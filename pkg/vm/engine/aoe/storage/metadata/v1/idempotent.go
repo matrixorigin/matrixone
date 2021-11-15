@@ -23,10 +23,19 @@ func (checker *IdempotentChecker) ConsumeIdempotentIndex(index *LogIndex) (*LogI
 		return nil, true
 	}
 	ok := false
-	comp := curr.Compare(index)
+	comp := curr.CompareID(index)
 	if comp < 0 {
 		checker.ResetIdempotentIndex()
+		curr = nil
 		ok = true
+	} else if comp == 0 {
+		if curr.IsApplied() {
+			checker.ResetIdempotentIndex()
+			curr = nil
+			ok = true
+		} else {
+			ok = true
+		}
 	}
 	return curr, ok
 }

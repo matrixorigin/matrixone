@@ -54,6 +54,7 @@ var (
 )
 
 type TxnCtx = metadata.TxnCtx
+type LogIndex = metadata.LogIndex
 
 type DB struct {
 	// Working directory of DB
@@ -192,6 +193,10 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	defer collection.Unref()
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
+	}
+	index, err = d.tableIdempotenceCheckAndIndexRewrite(tbl, index)
+	if err == metadata.IdempotenceErr {
+		return nil
 	}
 	return collection.Append(ctx.Data, index)
 }

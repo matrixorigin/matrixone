@@ -109,3 +109,15 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 
 	return writer.GetIndex(), nil
 }
+
+func (d *DB) tableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
+	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
+	if !ok {
+		return index, metadata.IdempotenceErr
+	}
+	if idempotentIdx == nil {
+		return index, nil
+	}
+	index.Start = idempotentIdx.Count + idempotentIdx.Start
+	return index, nil
+}
