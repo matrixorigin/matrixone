@@ -45,10 +45,10 @@ import (
 )
 
 const (
-	sPrefix             = "MateTbl"
-	sShardId           	= "ShardId"
-	sLogIndex         	= "LogIndex"
-	sMetadata        	= "Metadata"
+	sPrefix   = "MateTbl"
+	sShardId  = "ShardId"
+	sLogIndex = "LogIndex"
+	sMetadata = "Metadata"
 )
 
 // Storage memory storage
@@ -247,7 +247,6 @@ func (s *Storage) NewWriteBatch() storage.Resetable {
 func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 	tblNames := s.tableNames()
 	var values []meta.ShardMetadata
-	logutil.Infof("tblNames len  is %d\n", len(tblNames))
 	for _, tblName := range tblNames {
 		//TODO:Strictly judge whether it is a "shard metadata table"
 		if !strings.Contains(tblName, sPrefix) {
@@ -269,17 +268,17 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 		seg := rel.Segment(segment.Id, nil)
 		blks := seg.Blocks()
 		blk := seg.Block(blks[len(blks)-1], nil)
-		cds := make([]*bytes.Buffer, 3)
-		dds := make([]*bytes.Buffer, 3)
+		cds := make([]*bytes.Buffer, len(attrs))
+		dds := make([]*bytes.Buffer, len(attrs))
 		for i := range cds {
 			cds[i] = bytes.NewBuffer(make([]byte, 0))
 			dds[i] = bytes.NewBuffer(make([]byte, 0))
 		}
 		refs := make([]uint64, len(attrs))
 		bat, _ := blk.Read(refs, attrs, cds, dds)
-		shardId := bat.GetVector(attrs[0])
-		logIndex := bat.GetVector(attrs[1])
-		metadate := bat.GetVector(attrs[2])
+		shardId := bat.GetVector(sShardId)
+		logIndex := bat.GetVector(sLogIndex)
+		metadate := bat.GetVector(sMetadata)
 		logutil.Infof("GetInitialStates Metadata is %v\n",
 			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
 		customReq := &meta.ShardLocalState{}
@@ -345,7 +344,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		tbl := s.DB.Store.Catalog.SimpleGetTableByName(tableName)
-		createTable := false;
+		createTable := false
 		if tbl == nil {
 			mateTblInfo := aoe.TableInfo{
 				Name:    tableName,
@@ -364,7 +363,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			colInfo := aoe.ColumnInfo{
 				Name: sMetadata,
 			}
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 128}
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar)}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, colInfo)
 			_, err := s.DB.CreateTable(&mateTblInfo, dbi.TableOpCtx{
 				ShardId:   metadata.ShardID,
@@ -378,13 +377,22 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				return err
 			}
 			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
-			createTable = true;
+			createTable = true
 		}
+
 		var attrs []string
 		for _, colDef := range tbl.Schema.ColDefs {
 			attrs = append(attrs, colDef.Name)
 		}
 		bat := batch.New(true, attrs)
+		vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
+		vShardID.Ref = 1
+		vShardID.Col = []uint64{metadata.ShardID}
+		bat.Vecs[0] = vShardID
+		vLogIndex := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
+		vLogIndex.Ref = 1
+		vLogIndex.Col = []uint64{metadata.LogIndex}
+		bat.Vecs[1] = vLogIndex
 		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(protoc.MustMarshal(&metadata.Metadata)))})
 		vMetadata.Ref = 1
 		logutil.Infof("SaveShardMetadata Metadata is %v, LogIndex is %d\n", metadata.Metadata, metadata.LogIndex)
@@ -394,14 +402,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			Lengths: []uint32{uint32(len(protoc.MustMarshal(&metadata.Metadata)))},
 		}
 		bat.Vecs[2] = vMetadata
-		vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
-		vShardID.Ref = 1
-		vShardID.Col = []uint64{metadata.ShardID}
-		bat.Vecs[0] = vShardID
-		vLogIndex := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
-		vLogIndex.Ref = 1
-		vLogIndex.Col = []uint64{metadata.LogIndex}
-		bat.Vecs[1] = vLogIndex
+
 		offset := 0
 		size := 1
 		if createTable {
