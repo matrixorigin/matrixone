@@ -112,6 +112,7 @@ type ITableData interface {
 	// StrongRefLastBlock Ref to the last Block in TableData
 	StrongRefLastBlock() IBlock
 	GetIdempotentIndex() *metadata.LogIndex
+	ConsumeIdempotentIndex(*metadata.LogIndex) (*metadata.LogIndex, bool)
 	ResetIdempotentIndex()
 
 	CopyTo(dir string) error

@@ -17,6 +17,20 @@ func (checker *IdempotentChecker) GetIdempotentIndex() *LogIndex {
 	return (*LogIndex)(ptr)
 }
 
+func (checker *IdempotentChecker) ConsumeIdempotentIndex(index *LogIndex) (*LogIndex, bool) {
+	curr := checker.GetIdempotentIndex()
+	if curr == nil {
+		return nil, true
+	}
+	ok := false
+	comp := curr.Compare(index)
+	if comp < 0 {
+		checker.ResetIdempotentIndex()
+		ok = true
+	}
+	return curr, ok
+}
+
 func (checker *IdempotentChecker) ResetIdempotentIndex() {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&checker.IdempotentIndex)))
 	if ptr == nil {
