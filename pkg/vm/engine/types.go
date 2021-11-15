@@ -34,6 +34,35 @@ type Attribute struct {
 	Name string     // name of attribute
 	Alg  compress.T // compression algorithm
 	Type types.Type // type of attribute
+	Default DefaultExpr
+
+	PrimaryKey bool
+}
+
+type DefaultExpr struct {
+	Exist bool
+	Value interface{}
+	IsNull bool
+}
+
+// MakeDefaultExpr returns a new DefaultExpr
+func MakeDefaultExpr(exist bool, value interface{}, isNull bool) DefaultExpr {
+	return DefaultExpr{
+		Exist:  exist,
+		Value:  value,
+		IsNull: isNull,
+	}
+}
+
+// EmptyDefaultExpr means there is no definition for default expr
+var EmptyDefaultExpr = DefaultExpr{Exist: false}
+
+func (attr Attribute) HasDefaultExpr() bool {
+	return attr.Default.Exist
+}
+
+func (attr Attribute) GetDefaultExpr() (interface{}, bool) {
+	return attr.Default.Value, attr.Default.IsNull
 }
 
 type NodeInfo struct {
@@ -65,8 +94,9 @@ type PartitionByDef struct {
 }
 
 type IndexTableDef struct {
-	Typ   int
-	Names []string
+	Typ   	 int
+	ColNames []string
+	Name 	 string
 }
 
 type AttributeDef struct {

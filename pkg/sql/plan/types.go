@@ -97,6 +97,39 @@ type Query struct {
 	VarsMap           map[string]int
 }
 
+type CreateDatabase struct {
+	IfNotExistFlag bool
+	Id 			   string
+	E 			   engine.Engine
+}
+
+type CreateTable struct {
+	IfNotExistFlag bool
+	Id 			   string
+	Db 			   engine.Database
+	Defs 		   []engine.TableDef
+	PartitionBy    *engine.PartitionByDef
+}
+
+type DropDatabase struct {
+	IfExistFlag bool
+	Id          string
+	E			engine.Engine
+}
+
+type DropTable struct {
+	IfExistFlag bool
+	Ids         []string
+	Dbs 		[]string
+	E			engine.Engine
+}
+
+type CreateIndex struct {
+	IfNotExistFlag bool
+	Relation       engine.Relation
+	Defs		   []engine.TableDef
+}
+
 type build struct {
 	flg bool   // use for having clause
 	db  string // name of schema
@@ -302,4 +335,73 @@ func (i Direction) String() string {
 		return fmt.Sprintf("Direction(%d)", i)
 	}
 	return directionName[i]
+}
+
+func (c CreateDatabase) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("create database ")
+	if c.IfNotExistFlag {
+		buf.WriteString("if not exists ")
+	}
+	buf.WriteString(fmt.Sprintf("%s", c.Id))
+	return buf.String()
+}
+
+func (c CreateTable) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("create table ")
+	if c.IfNotExistFlag {
+		buf.WriteString("if not exists ")
+	}
+	// todo: db name lost.
+	buf.WriteString(fmt.Sprintf("%s (", c.Id))
+	for i := range c.Defs {
+		_ = i
+		buf.WriteString("\n")
+		// column def
+		// index def
+		// constraint def
+	}
+	buf.WriteString(")")
+	if c.PartitionBy != nil {
+		// list
+		// range
+		// hash
+	}
+	return buf.String()
+}
+
+func (d DropDatabase) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("drop database ")
+	if d.IfExistFlag {
+		buf.WriteString("if exists ")
+	}
+	buf.WriteString(d.Id)
+	return buf.String()
+}
+
+func (d DropTable) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("drop table ")
+	if d.IfExistFlag {
+		buf.WriteString("if exists")
+	}
+	for i := 0; i < len(d.Dbs); i++ {
+		buf.WriteString(d.Dbs[i] + "." + d.Ids[i])
+	}
+	return buf.String()
+}
+
+func (c CreateIndex) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("create index ")
+	if c.IfNotExistFlag {
+		buf.WriteString("if not exists ")
+	}
+	for _, def := range c.Defs {
+		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
+	}
+	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
+	return buf.String()
 }
