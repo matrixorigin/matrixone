@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -113,11 +114,13 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 func (d *DB) tableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
 	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
 	if !ok {
+		logutil.Infof("Table %s | %s | %s | Stale Index", meta.Repr(false), index.String(), idempotentIdx.String())
 		return index, metadata.IdempotenceErr
 	}
 	if idempotentIdx == nil {
 		return index, nil
 	}
+	logutil.Infof("Table %s | %s | %s | Rewrite Index", meta.Repr(false), index.String(), idempotentIdx.String())
 	index.Start = idempotentIdx.Count + idempotentIdx.Start
 	return index, nil
 }

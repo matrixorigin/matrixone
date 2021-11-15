@@ -153,7 +153,6 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 }
 
 func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
-	// tableMeta := c.data.GetMeta()
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -163,25 +162,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 		c.onImmut()
 	}
 
-	offset := uint64(0)
-	// idempotentIdx := c.meta.GetIdempotentIndex()
-	// if idempotentIdx != nil {
-	// 	logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), idempotentIdx.String())
-	// 	logutil.Infof("Incoming Index %s", index.String())
-	// 	if !idempotentIdx.IsApplied() {
-	// 		if (idempotentIdx.Id.Id != index.Id.Id) ||
-	// 			(idempotentIdx.Id.Offset < index.Id.Offset) {
-	// 			panic(fmt.Sprintf("should idempotentIdx: %d, but %d received", idempotentIdx.Id, index.Id))
-	// 		}
-	// 		if idempotentIdx.Id.Offset > index.Id.Offset {
-	// 			logutil.Infof("Index %s has been applied", index.String())
-	// 			return nil
-	// 		}
-	// 		offset = idempotentIdx.Count + idempotentIdx.Start
-	// 		index.Start = offset
-	// 	}
-	// 	c.meta.ResetIdempotentIndex()
-	// }
+	offset := index.Start
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
 		if c.mutBlk.GetMeta().HasMaxRowsLocked() {
