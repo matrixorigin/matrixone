@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
@@ -26,6 +27,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
+	"github.com/matrixorigin/matrixcube/storage/kv"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
@@ -69,10 +71,9 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 
 	customReq := &pb.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	diff := len(req.Key) - len(customReq.Start)
 
 	startKey := req.Key
-	endKey := append(req.Key[:diff], customReq.End...)
+	endKey := kv.EncodeDataKey(customReq.End,nil)
 
 	if customReq.Start == nil {
 		startKey = nil
@@ -114,7 +115,6 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	prefix := req.Key
-	diff := len(req.Key) - len(customReq.Prefix)
 
 	var data [][]byte
 	err := ce.kv.PrefixScan(prefix, func(key, value []byte) (bool, error) {
@@ -122,7 +122,7 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
-		data = append(data, key[diff:])
+		data = append(data, kv.DecodeDataKey(key))
 		data = append(data, value)
 		return true, nil
 	}, true)
