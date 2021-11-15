@@ -49,6 +49,12 @@ func (e *BaseEntry) LatestLogIndex() *LogIndex {
 	return e.LatestLogIndexLocked()
 }
 
+func (e *BaseEntry) FirstCommit() *CommitInfo {
+	e.RLock()
+	defer e.RUnlock()
+	return e.FirstCommitLocked()
+}
+
 func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
 	var ret *CommitInfo
 	fn := func(info *CommitInfo) bool {

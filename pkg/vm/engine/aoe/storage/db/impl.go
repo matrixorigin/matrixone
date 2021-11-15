@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -111,7 +112,7 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 	return writer.GetIndex(), nil
 }
 
-func (d *DB) tableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
+func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
 	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
 	if !ok {
 		logutil.Infof("Table %s | %s | %s | Stale Index", meta.Repr(false), index.String(), idempotentIdx.String())
@@ -123,4 +124,32 @@ func (d *DB) tableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 	logutil.Infof("Table %s | %s | %s | Rewrite Index", meta.Repr(false), index.String(), idempotentIdx.String())
 	index.Start = idempotentIdx.Count + idempotentIdx.Start
 	return index, nil
+}
+
+func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) error {
+	var err error
+	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
+	if collection == nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
+	}
+	defer collection.Unref()
+	return collection.Append(data, index)
 }

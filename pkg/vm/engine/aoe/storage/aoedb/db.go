@@ -15,6 +15,8 @@
 package aoedb
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
@@ -128,8 +130,26 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
-	ctx.DBName = ShardIdToName(ctx.ShardId)
-	return d.Impl.Append(ctx)
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	if ctx.OpOffset >= ctx.OpSize {
+		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
+	}
+	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	if err != nil {
+		return err
+	}
+	ctx.ShardId = tbl.Database.GetShardId()
+	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
+	if err == metadata.IdempotenceErr {
+		return nil
+	}
+	return d.DoAppend(tbl, ctx.Data, index)
 }
 
 func (d *DB) CreateSnapshot(shardId uint64, path string, forcesync bool) (uint64, error) {

@@ -497,6 +497,30 @@ func (db *Database) GetTableByNameLocked(name string, tranId uint64) *Table {
 	return nil
 }
 
+func (db *Database) GetTableByNameAndLogIndex(name string, index *LogIndex) (*Table, error) {
+	db.RLock()
+	defer db.RUnlock()
+	nn := db.nameNodes[name]
+	if nn == nil {
+		return nil, TableNotFoundErr
+	}
+	var err error
+	var table *Table
+	nn.ForEachNodesLocked(func(n *nameNode) bool {
+		entry := n.GetTable()
+		createIdx := entry.FirstCommit().LogIndex
+		if createIdx == nil || createIdx.Compare(index) <= 0 {
+			table = entry
+			return false
+		}
+		return true
+	})
+	if table == nil {
+		err = TableNotFoundErr
+	}
+	return table, err
+}
+
 func (db *Database) SimpleGetTable(id uint64) *Table {
 	db.RLock()
 	defer db.RUnlock()

@@ -158,47 +158,28 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if ctx.OpOffset >= ctx.OpSize {
 		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
 	}
-	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
 	if err != nil {
 		return err
 	}
-	// if ctx.ShardId != tbl.Database.GetShardId() {
-	// 	logutil.Warnf(metadata.InconsistentShardIdErr.Error())
-	// }
-
-	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   tbl,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
-	}
-	ctx.ShardId = tbl.Database.GetShardId()
+	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	defer collection.Unref()
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
-	index, err = d.tableIdempotenceCheckAndIndexRewrite(tbl, index)
+	tbl, err := database.GetTableByNameAndLogIndex(ctx.TableName, index)
+	if err != nil {
+		return err
+	}
+	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
+	// TODO
 	if err == metadata.IdempotenceErr {
 		return nil
 	}
-	return collection.Append(ctx.Data, index)
+	if tbl.IsDeleted() {
+		return metadata.TableNotFoundErr
+	}
+	return d.DoAppend(tbl, ctx.Data, index)
 }
 
 func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
