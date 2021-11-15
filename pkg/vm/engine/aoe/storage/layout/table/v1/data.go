@@ -51,7 +51,6 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 }
 
 type tableData struct {
-	metadata.IdempotentChecker
 	common.RefHelper
 	tree struct {
 		sync.RWMutex
@@ -318,13 +317,8 @@ func (td *tableData) AddRows(rows uint64) uint64 {
 	return atomic.AddUint64(&td.tree.rowCount, rows)
 }
 
-func (td *tableData) initReplayCtx() {
-	td.InitIdempotentIndex(td.meta.MaxLogIndex())
-}
-
 func (td *tableData) InitReplay() {
 	td.initRowCount()
-	td.initReplayCtx()
 }
 
 func (td *tableData) initRowCount() {

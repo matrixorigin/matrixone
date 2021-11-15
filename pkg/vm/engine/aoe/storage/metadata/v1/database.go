@@ -164,6 +164,7 @@ func (db *Database) DebugCheckReplayedState() {
 	var maxDDLIndex *LogIndex
 	for _, table := range db.TableSet {
 		table.DebugCheckReplayedState()
+		table.InitIdempotentIndex(table.MaxLogIndex())
 		if maxDDLIndex == nil {
 			maxDDLIndex = table.CommitInfo.LogIndex
 		} else if maxDDLIndex.Compare(table.CommitInfo.LogIndex) < 0 {

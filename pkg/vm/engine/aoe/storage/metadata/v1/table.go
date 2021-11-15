@@ -42,11 +42,12 @@ func (e *tableLogEntry) Unmarshal(buf []byte) error {
 
 type Table struct {
 	*BaseEntry
-	Schema     *Schema        `json:"schema"`
-	SegmentSet []*Segment     `json:"segments"`
-	IdIndex    map[uint64]int `json:"-"`
-	Database   *Database      `json:"-"`
-	FlushTS    int64          `json:"-"`
+	IdempotentChecker `json:"-"`
+	Schema            *Schema        `json:"schema"`
+	SegmentSet        []*Segment     `json:"segments"`
+	IdIndex           map[uint64]int `json:"-"`
+	Database          *Database      `json:"-"`
+	FlushTS           int64          `json:"-"`
 }
 
 func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {

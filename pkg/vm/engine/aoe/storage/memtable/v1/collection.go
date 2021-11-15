@@ -32,6 +32,7 @@ type collection struct {
 	common.RefHelper
 	mgr    *manager
 	data   iface.ITableData
+	meta   *metadata.Table
 	mu     *sync.RWMutex
 	mutBlk iface.IMutBlock
 }
@@ -40,6 +41,7 @@ func newCollection(mgr *manager, data iface.ITableData) *collection {
 	c := &collection{
 		mgr:  mgr,
 		data: data,
+		meta: data.GetMeta(),
 		mu:   &sync.RWMutex{},
 	}
 	mutBlk := data.StrongRefLastBlock()
@@ -163,7 +165,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 	}
 
 	offset := uint64(0)
-	idempotentIdx := c.data.GetIdempotentIndex()
+	idempotentIdx := c.meta.GetIdempotentIndex()
 	if idempotentIdx != nil {
 		logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), idempotentIdx.String())
 		logutil.Infof("Incoming Index %s", index.String())
@@ -179,7 +181,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 			offset = idempotentIdx.Count + idempotentIdx.Start
 			index.Start = offset
 		}
-		c.data.ResetIdempotentIndex()
+		c.meta.ResetIdempotentIndex()
 	}
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
