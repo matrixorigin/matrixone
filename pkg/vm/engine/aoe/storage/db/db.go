@@ -51,6 +51,7 @@ var (
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 	ErrTimeout           = errors.New("aoe: timeout")
 	ErrStaleErr          = errors.New("aoe: stale")
+	ErrIdempotence       = metadata.IdempotenceErr
 )
 
 type TxnCtx = metadata.TxnCtx
@@ -172,9 +173,8 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		return err
 	}
 	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
-	// TODO
 	if err == metadata.IdempotenceErr {
-		return nil
+		return ErrIdempotence
 	}
 	if tbl.IsDeleted() {
 		return metadata.TableNotFoundErr
@@ -232,29 +232,38 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	table, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
 	if err != nil {
 		return
 	}
-	// if table.Database.GetShardId() != ctx.ShardId {
-	// 	err = metadata.InconsistentShardIdErr
-	// 	return
-	// }
-	id = table.Id
 
-	ctx.ShardId = table.Database.GetShardId()
+	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
-	if err = table.SimpleSoftDelete(index); err != nil {
-		return
-	}
-
-	logutil.Infof("DropTable %s", index.String())
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
 	defer d.Wal.Checkpoint(index)
 
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
+	var ok bool
+	if _, ok = database.ConsumeIdempotentIndex(index); !ok {
+		err = ErrIdempotence
+		return
+	}
+
+	meta := database.SimpleGetTableByName(ctx.TableName)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return
+	}
+
+	if err = meta.SimpleSoftDelete(index); err != nil {
+		return
+	}
+
+	id = meta.Id
+
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 	return
 }
@@ -309,6 +318,13 @@ func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata
 		return
 	}
 	defer d.Wal.Checkpoint(index)
+
+	var ok bool
+	if _, ok = database.ConsumeIdempotentIndex(index); !ok {
+		err = ErrIdempotence
+		panic(err)
+		return
+	}
 
 	tbl, err := database.SimpleCreateTable(schema, index)
 	if err != nil {

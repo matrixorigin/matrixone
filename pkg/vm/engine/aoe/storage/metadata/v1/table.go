@@ -262,7 +262,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
 func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
-	if exIndex != nil && exIndex.ShardId != e.GetShardId() {
+	if exIndex != nil && exIndex.ShardId != e.Database.GetShardId() {
 		return InconsistentShardIdErr
 	}
 	tranId := e.Database.Catalog.NextUncommitId()

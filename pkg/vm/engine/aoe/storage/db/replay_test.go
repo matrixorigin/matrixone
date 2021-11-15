@@ -980,6 +980,7 @@ func TestReplay12(t *testing.T) {
 			TableName: meta.Schema.Name,
 			DBName:    database.Name,
 		})
+		assert.Equal(t, ErrIdempotence, err)
 		err = rel.Write(dbi.AppendCtx{
 			OpIndex:   segmentedIdx + 1,
 			OpOffset:  1,
