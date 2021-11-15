@@ -15,6 +15,9 @@
 package gcreqs
 
 import (
+	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
@@ -32,6 +35,7 @@ type dropDBRequest struct {
 	Opts           *storage.Options
 	Cleaner        *metadata.Cleaner
 	needReschedule bool
+	startTime      time.Time
 }
 
 func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr mtif.IManager) *dropDBRequest {
@@ -39,6 +43,8 @@ func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *ta
 	req.DB = meta
 	req.Tables = tables
 	req.Opts = opts
+	req.MemTableMgr = mtMgr
+	req.StartTime = time.Now()
 	req.Cleaner = metadata.NewCleaner(opts.Meta.Catalog)
 	req.Op = ops.Op{
 		Impl:   req,
@@ -60,10 +66,16 @@ func (req *dropDBRequest) dropTable(meta *metadata.Table) error {
 
 func (req *dropDBRequest) Execute() error {
 	err := req.Cleaner.TryCompactDB(req.DB, req.dropTable)
-	if err != nil && req.needReschedule {
+	if err != nil {
+		return err
+	}
+	if time.Since(req.StartTime) >= time.Duration(10)*time.Second {
+		panic(fmt.Sprintf("cannot gc db %d", req.DB.Id))
+	}
+	if req.needReschedule {
 		req.needReschedule = false
 		req.Next = req
-		err = nil
 	}
+
 	return err
 }

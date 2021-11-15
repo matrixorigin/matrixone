@@ -58,6 +58,7 @@ type Addresses struct {
 	Table    map[uint64]uint64
 	Segment  map[uint64]uint64
 	Block    map[uint64]uint64
+	ShardId  map[uint64]uint64
 }
 
 func (m *Addresses) GetBlkAddr(addr *common.ID) (*common.ID, error) {

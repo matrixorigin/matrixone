@@ -232,6 +232,12 @@ func (e *BaseEntry) IsReplacedLocked() bool {
 	return e.CommitInfo.IsReplaced()
 }
 
+func (e *BaseEntry) IsReplaced() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsReplacedLocked()
+}
+
 func (e *BaseEntry) IsDeleted() bool {
 	e.RLock()
 	defer e.RUnlock()

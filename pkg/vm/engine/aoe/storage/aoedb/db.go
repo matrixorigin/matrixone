@@ -132,8 +132,8 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	return d.Impl.Append(ctx)
 }
 
-func (d *DB) CreateSnapshot(shardId uint64, path string) (uint64, error) {
-	return d.Impl.CreateSnapshot(ShardIdToName(shardId), path)
+func (d *DB) CreateSnapshot(shardId uint64, path string, forcesync bool) (uint64, error) {
+	return d.Impl.CreateSnapshot(ShardIdToName(shardId), path, forcesync)
 }
 
 func (d *DB) ApplySnapshot(shardId uint64, path string) error {

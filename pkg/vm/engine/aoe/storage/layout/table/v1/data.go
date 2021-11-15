@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -52,6 +51,7 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 }
 
 type tableData struct {
+	metadata.IdempotentChecker
 	common.RefHelper
 	tree struct {
 		sync.RWMutex
@@ -65,7 +65,6 @@ type tableData struct {
 	meta        *metadata.Table
 	indexHolder *index.TableHolder
 	blkFactory  iface.IBlockFactory
-	replayIndex *metadata.LogIndex
 }
 
 func (td *tableData) StrongRefLastBlock() iface.IBlock {
@@ -319,28 +318,8 @@ func (td *tableData) AddRows(rows uint64) uint64 {
 	return atomic.AddUint64(&td.tree.rowCount, rows)
 }
 
-func (td *tableData) GetReplayIndex() *metadata.LogIndex {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)))
-	if ptr == nil {
-		return nil
-	}
-	return (*metadata.LogIndex)(ptr)
-}
-
-func (td *tableData) ResetReplayIndex() {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)))
-	if ptr == nil {
-		panic("logic error")
-	}
-	var netIndex *metadata.LogIndex
-	nptr := (*unsafe.Pointer)(unsafe.Pointer(&netIndex))
-	if !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)), ptr, *nptr) {
-		panic("logic error")
-	}
-}
-
 func (td *tableData) initReplayCtx() {
-	td.replayIndex = td.meta.MaxLogIndex()
+	td.InitIdempotentIndex(td.meta.MaxLogIndex())
 }
 
 func (td *tableData) InitReplay() {

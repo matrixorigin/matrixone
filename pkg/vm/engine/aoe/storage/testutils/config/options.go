@@ -88,9 +88,9 @@ func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt
 	opts.Meta.Conf = metaCfg
 	if cst == CST_Customize {
 		cacheCfg := new(storage.CacheCfg)
-		cacheCfg.IndexCapacity = blockRows * blockCnt * 80
-		cacheCfg.InsertCapacity = blockRows * blockCnt * 800
-		cacheCfg.DataCapacity = blockRows * blockCnt * 80
+		cacheCfg.IndexCapacity = blockRows * blockCnt * 2000
+		cacheCfg.InsertCapacity = blockRows * blockCnt * 1000
+		cacheCfg.DataCapacity = blockRows * blockCnt * 2000
 		opts.CacheCfg = cacheCfg
 	}
 	opts.FillDefaults(dir)

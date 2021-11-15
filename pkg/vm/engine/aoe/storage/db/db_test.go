@@ -49,10 +49,12 @@ import (
 )
 
 var (
-	TEST_DB_DIR   = "/tmp/db_test"
-	defaultDBPath = "aoedb"
-	defaultDBName = "default"
-	emptyDBName   = ""
+	TEST_DB_DIR              = "/tmp/db_test"
+	defaultDBPath            = "aoedb"
+	defaultDBName            = "default"
+	emptyDBName              = ""
+	defaultTestBlockRows     = uint64(2000)
+	defaultTestSegmentBlocks = uint64(2)
 )
 
 func initDBTest() {
@@ -88,19 +90,19 @@ func initTestDB3(t *testing.T) (*DB, *shard.MockIndexAllocator, *metadata.Databa
 }
 
 func initTestBrokerDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
-	return initTestDBWithOptions(t, wal.BrokerRole, dir, dbName, cleanCfg)
+	return initTestDBWithOptions(t, wal.BrokerRole, dir, dbName, defaultTestBlockRows, defaultTestSegmentBlocks, cleanCfg)
 }
 
 func initTestHolderDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
-	return initTestDBWithOptions(t, wal.HolderRole, dir, dbName, cleanCfg)
+	return initTestDBWithOptions(t, wal.HolderRole, dir, dbName, defaultTestBlockRows, defaultTestSegmentBlocks, cleanCfg)
 }
 
-func initTestDBWithOptions(t *testing.T, walRole wal.Role, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+func initTestDBWithOptions(t *testing.T, walRole wal.Role, dir, dbName string, blockRows, segBlocks uint64, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
 	opts := new(storage.Options)
 	opts.WalRole = walRole
 	opts.MetaCleanerCfg = cleanCfg
 	path := filepath.Join(getTestPath(t), dir)
-	config.NewCustomizedMetaOptions(path, config.CST_Customize, uint64(2000), uint64(2), opts)
+	config.NewCustomizedMetaOptions(path, config.CST_Customize, blockRows, segBlocks, opts)
 	inst, _ := Open(path, opts)
 	gen := shard.NewMockIndexAllocator()
 	var database *metadata.Database
@@ -234,7 +236,7 @@ func TestSSOnMutation(t *testing.T) {
 	}
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 	testutils.WaitExpect(200, func() bool {
 		return database.GetCheckpointId() == gen.Get(database.GetShardId())
@@ -321,7 +323,7 @@ func TestAppend(t *testing.T) {
 
 	ssPath := prepareSnapshotPath(defaultSnapshotPath, t)
 
-	idx, err := inst.CreateSnapshot(database.Name, ssPath)
+	idx, err := inst.CreateSnapshot(database.Name, ssPath, false)
 	assert.Nil(t, err)
 	assert.Equal(t, database.GetCheckpointId(), idx)
 
@@ -338,7 +340,7 @@ func TestAppend(t *testing.T) {
 
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
-	err = inst.Flush(database2.Name, schema.Name)
+	err = inst.FlushTable(database2.Name, schema.Name)
 	t.Log(inst.Wal.String())
 	gen.Reset(database2.GetShardId(), appendCtx.OpIndex)
 
@@ -923,7 +925,7 @@ func TestCreateSnapshot(t *testing.T) {
 		if err := inst.Append(dbi.AppendCtx{ShardId: db1.GetShardId(), TableName: tableName1, DBName: db1.Name, Data: bat1, OpIndex: gen.Alloc(db1.GetShardId()), OpSize: 1}); err != nil {
 			t.Error(err)
 		}
-		pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-%d", i))
+		pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-%d", i), false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -932,7 +934,7 @@ func TestCreateSnapshot(t *testing.T) {
 		if err := inst.Append(dbi.AppendCtx{DBName: db2.Name, ShardId: db2.GetShardId(), TableName: tableName2, Data: bat2, OpIndex: gen.Alloc(db2.GetShardId()), OpSize: 1}); err != nil {
 			t.Error(err)
 		}
-		pid, err = inst.CreateSnapshot(db2.Name, fmt.Sprintf("/tmp/test_ss/s1/ss-%d", i))
+		pid, err = inst.CreateSnapshot(db2.Name, fmt.Sprintf("/tmp/test_ss/s1/ss-%d", i), false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -942,7 +944,7 @@ func TestCreateSnapshot(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	st := time.Now()
-	pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-final"))
+	pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-final"), false)
 	assert.Nil(t, err)
 	t.Log(time.Since(st).Milliseconds(), " ms")
 	assert.Equal(t, pid, inst.GetShardCheckpointId(db1.GetShardId()))
@@ -1061,7 +1063,7 @@ func TestCreateSnapshotCase1(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		newId, err = inst.CreateSnapshot(database.Name, "/tmp/test_ss/case_1/ss-1")
+		newId, err = inst.CreateSnapshot(database.Name, "/tmp/test_ss/case_1/ss-1", false)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1149,7 +1151,7 @@ func TestCreateSnapshotCase2(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		newId, err = inst.CreateSnapshot(database.Name, "/tmp/test_ss/case_2/ss-1")
+		newId, err = inst.CreateSnapshot(database.Name, "/tmp/test_ss/case_2/ss-1", false)
 		if err != nil {
 			t.Error(err)
 		}

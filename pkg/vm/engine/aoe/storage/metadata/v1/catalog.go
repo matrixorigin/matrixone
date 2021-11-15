@@ -43,6 +43,7 @@ var (
 	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
 	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
 	CommitStaleErr         = errors.New("aoe: commit stale info")
+	IdempotenceErr         = errors.New("aoe: idempotence error")
 )
 
 type CatalogCfg struct {
@@ -213,6 +214,16 @@ func (catalog *Catalog) prepareCommitTxn(txn *TxnCtx) (LogEntry, error) {
 func (catalog *Catalog) AbortTxn(txn *TxnCtx) error {
 	// TODO
 	return nil
+}
+
+func (catalog *Catalog) SimpleGetDatabase(id uint64) (*Database, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	db := catalog.Databases[id]
+	if db == nil {
+		return nil, DatabaseNotFoundErr
+	}
+	return db, nil
 }
 
 func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, error) {
