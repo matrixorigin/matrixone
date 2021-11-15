@@ -30,7 +30,7 @@ func TestDebug(t *testing.T) {
 	}{
 		in:   "'\\%'",
 		id:   STRING,
-		want: "\\%",
+		want: "%",
 	}
 
 	id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
@@ -111,31 +111,31 @@ func TestString(t *testing.T) {
 	}, {
 		in:   "'\\n'",
 		id:   STRING,
-		want: "\\n",
+		want: "\n",
 	}, {
 		in:   "'\\nhello\\n'",
 		id:   STRING,
-		want: "\\nhello\\n",
+		want: "\nhello\n",
 	}, {
 		in:   "'\\'",
-		id:   STRING,
-		want: "\\",
+		id:   LEX_ERROR,
+		want: "'",
 	}, {
 		in:   "'",
 		id:   LEX_ERROR,
 		want: "",
 	}, {
 		in:   "'hello\\'",
-		id:   STRING,
-		want: "hello\\",
+		id:   LEX_ERROR,
+		want: "hello'",
 	}, {
 		in:   "'hello",
 		id:   LEX_ERROR,
 		want: "hello",
 	}, {
-		in:   "'hello\\",
-		id:   LEX_ERROR,
-		want: "hello\\",
+		in:   "'C:\\Program Files(x86)'",
+		id:   STRING,
+		want: "C:Program Files(x86)",
 	}}
 
 	for _, tcase := range testcases {
