@@ -35,14 +35,17 @@ type Attribute struct {
 	Alg  compress.T // compression algorithm
 	Type types.Type // type of attribute
 	Default DefaultExpr
-
-	PrimaryKey bool
 }
 
 type DefaultExpr struct {
 	Exist bool
 	Value interface{}
 	IsNull bool
+}
+
+type PrimaryIndexDef struct {
+	TableDef
+	Names []string
 }
 
 // MakeDefaultExpr returns a new DefaultExpr

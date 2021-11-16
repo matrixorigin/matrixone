@@ -28,6 +28,7 @@ import (
 )
 
 func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) error {
+	var primaryKeys []string// stores primary key column's names.
 	defs := make([]engine.TableDef, 0, len(stmt.Defs))
 
 	// semantic analysis
@@ -39,13 +40,26 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 	if err != nil {
 		return err
 	}
+
+	addPrimaryIndex := true
 	for i := range stmt.Defs {
-		def, err := b.getTableDef(stmt.Defs[i])
+		def, pkeys, err := b.getTableDef(stmt.Defs[i])
 		if err != nil {
 			return err
 		}
+		if primaryKeys != nil && pkeys != nil {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
+		}
+		if _, ok := def.(*engine.PrimaryIndexDef); ok {
+			addPrimaryIndex = false
+		}
+		primaryKeys = pkeys
 		defs = append(defs, def)
 	}
+	if addPrimaryIndex && primaryKeys != nil {
+		defs = append(defs, engine.PrimaryIndexDef{Names: primaryKeys})
+	}
+
 	if stmt.PartitionOption != nil {
 		return errors.New(errno.SQLStatementNotYetComplete, "partitionBy not yet complete")
 	}
@@ -68,23 +82,24 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 	return string(tbl.SchemaName), string(tbl.ObjectName), nil
 }
 
-func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
+func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error) {
+	primaryKeys := make([]string, 0)
+
 	switch n := def.(type) {
 	case *tree.ColumnTableDef:
 		typ, err := b.getTableDefType(n.Type)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		defaultExpr, err := getDefaultExprFromColumnDef(n, typ)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
-		primaryKey := false
 		for _, attr := range n.Attributes {
 			if _, ok := attr.(*tree.AttributePrimaryKey); ok {
-				primaryKey = true
+				primaryKeys = append(primaryKeys, n.Name.Parts[0])
 			}
 		}
 
@@ -94,11 +109,22 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 				Alg:        compress.Lz4,
 				Type:       *typ,
 				Default:    defaultExpr,
-				PrimaryKey: primaryKey,
 			},
-		}, nil
+		}, primaryKeys, nil
+	case *tree.PrimaryKeyIndex: // todo: need to change if parser will use another AST
+		mapPrimaryKeyNames := map[string]struct{}{}
+		pkNames := make([]string, len(n.KeyParts))
+		for i, key := range n.KeyParts {
+			if _, ok := mapPrimaryKeyNames[key.ColName.Parts[0]]; ok {
+				pkNames[i] = key.ColName.Parts[0]
+			}
+			mapPrimaryKeyNames[key.ColName.Parts[0]] = struct{}{}
+		}
+		return &engine.PrimaryIndexDef{
+			Names: pkNames,
+		}, pkNames, nil
 	default:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
+		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
 	}
 }
 
