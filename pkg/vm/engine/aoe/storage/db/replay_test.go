@@ -1168,4 +1168,18 @@ func TestReplay14(t *testing.T) {
 		TableName: schema1.Name,
 	})
 	assert.Equal(t, ErrIdempotence, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return db2.UncheckpointedCnt() == 1
+	})
+	assert.Equal(t, 1, db2.UncheckpointedCnt())
+
+	err = inst2.FlushDatabase(db2.Name)
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return db2.UncheckpointedCnt() == 0
+	})
+	assert.Equal(t, 0, db2.UncheckpointedCnt())
+	assert.Equal(t, gen.Get(db2.GetShardId()), db2.GetCheckpointId())
 }
