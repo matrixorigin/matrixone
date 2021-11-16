@@ -459,27 +459,12 @@ func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable Rename
 		panic(err)
 	}
 	// TODO: validate parameters
-
 	var (
 		err      error
 		database *metadata.Database
 	)
 	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
-		return err
-	}
-	spec := metadata.NewEmptyShardSplitSpec()
-	err = spec.Unmarshal(ctx)
-	if err != nil {
-		return err
-	}
-	dbSpecs := make([]*metadata.DBSpec, len(keys))
-	for i, _ := range dbSpecs {
-		dbSpec := new(metadata.DBSpec)
-		dbSpec.Name = newNames[i]
-		dbSpecs[i] = dbSpec
-	}
-	if err = d.DoFlushDatabase(database); err != nil {
 		return err
 	}
 
@@ -491,7 +476,8 @@ func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable Rename
 		return err
 	}
 	defer d.Wal.Checkpoint(splitIdx)
-	splitter := metadata.NewShardSplitter(d.Store.Catalog, spec, dbSpecs, splitIdx, renameTable)
+
+	splitter := NewSplitter(database, newNames, renameTable, keys, ctx, splitIdx, d)
 	if err = splitter.Prepare(); err != nil {
 		return err
 	}

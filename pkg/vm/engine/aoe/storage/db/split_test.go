@@ -43,7 +43,7 @@ func TestSplit1(t *testing.T) {
 	})
 	assert.Equal(t, 0, database.UncheckpointedCnt())
 	coarseSize := database.GetSize()
-	size := coarseSize * 3 / 4
+	size := coarseSize * 7 / 8
 
 	_, _, keys, ctx, err := inst1.SpliteDatabaseCheck(database.Name, uint64(size))
 	assert.Nil(t, err)
