@@ -109,7 +109,7 @@ type addReplaceCommitCtx struct {
 type splitDBCtx struct {
 	writeCtx
 	spec        *ShardSplitSpec
-	nameFactory TableNameFactory
+	renameTable RenameTableFactory
 	dbSpecs     []*DBSpec
 }
 

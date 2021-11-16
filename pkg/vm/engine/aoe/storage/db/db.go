@@ -440,7 +440,7 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	return err
 }
 
-func (d *DB) SpliteCheck(size uint64, dbName string) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
+func (d *DB) SpliteDatabaseCheck(dbName string, size uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -451,6 +451,28 @@ func (d *DB) SpliteCheck(size uint64, dbName string) (coarseSize uint64, coarseC
 	}
 	index := database.GetCheckpointId()
 	return database.SplitCheck(size, index)
+}
+
+func (d *DB) SpliteDatabase(dbName string, newNames []string, keys [][]byte, ctx []byte, index uint64) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return nil
+	// var err error
+	// var database *metadata.Database
+	// database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	// if err != nil {
+	// 	return err
+	// }
+	// spec := metadata.NewEmptyShardSplitSpec()
+	// err = spec.Unmarshal(ctx)
+	// if err != nil {
+	// 	return err
+	// }
+	// dbSpecs := make([]metadata.DBSpec, len(keys))
+	// for i, _ := range dbSpecs {
+	// 	dbSpec := new(metadata.DBSpec)
+	// }
 }
 
 func (d *DB) startWorkers() {

@@ -598,10 +598,10 @@ func (catalog *Catalog) SplitCheck(size, index uint64, dbName string) (coarseSiz
 	return db.SplitCheck(size, index)
 }
 
-func (catalog *Catalog) execSplit(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []*DBSpec) error {
+func (catalog *Catalog) execSplit(rename RenameTableFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []*DBSpec) error {
 	ctx := new(splitDBCtx)
 	ctx.spec = spec
-	ctx.nameFactory = nameFactory
+	ctx.renameTable = rename
 	ctx.tranId = tranId
 	ctx.exIndex = index
 	ctx.dbSpecs = dbSpecs
@@ -620,7 +620,7 @@ func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {
 	}
 	for _, spec := range ctx.spec.Specs {
 		table := ctx.spec.splitted[spec.Index]
-		table.Splite(catalog, ctx.tranId, spec, ctx.nameFactory, dbs)
+		table.Splite(catalog, ctx.tranId, spec, ctx.renameTable, dbs)
 	}
 	rCtx := new(addReplaceCommitCtx)
 	rCtx.tranId = ctx.tranId

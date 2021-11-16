@@ -22,11 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
-type TableNameFactory interface {
+type NameFactory interface {
 	Encode(shardId uint64, name string) string
 	Decode(name string) (uint64, string)
 	Rename(name string, shardId uint64) string
 }
+
+type RenameTableFactory = func(oldName, dbName string) string
 
 type TableRangeSpec struct {
 	DBSpec     *DBSpec      `json:"dbspec"`
@@ -120,7 +122,7 @@ func (split *ShardSplitSpec) Rewrite(specs []*DBSpec) {
 	}
 }
 
-func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFactory, dbSpecs []*DBSpec) error {
+func (split *ShardSplitSpec) Prepare(catalog *Catalog, rename RenameTableFactory, dbSpecs []*DBSpec) error {
 	var err error
 	split.db, err = catalog.SimpleGetDatabaseByName(split.Name)
 	if err != nil {
@@ -162,17 +164,17 @@ func (split *ShardSplitSpec) Unmarshal(buf []byte) error {
 type ShardSplitter struct {
 	Spec        *ShardSplitSpec
 	Catalog     *Catalog
-	NameFactory TableNameFactory
+	TableRename RenameTableFactory
 	DBSpecs     []*DBSpec
 	Index       *LogIndex
 	TranId      uint64
 }
 
-func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec, index *LogIndex, nameFactory TableNameFactory) *ShardSplitter {
+func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec, index *LogIndex, rename RenameTableFactory) *ShardSplitter {
 	return &ShardSplitter{
 		Spec:        spec,
 		Catalog:     catalog,
-		NameFactory: nameFactory,
+		TableRename: rename,
 		DBSpecs:     dbSpecs,
 		Index:       index,
 	}
@@ -180,9 +182,9 @@ func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec,
 
 func (splitter *ShardSplitter) Prepare() error {
 	splitter.TranId = splitter.Catalog.NextUncommitId()
-	return splitter.Spec.Prepare(splitter.Catalog, splitter.NameFactory, splitter.DBSpecs)
+	return splitter.Spec.Prepare(splitter.Catalog, splitter.TableRename, splitter.DBSpecs)
 }
 
 func (splitter *ShardSplitter) Commit() error {
-	return splitter.Catalog.execSplit(splitter.NameFactory, splitter.Spec, splitter.TranId, splitter.Index, splitter.DBSpecs)
+	return splitter.Catalog.execSplit(splitter.TableRename, splitter.Spec, splitter.TranId, splitter.Index, splitter.DBSpecs)
 }

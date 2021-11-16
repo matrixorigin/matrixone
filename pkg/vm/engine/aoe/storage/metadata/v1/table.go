@@ -500,14 +500,10 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	return e.GetSegment(id, MinUncommitId)
 }
 
-func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpec, nameFactory TableNameFactory, dbs map[uint64]*Database) {
+func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpec, renameTable RenameTableFactory, dbs map[uint64]*Database) {
 	specs := splitSpec.Specs
 	tables := make([]*Table, len(specs))
 	for i, spec := range specs {
-		// logIndex := LogIndex{
-		// 	ShardId: spec.DBSpec.ShardId,
-		// 	Id:      shard.SimpleIndexId(uint64(0)),
-		// }
 		db := dbs[spec.DBSpec.ShardId]
 		info := e.CommitInfo.Clone()
 		info.TranId = tranId
@@ -518,7 +514,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			CommitInfo: info,
 		}
 		schema := *e.Schema
-		schema.Name = nameFactory.Rename(schema.Name, spec.DBSpec.ShardId)
+		schema.Name = renameTable(schema.Name, spec.DBSpec.Name)
 		table := &Table{
 			Schema:     &schema,
 			BaseEntry:  baseEntry,
