@@ -26,7 +26,7 @@ import (
 
 // There is a premise here, that is, all mutation requests of a database are
 // single-threaded
-func (d *DB) doFlushDatabase(meta *metadata.Database) error {
+func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 	tables := make([]*metadata.Table, 0, 8)
 	fn := func(t *metadata.Table) error {
 		if t.IsDeleted() {
@@ -38,7 +38,7 @@ func (d *DB) doFlushDatabase(meta *metadata.Database) error {
 	meta.ForLoopTables(fn)
 	var err error
 	for _, t := range tables {
-		if err = d.doFlushTable(t); err != nil {
+		if err = d.DoFlushTable(t); err != nil {
 			break
 		}
 	}
@@ -47,7 +47,7 @@ func (d *DB) doFlushDatabase(meta *metadata.Database) error {
 
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
-func (d *DB) doFlushTable(meta *metadata.Table) error {
+func (d *DB) DoFlushTable(meta *metadata.Table) error {
 	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
 	if collection == nil {
 		eCtx := &memdata.Context{
@@ -74,11 +74,11 @@ func (d *DB) doFlushTable(meta *metadata.Table) error {
 	return collection.Flush()
 }
 
-func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
+func (d *DB) DoCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
 	var err error
 	if forcesync {
 		endTime := time.Now().Add(time.Duration(1) * time.Second)
-		if err = d.doFlushDatabase(database); err != nil {
+		if err = d.DoFlushDatabase(database); err != nil {
 			return 0, err
 		}
 		interval := time.Duration(1) * time.Millisecond
@@ -114,7 +114,7 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 
 func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
 	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
-	if !ok {
+	if !ok || (idempotentIdx != nil && idempotentIdx.IsApplied()) {
 		logutil.Infof("Table %s | %s | %s | Stale Index", meta.Repr(false), index.String(), idempotentIdx.String())
 		return index, metadata.IdempotenceErr
 	}

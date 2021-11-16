@@ -138,7 +138,7 @@ func (d *DB) FlushDatabase(dbName string) error {
 	if err != nil {
 		return err
 	}
-	return d.doFlushDatabase(database)
+	return d.DoFlushDatabase(database)
 }
 
 func (d *DB) FlushTable(dbName, tableName string) error {
@@ -149,7 +149,7 @@ func (d *DB) FlushTable(dbName, tableName string) error {
 	if err != nil {
 		return err
 	}
-	return d.doFlushTable(meta)
+	return d.DoFlushTable(meta)
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
@@ -172,6 +172,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err != nil {
 		return err
 	}
+	logutil.Infof("xxxxxxxxxxx %s", tbl.PString(metadata.PPL0, 0))
 	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
 	if err == metadata.IdempotenceErr {
 		return ErrIdempotence
@@ -246,9 +247,15 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	defer d.Wal.Checkpoint(index)
 
 	var ok bool
-	if _, ok = database.ConsumeIdempotentIndex(index); !ok {
+	var idx *LogIndex
+	if idx, ok = database.ConsumeIdempotentIndex(index); !ok {
 		err = ErrIdempotence
 		return
+	} else if idx != nil {
+		if idx.IsApplied() {
+			err = ErrIdempotence
+			return
+		}
 	}
 
 	meta := database.SimpleGetTableByName(ctx.TableName)
@@ -430,7 +437,7 @@ func (d *DB) CreateSnapshot(dbName string, path string, forcesync bool) (uint64,
 	now := time.Now()
 	maxTillTime := now.Add(time.Duration(4) * time.Second)
 	for time.Now().Before(maxTillTime) {
-		index, err = d.doCreateSnapshot(database, path, forcesync)
+		index, err = d.DoCreateSnapshot(database, path, forcesync)
 		if err != ErrStaleErr && err != ErrTimeout {
 			break
 		}

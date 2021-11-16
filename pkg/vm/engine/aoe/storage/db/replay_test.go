@@ -1121,6 +1121,7 @@ func TestReplay14(t *testing.T) {
 	}
 	err = inst1.Append(appendCtx)
 	assert.Nil(t, err)
+	// appendIdx := gen.Get(database.GetShardId())
 
 	t1, err := inst1.Store.Catalog.SimpleGetTableByName(database.Name, schema1.Name)
 	assert.Nil(t, err)
@@ -1130,7 +1131,7 @@ func TestReplay14(t *testing.T) {
 		DBName:    database.Name,
 		TableName: schema1.Name,
 	})
-	lastIdx := gen.Get(database.GetShardId())
+	dropIdx := gen.Get(database.GetShardId())
 
 	testutils.WaitExpect(200, func() bool {
 		return database.UncheckpointedCnt() == 1 && t1.IsHardDeleted()
@@ -1156,5 +1157,15 @@ func TestReplay14(t *testing.T) {
 	t2Replayed := db2.GetTable(t1.Id)
 	assert.True(t, t2Replayed.IsHardDeleted())
 	t.Log(db2.GetIdempotentIndex().String())
-	assert.Equal(t, lastIdx, db2.GetIdempotentIndex().Id.Id)
+	assert.Equal(t, dropIdx, db2.GetIdempotentIndex().Id.Id)
+
+	err = inst2.Append(appendCtx)
+	assert.Nil(t, err)
+
+	_, err = inst2.DropTable(dbi.DropTableCtx{
+		OpIndex:   dropIdx,
+		DBName:    database.Name,
+		TableName: schema1.Name,
+	})
+	assert.Equal(t, ErrIdempotence, err)
 }

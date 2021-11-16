@@ -29,13 +29,8 @@ func (checker *IdempotentChecker) ConsumeIdempotentIndex(index *LogIndex) (*LogI
 		curr = nil
 		ok = true
 	} else if comp == 0 {
-		if curr.IsApplied() {
-			checker.ResetIdempotentIndex()
-			curr = nil
-			ok = true
-		} else {
-			ok = true
-		}
+		checker.ResetIdempotentIndex()
+		ok = true
 	}
 	return curr, ok
 }
