@@ -12,14 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fastmap
+package rewrite
 
-const (
-	Group     = 16
-	GroupMask = 0xF
-)
+import "matrixone/pkg/sql/parsers/tree"
 
-type Map struct {
-	Vs [][]int
-	Ks [][]uint64
+func Rewrite(stmt tree.Statement) tree.Statement {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return rewriteSelect(stmt)
+	case *tree.ParenSelect:
+		stmt.Select = rewriteSelect(stmt.Select)
+		return stmt
+	case *tree.Insert:
+		return rewriteInsert(stmt)
+	}
+	return stmt
 }

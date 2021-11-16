@@ -12,20 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fastmap
+package output
 
 import (
-	"fmt"
-	"testing"
+	"bytes"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/process"
 )
 
-func TestMap(t *testing.T) {
-	m := New()
-	for i := 0; i < 100; i++ {
-		m.Set(uint64(i), i)
+func String(arg interface{}, buf *bytes.Buffer) {
+	buf.WriteString("sql output")
+}
+
+func Prepare(_ *process.Process, _ interface{}) error {
+	return nil
+}
+
+func Call(proc *process.Process, arg interface{}) (bool, error) {
+	ap := arg.(*Argument)
+	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
+		if len(ap.Attrs) > 0 {
+			batch.Reorder(bat, ap.Attrs)
+		}
+		if err := ap.Func(ap.Data, bat); err != nil {
+			batch.Clean(bat, proc.Mp)
+			return true, err
+		}
+		batch.Clean(bat, proc.Mp)
 	}
-	for i := 0; i < 100; i++ {
-		v, ok := m.Get(uint64(i))
-		fmt.Printf("%v: %v, %v\n", i, v, ok)
-	}
+	return false, nil
 }

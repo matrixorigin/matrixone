@@ -258,6 +258,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_int16:
 		vs := v.Col.([]int16)
@@ -273,6 +274,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_int32:
 		vs := v.Col.([]int32)
@@ -288,6 +290,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_int64:
 		vs := v.Col.([]int64)
@@ -303,6 +306,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_uint8:
 		vs := v.Col.([]uint8)
@@ -318,6 +322,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_uint16:
 		vs := v.Col.([]uint16)
@@ -333,6 +338,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_uint32:
 		vs := v.Col.([]uint32)
@@ -348,6 +354,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_uint64:
 		vs := v.Col.([]uint64)
@@ -363,6 +370,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_float32:
 		vs := v.Col.([]float32)
@@ -378,6 +386,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_float64:
 		vs := v.Col.([]float64)
@@ -393,6 +402,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	case types.T_char, types.T_varchar, types.T_json:
 		var err error
@@ -420,6 +430,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Typ:  v.Typ,
 			Nsp:  v.Nsp,
 			Ref:  v.Ref,
+			Link: v.Link,
 		}, nil
 	}
 	return nil, fmt.Errorf("unsupport type %v", v.Typ)
@@ -509,13 +520,111 @@ func Append(v *Vector, arg interface{}) error {
 	return nil
 }
 
-func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
+func Shrink(v *Vector, sels []int64) {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		vs := v.Col.([]int8)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_int16:
+		vs := v.Col.([]int16)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_int32:
+		vs := v.Col.([]int32)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_int64:
+		vs := v.Col.([]int64)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_uint8:
+		vs := v.Col.([]uint8)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_uint16:
+		vs := v.Col.([]uint16)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_uint32:
+		vs := v.Col.([]uint32)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_uint64:
+		vs := v.Col.([]uint64)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_float32:
+		vs := v.Col.([]float32)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_float64:
+		vs := v.Col.([]float64)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_sel:
+		vs := v.Col.([]int64)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_tuple:
+		vs := v.Col.([][]interface{})
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_char, types.T_varchar, types.T_json:
+		vs := v.Col.(*types.Bytes)
+		for i, sel := range sels {
+			vs.Offsets[i] = vs.Offsets[sel]
+			vs.Lengths[i] = vs.Lengths[sel]
+		}
+		vs.Offsets = vs.Offsets[:len(sels)]
+		vs.Lengths = vs.Lengths[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	}
+}
+
+func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 	switch v.Typ.Oid {
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		data, err := mheap.Alloc(m, int64(len(vs)))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeInt8Slice(data)
 		v.Col = shuffle.I8Shuffle(vs, ws, sels)
@@ -525,7 +634,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]int16)
 		data, err := mheap.Alloc(m, int64(len(vs)*2))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeInt16Slice(data)
 		v.Col = shuffle.I16Shuffle(vs, ws, sels)
@@ -535,7 +644,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]int32)
 		data, err := mheap.Alloc(m, int64(len(vs)*4))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeInt32Slice(data)
 		v.Col = shuffle.I32Shuffle(vs, ws, sels)
@@ -545,7 +654,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]int64)
 		data, err := mheap.Alloc(m, int64(len(vs)*8))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
 		v.Col = shuffle.I64Shuffle(vs, ws, sels)
@@ -555,7 +664,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]uint8)
 		data, err := mheap.Alloc(m, int64(len(vs)))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeUint8Slice(data)
 		v.Col = shuffle.Ui8Shuffle(vs, ws, sels)
@@ -565,7 +674,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]uint16)
 		data, err := mheap.Alloc(m, int64(len(vs)*2))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeUint16Slice(data)
 		v.Col = shuffle.Ui16Shuffle(vs, ws, sels)
@@ -575,7 +684,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]uint32)
 		data, err := mheap.Alloc(m, int64(len(vs)*4))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeUint32Slice(data)
 		v.Col = shuffle.Ui32Shuffle(vs, ws, sels)
@@ -585,7 +694,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]uint64)
 		data, err := mheap.Alloc(m, int64(len(vs)*8))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeUint64Slice(data)
 		v.Col = shuffle.Ui64Shuffle(vs, ws, sels)
@@ -595,7 +704,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]float32)
 		data, err := mheap.Alloc(m, int64(len(vs)*4))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeFloat32Slice(data)
 		v.Col = shuffle.Float32Shuffle(vs, ws, sels)
@@ -605,7 +714,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]float64)
 		data, err := mheap.Alloc(m, int64(len(vs)*8))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeFloat64Slice(data)
 		v.Col = shuffle.Float64Shuffle(vs, ws, sels)
@@ -615,7 +724,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.([]int64)
 		data, err := mheap.Alloc(m, int64(len(vs)*8))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
 		v.Col = shuffle.I64Shuffle(vs, ws, sels)
@@ -630,13 +739,13 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		vs := v.Col.(*types.Bytes)
 		odata, err := mheap.Alloc(m, int64(len(vs.Offsets)*4))
 		if err != nil {
-			return nil, err
+			return err
 		}
 		os := encoding.DecodeUint32Slice(odata)
 		ndata, err := mheap.Alloc(m, int64(len(vs.Offsets)*4))
 		if err != nil {
 			mheap.Free(m, odata)
-			return nil, err
+			return err
 		}
 		ns := encoding.DecodeUint32Slice(ndata)
 		v.Col = shuffle.SShuffle(vs, os, ns, sels)
@@ -644,7 +753,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) (*Vector, error) {
 		mheap.Free(m, odata)
 		mheap.Free(m, ndata)
 	}
-	return v, nil
+	return nil
 }
 
 // v[vi] = w[wi]
@@ -959,7 +1068,7 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
 		from := ws.Get(sel)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(len(from)))
+			data, err := mheap.Alloc(m, int64(len(from))*8)
 			if err != nil {
 				return err
 			}

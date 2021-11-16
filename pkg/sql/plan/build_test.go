@@ -188,7 +188,6 @@ func TestBuild(t *testing.T) {
 }
 
 func processQuery(query string, e engine.Engine) {
-	// stmts, err := tree.NewParser().Parse(query)
 	stmts, err := parsers.Parse(dialect.MYSQL, query)
 	if err != nil {
 		log.Fatal(err)
@@ -200,7 +199,6 @@ func processQuery(query string, e engine.Engine) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("+++++++++++\n")
 		fmt.Printf("%s\n", qry)
 	}
 

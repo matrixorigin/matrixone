@@ -15,12 +15,10 @@
 package engine
 
 import (
-	"bytes"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/mheap"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -104,7 +102,7 @@ type Relation interface {
 	AddTableDef(uint64, TableDef) error
 	DelTableDef(uint64, TableDef) error
 
-	NewReader(int, *mheap.Mheap) []Reader // first argument is the number of reader
+	NewReader(int) []Reader // first argument is the number of reader
 }
 
 type Reader interface {
@@ -112,7 +110,7 @@ type Reader interface {
 	NewSummarizer() Summarizer
 	NewSparseFilter() SparseFilter
 
-	Read([]uint64, []string, []*bytes.Buffer) (*batch.Batch, error)
+	Read([]uint64, []string) (*batch.Batch, error)
 }
 
 type Filter interface {

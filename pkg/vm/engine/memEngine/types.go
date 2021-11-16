@@ -1,6 +1,7 @@
 package memEngine
 
 import (
+	"bytes"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/memEngine/kv"
 	"matrixone/pkg/vm/engine/memEngine/meta"
@@ -22,4 +23,13 @@ type relation struct {
 	db *kv.KV
 	n  engine.Node
 	md meta.Metadata
+}
+
+type reader struct {
+	zs    []int64
+	db    *kv.KV
+	segs  []string
+	cds   []*bytes.Buffer
+	dds   []*bytes.Buffer
+	attrs map[string]engine.Attribute
 }

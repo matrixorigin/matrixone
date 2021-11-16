@@ -20,7 +20,33 @@ import (
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/util"
+	"matrixone/pkg/sql/viewexec/transformer"
 )
+
+func (qry *Query) backFill() {
+	qry.VarsMap = make(map[string]int)
+	for _, rn := range qry.Rels {
+		rel := qry.RelsMap[rn]
+		for _, attr := range rel.Attrs {
+			qry.VarsMap[attr]++
+		}
+		for _, agg := range rel.Aggregations {
+			_, name := util.SplitTableAndColumn(agg.Alias)
+			qry.VarsMap[name]++
+			if agg.Op == transformer.StarCount {
+				agg.Name = rel.Attrs[0]
+			}
+		}
+		for _, e := range rel.ProjectionExtends {
+			_, name := util.SplitTableAndColumn(e.Alias)
+			qry.VarsMap[name]++
+		}
+	}
+	for _, e := range qry.ProjectionExtends {
+		_, name := util.SplitTableAndColumn(e.Alias)
+		qry.VarsMap[name]++
+	}
+}
 
 // If flg is set, then it will increase the reference count
 // 	. only the original attributes will be looked up
@@ -207,7 +233,8 @@ func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, er
 	return names, typ, nil
 }
 
-func (qry *Query) getJoinAttribute(tbls []string, col string) (string, string, error) {
+// If flg is set, then it will increase the reference count
+func (qry *Query) getJoinAttribute(flg bool, tbls []string, col string) (string, string, error) {
 	var names []string
 
 	tbl, name := util.SplitTableAndColumn(col)
@@ -218,7 +245,9 @@ func (qry *Query) getJoinAttribute(tbls []string, col string) (string, string, e
 				if !ok {
 					return "", "", errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Column '%s' doesn't exist", col))
 				}
-				attr.IncRef()
+				if flg {
+					attr.IncRef()
+				}
 				names = append(names, tbls[i])
 			}
 		}
@@ -228,7 +257,9 @@ func (qry *Query) getJoinAttribute(tbls []string, col string) (string, string, e
 	} else {
 		for i := 0; i < len(tbls); i++ {
 			if attr, ok := qry.RelsMap[tbls[i]].AttrsMap[name]; ok {
-				attr.IncRef()
+				if flg {
+					attr.IncRef()
+				}
 				names = append(names, tbls[i])
 			}
 		}

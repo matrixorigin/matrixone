@@ -40,11 +40,11 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		if !ok {
 			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
 		}
-		r, rattr, err := qry.getJoinAttribute(append(rs, ss...), left)
+		r, rattr, err := qry.getJoinAttribute(true, append(rs, ss...), left)
 		if err != nil {
 			return err
 		}
-		s, sattr, err := qry.getJoinAttribute(append(rs, ss...), right)
+		s, sattr, err := qry.getJoinAttribute(true, append(rs, ss...), right)
 		if err != nil {
 			return err
 		}
@@ -64,11 +64,11 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 
 func (b *build) buildUsingJoinCond(cols tree.IdentifierList, rs, ss []string, qry *Query) error {
 	for _, col := range cols {
-		r, rattr, err := qry.getJoinAttribute(rs, string(col))
+		r, rattr, err := qry.getJoinAttribute(true, rs, string(col))
 		if err != nil {
 			return err
 		}
-		s, sattr, err := qry.getJoinAttribute(ss, string(col))
+		s, sattr, err := qry.getJoinAttribute(true, ss, string(col))
 		if err != nil {
 			return err
 		}

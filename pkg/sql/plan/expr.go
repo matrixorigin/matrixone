@@ -25,6 +25,7 @@ import (
 	"matrixone/pkg/sql/colexec/extend/overload"
 	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/parsers/tree"
+	"matrixone/pkg/sql/util"
 	"matrixone/pkg/sql/viewexec/transformer"
 	"strings"
 )
@@ -531,6 +532,8 @@ func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, f
 	if len(mp) > 1 {
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the aggregation must belong to the same relation"))
 	}
+	alias := fmt.Sprintf("%s(%s)", name, e)
+	e = pruneExtendAttribute(e)
 	if _, ok := e.(*extend.Attribute); !ok {
 		qry.RelsMap[rel].AddProjection(&ProjectionExtend{
 			Ref:   1,
@@ -542,11 +545,11 @@ func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, f
 		Ref:   1,
 		Op:    op,
 		Name:  e.String(),
-		Alias: fmt.Sprintf("%s(%s)", name, e),
+		Alias: alias,
 		Type:  transformer.ReturnType(op, e.ReturnType()),
 	})
 	return &extend.Attribute{
-		Name: fmt.Sprintf("%s(%s)", name, e),
+		Name: alias,
 		Type: transformer.ReturnType(op, e.ReturnType()),
 	}, nil
 }
@@ -654,6 +657,22 @@ func stripEqual(e extend.Extend) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func pruneExtendAttribute(e extend.Extend) extend.Extend {
+	switch v := e.(type) {
+	case *extend.UnaryExtend:
+		v.E = pruneExtendAttribute(v.E)
+	case *extend.ParenExtend:
+		v.E = pruneExtendAttribute(v.E)
+	case *extend.Attribute:
+		_, name := util.SplitTableAndColumn(v.Name)
+		v.Name = name
+	case *extend.BinaryExtend:
+		v.Left = pruneExtendAttribute(v.Left)
+		v.Right = pruneExtendAttribute(v.Right)
+	}
+	return e
 }
 
 func andExtends(qry *Query, e extend.Extend, es []extend.Extend) []extend.Extend {

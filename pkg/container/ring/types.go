@@ -21,20 +21,27 @@ import (
 )
 
 type Ring interface {
+	Count() int
+
 	Size() int
 
 	Dup() Ring
 	Type() types.Type
 
+	String() string
+
 	Free(*mheap.Mheap)
 	Grow(*mheap.Mheap) error
 
+	Shrink([]int64)
 	Shuffle([]int64, *mheap.Mheap) error
 
 	Eval([]int64) *vector.Vector
 
-	Fill(int64, []int64, []int64, *vector.Vector)
+	Fill(int64, int64, int64, *vector.Vector)
 
+	BulkFill(int64, []int64, *vector.Vector)
+
+	Mul(int64, int64)
 	Add(interface{}, int64, int64)
-	Mul(interface{}, []int64, int64, int64, int64)
 }

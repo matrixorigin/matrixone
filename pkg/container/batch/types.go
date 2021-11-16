@@ -34,10 +34,9 @@ type Batch struct {
 	// Attrs column name list
 	Attrs []string
 	// Vecs col data
-	Ring struct {
-		Zs []int64
-		As []string // alias list
-		Rs []ring.Ring
-	}
 	Vecs []*vector.Vector
+	// ring
+	Zs []int64
+	As []string // alias list
+	Rs []ring.Ring
 }

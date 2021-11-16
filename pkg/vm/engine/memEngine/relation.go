@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/mheap"
 
 	"github.com/pierrec/lz4"
 )
@@ -21,7 +20,11 @@ func (r *relation) Rows() int64 {
 	return r.md.Rows
 }
 
-func (r *relation) Size(_ string) int64 {
+func (_ *relation) Size(_ string) int64 {
+	return 0
+}
+
+func (_ *relation) CardinalNumber(_ string) int64 {
 	return 0
 }
 
@@ -37,8 +40,48 @@ func (r *relation) TableDefs() []engine.TableDef {
 	return defs
 }
 
-func (r *relation) NewReader(_ int, _ *mheap.Mheap) []engine.Reader {
-	return nil
+func (r *relation) NewReader(n int) []engine.Reader {
+	segs := make([]string, r.md.Segs)
+	for i := range segs {
+		segs[i] = sKey(i, r.id)
+	}
+	attrs := make(map[string]engine.Attribute)
+	{
+		for i, attr := range r.md.Attrs {
+			attrs[attr.Name] = r.md.Attrs[i]
+		}
+	}
+	rs := make([]engine.Reader, n)
+	if int64(n) < r.md.Segs {
+		step := int(r.md.Segs) / n
+		for i := 0; i < n; i++ {
+			if i == n-1 {
+				rs[i] = &reader{
+					db:    r.db,
+					attrs: attrs,
+					segs:  segs[i*step:],
+				}
+			} else {
+				rs[i] = &reader{
+					db:    r.db,
+					attrs: attrs,
+					segs:  segs[i*step : (i+1)*step],
+				}
+			}
+		}
+	} else {
+		for i := range segs {
+			rs[i] = &reader{
+				db:    r.db,
+				attrs: attrs,
+				segs:  segs[i : i+1],
+			}
+		}
+		for i := len(segs); i < n; i++ {
+			rs[i] = &reader{}
+		}
+	}
+	return rs
 }
 
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {

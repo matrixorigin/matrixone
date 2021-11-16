@@ -12,17 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fastmap
-
-var (
-	Find func([]uint64, uint64) int
-)
-
-func find(xs []uint64, v uint64) int {
-	for i, x := range xs {
-		if x == v {
-			return i
-		}
-	}
-	return -1
-}
+package compile

@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
+package times
 
-package fastmap
+import (
+	"bytes"
+	"matrixone/pkg/vm/process"
+)
 
-import "golang.org/x/sys/cpu"
+func String(_ interface{}, buf *bytes.Buffer) {
+	buf.WriteString(" ⨯ ")
+}
 
-func findAvx2Asm(x []uint64, y uint64) int
+func Prepare(_ *process.Process, arg interface{}) error {
+	n := arg.(*Argument)
+	n.Ctr = new(Container)
+	return nil
+}
 
-func init() {
-	if cpu.X86.HasAVX2 {
-		Find = findAvx2Asm
-	} else {
-		Find = find
-	}
+func Call(proc *process.Process, arg interface{}) (bool, error) {
+	return false, nil
 }

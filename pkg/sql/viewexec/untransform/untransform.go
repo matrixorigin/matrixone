@@ -12,11 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build arm64
-// +build arm64
+package untransform
 
-package fastmap
+import (
+	"bytes"
+	"matrixone/pkg/vm/process"
+)
 
-func init() {
-	Find = find
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString("∐ ([")
+	for i, fvar := range n.FreeVars {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(fvar)
+	}
+	buf.WriteString("])")
+}
+
+func Prepare(_ *process.Process, arg interface{}) error {
+	n := arg.(*Argument)
+	n.Ctr = new(Container)
+	return nil
+}
+
+func Call(proc *process.Process, arg interface{}) (bool, error) {
+	return false, nil
 }

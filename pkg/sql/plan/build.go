@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/sql/transform"
+	"matrixone/pkg/sql/rewrite"
 	"matrixone/pkg/vm/engine"
 )
 
@@ -32,7 +32,7 @@ func New(db string, sql string, e engine.Engine) *build {
 }
 
 func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
-	stmt = transform.Transform(stmt)
+	stmt = rewrite.Rewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		qry := &Query{
@@ -43,6 +43,7 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 		if err := b.buildSelect(stmt, qry); err != nil {
 			return nil, err
 		}
+		qry.backFill()
 		return qry, nil
 	case *tree.ParenSelect:
 		qry := &Query{
@@ -53,6 +54,7 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 		if err := b.buildSelect(stmt.Select, qry); err != nil {
 			return nil, err
 		}
+		qry.backFill()
 		return qry, nil
 	}
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))

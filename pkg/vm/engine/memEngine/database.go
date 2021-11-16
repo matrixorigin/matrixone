@@ -23,7 +23,6 @@ func (d *database) Relation(name string) (engine.Relation, error) {
 		return nil, err
 	}
 	return &relation{id: name, db: d.db, n: d.n, md: md}, nil
-
 }
 
 func (d *database) Delete(_ uint64, _ string) error {
