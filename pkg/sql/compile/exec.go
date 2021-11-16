@@ -62,6 +62,45 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 			return nil, err
 		}
 		return e.compileVTree(vtree.New().Build(ft), qry.VarsMap)
+	case *plan.CreateDatabase:
+		return &Scope{
+			Magic:        CreateDatabase,
+			Plan:         pn,
+			Proc:         e.c.proc,
+		}, nil
+	case *plan.CreateTable:
+		return &Scope{
+			Magic:        CreateTable,
+			Plan:         pn,
+			Proc:         e.c.proc,
+			// todo: create table t1 as select a, b, c from t2 ?
+			DataSource:   nil,
+			PreScopes: 	  nil,
+		}, nil
+	case *plan.CreateIndex:
+		return &Scope{
+			Magic:        CreateIndex,
+			Plan:         pn,
+			Proc:         e.c.proc,
+		}, nil
+	case *plan.DropDatabase:
+		return &Scope{
+			Magic:        DropDatabase,
+			Plan:         pn,
+			Proc:         e.c.proc,
+		}, nil
+	case *plan.DropTable:
+		return &Scope{
+			Magic:        DropTable,
+			Plan:         pn,
+			Proc:         e.c.proc,
+		}, nil
+	case *plan.DropIndex:
+		return &Scope{
+			Magic:        DropIndex,
+			Plan:         pn,
+			Proc:         e.c.proc,
+		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }

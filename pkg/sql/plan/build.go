@@ -86,6 +86,12 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 			return nil, err
 		}
 		return plan, nil
+	case *tree.DropIndex:
+		plan := &DropIndex{}
+		if err := b.BuildDropIndex(stmt, plan); err != nil {
+			return nil, err
+		}
+		return plan, nil
 	}
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }

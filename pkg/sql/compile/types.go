@@ -28,6 +28,12 @@ const (
 	Normal = iota
 	Merge
 	Remote
+	CreateDatabase
+	CreateTable
+	CreateIndex
+	DropDatabase
+	DropTable
+	DropIndex
 )
 
 // Source contains information of a relation which will be used in execution,

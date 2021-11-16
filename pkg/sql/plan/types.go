@@ -111,6 +111,12 @@ type CreateTable struct {
 	PartitionBy    *engine.PartitionByDef
 }
 
+type CreateIndex struct {
+	IfNotExistFlag bool
+	Relation       engine.Relation
+	Defs		   []engine.TableDef
+}
+
 type DropDatabase struct {
 	IfExistFlag bool
 	Id          string
@@ -124,10 +130,10 @@ type DropTable struct {
 	E			engine.Engine
 }
 
-type CreateIndex struct {
-	IfNotExistFlag bool
-	Relation       engine.Relation
-	Defs		   []engine.TableDef
+type DropIndex struct {
+	IfExistFlag bool
+	Id			string
+	Relation	engine.Relation
 }
 
 type build struct {
@@ -347,6 +353,10 @@ func (c CreateDatabase) String() string {
 	return buf.String()
 }
 
+func (c CreateDatabase) ResultColumns() []*Attribute {
+	return nil
+}
+
 func (c CreateTable) String() string {
 	var buf bytes.Buffer
 	buf.WriteString("create table ")
@@ -371,6 +381,27 @@ func (c CreateTable) String() string {
 	return buf.String()
 }
 
+func (c CreateTable) ResultColumns() []*Attribute {
+	return nil
+}
+
+func (c CreateIndex) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("create index ")
+	if c.IfNotExistFlag {
+		buf.WriteString("if not exists ")
+	}
+	for _, def := range c.Defs {
+		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
+	}
+	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
+	return buf.String()
+}
+
+func (c CreateIndex) ResultColumns() []*Attribute {
+	return nil
+}
+
 func (d DropDatabase) String() string {
 	var buf bytes.Buffer
 	buf.WriteString("drop database ")
@@ -379,6 +410,10 @@ func (d DropDatabase) String() string {
 	}
 	buf.WriteString(d.Id)
 	return buf.String()
+}
+
+func (d DropDatabase) ResultColumns() []*Attribute {
+	return nil
 }
 
 func (d DropTable) String() string {
@@ -393,15 +428,20 @@ func (d DropTable) String() string {
 	return buf.String()
 }
 
-func (c CreateIndex) String() string {
+func (d DropTable) ResultColumns() []*Attribute {
+	return nil
+}
+
+func (d DropIndex) String() string {
 	var buf bytes.Buffer
-	buf.WriteString("create index ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
+	buf.WriteString("drop index ")
+	if d.IfExistFlag {
+		buf.WriteString("if exists ")
 	}
-	for _, def := range c.Defs {
-		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
-	}
-	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
+	buf.WriteString(d.Id)
 	return buf.String()
+}
+
+func (d DropIndex) ResultColumns() []*Attribute {
+	return nil
 }
