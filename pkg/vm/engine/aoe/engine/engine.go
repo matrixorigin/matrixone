@@ -15,7 +15,7 @@
 package engine
 
 import (
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -40,9 +40,9 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var ni *engine.NodeInfo
-	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard meta.Shard, store meta.Store) bool {
 		if ni != nil {
-			return
+			return false
 		}
 		if strings.HasPrefix(store.ClientAddr, ip) {
 			stats := e.catalog.Driver.RaftStore().GetRouter().GetStoreStats(store.ID)
@@ -54,6 +54,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 				Mcpu: cpuCnt,
 			}
 		}
+		return true
 	})
 	return ni
 }

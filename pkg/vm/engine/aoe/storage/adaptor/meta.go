@@ -87,7 +87,11 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {
 	return &shard.Index{
 		ShardId: ctx.ShardId,
-		Id:      shard.SimpleIndexId(ctx.OpIndex),
+		Id: shard.IndexId{
+			Id:     ctx.OpIndex,
+			Offset: uint32(ctx.OpOffset),
+			Size:   uint32(ctx.OpSize),
+		},
 	}
 }
 

@@ -23,6 +23,8 @@ type OnTableDroppedCB = func(error)
 type TableOpCtx struct {
 	ShardId   uint64
 	OpIndex   uint64
+	OpOffset  int
+	OpSize    int
 	TableName string
 }
 

@@ -16,14 +16,16 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -90,7 +92,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
-			c.ServerConfig.ExternalServer = true
+			// c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -115,7 +117,8 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
@@ -124,7 +127,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*30)
+	// c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -192,7 +195,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	idxTableInfo, _ = catalog.GetTable(dbids[0], testTables[0].Name)
 	idxs = idxTableInfo.Indices
 	require.Equal(t, 0, len(idxs))
-	
+
 	err = catalog.DropIndex(0, idxTableInfo.Id, idxTableInfo.SchemaId, "mock_idx")
 	require.Equal(t, ErrIndexNotExist, err)
 

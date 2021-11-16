@@ -102,7 +102,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if len(ids.Ids) == 0 {
 				continue
 			}
-			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
+			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
 			if lRelation, err := ldb.Relation(tbl.ShardId, tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
