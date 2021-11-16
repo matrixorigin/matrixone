@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -152,4 +153,35 @@ func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) 
 	}
 	defer collection.Unref()
 	return collection.Append(data, index)
+}
+
+func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
+	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
+	if err != nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := e.Collection
+		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
+			collection.Unref()
+			return nil, err
+		}
+		collection.Unref()
+	}
+	return data, nil
 }

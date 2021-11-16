@@ -29,12 +29,10 @@ import (
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
@@ -172,7 +170,6 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err != nil {
 		return err
 	}
-	logutil.Infof("xxxxxxxxxxx %s", tbl.PString(metadata.PPL0, 0))
 	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
 	if err == metadata.IdempotenceErr {
 		return ErrIdempotence
@@ -181,37 +178,6 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		return metadata.TableNotFoundErr
 	}
 	return d.DoAppend(tbl, ctx.Data, index)
-}
-
-func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
-	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
-	if err != nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection := e.Collection
-		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			collection.Unref()
-			return nil, err
-		}
-		collection.Unref()
-	}
-	return data, nil
 }
 
 func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
@@ -385,6 +351,13 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 		ss = handle.NewSnapshot(ctx.SegmentIds, ctx.Cols, tableData)
 	}
 	return ss, nil
+}
+
+func (d *DB) DatabaseNames() []string {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return d.Store.Catalog.SimpleGetDatabaseNames()
 }
 
 func (d *DB) TableIDs(dbName string) (ids []uint64, err error) {
