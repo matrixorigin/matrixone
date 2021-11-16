@@ -113,6 +113,11 @@ type splitDBCtx struct {
 	dbSpecs     []*DBSpec
 }
 
+type commitSplitCtx struct {
+	writeCtx
+	replace *dbReplaceLogEntry
+}
+
 func newDeleteTableCtx(table *Table, tranId uint64) *deleteTableCtx {
 	return &deleteTableCtx{
 		writeCtx: writeCtx{

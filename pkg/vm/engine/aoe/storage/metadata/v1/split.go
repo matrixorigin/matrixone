@@ -164,27 +164,71 @@ func (split *ShardSplitSpec) Unmarshal(buf []byte) error {
 type ShardSplitter struct {
 	Spec        *ShardSplitSpec
 	Catalog     *Catalog
-	TableRename RenameTableFactory
+	RenameTable RenameTableFactory
 	DBSpecs     []*DBSpec
 	Index       *LogIndex
 	TranId      uint64
+	ReplaceCtx  *dbReplaceLogEntry
 }
 
 func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec, index *LogIndex, rename RenameTableFactory) *ShardSplitter {
 	return &ShardSplitter{
 		Spec:        spec,
 		Catalog:     catalog,
-		TableRename: rename,
+		RenameTable: rename,
 		DBSpecs:     dbSpecs,
 		Index:       index,
 	}
 }
 
+func (splitter *ShardSplitter) prepareReplaceCtx() error {
+	splitter.ReplaceCtx = newDbReplaceLogEntry()
+	db := splitter.Spec.db
+	dbs := make(map[uint64]*Database)
+	for _, spec := range splitter.DBSpecs {
+		nDB := NewDatabase(splitter.Catalog, spec.Name, splitter.TranId, nil)
+		spec.ShardId = nDB.CommitInfo.GetShardId()
+		dbs[spec.ShardId] = nDB
+		splitter.ReplaceCtx.AddReplacer(nDB)
+	}
+	for _, spec := range splitter.Spec.Specs {
+		table := splitter.Spec.splitted[spec.Index]
+		table.Splite(splitter.Catalog, splitter.TranId, spec, splitter.RenameTable, dbs)
+	}
+	rCtx := new(addReplaceCommitCtx)
+	rCtx.tranId = splitter.TranId
+	rCtx.inTran = true
+	rCtx.database = db
+	rCtx.exIndex = splitter.Index
+	if _, err := db.prepareReplace(rCtx); err != nil {
+		panic(err)
+	}
+	splitter.ReplaceCtx.Replaced = &databaseLogEntry{
+		BaseEntry: db.BaseEntry,
+		Id:        db.Id,
+	}
+
+	for _, nDB := range dbs {
+		nCtx := new(addDatabaseCtx)
+		nCtx.tranId = splitter.TranId
+		nCtx.inTran = true
+		nCtx.database = nDB
+		if _, err := splitter.Catalog.prepareAddDatabase(nCtx); err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
 func (splitter *ShardSplitter) Prepare() error {
 	splitter.TranId = splitter.Catalog.NextUncommitId()
-	return splitter.Spec.Prepare(splitter.Catalog, splitter.TableRename, splitter.DBSpecs)
+	err := splitter.Spec.Prepare(splitter.Catalog, splitter.RenameTable, splitter.DBSpecs)
+	if err != nil {
+		return err
+	}
+	return splitter.prepareReplaceCtx()
 }
 
 func (splitter *ShardSplitter) Commit() error {
-	return splitter.Catalog.execSplit(splitter.TableRename, splitter.Spec, splitter.TranId, splitter.Index, splitter.DBSpecs)
+	return splitter.Catalog.CommitSplit(splitter.ReplaceCtx)
 }

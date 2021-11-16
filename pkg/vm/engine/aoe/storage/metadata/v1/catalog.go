@@ -198,6 +198,17 @@ func (catalog *Catalog) Close() error {
 	return nil
 }
 
+func (catalog *Catalog) CommitSplit(replace *dbReplaceLogEntry) error {
+	ctx := new(commitSplitCtx)
+	ctx.replace = replace
+	return catalog.onCommitRequest(ctx, true)
+}
+
+func (catalog *Catalog) prepareCommitSplit(ctx *commitSplitCtx) (LogEntry, error) {
+	logEntry := catalog.prepareCommitEntry(ctx.replace, ETSplitDatabase, nil)
+	return logEntry, nil
+}
+
 func (catalog *Catalog) StartTxn(index *LogIndex) *TxnCtx {
 	return NewTxn(catalog, index)
 }
