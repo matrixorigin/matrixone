@@ -29,7 +29,7 @@ type TableNameFactory interface {
 }
 
 type TableRangeSpec struct {
-	DBSpec     DBSpec       `json:"dbspec"`
+	DBSpec     *DBSpec      `json:"dbspec"`
 	CoarseSize int64        `json:"size"`
 	Group      uint32       `json:"group"`
 	Range      common.Range `json:"range"`
@@ -51,7 +51,7 @@ func (spec *TableRangeSpec) String() string {
 	return fmt.Sprintf("(ndb-%s|grp-%d|size-%d|%s)", spec.DBSpec.String(), spec.Group, spec.CoarseSize, spec.Range.String())
 }
 
-func (split *TableSplitSpec) Rewrite(dbSpecs []DBSpec) {
+func (split *TableSplitSpec) Rewrite(dbSpecs []*DBSpec) {
 	for _, spec := range split.Specs {
 		spec.DBSpec = dbSpecs[int(spec.Group)]
 	}
@@ -114,13 +114,13 @@ func (split *ShardSplitSpec) String() string {
 	return fmt.Sprintf("%s\n}", s)
 }
 
-func (split *ShardSplitSpec) Rewrite(specs []DBSpec) {
+func (split *ShardSplitSpec) Rewrite(specs []*DBSpec) {
 	for _, spec := range split.Specs {
 		spec.Rewrite(specs)
 	}
 }
 
-func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFactory, dbSpecs []DBSpec) error {
+func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFactory, dbSpecs []*DBSpec) error {
 	var err error
 	split.db, err = catalog.SimpleGetDatabaseByName(split.Name)
 	if err != nil {
@@ -163,12 +163,12 @@ type ShardSplitter struct {
 	Spec        *ShardSplitSpec
 	Catalog     *Catalog
 	NameFactory TableNameFactory
-	DBSpecs     []DBSpec
+	DBSpecs     []*DBSpec
 	Index       *LogIndex
 	TranId      uint64
 }
 
-func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []DBSpec, index *LogIndex, nameFactory TableNameFactory) *ShardSplitter {
+func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec, index *LogIndex, nameFactory TableNameFactory) *ShardSplitter {
 	return &ShardSplitter{
 		Spec:        spec,
 		Catalog:     catalog,

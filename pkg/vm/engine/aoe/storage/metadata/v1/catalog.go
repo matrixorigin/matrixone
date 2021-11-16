@@ -598,7 +598,7 @@ func (catalog *Catalog) SplitCheck(size, index uint64, dbName string) (coarseSiz
 	return db.SplitCheck(size, index)
 }
 
-func (catalog *Catalog) execSplit(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []DBSpec) error {
+func (catalog *Catalog) execSplit(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []*DBSpec) error {
 	ctx := new(splitDBCtx)
 	ctx.spec = spec
 	ctx.nameFactory = nameFactory
@@ -613,11 +613,8 @@ func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {
 	db := ctx.spec.db
 	dbs := make(map[uint64]*Database)
 	for _, spec := range ctx.dbSpecs {
-		index := &LogIndex{
-			ShardId: spec.ShardId,
-			Id:      shard.SimpleIndexId(uint64(0)),
-		}
-		nDB := NewDatabase(catalog, spec.Name, ctx.tranId, index)
+		nDB := NewDatabase(catalog, spec.Name, ctx.tranId, nil)
+		spec.ShardId = nDB.CommitInfo.GetShardId()
 		dbs[spec.ShardId] = nDB
 		entry.AddReplacer(nDB)
 	}

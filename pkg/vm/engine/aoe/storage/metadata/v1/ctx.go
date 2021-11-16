@@ -110,7 +110,7 @@ type splitDBCtx struct {
 	writeCtx
 	spec        *ShardSplitSpec
 	nameFactory TableNameFactory
-	dbSpecs     []DBSpec
+	dbSpecs     []*DBSpec
 }
 
 func newDeleteTableCtx(table *Table, tranId uint64) *deleteTableCtx {

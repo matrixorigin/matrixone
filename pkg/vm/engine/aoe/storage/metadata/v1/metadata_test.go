@@ -1202,11 +1202,10 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
 
-	dbSpecs := make([]DBSpec, len(keys))
+	dbSpecs := make([]*DBSpec, len(keys))
 	for i, _ := range dbSpecs {
-		dbSpec := DBSpec{}
-		dbSpec.ShardId = uint64(100) + uint64(i)
-		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
+		dbSpec := new(DBSpec)
+		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
 	}
 	splitIndex := gen.Next(shardId)
@@ -1290,11 +1289,10 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
 
-	dbSpecs := make([]DBSpec, len(keys))
+	dbSpecs := make([]*DBSpec, len(keys))
 	for i, _ := range dbSpecs {
-		dbSpec := DBSpec{}
-		dbSpec.ShardId = uint64(100) + uint64(i)
-		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
+		dbSpec := new(DBSpec)
+		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
 	}
 	splitIndex := gen.Next(shardId)
