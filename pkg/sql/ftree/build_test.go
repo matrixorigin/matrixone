@@ -17,7 +17,8 @@ package ftree
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/sql/parsers/tree"
+	"matrixone/pkg/sql/parsers"
+	"matrixone/pkg/sql/parsers/dialect"
 	"matrixone/pkg/sql/plan"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/memEngine"
@@ -188,12 +189,13 @@ func TestBuild(t *testing.T) {
 }
 
 func processQuery(query string, e engine.Engine) {
-	stmts, err := tree.NewParser().Parse(query)
+	stmts, err := parsers.Parse(dialect.MYSQL, query)
 	if err != nil {
 		log.Fatal(err)
 	}
 	b := plan.New("test", query, e)
 	for _, stmt := range stmts {
+		fmt.Printf("%s\n", query)
 		qry, err := b.BuildStatement(stmt)
 		if err != nil {
 			log.Fatal(err)

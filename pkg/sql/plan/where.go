@@ -33,11 +33,11 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 	if es := extend.AndExtends(e, nil); len(es) > 0 { // push down join condition
 		for i := 0; i < len(es); i++ { // extracting join information
 			if left, right, ok := stripEqual(es[i]); ok {
-				r, rattr, err := qry.getJoinAttribute(qry.Rels, left)
+				r, rattr, err := qry.getJoinAttribute(false, qry.Rels, left)
 				if err != nil {
 					return err
 				}
-				s, sattr, err := qry.getJoinAttribute(qry.Rels, right)
+				s, sattr, err := qry.getJoinAttribute(false, qry.Rels, right)
 				if err != nil {
 					return err
 				}

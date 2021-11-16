@@ -45,24 +45,36 @@ func Reorder(bat *Batch, attrs []string) {
 	}
 }
 
-func Shuffle(bat *Batch, m *mheap.Mheap) error {
-	var err error
+func Shrink(bat *Batch, sels []int64) {
+	for _, vec := range bat.Vecs {
+		vector.Shrink(vec, sels)
+	}
+	for _, r := range bat.Rs {
+		r.Shrink(sels)
+	}
+	vs := bat.Zs
+	for i, sel := range sels {
+		vs[i] = vs[sel]
+	}
+	bat.Zs = bat.Zs[:len(sels)]
+}
 
+func Shuffle(bat *Batch, m *mheap.Mheap) error {
 	if bat.SelsData != nil {
-		for i, vec := range bat.Vecs {
-			if bat.Vecs[i], err = vector.Shuffle(vec, bat.Sels, m); err != nil {
+		for _, vec := range bat.Vecs {
+			if err := vector.Shuffle(vec, bat.Sels, m); err != nil {
 				return err
 			}
 		}
-		for _, r := range bat.Ring.Rs {
+		for _, r := range bat.Rs {
 			r.Shuffle(bat.Sels, m)
 		}
-		data, err := mheap.Alloc(m, int64(len(bat.Ring.Zs))*8)
+		data, err := mheap.Alloc(m, int64(len(bat.Zs))*8)
 		if err != nil {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		bat.Ring.Zs = shuffle.I64Shuffle(bat.Ring.Zs, ws, bat.Sels)
+		bat.Zs = shuffle.I64Shuffle(bat.Zs, ws, bat.Sels)
 		mheap.Free(m, data)
 		mheap.Free(m, bat.SelsData)
 		bat.Sels = nil
@@ -72,7 +84,7 @@ func Shuffle(bat *Batch, m *mheap.Mheap) error {
 }
 
 func Length(bat *Batch) int {
-	return len(bat.Ring.Zs)
+	return len(bat.Zs)
 }
 
 func Prefetch(bat *Batch, attrs []string, vecs []*vector.Vector) {
@@ -103,12 +115,12 @@ func Clean(bat *Batch, m *mheap.Mheap) {
 		}
 	}
 	bat.Vecs = nil
-	for _, r := range bat.Ring.Rs {
+	for _, r := range bat.Rs {
 		r.Free(m)
 	}
-	bat.Ring.Rs = nil
-	bat.Ring.As = nil
-	bat.Ring.Zs = nil
+	bat.Rs = nil
+	bat.As = nil
+	bat.Zs = nil
 }
 
 func Reduce(bat *Batch, attrs []string, m *mheap.Mheap) {

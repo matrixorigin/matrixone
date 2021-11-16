@@ -1,13 +1,28 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package connector
 
 import (
 	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/mheap"
 	"matrixone/pkg/vm/process"
 )
 
-func String(_ interface{}, buf *bytes.Buffer) {
+func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("pipe connector")
 }
 
@@ -33,7 +48,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		process.FreeRegisters(proc)
 		return true, nil
 	}
-	size := int64(0)
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
@@ -42,8 +59,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return false, err
 			}
 			vecs = append(vecs, vec)
-		} else {
-			size += int64(cap(bat.Vecs[i].Data))
 		}
 	}
 	for i := range bat.Vecs {
@@ -52,10 +67,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vecs = vecs[1:]
 		}
 	}
+	size := mheap.Size(proc.Mp)
 	reg.Wg.Add(1)
-	reg.Ch <- proc.Reg.InputBatch
+	reg.Ch <- bat
+	reg.Wg.Wait()
 	n.Mmu.Alloc(size)
 	proc.Mp.Gm.Free(size)
-	reg.Wg.Wait()
 	return false, nil
 }

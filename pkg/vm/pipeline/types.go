@@ -15,7 +15,6 @@
 package pipeline
 
 import (
-	"bytes"
 	"matrixone/pkg/vm"
 )
 
@@ -82,8 +81,6 @@ type Pipeline struct {
 	attrs []string
 	// refCnts, reference count for attribute.
 	refCnts []uint64
-	// buffers, buffers for decompressed data.
-	buffers []*bytes.Buffer
 	// instructions, stores ordered instruction list that to be executed.
 	instructions vm.Instructions // orders to be executed.
 }

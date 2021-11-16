@@ -16,11 +16,46 @@ package vm
 
 import (
 	"bytes"
+	"matrixone/pkg/sql/colexec/connector"
+	"matrixone/pkg/sql/colexec/output"
+	"matrixone/pkg/sql/colexec/projection"
+	"matrixone/pkg/sql/colexec/restrict"
+	"matrixone/pkg/sql/viewexec/plus"
+	"matrixone/pkg/sql/viewexec/times"
+	"matrixone/pkg/sql/viewexec/transform"
+	"matrixone/pkg/sql/viewexec/untransform"
 	"matrixone/pkg/vm/process"
 )
 
-var stringFunc = [...]func(interface{}, *bytes.Buffer){}
+var stringFunc = [...]func(interface{}, *bytes.Buffer){
+	Plus:        plus.String,
+	Times:       times.String,
+	Output:      output.String,
+	Restrict:    restrict.String,
+	Connector:   connector.String,
+	Transform:   transform.String,
+	Projection:  projection.String,
+	UnTransform: untransform.String,
+}
 
-var prepareFunc = [...]func(*process.Process, interface{}) error{}
+var prepareFunc = [...]func(*process.Process, interface{}) error{
+	Plus:        plus.Prepare,
+	Times:       times.Prepare,
+	Output:      output.Prepare,
+	Restrict:    restrict.Prepare,
+	Connector:   connector.Prepare,
+	Transform:   transform.Prepare,
+	Projection:  projection.Prepare,
+	UnTransform: untransform.Prepare,
+}
 
-var execFunc = [...]func(*process.Process, interface{}) (bool, error){}
+var execFunc = [...]func(*process.Process, interface{}) (bool, error){
+	Plus:        plus.Call,
+	Times:       times.Call,
+	Output:      output.Call,
+	Restrict:    restrict.Call,
+	Connector:   connector.Call,
+	Transform:   transform.Call,
+	Projection:  projection.Call,
+	UnTransform: untransform.Call,
+}

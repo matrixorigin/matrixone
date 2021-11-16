@@ -55,14 +55,8 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
-	p.buffers = make([]*bytes.Buffer, len(p.refCnts))
-	{
-		for i := range p.refCnts {
-			p.buffers[i] = bytes.NewBuffer(make([]byte, 0, 8))
-		}
-	}
 	for {
-		if bat, err = r.Read(p.refCnts, p.attrs, p.buffers); err != nil {
+		if bat, err = r.Read(p.refCnts, p.attrs); err != nil {
 			return false, err
 		}
 		proc.Reg.InputBatch = bat
@@ -86,21 +80,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	for {
 		proc.Reg.InputBatch = nil
 		if end, err = vm.Run(p.instructions, proc); err != nil || end {
-			p.clean(proc)
 			return end, err
 		}
 	}
-}
-
-func (p *Pipeline) clean(proc *process.Process) {
-	for _, reg := range proc.Reg.MergeReceivers {
-		if reg.Ch != nil {
-			if bat := <-reg.Ch; bat != nil {
-				batch.Clean(bat, proc.Mp)
-			}
-			reg.Ch = nil
-			reg.Wg.Done()
-		}
-	}
-
 }

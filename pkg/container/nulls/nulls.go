@@ -17,7 +17,6 @@ package nulls
 import (
 	"bytes"
 	"fmt"
-	"reflect"
 	"unsafe"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -116,12 +115,14 @@ func Set(n, m *Nulls) {
 
 func FilterCount(n *Nulls, sels []int64) int {
 	var cnt int
+	var sp []uint64
 
 	if n.Np == nil {
 		return cnt
 	}
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&sels))
-	sp := *(*[]uint64)(unsafe.Pointer(&hp))
+	if len(sels) > 0 {
+		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
+	}
 	for _, sel := range sp {
 		if n.Np.Contains(sel) {
 			cnt++
@@ -158,11 +159,14 @@ func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
 }
 
 func Filter(n *Nulls, sels []int64) *Nulls {
+	var sp []uint64
+
 	if n.Np == nil {
 		return n
 	}
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&sels))
-	sp := *(*[]uint64)(unsafe.Pointer(&hp))
+	if len(sels) > 0 {
+		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
+	}
 	np := roaring.NewBitmap()
 	for i, sel := range sp {
 		if n.Np.Contains(sel) {

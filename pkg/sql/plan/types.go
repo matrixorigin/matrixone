@@ -25,6 +25,7 @@ import (
 
 type Plan interface {
 	fmt.Stringer
+	ResultColumns() []*Attribute
 }
 
 // Direction for ordering results.
@@ -92,6 +93,8 @@ type Query struct {
 	RestrictConds     []extend.Extend
 	Conds             []*JoinCondition
 	ProjectionExtends []*ProjectionExtend
+	ResultAttributes  []*Attribute
+	VarsMap           map[string]int
 }
 
 type build struct {
@@ -99,6 +102,10 @@ type build struct {
 	db  string // name of schema
 	sql string
 	e   engine.Engine
+}
+
+func (qry *Query) ResultColumns() []*Attribute {
+	return qry.ResultAttributes
 }
 
 func (qry *Query) Reduce() {
@@ -130,6 +137,8 @@ func (qry *Query) Name() string {
 func (qry *Query) String() string {
 	var buf bytes.Buffer
 
+	buf.WriteString(fmt.Sprintf("result attributes: %v\n", qry.ResultAttributes))
+	buf.WriteString(fmt.Sprintf("variables: %v\n", qry.VarsMap))
 	buf.WriteString(fmt.Sprintf("free attributes: %v\n", qry.FreeAttrs))
 	buf.WriteString(fmt.Sprintf("relations: %v\n", qry.Rels))
 	for _, rel := range qry.Rels {
@@ -271,7 +280,7 @@ func (agg *Aggregation) DecRef() {
 }
 
 func (agg *Aggregation) String() string {
-	return fmt.Sprintf("'%s(%s)' = %v", transformer.TransformerNames[agg.Op], agg.Name, agg.Ref)
+	return fmt.Sprintf("'%s(%s)' = %v -> %v", transformer.TransformerNames[agg.Op], agg.Name, agg.Ref, agg.Alias)
 }
 
 func (n *Field) String() string {

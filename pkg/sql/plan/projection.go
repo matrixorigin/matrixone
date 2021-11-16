@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/errors"
@@ -29,10 +30,22 @@ func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
 			for _, rel := range qry.Rels {
 				attrs := qry.RelsMap[rel].GetAttributes()
 				for _, attr := range attrs {
-					if _, _, err := qry.getAttribute0(false, attr.Name); err != nil {
+					names, _, err := qry.getAttribute0(false, attr.Name)
+					if err != nil {
 						return err
 					}
 					attr.IncRef()
+					if len(names) > 1 {
+						qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
+							Type: attr.Type,
+							Name: rel + "." + attr.Name,
+						})
+					} else {
+						qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
+							Name: attr.Name,
+							Type: attr.Type,
+						})
+					}
 				}
 			}
 			continue
@@ -43,6 +56,20 @@ func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
 		}
 		if e, err = b.pruneExtend(e); err != nil {
 			return err
+		}
+		{
+			if len(expr.As) > 0 {
+				qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
+					Name: string(expr.As),
+					Type: types.Type{Oid: e.ReturnType()},
+				})
+			} else {
+				qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
+					Name: e.String(),
+					Type: types.Type{Oid: e.ReturnType()},
+				})
+
+			}
 		}
 		if len(expr.As) > 0 {
 			es = append(es, &ProjectionExtend{
@@ -56,6 +83,17 @@ func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
 				E:     e,
 				Alias: e.String(),
 			})
+		}
+	}
+	{ // check duplicate column
+		mp := make(map[string]uint8)
+		for _, attr := range qry.ResultAttributes {
+			mp[attr.Name]++
+		}
+		for k, v := range mp {
+			if v > 1 {
+				return errors.New(errno.DuplicateColumn, fmt.Sprintf("Duplicate column name '%s'", k))
+			}
 		}
 	}
 	for i := 0; i < len(es); i++ {
