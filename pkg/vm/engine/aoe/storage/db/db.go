@@ -54,6 +54,7 @@ var (
 
 type TxnCtx = metadata.TxnCtx
 type LogIndex = metadata.LogIndex
+type RenameTableFactory = metadata.RenameTableFactory
 
 type DB struct {
 	// Working directory of DB
@@ -453,26 +454,51 @@ func (d *DB) SpliteDatabaseCheck(dbName string, size uint64) (coarseSize uint64,
 	return database.SplitCheck(size, index)
 }
 
-func (d *DB) SpliteDatabase(dbName string, newNames []string, keys [][]byte, ctx []byte, index uint64) error {
+func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable RenameTableFactory, keys [][]byte, ctx []byte, index uint64) error {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	return nil
-	// var err error
-	// var database *metadata.Database
-	// database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	// if err != nil {
-	// 	return err
-	// }
-	// spec := metadata.NewEmptyShardSplitSpec()
-	// err = spec.Unmarshal(ctx)
-	// if err != nil {
-	// 	return err
-	// }
-	// dbSpecs := make([]metadata.DBSpec, len(keys))
-	// for i, _ := range dbSpecs {
-	// 	dbSpec := new(metadata.DBSpec)
-	// }
+	// TODO: validate parameters
+
+	var (
+		err      error
+		database *metadata.Database
+	)
+	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return err
+	}
+	spec := metadata.NewEmptyShardSplitSpec()
+	err = spec.Unmarshal(ctx)
+	if err != nil {
+		return err
+	}
+	dbSpecs := make([]*metadata.DBSpec, len(keys))
+	for i, _ := range dbSpecs {
+		dbSpec := new(metadata.DBSpec)
+		dbSpec.Name = newNames[i]
+		dbSpecs[i] = dbSpec
+	}
+	if err = d.DoFlushDatabase(database); err != nil {
+		return err
+	}
+
+	splitIdx := &LogIndex{
+		ShardId: database.GetShardId(),
+		Id:      shard.SimpleIndexId(index),
+	}
+	if err = d.Wal.SyncLog(splitIdx); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(splitIdx)
+	splitter := metadata.NewShardSplitter(d.Store.Catalog, spec, dbSpecs, splitIdx, renameTable)
+	if err = splitter.Prepare(); err != nil {
+		return err
+	}
+	if err = splitter.Commit(); err != nil {
+		return err
+	}
+	return err
 }
 
 func (d *DB) startWorkers() {
