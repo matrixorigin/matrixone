@@ -440,6 +440,19 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	return err
 }
 
+func (d *DB) SpliteCheck(size uint64, dbName string) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var database *metadata.Database
+	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	index := database.GetCheckpointId()
+	return database.SplitCheck(size, index)
+}
+
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
 	d.FlushDriver.Start()
