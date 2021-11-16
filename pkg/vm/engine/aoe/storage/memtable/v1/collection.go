@@ -14,7 +14,6 @@
 package memtable
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +31,7 @@ type collection struct {
 	common.RefHelper
 	mgr    *manager
 	data   iface.ITableData
+	meta   *metadata.Table
 	mu     *sync.RWMutex
 	mutBlk iface.IMutBlock
 }
@@ -40,6 +40,7 @@ func newCollection(mgr *manager, data iface.ITableData) *collection {
 	c := &collection{
 		mgr:  mgr,
 		data: data,
+		meta: data.GetMeta(),
 		mu:   &sync.RWMutex{},
 	}
 	mutBlk := data.StrongRefLastBlock()
@@ -152,7 +153,6 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 }
 
 func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
-	// tableMeta := c.data.GetMeta()
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -162,25 +162,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 		c.onImmut()
 	}
 
-	offset := uint64(0)
-	idempotentIdx := c.data.GetIdempotentIndex()
-	if idempotentIdx != nil {
-		logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), idempotentIdx.String())
-		logutil.Infof("Incoming Index %s", index.String())
-		if !idempotentIdx.IsApplied() {
-			if (idempotentIdx.Id.Id != index.Id.Id) ||
-				(idempotentIdx.Id.Offset < index.Id.Offset) {
-				panic(fmt.Sprintf("should idempotentIdx: %d, but %d received", idempotentIdx.Id, index.Id))
-			}
-			if idempotentIdx.Id.Offset > index.Id.Offset {
-				logutil.Infof("Index %s has been applied", index.String())
-				return nil
-			}
-			offset = idempotentIdx.Count + idempotentIdx.Start
-			index.Start = offset
-		}
-		c.data.ResetIdempotentIndex()
-	}
+	offset := index.Start
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
 		if c.mutBlk.GetMeta().HasMaxRowsLocked() {

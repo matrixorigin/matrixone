@@ -42,11 +42,12 @@ func (e *tableLogEntry) Unmarshal(buf []byte) error {
 
 type Table struct {
 	*BaseEntry
-	Schema     *Schema        `json:"schema"`
-	SegmentSet []*Segment     `json:"segments"`
-	IdIndex    map[uint64]int `json:"-"`
-	Database   *Database      `json:"-"`
-	FlushTS    int64          `json:"-"`
+	IdempotentChecker `json:"-"`
+	Schema            *Schema        `json:"schema"`
+	SegmentSet        []*Segment     `json:"segments"`
+	IdIndex           map[uint64]int `json:"-"`
+	Database          *Database      `json:"-"`
+	FlushTS           int64          `json:"-"`
 }
 
 func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
@@ -261,7 +262,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
 func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
-	if exIndex != nil && exIndex.ShardId != e.GetShardId() {
+	if exIndex != nil && exIndex.ShardId != e.Database.GetShardId() {
 		return InconsistentShardIdErr
 	}
 	tranId := e.Database.Catalog.NextUncommitId()

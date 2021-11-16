@@ -980,6 +980,7 @@ func TestReplay12(t *testing.T) {
 			TableName: meta.Schema.Name,
 			DBName:    database.Name,
 		})
+		assert.Equal(t, ErrIdempotence, err)
 		err = rel.Write(dbi.AppendCtx{
 			OpIndex:   segmentedIdx + 1,
 			OpOffset:  1,
@@ -1120,6 +1121,7 @@ func TestReplay14(t *testing.T) {
 	}
 	err = inst1.Append(appendCtx)
 	assert.Nil(t, err)
+	// appendIdx := gen.Get(database.GetShardId())
 
 	t1, err := inst1.Store.Catalog.SimpleGetTableByName(database.Name, schema1.Name)
 	assert.Nil(t, err)
@@ -1129,7 +1131,7 @@ func TestReplay14(t *testing.T) {
 		DBName:    database.Name,
 		TableName: schema1.Name,
 	})
-	lastIdx := gen.Get(database.GetShardId())
+	dropIdx := gen.Get(database.GetShardId())
 
 	testutils.WaitExpect(200, func() bool {
 		return database.UncheckpointedCnt() == 1 && t1.IsHardDeleted()
@@ -1155,5 +1157,29 @@ func TestReplay14(t *testing.T) {
 	t2Replayed := db2.GetTable(t1.Id)
 	assert.True(t, t2Replayed.IsHardDeleted())
 	t.Log(db2.GetIdempotentIndex().String())
-	assert.Equal(t, lastIdx, db2.GetIdempotentIndex().Id.Id)
+	assert.Equal(t, dropIdx, db2.GetIdempotentIndex().Id.Id)
+
+	err = inst2.Append(appendCtx)
+	assert.Nil(t, err)
+
+	_, err = inst2.DropTable(dbi.DropTableCtx{
+		OpIndex:   dropIdx,
+		DBName:    database.Name,
+		TableName: schema1.Name,
+	})
+	assert.Equal(t, ErrIdempotence, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return db2.UncheckpointedCnt() == 1
+	})
+	assert.Equal(t, 1, db2.UncheckpointedCnt())
+
+	err = inst2.FlushDatabase(db2.Name)
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return db2.UncheckpointedCnt() == 0
+	})
+	assert.Equal(t, 0, db2.UncheckpointedCnt())
+	assert.Equal(t, gen.Get(db2.GetShardId()), db2.GetCheckpointId())
 }

@@ -29,12 +29,10 @@ import (
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
@@ -51,9 +49,11 @@ var (
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 	ErrTimeout           = errors.New("aoe: timeout")
 	ErrStaleErr          = errors.New("aoe: stale")
+	ErrIdempotence       = metadata.IdempotenceErr
 )
 
 type TxnCtx = metadata.TxnCtx
+type LogIndex = metadata.LogIndex
 
 type DB struct {
 	// Working directory of DB
@@ -136,7 +136,7 @@ func (d *DB) FlushDatabase(dbName string) error {
 	if err != nil {
 		return err
 	}
-	return d.doFlushDatabase(database)
+	return d.DoFlushDatabase(database)
 }
 
 func (d *DB) FlushTable(dbName, tableName string) error {
@@ -147,7 +147,7 @@ func (d *DB) FlushTable(dbName, tableName string) error {
 	if err != nil {
 		return err
 	}
-	return d.doFlushTable(meta)
+	return d.DoFlushTable(meta)
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
@@ -157,74 +157,27 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if ctx.OpOffset >= ctx.OpSize {
 		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
 	}
-	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
 	if err != nil {
 		return err
 	}
-	// if ctx.ShardId != tbl.Database.GetShardId() {
-	// 	logutil.Warnf(metadata.InconsistentShardIdErr.Error())
-	// }
-
-	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   tbl,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
-	}
-	ctx.ShardId = tbl.Database.GetShardId()
+	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	defer collection.Unref()
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
-	return collection.Append(ctx.Data, index)
-}
-
-func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
-	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
+	tbl, err := database.GetTableByNameAndLogIndex(ctx.TableName, index)
 	if err != nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection := e.Collection
-		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			collection.Unref()
-			return nil, err
-		}
-		collection.Unref()
+		return err
 	}
-	return data, nil
+	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
+	if err == metadata.IdempotenceErr {
+		return ErrIdempotence
+	}
+	if tbl.IsDeleted() {
+		return metadata.TableNotFoundErr
+	}
+	return d.DoAppend(tbl, ctx.Data, index)
 }
 
 func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
@@ -246,29 +199,44 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	table, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
 	if err != nil {
 		return
 	}
-	// if table.Database.GetShardId() != ctx.ShardId {
-	// 	err = metadata.InconsistentShardIdErr
-	// 	return
-	// }
-	id = table.Id
 
-	ctx.ShardId = table.Database.GetShardId()
+	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
-	if err = table.SimpleSoftDelete(index); err != nil {
-		return
-	}
-
-	logutil.Infof("DropTable %s", index.String())
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
 	defer d.Wal.Checkpoint(index)
 
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
+	var ok bool
+	var idx *LogIndex
+	if idx, ok = database.ConsumeIdempotentIndex(index); !ok {
+		err = ErrIdempotence
+		return
+	} else if idx != nil {
+		if idx.IsApplied() {
+			err = ErrIdempotence
+			return
+		}
+	}
+
+	meta := database.SimpleGetTableByName(ctx.TableName)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return
+	}
+
+	if err = meta.SimpleSoftDelete(index); err != nil {
+		return
+	}
+
+	id = meta.Id
+
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 	return
 }
@@ -324,6 +292,13 @@ func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata
 	}
 	defer d.Wal.Checkpoint(index)
 
+	var ok bool
+	if _, ok = database.ConsumeIdempotentIndex(index); !ok {
+		err = ErrIdempotence
+		panic(err)
+		return
+	}
+
 	tbl, err := database.SimpleCreateTable(schema, index)
 	if err != nil {
 		return
@@ -378,6 +353,13 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	return ss, nil
 }
 
+func (d *DB) DatabaseNames() []string {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return d.Store.Catalog.SimpleGetDatabaseNames()
+}
+
 func (d *DB) TableIDs(dbName string) (ids []uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
@@ -428,7 +410,7 @@ func (d *DB) CreateSnapshot(dbName string, path string, forcesync bool) (uint64,
 	now := time.Now()
 	maxTillTime := now.Add(time.Duration(4) * time.Second)
 	for time.Now().Before(maxTillTime) {
-		index, err = d.doCreateSnapshot(database, path, forcesync)
+		index, err = d.DoCreateSnapshot(database, path, forcesync)
 		if err != ErrStaleErr && err != ErrTimeout {
 			break
 		}
