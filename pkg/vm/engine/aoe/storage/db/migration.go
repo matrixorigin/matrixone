@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 var (
@@ -100,4 +101,39 @@ func ScanMigrationDir(path string) (metas []string, tblks []string, blks []strin
 		}
 	}
 	return
+}
+
+func CopyDataFiles(tblks, blks, segs []string, srcDir, destDir string, blkMapFn, segMapFn func(*common.ID) (*common.ID, error)) error {
+	var err error
+	for _, tblk := range tblks {
+		if err = CopyTBlockFileToDestDir(tblk, srcDir, destDir, blkMapFn); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", tblk)
+				err = nil
+				continue
+			}
+			return err
+		}
+	}
+	for _, blk := range blks {
+		if err = CopyBlockFileToDestDir(blk, srcDir, destDir, blkMapFn); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", blk)
+				err = nil
+				continue
+			}
+			return err
+		}
+	}
+	for _, seg := range segs {
+		if err = CopySegmentFileToDestDir(seg, srcDir, destDir, segMapFn); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", seg)
+				err = nil
+				continue
+			}
+			return err
+		}
+	}
+	return err
 }

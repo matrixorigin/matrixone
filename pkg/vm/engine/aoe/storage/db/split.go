@@ -70,22 +70,9 @@ func (splitter *Splitter) prepareData() error {
 			return err
 		}
 	}
-	// files, err := ioutil.ReadDir(splitter.tempDir)
+	// _, tblks, blks, segs, err := ScanMigrationDir(splitter.tempDir)
 	// if err != nil {
 	// 	return err
-	// }
-	// var (
-	// 	blks, tblks, segs []string
-	// )
-	// for _, file := range files {
-	// 	name := file.Name()
-	// 	if common.IsSegmentFile(name) {
-	// 		segs = append(segs, name)
-	// 	} else if common.IsBlockFile(name) {
-	// 		blks = append(blks, name)
-	// 	} else if common.IsTBlockFile(name) {
-	// 		tblks = append(tblks, name)
-	// 	}
 	// }
 	return err
 }

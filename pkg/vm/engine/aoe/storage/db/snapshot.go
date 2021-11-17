@@ -20,7 +20,6 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -138,45 +137,6 @@ func (ss *ssLoader) validateMetaLoader() error {
 	return nil
 }
 
-func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
-	var err error
-	blkMapFn := ss.mloader.Addresses().GetBlkAddr
-	segMapFn := ss.mloader.Addresses().GetSegAddr
-	destDir := ss.database.Catalog.Cfg.Dir
-	for _, tblk := range tblks {
-		if err = CopyTBlockFileToDestDir(tblk, ss.src, destDir, blkMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
-				logutil.Warnf("%s cannot be used", tblk)
-				err = nil
-				continue
-			}
-			return err
-		}
-	}
-	for _, blk := range blks {
-		if err = CopyBlockFileToDestDir(blk, ss.src, destDir, blkMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
-				logutil.Warnf("%s cannot be used", blk)
-				err = nil
-				continue
-			}
-			return err
-		}
-	}
-	for _, seg := range segs {
-		if err = CopySegmentFileToDestDir(seg, ss.src, destDir, segMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
-				logutil.Warnf("%s cannot be used", seg)
-				err = nil
-				continue
-			}
-			return err
-		}
-	}
-
-	return err
-}
-
 func (ss *ssLoader) PrepareLoad() error {
 	metas, tblks, blks, segs, err := ScanMigrationDir(ss.src)
 	if err != nil {
@@ -195,7 +155,10 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
-	if err = ss.prepareData(tblks, blks, segs); err != nil {
+	destDir := ss.database.Catalog.Cfg.Dir
+	blkMapFn := ss.mloader.Addresses().GetBlkAddr
+	segMapFn := ss.mloader.Addresses().GetSegAddr
+	if err = CopyDataFiles(tblks, blks, segs, ss.src, destDir, blkMapFn, segMapFn); err != nil {
 		return err
 	}
 
