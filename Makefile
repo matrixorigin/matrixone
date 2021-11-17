@@ -18,12 +18,14 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 # Building mo-server binary
 .PHONY: build
 build: cmd/db-server/main.go
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary])
 	@go build -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
 debug: cmd/db-server/main.go
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary for debug])
 	go get github.com/matrixorigin/matrixcube
 	go mod tidy
@@ -32,6 +34,7 @@ debug: cmd/db-server/main.go
 # Run Static Code Analysis
 .PHONY: sca
 sca:
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Static code analysis])
 	@cd optools && ./run_ut.sh SCA
 
@@ -39,6 +42,7 @@ sca:
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut 
 ut:
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
