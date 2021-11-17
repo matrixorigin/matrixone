@@ -22,36 +22,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
-type TableNameFactory interface {
+type NameFactory interface {
 	Encode(shardId uint64, name string) string
 	Decode(name string) (uint64, string)
 	Rename(name string, shardId uint64) string
 }
 
+type RenameTableFactory = func(oldName, dbName string) string
+
 type TableRangeSpec struct {
-	DBSpec     DBSpec       `json:"dbspec"`
+	DBSpec     *DBSpec      `json:"dbspec"`
 	CoarseSize int64        `json:"size"`
 	Group      uint32       `json:"group"`
 	Range      common.Range `json:"range"`
 }
 
 type TableSplitSpec struct {
-	Index LogIndex          `json:"idx"`
-	Specs []*TableRangeSpec `json:"spec"`
+	Index        LogIndex                 `json:"idx"`
+	Specs        []*TableRangeSpec        `json:"spec"`
+	SegmentTrace map[common.ID]*common.ID `json:"-"`
+	BlockTrace   map[common.ID]*common.ID `json:"-"`
 }
 
 func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
 	return &TableSplitSpec{
-		Index: *index,
-		Specs: make([]*TableRangeSpec, 0),
+		Index:        *index,
+		Specs:        make([]*TableRangeSpec, 0),
+		SegmentTrace: make(map[common.ID]*common.ID),
+		BlockTrace:   make(map[common.ID]*common.ID),
 	}
+}
+
+func (spec *TableSplitSpec) InitTrace() {
+	spec.SegmentTrace = make(map[common.ID]*common.ID)
+	spec.BlockTrace = make(map[common.ID]*common.ID)
 }
 
 func (spec *TableRangeSpec) String() string {
 	return fmt.Sprintf("(ndb-%s|grp-%d|size-%d|%s)", spec.DBSpec.String(), spec.Group, spec.CoarseSize, spec.Range.String())
 }
 
-func (split *TableSplitSpec) Rewrite(dbSpecs []DBSpec) {
+func (split *TableSplitSpec) Rewrite(dbSpecs []*DBSpec) {
 	for _, spec := range split.Specs {
 		spec.DBSpec = dbSpecs[int(spec.Group)]
 	}
@@ -106,6 +117,32 @@ func NewEmptyShardSplitSpec() *ShardSplitSpec {
 	}
 }
 
+func (split *ShardSplitSpec) GetBlkAddr(blk *common.ID) (addr *common.ID, err error) {
+	for _, spec := range split.Specs {
+		addr = spec.BlockTrace[*blk]
+		if addr != nil {
+			break
+		}
+	}
+	if addr == nil {
+		err = AddressNotFoundErr
+	}
+	return
+}
+
+func (split *ShardSplitSpec) GetSegAddr(seg *common.ID) (addr *common.ID, err error) {
+	for _, spec := range split.Specs {
+		addr = spec.SegmentTrace[*seg]
+		if addr != nil {
+			break
+		}
+	}
+	if addr == nil {
+		err = AddressNotFoundErr
+	}
+	return
+}
+
 func (split *ShardSplitSpec) String() string {
 	s := fmt.Sprintf("ShardSplit<%s-%d>{", split.Name, split.Index)
 	for _, spec := range split.Specs {
@@ -114,13 +151,13 @@ func (split *ShardSplitSpec) String() string {
 	return fmt.Sprintf("%s\n}", s)
 }
 
-func (split *ShardSplitSpec) Rewrite(specs []DBSpec) {
+func (split *ShardSplitSpec) Rewrite(specs []*DBSpec) {
 	for _, spec := range split.Specs {
 		spec.Rewrite(specs)
 	}
 }
 
-func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFactory, dbSpecs []DBSpec) error {
+func (split *ShardSplitSpec) Prepare(catalog *Catalog, rename RenameTableFactory, dbSpecs []*DBSpec) error {
 	var err error
 	split.db, err = catalog.SimpleGetDatabaseByName(split.Name)
 	if err != nil {
@@ -162,27 +199,71 @@ func (split *ShardSplitSpec) Unmarshal(buf []byte) error {
 type ShardSplitter struct {
 	Spec        *ShardSplitSpec
 	Catalog     *Catalog
-	NameFactory TableNameFactory
-	DBSpecs     []DBSpec
+	RenameTable RenameTableFactory
+	DBSpecs     []*DBSpec
 	Index       *LogIndex
 	TranId      uint64
+	ReplaceCtx  *dbReplaceLogEntry
 }
 
-func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []DBSpec, index *LogIndex, nameFactory TableNameFactory) *ShardSplitter {
+func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, dbSpecs []*DBSpec, index *LogIndex, rename RenameTableFactory) *ShardSplitter {
 	return &ShardSplitter{
 		Spec:        spec,
 		Catalog:     catalog,
-		NameFactory: nameFactory,
+		RenameTable: rename,
 		DBSpecs:     dbSpecs,
 		Index:       index,
 	}
 }
 
+func (splitter *ShardSplitter) prepareReplaceCtx() error {
+	splitter.ReplaceCtx = newDbReplaceLogEntry()
+	db := splitter.Spec.db
+	dbs := make(map[uint64]*Database)
+	for _, spec := range splitter.DBSpecs {
+		nDB := NewDatabase(splitter.Catalog, spec.Name, splitter.TranId, nil)
+		spec.ShardId = nDB.CommitInfo.GetShardId()
+		dbs[spec.ShardId] = nDB
+		splitter.ReplaceCtx.AddReplacer(nDB)
+	}
+	for _, spec := range splitter.Spec.Specs {
+		table := splitter.Spec.splitted[spec.Index]
+		table.Splite(splitter.Catalog, splitter.TranId, spec, splitter.RenameTable, dbs)
+	}
+	rCtx := new(addReplaceCommitCtx)
+	rCtx.tranId = splitter.TranId
+	rCtx.inTran = true
+	rCtx.database = db
+	rCtx.exIndex = splitter.Index
+	if _, err := db.prepareReplace(rCtx); err != nil {
+		panic(err)
+	}
+	splitter.ReplaceCtx.Replaced = &databaseLogEntry{
+		BaseEntry: db.BaseEntry,
+		Id:        db.Id,
+	}
+
+	for _, nDB := range dbs {
+		nCtx := new(addDatabaseCtx)
+		nCtx.tranId = splitter.TranId
+		nCtx.inTran = true
+		nCtx.database = nDB
+		if _, err := splitter.Catalog.prepareAddDatabase(nCtx); err != nil {
+			panic(err)
+		}
+	}
+	return nil
+}
+
 func (splitter *ShardSplitter) Prepare() error {
 	splitter.TranId = splitter.Catalog.NextUncommitId()
-	return splitter.Spec.Prepare(splitter.Catalog, splitter.NameFactory, splitter.DBSpecs)
+	err := splitter.Spec.Prepare(splitter.Catalog, splitter.RenameTable, splitter.DBSpecs)
+	if err != nil {
+		return err
+	}
+	return splitter.prepareReplaceCtx()
 }
 
 func (splitter *ShardSplitter) Commit() error {
-	return splitter.Catalog.execSplit(splitter.NameFactory, splitter.Spec, splitter.TranId, splitter.Index, splitter.DBSpecs)
+	return splitter.Catalog.CommitSplit(splitter.ReplaceCtx)
 }

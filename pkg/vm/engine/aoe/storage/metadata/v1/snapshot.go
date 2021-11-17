@@ -239,6 +239,12 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 		return err
 	}
 	ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
+	// for src, dest := range ss.addresses.Segment {
+	// 	logutil.Infof("map segment %d------->%d", src, dest)
+	// }
+	// for src, dest := range ss.addresses.Block {
+	// 	logutil.Infof("map block %d------->%d", src, dest)
+	// }
 	return nil
 }
 

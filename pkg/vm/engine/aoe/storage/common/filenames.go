@@ -40,12 +40,17 @@ const (
 	NodeSuffix = ".nod"
 
 	SpillDirName = "spill"
+	TempDirName  = "temp"
 	DataDirName  = "data"
 	MetaDirName  = "meta"
 )
 
 func MakeSpillDir(dirname string) string {
 	return path.Join(dirname, SpillDirName)
+}
+
+func MakeTempDir(dirname string) string {
+	return path.Join(dirname, TempDirName)
 }
 
 func MakeDataDir(dirname string) string {

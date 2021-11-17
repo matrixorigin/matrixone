@@ -109,8 +109,13 @@ type addReplaceCommitCtx struct {
 type splitDBCtx struct {
 	writeCtx
 	spec        *ShardSplitSpec
-	nameFactory TableNameFactory
-	dbSpecs     []DBSpec
+	renameTable RenameTableFactory
+	dbSpecs     []*DBSpec
+}
+
+type commitSplitCtx struct {
+	writeCtx
+	replace *dbReplaceLogEntry
 }
 
 func newDeleteTableCtx(table *Table, tranId uint64) *deleteTableCtx {

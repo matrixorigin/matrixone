@@ -18,7 +18,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,20 +70,20 @@ func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup 
 
 type mockNameFactory struct{}
 
-func (factory *mockNameFactory) Encode(shardId uint64, name string) string {
-	return fmt.Sprintf("mock:%s:%d", name, shardId)
+func (factory *mockNameFactory) Encode(dbName, name string) string {
+	return fmt.Sprintf("mock:%s:%s", dbName, name)
 }
 
-func (factory *mockNameFactory) Decode(name string) (shardId uint64, oname string) {
+func (factory *mockNameFactory) Decode(name string) (dbName string, oname string) {
 	arr := strings.Split(name, ":")
-	oname = arr[1]
-	shardId, _ = strconv.ParseUint(arr[2], 10, 64)
+	dbName = arr[1]
+	oname = arr[2]
 	return
 }
 
-func (factory *mockNameFactory) Rename(name string, shardId uint64) string {
-	_, oname := factory.Decode(name)
-	return factory.Encode(shardId, oname)
+func (factory *mockNameFactory) RenameTable(oldName, dbName string) string {
+	_, name := factory.Decode(oldName)
+	return factory.Encode(dbName, name)
 }
 
 func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
@@ -102,7 +101,7 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 			schema := MockSchema(2)
 			index := gen.Next(shardId)
 			name := fmt.Sprintf("t%d", index.Id.Id)
-			schema.Name = mockFactory.Encode(shardId, name)
+			schema.Name = mockFactory.Encode(db.Name, name)
 			db.SyncLog(index)
 			tbl, err := db.SimpleCreateTable(schema, index)
 			assert.Nil(t, err)
@@ -549,8 +548,8 @@ func TestReplay(t *testing.T) {
 	dbName := "db1"
 	db, _ := catalog.SimpleCreateDatabase(dbName, idx)
 
-	mockShards := 5
-	createBlkWorker, _ := ants.NewPool(mockShards)
+	ws := 5
+	createBlkWorker, _ := ants.NewPool(ws)
 	upgradeSegWorker, _ := ants.NewPool(4)
 
 	getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
@@ -560,9 +559,9 @@ func TestReplay(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	for i := 0; i < mockShards; i++ {
+	for i := 0; i < ws; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, gen, uint64(i), db, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -1202,16 +1201,15 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
 
-	dbSpecs := make([]DBSpec, len(keys))
+	dbSpecs := make([]*DBSpec, len(keys))
 	for i, _ := range dbSpecs {
-		dbSpec := DBSpec{}
-		dbSpec.ShardId = uint64(100) + uint64(i)
-		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
+		dbSpec := new(DBSpec)
+		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
 	}
 	splitIndex := gen.Next(shardId)
 
-	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory)
+	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory.RenameTable)
 	err = splitter.Prepare()
 	assert.Nil(t, err)
 	err = splitter.Commit()
@@ -1254,6 +1252,7 @@ func TestSplit2(t *testing.T) {
 
 	shardId := uint64(66)
 	indexWal.SyncLog(gen.Next(shardId))
+
 	db, err := catalog.SimpleCreateDatabase("db1", gen.Curr(shardId))
 	assert.Nil(t, err)
 	indexWal.Checkpoint(gen.Curr(shardId))
@@ -1290,17 +1289,16 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
 
-	dbSpecs := make([]DBSpec, len(keys))
+	dbSpecs := make([]*DBSpec, len(keys))
 	for i, _ := range dbSpecs {
-		dbSpec := DBSpec{}
-		dbSpec.ShardId = uint64(100) + uint64(i)
-		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
+		dbSpec := new(DBSpec)
+		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
 	}
 	splitIndex := gen.Next(shardId)
 
 	indexWal.SyncLog(splitIndex)
-	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory)
+	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory.RenameTable)
 	err = splitter.Prepare()
 	assert.Nil(t, err)
 	err = splitter.Commit()
