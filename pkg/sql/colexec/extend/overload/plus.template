@@ -159,7 +159,7 @@ func init() {
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(rvs)]
-                vec.Nsp.Set(rv.Nsp.Or(lv.Nsp))
+                nulls.Set(vec.Nsp, rv.Nsp.Or(lv.Nsp))
                 vector.SetCol(vec, add.{.LTYP}{.RTYP}Add(lvs, rvs, rs))
                 if rv.Ref == 0 {
                     process.Put(proc, rv)
@@ -228,7 +228,7 @@ func init() {
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(lvs)]
-                vec.Nsp.Set(rv.Nsp.Or(lv.Nsp))
+                nulls.Set(vec.Nsp, rv.Nsp.Or(lv.Nsp))
                 vector.SetCol(vec, add.{.RTYP}{.LTYP}Add(rvs, lvs, rs))
                 if rv.Ref == 0 {
                     process.Put(proc, rv)

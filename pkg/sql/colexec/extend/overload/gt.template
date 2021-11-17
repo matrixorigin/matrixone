@@ -17,6 +17,7 @@
 package overload
 
 import (
+    "matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
