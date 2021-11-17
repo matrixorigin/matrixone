@@ -15,7 +15,6 @@
 package db
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -42,20 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
-
-var (
-	ErrClosed            = errors.New("aoe: closed")
-	ErrUnsupported       = errors.New("aoe: unsupported")
-	ErrNotFound          = errors.New("aoe: notfound")
-	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
-	ErrTimeout           = errors.New("aoe: timeout")
-	ErrStaleErr          = errors.New("aoe: stale")
-	ErrIdempotence       = metadata.IdempotenceErr
-)
-
-type TxnCtx = metadata.TxnCtx
-type LogIndex = metadata.LogIndex
-type RenameTableFactory = metadata.RenameTableFactory
 
 type DB struct {
 	// Working directory of DB
