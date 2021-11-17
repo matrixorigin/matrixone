@@ -81,6 +81,7 @@ type ColumnInfo struct {
 	Alg        int                  `json:"alg"`
 	Epoch      uint64               `json:"epoch"`
 	PrimaryKey bool                 `json:"primary_key"` // PrimaryKey is the name of the column of the primary key
+	NullAbility bool				`json:"nullability"`
 }
 
 type IndexInfo struct {

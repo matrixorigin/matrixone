@@ -17,6 +17,7 @@ package build
 import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/showColumns"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -52,4 +53,20 @@ func (b *build) buildShowDatabases(stmt *tree.ShowDatabases) (op.OP, error) {
 	}
 
 	return showDatabases.New(b.e, likeStr), nil
+}
+
+func (b *build) buildShowColumns(stmt *tree.ShowColumns) (op.OP, error) {
+	tn := stmt.Table.ToTableName()
+	_, _, r, err := b.tableName(&tn)
+	if err != nil {
+		return nil, err
+	}
+	if stmt.Where != nil {
+
+	}
+	var likeStr []byte
+	if stmt.Like != nil {
+		likeStr = []byte(stmt.Like.Right.String())
+	}
+	return showColumns.New(r, likeStr), nil
 }

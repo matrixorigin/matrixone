@@ -698,8 +698,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
 	execs, err := comp.Build()
 	if err != nil {
-		return NewMysqlError(ER_PARSE_ERROR,
-			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use",err)
+		return NewMysqlError(ER_PARSE_ERROR, err,
+			"--- Check the SQL syntax or the manual that corresponds to your MatrixOne server version for the right syntax to use")
 	}
 
 	ses.Mrs = &MysqlResultSet{}

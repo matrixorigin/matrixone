@@ -77,6 +77,8 @@ func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
 		return b.buildShowTables(stmt)
 	case *tree.ShowDatabases:
 		return b.buildShowDatabases(stmt)
+	case *tree.ShowColumns:
+		return b.buildShowColumns(stmt)
 	case *tree.CreateIndex:
 		return b.buildCreateIndex(stmt)
 	case *tree.DropIndex:

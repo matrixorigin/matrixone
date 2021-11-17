@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/insert"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/showColumns"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
@@ -323,6 +325,117 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 			return err
 		}
 		bat.Vecs[0] = vec
+	}
+	return fill(u, bat)
+}
+
+func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	o, _ := s.Operator.(*showColumns.ShowColumns)
+	cs := o.R.Attribute()
+	var idxs []int
+	count := 0
+	bat := batch.New(true, []string{"Filed", "Type", "Null", "Key", "Default", "Extra"})
+	{
+		vs := make([][]byte, len(cs))
+		if o.Like == nil {
+			for _, c := range cs {
+				vs[count] = []byte(c.Name)
+				idxs = append(idxs, count)
+				count++
+			}
+		} else {
+			tmpSlice := make([]int64, 1)
+			for i, c := range cs {
+				colName := []byte(c.Name)
+				if k, _ := like.PureLikePure(colName, o.Like, tmpSlice); k != nil {
+					vs[count] = colName
+					idxs = append(idxs, i)
+					count++
+				}
+			}
+		}
+		vs = vs[:count]
+
+		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[0] = vec
+	}
+	{
+		vs := make([][]byte, count)
+		for i, idx := range idxs {
+			var str string
+			if cs[idx].Type.Width > 0 {
+				str = fmt.Sprintf("%s(%v)", strings.ToLower(cs[idx].Type.String()), cs[idx].Type.Width)
+			} else {
+				str = strings.ToLower(cs[idx].Type.String())
+			}
+			vs[i] = []byte(str)
+		}
+		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[1] = vec
+	}
+	{
+		vs := make([][]byte, count)
+		for i, idx := range idxs {
+			if cs[idx].Nullability {
+				vs[i] = []byte("Yes")
+			} else {
+				vs[i] = []byte("No")
+			}
+		}
+		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[2] = vec
+	}
+	{
+		vs := make([][]byte, count)
+		for i, idx := range idxs {
+			if cs[idx].PrimaryKey {
+				vs[i] = []byte("Pri")
+			} else {
+				vs[i] = []byte("")
+			}
+		}
+		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[3] = vec
+	}
+	{
+		vs := make([][]byte, count)
+		for i, idx := range idxs {
+			if cs[idx].HasDefaultExpr() {
+				str := fmt.Sprintf("%v", cs[idx].Default.Value)
+				vs[i] = []byte(str)
+			} else {
+				vs[i] = []byte("")
+			}
+		}
+		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[4] = vec
+	}
+	{
+		vs := make([][]byte, count)
+		for i, _ := range idxs {
+			// TODO: Show extra attribute
+			vs[i] = []byte("")
+		}
+		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
+		if err := vec.Append(vs); err != nil {
+			return err
+		}
+		bat.Vecs[5] = vec
 	}
 	return fill(u, bat)
 }
