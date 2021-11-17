@@ -51,12 +51,100 @@ func (d *DB) CreateTable(ctx *CreateTableCtx) (*metadata.Table, error) {
 		return nil, err
 	}
 	index := ctx.ToLogIndex(database)
+
 	if err = d.Wal.SyncLog(index); err != nil {
 		return nil, err
 	}
 	defer d.Wal.Checkpoint(index)
 
+	if database.InReplaying(index) {
+		if _, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return nil, err
+		}
+	}
+
 	return database.SimpleCreateTable(ctx.Schema, index)
+}
+
+func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return nil, err
+	}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return nil, err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return nil, err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return nil, err
+			}
+		}
+	}
+
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return nil, err
+	}
+
+	if err = meta.SimpleSoftDelete(index); err != nil {
+		return nil, err
+	}
+	d.ScheduleGCTable(meta)
+	return meta, err
+}
+
+func (d *DB) Append(ctx *AppendCtx) (err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
+	index := ctx.ToLogIndex(database)
+	var meta *metadata.Table
+	if database.InReplaying(index) {
+		meta, err = database.GetTableByNameAndLogIndex(ctx.Table, index)
+		if err != nil {
+			return
+		}
+		index, err = d.TableIdempotenceCheckAndIndexRewrite(meta, index)
+		if err == metadata.IdempotenceErr {
+			return
+		}
+		if meta.IsDeleted() {
+			return metadata.TableNotFoundErr
+		}
+	} else {
+		meta = database.SimpleGetTableByName(ctx.Table)
+		if meta == nil {
+			return metadata.TableNotFoundErr
+		}
+	}
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	defer func() {
+		if err != nil {
+			index.Count = index.Capacity - index.Start
+			d.Wal.Checkpoint(index)
+		}
+	}()
+	err = d.DoAppend(meta, ctx.Data, index)
+	return err
 }
 
 func (d *DB) CreateSnapshot(ctx *CreateSnapshotCtx) (uint64, error) {
