@@ -23,7 +23,10 @@ import (
 )
 
 func (e *UnaryExtend) IsLogical() bool {
-	return overload.IsLogical(e.Op)
+	if e.Op == overload.Not {
+		return e.E.IsLogical()
+	}
+	return false
 }
 
 func (_ *UnaryExtend) IsConstant() bool {

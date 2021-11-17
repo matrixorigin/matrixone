@@ -55,6 +55,33 @@ var (
 	Float64MulSels       func([]float64, []float64, []float64, []int64) []float64
 	Float64MulScalar     func(float64, []float64, []float64) []float64
 	Float64MulScalarSels func(float64, []float64, []float64, []int64) []float64
+
+	Int32Int64Mul func([]int32, []int64, []int64) []int64
+	Int32Int64MulSels func([]int32, []int64, []int64, []int64) []int64
+	Int16Int64Mul func([]int16, []int64, []int64) []int64
+	Int16Int64MulSels func([]int16, []int64, []int64, []int64) []int64
+	Int8Int64Mul func([]int8, []int64, []int64) []int64
+	Int8Int64MulSels func([]int8, []int64, []int64, []int64) []int64
+	Int16Int32Mul func([]int16, []int32, []int32) []int32
+	Int16Int32MulSels func([]int16, []int32, []int32, []int64) []int32
+	Int8Int32Mul func([]int8, []int32, []int32) []int32
+	Int8Int32MulSels func([]int8, []int32, []int32, []int64) []int32
+	Int8Int16Mul func([]int8, []int16, []int16) []int16
+	Int8Int16MulSels func([]int8, []int16, []int16, []int64) []int16
+	Float32Float64Mul func([]float32, []float64, []float64) []float64
+	Float32Float64MulSels func([]float32, []float64, []float64, []int64) []float64
+	Uint32Uint64Mul func([]uint32, []uint64, []uint64) []uint64
+	Uint32Uint64MulSels func([]uint32, []uint64, []uint64, []int64) []uint64
+	Uint16Uint64Mul func([]uint16, []uint64, []uint64) []uint64
+	Uint16Uint64MulSels func([]uint16, []uint64, []uint64, []int64) []uint64
+	Uint8Uint64Mul func([]uint8, []uint64, []uint64) []uint64
+	Uint8Uint64MulSels func([]uint8, []uint64, []uint64, []int64) []uint64
+	Uint16Uint32Mul func([]uint16, []uint32, []uint32) []uint32
+	Uint16Uint32MulSels func([]uint16, []uint32, []uint32, []int64) []uint32
+	Uint8Uint32Mul func([]uint8, []uint32, []uint32) []uint32
+	Uint8Uint32MulSels func([]uint8, []uint32, []uint32, []int64) []uint32
+	Uint8Uint16Mul func([]uint8, []uint16, []uint16) []uint16
+	Uint8Uint16MulSels func([]uint8, []uint16, []uint16, []int64) []uint16
 )
 
 func init() {
@@ -98,6 +125,33 @@ func init() {
 	Float64MulSels = float64MulSels
 	Float64MulScalar = float64MulScalar
 	Float64MulScalarSels = float64MulScalarSels
+
+	Int32Int64Mul = int32Int64Mul
+	Int32Int64MulSels = int32Int64MulSels
+	Int16Int64Mul = int16Int64Mul
+	Int16Int64MulSels = int16Int64MulSels
+	Int8Int64Mul = int8Int64Mul
+	Int8Int64MulSels = int8Int64MulSels
+	Int16Int32Mul = int16Int32Mul
+	Int16Int32MulSels = int16Int32MulSels
+	Int8Int32Mul = int8Int32Mul
+	Int8Int32MulSels = int8Int32MulSels
+	Int8Int16Mul = int8Int16Mul
+	Int8Int16MulSels = int8Int16MulSels
+	Float32Float64Mul = float32Float64Mul
+	Float32Float64MulSels = float32Float64MulSels
+	Uint32Uint64Mul = uint32Uint64Mul
+	Uint32Uint64MulSels = uint32Uint64MulSels
+	Uint16Uint64Mul = uint16Uint64Mul
+	Uint16Uint64MulSels = uint16Uint64MulSels
+	Uint8Uint64Mul = uint8Uint64Mul
+	Uint8Uint64MulSels = uint8Uint64MulSels
+	Uint16Uint32Mul = uint16Uint32Mul
+	Uint16Uint32MulSels = uint16Uint32MulSels
+	Uint8Uint32Mul = uint8Uint32Mul
+	Uint8Uint32MulSels = uint8Uint32MulSels
+	Uint8Uint16Mul = uint8Uint16Mul
+	Uint8Uint16MulSels = uint8Uint16MulSels
 }
 
 func int8Mul(xs, ys, rs []int8) []int8 {
@@ -376,6 +430,188 @@ func float64MulScalar(x float64, ys, rs []float64) []float64 {
 func float64MulScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
 	for i, sel := range sels {
 		rs[i] = x * ys[sel]
+	}
+	return rs
+}
+
+func int32Int64Mul(xs []int32, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = ys[i] * int64(xs[i])
+	}
+	return rs
+}
+
+func int32Int64MulSels(xs []int32, ys, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int64(xs[sel])
+	}
+	return rs
+}
+
+func int16Int64Mul(xs []int16, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = ys[i] * int64(xs[i])
+	}
+	return rs
+}
+
+func int16Int64MulSels(xs []int16, ys, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int64(xs[sel])
+	}
+	return rs
+}
+
+func int8Int64Mul(xs []int8, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = ys[i] * int64(xs[i])
+	}
+	return rs
+}
+
+func int8Int64MulSels(xs []int8, ys, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int64(xs[sel])
+	}
+	return rs
+}
+
+func int16Int32Mul(xs []int16, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = ys[i] * int32(xs[i])
+	}
+	return rs
+}
+
+func int16Int32MulSels(xs []int16, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int32(xs[sel])
+	}
+	return rs
+}
+
+func int8Int32Mul(xs []int8, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = ys[i] * int32(xs[i])
+	}
+	return rs
+}
+
+func int8Int32MulSels(xs []int8, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int32(xs[sel])
+	}
+	return rs
+}
+
+func int8Int16Mul(xs []int8, ys, rs []int16) []int16 {
+	for i := range rs {
+		rs[i] = ys[i] * int16(xs[i])
+	}
+	return rs
+}
+
+func int8Int16MulSels(xs []int8, ys, rs []int16, sels []int64) []int16 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * int16(xs[sel])
+	}
+	return rs
+}
+
+func float32Float64Mul(xs []float32, ys, rs []float64) []float64 {
+	for i := range rs {
+		rs[i] = ys[i] * float64(xs[i])
+	}
+	return rs
+}
+
+func float32Float64MulSels(xs []float32, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * float64(xs[sel])
+	}
+	return rs
+}
+
+func uint32Uint64Mul(xs []uint32, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = ys[i] * uint64(xs[i])
+	}
+	return rs
+}
+
+func uint32Uint64MulSels(xs []uint32, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint64(xs[sel])
+	}
+	return rs
+}
+
+func uint16Uint64Mul(xs []uint16, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = ys[i] * uint64(xs[i])
+	}
+	return rs
+}
+
+func uint16Uint64MulSels(xs []uint16, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint64(xs[sel])
+	}
+	return rs
+}
+
+func uint8Uint64Mul(xs []uint8, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = ys[i] * uint64(xs[i])
+	}
+	return rs
+}
+
+func uint8Uint64MulSels(xs []uint8, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint64(xs[sel])
+	}
+	return rs
+}
+
+func uint16Uint32Mul(xs []uint16, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = ys[i] * uint32(xs[i])
+	}
+	return rs
+}
+
+func uint16Uint32MulSels(xs []uint16, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint32(xs[sel])
+	}
+	return rs
+}
+
+func uint8Uint32Mul(xs []uint8, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = ys[i] * uint32(xs[i])
+	}
+	return rs
+}
+
+func uint8Uint32MulSels(xs []uint8, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint32(xs[sel])
+	}
+	return rs
+}
+
+func uint8Uint16Mul(xs []uint8, ys, rs []uint16) []uint16 {
+	for i := range rs {
+		rs[i] = ys[i] * uint16(xs[i])
+	}
+	return rs
+}
+
+func uint8Uint16MulSels(xs []uint8, ys, rs []uint16, sels []int64) []uint16 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] * uint16(xs[sel])
 	}
 	return rs
 }
