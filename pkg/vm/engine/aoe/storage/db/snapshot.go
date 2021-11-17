@@ -170,6 +170,7 @@ func (ss *ssLoader) execCopyTBlk(dir, file string) error {
 	}
 	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
 	if err != nil {
+		logutil.Infof("Cannot found %s", id.ToTBlockFileName(""))
 		return err
 	}
 	src := filepath.Join(dir, file)
@@ -214,17 +215,32 @@ func (ss *ssLoader) execCopySeg(dir, file string) error {
 func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
 	var err error
 	for _, tblk := range tblks {
-		if ss.execCopyTBlk(ss.src, tblk); err != nil {
+		if err = CopyTBlockFileToDestDir(tblk, ss.src, ss.database.Catalog.Cfg.Dir, ss.mloader.Addresses().GetBlkAddr); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", tblk)
+				err = nil
+				continue
+			}
 			return err
 		}
 	}
 	for _, blk := range blks {
-		if ss.execCopyBlk(ss.src, blk); err != nil {
+		if err = ss.execCopyBlk(ss.src, blk); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", blk)
+				err = nil
+				continue
+			}
 			return err
 		}
 	}
 	for _, seg := range segs {
-		if ss.execCopySeg(ss.src, seg); err != nil {
+		if err = ss.execCopySeg(ss.src, seg); err != nil {
+			if err == metadata.AddressNotFoundErr {
+				logutil.Warnf("%s cannot be used", seg)
+				err = nil
+				continue
+			}
 			return err
 		}
 	}

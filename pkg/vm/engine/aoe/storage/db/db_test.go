@@ -597,21 +597,21 @@ func TestMultiTables(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < insertCnt; i++ {
 		for _, name := range tnames {
-			task := func(opIdx uint64, tname string) func() {
+			task := func(tname string) func() {
 				return func() {
 					defer wg.Done()
 					inst.Append(dbi.AppendCtx{
 						ShardId:   database.GetShardId(),
 						DBName:    database.Name,
 						TableName: tname,
-						OpIndex:   opIdx,
+						OpIndex:   gen.Alloc(database.GetShardId()),
 						OpSize:    1,
 						Data:      baseCk,
 					})
 				}
 			}
 			wg.Add(1)
-			p1.Submit(task(uint64(i), name))
+			p1.Submit(task(name))
 		}
 	}
 

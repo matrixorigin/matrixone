@@ -164,9 +164,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
+	// if err = d.Wal.SyncLog(index); err != nil {
+	// 	return
+	// }
 	tbl, err := database.GetTableByNameAndLogIndex(ctx.TableName, index)
 	if err != nil {
 		return err
@@ -177,6 +177,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 	if tbl.IsDeleted() {
 		return metadata.TableNotFoundErr
+	}
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
 	}
 	return d.DoAppend(tbl, ctx.Data, index)
 }
