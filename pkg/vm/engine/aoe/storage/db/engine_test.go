@@ -254,7 +254,14 @@ func TestLogIndex(t *testing.T) {
 		rel.Close()
 	}
 
-	_, err = inst.DropTable(dbi.DropTableCtx{ShardId: shardId, DBName: database.Name, TableName: tblMeta.Schema.Name, OpIndex: gen.Alloc(shardId)})
+	_, err = inst.DropTable(dbi.DropTableCtx{
+		ShardId:   shardId,
+		DBName:    database.Name,
+		TableName: tblMeta.Schema.Name,
+		OpIndex:   gen.Alloc(shardId),
+		OpOffset:  0,
+		OpSize:    1,
+	})
 	assert.Nil(t, err)
 	testutils.WaitExpect(100, func() bool {
 		return inst.GetShardCheckpointId(shardId) == inst.Wal.GetShardCurrSeqNum(shardId)
