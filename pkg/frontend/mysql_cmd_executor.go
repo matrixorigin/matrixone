@@ -166,6 +166,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if n := len(bat.Sels); n == 0 {
 		n = vector.Length(bat.Vecs[0])
 		for j := 0; j < n; j++ { //row index
+			if bat.Zs[j] <= 0{
+				continue
+			}
 			row, err := oq.getEmptyRow()
 			if err != nil {
 				return err
@@ -324,7 +327,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 
 			//duplicate rows
-			for i := int64(0); i < bat.Zs[j]; i++ {
+			for i := int64(0); i < bat.Zs[j] - 1; i++ {
 				erow,rr := oq.getEmptyRow()
 				if rr != nil {
 					return rr
@@ -346,6 +349,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	} else {
 		n = vector.Length(bat.Vecs[0])
 		for j := 0; j < n; j++ { //row index
+			if bat.Zs[j] <= 0{
+				continue
+			}
 			row, err := oq.getEmptyRow()
 			if err != nil{
 				return err
@@ -504,7 +510,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 
 			//duplicate rows
-			for i := int64(0); i < bat.Zs[j]; i++ {
+			for i := int64(0); i < bat.Zs[j] - 1; i++ {
 				erow,rr := oq.getEmptyRow()
 				if rr != nil {
 					return rr
