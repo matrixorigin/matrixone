@@ -18,14 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -42,25 +37,6 @@ type SSLoader = metadata.SSLoader
 type Snapshoter interface {
 	SSWriter
 	SSLoader
-}
-
-var (
-	CopyTableFn func(t iface.ITableData, destDir string) error
-	CopyFileFn  func(src, dest string) error
-)
-
-func init() {
-	CopyTableFn = func(t iface.ITableData, destDir string) error {
-		return t.LinkTo(destDir)
-	}
-	// CopyTableFn = func(t iface.ITableData, destDir string) error {
-	// 	return t.CopyTo(destDir)
-	// }
-	CopyFileFn = os.Link
-	// CopyFileFn = func(src, dest string) error {
-	// 	_, err := dataio.CopyFile(src, dest)
-	// 	return err
-	// }
 }
 
 type ssWriter struct {
@@ -162,60 +138,13 @@ func (ss *ssLoader) validateMetaLoader() error {
 	return nil
 }
 
-func (ss *ssLoader) execCopyTBlk(dir, file string) error {
-	name, _ := common.ParseTBlockfileName(file)
-	count, tag, id, err := dataio.ParseTBlockfileName(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
-	if err != nil {
-		logutil.Infof("Cannot found %s", id.ToTBlockFileName(""))
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := dataio.MakeTblockFileName(ss.database.Catalog.Cfg.Dir, tag, count, *nid, false)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
-func (ss *ssLoader) execCopyBlk(dir, file string) error {
-	name, _ := common.ParseBlockfileName(file)
-	id, err := common.ParseBlkNameToID(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
-	if err != nil {
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := common.MakeBlockFileName(ss.database.Catalog.Cfg.Dir, nid.ToBlockFileName(), nid.TableID, false)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
-func (ss *ssLoader) execCopySeg(dir, file string) error {
-	name, _ := common.ParseSegmentFileName(file)
-	id, err := common.ParseSegmentNameToID(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetSegAddr(&id)
-	if err != nil {
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := common.MakeSegmentFileName(ss.database.Catalog.Cfg.Dir, nid.ToSegmentFileName(), nid.TableID, false)
-	logutil.Infof("Copy \"%s\" to \"%s\"", src, dest)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
 func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
 	var err error
+	blkMapFn := ss.mloader.Addresses().GetBlkAddr
+	segMapFn := ss.mloader.Addresses().GetSegAddr
+	destDir := ss.database.Catalog.Cfg.Dir
 	for _, tblk := range tblks {
-		if err = CopyTBlockFileToDestDir(tblk, ss.src, ss.database.Catalog.Cfg.Dir, ss.mloader.Addresses().GetBlkAddr); err != nil {
+		if err = CopyTBlockFileToDestDir(tblk, ss.src, destDir, blkMapFn); err != nil {
 			if err == metadata.AddressNotFoundErr {
 				logutil.Warnf("%s cannot be used", tblk)
 				err = nil
@@ -225,7 +154,7 @@ func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
 		}
 	}
 	for _, blk := range blks {
-		if err = ss.execCopyBlk(ss.src, blk); err != nil {
+		if err = CopyBlockFileToDestDir(blk, ss.src, destDir, blkMapFn); err != nil {
 			if err == metadata.AddressNotFoundErr {
 				logutil.Warnf("%s cannot be used", blk)
 				err = nil
@@ -235,7 +164,7 @@ func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
 		}
 	}
 	for _, seg := range segs {
-		if err = ss.execCopySeg(ss.src, seg); err != nil {
+		if err = CopySegmentFileToDestDir(seg, ss.src, destDir, segMapFn); err != nil {
 			if err == metadata.AddressNotFoundErr {
 				logutil.Warnf("%s cannot be used", seg)
 				err = nil
@@ -249,26 +178,10 @@ func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
 }
 
 func (ss *ssLoader) PrepareLoad() error {
-	files, err := ioutil.ReadDir(ss.src)
+	metas, tblks, blks, segs, err := ScanMigrationDir(ss.src)
 	if err != nil {
 		return err
 	}
-	var (
-		metas, blks, tblks, segs []string
-	)
-	for _, file := range files {
-		name := file.Name()
-		if common.IsSegmentFile(name) {
-			segs = append(segs, name)
-		} else if common.IsBlockFile(name) {
-			blks = append(blks, name)
-		} else if common.IsTBlockFile(name) {
-			tblks = append(tblks, name)
-		} else if strings.HasSuffix(name, ".meta") {
-			metas = append(metas, name)
-		}
-	}
-
 	if len(metas) != 1 {
 		return errors.New("invalid meta data to apply")
 	}
