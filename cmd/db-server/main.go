@@ -23,18 +23,17 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/rpcserver"
-	"matrixone/pkg/sql/handler"
+	//"matrixone/pkg/rpcserver"
 	"matrixone/pkg/vm/driver"
 	aoeDriver "matrixone/pkg/vm/driver/aoe"
 	dConfig "matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/driver/pb"
+	"matrixone/pkg/vm/engine"
 	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/mmu/guest"
+	//"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
+	//"matrixone/pkg/vm/process"
 	"os"
 	"os/signal"
 	"strconv"
@@ -153,7 +152,7 @@ func main() {
 
 	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
 
-	Host := config.GlobalSystemVariables.GetHost()
+	//Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 	strNodeId := strconv.FormatInt(NodeId, 10)
 
@@ -232,26 +231,26 @@ func main() {
 	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
-	hm := config.HostMmu
-	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
-	{
-		proc.Id = "0"
-		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-		proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-		proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
-		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
-		proc.Refer = make(map[string]uint64)
-	}
-	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-		log.SetLevel(logger.WARN)*/
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
-	if err != nil {
-		logutil.Infof("Create rpcserver failed, %v", err)
-		os.Exit(CreateRPCExit)
-	}
-	hp := handler.New(eng, proc)
-	srv.Register(hp.Process)
+	//hm := config.HostMmu
+	//gm := guest.New(1<<40, hm)
+	//proc := process.New(gm)
+	//{
+	//	proc.Id = "0"
+	//	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
+	//	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
+	//	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+	//	proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
+	//	proc.Refer = make(map[string]uint64)
+	//}
+	///*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+	//	log.SetLevel(logger.WARN)*/
+	//srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
+	//if err != nil {
+	//	logutil.Infof("Create rpcserver failed, %v", err)
+	//	os.Exit(CreateRPCExit)
+	//}
+	//hp := handler.New(eng, proc)
+	//srv.Register(hp.Process)
 
 	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
@@ -260,12 +259,12 @@ func main() {
 		os.Exit(WaitCubeStartExit)
 	}
 
-	go srv.Run()
+	//go srv.Run()
 	//test storage aoe_storage
 	config.StorageEngine = eng
 
 	//test cluster nodes
-	config.ClusterNodes = metadata.Nodes{}
+	config.ClusterNodes = engine.Nodes{}
 
 	createMOServer(pci)
 
@@ -277,7 +276,7 @@ func main() {
 	//registerSignalHandlers()
 
 	waitSignal()
-	srv.Stop()
+	//srv.Stop()
 	serverShutdown(true)
 	a.Close()
 	aoeDataStorage.Close()

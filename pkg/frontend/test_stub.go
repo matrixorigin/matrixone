@@ -33,7 +33,7 @@ import (
 	"matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/mheap"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -228,13 +228,12 @@ func getMemEngineAndComputationEngine()(engine.Engine,rpcserver.Server,error) {
 	}
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
+	proc := process.New(mheap.New(gm))
 	{
 		proc.Id = "0"
 		proc.Lim.Size = 10 << 32
 		proc.Lim.BatchRows = 10 << 32
 		proc.Lim.PartitionRows = 10 << 32
-		proc.Refer = make(map[string]uint64)
 	}
 
 	srv, err := testutil.NewTestServer(e, proc)
@@ -281,7 +280,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, metadata.Nodes{}, nil)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
 
 	return pu,nil
 }

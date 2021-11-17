@@ -84,7 +84,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
 			Typ:   int(idx.Type),
-			Names: idx.Names,
+			ColNames: idx.Names,
 		})
 	}
 	if tbl.Comment != nil {
@@ -117,7 +117,7 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 				Id:       id,
 				Type:     uint64(v.Typ),
 			}
-			for _, name := range v.Names {
+			for _, name := range v.ColNames {
 				idx.Names = append(idx.Names, name)
 				idx.Columns = append(idx.Columns, mp[name])
 			}
@@ -175,7 +175,7 @@ func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
 			Typ:   int(idx.Type),
-			Names: idx.Names,
+			ColNames: idx.Names,
 		}
 	}
 	return defs

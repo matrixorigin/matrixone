@@ -24,7 +24,6 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
 	"os"
 	"runtime"
 	"strconv"
@@ -89,7 +88,7 @@ type SharePart struct {
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
 
-	cols      []metadata.Attribute
+	cols      []*engine.AttributeDef
 	attrName  []string
 	timestamp uint64
 
@@ -308,7 +307,7 @@ func makeBatch(handler *ParseLineHandler) *PoolElement {
 
 	//alloc space for vector
 	for i := 0; i < len(handler.attrName); i++ {
-		vec := vector.New(handler.cols[i].Type)
+		vec := vector.New(handler.cols[i].Attr.Type)
 		switch vec.Typ.Oid {
 		case types.T_int8:
 			vec.Col = make([]int8, batchSize)
@@ -356,12 +355,20 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
-	cols := relation.Attribute()
+	var cols []*engine.AttributeDef = nil
+	defs := relation.TableDefs()
+	for _, def := range defs {
+		attr,ok := def.(*engine.AttributeDef)
+		if ok {
+			cols = append(cols,attr)
+		}
+	}
+
 	attrName := make([]string, len(cols))
 	tableName2ColumnId := make(map[string]int)
 	for i, col := range cols {
-		attrName[i] = col.Name
-		tableName2ColumnId[col.Name] = i
+		attrName[i] = col.Attr.Name
+		tableName2ColumnId[col.Attr.Name] = i
 	}
 
 	handler.cols = cols
@@ -595,7 +602,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_int8:
 					cols := vec.Col.([]int8)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseInt(field, 10, 8)
 						if err != nil {
@@ -613,7 +620,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_int16:
 					cols := vec.Col.([]int16)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseInt(field, 10, 16)
 						if err != nil {
@@ -630,7 +637,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_int32:
 					cols := vec.Col.([]int32)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseInt(field, 10, 32)
 						if err != nil {
@@ -647,7 +654,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_int64:
 					cols := vec.Col.([]int64)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseInt(field, 10, 64)
 						if err != nil {
@@ -664,7 +671,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_uint8:
 					cols := vec.Col.([]uint8)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseUint(field, 10, 8)
 						if err != nil {
@@ -681,7 +688,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_uint16:
 					cols := vec.Col.([]uint16)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseUint(field, 10, 16)
 						if err != nil {
@@ -698,7 +705,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_uint32:
 					cols := vec.Col.([]uint32)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseUint(field, 10, 32)
 						if err != nil {
@@ -715,7 +722,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_uint64:
 					cols := vec.Col.([]uint64)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseUint(field, 10, 64)
 						if err != nil {
@@ -732,7 +739,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_float32:
 					cols := vec.Col.([]float32)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						d, err := strconv.ParseFloat(field, 32)
 						if err != nil {
@@ -749,7 +756,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_float64:
 					cols := vec.Col.([]float64)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 					} else {
 						fs := field
 						//fmt.Printf("==== > field string [%s] \n",fs)
@@ -768,7 +775,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				case types.T_char, types.T_varchar:
 					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
-						vec.Nsp.Add(uint64(rowIdx))
+						nulls.Add(vec.Nsp,uint64(rowIdx))
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Lengths[rowIdx] = uint32(len(field))
 					} else {
@@ -793,7 +800,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						vBytes.Lengths[rowIdx] = uint32(0)
 					}
-					vec.Nsp.Add(uint64(rowIdx))
+					nulls.Add(vec.Nsp,uint64(rowIdx))
 
 					//mysql warning ER_WARN_TOO_FEW_RECORDS
 					//result.Warnings++
@@ -834,7 +841,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseInt(field, 10, 8)
@@ -856,7 +863,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseInt(field, 10, 16)
@@ -878,7 +885,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseInt(field, 10, 32)
@@ -900,7 +907,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseInt(field, 10, 64)
@@ -922,7 +929,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseUint(field, 10, 8)
@@ -944,7 +951,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseUint(field, 10, 16)
@@ -966,7 +973,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseUint(field, 10, 32)
@@ -988,7 +995,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseUint(field, 10, 64)
@@ -1010,7 +1017,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						d, err := strconv.ParseFloat(field, 32)
@@ -1032,7 +1039,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 					} else {
 						field := line[j]
 						//fmt.Printf("==== > field string [%s] \n",fs)
@@ -1055,7 +1062,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
-						vec.Nsp.Add(uint64(i))
+						nulls.Add(vec.Nsp,uint64(i))
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Lengths[i] = uint32(len(line[j]))
 					} else {
@@ -1084,7 +1091,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						vBytes.Offsets[i] = uint32(len(vBytes.Data))
 						vBytes.Lengths[i] = uint32(0)
 					}
-					vec.Nsp.Add(uint64(i))
+					nulls.Add(vec.Nsp,uint64(i))
 				}
 			}
 		}
@@ -1193,7 +1200,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					//fmt.Printf("needLen %d %d type %d %s \n",needLen,i,vec.Typ.Oid,vec.Typ.String())
 					//remove nulls.NUlls
 					for j := uint64(handler.batchFilled); j < uint64(handler.batchSize); j++ {
-						vec.Nsp.Del(j)
+						nulls.Del(vec.Nsp,j)
 					}
 					//remove row
 					switch vec.Typ.Oid {
