@@ -501,6 +501,7 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 }
 
 func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpec, renameTable RenameTableFactory, dbs map[uint64]*Database) {
+	splitSpec.InitTrace()
 	specs := splitSpec.Specs
 	tables := make([]*Table, len(specs))
 	for i, spec := range specs {
@@ -532,22 +533,40 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			idx++
 			spec = specs[idx]
 		}
-		osid := segment.AsCommonID()
+		osid := &common.ID{
+			TableID:   e.Id,
+			SegmentID: segment.Id,
+		}
 		table := tables[idx]
 		segment.Id = catalog.NextSegmentId()
 		segment.CommitInfo.TranId = tranId
 		segment.CommitInfo.CommitId = tranId
 		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
 		for _, block := range segment.BlockSet {
-			obid := block.AsCommonID()
+			obid := &common.ID{
+				TableID:   e.Id,
+				SegmentID: osid.SegmentID,
+				BlockID:   block.Id,
+			}
 			block.Id = catalog.NextBlockId()
 			block.CommitInfo.TranId = tranId
 			block.CommitInfo.CommitId = tranId
 			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
-			splitSpec.BlockTrace[*obid] = *block.AsCommonID()
+			nbid := &common.ID{
+				TableID:   table.Id,
+				SegmentID: segment.Id,
+				BlockID:   block.Id,
+			}
+			splitSpec.BlockTrace[*obid] = *nbid
+			logutil.Infof("[Trace] %s -> %s", obid.BlockString(), nbid.BlockString())
 		}
 		table.SegmentSet = append(table.SegmentSet, segment)
-		splitSpec.SegmentTrace[*osid] = *segment.AsCommonID()
+		nsid := &common.ID{
+			TableID:   table.Id,
+			SegmentID: segment.Id,
+		}
+		splitSpec.SegmentTrace[*osid] = *nsid
+		logutil.Infof("[Trace] %s -> %s", osid.SegmentString(), nsid.SegmentString())
 	}
 }
 

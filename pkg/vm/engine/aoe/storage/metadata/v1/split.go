@@ -53,6 +53,11 @@ func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
 	}
 }
 
+func (spec *TableSplitSpec) InitTrace() {
+	spec.SegmentTrace = make(map[common.ID]common.ID)
+	spec.BlockTrace = make(map[common.ID]common.ID)
+}
+
 func (spec *TableRangeSpec) String() string {
 	return fmt.Sprintf("(ndb-%s|grp-%d|size-%d|%s)", spec.DBSpec.String(), spec.Group, spec.CoarseSize, spec.Range.String())
 }
