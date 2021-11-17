@@ -19,7 +19,6 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/mheap"
 )
 
 // aoe engine
@@ -36,7 +35,6 @@ type SegmentInfo struct {
 }
 
 type aoeReader struct {
-	mp *mheap.Mheap
 	blocks []aoe.Block
 }
 
