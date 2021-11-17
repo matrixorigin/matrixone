@@ -38,14 +38,18 @@ type TableRangeSpec struct {
 }
 
 type TableSplitSpec struct {
-	Index LogIndex          `json:"idx"`
-	Specs []*TableRangeSpec `json:"spec"`
+	Index        LogIndex                `json:"idx"`
+	Specs        []*TableRangeSpec       `json:"spec"`
+	SegmentTrace map[common.ID]common.ID `json:"-"`
+	BlockTrace   map[common.ID]common.ID `json:"-"`
 }
 
 func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
 	return &TableSplitSpec{
-		Index: *index,
-		Specs: make([]*TableRangeSpec, 0),
+		Index:        *index,
+		Specs:        make([]*TableRangeSpec, 0),
+		SegmentTrace: make(map[common.ID]common.ID),
+		BlockTrace:   make(map[common.ID]common.ID),
 	}
 }
 
