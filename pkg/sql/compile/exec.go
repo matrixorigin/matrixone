@@ -24,6 +24,7 @@ import (
 	"matrixone/pkg/sql/plan"
 	"matrixone/pkg/sql/rewrite"
 	"matrixone/pkg/sql/vtree"
+	"sync"
 )
 
 // Compile compiles ast tree to scope list.
@@ -133,10 +134,61 @@ func (e *Exec) GetAffectedRows() uint64 {
 }
 
 func (e *Exec) Run(ts uint64) error {
+	var wg sync.WaitGroup
+
 	fmt.Printf("+++++++++\n")
 	Print(nil, []*Scope{e.scope})
 	fmt.Printf("+++++++++\n")
 	switch e.scope.Magic {
+	case CreateDatabase:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.CreateDatabase(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case CreateTable:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.CreateTable(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case CreateIndex:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.CreateIndex(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case DropDatabase:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.DropDatabase(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case DropTable:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.DropTable(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case DropIndex:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.DropIndex(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
 	}
-	return nil
+	wg.Wait()
+	return e.err
 }
