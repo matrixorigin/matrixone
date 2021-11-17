@@ -19,6 +19,7 @@ const (
 	PageSize = 64
 	Limit    = 1 << 30
 	MaxSize  = 1 << 20
+	MaxSlots = 256
 )
 
 type Mempool struct {

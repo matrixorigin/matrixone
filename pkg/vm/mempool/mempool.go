@@ -88,7 +88,9 @@ func (m *Mempool) Free(data []byte) {
 	if size <= MaxSize {
 		for i, j := 0, len(m.buckets); i < j; i++ {
 			if size == m.buckets[i].size {
-				m.buckets[i].slots = append(m.buckets[i].slots, data)
+				if len(m.buckets[i].slots) < MaxSlots {
+					m.buckets[i].slots = append(m.buckets[i].slots, data)
+				}
 				return
 			}
 		}
