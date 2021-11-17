@@ -18,3 +18,10 @@ cube*/
 pkg/catalog/test/
 pkg/vm/driver/test/test/
 pkg/vm/engine/aoe/engine/test/
+pkg/sql/colexec/extend/overload/*.go 
+!pkg/sql/colexec/extend/overload/binary.go 
+!pkg/sql/colexec/extend/overload/multi.go 
+!pkg/sql/colexec/extend/overload/overload.go 
+!pkg/sql/colexec/extend/overload/overloadGenerate.go 
+!pkg/sql/colexec/extend/overload/types.go 
+!pkg/sql/colexec/extend/overload/unary.go

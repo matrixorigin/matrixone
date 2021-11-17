@@ -45,6 +45,7 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	plan.IfNotExistFlag = stmt.IfNotExists
 	plan.Defs = defs
 	plan.Relation = r
+	plan.Id = string(stmt.Name)
 	return nil
 }
 

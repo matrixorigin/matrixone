@@ -38,6 +38,7 @@ const (
 	Minus
 	Mult
 	Div
+	IntegerDiv
 	Mod
 	Like
 	NotLike
