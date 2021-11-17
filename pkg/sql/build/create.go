@@ -79,13 +79,20 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 				primaryKey = true
 			}
 		}
+		nullability := true
+		for _, attr := range n.Attributes {
+			if v, ok := attr.(*tree.AttributeNull); ok {
+				nullability = v.Is
+			}
+		}
 		return &engine.AttributeDef{
 			Attr: metadata.Attribute{
-				Type:       *typ,
-				Alg:        compress.Lz4,
-				Name:       n.Name.Parts[0],
-				Default:    defaultExpr,
-				PrimaryKey: primaryKey,
+				Type:        *typ,
+				Alg:         compress.Lz4,
+				Name:        n.Name.Parts[0],
+				Default:     defaultExpr,
+				PrimaryKey:  primaryKey,
+				Nullability: nullability,
 			},
 		}, nil
 	default:

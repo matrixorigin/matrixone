@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/showColumns"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -134,6 +135,13 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Table"})
 		case *showDatabases.ShowDatabases:
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Database"})
+		case *showColumns.ShowColumns:
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Field"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Type"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Null"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Key"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Default"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Extra"})
 		}
 	}
 	e.u = u
@@ -264,6 +272,14 @@ func (e *Exec) Run(ts uint64) error {
 				}
 				wg.Done()
 			}(e.scopes[i])
+		case ShowColumns:
+			wg.Add(1)
+			go func(s *Scope) {
+				if err := s.ShowColumns(e.u, e.fill); err != nil {
+					e.err = err
+				}
+				wg.Done()
+			}(e.scopes[i])
 		case CreateIndex:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -306,6 +322,8 @@ func (c *compile) compileAlgebra(o op.OP) ([]*Scope, error) {
 		return []*Scope{{Magic: ShowTables, Operator: o}}, nil
 	case *showDatabases.ShowDatabases:
 		return []*Scope{{Magic: ShowDatabases, Operator: o}}, nil
+	case *showColumns.ShowColumns:
+		return []*Scope{{Magic: ShowColumns, Operator: o}}, nil
 	case *createIndex.CreateIndex:
 		return []*Scope{{Magic: CreateIndex, Operator: o}}, nil
 	case *dropIndex.DropIndex:

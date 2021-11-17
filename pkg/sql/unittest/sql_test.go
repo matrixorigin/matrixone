@@ -117,6 +117,32 @@ func TestDDLSql(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+
+	sql = "SHOW COLUMNS FROM R;"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW COLUMNS FROM R LIKE 'pric%';"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
 }
 func TestCreateDropIndex(t *testing.T) {
 	hm := host.New(1 << 40)

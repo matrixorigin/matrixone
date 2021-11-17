@@ -38,6 +38,7 @@ const (
 	CreateDatabase
 	ShowTables
 	ShowDatabases
+	ShowColumns
 	CreateIndex
 	DropIndex
 )
