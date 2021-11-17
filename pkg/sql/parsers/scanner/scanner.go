@@ -235,12 +235,67 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 		case delim:
 			s.skip(1)
 			return typ, s.buf[start : s.Pos-1]
+		case '\\':
+			var buffer strings.Builder
+			buffer.WriteString(s.buf[start:s.Pos])
+			return s.scanStringSlow(&buffer, delim, typ)
 		case eofChar:
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
 
 		s.skip(1)
 	}
+}
+
+func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
+	for {
+		ch := s.cur()
+		if ch == eofChar {
+			return LEX_ERROR, buffer.String()
+		}
+		if ch != delim && ch != '\\' {
+			start := s.Pos
+			for ; s.Pos < len(s.buf); s.Pos++ {
+				ch = uint16(s.buf[s.Pos])
+				if ch == delim || ch == '\\' {
+					break
+				}
+			}
+			buffer.WriteString(s.buf[start:s.Pos])
+			if s.Pos >= len(s.buf) {
+				s.skip(1)
+				continue
+			}
+		}
+		s.skip(1)
+		if ch == '\\' {
+			if s.cur() == eofChar {
+				return LEX_ERROR, buffer.String()
+			}
+			if to, ok := encodeRef[byte(s.cur())]; ok {
+				ch = uint16(to)
+			} else {
+				ch = s.cur()
+			}
+		} else if ch == delim {
+			break
+		}
+		buffer.WriteByte(byte(ch))
+		s.skip(1)
+	}
+	return typ, buffer.String()
+}
+
+var encodeRef = map[byte]byte{
+	'0':    '\x00',
+	'\'':   '\'',
+	'"':    '"',
+	'b':    '\b',
+	'n':    '\n',
+	'r':    '\r',
+	't':    '\t',
+	'Z':     26, // ctl-Z
+	'\\':   '\\',
 }
 
 // scanLiteralIdentifier scans an identifier enclosed by backticks. If the identifier

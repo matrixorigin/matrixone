@@ -62,7 +62,7 @@ var (
 				from 'h1'@'h3'`,
 		output: "revoke super(a, b, c) on procedure db.func from h1@h3",
 	}, {
-		input: "select * from t where a like '\\%'",
+		input: "select * from t where a like '\\\\%'",
 		output: "select * from t where a like \\%",
 	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",

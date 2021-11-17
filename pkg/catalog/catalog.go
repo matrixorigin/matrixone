@@ -19,15 +19,17 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixcube/server"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"sync"
-	"sync/atomic"
-	"time"
 )
 
 const (
@@ -629,7 +631,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 
 //encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
+	return strconv.Itoa(int(groupId))+strconv.Itoa(int(tableId))
 }
 
 //genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.

@@ -102,6 +102,10 @@ func waitSignal() {
 	<-sigchan
 }
 
+func preShutdown() {
+	logutil.Infof("mo-server is shutting down ...\n")
+}
+
 func cleanup() {
 	fmt.Println("\rBye!")
 }
@@ -287,6 +291,7 @@ func main() {
 	//registerSignalHandlers()
 
 	waitSignal()
+	preShutdown()
 	srv.Stop()
 	serverShutdown(true)
 	a.Close()

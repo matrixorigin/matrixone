@@ -139,6 +139,13 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 	return
 }
 
+func (idx *Index) CompareID(o *Index) int {
+	if idx.ShardId != o.ShardId {
+		panic("cannot compare index with diff shard id")
+	}
+	return idx.Id.Compare(&o.Id)
+}
+
 func (idx *Index) Compare(o *Index) int {
 	if idx.ShardId != o.ShardId {
 		panic("cannot compare index with diff shard id")

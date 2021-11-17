@@ -18,13 +18,16 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 // There is a premise here, that is, all mutation requests of a database are
 // single-threaded
-func (d *DB) doFlushDatabase(meta *metadata.Database) error {
+func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 	tables := make([]*metadata.Table, 0, 8)
 	fn := func(t *metadata.Table) error {
 		if t.IsDeleted() {
@@ -36,7 +39,7 @@ func (d *DB) doFlushDatabase(meta *metadata.Database) error {
 	meta.ForLoopTables(fn)
 	var err error
 	for _, t := range tables {
-		if err = d.doFlushTable(t); err != nil {
+		if err = d.DoFlushTable(t); err != nil {
 			break
 		}
 	}
@@ -45,7 +48,7 @@ func (d *DB) doFlushDatabase(meta *metadata.Database) error {
 
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
-func (d *DB) doFlushTable(meta *metadata.Table) error {
+func (d *DB) DoFlushTable(meta *metadata.Table) error {
 	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
 	if collection == nil {
 		eCtx := &memdata.Context{
@@ -72,11 +75,11 @@ func (d *DB) doFlushTable(meta *metadata.Table) error {
 	return collection.Flush()
 }
 
-func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
+func (d *DB) DoCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
 	var err error
 	if forcesync {
 		endTime := time.Now().Add(time.Duration(1) * time.Second)
-		if err = d.doFlushDatabase(database); err != nil {
+		if err = d.DoFlushDatabase(database); err != nil {
 			return 0, err
 		}
 		interval := time.Duration(1) * time.Millisecond
@@ -108,4 +111,77 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 	}
 
 	return writer.GetIndex(), nil
+}
+
+func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *LogIndex) (*LogIndex, error) {
+	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
+	if !ok || (idempotentIdx != nil && idempotentIdx.IsApplied()) {
+		logutil.Infof("Table %s | %s | %s | Stale Index", meta.Repr(false), index.String(), idempotentIdx.String())
+		return index, metadata.IdempotenceErr
+	}
+	if idempotentIdx == nil {
+		return index, nil
+	}
+	logutil.Infof("Table %s | %s | %s | Rewrite Index", meta.Repr(false), index.String(), idempotentIdx.String())
+	index.Start = idempotentIdx.Count + idempotentIdx.Start
+	return index, nil
+}
+
+func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) error {
+	var err error
+	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
+	if collection == nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
+	}
+	defer collection.Unref()
+	return collection.Append(data, index)
+}
+
+func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
+	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
+	if err != nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := e.Collection
+		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
+			collection.Unref()
+			return nil, err
+		}
+		collection.Unref()
+	}
+	return data, nil
 }

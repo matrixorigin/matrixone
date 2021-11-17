@@ -142,6 +142,7 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 				Type:       v.Attr.Type,
 				Default:    v.Attr.Default,
 				PrimaryKey: v.Attr.PrimaryKey,
+				NullAbility: v.Attr.Nullability,
 			})
 			id++
 		}
@@ -177,6 +178,8 @@ func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
 			Name:    col.Name,
 			Type:    col.Type,
 			Default: col.Default,
+			PrimaryKey: col.PrimaryKey,
+			Nullability: col.NullAbility,
 		}
 	}
 	return attrs

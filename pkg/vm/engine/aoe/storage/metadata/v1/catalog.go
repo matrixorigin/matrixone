@@ -238,6 +238,14 @@ func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, 
 	return table, nil
 }
 
+func (catalog *Catalog) GetTableByNameAndLogIndex(dbName, tableName string, index *LogIndex) (*Table, error) {
+	database, err := catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return nil, err
+	}
+	return database.GetTableByNameAndLogIndex(tableName, index)
+}
+
 func (catalog *Catalog) SimpleReplaceDatabase(view *databaseLogEntry, tranId uint64) error {
 	ctx := new(replaceDatabaseCtx)
 	ctx.tranId = tranId

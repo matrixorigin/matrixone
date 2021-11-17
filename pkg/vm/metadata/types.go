@@ -36,6 +36,8 @@ type Attribute struct {
 	Type types.Type
 
 	PrimaryKey bool
+
+	Nullability bool
 }
 
 type DefaultExpr struct {
