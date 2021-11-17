@@ -70,10 +70,16 @@ func (splitter *Splitter) prepareData() error {
 			return err
 		}
 	}
-	// _, tblks, blks, segs, err := ScanMigrationDir(splitter.tempDir)
-	// if err != nil {
-	// 	return err
-	// }
+	_, tblks, blks, segs, err := ScanMigrationDir(splitter.tempDir)
+	if err != nil {
+		return err
+	}
+	destDir := splitter.database.Catalog.Cfg.Dir
+	blkMapFn := splitter.msplitter.Spec.GetBlkAddr
+	segMapFn := splitter.msplitter.Spec.GetSegAddr
+	if err = CopyDataFiles(tblks, blks, segs, splitter.tempDir, destDir, blkMapFn, segMapFn); err != nil {
+		return err
+	}
 	return err
 }
 

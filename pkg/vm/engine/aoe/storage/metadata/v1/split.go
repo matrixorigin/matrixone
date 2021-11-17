@@ -38,24 +38,24 @@ type TableRangeSpec struct {
 }
 
 type TableSplitSpec struct {
-	Index        LogIndex                `json:"idx"`
-	Specs        []*TableRangeSpec       `json:"spec"`
-	SegmentTrace map[common.ID]common.ID `json:"-"`
-	BlockTrace   map[common.ID]common.ID `json:"-"`
+	Index        LogIndex                 `json:"idx"`
+	Specs        []*TableRangeSpec        `json:"spec"`
+	SegmentTrace map[common.ID]*common.ID `json:"-"`
+	BlockTrace   map[common.ID]*common.ID `json:"-"`
 }
 
 func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
 	return &TableSplitSpec{
 		Index:        *index,
 		Specs:        make([]*TableRangeSpec, 0),
-		SegmentTrace: make(map[common.ID]common.ID),
-		BlockTrace:   make(map[common.ID]common.ID),
+		SegmentTrace: make(map[common.ID]*common.ID),
+		BlockTrace:   make(map[common.ID]*common.ID),
 	}
 }
 
 func (spec *TableSplitSpec) InitTrace() {
-	spec.SegmentTrace = make(map[common.ID]common.ID)
-	spec.BlockTrace = make(map[common.ID]common.ID)
+	spec.SegmentTrace = make(map[common.ID]*common.ID)
+	spec.BlockTrace = make(map[common.ID]*common.ID)
 }
 
 func (spec *TableRangeSpec) String() string {
@@ -115,6 +115,32 @@ func NewEmptyShardSplitSpec() *ShardSplitSpec {
 		Specs:    make([]*TableSplitSpec, 0),
 		splitted: make(map[LogIndex]*Table),
 	}
+}
+
+func (split *ShardSplitSpec) GetBlkAddr(blk *common.ID) (addr *common.ID, err error) {
+	for _, spec := range split.Specs {
+		addr = spec.BlockTrace[*blk]
+		if addr != nil {
+			break
+		}
+	}
+	if addr == nil {
+		err = AddressNotFoundErr
+	}
+	return
+}
+
+func (split *ShardSplitSpec) GetSegAddr(seg *common.ID) (addr *common.ID, err error) {
+	for _, spec := range split.Specs {
+		addr = spec.SegmentTrace[*seg]
+		if addr != nil {
+			break
+		}
+	}
+	if addr == nil {
+		err = AddressNotFoundErr
+	}
+	return
 }
 
 func (split *ShardSplitSpec) String() string {

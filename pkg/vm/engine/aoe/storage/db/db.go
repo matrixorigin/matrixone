@@ -481,12 +481,15 @@ func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable Rename
 	defer d.Wal.Checkpoint(splitIdx)
 
 	splitter := NewSplitter(database, newNames, renameTable, keys, ctx, splitIdx, d)
+	defer splitter.Close()
 	if err = splitter.Prepare(); err != nil {
 		return err
 	}
 	if err = splitter.Commit(); err != nil {
 		return err
 	}
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(gcReq)
 	return err
 }
 

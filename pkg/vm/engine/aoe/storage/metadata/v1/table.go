@@ -557,7 +557,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 				SegmentID: segment.Id,
 				BlockID:   block.Id,
 			}
-			splitSpec.BlockTrace[*obid] = *nbid
+			splitSpec.BlockTrace[*obid] = nbid
 			logutil.Infof("[Trace] %s -> %s", obid.BlockString(), nbid.BlockString())
 		}
 		table.SegmentSet = append(table.SegmentSet, segment)
@@ -565,7 +565,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			TableID:   table.Id,
 			SegmentID: segment.Id,
 		}
-		splitSpec.SegmentTrace[*osid] = *nsid
+		splitSpec.SegmentTrace[*osid] = nsid
 		logutil.Infof("[Trace] %s -> %s", osid.SegmentString(), nsid.SegmentString())
 	}
 }

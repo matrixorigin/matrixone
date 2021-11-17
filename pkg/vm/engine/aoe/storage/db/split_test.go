@@ -59,6 +59,10 @@ func TestSplit1(t *testing.T) {
 	splitIdx := gen.Alloc(database.GetShardId())
 	err = inst1.SpliteDatabase(database.Name, newNames, renameTable, keys, ctx, splitIdx)
 	assert.Nil(t, err)
+	testutils.WaitExpect(500, func() bool {
+		return database.UncheckpointedCnt() == 0
+	})
+	assert.Equal(t, 0, database.UncheckpointedCnt())
 	t.Log(inst1.Store.Catalog.PString(metadata.PPL1, 0))
 
 	inst1.Close()
