@@ -162,6 +162,8 @@ func (db *Database) DebugCheckReplayedState() {
 		panic("sequence error")
 	}
 	var maxDDLIndex *LogIndex
+	var maxIndex *LogIndex
+
 	for _, table := range db.TableSet {
 		table.DebugCheckReplayedState()
 		table.InitIdempotentIndex(table.MaxLogIndex())
@@ -170,8 +172,14 @@ func (db *Database) DebugCheckReplayedState() {
 		} else if maxDDLIndex.Compare(table.CommitInfo.LogIndex) < 0 {
 			maxDDLIndex = table.CommitInfo.LogIndex
 		}
+		if maxIndex == nil {
+			maxIndex = table.GetIdempotentIndex()
+		} else if maxIndex.Compare(table.GetIdempotentIndex()) < 0 {
+			maxIndex = table.GetIdempotentIndex()
+		}
 	}
 	db.InitIdempotentIndex(maxDDLIndex)
+	db.InitMaxIndex(maxIndex)
 }
 
 func (db *Database) initListeners() {

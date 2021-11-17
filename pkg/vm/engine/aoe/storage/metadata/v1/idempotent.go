@@ -7,6 +7,7 @@ import (
 
 type IdempotentChecker struct {
 	IdempotentIndex *LogIndex
+	MaxIndex        *LogIndex
 }
 
 func (checker *IdempotentChecker) GetIdempotentIndex() *LogIndex {
@@ -49,4 +50,15 @@ func (checker *IdempotentChecker) ResetIdempotentIndex() {
 
 func (checker *IdempotentChecker) InitIdempotentIndex(index *LogIndex) {
 	checker.IdempotentIndex = index
+}
+
+func (checker *IdempotentChecker) InitMaxIndex(index *LogIndex) {
+	checker.MaxIndex = index
+}
+
+func (checker *IdempotentChecker) InReplaying(index *LogIndex) bool {
+	if checker.MaxIndex == nil {
+		return false
+	}
+	return checker.MaxIndex.Compare(index) >= 0
 }
