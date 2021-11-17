@@ -15,6 +15,7 @@
 package db
 
 import (
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -125,5 +126,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables, db.MemTableMgr)
 
 	db.Opts.GC.Acceptor.Accept(gcreqs.NewCatalogCompactionRequest(db.Store.Catalog, db.Opts.MetaCleanerCfg.Interval))
+	os.RemoveAll(db.GetTempDir())
+	os.MkdirAll(db.GetTempDir(), os.FileMode(0755))
 	return db, err
 }

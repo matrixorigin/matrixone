@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
@@ -97,7 +98,9 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
-// func (d *DB) checkIdempotence(database *Database, uint64 )
+func (d *DB) GetTempDir() string {
+	return common.MakeTempDir(d.Dir)
+}
 
 func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
 	return d.Store.Catalog.StartTxn(index)

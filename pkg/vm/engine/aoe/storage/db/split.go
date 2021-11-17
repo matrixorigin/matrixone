@@ -50,19 +50,12 @@ func (splitter *Splitter) onTableData(data iface.ITableData) error {
 	return nil
 }
 
-// func (splitter *Splitter) prepareTableData(t iface.ITableData, path string) error {
-// 	err = CopyTableFn(t, path)
-// 	if err != nil {
-// 		return
-// 	}
-// }
-
 func (splitter *Splitter) prepareData() error {
 	err := splitter.dbImpl.Store.DataTables.ForTables(splitter.onTableData)
 	if err != nil {
 		return err
 	}
-	if splitter.tempDir, err = ioutil.TempDir("/tmp", "aoesplit"); err != nil {
+	if splitter.tempDir, err = ioutil.TempDir(splitter.dbImpl.GetTempDir(), "aoesplit"); err != nil {
 		return err
 	}
 	for _, t := range splitter.tables {
