@@ -27,7 +27,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	//"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/protocol"
-	"matrixone/pkg/vm/mheap"
 	"time"
 )
 
@@ -120,7 +119,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) NewReader(num int, mheap *mheap.Mheap) []engine.Reader {
+func (r *relation) NewReader(num int) []engine.Reader {
 	if len(r.segments) == 0{
 		return nil
 	}
@@ -142,14 +141,12 @@ func (r *relation) NewReader(num int, mheap *mheap.Mheap) []engine.Reader {
 	for i := 0; i < num; i++ {
 		if i == num-1 || i == blockNum-1 {
 			reader := aoeReader {
-				mp: mheap,
 				blocks: blocks[i*mod:],
 			}
 			readers = append(readers, reader)
 			break
 		}
 		reader := aoeReader {
-			mp: mheap,
 			blocks: blocks[i*mod : (i+1)*mod],
 		}
 		readers = append(readers, reader)

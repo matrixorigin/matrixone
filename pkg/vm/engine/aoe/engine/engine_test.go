@@ -21,14 +21,10 @@ import (
 	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/protocol"
-	"matrixone/pkg/vm/mheap"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
-
 	aoe3 "matrixone/pkg/vm/driver/aoe"
 	"matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/driver/testutil"
+	"matrixone/pkg/vm/engine/aoe/protocol"
 	//"matrixone/pkg/sql/protocol"
 	vengine "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
@@ -231,23 +227,21 @@ func TestAOEEngine(t *testing.T) {
 		if i, ok := def.(*vengine.IndexTableDef); ok {
 			index = append(index, vengine.IndexTableDef{
 				Typ:   int(i.Typ),
-				Names: i.Names,
+				ColNames: i.ColNames,
 			})
 		}
 	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
-	hm := host.New(1 << 20)
-	gm := guest.New(1<<20, hm)
-	mp := mheap.New(gm)
-	readers := tb.NewReader(6, mp)
+	readers := tb.NewReader(6)
 	for _, reader := range readers {
-		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"}, []*bytes.Buffer{bytes.NewBuffer(nil)})
+		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
+
 		require.NoError(t, err)
-		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"}, []*bytes.Buffer{bytes.NewBuffer(nil)})
+		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"})
 		require.NoError(t, err)
 	}
-	num := tb.NewReader(15, mp)
+	num := tb.NewReader(15)
 	require.Equal(t, 10, len(num))
 	tb.Close()
 
