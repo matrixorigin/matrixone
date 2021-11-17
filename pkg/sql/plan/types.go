@@ -113,6 +113,7 @@ type CreateTable struct {
 
 type CreateIndex struct {
 	IfNotExistFlag bool
+	Id             string
 	Relation       engine.Relation
 	Defs		   []engine.TableDef
 }
