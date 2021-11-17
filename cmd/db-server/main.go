@@ -18,6 +18,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -34,13 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
@@ -96,6 +97,10 @@ func waitSignal() {
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 	<-sigchan
+}
+
+func preShutdown() {
+	logutil.Infof("mo-server is shutting down ...\n")
 }
 
 func cleanup() {
@@ -170,16 +175,14 @@ func main() {
 	}
 
 	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
+		FS:                          vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
-
 	})
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
+		FS:                          vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
-
 	})
 	var aoeDataStorage *aoeDriver.Storage
 
@@ -243,13 +246,13 @@ func main() {
 	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
 		log.SetLevel(logger.WARN)*/
 
-	li := strings.LastIndex(cfg.CubeConfig.ClientAddr,":")
+	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
 	if li == -1 {
 		logutil.Infof("There is no port in client addr")
 		os.Exit(LoadConfigExit)
 	}
 
-	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]),10,32)
+	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
 	if err != nil {
 		logutil.Infof("Invalid port")
 		os.Exit(LoadConfigExit)
@@ -287,6 +290,7 @@ func main() {
 	//registerSignalHandlers()
 
 	waitSignal()
+	preShutdown()
 	srv.Stop()
 	serverShutdown(true)
 	a.Close()
