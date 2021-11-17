@@ -23,7 +23,6 @@ import (
 	"matrixone/pkg/vectorize/gt"
 	"matrixone/pkg/vectorize/lt"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/process"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )

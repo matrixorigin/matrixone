@@ -23,7 +23,6 @@ import (
     "matrixone/pkg/encoding"
     "matrixone/pkg/vectorize/add"
     "matrixone/pkg/vm/process"
-    "matrixone/pkg/vm/process"
 )
 
 func init() {

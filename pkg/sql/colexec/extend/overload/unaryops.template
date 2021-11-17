@@ -23,7 +23,6 @@ import (
 	"matrixone/pkg/vectorize/neg"
 	"matrixone/pkg/vectorize/not"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/process"
 )
 
 func init() {
