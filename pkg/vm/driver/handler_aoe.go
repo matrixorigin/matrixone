@@ -50,6 +50,8 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
 		ShardId:   shard.ID,
 		OpIndex:   ctx.LogIndex(),
+		OpOffset:  ctx.Offset(),
+		OpSize:    ctx.BatchSize(),
 		TableName: customReq.Name,
 	})
 	if err != nil {
@@ -70,11 +72,12 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	resp := pb.AcquireResponse()
 	customReq := &pb3.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
 	id, err := store.DropTable(dbi.DropTableCtx{
 		ShardId:   shard.ID,
 		OpIndex:   ctx.LogIndex(),
+		OpOffset:  ctx.Offset(),
+		OpSize:    ctx.BatchSize(),
 		TableName: customReq.Name,
 	})
 	if err != nil {
