@@ -22,12 +22,14 @@ import (
 	"matrixone/pkg/sql/ftree"
 	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/sql/plan"
+	"matrixone/pkg/sql/rewrite"
 	"matrixone/pkg/sql/vtree"
 )
 
 // Compile compiles ast tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	e.stmt = rewrite.AstRewrite(e.stmt)
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err
