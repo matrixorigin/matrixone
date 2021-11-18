@@ -48,6 +48,10 @@ func TestAll(t *testing.T) {
 	rowCount, blkCount := uint64(10), uint64(4)
 	catalog := metadata.MockCatalog(path, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchemaAll(14)
+	schema.Indices = append(schema.Indices, &IndexInfo{Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{}})
+	for i := uint16(0); i < 12; i++ {
+		schema.Indices[0].Columns = append(schema.Indices[0].Columns, i)
+	}
 	segCnt, blkCnt := uint64(4), uint64(4)
 	gen := shard.NewMockIndexAllocator()
 	table := metadata.MockDBTable(catalog, "db1", schema, segCnt*blkCnt, gen.Shard(0))

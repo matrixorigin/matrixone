@@ -122,12 +122,11 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		switch meta.Type {
 		case base.ZoneMap:
 			node = newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
-		case base.NumBsi:
-			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
+		//case base.NumBsi:
+		//	node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
 			//log.Info(node.GetManagedNode().DataNode.(*NumericBsiIndex).Get(uint64(39)))
 			//node.Close()
 		default:
-			// todo: str bsi
 			panic("unsupported index type")
 		}
 		idxes, ok := holder.self.ColIndices[col]
@@ -162,6 +161,9 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	}
 	var err error
 	for _, idx := range idxes {
+		val := ctx.Val
+		valMax := ctx.ValMax
+		valMin := ctx.ValMin
 		node := holder.self.Indices[idx].GetManagedNode()
 		err = node.DataNode.(Index).Eval(ctx)
 		if err != nil {
@@ -169,6 +171,9 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 			return err
 		}
 		node.Close()
+		ctx.Val = val
+		ctx.ValMax = valMax
+		ctx.ValMin = valMin
 	}
 	return nil
 }
