@@ -43,6 +43,7 @@ type SSLoader interface {
 	GetIndex() uint64
 	GetShardId() uint64
 	Addresses() *Addresses
+	GetTables() map[uint64]*Table
 }
 
 type Snapshoter interface {
@@ -274,4 +275,8 @@ func (ss *dbSnapshoter) View() *databaseLogEntry {
 
 func (ss *dbSnapshoter) Addresses() *Addresses {
 	return ss.addresses
+}
+
+func (ss *dbSnapshoter) GetTables() map[uint64]*Table {
+	return ss.view.Database.TableSet
 }

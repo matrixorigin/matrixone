@@ -128,6 +128,9 @@ func (p *reallocIdProcessor) onBlock(block *Block) error {
 	if block.CommitInfo.LogIndex != nil {
 		block.CommitInfo.LogIndex.ShardId = p.trace.ShardId[block.CommitInfo.LogIndex.ShardId]
 	}
+	if block.CommitInfo.LogRange != nil {
+		block.CommitInfo.LogRange.ShardId = p.trace.ShardId[block.CommitInfo.LogIndex.ShardId]
+	}
 	return nil
 }
 

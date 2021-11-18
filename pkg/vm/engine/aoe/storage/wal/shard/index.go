@@ -105,7 +105,7 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 		err = ParseReprErr
 		return
 	}
-	strs := strings.Split(repr, "_")
+	strs := strings.Split(repr, ":")
 	if len(strs) != 7 {
 		err = ParseReprErr
 		return

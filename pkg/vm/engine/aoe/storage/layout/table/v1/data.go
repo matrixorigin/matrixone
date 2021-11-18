@@ -590,7 +590,7 @@ func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) 
 	return data, nil
 }
 
-func (ts *Tables) PrepareInstallTables(meta []*metadata.Table, ctx InstallContext) (tables []iface.ITableData, err error) {
+func (ts *Tables) PrepareInstallTables(meta map[uint64]*metadata.Table, ctx InstallContext) (tables []iface.ITableData, err error) {
 	for _, table := range meta {
 		var data iface.ITableData
 		if data, err = ts.PrepareInstallTable(table, ctx); err != nil {

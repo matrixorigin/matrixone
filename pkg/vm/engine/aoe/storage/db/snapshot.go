@@ -58,6 +58,33 @@ type ssLoader struct {
 	flushsegs []*metadata.Segment
 }
 
+type installContext struct {
+	blkfiles     map[common.ID]bool
+	sortedsegs   map[common.ID]bool
+	unsortedsegs map[common.ID]bool
+}
+
+func (ctx *installContext) Preprocess() {
+	ctx.unsortedsegs = make(map[common.ID]bool)
+	for id, _ := range ctx.blkfiles {
+		ctx.unsortedsegs[id.AsSegmentID()] = true
+	}
+}
+
+func (ctx *installContext) HasBlockFile(id *common.ID) bool {
+	_, ok := ctx.blkfiles[*id]
+	return ok
+}
+
+func (ctx *installContext) HasSegementFile(id *common.ID) bool {
+	_, ok := ctx.unsortedsegs[*id]
+	if ok {
+		return true
+	}
+	_, ok = ctx.sortedsegs[*id]
+	return ok
+}
+
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {
 	w := &ssWriter{
 		data:   make(map[uint64]iface.ITableData),
@@ -196,6 +223,18 @@ func (ss *ssLoader) PrepareLoad() error {
 	processor.BlockFn = func(block *metadata.Block) error {
 		return nil
 	}
+	tables := ss.mloader.GetTables()
+	ctx := new(installContext)
+	ctx.blkfiles = blkFiles
+	ctx.sortedsegs = segFiles
+	ctx.Preprocess()
+	tablesData, err := ss.tables.PrepareInstallTables(tables, ctx)
+	if err != nil {
+		return err
+	}
+	if err = ss.tables.CommitInstallTables(tablesData); err != nil {
+		return err
+	}
 
 	return ss.Preprocess(processor)
 }
@@ -208,7 +247,7 @@ func (ss *ssLoader) CommitLoad() error {
 	return nil
 }
 
-func (ss ssLoader) ScheduleEvents(d *DB) error {
+func (ss *ssLoader) ScheduleEvents(d *DB) error {
 	return nil
 	for _, meta := range ss.flushsegs {
 		table, _ := d.GetTableData(meta.Table)
@@ -220,3 +259,7 @@ func (ss ssLoader) ScheduleEvents(d *DB) error {
 	}
 	return nil
 }
+
+// func (ss *ssLoader) GetTables() map[uint64]*Table {
+// 	return ss.mloader.GetTables()
+// }
