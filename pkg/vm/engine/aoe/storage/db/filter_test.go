@@ -36,7 +36,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestAll(t *testing.T) {
+func TestFilter(t *testing.T) {
 	if !dataio.FlushIndex {
 		dataio.FlushIndex = true
 		defer func() {
