@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -45,7 +46,7 @@ import (
 )
 
 const (
-	sPrefix   = "MateTbl"
+	sPrefix   = "MetaTbl"
 	sShardId  = "ShardId"
 	sLogIndex = "LogIndex"
 	sMetadata = "Metadata"
@@ -59,7 +60,7 @@ type Storage struct {
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
-		s.DB.Flush(sPrefix + strconv.Itoa(int(shardId)))
+		s.DB.FlushDatabase(sPrefix + strconv.Itoa(int(shardId)))
 	}
 	//TODO: implement me
 	return nil
@@ -207,19 +208,36 @@ func (s *Storage) dropTable(index uint64, shardId uint64, cmd []byte, key []byte
 }
 
 //TableIDs returns the ids of all the tables in the storage.
-func (s *Storage) tableIDs(shardId uint64) []byte {
-	rsp, err := s.DB.TableIDs(shardId)
-	if err != nil {
-		resp.Value = errorResp(err)
-		return resp
+func (s *Storage) tableIDs() []byte {
+	var ids []uint64
+	dbs := s.DB.DatabaseNames()
+	for _, db := range dbs {
+		shardId, err := aoedb.NameToShardId(db)
+		if err != nil {
+			return errDriver.ErrorResp(err)
+		}
+		tbNames, err := s.DB.TableIDs(shardId)
+		if err != nil {
+			return errDriver.ErrorResp(err)
+		}
+		ids = append(ids, tbNames...)
 	}
-	rep, _ = json.Marshal(rsp)
+	rep, _ := json.Marshal(ids)
 	return rep
 }
 
-//TableIDs returns the names of all the tables in the storage.
-func (s *Storage) tableNames(shardId uint64) (ids []string) {
-	return s.DB.TableNames(shardId)
+//tableNames returns the names of all the tables in the storage.
+func (s *Storage) tableNames() (ids []string) {
+	dbs := s.DB.DatabaseNames()
+	for _, db := range dbs {
+		shardId, err := aoedb.NameToShardId(db)
+		if err != nil {
+			return nil
+		}
+		tbNames := s.DB.TableNames(shardId)
+		ids = append(ids, tbNames...)
+	}
+	return
 }
 
 //TODO
@@ -252,49 +270,57 @@ func (s *Storage) NewWriteBatch() storage.Resetable {
 }
 
 func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
-	tblNames := s.tableNames()
 	var values []meta.ShardMetadata
-	for _, tblName := range tblNames {
-		//TODO:Strictly judge whether it is a "shard metadata table"
-		if !strings.Contains(tblName, sPrefix) {
-			continue
-		}
-		rel, err := s.Relation(tblName)
+	dbs := s.DB.DatabaseNames()
+	for _, db := range dbs {
+		shardId, err := aoedb.NameToShardId(db)
 		if err != nil {
 			return nil, err
 		}
-		attrs := make([]string, 0)
-		for _, ColDef := range rel.Meta.Schema.ColDefs {
-			attrs = append(attrs, ColDef.Name)
+		tblNames := s.DB.TableNames(shardId)
+		for _, tblName := range tblNames {
+			//TODO:Strictly judge whether it is a "shard metadata table"
+			if !strings.Contains(tblName, sPrefix) {
+				continue
+			}
+			rel, err := s.Relation(shardId, tblName)
+			if err != nil {
+				return nil, err
+			}
+			attrs := make([]string, 0)
+			for _, ColDef := range rel.Meta.Schema.ColDefs {
+				attrs = append(attrs, ColDef.Name)
+			}
+			rel.Data.GetBlockFactory()
+			if len(rel.Meta.SegmentSet) < 1 {
+				continue
+			}
+			segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
+			seg := rel.Segment(segment.Id, nil)
+			blks := seg.Blocks()
+			blk := seg.Block(blks[len(blks)-1], nil)
+			cds := make([]*bytes.Buffer, len(attrs))
+			dds := make([]*bytes.Buffer, len(attrs))
+			for i := range cds {
+				cds[i] = bytes.NewBuffer(make([]byte, 0))
+				dds[i] = bytes.NewBuffer(make([]byte, 0))
+			}
+			refs := make([]uint64, len(attrs))
+			bat, _ := blk.Read(refs, attrs, cds, dds)
+			shardId := bat.GetVector(sShardId)
+			logIndex := bat.GetVector(sLogIndex)
+			metadate := bat.GetVector(sMetadata)
+			logutil.Infof("GetInitialStates Metadata is %v\n",
+				metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
+			customReq := &meta.ShardLocalState{}
+			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
+			values = append(values, meta.ShardMetadata{
+				ShardID:  shardId.Col.([]uint64)[0],
+				LogIndex: logIndex.Col.([]uint64)[0],
+				Metadata: *customReq,
+			})
+
 		}
-		rel.Data.GetBlockFactory()
-		if len(rel.Meta.SegmentSet) < 1 {
-			continue
-		}
-		segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
-		seg := rel.Segment(segment.Id, nil)
-		blks := seg.Blocks()
-		blk := seg.Block(blks[len(blks)-1], nil)
-		cds := make([]*bytes.Buffer, len(attrs))
-		dds := make([]*bytes.Buffer, len(attrs))
-		for i := range cds {
-			cds[i] = bytes.NewBuffer(make([]byte, 0))
-			dds[i] = bytes.NewBuffer(make([]byte, 0))
-		}
-		refs := make([]uint64, len(attrs))
-		bat, _ := blk.Read(refs, attrs, cds, dds)
-		shardId := bat.GetVector(sShardId)
-		logIndex := bat.GetVector(sLogIndex)
-		metadate := bat.GetVector(sMetadata)
-		logutil.Infof("GetInitialStates Metadata is %v\n",
-			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
-		customReq := &meta.ShardLocalState{}
-		protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
-		values = append(values, meta.ShardMetadata{
-			ShardID:  shardId.Col.([]uint64)[0],
-			LogIndex: logIndex.Col.([]uint64)[0],
-			Metadata: *customReq,
-		})
 	}
 	return values, nil
 }
@@ -339,7 +365,7 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 	case uint64(pb.GetSegmentedId):
 		rep = s.getSegmentedId(cmd)
 	case uint64(pb.TabletIds):
-		rep = s.TableIDs(cmd, ctx.Shard().ID)
+		rep = s.tableIDs()
 	}
 	return rep, nil
 }
@@ -352,7 +378,24 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
-		tbl := s.DB.Store.Catalog.SimpleGetTableByName(tableName)
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
+		if err != nil && err != aoeMeta.DatabaseNotFoundErr && err != aoeMeta.TableNotFoundErr {
+			return err
+		}
+		// createDatabase := false
+		if err == aoeMeta.DatabaseNotFoundErr {
+			_, err = s.DB.CreateDatabase(aoedb.ShardIdToName(metadata.ShardID))
+			if err != nil {
+				return err
+			}
+			tbs := s.DB.TableNames(metadata.ShardID)
+			logutil.Infof("In db %v, len(tables) is %v, tables are %v.", metadata.ShardID, len(tbs), tbs)
+			tbl, err = s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
+			if err != nil && err != aoeMeta.DatabaseNotFoundErr && err != aoeMeta.TableNotFoundErr {
+				return err
+			}
+			// createDatabase = true
+		}
 		createTable := false
 		if tbl == nil {
 			mateTblInfo := aoe.TableInfo{
@@ -381,18 +424,23 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				OpSize:    2,
 				TableName: tableName,
 			})
-			if err != nil {
+			if err != nil && err != aoeMeta.DuplicateErr {
 				logutil.Errorf("CreateTable is failed: %v\n", err.Error())
 				return err
 			}
-			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
+			if err == aoeMeta.DuplicateErr {
+				tbl, _ = s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
+				logutil.Infof("DuplicateErr, shard id is %v, tbl is %v, table name is %v.", metadata.ShardID, tbl, tableName)
+			}
+			// _, err = s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
+			// if err != nil {
+			// 	logutil.Infof("error4")
+			// 	return err
+			// }
 			createTable = true
 		}
 
-		var attrs []string
-		for _, colDef := range tbl.Schema.ColDefs {
-			attrs = append(attrs, colDef.Name)
-		}
+		attrs := []string{sShardId, sLogIndex, sMetadata}
 		bat := batch.New(true, attrs)
 		vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
 		vShardID.Ref = 1
@@ -404,6 +452,8 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		bat.Vecs[1] = vLogIndex
 		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(protoc.MustMarshal(&metadata.Metadata)))})
 		vMetadata.Ref = 1
+		tbs := s.DB.TableNames(metadata.ShardID)
+		logutil.Infof("In db %v, len(tables) is %v, tables are %v.", metadata.ShardID, len(tbs), tbs)
 		logutil.Infof("SaveShardMetadata Metadata is %v, LogIndex is %d\n", metadata.Metadata, metadata.LogIndex)
 		vMetadata.Col = &types.Bytes{
 			Data:    protoc.MustMarshal(&metadata.Metadata),
@@ -418,7 +468,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			offset = 1
 			size = 2
 		}
-		err := s.DB.Append(dbi.AppendCtx{
+		err = s.DB.Append(dbi.AppendCtx{
 			ShardId:   metadata.ShardID,
 			OpIndex:   metadata.LogIndex,
 			OpOffset:  offset,
@@ -426,6 +476,10 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			TableName: sPrefix + strconv.Itoa(int(metadata.ShardID)),
 			Data:      bat,
 		})
+		if err == aoeMeta.TableNotFoundErr {
+			tbl, _ = s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
+			logutil.Infof("TableNotFoundErr, shard id is %v, tbl is %v, table name is %v", metadata.ShardID, tbl, tableName)
+		}
 		if err != nil {
 			logutil.Errorf("SaveShardMetadata is failed: %v\n", err.Error())
 			return err
