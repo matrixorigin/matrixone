@@ -18,7 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -411,8 +410,7 @@ func TestSnapshot5(t *testing.T) {
 	assert.True(t, dbReplayed.IsReplaced())
 	assert.Equal(t, dbReplayed.GetCheckpointId(), dbReplayed.GetCommit().GetIndex())
 
-	gcreq := gcreqs.NewCatalogCompactionRequest(inst.Store.Catalog, time.Duration(1)*time.Millisecond)
-	err = gcreq.Execute()
+	err = inst.ForceCompactCatalog()
 	assert.Nil(t, err)
 	testutils.WaitExpect(500, func() bool {
 		_, err := inst2.Store.Catalog.SimpleGetDatabase(database.Id)
@@ -587,8 +585,7 @@ func TestSnapshot6(t *testing.T) {
 	assert.True(t, dbReplayed.IsReplaced())
 	assert.Equal(t, dbReplayed.GetCheckpointId(), dbReplayed.GetCommit().GetIndex())
 
-	gcreq := gcreqs.NewCatalogCompactionRequest(aoedb2.Store.Catalog, time.Duration(1)*time.Millisecond)
-	err = gcreq.Execute()
+	err = aoedb2.ForceCompactCatalog()
 	assert.Nil(t, err)
 	testutils.WaitExpect(500, func() bool {
 		_, err := aoedb2.Store.Catalog.SimpleGetDatabase(database.Id)

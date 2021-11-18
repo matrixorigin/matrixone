@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -173,8 +172,7 @@ func TestReplay1(t *testing.T) {
 	assert.Equal(t, ckId, database.GetCheckpointId())
 	t.Log(inst1.Store.Catalog.PString(metadata.PPL0, 0))
 
-	gcreq := gcreqs.NewCatalogCompactionRequest(inst1.Store.Catalog, time.Duration(1)*time.Millisecond)
-	err = gcreq.Execute()
+	err = inst1.ForceCompactCatalog()
 	assert.Nil(t, err)
 
 	inst1.Close()
@@ -350,7 +348,7 @@ func TestReplay3(t *testing.T) {
 		return gen.Get(shardId)-1 == database.GetCheckpointId()
 	})
 	assert.Equal(t, gen.Get(shardId)-1, database.GetCheckpointId())
-	time.Sleep(time.Duration(20) * time.Millisecond)
+	time.Sleep(time.Duration(80) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()

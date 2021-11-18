@@ -196,3 +196,8 @@ func (d *DB) ScheduleGCTable(meta *metadata.Table) {
 	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, nil)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
+
+func (d *DB) ForceCompactCatalog() error {
+	compactReq := gcreqs.NewCatalogCompactionRequest(d.Store.Catalog, d.Opts.MetaCleanerCfg.Interval)
+	return compactReq.Execute()
+}

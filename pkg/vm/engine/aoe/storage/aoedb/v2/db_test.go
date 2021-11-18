@@ -852,6 +852,7 @@ func TestEngine(t *testing.T) {
 		f := func(idx int) func() {
 			return func() {
 				schema := metadata.MockSchema(2)
+				schema.Name = fmt.Sprintf("%s-%d", schema.Name, idx)
 				createCtx := &CreateTableCtx{
 					DBMutationCtx: *CreateDBMutationCtx(database, gen),
 					Schema:        schema,
@@ -1023,7 +1024,7 @@ func TestLogIndex(t *testing.T) {
 	dropCtx := CreateTableMutationCtx(database, gen, schema.Name)
 	_, err = inst.DropTable(dropCtx)
 	assert.Nil(t, err)
-	testutils.WaitExpect(100, func() bool {
+	testutils.WaitExpect(200, func() bool {
 		return inst.GetShardCheckpointId(shardId) == inst.Wal.GetShardCurrSeqNum(shardId)
 	})
 	assert.Equal(t, gen.Get(shardId), inst.Wal.GetShardCurrSeqNum(shardId))
