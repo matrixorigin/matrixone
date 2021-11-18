@@ -22,32 +22,30 @@ import (
 )
 
 func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) error {
-	/*
-		var defs []engine.TableDef
-		var typ tree.IndexType
+	var defs []engine.TableDef
+	var typ tree.IndexType
 
-		_, _, r, err := b.tableName(&stmt.Table)
-		if err != nil {
-			return nil
-		}
-		if stmt.IndexOption != nil {
-			typ = stmt.IndexOption.IType
-		} else {
-			typ = tree.INDEX_TYPE_BTREE
-		}
+	_, _, r, err := b.tableName(&stmt.Table)
+	if err != nil {
+		return nil
+	}
+	if stmt.IndexOption != nil {
+		typ = stmt.IndexOption.IType
+	} else {
+		typ = tree.INDEX_TYPE_BTREE
+	}
 
-		def := &engine.IndexTableDef{
-			Typ:      int(typ),
-			ColNames: stmt.KeyParts[0].ColName.Parts[:1],
-			Name:     string(stmt.Name),
-		}
-		defs = append(defs, def)
+	def := &engine.IndexTableDef{
+		Typ:      int(typ),
+		ColNames: stmt.KeyParts[0].ColName.Parts[:1],
+		Name:     string(stmt.Name),
+	}
+	defs = append(defs, def)
 
-		plan.IfNotExistFlag = stmt.IfNotExists
-		plan.Defs = defs
-		plan.Relation = r
-		plan.Id = string(stmt.Name)
-	*/
+	plan.IfNotExistFlag = stmt.IfNotExists
+	plan.Defs = defs
+	plan.Relation = r
+	plan.Id = string(stmt.Name)
 	return nil
 }
 

@@ -77,8 +77,9 @@ type PartitionByDef struct {
 }
 
 type IndexTableDef struct {
-	Typ   int
-	Names []string
+	Typ      int
+	ColNames []string
+	Name     string
 }
 
 type AttributeDef struct {
