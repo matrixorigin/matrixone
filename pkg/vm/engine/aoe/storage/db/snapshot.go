@@ -48,11 +48,12 @@ type ssWriter struct {
 }
 
 type ssLoader struct {
-	mloader  metadata.SSLoader
-	src      string
-	database *metadata.Database
-	tables   *table.Tables
-	index    uint64
+	mloader   metadata.SSLoader
+	src       string
+	database  *metadata.Database
+	tables    *table.Tables
+	index     uint64
+	flushsegs []*metadata.Segment
 }
 
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {
@@ -67,9 +68,10 @@ func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables
 
 func NewDBSSLoader(database *metadata.Database, tables *table.Tables, src string) *ssLoader {
 	ss := &ssLoader{
-		database: database,
-		src:      src,
-		tables:   tables,
+		database:  database,
+		src:       src,
+		tables:    tables,
+		flushsegs: make([]*metadata.Segment, 0),
 	}
 	return ss
 }
@@ -137,6 +139,10 @@ func (ss *ssLoader) validateMetaLoader() error {
 	return nil
 }
 
+func (ss *ssLoader) Preprocess(processor metadata.Processor) error {
+	return ss.mloader.Preprocess(processor)
+}
+
 func (ss *ssLoader) PrepareLoad() error {
 	metas, tblks, blks, segs, err := ScanMigrationDir(ss.src)
 	if err != nil {
@@ -162,7 +168,15 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
-	return err
+	processor := new(metadata.LoopProcessor)
+	processor.SegmentFn = func(segment *metadata.Segment) error {
+		if segment.IsUpgradable() {
+			ss.flushsegs = append(ss.flushsegs, segment)
+		}
+		return nil
+	}
+
+	return ss.Preprocess(processor)
 }
 
 func (ss *ssLoader) CommitLoad() error {

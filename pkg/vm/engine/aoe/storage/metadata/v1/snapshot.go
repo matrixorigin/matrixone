@@ -37,6 +37,7 @@ type SSWriter interface {
 }
 
 type SSLoader interface {
+	Preprocess(Processor) error
 	PrepareLoad() error
 	CommitLoad() error
 	GetIndex() uint64
@@ -246,6 +247,10 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 	// 	logutil.Infof("map block %d------->%d", src, dest)
 	// }
 	return nil
+}
+
+func (ss *dbSnapshoter) Preprocess(processor Processor) error {
+	return ss.view.Database.RecurLoopLocked(processor)
 }
 
 func (ss *dbSnapshoter) GetIndex() uint64 {

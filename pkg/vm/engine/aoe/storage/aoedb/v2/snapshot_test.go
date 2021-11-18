@@ -16,7 +16,6 @@ package aoedb
 
 import (
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -395,7 +394,6 @@ func TestSnapshot5(t *testing.T) {
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
 	assert.Equal(t, idx, idx2)
-	time.Sleep(time.Duration(500) * time.Millisecond)
 	testutils.WaitExpect(200, func() bool {
 		return database.GetCheckpointId() == gen.Get(database.GetShardId())
 	})

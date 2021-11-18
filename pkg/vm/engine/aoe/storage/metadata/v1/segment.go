@@ -303,6 +303,27 @@ func (e *Segment) FirstInFullBlock() *Block {
 	return found
 }
 
+func (e *Segment) IsUpgradable() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsUpgradableLocked()
+}
+
+func (e *Segment) IsUpgradableLocked() bool {
+	if e.IsSortedLocked() {
+		return false
+	}
+	if len(e.BlockSet) != int(e.Table.Schema.SegmentMaxBlocks) {
+		return false
+	}
+	for _, block := range e.BlockSet {
+		if !block.IsFull() {
+			return false
+		}
+	}
+	return true
+}
+
 // Not safe
 func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSortedLocked() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
