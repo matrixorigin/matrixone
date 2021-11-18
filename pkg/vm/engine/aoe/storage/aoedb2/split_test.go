@@ -1,10 +1,9 @@
-package db
+package aoedb2
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -20,18 +19,16 @@ func TestSplit1(t *testing.T) {
 	inst1, gen, database := initTestDB1(t)
 
 	schema := metadata.MockSchema(2)
-	_, err := inst1.CreateTable(database.Name, schema, gen.Next(database.GetShardId()))
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	_, err := inst1.CreateTable(createCtx)
 	assert.Nil(t, err)
 
 	rows := inst1.Store.Catalog.Cfg.BlockMaxRows * 12
 	ck := mock.MockBatch(schema.Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schema.Name,
-		DBName:    database.Name,
-		Data:      ck,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, ck)
 	err = inst1.Append(appendCtx)
 	assert.Nil(t, err)
 

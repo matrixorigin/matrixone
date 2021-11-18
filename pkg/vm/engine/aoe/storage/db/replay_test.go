@@ -18,107 +18,15 @@ import (
 	"sort"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func TestReplay1(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1")
-	schema := metadata.MockSchema(2)
-	schema.Name = "mockcon"
-	shardId := database.GetShardId()
-	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
-	assert.Nil(t, err)
-
-	meta := database.SimpleGetTable(tid)
-	assert.NotNil(t, meta)
-	rel, err := inst.Relation(database.Name, meta.Schema.Name)
-	assert.Nil(t, err)
-
-	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
-	ibat := mock.MockBatch(meta.Schema.Types(), irows)
-
-	insertFn := func() {
-		err = rel.Write(dbi.AppendCtx{
-			ShardId:   database.GetShardId(),
-			OpIndex:   gen.Alloc(shardId),
-			OpSize:    1,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn()
-	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*3, uint64(rel.Rows()))
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	testutils.WaitExpect(200, func() bool {
-		return gen.Get(shardId) == inst.GetShardCheckpointId(shardId)
-	})
-	time.Sleep(time.Duration(10) * time.Millisecond)
-
-	rel.Close()
-	inst.Close()
-
-	inst, _ = initDB(wal.BrokerRole)
-
-	t.Log(inst.Store.Catalog.PString(metadata.PPL1, 0))
-	segmentedIdx := inst.GetShardCheckpointId(shardId)
-	assert.Equal(t, gen.Get(shardId), segmentedIdx)
-
-	meta, err = inst.Opts.Meta.Catalog.SimpleGetTableByName(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	rel, err = inst.Relation(database.Name, meta.Schema.Name)
-	assert.Nil(t, err)
-	assert.Equal(t, int(irows*3), int(rel.Rows()))
-	t.Log(rel.Rows())
-
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(rel.Rows())
-	t.Log(inst.MutationBufMgr.String())
-
-	err = inst.FlushTable(database.Name, meta.Schema.Name)
-	assert.Nil(t, err)
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	t.Log(rel.Rows())
-
-	rel.Close()
-	inst.Close()
-}
 
 func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToSegmentFileName()
@@ -163,8 +71,7 @@ func (o *replayObserver) OnRemove(name string) {
 }
 
 func TestReplay2(t *testing.T) {
-	dir := "/tmp/testreplay2"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 
 	mu := &sync.RWMutex{}
@@ -236,8 +143,7 @@ func buildOpts(dir string, createCatalog bool) *storage.Options {
 }
 
 func TestReplay3(t *testing.T) {
-	dir := "/tmp/testreplay3"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -279,8 +185,7 @@ func TestReplay3(t *testing.T) {
 }
 
 func TestReplay4(t *testing.T) {
-	dir := "/tmp/testreplay4"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
@@ -332,8 +237,7 @@ func TestReplay4(t *testing.T) {
 }
 
 func TestReplay5(t *testing.T) {
-	dir := "/tmp/testreplay5"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -400,8 +304,7 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
-	dir := "/tmp/testreplay6"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -473,8 +376,7 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
-	dir := "/tmp/testreplay7"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -545,8 +447,7 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
-	dir := "/tmp/testreplay8"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -619,8 +520,7 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
-	dir := "/tmp/testreplay9"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -739,8 +639,7 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
-	dir := "/tmp/testreplay10"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -809,8 +708,7 @@ func TestReplay10(t *testing.T) {
 }
 
 func TestReplay11(t *testing.T) {
-	dir := "/tmp/testreplay11"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
@@ -878,310 +776,4 @@ func TestReplay11(t *testing.T) {
 	})
 	assert.Equal(t, toRemove, observer.removed)
 	catalog.Close()
-}
-
-func TestReplay12(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1")
-	schema := metadata.MockSchema(2)
-	schema.Name = "mockcon"
-	shardId := database.GetShardId()
-	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
-	assert.Nil(t, err)
-
-	meta := database.SimpleGetTable(tid)
-	assert.NotNil(t, meta)
-	rel, err := inst.Relation(database.Name, meta.Schema.Name)
-	assert.Nil(t, err)
-
-	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
-	ibat := mock.MockBatch(meta.Schema.Types(), irows)
-
-	insertFn := func() {
-		err = rel.Write(dbi.AppendCtx{
-			ShardId:   database.GetShardId(),
-			OpIndex:   gen.Alloc(shardId),
-			OpSize:    1,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn()
-	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.FlushTable(database.Name, schema.Name)
-	assert.Nil(t, err)
-
-	ibat2 := mock.MockBatch(meta.Schema.Types(), inst.Store.Catalog.Cfg.BlockMaxRows)
-	insertFn2 := func() {
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   gen.Alloc(shardId),
-			OpOffset:  0,
-			OpSize:    2,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-			ShardId:   shardId,
-		})
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   gen.Get(shardId),
-			OpOffset:  1,
-			OpSize:    2,
-			Data:      ibat2,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-			ShardId:   shardId,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn2()
-	assert.Equal(t, irows*5, uint64(rel.Rows()))
-	t.Log(rel.Rows())
-	testutils.WaitExpect(200, func() bool {
-		safeId := inst.GetShardCheckpointId(shardId)
-		return gen.Get(shardId)-1 == safeId
-	})
-	assert.Equal(t, gen.Get(shardId)-1, inst.GetShardCheckpointId(shardId))
-	time.Sleep(time.Duration(50) * time.Millisecond)
-
-	rel.Close()
-	inst.Close()
-
-	inst, _ = initDB(wal.BrokerRole)
-	replayDatabase, err := inst.Store.Catalog.SimpleGetDatabaseByName(database.Name)
-	assert.Nil(t, err)
-
-	assert.Equal(t, database.GetSize(), replayDatabase.GetSize())
-	assert.Equal(t, database.GetCount(), replayDatabase.GetCount())
-
-	segmentedIdx := inst.GetShardCheckpointId(shardId)
-	assert.Equal(t, gen.Get(shardId)-1, segmentedIdx)
-
-	rel, err = inst.Relation(database.Name, meta.Schema.Name)
-	t.Log(rel.Rows())
-	assert.Nil(t, err)
-	assert.Equal(t, int64(irows*4), rel.Rows())
-
-	insertFn3 := func() {
-		err = rel.Write(dbi.AppendCtx{
-			ShardId:   shardId,
-			OpIndex:   segmentedIdx + 1,
-			OpOffset:  0,
-			OpSize:    2,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-		})
-		assert.Equal(t, ErrIdempotence, err)
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   segmentedIdx + 1,
-			OpOffset:  1,
-			OpSize:    2,
-			Data:      ibat2,
-			TableName: meta.Schema.Name,
-			DBName:    database.Name,
-			ShardId:   shardId,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn3()
-	t.Log(rel.Rows())
-	insertFn()
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(rel.Rows())
-	t.Log(inst.MutationBufMgr.String())
-
-	err = inst.FlushTable(meta.Database.Name, meta.Schema.Name)
-	assert.Nil(t, err)
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	t.Log(rel.Rows())
-
-	rel.Close()
-	inst.Close()
-}
-
-func TestReplay13(t *testing.T) {
-	// dir := "/tmp/replay/test13"
-	// os.RemoveAll(dir)
-	dir := TEST_DB_DIR
-	initDBTest()
-	initDataAndMetaDir(dir)
-	inst, gen := initDB(wal.BrokerRole)
-	shardId := uint64(100)
-	catalog := inst.Store.Catalog
-	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
-	schema := metadata.MockSchema(2)
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(shardId))
-	toRemove := make([]string, 0)
-	seg := tbl.SegmentSet[0]
-	for i := 0; i < len(seg.BlockSet); i++ {
-		blk := seg.BlockSet[i]
-		blk.SetCount(catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
-		assert.Nil(t, err)
-	}
-	name := mockSegFile(*seg.AsCommonID(), dir, t)
-	toRemove = append(toRemove, name)
-	indice := make([]*metadata.LogIndex, 1)
-	indice[0] = gen.Next(shardId)
-	err := seg.SimpleUpgrade(100, indice)
-	assert.Nil(t, err)
-
-	catalog.IndexWal.SyncLog(gen.Next(shardId))
-	err = tbl.SimpleSoftDelete(gen.Curr(shardId))
-	assert.Nil(t, err)
-	assert.True(t, tbl.IsSoftDeleted())
-	catalog.IndexWal.Checkpoint(gen.Curr(shardId))
-
-	testutils.WaitExpect(100, func() bool {
-		return tbl.GetCommit().GetIndex() == tbl.Database.GetCheckpointId()
-	})
-	assert.Equal(t, tbl.GetCommit().GetIndex(), tbl.Database.GetCheckpointId())
-
-	schema = metadata.MockSchema(3)
-	tbl2 := metadata.MockTable(tbl.Database, schema, 1, gen.Next(shardId))
-	blk := tbl2.SegmentSet[0].BlockSet[0]
-	blk.SetCount(catalog.Cfg.BlockMaxRows)
-	indice[0] = gen.Next(shardId)
-	catalog.IndexWal.SyncLog(gen.Curr(shardId))
-	err = blk.SimpleUpgrade(indice)
-	assert.Nil(t, err)
-	catalog.IndexWal.Checkpoint(gen.Curr(shardId))
-	name = mockBlkFile(*blk.AsCommonID(), dir, t)
-	toRemove = append(toRemove, name)
-	catalog.IndexWal.SyncLog(gen.Next(shardId))
-	err = tbl2.SimpleSoftDelete(gen.Curr(shardId))
-	assert.Nil(t, err)
-
-	inst.Close()
-
-	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
-	assert.Nil(t, err)
-	catalog.Start()
-
-	observer := &replayObserver{
-		removed: make([]string, 0),
-	}
-	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
-	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
-	sort.Slice(toRemove, func(i, j int) bool {
-		return toRemove[i] < toRemove[j]
-	})
-	sort.Slice(observer.removed, func(i, j int) bool {
-		return observer.removed[i] < observer.removed[j]
-	})
-	assert.Equal(t, toRemove, observer.removed)
-
-	db1 := catalog.Databases[tbl.Database.Id]
-	assert.True(t, db1.TableSet[tbl.Id].IsHardDeleted())
-	assert.True(t, db1.TableSet[tbl2.Id].IsHardDeleted())
-	catalog.Compact(nil, nil)
-	t.Log(catalog.PString(metadata.PPL0, 0))
-
-	catalog.Close()
-}
-
-// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
-// 1. Create 2 tables: 1-1, 1-2                           [  2,         ?     ]
-// 2. Append 1/10 (MaxBlockRows) rows into (1-2)          [  3,         ?     ]
-// 3. Drop table 1-1                                      [  4,         ?     ]
-// 4. Wait checkpoint                                     [  -,         2     ]
-// 5. Compact, 1-1 should not be marked as hard delete    [  -,         2     ]
-func TestReplay14(t *testing.T) {
-	initTestEnv(t)
-	inst1, gen, database := initTestDB1(t)
-	schema1 := metadata.MockSchema(2)
-	schema2 := metadata.MockSchema(3)
-	_, err := inst1.CreateTable(database.Name, schema1, gen.Next(database.GetShardId()))
-	assert.Nil(t, err)
-	_, err = inst1.CreateTable(database.Name, schema2, gen.Next(database.GetShardId()))
-	assert.Nil(t, err)
-	ckId := gen.Get(database.GetShardId())
-
-	rows := inst1.Store.Catalog.Cfg.BlockMaxRows / 10
-	ck2 := mock.MockBatch(schema2.Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schema2.Name,
-		DBName:    database.Name,
-		Data:      ck2,
-	}
-	err = inst1.Append(appendCtx)
-	assert.Nil(t, err)
-	// appendIdx := gen.Get(database.GetShardId())
-
-	t1, err := inst1.Store.Catalog.SimpleGetTableByName(database.Name, schema1.Name)
-	assert.Nil(t, err)
-
-	_, err = inst1.DropTable(dbi.DropTableCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		DBName:    database.Name,
-		TableName: schema1.Name,
-	})
-	dropIdx := gen.Get(database.GetShardId())
-
-	testutils.WaitExpect(200, func() bool {
-		return database.UncheckpointedCnt() == 1 && t1.IsHardDeleted()
-	})
-	assert.Equal(t, 1, database.UncheckpointedCnt())
-	assert.True(t, t1.IsHardDeleted())
-	assert.Equal(t, ckId, database.GetCheckpointId())
-	t.Log(inst1.Store.Catalog.PString(metadata.PPL0, 0))
-
-	gcreq := gcreqs.NewCatalogCompactionRequest(inst1.Store.Catalog, time.Duration(1)*time.Millisecond)
-	err = gcreq.Execute()
-	assert.Nil(t, err)
-
-	inst1.Close()
-
-	inst2, _, _ := initTestDB3(t)
-	defer inst2.Close()
-	t.Log(inst2.Store.Catalog.PString(metadata.PPL0, 0))
-
-	db2, err := inst2.Store.Catalog.SimpleGetDatabaseByName(database.Name)
-	assert.Nil(t, err)
-	assert.Equal(t, ckId, db2.GetCheckpointId())
-	t2Replayed := db2.GetTable(t1.Id)
-	assert.True(t, t2Replayed.IsHardDeleted())
-	t.Log(db2.GetIdempotentIndex().String())
-	assert.Equal(t, dropIdx, db2.GetIdempotentIndex().Id.Id)
-
-	err = inst2.Append(appendCtx)
-	assert.Nil(t, err)
-
-	_, err = inst2.DropTable(dbi.DropTableCtx{
-		OpIndex:   dropIdx,
-		OpSize:    1,
-		DBName:    database.Name,
-		TableName: schema1.Name,
-	})
-	assert.Equal(t, ErrIdempotence, err)
-
-	testutils.WaitExpect(200, func() bool {
-		return db2.UncheckpointedCnt() == 1
-	})
-	assert.Equal(t, 1, db2.UncheckpointedCnt())
-
-	err = inst2.FlushDatabase(db2.Name)
-	assert.Nil(t, err)
-
-	testutils.WaitExpect(200, func() bool {
-		return db2.UncheckpointedCnt() == 0
-	})
-	assert.Equal(t, 0, db2.UncheckpointedCnt())
-	assert.Equal(t, gen.Get(db2.GetShardId()), db2.GetCheckpointId())
 }

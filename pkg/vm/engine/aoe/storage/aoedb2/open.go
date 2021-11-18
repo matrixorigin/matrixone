@@ -6,7 +6,7 @@ import (
 )
 
 func Open(dirname string, opts *storage.Options) (inst *DB, err error) {
-	impl, err := db.OpenWithWalBroker(dirname, opts)
+	impl, err := db.Open(dirname, opts)
 	if err != nil {
 		return nil, err
 	}
