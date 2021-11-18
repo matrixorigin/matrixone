@@ -34,6 +34,9 @@ const (
 	DropDatabase
 	DropTable
 	DropIndex
+	ShowDatabases
+	ShowTables
+	ShowColumns
 )
 
 // Source contains information of a relation which will be used in execution,

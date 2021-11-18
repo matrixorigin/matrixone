@@ -83,7 +83,7 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 }
 
 func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error) {
-	primaryKeys := make([]string, 0)
+	var primaryKeys []string = nil
 
 	switch n := def.(type) {
 	case *tree.ColumnTableDef:
@@ -116,8 +116,9 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 		pkNames := make([]string, len(n.KeyParts))
 		for i, key := range n.KeyParts {
 			if _, ok := mapPrimaryKeyNames[key.ColName.Parts[0]]; ok {
-				pkNames[i] = key.ColName.Parts[0]
+				return nil, nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
 			}
+			pkNames[i] = key.ColName.Parts[0]
 			mapPrimaryKeyNames[key.ColName.Parts[0]] = struct{}{}
 		}
 		return &engine.PrimaryIndexDef{
