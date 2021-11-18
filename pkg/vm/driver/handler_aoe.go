@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
@@ -80,7 +81,7 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 		OpSize:    ctx.BatchSize(),
 		TableName: customReq.Name,
 	})
-	if err != nil {
+	if err != nil && err != metadata.DatabaseNotFoundErr{
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
