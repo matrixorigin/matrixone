@@ -38,6 +38,7 @@ func (c *compile) Build() ([]*Exec, error) {
 	stmts, err := parsers.Parse(dialect.MYSQL, c.sql)
 	if err != nil {
 		log.Fatal(err)
+		return nil, err
 	}
 	es := make([]*Exec, len(stmts))
 	for i := range stmts {
