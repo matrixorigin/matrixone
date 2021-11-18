@@ -217,7 +217,7 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	p, _ := s.Plan.(*plan.ShowColumns)
 	results := p.ResultColumns() // field, type, null, key, default, extra
 	defs := p.Relation.TableDefs()
-	attrs := make([]columnInfo, len(results))
+	attrs := make([]columnInfo, len(defs))
 
 	names := make([]string, 0)
 	for _, resultColumn := range results {
