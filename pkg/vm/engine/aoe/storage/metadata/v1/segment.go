@@ -178,7 +178,7 @@ func (e *Segment) PString(level PPLevel, depth int) string {
 	ident2 := " " + ident
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
+	s := fmt.Sprintf("<Segment[%d] %s", e.Id, e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {

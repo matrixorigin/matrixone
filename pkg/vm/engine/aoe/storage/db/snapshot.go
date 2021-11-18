@@ -20,6 +20,8 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -162,17 +164,36 @@ func (ss *ssLoader) PrepareLoad() error {
 	}
 
 	destDir := ss.database.Catalog.Cfg.Dir
-	blkMapFn := ss.mloader.Addresses().GetBlkAddr
-	segMapFn := ss.mloader.Addresses().GetSegAddr
+	blkFiles := make(map[common.ID]bool)
+	segFiles := make(map[common.ID]bool)
+	blkMapFn := func(id *common.ID) (*common.ID, error) {
+		blkFiles[*id] = true
+		return ss.mloader.Addresses().GetBlkAddr(id)
+	}
+	segMapFn := func(id *common.ID) (*common.ID, error) {
+		segFiles[*id] = true
+		return ss.mloader.Addresses().GetSegAddr(id)
+	}
 	if err = CopyDataFiles(tblks, blks, segs, ss.src, destDir, blkMapFn, segMapFn); err != nil {
 		return err
 	}
 
+	// var tableData iface.ITableData
+	// var segData iface.ISegment
+	// tables := make([]*metadata.Table, 0)
 	processor := new(metadata.LoopProcessor)
+	processor.TableFn = func(table *metadata.Table) error {
+		var err error
+		// tableData, err = ss.tables.RegisterTable(table)
+		return err
+	}
 	processor.SegmentFn = func(segment *metadata.Segment) error {
 		if segment.IsUpgradable() {
 			ss.flushsegs = append(ss.flushsegs, segment)
 		}
+		return nil
+	}
+	processor.BlockFn = func(block *metadata.Block) error {
 		return nil
 	}
 
@@ -180,5 +201,22 @@ func (ss *ssLoader) PrepareLoad() error {
 }
 
 func (ss *ssLoader) CommitLoad() error {
-	return ss.mloader.CommitLoad()
+	err := ss.mloader.CommitLoad()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ss ssLoader) ScheduleEvents(d *DB) error {
+	return nil
+	for _, meta := range ss.flushsegs {
+		table, _ := d.GetTableData(meta.Table)
+		defer table.Unref()
+		segment := table.StrongRefSegment(meta.Id)
+		flushCtx := &dbsched.Context{Opts: d.Opts}
+		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		d.Scheduler.Schedule(flushEvent)
+	}
+	return nil
 }

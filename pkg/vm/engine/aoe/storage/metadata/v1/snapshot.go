@@ -73,7 +73,7 @@ func (m *Addresses) GetBlkAddr(addr *common.ID) (*common.ID, error) {
 	if !ok {
 		return nil, AddressNotFoundErr
 	}
-	naddr.BlockID, ok = m.Segment[addr.BlockID]
+	naddr.BlockID, ok = m.Block[addr.BlockID]
 	if !ok {
 		return nil, AddressNotFoundErr
 	}
@@ -240,6 +240,9 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 		return err
 	}
 	ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
+	// for src, dest := range ss.addresses.Table {
+	// 	logutil.Infof("map table %d------->%d", src, dest)
+	// }
 	// for src, dest := range ss.addresses.Segment {
 	// 	logutil.Infof("map segment %d------->%d", src, dest)
 	// }

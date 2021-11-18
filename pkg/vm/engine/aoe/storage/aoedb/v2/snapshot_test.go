@@ -17,6 +17,7 @@ package aoedb
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -612,26 +613,103 @@ func TestSnapshot6(t *testing.T) {
 	// t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
 }
 
-// // -------- Test Description ---------------------------- [LogIndex,Checkpoint]
-// // 1.  Create db isntance and create a database           [   0,        ?     ]
-// // 2.  Create 3 tables: 1-1 [1,?], 1-2 [2,?], 1-3 [3,?]   [   3,        ?     ]
-// // 3.  Wait and assert checkpoint                         [   -,        3     ]
-// // 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
-// // 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
-// // 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
-// // 7.  Wait and assert checkpoint                         [   -,        5     ]
-// // 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
-// // 9.  Drop (1-2)                                         [   7,        5     ]
-// // 10. Wait [7] committed                                 [   -,        5     ]
-// // 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
-// // 12. Create another db instance
-// // 13. Apply previous created snapshot
-// // 14. Check:
-// //     1) database exists 2) database checkpoint id is [5]
-// //     3) total 3 tables with 2 table of one segment and one block
-// //     4) replay [6] and [7] operation
-// //     5) check new applied database is same as origin database
-// // 15. Restart new db instance and check again
-// func TestSnapshot7(t *testing.T) {
-// 	// TODO
-// }
+// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// 1.  Create db isntance and create a database           [   0,        ?     ]
+// 2.  Create 3 tables: 1-1 [1,?], 1-2 [2,?], 1-3 [3,?]   [   3,        ?     ]
+// 3.  Wait and assert checkpoint                         [   -,        3     ]
+// 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
+// 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
+// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
+// 7.  Wait and assert checkpoint                         [   -,        5     ]
+// 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
+// 9.  Drop (1-2)                                         [   7,        5     ]
+// 10. Wait [7] committed                                 [   -,        5     ]
+// 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
+// 12. Create another db instance
+// 13. Apply previous created snapshot
+// 14. Check:
+//     1) database exists 2) database checkpoint id is [5]
+//     3) total 3 tables with 2 table of one segment and one block
+//     4) replay [6] and [7] operation
+//     5) check new applied database is same as origin database
+// 15. Restart new db instance and check again
+func TestSnapshot7(t *testing.T) {
+	// TODO
+}
+
+// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// 1.  Create db isntance and create a database           [   0,        0     ]
+// 2.  Disable flush segment                              [   0,        0     ]
+// 3.  Create 2 tables: 1-1 [1,?], 1-2 [2,?]              [   2,        ?     ]
+// 4.  Append 35/10 (MaxBlockRows) rows into (1-1)        [   3,        2     ]
+// 5.  Append 35/10 (MaxBlockRows) rows into (1-2)        [   4,        2     ]
+// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
+// 7.  Create snapshot, the snapshot index should be [4]  [   -,        4     ]
+// 8.  Create another db instance
+// 9.  Apply previous created snapshot
+// 10. Check:
+//     1) database exists 2) database checkpoint id is
+//     3) check segment flushed
+// 11. Restart new db instance and check again
+func TestSnapshot8(t *testing.T) {
+	initTestEnv(t)
+	prepareSnapshotPath(defaultSnapshotPath, t)
+	// 1. Create a db instance and a database
+	inst, gen, database := initTestDB1(t)
+	defer inst.Close()
+	// shardId := database.GetShardId()
+	// idxGen := gen.Shard(shardId)
+
+	// 2. Disable flush segment
+	inst.Scheduler.ExecCmd(sched.TurnOffFlushSegmentCmd)
+
+	// 3. Create 2 tables
+	schemas := make([]*metadata.Schema, 2)
+	for i, _ := range schemas {
+		schema := metadata.MockSchema(i + 1)
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
+		assert.Nil(t, err)
+		schemas[i] = schema
+	}
+
+	// 4. Append rows to 1-1
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
+	ck0 := mock.MockBatch(schemas[0].Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
+	err := inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 5. Append rows to 1-2
+	ck1 := mock.MockBatch(schemas[1].Types(), rows)
+	appendCtx = CreateAppendCtx(database, gen, schemas[1].Name, ck1)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 6. Create snapshot
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: true,
+	}
+	index, err := inst.CreateSnapshot(createSSCtx)
+	assert.Equal(t, 0, database.UncheckpointedCnt())
+	assert.Equal(t, database.GetCheckpointId(), index)
+
+	// 12. Create another db instance
+	aoedb2, _, _ := initTestDBWithOptions(t, "aoedb2", database.Name, defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
+
+	// 13. Apply snapshot
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = aoedb2.ApplySnapshot(applySSCtx)
+	assert.Nil(t, err)
+	t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
+
+	aoedb2.Close()
+}
