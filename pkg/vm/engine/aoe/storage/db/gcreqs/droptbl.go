@@ -74,6 +74,8 @@ func (req *dropTblRequest) Execute() error {
 		segIds := req.Meta.SimpleGetSegmentIds()
 		if len(segIds) == 0 {
 			err = nil
+		} else if c = req.MemTableMgr.WeakRefCollection(req.Meta.Id); c == nil {
+			err = nil
 		} else {
 			if req.Iteration < 3 {
 				return err
