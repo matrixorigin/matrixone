@@ -17,6 +17,7 @@ package aoe
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -35,10 +36,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -163,25 +167,54 @@ func (s *Storage) getSegmentedId(cmd []byte) []byte {
 //CreateTable creates a table in the storage.
 //It returns the id of the created table.
 //If the storage is closed, it panics.
-func (s *Storage) createTable(index uint64, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) createTable(index uint64,offset int,batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	if err := s.DB.Closed.Load(); err != nil {
+		panic(err)
+	}
+	if offset >= batchsize {
+		panic(fmt.Sprintf("bad index %d: offset %d, size %d", index, offset, batchsize))
+	}
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
-	t, err := helper.DecodeTable(customReq.TableInfo)
-	if err != nil {
-		buf := errDriver.ErrorResp(err)
 
-		return 0, 0, buf
-	}
-	id, err := s.DB.CreateTable(&t, dbi.TableOpCtx{
-		ShardId:   shardId,
-		OpIndex:   index,
-		TableName: customReq.Name,
-	})
+	db,err:=s.DB.Store.Catalog.GetDatabaseByName(aoedb.ShardIdToName(shardId))
 	if err != nil {
 		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
 		return 0, 0, buf
 	}
-	buf := codec.Uint642Bytes(id)
+
+	idx:=&shard.Index{
+		ShardId: shardId,
+		Id: shard.IndexId{
+			Id:     index,
+			Offset: uint32(offset),
+			Size:   uint32(batchsize),
+		},
+	}
+
+	t, err := helper.DecodeTable(customReq.TableInfo)
+	if err != nil {
+		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
+		return 0, 0, buf
+	}
+	schema := adaptor.TableInfoToSchema(s.DB.Opts.Meta.Catalog, &t)
+	schema.Name=customReq.Name
+	txn:=s.DB.StartTxn(idx)
+	tbl, err := db.CreateTableInTxn(txn, schema)
+	if err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
+		return 0, 0, buf
+	}
+	err = s.DB.CommitTxn(txn)
+	if err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
+		return 0, 0, buf
+	}
+	tbs:=db.SimpleGetTableNames()
+	logutil.Infof("createTable, tables are %v",tbs)
+	buf := codec.Uint642Bytes(tbl.Id)
 	writtenBytes := uint64(len(key) + len(customReq.TableInfo))
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, buf
@@ -189,14 +222,51 @@ func (s *Storage) createTable(index uint64, shardId uint64, cmd []byte, key []by
 
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
-func (s *Storage) dropTable(index uint64, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
-	id, err := s.DB.DropTable(dbi.DropTableCtx{
-		ShardId:   shardId,
-		OpIndex:   index,
-		TableName: customReq.Name,
-	})
+
+	idx:=&shard.Index{
+		ShardId: shardId,
+		Id: shard.IndexId{
+			Id:     index,
+			Offset: uint32(offset),
+			Size:   uint32(batchsize),
+		},
+	}
+	txn := s.DB.StartTxn(idx)
+
+	database,err:=s.DB.Store.Catalog.GetDatabaseByNameInTxn(txn,aoedb.ShardIdToName(shardId))
+	if err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err)
+		return 0, 0, buf
+	}
+
+	err = database.SoftDeleteInTxn(txn)
+	if err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err)
+		return 0, 0, buf
+	}
+	table, err := database.DropTableByNameInTxn(txn, customReq.Name)
+	if err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err)
+		return 0, 0, buf
+	} 
+
+	id := table.Id
+	if err = s.DB.CommitTxn(txn); err != nil {
+		s.DB.AbortTxn(txn)
+		buf := errDriver.ErrorResp(err)
+		return 0, 0, buf
+	}
+	gcTable := gcreqs.NewDropTblRequest(s.DB.Opts, table, s.DB.Store.DataTables, s.DB.MemTableMgr, nil)
+	s.DB.Opts.GC.Acceptor.Accept(gcTable)
+	gcDB := gcreqs.NewDropDBRequest(s.DB.Opts, database, s.DB.Store.DataTables, s.DB.MemTableMgr)
+	s.DB.Opts.GC.Acceptor.Accept(gcDB)
+
 	if err != nil {
 		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
 		return 0, 0, buf
@@ -338,9 +408,9 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 		var changedBytes int64
 		switch CmdType {
 		case uint64(pb.CreateTablet):
-			writtenBytes, changedBytes, rep = s.createTable(batch.Index, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.createTable(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.DropTablet):
-			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.Append):
 			writtenBytes, changedBytes, rep = s.Append(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		}
@@ -381,20 +451,6 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr && err != aoeMeta.TableNotFoundErr {
 			return err
-		}
-		// createDatabase := false
-		if err == aoeMeta.DatabaseNotFoundErr {
-			_, err = s.DB.CreateDatabase(aoedb.ShardIdToName(metadata.ShardID))
-			if err != nil {
-				return err
-			}
-			tbs := s.DB.TableNames(metadata.ShardID)
-			logutil.Infof("In db %v, len(tables) is %v, tables are %v.", metadata.ShardID, len(tbs), tbs)
-			tbl, err = s.DB.Store.Catalog.SimpleGetTableByName(aoedb.ShardIdToName(metadata.ShardID), tableName)
-			if err != nil && err != aoeMeta.DatabaseNotFoundErr && err != aoeMeta.TableNotFoundErr {
-				return err
-			}
-			// createDatabase = true
 		}
 		createTable := false
 		if tbl == nil {
@@ -452,7 +508,9 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		bat.Vecs[1] = vLogIndex
 		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(protoc.MustMarshal(&metadata.Metadata)))})
 		vMetadata.Ref = 1
+		dbs := s.DB.DatabaseNames()
 		tbs := s.DB.TableNames(metadata.ShardID)
+		logutil.Infof("dbs is %v,len(db) is %v.", dbs, len(dbs))
 		logutil.Infof("In db %v, len(tables) is %v, tables are %v.", metadata.ShardID, len(tbs), tbs)
 		logutil.Infof("SaveShardMetadata Metadata is %v, LogIndex is %d\n", metadata.Metadata, metadata.LogIndex)
 		vMetadata.Col = &types.Bytes{
