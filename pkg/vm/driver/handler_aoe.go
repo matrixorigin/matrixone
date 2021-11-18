@@ -81,7 +81,7 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 		OpSize:    ctx.BatchSize(),
 		TableName: customReq.Name,
 	})
-	if err != nil && err != metadata.DatabaseNotFoundErr{
+	if err != nil && err != metadata.DatabaseNotFoundErr && err != metadata.TableNotFoundErr {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
