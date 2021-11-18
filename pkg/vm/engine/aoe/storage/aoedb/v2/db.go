@@ -1,4 +1,4 @@
-package aoedb2
+package aoedb
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"

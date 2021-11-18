@@ -1,4 +1,4 @@
-package aoedb2
+package aoedb
 
 import (
 	"os"
