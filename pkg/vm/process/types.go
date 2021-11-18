@@ -15,16 +15,16 @@
 package process
 
 import (
+	"context"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/mheap"
-	"sync"
 )
 
 // WaitRegister channel
 type WaitRegister struct {
-	Wg *sync.WaitGroup
-	Ch chan *batch.Batch
+	Ctx context.Context
+	Ch  chan *batch.Batch
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -63,4 +63,6 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 	Mp  *mheap.Mheap
+
+	Cancel context.CancelFunc
 }

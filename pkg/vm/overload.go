@@ -17,9 +17,15 @@ package vm
 import (
 	"bytes"
 	"matrixone/pkg/sql/colexec/connector"
+	"matrixone/pkg/sql/colexec/dedup"
+	"matrixone/pkg/sql/colexec/limit"
+	"matrixone/pkg/sql/colexec/merge"
+	"matrixone/pkg/sql/colexec/offset"
+	"matrixone/pkg/sql/colexec/order"
 	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/colexec/restrict"
+	"matrixone/pkg/sql/colexec/top"
 	"matrixone/pkg/sql/viewexec/plus"
 	"matrixone/pkg/sql/viewexec/times"
 	"matrixone/pkg/sql/viewexec/transform"
@@ -28,9 +34,15 @@ import (
 )
 
 var stringFunc = [...]func(interface{}, *bytes.Buffer){
+	Top:         top.String,
 	Plus:        plus.String,
+	Limit:       limit.String,
+	Dedup:       dedup.String,
+	Order:       order.String,
 	Times:       times.String,
+	Merge:       merge.String,
 	Output:      output.String,
+	Offset:      offset.String,
 	Restrict:    restrict.String,
 	Connector:   connector.String,
 	Transform:   transform.String,
@@ -39,9 +51,15 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
+	Top:         top.Prepare,
 	Plus:        plus.Prepare,
+	Limit:       limit.Prepare,
+	Dedup:       dedup.Prepare,
+	Order:       order.Prepare,
 	Times:       times.Prepare,
+	Merge:       merge.Prepare,
 	Output:      output.Prepare,
+	Offset:      offset.Prepare,
 	Restrict:    restrict.Prepare,
 	Connector:   connector.Prepare,
 	Transform:   transform.Prepare,
@@ -50,9 +68,15 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
+	Top:         top.Call,
 	Plus:        plus.Call,
+	Limit:       limit.Call,
+	Dedup:       dedup.Call,
+	Order:       order.Call,
 	Times:       times.Call,
+	Merge:       merge.Call,
 	Output:      output.Call,
+	Offset:      offset.Call,
 	Restrict:    restrict.Call,
 	Connector:   connector.Call,
 	Transform:   transform.Call,

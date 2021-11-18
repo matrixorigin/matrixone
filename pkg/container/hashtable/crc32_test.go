@@ -15,11 +15,13 @@
 package hashtable
 
 import (
+	"reflect"
 	"testing"
+	"unsafe"
 )
 
 type test struct {
-	crc32 uint64
+	Crc32 uint64
 	in    string
 }
 
@@ -51,8 +53,8 @@ var golden = []test{
 
 func TestGoldenCastagnoli(t *testing.T) {
 	for _, g := range golden {
-		if crc := crc32BytesHashAsm([]byte(g.in)); crc != g.crc32 {
-			t.Errorf("crc32Hash(%s) = 0x%x want 0x%x", g.in, crc, g.crc32)
+		if crc := Crc32BytesHashAsm(unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&g.in)).Data), len(g.in)); crc != g.Crc32 {
+			t.Errorf("Crc32Hash(%s) = 0x%x want 0x%x", g.in, crc, g.Crc32)
 		}
 	}
 }

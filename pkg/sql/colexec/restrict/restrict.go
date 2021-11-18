@@ -41,6 +41,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {
 		batch.Clean(bat, proc.Mp)
+		proc.Reg.InputBatch = &batch.Batch{}
 		return false, err
 	}
 	sels := vec.Col.([]int64)

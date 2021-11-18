@@ -33,7 +33,9 @@ type Ring interface {
 	Free(*mheap.Mheap)
 	Grow(*mheap.Mheap) error
 
+	SetLength(int)
 	Shrink([]int64)
+
 	Shuffle([]int64, *mheap.Mheap) error
 
 	Eval([]int64) *vector.Vector

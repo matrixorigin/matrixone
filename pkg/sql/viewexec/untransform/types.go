@@ -14,16 +14,44 @@
 
 package untransform
 
+import (
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/hashtable"
+)
+
 const (
-	Single = iota
-	Horde
+	UnitLimit = 256
+)
+
+const (
+	H8 = iota
+	H16
+	H24
+	HStr
 )
 
 type Container struct {
+	rows    uint64
+	vars    []string
+	key     []byte
+	inserts []bool
+	hashs   []uint64
+	values  []*uint64
+	h8      struct {
+		keys []uint64
+	}
+	h16 struct {
+		keys [][2]uint64
+	}
+	h24 struct {
+		keys [][3]uint64
+	}
+	bat *batch.Batch
+	mp  *hashtable.MockStringHashTable
 }
 
 type Argument struct {
-	Typ      int
+	IsBare   bool
 	FreeVars []string // free variables
-	Ctr      *Container
+	ctr      *Container
 }

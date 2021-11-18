@@ -19,7 +19,7 @@ import (
 	"unsafe"
 )
 
-var BytesHash func([]byte) uint64
+var BytesHash func(unsafe.Pointer, int) uint64
 var IntHash func(uint64) uint64
 
 const (
@@ -30,17 +30,16 @@ const (
 	m5 = 0x1d8e4e27c47d124f
 )
 
-func wyhash(data []byte) uint64 {
-	s := len(data)
+func wyhash(data unsafe.Pointer, s int) uint64 {
 	var a, b uint64
 	seed := uint64(m3 ^ m1)
 	switch {
 	case s == 0:
 		return seed
 	case s < 4:
-		a = uint64(data[0])
-		a |= uint64(data[s>>1]) << 8
-		a |= uint64(data[s-1]) << 16
+		a = uint64(*(*byte)(data))
+		a |= uint64(*(*byte)(unsafe.Add(data, s>>1))) << 8
+		a |= uint64(*(*byte)(unsafe.Add(data, s-1))) << 16
 	case s == 4:
 		a = r4(data, 0)
 		b = a
@@ -62,13 +61,13 @@ func wyhash(data []byte) uint64 {
 				seed = mix(r8(data, 0)^m2, r8(data, 8)^seed)
 				seed1 = mix(r8(data, 16)^m3, r8(data, 24)^seed1)
 				seed2 = mix(r8(data, 32)^m4, r8(data, 40)^seed2)
-				data = data[48:]
+				data = unsafe.Add(data, 48)
 			}
 			seed ^= seed1 ^ seed2
 		}
 		for ; l > 16; l -= 16 {
 			seed = mix(r8(data, 0)^m2, r8(data, 8)^seed)
-			data = data[16:]
+			data = unsafe.Add(data, 16)
 		}
 		a = r8(data, l-16)
 		b = r8(data, l-8)
@@ -82,12 +81,12 @@ func mix(a, b uint64) uint64 {
 	return hi ^ lo
 }
 
-func r4(data []byte, p int) uint64 {
-	return uint64(*(*uint32)(unsafe.Pointer(&data[p])))
+func r4(data unsafe.Pointer, p int) uint64 {
+	return uint64(*(*uint32)(unsafe.Add(data, p)))
 }
 
-func r8(data []byte, p int) uint64 {
-	return *(*uint64)(unsafe.Pointer(&data[p]))
+func r8(data unsafe.Pointer, p int) uint64 {
+	return *(*uint64)(unsafe.Add(data, p))
 }
 
 func intHash64(x uint64) uint64 {

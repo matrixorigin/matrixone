@@ -17,6 +17,7 @@ package limit
 import (
 	"bytes"
 	"fmt"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/process"
 )
 
@@ -30,6 +31,24 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 // returning only the first n tuples from its input
-func Call(_ *process.Process, _ interface{}) (bool, error) {
+func Call(proc *process.Process, arg interface{}) (bool, error) {
+	bat := proc.Reg.InputBatch
+	if bat == nil || len(bat.Zs) == 0 {
+		return false, nil
+	}
+	n := arg.(*Argument)
+	if n.Seen >= n.Limit {
+		proc.Reg.InputBatch = nil
+		batch.Clean(bat, proc.Mp)
+		return true, nil
+	}
+	length := len(bat.Zs)
+	newSeen := n.Seen + uint64(length)
+	if newSeen >= n.Limit { // limit - seen
+		batch.SetLength(bat, int(n.Limit-n.Seen))
+		n.Seen = newSeen
+		return true, nil
+	}
+	n.Seen = newSeen
 	return false, nil
 }

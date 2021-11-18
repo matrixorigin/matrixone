@@ -12,16 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build arm64
-// +build arm64
-
 #include "textflag.h"
 
-// func crc32BytesHashAsm(data []byte) uint64
+// func Crc32BytesHashAsm(data unsafe.Pointer, length int) uint64
 // Requires: CRC32
-TEXT ·crc32BytesHashAsm(SB), NOSPLIT, $0-32
-	MOVD    data_base+0(FP), R0
-	MOVD    data_len+8(FP), R1
+TEXT ·Crc32BytesHashAsm(SB), NOSPLIT, $0-24
+	MOVD    data+0(FP), R0
+	MOVD    length+8(FP), R1
 	MOVD    $-1, R2
 	CRC32CX R1, R2
 	ADD     R0, R1
@@ -37,13 +34,14 @@ loop:
 done:
 	MOVD    (R1), R3
 	CRC32CX R3, R2
-	MOVD    R2, ret+24(FP)
+	MOVD    R2, ret+16(FP)
 	RET
 
-// func crc32IntHashAsm(data uint64) uint64
+// func Crc32IntHashAsm(data uint64) uint64
 // Requires: CRC32
-TEXT ·crc32IntHashAsm(SB), NOSPLIT, $0-16
+TEXT ·Crc32IntHashAsm(SB), NOSPLIT, $0-16
 	MOVD    data_base+0(FP), R0
+	MOVD    $-1, R1
 	CRC32CX R0, R1
 	MOVD    R1, ret+8(FP)
 	RET

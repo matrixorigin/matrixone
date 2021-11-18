@@ -19,6 +19,7 @@ const (
 	Plus
 	Limit
 	Times
+	Merge
 	Dedup
 	Order
 	Output

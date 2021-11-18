@@ -25,8 +25,8 @@ import (
 )
 
 const (
-	Normal = iota
-	Merge
+	Merge = iota
+	Normal
 	Remote
 	CreateDatabase
 	CreateTable
@@ -41,6 +41,7 @@ const (
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
+	IsMerge      bool
 	SchemaName   string
 	RelationName string
 	RefCounts    []uint64

@@ -46,7 +46,7 @@ func (r *FloatRing) Count() int {
 }
 
 func (r *FloatRing) Size() int {
-	return len(r.Vs) * 8
+	return cap(r.Da)
 }
 
 func (r *FloatRing) Dup() ring.Ring {
@@ -57,6 +57,11 @@ func (r *FloatRing) Dup() ring.Ring {
 
 func (r *FloatRing) Type() types.Type {
 	return r.Typ
+}
+
+func (r *FloatRing) SetLength(n int) {
+	r.Vs = r.Vs[:n]
+	r.Ns = r.Ns[:n]
 }
 
 func (r *FloatRing) Shrink(sels []int64) {

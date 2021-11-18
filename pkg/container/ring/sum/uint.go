@@ -46,7 +46,7 @@ func (r *UIntRing) Count() int {
 }
 
 func (r *UIntRing) Size() int {
-	return len(r.Vs) * 8
+	return cap(r.Da)
 }
 
 func (r *UIntRing) Dup() ring.Ring {
@@ -57,6 +57,11 @@ func (r *UIntRing) Dup() ring.Ring {
 
 func (r *UIntRing) Type() types.Type {
 	return r.Typ
+}
+
+func (r *UIntRing) SetLength(n int) {
+	r.Vs = r.Vs[:n]
+	r.Ns = r.Ns[:n]
 }
 
 func (r *UIntRing) Shrink(sels []int64) {

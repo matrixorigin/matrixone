@@ -80,6 +80,13 @@ type path struct {
 	freeVarsMap map[string]uint8
 }
 
+func (vt *ViewTree) IsBare() bool {
+	if len(vt.FreeVars) > 0 {
+		return false
+	}
+	return isBare(vt.Views)
+}
+
 func (vt *ViewTree) String() string {
 	var buf bytes.Buffer
 

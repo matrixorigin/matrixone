@@ -99,15 +99,15 @@ type Query struct {
 
 type CreateDatabase struct {
 	IfNotExistFlag bool
-	Id 			   string
-	E 			   engine.Engine
+	Id             string
+	E              engine.Engine
 }
 
 type CreateTable struct {
 	IfNotExistFlag bool
-	Id 			   string
-	Db 			   engine.Database
-	Defs 		   []engine.TableDef
+	Id             string
+	Db             engine.Database
+	Defs           []engine.TableDef
 	PartitionBy    *engine.PartitionByDef
 }
 
@@ -115,42 +115,42 @@ type CreateIndex struct {
 	IfNotExistFlag bool
 	Id             string
 	Relation       engine.Relation
-	Defs		   []engine.TableDef
+	Defs           []engine.TableDef
 }
 
 type DropDatabase struct {
 	IfExistFlag bool
 	Id          string
-	E			engine.Engine
+	E           engine.Engine
 }
 
 type DropTable struct {
 	IfExistFlag bool
 	Ids         []string
-	Dbs 		[]string
-	E			engine.Engine
+	Dbs         []string
+	E           engine.Engine
 }
 
 type DropIndex struct {
 	IfExistFlag bool
-	Id			string
-	Relation	engine.Relation
+	Id          string
+	Relation    engine.Relation
 }
 
 type ShowDatabases struct {
-	E			engine.Engine
-	Like		[]byte
-	//Where		extend.Extend
+	E    engine.Engine
+	Like []byte
+	//Where     extend.Extend
 }
 
 type ShowTables struct {
-	Db			engine.Database
-	Like		[]byte
+	Db   engine.Database
+	Like []byte
 }
 
 type ShowColumns struct {
-	Relation	engine.Relation
-	Like		[]byte
+	Relation engine.Relation
+	Like     []byte
 }
 
 type build struct {
@@ -358,169 +358,4 @@ func (i Direction) String() string {
 		return fmt.Sprintf("Direction(%d)", i)
 	}
 	return directionName[i]
-}
-
-func (c CreateDatabase) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create database ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	buf.WriteString(fmt.Sprintf("%s", c.Id))
-	return buf.String()
-}
-
-func (c CreateDatabase) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (c CreateTable) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create table ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	// todo: db name lost.
-	buf.WriteString(fmt.Sprintf("%s (", c.Id))
-	for i := range c.Defs {
-		_ = i
-		buf.WriteString("\n")
-		// column def
-		// index def
-		// constraint def
-	}
-	buf.WriteString(")")
-	if c.PartitionBy != nil {
-		// list
-		// range
-		// hash
-	}
-	return buf.String()
-}
-
-func (c CreateTable) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (c CreateIndex) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("create index ")
-	if c.IfNotExistFlag {
-		buf.WriteString("if not exists ")
-	}
-	for _, def := range c.Defs {
-		buf.WriteString(fmt.Sprintf("%s", def.(*engine.AttributeDef).Attr.Name))
-	}
-	buf.WriteString(fmt.Sprintf("on %s", c.Relation))
-	return buf.String()
-}
-
-func (c CreateIndex) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropDatabase) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop database ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists ")
-	}
-	buf.WriteString(d.Id)
-	return buf.String()
-}
-
-func (d DropDatabase) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropTable) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop table ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists")
-	}
-	for i := 0; i < len(d.Dbs); i++ {
-		buf.WriteString(d.Dbs[i] + "." + d.Ids[i])
-	}
-	return buf.String()
-}
-
-func (d DropTable) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (d DropIndex) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("drop index ")
-	if d.IfExistFlag {
-		buf.WriteString("if exists ")
-	}
-	buf.WriteString(d.Id)
-	return buf.String()
-}
-
-func (d DropIndex) ResultColumns() []*Attribute {
-	return nil
-}
-
-func (s ShowDatabases) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show databases")
-	if s.Like != nil {
-		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
-	}
-	return buf.String()
-}
-
-func (s ShowDatabases) ResultColumns() []*Attribute {
-	return []*Attribute{
-		&Attribute{
-			Ref:  1,
-			Name: "Databases",
-			Type: types.Type{
-				Oid:       types.T_varchar,
-				Size:      24,
-			},
-		},
-	}
-}
-
-func (s ShowTables) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show tables")
-	if s.Like != nil {
-		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
-	}
-	return buf.String()
-}
-
-func (s ShowTables) ResultColumns() []*Attribute {
-	return []*Attribute{
-		&Attribute{
-			Ref:  1,
-			Name: fmt.Sprintf("Tables"),
-			Type: types.Type{
-				Oid: types.T_varchar,
-				Size: 24,
-			},
-		},
-	}
-}
-
-func (s ShowColumns) String() string {
-	var buf bytes.Buffer
-	buf.WriteString("show columns")
-	return buf.String()
-}
-
-func (s ShowColumns) ResultColumns() []*Attribute {
-	attrs := []*Attribute{
-		&Attribute{Ref: 1, Name: "Filed", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-		&Attribute{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
-	}
-	return attrs
 }

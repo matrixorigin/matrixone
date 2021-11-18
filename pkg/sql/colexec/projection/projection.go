@@ -56,6 +56,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				rbat.Vecs = rbat.Vecs[:i]
 				batch.Clean(bat, proc.Mp)
 				batch.Clean(rbat, proc.Mp)
+				proc.Reg.InputBatch = &batch.Batch{}
 				return false, err
 			}
 		}

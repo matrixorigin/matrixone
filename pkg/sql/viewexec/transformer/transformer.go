@@ -15,7 +15,14 @@
 package transformer
 
 import (
+	"errors"
+	"fmt"
 	"matrixone/pkg/container/ring"
+	"matrixone/pkg/container/ring/avg"
+	"matrixone/pkg/container/ring/count"
+	"matrixone/pkg/container/ring/max"
+	"matrixone/pkg/container/ring/min"
+	"matrixone/pkg/container/ring/starcount"
 	"matrixone/pkg/container/ring/sum"
 	"matrixone/pkg/container/types"
 )
@@ -62,6 +69,16 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	switch op {
 	case Sum:
 		return NewSum(typ)
+	case Avg:
+		return avg.NewAvg(typ), nil
+	case Max:
+		return NewMax(typ)
+	case Min:
+		return NewMin(typ)
+	case Count:
+		return count.NewCount(typ), nil
+	case StarCount:
+		return starcount.NewCount(typ), nil
 	}
 	return nil, nil
 }
@@ -73,5 +90,71 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		return sum.NewUint(typ), nil
 	}
-	return nil, nil
+	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
+}
+
+func NewAvg(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_float32, types.T_float64:
+		return avg.NewAvg(typ), nil
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return avg.NewAvg(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support Avg", typ))
+}
+
+func NewMax(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_int8:
+		return max.NewInt8(typ), nil
+	case types.T_int16:
+		return max.NewInt16(typ), nil
+	case types.T_int32:
+		return max.NewInt32(typ), nil
+	case types.T_int64:
+		return max.NewInt64(typ), nil
+	case types.T_uint8:
+		return max.NewUInt8(typ), nil
+	case types.T_uint16:
+		return max.NewUInt16(typ), nil
+	case types.T_uint32:
+		return max.NewUInt32(typ), nil
+	case types.T_uint64:
+		return max.NewUInt64(typ), nil
+	case types.T_float32:
+		return max.NewFloat32(typ), nil
+	case types.T_float64:
+		return max.NewFloat64(typ), nil
+	case types.T_char, types.T_varchar:
+		return max.NewStr(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support Max", typ))
+}
+
+func NewMin(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_int8:
+		return min.NewInt8(typ), nil
+	case types.T_int16:
+		return min.NewInt16(typ), nil
+	case types.T_int32:
+		return min.NewInt32(typ), nil
+	case types.T_int64:
+		return min.NewInt64(typ), nil
+	case types.T_uint8:
+		return min.NewUInt8(typ), nil
+	case types.T_uint16:
+		return min.NewUInt16(typ), nil
+	case types.T_uint32:
+		return min.NewUInt32(typ), nil
+	case types.T_uint64:
+		return min.NewUInt64(typ), nil
+	case types.T_float32:
+		return min.NewFloat32(typ), nil
+	case types.T_float64:
+		return min.NewFloat64(typ), nil
+	case types.T_char, types.T_varchar:
+		return min.NewStr(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support Min", typ))
 }

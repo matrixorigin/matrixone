@@ -33,23 +33,15 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	reg := n.Reg
-	if reg.Ch == nil {
-		if bat := proc.Reg.InputBatch; bat != nil {
-			batch.Clean(bat, proc.Mp)
-		}
-		process.FreeRegisters(proc)
-		return true, nil
-	}
 	bat := proc.Reg.InputBatch
-	if bat == nil {
-		reg.Wg.Add(1)
-		reg.Ch <- nil
-		reg.Wg.Wait()
-		process.FreeRegisters(proc)
-		return true, nil
-	}
-	if len(bat.Zs) == 0 {
-		return false, nil
+	if bat == nil || len(bat.Zs) == 0 {
+		select {
+		case <-reg.Ctx.Done():
+			process.FreeRegisters(proc)
+			return true, nil
+		case reg.Ch <- bat:
+			return false, nil
+		}
 	}
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {
@@ -68,10 +60,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 	}
 	size := mheap.Size(proc.Mp)
-	reg.Wg.Add(1)
-	reg.Ch <- bat
-	reg.Wg.Wait()
-	n.Mmu.Alloc(size)
-	proc.Mp.Gm.Free(size)
-	return false, nil
+	select {
+	case <-reg.Ctx.Done():
+		batch.Clean(bat, proc.Mp)
+		process.FreeRegisters(proc)
+		return true, nil
+	case reg.Ch <- bat:
+		n.Mmu.Alloc(size)
+		proc.Mp.Gm.Free(size)
+		return false, nil
+	}
 }

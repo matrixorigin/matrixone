@@ -45,6 +45,16 @@ func Reorder(bat *Batch, attrs []string) {
 	}
 }
 
+func SetLength(bat *Batch, n int) {
+	for _, vec := range bat.Vecs {
+		vector.SetLength(vec, n)
+	}
+	for _, r := range bat.Rs {
+		r.SetLength(n)
+	}
+	bat.Zs = bat.Zs[:n]
+}
+
 func Shrink(bat *Batch, sels []int64) {
 	for _, vec := range bat.Vecs {
 		vector.Shrink(vec, sels)
@@ -162,7 +172,9 @@ func (bat *Batch) String() string {
 	}
 	for i, attr := range bat.Attrs {
 		buf.WriteString(fmt.Sprintf("%s\n", attr))
-		buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))
+		if len(bat.Zs) > 0 {
+			buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))
+		}
 	}
 	return buf.String()
 }
