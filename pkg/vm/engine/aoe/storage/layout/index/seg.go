@@ -22,6 +22,10 @@ import (
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"io/ioutil"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -68,6 +72,49 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	if indicesMeta == nil {
 		return
 	}
+
+	// collect attached index files and make file for them
+	dir := segFile.GetDir()
+	infos, err := ioutil.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+	bsiFiles := make([]string, 0)
+	for _, info := range infos {
+		if strings.HasSuffix(info.Name(), ".bsi") && strings.HasPrefix(info.Name(), fmt.Sprintf("1_%d", holder.ID.SegmentID)) {
+			bsiFiles = append(bsiFiles, info.Name())
+		}
+	}
+
+	for _, filename := range bsiFiles {
+		file, err := os.Open(filepath.Join(dir, filename))
+		if err != nil {
+			panic(err)
+		}
+		idxMeta, err := DefaultRWHelper.ReadIndicesMeta(*file)
+		if err != nil {
+			panic(err)
+		}
+		if idxMeta.Data == nil || len(idxMeta.Data) != 1 {
+			panic("logic error")
+		}
+		col := int(idxMeta.Data[0].Cols.ToArray()[0])
+		id := common.ID{}
+		id.SegmentID = holder.ID.SegmentID
+		id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
+		vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
+		// TODO: str bsi
+		node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+		idxes, ok := holder.self.ColIndices[col]
+		if !ok {
+			idxes = make([]int, 0)
+			holder.self.ColIndices[col] = idxes
+		}
+		holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
+		holder.self.Indices = append(holder.self.Indices, node)
+	}
+
+	// init embed index
 	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])

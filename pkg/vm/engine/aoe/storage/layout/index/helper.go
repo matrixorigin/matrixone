@@ -16,13 +16,13 @@ package index
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
-	"io"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"io"
 	"os"
-
-	"github.com/RoaringBitmap/roaring"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -153,4 +153,19 @@ func (h *RWHelper) ReadIndicesMeta(f os.File) (meta *base.IndicesMeta, err error
 	}
 	// log.Info(meta.String())
 	return meta, nil
+}
+
+func (h *RWHelper) FlushBitSlicedIndex(idx Index, filename string) error {
+	buf, err := DefaultRWHelper.WriteIndices([]Index{idx})
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	if err = binary.Write(f, binary.BigEndian, buf); err != nil {
+		return err
+	}
+	return f.Close()
 }

@@ -15,8 +15,10 @@
 package dataio
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"os"
 )
 
 type EmbedIndexFile struct {
@@ -28,6 +30,14 @@ type EmbedIndexFile struct {
 type EmbedBlockIndexFile struct {
 	EmbedIndexFile
 	ID common.ID
+}
+
+type IndexFile struct {
+	os.File
+	common.RefHelper
+	ID common.ID
+	Meta *base.IndexMeta
+	Info *fileStat
 }
 
 func newEmbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
@@ -57,6 +67,38 @@ func newEmbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.In
 	}
 	f.Ref()
 	return f
+}
+
+func newIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+	f := &IndexFile{
+		File:      *file,
+		ID:        *id,
+		Meta:      meta,
+		Info:      &fileStat{
+			size:  int64(meta.Ptr.Len),
+			osize: int64(meta.Ptr.Len),
+		},
+	}
+	f.Ref()
+	return f
+}
+
+func (f *IndexFile) Stat() common.FileInfo {
+	return f.Info
+}
+
+func (f *IndexFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
+func (f *IndexFile) Read(buf []byte) (n int, err error) {
+	if len(buf) != int(f.Meta.Ptr.Len) {
+		return 0, errors.New("length mismatch reading idx file")
+	}
+	if _, err := f.ReadAt(buf, f.Meta.Ptr.Offset); err != nil {
+		return 0, err
+	}
+	return len(buf), nil
 }
 
 func (f *EmbedIndexFile) Stat() common.FileInfo {

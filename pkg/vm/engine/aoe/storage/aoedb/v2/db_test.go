@@ -735,6 +735,7 @@ func TestDropTable2(t *testing.T) {
 	inst.Close()
 }
 
+// Test bsi file flushed with segment file when metadata contains bsi.
 func TestE2E(t *testing.T) {
 	if !dataio.FlushIndex {
 		dataio.FlushIndex = true
@@ -749,6 +750,11 @@ func TestE2E(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
+	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
+		Id:      0,
+		Type:    metadata.NumBsi,
+		Columns: []uint16{1},
+	})
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -794,7 +800,7 @@ func TestE2E(t *testing.T) {
 		sumr := segment.NewSummarizer()
 		t.Log(spf.Eq("mock_0", int32(1)))
 		t.Log(f == nil)
-		t.Log(sumr.Count("mock_0", nil))
+		t.Log(sumr.Count("mock_1", nil))
 		//t.Log(spf.Eq("mock_0", int32(1)))
 		//t.Log(f.Eq("mock_0", int32(-1)))
 		//t.Log(sumr.Count("mock_0", nil))

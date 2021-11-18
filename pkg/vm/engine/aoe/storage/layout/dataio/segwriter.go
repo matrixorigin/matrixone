@@ -17,6 +17,7 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -141,6 +142,7 @@ func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.Fil
 	return w, err
 }
 
+// flushIndices flush zone map index, and BSI if enabled.
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
 	if !FlushIndex {
 		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
@@ -151,7 +153,19 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 		return err
 	}
 	var indices []index.Index
+	bsiEnabled := make(map[int]bool)
+	for _, idx := range meta.Table.Schema.Indices {
+		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
+			for _, col := range idx.Columns {
+				bsiEnabled[int(col)] = true
+			}
+		}
+	}
+
 	for idx, colDef := range meta.Table.Schema.ColDefs {
+		hasBsi := bsiEnabled[idx]
+		bsiFilename := filepath.Join(sw.dir, fmt.Sprintf("data/%d_%d_%d.bsi", meta.Table.Id, meta.Id, idx))
+		//logutil.Infof("BSI path: %s", bsiFilename)
 		switch colDef.Type.Oid {
 		case types.T_int8:
 			// build segment zone map index
@@ -187,19 +201,23 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			// build bit-sliced index
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int8)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			// if enabled, flush BSI
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]int8)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_int16:
 			var minv, maxv, blkMaxv, blkMinv int16
 			var blkMin, blkMax []interface{}
@@ -233,18 +251,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int16)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]int16)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_int32:
 			var minv, maxv, blkMaxv, blkMinv int32
 			var blkMin, blkMax []interface{}
@@ -278,18 +300,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]int32)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_int64:
 			var minv, maxv, blkMaxv, blkMinv int64
 			var blkMin, blkMax []interface{}
@@ -323,18 +349,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]int64)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint8:
 			var minv, maxv, blkMaxv, blkMinv uint8
 			var blkMin, blkMax []interface{}
@@ -368,18 +398,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint8)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]uint8)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint16:
 			var minv, maxv, blkMaxv, blkMinv uint16
 			var blkMin, blkMax []interface{}
@@ -413,18 +447,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint16)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]uint16)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint32:
 			var minv, maxv, blkMaxv, blkMinv uint32
 			var blkMin, blkMax []interface{}
@@ -458,18 +496,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]uint32)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint64:
 			var minv, maxv, blkMaxv, blkMinv uint64
 			var blkMin, blkMax []interface{}
@@ -503,18 +545,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]uint64)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_float32:
 			var minv, maxv, blkMaxv, blkMinv float32
 			var blkMin, blkMax []interface{}
@@ -548,18 +594,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]float32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]float32)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_float64:
 			var minv, maxv, blkMaxv, blkMinv float64
 			var blkMin, blkMax []interface{}
@@ -593,18 +643,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]float64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]float64)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), val); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			var minv, maxv, blkMaxv, blkMinv []byte
 			var blkMin, blkMax []interface{}
@@ -673,18 +727,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]types.Datetime)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]types.Datetime)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		case types.T_date:
 			var minv, maxv, blkMaxv, blkMinv types.Date
 			var blkMin, blkMax []interface{}
@@ -718,18 +776,22 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
 
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]types.Date)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
-						return err
+			if hasBsi {
+				bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
+				row := 0
+				for _, blk := range data {
+					column := blk.Vecs[idx].Col.([]types.Date)
+					for _, val := range column {
+						if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
+							return err
+						}
+						row++
 					}
-					row++
+				}
+				if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsiIdx, bsiFilename); err != nil {
+					return err
 				}
 			}
-			indices = append(indices, bsiIdx)
 		}
 	}
 	buf, err := index.DefaultRWHelper.WriteIndices(indices)

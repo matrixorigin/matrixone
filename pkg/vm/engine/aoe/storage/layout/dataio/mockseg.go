@@ -15,6 +15,7 @@
 package dataio
 
 import (
+	"os"
 	"path/filepath"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -153,6 +154,10 @@ func (msf *MockSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IV
 }
 
 func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
+	return nil
+}
+
+func (sf *MockSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 
