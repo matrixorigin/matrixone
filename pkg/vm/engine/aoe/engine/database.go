@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	log "github.com/sirupsen/logrus"
 )
@@ -91,7 +91,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		pid:     db.id,
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
-		mp:      make(map[string]*adb.Relation),
+		mp:      make(map[string]*aoedb.Relation),
 	}
 	r.tablets = tablets
 	ldb := db.catalog.Driver.AOEStore()

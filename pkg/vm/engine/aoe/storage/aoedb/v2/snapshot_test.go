@@ -1,42 +1,30 @@
-package db
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package aoedb
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/stretchr/testify/assert"
 )
-
-var (
-	defaultSnapshotPath = "snapshot"
-)
-
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath("DB", t)
-}
-
-func initTestEnv(t *testing.T) string {
-	testutils.RemoveDefaultTestPath("DB", t)
-	return testutils.MakeDefaultTestPath("DB", t)
-}
-
-func getSnapshotPath(dir string, t *testing.T) string {
-	workdir := getTestPath(t)
-	return filepath.Join(workdir, dir)
-}
-
-func prepareSnapshotPath(dir string, t *testing.T) string {
-	path := getSnapshotPath(dir, t)
-	os.MkdirAll(path, os.FileMode(0755))
-	return path
-}
 
 func TestSnapshot1(t *testing.T) {
 	initTestEnv(t)
@@ -47,7 +35,11 @@ func TestSnapshot1(t *testing.T) {
 	schemas := make([]*metadata.Schema, 10)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -60,11 +52,20 @@ func TestSnapshot1(t *testing.T) {
 	names := inst.TableNames(database.Name)
 	assert.Equal(t, len(schemas), len(names))
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, idxGen.Get(), idx)
 
-	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = inst.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
@@ -92,7 +93,11 @@ func TestSnapshot2(t *testing.T) {
 	schemas := make([]*metadata.Schema, 3)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -108,24 +113,32 @@ func TestSnapshot2(t *testing.T) {
 
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schemas[0].Name,
-		DBName:    database.Name,
-		Data:      ck0,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
 	err := inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	schema := metadata.MockSchema(2)
-	_, err = inst.CreateTable(database.Name, schema, idxGen.Next())
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	_, err = inst.CreateTable(createCtx)
+	assert.Nil(t, err)
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
-	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = inst.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
@@ -153,7 +166,11 @@ func TestSnapshot3(t *testing.T) {
 	schemas := make([]*metadata.Schema, 2)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -169,22 +186,21 @@ func TestSnapshot3(t *testing.T) {
 
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schemas[0].Name,
-		DBName:    database.Name,
-		Data:      ck0,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
 	err := inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	schema := metadata.MockSchema(2)
-	_, err = inst.CreateTable(database.Name, schema, idxGen.Next())
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	_, err = inst.CreateTable(createCtx)
+	assert.Nil(t, err)
 
 	ck1 := mock.MockBatch(schemas[1].Types(), rows)
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[1].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[1].Name
 	appendCtx.Data = ck1
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
@@ -198,11 +214,20 @@ func TestSnapshot3(t *testing.T) {
 	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
 	assert.Equal(t, 1, stats[0].Count)
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
-	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = inst.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
@@ -230,7 +255,11 @@ func TestSnapshot4(t *testing.T) {
 	schemas := make([]*metadata.Schema, 3)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -246,19 +275,13 @@ func TestSnapshot4(t *testing.T) {
 
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schemas[0].Name,
-		DBName:    database.Name,
-		Data:      ck0,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
 	err := inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	ck1 := mock.MockBatch(schemas[1].Types(), rows)
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[1].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[1].Name
 	appendCtx.Data = ck1
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
@@ -272,11 +295,20 @@ func TestSnapshot4(t *testing.T) {
 	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
 	assert.Equal(t, 1, stats[0].Count)
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
-	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = inst.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
@@ -304,7 +336,11 @@ func TestSnapshot5(t *testing.T) {
 	schemas := make([]*metadata.Schema, 3)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -319,19 +355,13 @@ func TestSnapshot5(t *testing.T) {
 
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schemas[0].Name,
-		DBName:    database.Name,
-		Data:      ck0,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
 	err := inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	ck1 := mock.MockBatch(schemas[1].Types(), rows)
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[1].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[1].Name
 	appendCtx.Data = ck1
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
@@ -348,11 +378,20 @@ func TestSnapshot5(t *testing.T) {
 	assert.Equal(t, uint64(4), ckId)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
-	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = inst.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
@@ -425,7 +464,11 @@ func TestSnapshot6(t *testing.T) {
 	schemas := make([]*metadata.Schema, 3)
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		_, err := inst.CreateTable(database.Name, schema, idxGen.Next())
+		createCtx := &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
 		assert.Nil(t, err)
 		schemas[i] = schema
 	}
@@ -441,20 +484,14 @@ func TestSnapshot6(t *testing.T) {
 	// 4. Append rows into table 1-1
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
-	appendCtx := dbi.AppendCtx{
-		OpIndex:   gen.Alloc(database.GetShardId()),
-		OpSize:    1,
-		TableName: schemas[0].Name,
-		DBName:    database.Name,
-		Data:      ck0,
-	}
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
 	err := inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	// 5. Append rows into table 1-2
 	ck1 := mock.MockBatch(schemas[1].Types(), rows)
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[1].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[1].Name
 	appendCtx.Data = ck1
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
@@ -475,15 +512,15 @@ func TestSnapshot6(t *testing.T) {
 	assert.Equal(t, gen.Get(database.GetShardId()), ckId)
 
 	// 8. Append rows into table 1-1
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[0].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[0].Name
 	appendCtx.Data = ck0
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	// 9. Append rows into table 1-2
-	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
-	appendCtx.TableName = schemas[1].Name
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.Table = schemas[1].Name
 	appendCtx.Data = ck1
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
@@ -500,15 +537,24 @@ func TestSnapshot6(t *testing.T) {
 	assert.Equal(t, ckId, database.GetCheckpointId())
 
 	// 11. Create snapshot
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: false,
+	}
+	idx, err := inst.CreateSnapshot(createSSCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
 	// 12. Create another db instance
-	aoedb2, gen2, origindb := initTestBrokerDB(t, "aoedb2", database.Name, nil)
+	aoedb2, gen2, origindb := initTestDBWithOptions(t, "aoedb2", database.Name, defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
 
 	// 13. Apply snapshot
-	err = aoedb2.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = aoedb2.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 
 	// 14. Check
@@ -532,7 +578,8 @@ func TestSnapshot6(t *testing.T) {
 
 	// 15. Restart and check data replay
 	aoedb2.Close()
-	aoedb2, _, _ = initTestBrokerDB(t, "aoedb2", "", nil)
+	aoedb2, _, _ = initTestDBWithOptions(t, "aoedb2", "", defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
+
 	defer aoedb2.Close()
 
 	dbReplayed, err := aoedb2.Store.Catalog.SimpleGetDatabase(origindb.Id)
@@ -570,26 +617,26 @@ func TestSnapshot6(t *testing.T) {
 	// t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
 }
 
-// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
-// 1.  Create db isntance and create a database           [   0,        ?     ]
-// 2.  Create 3 tables: 1-1 [1,?], 1-2 [2,?], 1-3 [3,?]   [   3,        ?     ]
-// 3.  Wait and assert checkpoint                         [   -,        3     ]
-// 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
-// 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
-// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
-// 7.  Wait and assert checkpoint                         [   -,        5     ]
-// 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
-// 9.  Drop (1-2)                                         [   7,        5     ]
-// 10. Wait [7] committed                                 [   -,        5     ]
-// 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
-// 12. Create another db instance
-// 13. Apply previous created snapshot
-// 14. Check:
-//     1) database exists 2) database checkpoint id is [5]
-//     3) total 3 tables with 2 table of one segment and one block
-//     4) replay [6] and [7] operation
-//     5) check new applied database is same as origin database
-// 15. Restart new db instance and check again
-func TestSnapshot7(t *testing.T) {
-	// TODO
-}
+// // -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// // 1.  Create db isntance and create a database           [   0,        ?     ]
+// // 2.  Create 3 tables: 1-1 [1,?], 1-2 [2,?], 1-3 [3,?]   [   3,        ?     ]
+// // 3.  Wait and assert checkpoint                         [   -,        3     ]
+// // 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
+// // 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
+// // 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
+// // 7.  Wait and assert checkpoint                         [   -,        5     ]
+// // 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
+// // 9.  Drop (1-2)                                         [   7,        5     ]
+// // 10. Wait [7] committed                                 [   -,        5     ]
+// // 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
+// // 12. Create another db instance
+// // 13. Apply previous created snapshot
+// // 14. Check:
+// //     1) database exists 2) database checkpoint id is [5]
+// //     3) total 3 tables with 2 table of one segment and one block
+// //     4) replay [6] and [7] operation
+// //     5) check new applied database is same as origin database
+// // 15. Restart new db instance and check again
+// func TestSnapshot7(t *testing.T) {
+// 	// TODO
+// }

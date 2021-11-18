@@ -12,28 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package aoedb
 
 import (
-	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 )
 
-var (
-	defaultDBPath            = "aoedb"
-	moduleName               = "DB"
-	defaultDBName            = "default"
-	emptyDBName              = ""
-	defaultTestBlockRows     = uint64(2000)
-	defaultTestSegmentBlocks = uint64(2)
-)
-
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
-
-func initTestEnv(t *testing.T) string {
-	testutils.RemoveDefaultTestPath(moduleName, t)
-	return testutils.MakeDefaultTestPath(moduleName, t)
+func Open(dirname string, opts *storage.Options) (inst *DB, err error) {
+	impl, err := db.Open(dirname, opts)
+	if err != nil {
+		return nil, err
+	}
+	inst = &DB{Impl: *impl}
+	return
 }

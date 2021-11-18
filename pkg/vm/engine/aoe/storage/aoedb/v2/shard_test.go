@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package aoedb
 
 import (
 	"fmt"
@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -67,7 +66,10 @@ func newMockShard(inst *DB, gen *shard.MockIndexAllocator) *mockShard {
 	}
 	var err error
 	dbName := strconv.FormatUint(uint64(time.Now().UnixNano()), 10)
-	s.database, err = inst.CreateDatabase(dbName)
+	ctx := &CreateDBCtx{
+		DB: dbName,
+	}
+	s.database, err = inst.CreateDatabase(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -83,6 +85,9 @@ func (s *mockShard) Stop() {
 }
 
 func (s *mockShard) sendRequest(ctx *requestCtx) {
+	if ctx.request == nil {
+		panic(ctx)
+	}
 	_, err := s.queue.Enqueue(ctx)
 	if err != nil {
 		ctx.Done()
@@ -96,42 +101,44 @@ func (s *mockShard) onItems(items ...interface{}) {
 	case *metadata.Schema:
 		err := s.createTable(r)
 		ctx.setDone(err, nil)
-	case *dbi.DropTableCtx:
+	case *DropTableCtx:
 		err := s.dropTable(r)
 		ctx.setDone(err, nil)
-	case *dbi.AppendCtx:
+	case *AppendCtx:
 		err := s.insert(r)
 		ctx.setDone(err, nil)
 	default:
-		panic("")
+		panic(r)
 	}
 }
 
 func (s *mockShard) createTable(schema *metadata.Schema) error {
-	_, err := s.inst.CreateTable(s.database.Name, schema, s.gen.Next())
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(s.database, s.gen.Host),
+		Schema:        schema,
+	}
+	_, err := s.inst.CreateTable(createCtx)
 	return err
 }
 
-func (s *mockShard) dropTable(ctx *dbi.DropTableCtx) error {
-	ctx.ShardId = s.gen.ShardId
-	ctx.DBName = s.database.Name
-	ctx.OpIndex = s.gen.Alloc()
-	ctx.OpSize = 1
-	_, err := s.inst.DropTable(*ctx)
+func (s *mockShard) dropTable(ctx *DropTableCtx) error {
+	ctx.DB = s.database.Name
+	ctx.Id = s.gen.Alloc()
+	ctx.Size = 1
+	_, err := s.inst.DropTable(ctx)
 	return err
 }
 
-func (s *mockShard) insert(ctx *dbi.AppendCtx) error {
-	ctx.ShardId = s.gen.ShardId
-	ctx.DBName = s.database.Name
-	ctx.OpIndex = s.gen.Alloc()
-	ctx.OpSize = 1
-	err := s.inst.Append(*ctx)
+func (s *mockShard) insert(ctx *AppendCtx) error {
+	ctx.DB = s.database.Name
+	ctx.Id = s.gen.Alloc()
+	ctx.Size = 1
+	err := s.inst.Append(ctx)
 	return err
 }
 
 func (s *mockShard) getSafeId() uint64 {
-	return s.inst.Wal.GetShardCheckpointId(s.gen.ShardId)
+	return s.database.GetCheckpointId()
 }
 
 type mockClient struct {
@@ -171,7 +178,10 @@ func (cli *mockClient) insert(pos int) error {
 	ctx := newCtx()
 	rand.Seed(time.Now().UnixNano())
 	n := rand.Intn(len(cli.bats))
-	ctx.request = &dbi.AppendCtx{TableName: info.Name, Data: cli.bats[n]}
+	appendCtx := new(AppendCtx)
+	appendCtx.Table = info.Name
+	appendCtx.Data = cli.bats[n]
+	ctx.request = appendCtx
 	shard.sendRequest(ctx)
 	ctx.Wait()
 	return ctx.err
@@ -181,7 +191,9 @@ func (cli *mockClient) dropTable(pos int) error {
 	info := cli.schemas[pos]
 	shard := cli.routing(info.Name)
 	ctx := newCtx()
-	ctx.request = &dbi.DropTableCtx{TableName: info.Name}
+	ctx.request = &DropTableCtx{
+		Table: info.Name,
+	}
 	shard.sendRequest(ctx)
 	ctx.Wait()
 	return ctx.err
@@ -204,9 +216,9 @@ func TestShard1(t *testing.T) {
 		schemas[i] = metadata.MockSchema(20)
 		schemas[i].Name = fmt.Sprintf("mock-%d", i)
 	}
+	initTestEnv(t)
 
-	initDBTest()
-	inst, gen := initDB(wal.BrokerRole)
+	inst, gen, _ := initTestDB2(t)
 
 	shardCnt := 8
 	shards := make([]*mockShard, shardCnt)
@@ -252,13 +264,10 @@ func TestShard2(t *testing.T) {
 	schemas := make([]*metadata.Schema, tableCnt)
 	for i := 0; i < tableCnt; i++ {
 		schemas[i] = metadata.MockSchema(20)
-		schemas[i].Name = fmt.Sprintf("mock-%d", i)
 	}
 
-	initDBTest()
-	inst, _ := initDB(wal.BrokerRole)
-
-	gen := shard.NewMockIndexAllocator()
+	initTestEnv(t)
+	inst, gen, _ := initTestDB2(t)
 
 	shardCnt := 4
 	shards := make([]*mockShard, shardCnt)
@@ -335,7 +344,8 @@ func TestShard2(t *testing.T) {
 	assert.Equal(t, tableCnt, tblCompacts)
 
 	for _, shard := range shards {
-		err := inst.DropDatabase(shard.database.Name, shard.gen.Alloc())
+		ctx := CreateDBMutationCtx(shard.database, gen)
+		_, err := inst.DropDatabase(ctx)
 		assert.Nil(t, err)
 	}
 	for _, shard := range shards {
@@ -357,7 +367,7 @@ func TestShard2(t *testing.T) {
 
 func TestShard3(t *testing.T) {
 	initTestEnv(t)
-	inst, gen, _ := initTestDBWithOptions(t, wal.BrokerRole, defaultDBPath, "", uint64(40000), uint64(8), nil)
+	inst, gen, _ := initTestDBWithOptions(t, defaultDBPath, emptyDBName, uint64(40000), uint64(8), nil, wal.BrokerRole)
 	defer inst.Close()
 	t.Log(inst.Opts.CacheCfg.InsertCapacity / 1024 / 1024)
 	tableCnt := 10
@@ -407,7 +417,12 @@ func TestShard3(t *testing.T) {
 	costs := make(map[uint64]time.Duration)
 	for _, shard := range shards {
 		now := time.Now()
-		idx, err := inst.CreateSnapshot(shard.database.Name, getSnapshotPath(defaultSnapshotPath, t), true)
+		ctx := &CreateSnapshotCtx{
+			DB:   shard.database.Name,
+			Path: getSnapshotPath(defaultSnapshotPath, t),
+			Sync: true,
+		}
+		idx, err := inst.CreateSnapshot(ctx)
 		assert.Nil(t, err)
 		assert.Equal(t, shard.getSafeId(), idx)
 		costs[shard.database.Id] = time.Since(now)

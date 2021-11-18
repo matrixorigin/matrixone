@@ -12,13 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package aoedb
 
 import (
 	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -35,7 +36,7 @@ type Relation struct {
 	Meta   *md.Table
 	tree   struct {
 		sync.RWMutex
-		Segments map[uint64]*Segment
+		Segments map[uint64]*db.Segment
 	}
 }
 
@@ -45,7 +46,7 @@ func NewRelation(impl *DB, data iface.ITableData, meta *md.Table) *Relation {
 		Meta:   meta,
 		Data:   data,
 	}
-	r.tree.Segments = make(map[uint64]*Segment)
+	r.tree.Segments = make(map[uint64]*db.Segment)
 	return r
 }
 
@@ -104,7 +105,7 @@ func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 		r.tree.Unlock()
 		return seg
 	}
-	seg = &Segment{
+	seg = &db.Segment{
 		Ids:  new(atomic.Value),
 		Data: r.Data.StrongRefSegment(id),
 	}

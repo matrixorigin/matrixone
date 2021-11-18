@@ -15,19 +15,20 @@
 package local
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 type localRoRelation struct {
-	impl *db.Relation
+	impl *aoedb.Relation
 }
 
-func NewLocalRoRelation(impl *db.Relation) *localRoRelation {
+func NewLocalRoRelation(impl *aoedb.Relation) *localRoRelation {
 	return &localRoRelation{
 		impl: impl,
 	}
@@ -81,9 +82,9 @@ func (r *localRoRelation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	panic("not supported")
 }
 
-func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
 	panic("not supported")
 }
-func (r *localRoRelation) DropIndex(epoch uint64, name string) error{
+func (r *localRoRelation) DropIndex(epoch uint64, name string) error {
 	panic("not supported")
 }
