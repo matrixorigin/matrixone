@@ -18,14 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -42,25 +36,6 @@ type SSLoader = metadata.SSLoader
 type Snapshoter interface {
 	SSWriter
 	SSLoader
-}
-
-var (
-	CopyTableFn func(t iface.ITableData, destDir string) error
-	CopyFileFn  func(src, dest string) error
-)
-
-func init() {
-	CopyTableFn = func(t iface.ITableData, destDir string) error {
-		return t.LinkTo(destDir)
-	}
-	// CopyTableFn = func(t iface.ITableData, destDir string) error {
-	// 	return t.CopyTo(destDir)
-	// }
-	CopyFileFn = os.Link
-	// CopyFileFn = func(src, dest string) error {
-	// 	_, err := dataio.CopyFile(src, dest)
-	// 	return err
-	// }
 }
 
 type ssWriter struct {
@@ -162,97 +137,11 @@ func (ss *ssLoader) validateMetaLoader() error {
 	return nil
 }
 
-func (ss *ssLoader) execCopyTBlk(dir, file string) error {
-	name, _ := common.ParseTBlockfileName(file)
-	count, tag, id, err := dataio.ParseTBlockfileName(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
-	if err != nil {
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := dataio.MakeTblockFileName(ss.database.Catalog.Cfg.Dir, tag, count, *nid, false)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
-func (ss *ssLoader) execCopyBlk(dir, file string) error {
-	name, _ := common.ParseBlockfileName(file)
-	id, err := common.ParseBlkNameToID(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
-	if err != nil {
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := common.MakeBlockFileName(ss.database.Catalog.Cfg.Dir, nid.ToBlockFileName(), nid.TableID, false)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
-func (ss *ssLoader) execCopySeg(dir, file string) error {
-	name, _ := common.ParseSegmentFileName(file)
-	id, err := common.ParseSegmentNameToID(name)
-	if err != nil {
-		return err
-	}
-	nid, err := ss.mloader.Addresses().GetSegAddr(&id)
-	if err != nil {
-		return err
-	}
-	src := filepath.Join(dir, file)
-	dest := common.MakeSegmentFileName(ss.database.Catalog.Cfg.Dir, nid.ToSegmentFileName(), nid.TableID, false)
-	logutil.Infof("Copy \"%s\" to \"%s\"", src, dest)
-	err = CopyFileFn(src, dest)
-	return err
-}
-
-func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
-	var err error
-	for _, tblk := range tblks {
-		if ss.execCopyTBlk(ss.src, tblk); err != nil {
-			return err
-		}
-	}
-	for _, blk := range blks {
-		if ss.execCopyBlk(ss.src, blk); err != nil {
-			return err
-		}
-	}
-	for _, seg := range segs {
-		if ss.execCopySeg(ss.src, seg); err != nil {
-			return err
-		}
-	}
-
-	return err
-}
-
 func (ss *ssLoader) PrepareLoad() error {
-	files, err := ioutil.ReadDir(ss.src)
+	metas, tblks, blks, segs, err := ScanMigrationDir(ss.src)
 	if err != nil {
 		return err
 	}
-	var (
-		metas, blks, tblks, segs []string
-	)
-	for _, file := range files {
-		name := file.Name()
-		if common.IsSegmentFile(name) {
-			segs = append(segs, name)
-		} else if common.IsBlockFile(name) {
-			blks = append(blks, name)
-		} else if common.IsTBlockFile(name) {
-			tblks = append(tblks, name)
-		} else if strings.HasSuffix(name, ".meta") {
-			metas = append(metas, name)
-		}
-	}
-
 	if len(metas) != 1 {
 		return errors.New("invalid meta data to apply")
 	}
@@ -266,7 +155,10 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
-	if err = ss.prepareData(tblks, blks, segs); err != nil {
+	destDir := ss.database.Catalog.Cfg.Dir
+	blkMapFn := ss.mloader.Addresses().GetBlkAddr
+	segMapFn := ss.mloader.Addresses().GetSegAddr
+	if err = CopyDataFiles(tblks, blks, segs, ss.src, destDir, blkMapFn, segMapFn); err != nil {
 		return err
 	}
 

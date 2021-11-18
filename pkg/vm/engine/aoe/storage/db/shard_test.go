@@ -116,6 +116,7 @@ func (s *mockShard) dropTable(ctx *dbi.DropTableCtx) error {
 	ctx.ShardId = s.gen.ShardId
 	ctx.DBName = s.database.Name
 	ctx.OpIndex = s.gen.Alloc()
+	ctx.OpSize = 1
 	_, err := s.inst.DropTable(*ctx)
 	return err
 }

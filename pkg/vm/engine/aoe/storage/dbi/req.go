@@ -41,6 +41,8 @@ type GetSnapshotCtx struct {
 type DropTableCtx struct {
 	ShardId    uint64
 	OpIndex    uint64
+	OpOffset   int
+	OpSize     int
 	DBName     string
 	TableName  string
 	OnFinishCB OnTableDroppedCB

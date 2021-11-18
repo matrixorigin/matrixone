@@ -43,6 +43,8 @@ func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return p.catalog.prepareReplaceDatabase(v)
 	case *splitDBCtx:
 		return p.catalog.prepareSplit(v)
+	case *commitSplitCtx:
+		return p.catalog.prepareCommitSplit(v)
 	case *createTableCtx:
 		return v.database.prepareCreateTable(v)
 	case *dropTableCtx:

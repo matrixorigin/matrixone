@@ -98,7 +98,11 @@ func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {
 func GetLogIndexFromDropTableCtx(ctx *dbi.DropTableCtx) *shard.Index {
 	return &shard.Index{
 		ShardId: ctx.ShardId,
-		Id:      shard.SimpleIndexId(ctx.OpIndex),
+		Id: shard.IndexId{
+			Id:     ctx.OpIndex,
+			Offset: uint32(ctx.OpOffset),
+			Size:   uint32(ctx.OpSize),
+		},
 	}
 }
 

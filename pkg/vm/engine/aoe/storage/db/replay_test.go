@@ -1128,6 +1128,7 @@ func TestReplay14(t *testing.T) {
 
 	_, err = inst1.DropTable(dbi.DropTableCtx{
 		OpIndex:   gen.Alloc(database.GetShardId()),
+		OpSize:    1,
 		DBName:    database.Name,
 		TableName: schema1.Name,
 	})
@@ -1164,6 +1165,7 @@ func TestReplay14(t *testing.T) {
 
 	_, err = inst2.DropTable(dbi.DropTableCtx{
 		OpIndex:   dropIdx,
+		OpSize:    1,
 		DBName:    database.Name,
 		TableName: schema1.Name,
 	})

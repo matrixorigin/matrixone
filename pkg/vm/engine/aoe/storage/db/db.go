@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
@@ -54,6 +55,7 @@ var (
 
 type TxnCtx = metadata.TxnCtx
 type LogIndex = metadata.LogIndex
+type RenameTableFactory = metadata.RenameTableFactory
 
 type DB struct {
 	// Working directory of DB
@@ -96,7 +98,9 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
-// func (d *DB) checkIdempotence(database *Database, uint64 )
+func (d *DB) GetTempDir() string {
+	return common.MakeTempDir(d.Dir)
+}
 
 func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
 	return d.Store.Catalog.StartTxn(index)
@@ -163,9 +167,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 	ctx.ShardId = database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
+	// if err = d.Wal.SyncLog(index); err != nil {
+	// 	return
+	// }
 	tbl, err := database.GetTableByNameAndLogIndex(ctx.TableName, index)
 	if err != nil {
 		return err
@@ -176,6 +180,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 	if tbl.IsDeleted() {
 		return metadata.TableNotFoundErr
+	}
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
 	}
 	return d.DoAppend(tbl, ctx.Data, index)
 }
@@ -433,6 +440,55 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 		return err
 	}
 	if err = loader.CommitLoad(); err != nil {
+		return err
+	}
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(gcReq)
+	return err
+}
+
+func (d *DB) SpliteDatabaseCheck(dbName string, size uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var database *metadata.Database
+	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	index := database.GetCheckpointId()
+	return database.SplitCheck(size, index)
+}
+
+func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable RenameTableFactory, keys [][]byte, ctx []byte, index uint64) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	// TODO: validate parameters
+	var (
+		err      error
+		database *metadata.Database
+	)
+	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return err
+	}
+
+	splitIdx := &LogIndex{
+		ShardId: database.GetShardId(),
+		Id:      shard.SimpleIndexId(index),
+	}
+	if err = d.Wal.SyncLog(splitIdx); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(splitIdx)
+
+	splitter := NewSplitter(database, newNames, renameTable, keys, ctx, splitIdx, d)
+	defer splitter.Close()
+	if err = splitter.Prepare(); err != nil {
+		return err
+	}
+	if err = splitter.Commit(); err != nil {
 		return err
 	}
 	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
