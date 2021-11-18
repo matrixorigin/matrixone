@@ -28,11 +28,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/local"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -66,12 +64,13 @@ const (
 
 var (
 	opts     = &storage.Options{}
-	table    *aoe.TableInfo
+	schema   *metadata.Schema
 	readPool *ants.Pool
 	proc     *process.Process
 	hm       *host.Mmu
 	gen      *shard.MockIndexAllocator
 	dbName   string
+	shardId  uint64
 )
 
 func init() {
@@ -90,10 +89,11 @@ func init() {
 	}
 	opts.Meta.Conf = mdCfg
 	opts.WalRole = wal.HolderRole
-	info := adaptor.MockTableInfo(colCnt)
-	table = info
+	schema = metadata.MockSchema(colCnt)
+	schema.Name = tableName
 	gen = shard.NewMockIndexAllocator()
-	dbName = aoedb.ShardIdToName(uint64(0))
+	dbName = "db1"
+	shardId = uint64(100)
 }
 
 func getInsertBatch(meta *metadata.Table) *batch.Batch {
@@ -116,7 +116,19 @@ func makeDB() *aoedb.DB {
 }
 
 func creatTable(impl *aoedb.DB) {
-	_, err := impl.CreateTable(table, dbi.TableOpCtx{TableName: table.Name})
+	createDBCtx := new(aoedb.CreateDBCtx)
+	createDBCtx.DB = dbName
+	_, err := impl.CreateDatabase(createDBCtx)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := new(aoedb.CreateTableCtx)
+	ctx.DB = dbName
+	ctx.Schema = schema
+	ctx.Size = 1
+	ctx.Id = gen.Alloc(shardId)
+	_, err = impl.CreateTable(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -133,7 +145,13 @@ func makeFiles(impl *aoedb.DB) {
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
-		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+		ctx := new(aoedb.AppendCtx)
+		ctx.DB = dbName
+		ctx.Table = tableName
+		ctx.Id = gen.Alloc(shardId)
+		ctx.Size = 1
+		ctx.Data = ibat
+		if err := impl.Append(ctx); err != nil {
 			panic(err)
 		}
 	}
@@ -180,7 +198,7 @@ func readData() {
 	refs := make([]uint64, len(attrs))
 	var segIds dbi.IDS
 	{
-		dbrel, _ := impl.Relation(0, tableName)
+		dbrel, _ := impl.Relation(dbName, tableName)
 		segIds = dbrel.SegmentIds()
 		dbrel.Close()
 	}

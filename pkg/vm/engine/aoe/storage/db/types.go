@@ -14,26 +14,13 @@
 
 package db
 
-import (
-	"testing"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
-)
-
-var (
-	defaultDBPath            = "aoedb"
-	moduleName               = "DB"
-	defaultDBName            = "default"
-	emptyDBName              = ""
-	defaultTestBlockRows     = uint64(2000)
-	defaultTestSegmentBlocks = uint64(2)
-)
-
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
-
-func initTestEnv(t *testing.T) string {
-	testutils.RemoveDefaultTestPath(moduleName, t)
-	return testutils.MakeDefaultTestPath(moduleName, t)
-}
+type TxnCtx = metadata.TxnCtx
+type IndexId = metadata.IndexId
+type LogIndex = metadata.LogIndex
+type RenameTableFactory = metadata.RenameTableFactory
+type IndexT = metadata.IndexT
+type IndexInfo = metadata.IndexInfo
+type TableSchema = metadata.Schema
+type ColDef = metadata.ColDef

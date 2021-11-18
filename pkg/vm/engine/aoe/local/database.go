@@ -16,7 +16,7 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -41,7 +41,7 @@ func (d *localRoDatabase) Relations() []string {
 }
 
 func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
-	impl, err := d.dbimpl.Relation(d.database.GetShardId(), name)
+	impl, err := d.dbimpl.Relation(d.database.Name, name)
 	if err != nil {
 		return nil, err
 	}

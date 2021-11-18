@@ -23,8 +23,8 @@ import (
 type Role uint8
 
 const (
-	HolderRole Role = iota
-	BrokerRole
+	BrokerRole Role = iota
+	HolderRole
 )
 
 type Payload interface {

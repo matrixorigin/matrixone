@@ -15,25 +15,18 @@
 package db
 
 import (
-	"testing"
+	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 var (
-	defaultDBPath            = "aoedb"
-	moduleName               = "DB"
-	defaultDBName            = "default"
-	emptyDBName              = ""
-	defaultTestBlockRows     = uint64(2000)
-	defaultTestSegmentBlocks = uint64(2)
+	ErrClosed            = errors.New("aoe: closed")
+	ErrUnsupported       = errors.New("aoe: unsupported")
+	ErrNotFound          = errors.New("aoe: notfound")
+	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
+	ErrTimeout           = errors.New("aoe: timeout")
+	ErrStaleErr          = errors.New("aoe: stale")
+	ErrIdempotence       = metadata.IdempotenceErr
+	ErrResourceDeleted   = errors.New("aoe: resource is deleted")
 )
-
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
-
-func initTestEnv(t *testing.T) string {
-	testutils.RemoveDefaultTestPath(moduleName, t)
-	return testutils.MakeDefaultTestPath(moduleName, t)
-}

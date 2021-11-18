@@ -18,7 +18,7 @@ import (
 	catalog3 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 )
 
 // aoe engine
@@ -33,10 +33,10 @@ type database struct {
 }
 
 type relation struct {
-	pid      uint64                  //database id
-	tbl      *aoe.TableInfo          //table of the tablets
-	catalog  *catalog3.Catalog       //the catalog
-	segments []engine.SegmentInfo    //segments of the table
-	tablets  []aoe.TabletInfo        //tablets of the table
-	mp       map[string]*db.Relation //a map of each tablet and its relation
+	pid      uint64                     //database id
+	tbl      *aoe.TableInfo             //table of the tablets
+	catalog  *catalog3.Catalog          //the catalog
+	segments []engine.SegmentInfo       //segments of the table
+	tablets  []aoe.TabletInfo           //tablets of the table
+	mp       map[string]*aoedb.Relation //a map of each tablet and its relation
 }
