@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
@@ -409,6 +410,11 @@ func MockSegments(meta *metadata.Table, tblData iface.ITableData) []uint64 {
 	return segs
 }
 
+type InstallContext interface {
+	HasSegementFile(*common.ID) bool
+	HasBlockFile(*common.ID) bool
+}
+
 type Tables struct {
 	*sync.RWMutex
 	Data      map[uint64]iface.ITableData
@@ -527,4 +533,82 @@ func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl
 	return nil
+}
+
+func (ts *Tables) InstallTable(table iface.ITableData) error {
+	ts.Lock()
+	defer ts.Unlock()
+	return ts.InstallTableLocked(table)
+}
+
+func (ts *Tables) InstallTableLocked(table iface.ITableData) error {
+	return ts.CreateTableNoLock(table)
+}
+
+func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) (iface.ITableData, error) {
+	data := newTableData(ts, meta)
+	for _, segMeta := range meta.SegmentSet {
+		if segMeta.IsSortedLocked() || !segMeta.Appendable() {
+			segData, err := data.RegisterSegment(segMeta)
+			if err != nil {
+				return nil, err
+			}
+			defer segData.Unref()
+
+			for _, blkMeta := range segMeta.BlockSet {
+				blkData, err := data.RegisterBlock(blkMeta)
+				if err != nil {
+					return nil, err
+				}
+				defer blkData.Unref()
+			}
+			continue
+		}
+		sid := segMeta.AsCommonID()
+		if !ctx.HasSegementFile(sid) {
+			break
+		}
+		segData, err := data.RegisterSegment(segMeta)
+		if err != nil {
+			return nil, err
+		}
+		defer segData.Unref()
+		for _, blkMeta := range segMeta.BlockSet {
+			id := blkMeta.AsCommonID()
+			if !ctx.HasBlockFile(id) {
+				break
+			}
+			blkData, err := data.RegisterBlock(blkMeta)
+			if err != nil {
+				return nil, err
+			}
+			defer blkData.Unref()
+		}
+	}
+	data.InitReplay()
+	logutil.Info(data.String())
+	return data, nil
+}
+
+func (ts *Tables) PrepareInstallTables(meta []*metadata.Table, ctx InstallContext) (tables []iface.ITableData, err error) {
+	for _, table := range meta {
+		var data iface.ITableData
+		if data, err = ts.PrepareInstallTable(table, ctx); err != nil {
+			return
+		}
+		tables = append(tables, data)
+	}
+	return
+}
+
+func (ts *Tables) CommitInstallTables(tables []iface.ITableData) error {
+	var err error
+	ts.Lock()
+	defer ts.Unlock()
+	for _, table := range tables {
+		if err = ts.InstallTableLocked(table); err != nil {
+			panic(err)
+		}
+	}
+	return err
 }

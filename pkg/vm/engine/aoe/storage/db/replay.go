@@ -325,6 +325,24 @@ type tableDataFiles struct {
 	unsortedfiles map[common.ID]*unsortedSegmentFile
 }
 
+func (tdf *tableDataFiles) HasBlockFile(id *common.ID) bool {
+	sid := id.AsSegmentID()
+	unsorted := tdf.unsortedfiles[sid]
+	if unsorted == nil {
+		return false
+	}
+	return unsorted.hasblock(*id)
+}
+
+func (tdf *tableDataFiles) HasSegementFile(id *common.ID) bool {
+	unsorted := tdf.unsortedfiles[*id]
+	if unsorted != nil {
+		return true
+	}
+	sorted := tdf.sortedfiles[*id]
+	return sorted != nil
+}
+
 func (tdf *tableDataFiles) clean() {
 	for _, file := range tdf.sortedfiles {
 		file.clean()
@@ -559,54 +577,12 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 		return nil
 	}
 
-	tableData, err := h.tables.RegisterTable(meta)
+	data, err := h.tables.PrepareInstallTable(meta, tablesFiles)
 	if err != nil {
 		return err
 	}
-	for _, segMeta := range meta.SegmentSet {
-		if segMeta.IsSortedLocked() || !segMeta.Appendable() {
-			segData, err := tableData.RegisterSegment(segMeta)
-			if err != nil {
-				return err
-			}
-			defer segData.Unref()
-
-			for _, blkMeta := range segMeta.BlockSet {
-				blkData, err := tableData.RegisterBlock(blkMeta)
-				if err != nil {
-					return err
-				}
-				defer blkData.Unref()
-			}
-			continue
-		}
-		id := segMeta.AsCommonID()
-		segFile := tablesFiles.unsortedfiles[*id]
-		if segFile == nil {
-			break
-		}
-		segData, err := tableData.RegisterSegment(segMeta)
-		if err != nil {
-			return err
-		}
-		defer segData.Unref()
-		for _, blkMeta := range segMeta.BlockSet {
-			id = blkMeta.AsCommonID()
-			if !segFile.hasblock(*id) {
-				break
-			}
-			blkData, err := tableData.RegisterBlock(blkMeta)
-			if err != nil {
-				return err
-			}
-			defer blkData.Unref()
-		}
-
-		break
-	}
-	tableData.InitReplay()
-	// logutil.Info(tableData.String())
-	return nil
+	err = h.tables.InstallTable(data)
+	return err
 }
 
 func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
