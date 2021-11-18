@@ -19,13 +19,14 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/mheap"
+	"matrixone/pkg/vm/mmu/guest"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
-func New(m *mheap.Mheap) *Process {
+func New(gm *guest.Mmu) *Process {
 	return &Process{
-		Mp: m,
+		Gm: gm,
 	}
 }
 

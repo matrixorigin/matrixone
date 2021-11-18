@@ -482,6 +482,44 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	return w
 }
 
+func (v *Vector) Append(arg interface{}) error {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		v.Col = append(v.Col.([]int8), arg.([]int8)...)
+	case types.T_int16:
+		v.Col = append(v.Col.([]int16), arg.([]int16)...)
+	case types.T_int32:
+		v.Col = append(v.Col.([]int32), arg.([]int32)...)
+	case types.T_int64:
+		v.Col = append(v.Col.([]int64), arg.([]int64)...)
+	case types.T_uint8:
+		v.Col = append(v.Col.([]uint8), arg.([]uint8)...)
+	case types.T_uint16:
+		v.Col = append(v.Col.([]uint16), arg.([]uint16)...)
+	case types.T_uint32:
+		v.Col = append(v.Col.([]uint32), arg.([]uint32)...)
+	case types.T_uint64:
+		v.Col = append(v.Col.([]uint64), arg.([]uint64)...)
+	case types.T_decimal:
+		v.Col = append(v.Col.([]types.Decimal), arg.([]types.Decimal)...)
+	case types.T_float32:
+		v.Col = append(v.Col.([]float32), arg.([]float32)...)
+	case types.T_float64:
+		v.Col = append(v.Col.([]float64), arg.([]float64)...)
+	case types.T_date:
+		v.Col = append(v.Col.([]types.Date), arg.([]types.Date)...)
+	case types.T_datetime:
+		v.Col = append(v.Col.([]types.Datetime), arg.([]types.Datetime)...)
+	case types.T_sel:
+		v.Col = append(v.Col.([]int64), arg.([]int64)...)
+	case types.T_tuple:
+		v.Col = append(v.Col.([][]interface{}), arg.([][]interface{})...)
+	case types.T_char, types.T_varchar, types.T_json:
+		return v.Col.(*types.Bytes).Append(arg.([][]byte))
+	}
+	return nil
+}
+
 func Append(v *Vector, arg interface{}) error {
 	switch v.Typ.Oid {
 	case types.T_int8:

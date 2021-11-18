@@ -18,6 +18,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/mheap"
+	"matrixone/pkg/vm/mmu/guest"
 	"sync"
 )
 
@@ -63,4 +64,5 @@ type Process struct {
 	Reg Register
 	Lim Limitation
 	Mp  *mheap.Mheap
+	Gm  *guest.Mmu
 }
