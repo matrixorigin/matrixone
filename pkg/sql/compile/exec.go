@@ -100,9 +100,27 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 		}, nil
 	case *plan.DropIndex:
 		return &Scope{
-			Magic:        DropIndex,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic:		DropIndex,
+			Plan:		pn,
+			Proc:		e.c.proc,
+		}, nil
+	case *plan.ShowDatabases:
+		return &Scope{
+			Magic:		ShowDatabases,
+			Plan:		pn,
+			Proc:		e.c.proc,
+		}, nil
+	case *plan.ShowTables:
+		return &Scope{
+			Magic:		ShowTables,
+			Plan:		pn,
+			Proc:		e.c.proc,
+		}, nil
+	case *plan.ShowColumns:
+		return &Scope{
+			Magic: 		ShowColumns,
+			Plan: 		pn,
+			Proc:		e.c.proc,
 		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
@@ -184,6 +202,30 @@ func (e *Exec) Run(ts uint64) error {
 		wg.Add(1)
 		go func(s *Scope) {
 			if err := s.DropIndex(ts); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case ShowDatabases:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.ShowDatabases(e.u, e.fill); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case ShowTables:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.ShowTables(e.u, e.fill); err != nil {
+				e.err = err
+			}
+			wg.Done()
+		}(e.scope)
+	case ShowColumns:
+		wg.Add(1)
+		go func(s *Scope) {
+			if err := s.ShowColumns(e.u, e.fill); err != nil {
 				e.err = err
 			}
 			wg.Done()

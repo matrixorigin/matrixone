@@ -166,3 +166,11 @@ func (bat *Batch) String() string {
 	}
 	return buf.String()
 }
+
+// InitZsOne init Batch.Zs and values are all 1
+func (bat *Batch) InitZsOne(len int) {
+	bat.Zs = make([]int64, len)
+	for i := range bat.Zs {
+		bat.Zs[i]++
+	}
+}
