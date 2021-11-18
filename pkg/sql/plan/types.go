@@ -137,6 +137,22 @@ type DropIndex struct {
 	Relation	engine.Relation
 }
 
+type ShowDatabases struct {
+	E			engine.Engine
+	Like		[]byte
+	//Where		extend.Extend
+}
+
+type ShowTables struct {
+	Db			engine.Database
+	Like		[]byte
+}
+
+type ShowColumns struct {
+	Relation	engine.Relation
+	Like		[]byte
+}
+
 type build struct {
 	flg bool   // use for having clause
 	db  string // name of schema
@@ -445,4 +461,66 @@ func (d DropIndex) String() string {
 
 func (d DropIndex) ResultColumns() []*Attribute {
 	return nil
+}
+
+func (s ShowDatabases) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("show databases")
+	if s.Like != nil {
+		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
+	}
+	return buf.String()
+}
+
+func (s ShowDatabases) ResultColumns() []*Attribute {
+	return []*Attribute{
+		&Attribute{
+			Ref:  1,
+			Name: "Databases",
+			Type: types.Type{
+				Oid:       types.T_varchar,
+				Size:      24,
+			},
+		},
+	}
+}
+
+func (s ShowTables) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("show tables")
+	if s.Like != nil {
+		buf.WriteString(fmt.Sprintf(" likes %s", string(s.Like)))
+	}
+	return buf.String()
+}
+
+func (s ShowTables) ResultColumns() []*Attribute {
+	return []*Attribute{
+		&Attribute{
+			Ref:  1,
+			Name: fmt.Sprintf("Tables"),
+			Type: types.Type{
+				Oid: types.T_varchar,
+				Size: 24,
+			},
+		},
+	}
+}
+
+func (s ShowColumns) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("show columns")
+	return buf.String()
+}
+
+func (s ShowColumns) ResultColumns() []*Attribute {
+	attrs := []*Attribute{
+		&Attribute{Ref: 1, Name: "Filed", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+	}
+	return attrs
 }
