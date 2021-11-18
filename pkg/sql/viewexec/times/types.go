@@ -24,6 +24,7 @@ type Container struct {
 }
 
 type Argument struct {
+	IsBare  bool
 	R       string
 	Rvars   []string
 	Ss      []string

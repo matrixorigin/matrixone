@@ -15,15 +15,25 @@
 package compile
 
 import (
+	"context"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/errno"
+	"matrixone/pkg/sql/colexec/connector"
+	"matrixone/pkg/sql/colexec/merge"
 	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/plan"
+	"matrixone/pkg/sql/viewexec/plus"
+	"matrixone/pkg/sql/viewexec/transform"
 	"matrixone/pkg/vectorize/like"
+	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/mheap"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/pipeline"
+	"matrixone/pkg/vm/process"
 	"strings"
 )
 
@@ -197,9 +207,9 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 }
 
 type columnInfo struct {
-	name 	 string
-	typ	 	 types.Type
-	dft	  	 string // default value
+	name string
+	typ  types.Type
+	dft  string // default value
 }
 
 // ShowColumns will show column information from a table
@@ -218,14 +228,14 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	tmpSlice := make([]int64, 1)
 	for _, def := range defs {
 		if attrDef, ok := def.(*engine.AttributeDef); ok {
-			if p.Like != nil {	// deal with like rule
+			if p.Like != nil { // deal with like rule
 				if k, _ := like.PureLikePure([]byte(attrDef.Attr.Name), p.Like, tmpSlice); k == nil {
 					continue
 				}
 			}
 			attrs[count] = columnInfo{
-				name:     attrDef.Attr.Name,
-				typ:      attrDef.Attr.Type,
+				name: attrDef.Attr.Name,
+				typ:  attrDef.Attr.Type,
 			}
 			if attrDef.Attr.HasDefaultExpr() {
 				attrs[count].dft = fmt.Sprintf("%v", attrDef.Attr.Default.Value)
@@ -260,13 +270,134 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 		undefine[i] = []byte("")
 	}
 
-	vector.Append(bat.Vecs[0], vnames) 	 // field
-	vector.Append(bat.Vecs[1], vtyps)	 // type
+	vector.Append(bat.Vecs[0], vnames)   // field
+	vector.Append(bat.Vecs[1], vtyps)    // type
 	vector.Append(bat.Vecs[2], undefine) // null todo: not implement
 	vector.Append(bat.Vecs[3], undefine) // key todo: not implement
-	vector.Append(bat.Vecs[4], vdfts)	 // default
+	vector.Append(bat.Vecs[4], vdfts)    // default
 	vector.Append(bat.Vecs[5], undefine) // extra todo: not implement
 
 	bat.InitZsOne(count)
 	return fill(u, bat)
+}
+func (s *Scope) Run(e engine.Engine) error {
+	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
+	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Scope) MergeRun(e engine.Engine) error {
+	var err error
+
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Normal:
+			go func(s *Scope) {
+				if rerr := s.Run(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Merge:
+			go func(s *Scope) {
+				if rerr := s.MergeRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Remote:
+			go func(s *Scope) {
+				if rerr := s.RemoteRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		}
+	}
+	p := pipeline.NewMerge(s.Instructions)
+	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
+		err = rerr
+	}
+	return err
+}
+
+func (s *Scope) RemoteRun(e engine.Engine) error {
+	var rds []engine.Reader
+
+	//	mcpu := runtime.NumCPU()
+	mcpu := 1
+	ss := make([]*Scope, mcpu)
+	{
+		db, err := e.Database(s.DataSource.SchemaName)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(s.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rds = rel.NewReader(mcpu)
+	}
+	arg := s.Instructions[0].Arg.(*transform.Argument)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rds[i],
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Transform,
+			Arg: &transform.Argument{
+				Typ:        arg.Typ,
+				IsMerge:    arg.IsMerge,
+				FreeVars:   arg.FreeVars,
+				Restrict:   arg.Restrict,
+				Projection: arg.Projection,
+				BoundVars:  arg.BoundVars,
+			},
+		})
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Magic = Merge
+	s.PreScopes = ss
+	if s.DataSource.IsMerge {
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
+		}
+	} else {
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.Plus,
+			Arg: &plus.Argument{Typ: arg.Typ},
+		}
+	}
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return s.MergeRun(e)
 }

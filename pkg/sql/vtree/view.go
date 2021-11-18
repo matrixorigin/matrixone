@@ -26,6 +26,18 @@ import (
 	"matrixone/pkg/sql/viewexec/transformer"
 )
 
+func isBare(vs []*View) bool {
+	for _, v := range vs {
+		if v.Arg != nil && len(v.Arg.BoundVars) > 0 {
+			return false
+		}
+		if len(v.Children) > 0 && !isBare(v.Children) {
+			return false
+		}
+	}
+	return true
+}
+
 func constructViews(ns []*node) []*View {
 	if len(ns) == 0 {
 		return nil

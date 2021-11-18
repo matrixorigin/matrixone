@@ -60,20 +60,17 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 			return false, err
 		}
 		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil {
+		if end, err = vm.Run(p.instructions, proc); err != nil || end {
 			return end, err
 		}
-		if end {
-			break
-		}
 	}
-	return end, err
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
+	defer proc.Cancel()
 	if err := vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}

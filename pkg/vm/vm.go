@@ -51,5 +51,5 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 			end = true
 		}
 	}
-	return end, nil
+	return end, err
 }

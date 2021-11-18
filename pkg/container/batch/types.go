@@ -36,7 +36,8 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 	// ring
-	Zs []int64
-	As []string // alias list
-	Rs []ring.Ring
+	Zs   []int64
+	As   []string // alias list
+	Refs []uint64 // reference count
+	Rs   []ring.Ring
 }

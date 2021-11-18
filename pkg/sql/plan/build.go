@@ -56,60 +56,6 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 		}
 		qry.backFill()
 		return qry, nil
-	case *tree.CreateDatabase:
-		plan := &CreateDatabase{E: b.e}
-		if err := b.BuildCreateDatabase(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.CreateTable:
-		plan := &CreateTable{}
-		if err := b.BuildCreateTable(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.DropDatabase:
-		plan := &DropDatabase{E: b.e}
-		if err := b.BuildDropDatabase(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.DropTable:
-		plan := &DropTable{E: b.e}
-		if err := b.BuildDropTable(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.CreateIndex:
-		plan := &CreateIndex{}
-		if err := b.BuildCreateIndex(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.DropIndex:
-		plan := &DropIndex{}
-		if err := b.BuildDropIndex(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.ShowDatabases:
-		plan := &ShowDatabases{}
-		if err := b.BuildShowDatabases(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.ShowTables:
-		plan := &ShowTables{}
-		if err := b.BuildShowTables(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
-	case *tree.ShowColumns:
-		plan := &ShowColumns{}
-		if err := b.BuildShowColumns(stmt, plan); err != nil {
-			return nil, err
-		}
-		return plan, nil
 	}
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }

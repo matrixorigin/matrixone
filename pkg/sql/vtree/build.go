@@ -19,6 +19,7 @@ import (
 	"matrixone/pkg/sql/colexec/limit"
 	"matrixone/pkg/sql/colexec/offset"
 	"matrixone/pkg/sql/colexec/order"
+	"matrixone/pkg/sql/colexec/restrict"
 	"matrixone/pkg/sql/colexec/top"
 	"matrixone/pkg/sql/ftree"
 	"matrixone/pkg/sql/plan"
@@ -43,6 +44,14 @@ func constructViewTree(vs []*View, ft *ftree.FTree, qry *plan.Query) *ViewTree {
 	}
 	vt := &ViewTree{Views: vs, FreeVars: ft.FreeVars}
 	vt.ResultVariables = constructResultVariables(qry.ResultAttributes)
+	if len(qry.RestrictConds) > 0 {
+		vt.Restrict = &restrict.Argument{
+			E: constructRestrict(qry.RestrictConds),
+		}
+	}
+	if len(qry.ProjectionExtends) > 0 {
+		vt.Projection = constructProjection(qry.ProjectionExtends)
+	}
 	if qry.Limit > 0 && qry.Offset == -1 && len(qry.Fields) > 0 { // top
 		vt.Top = constructTop(qry.Fields, qry.Limit)
 	} else {

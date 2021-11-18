@@ -22,15 +22,12 @@ import (
 	"matrixone/pkg/sql/ftree"
 	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/sql/rewrite"
 	"matrixone/pkg/sql/vtree"
-	"sync"
 )
 
 // Compile compiles ast tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	e.stmt = rewrite.AstRewrite(e.stmt)
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err
@@ -67,60 +64,60 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 		return e.compileVTree(vtree.New().Build(ft), qry.VarsMap)
 	case *plan.CreateDatabase:
 		return &Scope{
-			Magic:        CreateDatabase,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic: CreateDatabase,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.CreateTable:
 		return &Scope{
-			Magic:        CreateTable,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic: CreateTable,
+			Plan:  pn,
+			Proc:  e.c.proc,
 			// todo: create table t1 as select a, b, c from t2 ?
-			DataSource:   nil,
-			PreScopes: 	  nil,
+			DataSource: nil,
+			PreScopes:  nil,
 		}, nil
 	case *plan.CreateIndex:
 		return &Scope{
-			Magic:        CreateIndex,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic: CreateIndex,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.DropDatabase:
 		return &Scope{
-			Magic:        DropDatabase,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic: DropDatabase,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.DropTable:
 		return &Scope{
-			Magic:        DropTable,
-			Plan:         pn,
-			Proc:         e.c.proc,
+			Magic: DropTable,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.DropIndex:
 		return &Scope{
-			Magic:		DropIndex,
-			Plan:		pn,
-			Proc:		e.c.proc,
+			Magic: DropIndex,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.ShowDatabases:
 		return &Scope{
-			Magic:		ShowDatabases,
-			Plan:		pn,
-			Proc:		e.c.proc,
+			Magic: ShowDatabases,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.ShowTables:
 		return &Scope{
-			Magic:		ShowTables,
-			Plan:		pn,
-			Proc:		e.c.proc,
+			Magic: ShowTables,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	case *plan.ShowColumns:
 		return &Scope{
-			Magic: 		ShowColumns,
-			Plan: 		pn,
-			Proc:		e.c.proc,
+			Magic: ShowColumns,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
@@ -152,85 +149,34 @@ func (e *Exec) GetAffectedRows() uint64 {
 }
 
 func (e *Exec) Run(ts uint64) error {
-	var wg sync.WaitGroup
-
 	fmt.Printf("+++++++++\n")
 	Print(nil, []*Scope{e.scope})
 	fmt.Printf("+++++++++\n")
 	switch e.scope.Magic {
+	case Normal:
+		return e.scope.Run(e.c.e)
+	case Merge:
+		return e.scope.MergeRun(e.c.e)
+	case Remote:
+		return e.scope.RemoteRun(e.c.e)
 	case CreateDatabase:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.CreateDatabase(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.CreateDatabase(ts)
 	case CreateTable:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.CreateTable(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.CreateTable(ts)
 	case CreateIndex:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.CreateIndex(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.CreateIndex(ts)
 	case DropDatabase:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.DropDatabase(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.DropDatabase(ts)
 	case DropTable:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.DropTable(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.DropTable(ts)
 	case DropIndex:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.DropIndex(ts); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.DropIndex(ts)
 	case ShowDatabases:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.ShowDatabases(e.u, e.fill); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.ShowDatabases(e.u, e.fill)
 	case ShowTables:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.ShowTables(e.u, e.fill); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.ShowTables(e.u, e.fill)
 	case ShowColumns:
-		wg.Add(1)
-		go func(s *Scope) {
-			if err := s.ShowColumns(e.u, e.fill); err != nil {
-				e.err = err
-			}
-			wg.Done()
-		}(e.scope)
+		return e.scope.ShowColumns(e.u, e.fill)
 	}
-	wg.Wait()
-	return e.err
+	return nil
 }
