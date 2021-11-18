@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type Relation = db.Relation
 type Impl = db.DB
 
 type DB struct {
@@ -35,8 +34,19 @@ type DB struct {
 }
 
 func (d *DB) Relation(shardId uint64, tableName string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
 	dbName := ShardIdToName(shardId)
-	return d.Impl.Relation(dbName, tableName)
+	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.GetTableData(meta)
+	if err != nil {
+		return nil, err
+	}
+	return NewRelation(d, data, meta), nil
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {

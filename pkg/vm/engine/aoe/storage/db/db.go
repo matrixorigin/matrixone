@@ -15,7 +15,6 @@
 package db
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -24,10 +23,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -38,7 +35,6 @@ import (
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
@@ -139,166 +135,6 @@ func (d *DB) FlushTable(dbName, tableName string) error {
 	return d.DoFlushTable(meta)
 }
 
-func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	if ctx.OpOffset >= ctx.OpSize {
-		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
-	}
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
-	if err != nil {
-		return err
-	}
-	ctx.ShardId = database.GetShardId()
-	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	// if err = d.Wal.SyncLog(index); err != nil {
-	// 	return
-	// }
-	tbl, err := database.GetTableByNameAndLogIndex(ctx.TableName, index)
-	if err != nil {
-		return err
-	}
-	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
-	if err == metadata.IdempotenceErr {
-		return ErrIdempotence
-	}
-	if tbl.IsDeleted() {
-		return metadata.TableNotFoundErr
-	}
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
-	return d.DoAppend(tbl, ctx.Data, index)
-}
-
-func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
-	if err != nil {
-		return nil, err
-	}
-	data, err := d.getTableData(meta)
-	if err != nil {
-		return nil, err
-	}
-	return NewRelation(d, data, meta), nil
-}
-
-func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DBName)
-	if err != nil {
-		return
-	}
-
-	ctx.ShardId = database.GetShardId()
-	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
-	defer d.Wal.Checkpoint(index)
-
-	var ok bool
-	var idx *LogIndex
-	if idx, ok = database.ConsumeIdempotentIndex(index); !ok {
-		err = ErrIdempotence
-		return
-	} else if idx != nil {
-		if idx.IsApplied() {
-			err = ErrIdempotence
-			return
-		}
-	}
-
-	meta := database.SimpleGetTableByName(ctx.TableName)
-	if meta == nil {
-		err = metadata.TableNotFoundErr
-		return
-	}
-
-	if err = meta.SimpleSoftDelete(index); err != nil {
-		return
-	}
-
-	id = meta.Id
-
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
-	d.Opts.GC.Acceptor.Accept(gcReq)
-	return
-}
-
-func (d *DB) CreateDatabase(name string) (*metadata.Database, error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	return d.Store.Catalog.SimpleCreateDatabase(name, nil)
-}
-
-func (d *DB) DropDatabase(name string, index uint64) (err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(name)
-	if err != nil {
-		return
-	}
-	logIndex := &metadata.LogIndex{
-		ShardId: database.GetShardId(),
-		Id:      shard.SimpleIndexId(index),
-	}
-	if err = d.Wal.SyncLog(logIndex); err != nil {
-		return
-	}
-	defer d.Wal.Checkpoint(logIndex)
-	if err = database.SimpleSoftDelete(logIndex); err != nil {
-		return
-	}
-	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
-	d.Opts.GC.Acceptor.Accept(gcReq)
-	return
-}
-
-func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata.LogIndex) (id uint64, err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	logutil.Infof("CreateTable %s", index.String())
-
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	if err != nil {
-		return
-	}
-	if index.ShardId != database.GetShardId() {
-		err = metadata.InconsistentShardIdErr
-		return
-	}
-
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
-	defer d.Wal.Checkpoint(index)
-
-	var ok bool
-	if _, ok = database.ConsumeIdempotentIndex(index); !ok {
-		err = ErrIdempotence
-		panic(err)
-		return
-	}
-
-	tbl, err := database.SimpleCreateTable(schema, index)
-	if err != nil {
-		return
-	}
-	id = tbl.Id
-	return
-}
-
 func (d *DB) GetSegmentIds(dbName string, tableName string) (ids dbi.IDS) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
@@ -311,7 +147,7 @@ func (d *DB) GetSegmentIds(dbName string, tableName string) (ids dbi.IDS) {
 	if meta == nil {
 		return
 	}
-	data, err := d.getTableData(meta)
+	data, err := d.GetTableData(meta)
 	if err != nil {
 		return
 	}
@@ -442,42 +278,6 @@ func (d *DB) SpliteDatabaseCheck(dbName string, size uint64) (coarseSize uint64,
 	}
 	index := database.GetCheckpointId()
 	return database.SplitCheck(size, index)
-}
-
-func (d *DB) SpliteDatabase(dbName string, newNames []string, renameTable RenameTableFactory, keys [][]byte, ctx []byte, index uint64) error {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	// TODO: validate parameters
-	var (
-		err      error
-		database *metadata.Database
-	)
-	database, err = d.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	if err != nil {
-		return err
-	}
-
-	splitIdx := &LogIndex{
-		ShardId: database.GetShardId(),
-		Id:      shard.SimpleIndexId(index),
-	}
-	if err = d.Wal.SyncLog(splitIdx); err != nil {
-		return err
-	}
-	defer d.Wal.Checkpoint(splitIdx)
-
-	splitter := NewSplitter(database, newNames, renameTable, keys, ctx, splitIdx, d)
-	defer splitter.Close()
-	if err = splitter.Prepare(); err != nil {
-		return err
-	}
-	if err = splitter.Commit(); err != nil {
-		return err
-	}
-	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
-	d.Opts.GC.Acceptor.Accept(gcReq)
-	return err
 }
 
 func (d *DB) startWorkers() {

@@ -42,7 +42,11 @@ func TestSplit1(t *testing.T) {
 	coarseSize := database.GetSize()
 	size := coarseSize * 7 / 8
 
-	_, _, keys, ctx, err := inst1.SpliteDatabaseCheck(database.Name, uint64(size))
+	prepareCtx := &PrepareSplitCtx{
+		DB:   database.Name,
+		Size: uint64(size),
+	}
+	_, _, keys, ctx, err := inst1.PrepareSplitDatabase(prepareCtx)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(keys))
 
@@ -53,8 +57,14 @@ func TestSplit1(t *testing.T) {
 	renameTable := func(oldName, newDBName string) string {
 		return oldName
 	}
-	splitIdx := gen.Alloc(database.GetShardId())
-	err = inst1.SpliteDatabase(database.Name, newNames, renameTable, keys, ctx, splitIdx)
+	execCtx := &ExecSplitCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		NewNames:      newNames,
+		RenameTable:   renameTable,
+		SplitKeys:     keys,
+		SplitCtx:      ctx,
+	}
+	err = inst1.ExecSplitDatabase(execCtx)
 	assert.Nil(t, err)
 	testutils.WaitExpect(500, func() bool {
 		return database.UncheckpointedCnt() == 0

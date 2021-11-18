@@ -156,7 +156,7 @@ func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) 
 	return collection.Append(data, index)
 }
 
-func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
+func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
 		eCtx := &memdata.Context{

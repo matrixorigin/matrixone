@@ -11,6 +11,21 @@ type DB struct {
 	Impl
 }
 
+func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.GetTableData(meta)
+	if err != nil {
+		return nil, err
+	}
+	return NewRelation(d, data, meta), nil
+}
+
 func (d *DB) CreateDatabase(ctx *CreateDBCtx) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
