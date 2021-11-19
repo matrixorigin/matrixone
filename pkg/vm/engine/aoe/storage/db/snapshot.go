@@ -20,6 +20,8 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -48,11 +50,39 @@ type ssWriter struct {
 }
 
 type ssLoader struct {
-	mloader  metadata.SSLoader
-	src      string
-	database *metadata.Database
-	tables   *table.Tables
-	index    uint64
+	mloader   metadata.SSLoader
+	src       string
+	database  *metadata.Database
+	tables    *table.Tables
+	index     uint64
+	flushsegs []*metadata.Segment
+}
+
+type installContext struct {
+	blkfiles     map[common.ID]bool
+	sortedsegs   map[common.ID]bool
+	unsortedsegs map[common.ID]bool
+}
+
+func (ctx *installContext) Preprocess() {
+	ctx.unsortedsegs = make(map[common.ID]bool)
+	for id, _ := range ctx.blkfiles {
+		ctx.unsortedsegs[id.AsSegmentID()] = true
+	}
+}
+
+func (ctx *installContext) HasBlockFile(id *common.ID) bool {
+	_, ok := ctx.blkfiles[*id]
+	return ok
+}
+
+func (ctx *installContext) HasSegementFile(id *common.ID) bool {
+	_, ok := ctx.unsortedsegs[*id]
+	if ok {
+		return true
+	}
+	_, ok = ctx.sortedsegs[*id]
+	return ok
 }
 
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {
@@ -67,9 +97,10 @@ func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables
 
 func NewDBSSLoader(database *metadata.Database, tables *table.Tables, src string) *ssLoader {
 	ss := &ssLoader{
-		database: database,
-		src:      src,
-		tables:   tables,
+		database:  database,
+		src:       src,
+		tables:    tables,
+		flushsegs: make([]*metadata.Segment, 0),
 	}
 	return ss
 }
@@ -90,8 +121,10 @@ func (ss *ssWriter) onTableData(data iface.ITableData) error {
 	return nil
 }
 
-func (ss *ssWriter) validatePrepare() error {
-	// TODO
+func (ss *ssWriter) validateAndRewrite() error {
+	// FIXME:
+	// 1. Validate the metadata
+	// 2. Rewrite the metadata base on copied data files: unsorted -> sorted .etc
 	return nil
 }
 
@@ -111,7 +144,7 @@ func (ss *ssWriter) PrepareWrite() error {
 	if err = ss.mwriter.PrepareWrite(); err != nil {
 		return err
 	}
-	return ss.validatePrepare()
+	return ss.validateAndRewrite()
 }
 
 func (ss *ssWriter) CommitWrite() error {
@@ -137,6 +170,10 @@ func (ss *ssLoader) validateMetaLoader() error {
 	return nil
 }
 
+func (ss *ssLoader) Preprocess(processor metadata.Processor) error {
+	return ss.mloader.Preprocess(processor)
+}
+
 func (ss *ssLoader) PrepareLoad() error {
 	metas, tblks, blks, segs, err := ScanMigrationDir(ss.src)
 	if err != nil {
@@ -156,15 +193,74 @@ func (ss *ssLoader) PrepareLoad() error {
 	}
 
 	destDir := ss.database.Catalog.Cfg.Dir
-	blkMapFn := ss.mloader.Addresses().GetBlkAddr
-	segMapFn := ss.mloader.Addresses().GetSegAddr
+	blkFiles := make(map[common.ID]bool)
+	segFiles := make(map[common.ID]bool)
+	blkMapFn := func(id *common.ID) (*common.ID, error) {
+		blkFiles[*id] = true
+		return ss.mloader.Addresses().GetBlkAddr(id)
+	}
+	segMapFn := func(id *common.ID) (*common.ID, error) {
+		segFiles[*id] = true
+		return ss.mloader.Addresses().GetSegAddr(id)
+	}
 	if err = CopyDataFiles(tblks, blks, segs, ss.src, destDir, blkMapFn, segMapFn); err != nil {
 		return err
 	}
 
-	return err
+	// var tableData iface.ITableData
+	// var segData iface.ISegment
+	// tables := make([]*metadata.Table, 0)
+	processor := new(metadata.LoopProcessor)
+	processor.TableFn = func(table *metadata.Table) error {
+		var err error
+		// tableData, err = ss.tables.RegisterTable(table)
+		return err
+	}
+	processor.SegmentFn = func(segment *metadata.Segment) error {
+		if segment.IsUpgradable() {
+			ss.flushsegs = append(ss.flushsegs, segment)
+		}
+		return nil
+	}
+	processor.BlockFn = func(block *metadata.Block) error {
+		return nil
+	}
+	tables := ss.mloader.GetTables()
+	ctx := new(installContext)
+	ctx.blkfiles = blkFiles
+	ctx.sortedsegs = segFiles
+	ctx.Preprocess()
+	tablesData, err := ss.tables.PrepareInstallTables(tables, ctx)
+	if err != nil {
+		return err
+	}
+	if err = ss.tables.CommitInstallTables(tablesData); err != nil {
+		return err
+	}
+
+	return ss.Preprocess(processor)
 }
 
 func (ss *ssLoader) CommitLoad() error {
-	return ss.mloader.CommitLoad()
+	err := ss.mloader.CommitLoad()
+	if err != nil {
+		return err
+	}
+	return nil
 }
+
+func (ss *ssLoader) ScheduleEvents(d *DB) error {
+	for _, meta := range ss.flushsegs {
+		table, _ := d.GetTableData(meta.Table)
+		defer table.Unref()
+		segment := table.StrongRefSegment(meta.Id)
+		flushCtx := &dbsched.Context{Opts: d.Opts}
+		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		d.Scheduler.Schedule(flushEvent)
+	}
+	return nil
+}
+
+// func (ss *ssLoader) GetTables() map[uint64]*Table {
+// 	return ss.mloader.GetTables()
+// }

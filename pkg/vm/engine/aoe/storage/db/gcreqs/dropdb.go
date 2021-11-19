@@ -58,7 +58,7 @@ func (req *dropDBRequest) IncIteration() {}
 func (req *dropDBRequest) dropTable(meta *metadata.Table) error {
 	task := NewDropTblRequest(req.Opts, meta, req.Tables, req.MemTableMgr, nil)
 	if err := task.Execute(); err != nil {
-		logutil.Warn(err.Error())
+		logutil.Warnf("%s, %s", meta.Repr(false), err.Error())
 		req.needReschedule = true
 	}
 	return nil

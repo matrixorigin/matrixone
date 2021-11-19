@@ -17,6 +17,7 @@ package sched
 import (
 	"sync"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -24,7 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
-var DisableFlushSegment = false
+type CommandType = sched.CommandType
+
+const (
+	TurnOffFlushSegmentCmd = iota + sched.CustomizedCmd
+	TurnOnFlushSegmentCmd
+)
 
 type metablkCommiter struct {
 	sync.RWMutex
@@ -89,6 +95,35 @@ func (p *metablkCommiter) Accept(meta *metadata.Block) {
 	p.Unlock()
 }
 
+type controller struct {
+	cmu  sync.RWMutex
+	mask *roaring64.Bitmap
+}
+
+func newController() *controller {
+	return &controller{
+		mask: roaring64.NewBitmap(),
+	}
+}
+
+func (c *controller) turnOnFlushSegment() {
+	c.cmu.Lock()
+	defer c.cmu.Unlock()
+	c.mask.Remove(1)
+}
+
+func (c *controller) turnOffFlushSegment() {
+	c.cmu.Lock()
+	defer c.cmu.Unlock()
+	c.mask.Add(1)
+}
+
+func (c *controller) canFlushSegment() bool {
+	c.cmu.RLock()
+	defer c.cmu.RLock()
+	return !c.mask.Contains(1)
+}
+
 // scheduler is the global event scheduler for AOE. It wraps the
 // BaseScheduler with some DB metadata and block committers.
 //
@@ -96,6 +131,7 @@ func (p *metablkCommiter) Accept(meta *metadata.Block) {
 // DB space. Basically you can refer to code under sched/ for more
 // implementation details for scheduler itself.
 type scheduler struct {
+	*controller
 	sched.BaseScheduler
 	opts      *storage.Options
 	tables    *table.Tables
@@ -110,6 +146,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 		BaseScheduler: *sched.NewBaseScheduler("scheduler"),
 		opts:          opts,
 		tables:        tables,
+		controller:    newController(),
 	}
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
@@ -227,8 +264,8 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if !event.SegmentClosed {
 		return
 	}
-	// TODO: remove later
-	if DisableFlushSegment {
+	if !s.canFlushSegment() {
+		logutil.Warn("[Scheduler] Flush Segment Is Turned-Off")
 		return
 	}
 	segment := event.TableData.StrongRefSegment(event.Meta.Segment.Id)
@@ -319,4 +356,18 @@ func (s *scheduler) preprocess(e sched.Event) {
 func (s *scheduler) Schedule(e sched.Event) error {
 	s.preprocess(e)
 	return s.BaseScheduler.Schedule(e)
+}
+
+func (s *scheduler) ExecCmd(cmd CommandType) error {
+	switch cmd {
+	case sched.NoopCmd:
+		return nil
+	case TurnOnFlushSegmentCmd:
+		s.turnOnFlushSegment()
+		return nil
+	case TurnOffFlushSegmentCmd:
+		s.turnOffFlushSegment()
+		return nil
+	}
+	panic("not supported")
 }

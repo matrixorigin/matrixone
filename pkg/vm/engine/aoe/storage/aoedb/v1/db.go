@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -132,10 +131,8 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 		d.AbortTxn(txn)
 		return
 	}
-	gcTable := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
-	d.Opts.GC.Acceptor.Accept(gcTable)
-	gcDB := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
-	d.Opts.GC.Acceptor.Accept(gcDB)
+	d.ScheduleGCTable(table)
+	d.ScheduleGCDatabase(database)
 	return
 }
 

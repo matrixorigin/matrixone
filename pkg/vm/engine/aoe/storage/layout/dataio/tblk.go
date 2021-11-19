@@ -188,7 +188,9 @@ func (f *TransientBlockFile) InitMeta(meta *metadata.Block) {
 		meta.Lock()
 		defer meta.Unlock()
 		meta.Count = f.files[0].Count
-		meta.CommitInfo.LogIndex = f.files[0].Idx
+		idx := ParseLogIndex(f.files[0].tag)
+		idx.ShardId = meta.Segment.Table.Database.GetShardId()
+		meta.CommitInfo.LogIndex = idx
 	}
 }
 

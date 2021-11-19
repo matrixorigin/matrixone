@@ -178,7 +178,7 @@ func (e *Segment) PString(level PPLevel, depth int) string {
 	ident2 := " " + ident
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
+	s := fmt.Sprintf("<Segment[%d] %s", e.Id, e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {
@@ -301,6 +301,27 @@ func (e *Segment) FirstInFullBlock() *Block {
 		}
 	}
 	return found
+}
+
+func (e *Segment) IsUpgradable() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsUpgradableLocked()
+}
+
+func (e *Segment) IsUpgradableLocked() bool {
+	if e.IsSortedLocked() {
+		return false
+	}
+	if len(e.BlockSet) != int(e.Table.Schema.SegmentMaxBlocks) {
+		return false
+	}
+	for _, block := range e.BlockSet {
+		if !block.IsFull() {
+			return false
+		}
+	}
+	return true
 }
 
 // Not safe
