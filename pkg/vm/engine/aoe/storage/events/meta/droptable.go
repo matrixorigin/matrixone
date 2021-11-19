@@ -21,7 +21,7 @@ import (
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
@@ -33,13 +33,13 @@ type dropTableEvent struct {
 
 	// Table's id, aoe is generated when the table is created
 	Id    uint64
-	MTMgr mtif.IManager
+	MTMgr base.IManager
 
 	// The created table will be inserted into the Tables
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManager, tables *table.Tables) *dropTableEvent {
+func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr base.IManager, tables *table.Tables) *dropTableEvent {
 	e := &dropTableEvent{
 		reqCtx: reqCtx,
 		Tables: tables,

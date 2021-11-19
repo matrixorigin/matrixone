@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -120,11 +120,11 @@ func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) 
 	return handle.Append(data, index)
 }
 
-func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (mtif.MutableTable, error) {
+func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, error) {
 	var err error
-	collection := d.MemTableMgr.StrongRefTable(meta.Id)
-	if collection != nil {
-		return collection, nil
+	handle := d.MemTableMgr.StrongRefTable(meta.Id)
+	if handle != nil {
+		return handle, nil
 	}
 	eCtx := &memdata.Context{
 		Opts:        d.Opts,
@@ -144,11 +144,11 @@ func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (mtif.MutableTable, e
 	if err = e.WaitDone(); err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
 	}
-	collection = e.Collection
-	if collection == nil {
+	handle = e.Handle
+	if handle == nil {
 		err = ErrNotFound
 	}
-	return collection, err
+	return handle, err
 }
 
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
@@ -172,12 +172,12 @@ func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 		if err = e.WaitDone(); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		collection := e.Collection
+		handle := e.Handle
 		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			collection.Unref()
+			handle.Unref()
 			return nil, err
 		}
-		collection.Unref()
+		handle.Unref()
 	}
 	return data, nil
 }

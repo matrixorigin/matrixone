@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memtable
+package muthandle
 
 import (
 	"errors"
@@ -21,7 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
@@ -39,20 +39,20 @@ type manager struct {
 	opts *storage.Options
 
 	// tables are containers of managed collection
-	tables map[uint64]imem.MutableTable
+	tables map[uint64]base.MutableTable
 
 	aware shard.NodeAware
 }
 
 var (
-	_ imem.IManager = (*manager)(nil)
+	_ base.IManager = (*manager)(nil)
 )
 
 func NewManager(opts *storage.Options, aware shard.NodeAware) *manager {
 	m := &manager{
 		opts:   opts,
 		aware:  aware,
-		tables: make(map[uint64]imem.MutableTable),
+		tables: make(map[uint64]base.MutableTable),
 	}
 	return m
 }
@@ -67,7 +67,7 @@ func (m *manager) TableIds() map[uint64]uint64 {
 	return ids
 }
 
-func (m *manager) WeakRefTable(id uint64) imem.MutableTable {
+func (m *manager) WeakRefTable(id uint64) base.MutableTable {
 	m.RLock()
 	c, ok := m.tables[id]
 	m.RUnlock()
@@ -77,7 +77,7 @@ func (m *manager) WeakRefTable(id uint64) imem.MutableTable {
 	return c
 }
 
-func (m *manager) StrongRefTable(id uint64) imem.MutableTable {
+func (m *manager) StrongRefTable(id uint64) base.MutableTable {
 	m.RLock()
 	c, ok := m.tables[id]
 	if ok {
@@ -100,7 +100,7 @@ func (m *manager) String() string {
 	return s
 }
 
-func (m *manager) RegisterTable(td interface{}) (c imem.MutableTable, err error) {
+func (m *manager) RegisterTable(td interface{}) (c base.MutableTable, err error) {
 	m.Lock()
 	tableData := td.(iface.ITableData)
 	_, ok := m.tables[tableData.GetID()]
@@ -119,7 +119,7 @@ func (m *manager) RegisterTable(td interface{}) (c imem.MutableTable, err error)
 	return c, err
 }
 
-func (m *manager) UnregisterTable(id uint64) (c imem.MutableTable, err error) {
+func (m *manager) UnregisterTable(id uint64) (c base.MutableTable, err error) {
 	m.Lock()
 	c, ok := m.tables[id]
 	if ok {

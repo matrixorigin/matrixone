@@ -238,6 +238,7 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
+	ss.mloader.Addresses().PrintDebugInfo()
 	return ss.Preprocess(processor)
 }
 

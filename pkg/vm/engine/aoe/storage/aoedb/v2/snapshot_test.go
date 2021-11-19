@@ -690,6 +690,13 @@ func TestSnapshot8(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
+	{
+		t1 := database.SimpleGetTableByName(schemas[1].Name)
+		data1, _ := inst.GetTableData(t1)
+		defer data1.Unref()
+		assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	}
+
 	// 6. Create snapshot
 	createSSCtx := &CreateSnapshotCtx{
 		DB:   database.Name,
@@ -750,6 +757,7 @@ func TestSnapshot8(t *testing.T) {
 	data1, _ := aoedb2.GetTableData(t1)
 	defer data1.Unref()
 	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	t.Log(t1.PString(metadata.PPL1, 0))
 
 	aoedb2.Close()
 }

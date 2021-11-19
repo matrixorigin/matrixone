@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
-	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
@@ -29,7 +29,7 @@ var (
 )
 
 type flusherDriver struct {
-	mgr     imem.IManager
+	mgr     base.IManager
 	id      uint64
 	checker func(int64) bool
 }
@@ -52,7 +52,7 @@ func (driver *flusherDriver) FlushNode(id uint64) error {
 	return c.Flush()
 }
 
-func createFlusherFactory(mgr imem.IManager) flusher.DriverFactory {
+func createFlusherFactory(mgr base.IManager) flusher.DriverFactory {
 	return func(id uint64) flusher.NodeDriver {
 		driver := &flusherDriver{
 			mgr: mgr,

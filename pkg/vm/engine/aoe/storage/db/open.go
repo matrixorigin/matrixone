@@ -28,8 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	mt "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -65,7 +65,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
-	memtblMgr := mt.NewManager(opts, flushDriver)
+	memtblMgr := muthandle.NewManager(opts, flushDriver)
 	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
 	db = &DB{

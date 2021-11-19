@@ -15,16 +15,16 @@
 package memdata
 
 import (
-	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type createTableEvent struct {
 	BaseEvent
 
-	// Collection manages the memTable data of a table(creates Block and
+	// Handle manages the memTable data of a table(creates Block and
 	// creates memTable) and provides Append() interface externally
-	Collection imem.MutableTable
+	Handle base.MutableTable
 }
 
 func NewCreateTableEvent(ctx *Context) *createTableEvent {
@@ -36,13 +36,13 @@ func NewCreateTableEvent(ctx *Context) *createTableEvent {
 	return e
 }
 
-// 1. Create a Collection
+// 1. Create a Handle
 // 2. Create and register a TableData
-// 3. Register Collection to the memTable manager
+// 3. Register Handle to the memTable manager
 func (e *createTableEvent) Execute() error {
-	collection := e.Ctx.MTMgr.StrongRefTable(e.Ctx.TableMeta.Id)
-	if collection != nil {
-		e.Collection = collection
+	handle := e.Ctx.MTMgr.StrongRefTable(e.Ctx.TableMeta.Id)
+	if handle != nil {
+		e.Handle = handle
 		return nil
 	}
 	meta := e.Ctx.TableMeta
@@ -56,13 +56,13 @@ func (e *createTableEvent) Execute() error {
 		}
 		tableData.Ref()
 	}
-	collection, err = e.Ctx.MTMgr.RegisterTable(tableData)
+	handle, err = e.Ctx.MTMgr.RegisterTable(tableData)
 	if err != nil {
 		tableData.Unref()
 		return err
 	}
 
-	e.Collection = collection
+	e.Handle = handle
 
 	return nil
 }

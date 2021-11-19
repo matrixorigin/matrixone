@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-package memtable
+package muthandle
 
 import (
 	"os"
@@ -38,7 +38,7 @@ import (
 )
 
 func TestMutTable(t *testing.T) {
-	dir := "/tmp/memtable/mc"
+	dir := "/tmp/muthandle/mc"
 	os.RemoveAll(dir)
 	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)

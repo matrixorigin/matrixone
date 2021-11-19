@@ -587,6 +587,7 @@ func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) 
 	}
 	data.InitReplay()
 	logutil.Info(data.String())
+	logutil.Infof("%s, %d", meta.Repr(false), data.GetRowCount())
 	return data, nil
 }
 
