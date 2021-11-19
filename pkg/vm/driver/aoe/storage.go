@@ -64,7 +64,7 @@ type Storage struct {
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
-		s.DB.FlushDatabase(sPrefix + strconv.Itoa(int(shardId)))
+		s.DB.FlushDatabase(aoedbName.ShardIdToName(shardId))
 	}
 	//TODO: implement me
 	return nil
@@ -113,7 +113,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	ctx := aoedb.AppendCtx{
 		TableMutationCtx: aoedb.TableMutationCtx{
 			DBMutationCtx: aoedb.DBMutationCtx{
-				Id:     shardId,
+				Id:     index,
 				Offset: offset,
 				Size:   batchSize,
 				DB:     aoedbName.ShardIdToName(shardId),
@@ -337,6 +337,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				LogIndex: logIndex.Col.([]uint64)[0],
 				Metadata: *customReq,
 			})
+			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d \n",
+				logIndex.Col.([]uint64)[0], shardId.Col.([]uint64)[0])
 
 		}
 	}
@@ -390,6 +392,10 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 	rsp := s.DB.GetShardCheckpointId(shardID)
+	//fixme:No need to fix logindex
+	if rsp == 0 {
+		rsp = 1
+	}
 	return rsp, nil
 }
 
@@ -403,7 +409,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		createDatabase := false
 		if db == nil {
 			ctx := aoedb.CreateDBCtx{
-				Id:     metadata.ShardID,
+				Id:     metadata.LogIndex,
 				Offset: 0,
 				Size:   3,
 				DB:     aoedbName.ShardIdToName(metadata.ShardID),
@@ -448,7 +454,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
 			ctx := aoedb.CreateTableCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     metadata.ShardID,
+					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedbName.ShardIdToName(metadata.ShardID),
@@ -494,7 +500,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		ctx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     metadata.ShardID,
+					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedbName.ShardIdToName(metadata.ShardID),
