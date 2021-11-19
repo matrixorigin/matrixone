@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -39,8 +40,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	aoedb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	segdb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
@@ -110,13 +111,13 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	}
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
-	ctx:=aoedb.AppendCtx{
+	ctx := aoedb.AppendCtx{
 		TableMutationCtx: aoedb.TableMutationCtx{
 			DBMutationCtx: aoedb.DBMutationCtx{
-				Id: shardId,
+				Id:     shardId,
 				Offset: offset,
-				Size: batchSize,
-				DB: aoedbName.ShardIdToName(shardId),
+				Size:   batchSize,
+				DB:     aoedbName.ShardIdToName(shardId),
 			},
 			Table: customReq.TabletName,
 		},
@@ -147,7 +148,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 func (s *Storage) getSegmentIds(cmd []byte, shardId uint64) []byte {
 	customReq := &pb.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
-	rsp := s.DB.GetSegmentIds( aoedbName.ShardIdToName(shardId),customReq.Name)
+	rsp := s.DB.GetSegmentIds(aoedbName.ShardIdToName(shardId), customReq.Name)
 	resp, _ := json.Marshal(rsp)
 	return resp
 }
@@ -169,7 +170,7 @@ func (s *Storage) getSegmentedId(cmd []byte) []byte {
 //CreateTable creates a table in the storage.
 //It returns the id of the created table.
 //If the storage is closed, it panics.
-func (s *Storage) createTable(index uint64,offset int,batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -179,23 +180,23 @@ func (s *Storage) createTable(index uint64,offset int,batchsize int, shardId uin
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 
-	tblInfo,err:=helper.DecodeTable(customReq.TableInfo)
-	if err!= nil{
+	tblInfo, err := helper.DecodeTable(customReq.TableInfo)
+	if err != nil {
 		buf := errDriver.ErrorResp(err)
 		return 0, 0, buf
 	}
-	schema:=adaptor.TableInfoToSchema(s.DB.Store.Catalog,&tblInfo)
-	ctx:=aoedb.CreateTableCtx{
+	schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
+	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
-			Id: shardId,
+			Id:     shardId,
 			Offset: offset,
-			Size: batchsize,
-			DB: aoedbName.ShardIdToName(shardId),
+			Size:   batchsize,
+			DB:     aoedbName.ShardIdToName(shardId),
 		},
 		Schema: schema,
 	}
-	tbl,err:=s.DB.CreateTable(&ctx)
-	if err!= nil{
+	tbl, err := s.DB.CreateTable(&ctx)
+	if err != nil {
 		buf := errDriver.ErrorResp(err)
 		return 0, 0, buf
 	}
@@ -212,17 +213,17 @@ func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64,
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 
-	ctx:=aoedb.DropTableCtx{
+	ctx := aoedb.DropTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
-			Id: shardId,
+			Id:     shardId,
 			Offset: offset,
-			Size: batchsize,
-			DB: aoedbName.ShardIdToName(shardId),
+			Size:   batchsize,
+			DB:     aoedbName.ShardIdToName(shardId),
 		},
 		Table: customReq.Name,
 	}
-	
-	tbl,err:=s.DB.DropTable(&ctx)
+
+	tbl, err := s.DB.DropTable(&ctx)
 
 	if err != nil {
 		buf := errDriver.ErrorResp(err, "Call DropTable Failed")
@@ -313,8 +314,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			}
 			segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
 			seg := rel.Segment(segment.Id, nil)
-			logutil.Infof("segment.id is ",segment.Id)
-			logutil.Infof("table name is %v, seg len is %v, seg data is %v, seg ids is %v",tblName,len(rel.Meta.SegmentSet),seg.(*segdb.Segment).Data,seg.(*segdb.Segment).Ids)
+			logutil.Infof("segment.id is ", segment.Id)
+			logutil.Infof("table name is %v, seg len is %v, seg data is %v, seg ids is %v", tblName, len(rel.Meta.SegmentSet), seg.(*segdb.Segment).Data, seg.(*segdb.Segment).Ids)
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1], nil)
 			cds := make([]*bytes.Buffer, len(attrs))
@@ -397,28 +398,28 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
-		if err != nil && err != aoeMeta.DatabaseNotFoundErr{
+		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
 			return err
 		}
-		createDatabase:=false
+		createDatabase := false
 		if db == nil {
-			ctx:=aoedb.CreateDBCtx{
-				Id: metadata.ShardID,
+			ctx := aoedb.CreateDBCtx{
+				Id:     metadata.ShardID,
 				Offset: 0,
-				Size: 3,
-				DB: aoedbName.ShardIdToName(metadata.ShardID),
+				Size:   3,
+				DB:     aoedbName.ShardIdToName(metadata.ShardID),
 			}
-			db,err=s.DB.CreateDatabase(&ctx)
-			if err != nil{
+			db, err = s.DB.CreateDatabase(&ctx)
+			if err != nil {
 				return err
 			}
-			createDatabase=true
+			createDatabase = true
 		}
-		tbl,err:=s.DB.Store.Catalog.SimpleGetTableByName(aoedbName.ShardIdToName(metadata.ShardID),tableName)
-		if err != nil && err != aoeMeta.TableNotFoundErr{
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedbName.ShardIdToName(metadata.ShardID), tableName)
+		if err != nil && err != aoeMeta.TableNotFoundErr {
 			return err
 		}
-		createTable:=false
+		createTable := false
 		if tbl == nil {
 			mateTblInfo := aoe.TableInfo{
 				Name:    tableName,
@@ -439,24 +440,24 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			}
 			colInfo.Type = types.Type{Oid: types.T(types.T_varchar)}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, colInfo)
-			offset:=0
-			size:=2
+			offset := 0
+			size := 2
 			if createDatabase {
-				offset=1
-				size=3
+				offset = 1
+				size = 3
 			}
-			schema:=adaptor.TableInfoToSchema(s.DB.Store.Catalog,&mateTblInfo)
-			ctx:=aoedb.CreateTableCtx{
+			schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
+			ctx := aoedb.CreateTableCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id: metadata.ShardID,
+					Id:     metadata.ShardID,
 					Offset: offset,
-					Size: size,
-					DB: aoedbName.ShardIdToName(metadata.ShardID),
+					Size:   size,
+					DB:     aoedbName.ShardIdToName(metadata.ShardID),
 				},
 				Schema: schema,
 			}
-			_,err =s.DB.CreateTable(&ctx)
-			if err != nil{
+			_, err = s.DB.CreateTable(&ctx)
+			if err != nil {
 				return err
 			}
 			createTable = true
@@ -491,13 +492,13 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			offset = 2
 			size = 3
 		}
-		ctx:=aoedb.AppendCtx{
+		ctx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id: metadata.ShardID,
+					Id:     metadata.ShardID,
 					Offset: offset,
-					Size: size,
-					DB: aoedbName.ShardIdToName(metadata.ShardID),
+					Size:   size,
+					DB:     aoedbName.ShardIdToName(metadata.ShardID),
 				},
 				Table: tableName,
 			},
@@ -505,12 +506,12 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		}
 		err = s.DB.Append(&ctx)
 		if err != nil {
-			db,_:=s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
+			db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
 			index := ctx.ToLogIndex(db)
-			tbl,_:=db.GetTableByNameAndLogIndex(tableName,index)
+			tbl, _ := db.GetTableByNameAndLogIndex(tableName, index)
 			tbls := s.DB.TableNames(aoedbName.ShardIdToName(metadata.ShardID))
-			logutil.Infof("SaveShardMetadata, offset is %v, tbl is %v,index is %v, table name is %v",offset,tbl,index,tableName)
-			logutil.Infof("SaveShardMetadata, shard id is %v, tbls are %v",metadata.ShardID,tbls)
+			logutil.Infof("SaveShardMetadata, offset is %v, tbl is %v,index is %v, table name is %v", offset, tbl, index, tableName)
+			logutil.Infof("SaveShardMetadata, shard id is %v, tbls are %v", metadata.ShardID, tbls)
 			logutil.Errorf("SaveShardMetadata is failed: %v\n", err.Error())
 			return err
 		}
@@ -519,7 +520,17 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 }
 
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
-	return nil
+	var err error
+	if removeData {
+		ctx := aoedb.DropDBCtx{
+			Id:     shard.ID,
+			Offset: 0,
+			Size:   1,
+			DB:     aoedbName.ShardIdToName(shard.ID),
+		}
+		_, err = s.DB.DropDatabase(&ctx)
+	}
+	return err
 }
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
