@@ -51,30 +51,12 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
 func (d *DB) DoFlushTable(meta *metadata.Table) error {
-	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err := d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err := e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
+	handle, err := d.MakeTableMutationHandle(meta)
+	if err != nil {
+		return err
 	}
-	defer collection.Unref()
-	return collection.Flush()
+	defer handle.Unref()
+	return handle.Flush()
 }
 
 func (d *DB) DoCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
