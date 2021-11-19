@@ -595,14 +595,6 @@ func NewAttributeOnUpdate(e Expr) *AttributeOnUpdate {
 	}
 }
 
-type IndexTableDef interface {
-	TableDef
-}
-
-type indexTableDefImpl struct {
-	IndexTableDef
-}
-
 type IndexType int
 
 func (it IndexType) ToString() string {
@@ -690,11 +682,35 @@ func NewIndexOption(k uint64, i IndexType, p string, c string, v VisibleType, e 
 }
 
 type PrimaryKeyIndex struct {
-	indexTableDefImpl
+	tableDefImpl
 	KeyParts    []*KeyPart
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+}
+
+func (node *PrimaryKeyIndex) Format(ctx *FmtCtx) {
+	ctx.WriteString("primary key")
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	}
+	if !node.Empty {
+		ctx.WriteString(" using none")
+	}
+	if node.KeyParts != nil {
+		prefix := " ("
+		for _, k := range node.KeyParts {
+			ctx.WriteString(prefix)
+			k.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.IndexOption != nil {
+		ctx.WriteByte(' ')
+		node.IndexOption.Format(ctx)
+	}
 }
 
 func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *PrimaryKeyIndex {
@@ -707,11 +723,39 @@ func NewPrimaryKeyIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Primar
 }
 
 type Index struct {
-	indexTableDefImpl
+	tableDefImpl
+	IfNotExists bool
 	KeyParts    []*KeyPart
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+}
+
+func (node *Index) Format(ctx *FmtCtx) {
+	ctx.WriteString("index")
+	if node.IfNotExists {
+		ctx.WriteString(" if not exists")
+	}
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	}
+	if !node.Empty {
+		ctx.WriteString(" using none")
+	}
+	if node.KeyParts != nil {
+		prefix := " ("
+		for _, k := range node.KeyParts {
+			ctx.WriteString(prefix)
+			k.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.IndexOption != nil {
+		ctx.WriteByte(' ')
+		node.IndexOption.Format(ctx)
+	}
 }
 
 func NewIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Index {
@@ -724,11 +768,35 @@ func NewIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Index {
 }
 
 type UniqueIndex struct {
-	indexTableDefImpl
+	tableDefImpl
 	KeyParts    []*KeyPart
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+}
+
+func (node *UniqueIndex) Format(ctx *FmtCtx) {
+	ctx.WriteString("unique key")
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	}
+	if !node.Empty {
+		ctx.WriteString(" using none")
+	}
+	if node.KeyParts != nil {
+		prefix := " ("
+		for _, k := range node.KeyParts {
+			ctx.WriteString(prefix)
+			k.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.IndexOption != nil {
+		ctx.WriteByte(' ')
+		node.IndexOption.Format(ctx)
+	}
 }
 
 func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueIndex {
@@ -741,12 +809,39 @@ func NewUniqueIndex(k []*KeyPart, n string, e bool, io *IndexOption) *UniqueInde
 }
 
 type ForeignKey struct {
-	indexTableDefImpl
+	tableDefImpl
 	IfNotExists bool
 	KeyParts    []*KeyPart
 	Name        string
 	Refer       *AttributeReference
 	Empty       bool
+}
+
+func (node *ForeignKey) Format(ctx *FmtCtx) {
+	ctx.WriteString("foreign key")
+	if node.IfNotExists {
+		ctx.WriteString(" if not exists")
+	}
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	}
+	if !node.Empty {
+		ctx.WriteString(" using none")
+	}
+	if node.KeyParts != nil {
+		prefix := " ("
+		for _, k := range node.KeyParts {
+			ctx.WriteString(prefix)
+			k.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.Refer != nil {
+		ctx.WriteByte(' ')
+		node.Refer.Format(ctx)
+	}
 }
 
 func NewForeignKey(ine bool, k []*KeyPart, n string, r *AttributeReference, e bool) *ForeignKey {
@@ -760,11 +855,35 @@ func NewForeignKey(ine bool, k []*KeyPart, n string, r *AttributeReference, e bo
 }
 
 type FullTextIndex struct {
-	indexTableDefImpl
+	tableDefImpl
 	KeyParts    []*KeyPart
 	Name        string
 	Empty       bool
 	IndexOption *IndexOption
+}
+
+func (node *FullTextIndex) Format(ctx *FmtCtx) {
+	ctx.WriteString("fulltext")
+	if node.Name != "" {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.Name)
+	}
+	if !node.Empty {
+		ctx.WriteString(" using none")
+	}
+	if node.KeyParts != nil {
+		prefix := " ("
+		for _, k := range node.KeyParts {
+			ctx.WriteString(prefix)
+			k.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.IndexOption != nil {
+		ctx.WriteByte(' ')
+		node.IndexOption.Format(ctx)
+	}
 }
 
 func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullTextIndex {
@@ -777,9 +896,18 @@ func NewFullTextIndex(k []*KeyPart, n string, e bool, io *IndexOption) *FullText
 }
 
 type CheckIndex struct {
-	indexTableDefImpl
+	tableDefImpl
 	Expr     Expr
 	Enforced bool
+}
+
+func (node *CheckIndex) Format(ctx *FmtCtx) {
+	ctx.WriteString("check (")
+	node.Expr.Format(ctx)
+	ctx.WriteByte(')')
+	if node.Enforced {
+		ctx.WriteString(" enforced")
+	}
 }
 
 func NewCheckIndex(e Expr, en bool) *CheckIndex {
