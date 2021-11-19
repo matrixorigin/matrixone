@@ -25,7 +25,10 @@ import (
 )
 
 func NewFloat64(typ types.Type) *Float64Ring {
-	return &Float64Ring{Typ: typ}
+	return &Float64Ring{
+		Typ: typ,
+		IsE: true,
+	}
 }
 
 func (r *Float64Ring) String() string {
@@ -51,6 +54,7 @@ func (r *Float64Ring) Size() int {
 
 func (r *Float64Ring) Dup() ring.Ring {
 	return &Float64Ring{
+		IsE: true,
 		Typ: r.Typ,
 	}
 }
@@ -103,7 +107,8 @@ func (r *Float64Ring) Grow(m *mheap.Mheap) error {
 }
 
 func (r *Float64Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.([]float64)[sel]; r.Ns[i] == 0 || v > r.Vs[i] {
+	if v := vec.Col.([]float64)[sel]; r.IsE || v > r.Vs[i] {
+		r.IsE = false
 		r.Vs[i] = v
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -114,7 +119,8 @@ func (r *Float64Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
 func (r *Float64Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.([]float64)
 	for _, v := range vs {
-		if r.Ns[i] == 0 || v > r.Vs[i] {
+		if r.IsE || v > r.Vs[i] {
+			r.IsE = false
 			r.Vs[i] = v
 		}
 	}

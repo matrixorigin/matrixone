@@ -101,7 +101,7 @@ func (ctr *Container) processBoundVars(proc *process.Process, arg *Argument) (bo
 		var err error
 
 		ctr.constructContainer(arg, bat)
-		batch.Reorder(bat, ctr.vars)
+		ctr.vars = append(ctr.vars, bat.Attrs...)
 		ctr.bat = &batch.Batch{}
 		ctr.bat.Zs = []int64{1}
 		ctr.bat.As = make([]string, len(arg.BoundVars))
@@ -110,7 +110,7 @@ func (ctr *Container) processBoundVars(proc *process.Process, arg *Argument) (bo
 		for i, bvar := range arg.BoundVars {
 			ctr.bat.As[i] = bvar.Alias
 			ctr.bat.Refs[i] = uint64(bvar.Ref)
-			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[i].Typ); err != nil {
+			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[ctr.is[i]].Typ); err != nil {
 				ctr.bat.Rs = ctr.bat.Rs[:i]
 				batch.Clean(ctr.bat, proc.Mp)
 				ctr.bat = nil
@@ -128,7 +128,7 @@ func (ctr *Container) processBoundVars(proc *process.Process, arg *Argument) (bo
 		batch.Reorder(bat, ctr.vars)
 	}
 	for i, r := range ctr.bat.Rs {
-		r.BulkFill(0, bat.Zs, bat.Vecs[i])
+		r.BulkFill(0, bat.Zs, bat.Vecs[ctr.is[i]])
 	}
 	return false, nil
 }
@@ -156,8 +156,9 @@ func (ctr *Container) processFreeVars(proc *process.Process, arg *Argument) (boo
 	if len(ctr.vars) == 0 {
 		var err error
 
+		batch.Reorder(bat, arg.FreeVars)
 		ctr.constructContainer(arg, bat)
-		batch.Reorder(bat, ctr.vars)
+		ctr.vars = append(ctr.vars, bat.Attrs...)
 		ctr.bat = batch.New(true, arg.FreeVars)
 		ctr.mp = &hashtable.MockStringHashTable{}
 		ctr.mp.Init()
@@ -223,7 +224,7 @@ func (ctr *Container) processFreeVars(proc *process.Process, arg *Argument) (boo
 		for i, bvar := range arg.BoundVars {
 			ctr.bat.As[i] = bvar.Alias
 			ctr.bat.Refs[i] = uint64(bvar.Ref)
-			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[i+ctr.n].Typ); err != nil {
+			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[ctr.is[i]].Typ); err != nil {
 				ctr.bat.Rs = ctr.bat.Rs[:i]
 				batch.Clean(ctr.bat, proc.Mp)
 				ctr.bat = nil
@@ -268,12 +269,12 @@ func (ctr *Container) processFreeVarsUnit(proc *process.Process, arg *Argument) 
 	defer batch.Clean(bat, proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 	if len(ctr.vars) == 0 {
+		batch.Reorder(bat, arg.FreeVars)
 		ctr.constructContainer(arg, bat)
-		batch.Reorder(bat, ctr.vars)
+		ctr.vars = append(ctr.vars, bat.Attrs...)
 		{
 			size := 0
 			for i := 0; i < ctr.n; i++ {
-				ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 				switch bat.Vecs[i].Typ.Oid {
 				case types.T_int8:
 					size += 1
@@ -336,10 +337,12 @@ func (ctr *Container) processFreeVarsUnit(proc *process.Process, arg *Argument) 
 			ctr.bat.Vecs[i] = vector.New(bat.Vecs[i].Typ)
 		}
 		ctr.bat.As = make([]string, len(arg.BoundVars))
+		ctr.bat.Refs = make([]uint64, len(arg.BoundVars))
 		ctr.bat.Rs = make([]ring.Ring, len(arg.BoundVars))
 		for i, bvar := range arg.BoundVars {
 			ctr.bat.As[i] = bvar.Alias
-			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[i+ctr.n].Typ); err != nil {
+			ctr.bat.Refs[i] = uint64(bvar.Ref)
+			if ctr.bat.Rs[i], err = transformer.New(bvar.Op, bat.Vecs[ctr.is[i]].Typ); err != nil {
 				batch.Clean(ctr.bat, proc.Mp)
 				return false, err
 			}
@@ -366,27 +369,38 @@ func (ctr *Container) processFreeVarsUnit(proc *process.Process, arg *Argument) 
 
 func (ctr *Container) constructContainer(n *Argument, bat *batch.Batch) {
 	ctr.n = len(n.FreeVars)
-	ctr.vars = make([]string, 0, len(n.FreeVars))
 	mp := make(map[string]int)
 	for i, attr := range bat.Attrs {
 		mp[attr] = i
 	}
 	for _, fvar := range n.FreeVars {
 		delete(mp, fvar)
-		ctr.vars = append(ctr.vars, fvar)
 	}
-	for _, bvar := range n.BoundVars {
-		delete(mp, bvar.Name)
-		ctr.vars = append(ctr.vars, bvar.Name)
+	{
+		mq := make(map[string]int)
+		for _, bvar := range n.BoundVars {
+			mq[bvar.Name]++
+			ctr.is = append(ctr.is, mp[bvar.Name])
+		}
+		for k, v := range mq {
+			vec := batch.GetVector(bat, k)
+			if int(vec.Ref) == v {
+				delete(mp, k)
+			}
+		}
 	}
-	for k, i := range mp {
+	for i, attr := range bat.Attrs {
+		if _, ok := mp[attr]; !ok {
+			continue
+		}
 		n.BoundVars = append(n.BoundVars, transformer.Transformer{
-			Name:  k,
-			Alias: k,
+			Name:  attr,
+			Alias: attr,
 			Op:    transformer.Max,
 			Ref:   int(bat.Vecs[i].Ref),
 		})
-		ctr.vars = append(ctr.vars, k)
+		ctr.is = append(ctr.is, i)
+
 	}
 }
 
@@ -508,7 +522,7 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 			ai := int64(*ctr.values[k])
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i, bat.Zs[i+int64(k)], bat.Vecs[ctr.n+j])
+				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.is[j]])
 			}
 		}
 	}
@@ -619,7 +633,7 @@ func (ctr *Container) processH16(bat *batch.Batch, proc *process.Process) error 
 			ai := int64(*ctr.values[k])
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i, bat.Zs[i+int64(k)], bat.Vecs[ctr.n+j])
+				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.is[j]])
 			}
 		}
 	}
@@ -730,7 +744,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 			ai := int64(*ctr.values[k])
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i, bat.Zs[i+int64(k)], bat.Vecs[ctr.n+j])
+				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.is[j]])
 			}
 		}
 	}
@@ -846,7 +860,7 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 		ai := int64(*vp)
 		ctr.bat.Zs[ai] += bat.Zs[i]
 		for j, r := range ctr.bat.Rs {
-			r.Fill(ai, i, bat.Zs[i], bat.Vecs[ctr.n+j])
+			r.Fill(ai, i, bat.Zs[i], bat.Vecs[ctr.is[j]])
 		}
 	}
 	return nil

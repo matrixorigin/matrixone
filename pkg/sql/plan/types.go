@@ -164,7 +164,7 @@ func (qry *Query) ResultColumns() []*Attribute {
 	return qry.ResultAttributes
 }
 
-func (qry *Query) Reduce() {
+func (qry *Query) reduce() {
 	for i := range qry.Rels {
 		rel := qry.RelsMap[qry.Rels[i]]
 		for j := 0; j < len(rel.Attrs); j++ {
@@ -308,7 +308,7 @@ func (attr *Attribute) DecDef() {
 }
 
 func (attr *Attribute) String() string {
-	return fmt.Sprintf("%s[%s] = %v", attr.Name, attr.Type, attr.Ref)
+	return fmt.Sprintf("%s:%s:%v", attr.Name, attr.Type, attr.Ref)
 }
 
 func (cond *JoinCondition) String() string {

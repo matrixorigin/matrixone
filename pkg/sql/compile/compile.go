@@ -15,7 +15,6 @@
 package compile
 
 import (
-	"log"
 	"matrixone/pkg/sql/parsers"
 	"matrixone/pkg/sql/parsers/dialect"
 	"matrixone/pkg/vm/engine"
@@ -37,7 +36,6 @@ func New(db string, sql string, uid string,
 func (c *compile) Build() ([]*Exec, error) {
 	stmts, err := parsers.Parse(dialect.MYSQL, c.sql)
 	if err != nil {
-		log.Fatal(err)
 		return nil, err
 	}
 	es := make([]*Exec, len(stmts))

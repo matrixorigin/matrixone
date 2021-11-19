@@ -24,6 +24,12 @@ const (
 )
 
 const (
+	Bare = iota
+	Single
+	FreeVarsAndBoundVars
+)
+
+const (
 	H8 = iota
 	H16
 	H24
@@ -51,7 +57,7 @@ type Container struct {
 }
 
 type Argument struct {
-	IsBare   bool
+	Type     int
 	FreeVars []string // free variables
 	ctr      *Container
 }

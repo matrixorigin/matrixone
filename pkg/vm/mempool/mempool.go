@@ -19,14 +19,11 @@ import (
 )
 
 func New() *Mempool {
-	m := &Mempool{buckets: make([]bucket, 0, 10)}
-	for size := PageSize; size <= MaxSize; size *= Factor {
-		m.buckets = append(m.buckets, bucket{
-			size:  size,
-			slots: make([][]byte, 0, 8),
-		})
-	}
-	return m
+	return &Mempool{}
+}
+
+func Alloc(m *Mempool, size int) (ret []byte) {
+	return malloc.Malloc(size)
 }
 
 func Realloc(data []byte, size int64) int64 {
@@ -34,6 +31,9 @@ func Realloc(data []byte, size int64) int64 {
 		return size
 	}
 	n := int64(cap(data))
+	if size <= n {
+		return n
+	}
 	newcap := n
 	doublecap := n + n
 	if size > doublecap {
@@ -51,34 +51,4 @@ func Realloc(data []byte, size int64) int64 {
 		}
 	}
 	return newcap
-}
-
-func Alloc(m *Mempool, size int) []byte {
-	if size <= MaxSize {
-		for i, b := range m.buckets {
-			if b.size >= size {
-				if len(b.slots) > 0 {
-					data := b.slots[0]
-					m.buckets[i].slots[0] = m.buckets[i].slots[len(m.buckets[i].slots)-1]
-					m.buckets[i].slots[len(m.buckets[i].slots)-1] = nil
-					m.buckets[i].slots = m.buckets[i].slots[:len(m.buckets[i].slots)-1]
-					return data
-				}
-				return malloc.Malloc(b.size)
-			}
-		}
-	}
-	return malloc.Malloc(size)
-}
-
-func Free(m *Mempool, data []byte) {
-	if size := cap(data); size <= MaxSize {
-		for i, j := 0, len(m.buckets); i < j; i++ {
-			if size == m.buckets[i].size {
-				m.buckets[i].slots = append(m.buckets[i].slots, data)
-				return
-			}
-		}
-		return
-	}
 }

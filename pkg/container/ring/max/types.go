@@ -76,6 +76,7 @@ type UInt64Ring struct {
 }
 
 type Float32Ring struct {
+	IsE bool // isempty
 	Da  []byte
 	Ns  []int64
 	Vs  []float32
@@ -83,6 +84,7 @@ type Float32Ring struct {
 }
 
 type Float64Ring struct {
+	IsE bool // isempty
 	Da  []byte
 	Ns  []int64
 	Vs  []float64

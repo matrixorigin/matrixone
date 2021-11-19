@@ -36,7 +36,8 @@ const (
 )
 
 const (
-	BoundVars = iota
+	Bare = iota
+	BoundVars
 	FreeVarsAndBoundVars
 )
 
