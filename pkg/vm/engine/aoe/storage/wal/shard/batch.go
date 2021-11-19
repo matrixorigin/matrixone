@@ -1,6 +1,8 @@
 package shard
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type BatchInfo struct {
 	Offset uint32
@@ -12,8 +14,26 @@ func (info *BatchInfo) Repr() string {
 }
 
 type BatchIndex struct {
-	Index
+	*Index
 	Info *BatchInfo
+}
+
+func NewBatchIndex(index *Index) *BatchIndex {
+	return &BatchIndex{
+		Index: index,
+	}
+}
+
+func (idx *BatchIndex) Clone() *BatchIndex {
+	index := *idx.Index
+	clone := &BatchIndex{
+		Index: &index,
+	}
+	if idx.Info != nil {
+		info := *idx.Info
+		clone.Info = &info
+	}
+	return clone
 }
 
 func (idx *BatchIndex) Valid() bool {
@@ -41,6 +61,13 @@ func (idx *BatchIndex) SliceSize() uint32 {
 	return idx.Info.Size
 }
 
+func (idx *BatchIndex) String() string {
+	if idx.Info == nil {
+		return idx.Index.String()
+	}
+	return fmt.Sprintf("%s-%s", idx.Index.String(), idx.Info.Repr())
+}
+
 type BatchIndice struct {
 	shardId uint64
 	indice  []*BatchIndex
@@ -56,7 +83,7 @@ func NewBatchIndice(shardId uint64) *BatchIndice {
 func NewSimpleBatchIndice(index *Index) *BatchIndice {
 	return &BatchIndice{
 		shardId: index.ShardId,
-		indice:  []*BatchIndex{&BatchIndex{Index: *index}},
+		indice:  []*BatchIndex{&BatchIndex{Index: index}},
 	}
 }
 
@@ -65,7 +92,7 @@ func (bi *BatchIndice) GetShardId() uint64 {
 }
 
 func (bi *BatchIndice) AppendIndex(index *Index) {
-	bi.indice = append(bi.indice, &BatchIndex{Index: *index})
+	bi.indice = append(bi.indice, &BatchIndex{Index: index})
 }
 
 func (bi *BatchIndice) Append(index *BatchIndex) {

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type mutableTable struct {
@@ -119,7 +120,7 @@ func (c *mutableTable) onImmut() {
 	c.onNoMut()
 }
 
-func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
+func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.BatchIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -140,7 +141,18 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	index.Count = n
 	meta.Lock()
 	defer meta.Unlock()
-	if err = meta.SetIndexLocked(*index); err != nil {
+	if !index.IsApplied() && !index.IsSlice() {
+		left := index.Capacity - index.Start - index.Count
+		slices := 1 + left/meta.Segment.Table.Schema.BlockMaxRows
+		if left%meta.Segment.Table.Schema.BlockMaxRows != 0 {
+			slices += 1
+		}
+		index.Info = &shard.BatchInfo{
+			Offset: 0,
+			Size:   uint32(slices),
+		}
+	}
+	if err = meta.SetIndexLocked(index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
@@ -152,7 +164,7 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	return n, nil
 }
 
-func (c *mutableTable) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
+func (c *mutableTable) Append(bat *batch.Batch, index *shard.BatchIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,6 +194,7 @@ func (c *mutableTable) Append(bat *batch.Batch, index *metadata.LogIndex) (err e
 		}
 		index.Start += n
 		index.Count = uint64(0)
+		index.Info.Offset += 1
 	}
 	blkHandle.Close()
 

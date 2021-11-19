@@ -55,7 +55,7 @@ func (s *sliceEntry) String() string {
 	if s.Committed() {
 		return fmt.Sprintf("%s-{C}", s.Repr())
 	}
-	return fmt.Sprintf("%s-%s", s.Repr(), s.mask.String())
+	return fmt.Sprintf("%d-%s", s.idx.Id.Offset, s.mask.String())
 }
 
 type commitEntry struct {
@@ -84,10 +84,10 @@ func (n *commitEntry) Commit(idx *BatchIndex) {
 		if n.slices == nil {
 			n.slices = make(map[uint32]*sliceEntry)
 		}
-		slice := n.slices[idx.Info.Offset]
+		slice := n.slices[idx.Id.Offset]
 		if slice == nil {
 			slice = newSliceEntry(idx)
-			n.slices[idx.Info.Offset] = slice
+			n.slices[idx.Id.Offset] = slice
 		}
 		slice.Commit(idx.Info.Offset)
 	} else {
