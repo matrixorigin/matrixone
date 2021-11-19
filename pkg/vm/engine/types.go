@@ -39,7 +39,7 @@ type Attribute struct {
 
 type DefaultExpr struct {
 	Exist  bool
-	Value  interface{}
+	Value  interface{} // int64, float32, float64, string
 	IsNull bool
 }
 
@@ -98,6 +98,7 @@ func (*CommentDef) tableDef()     {}
 func (*AttributeDef) tableDef()   {}
 func (*IndexTableDef) tableDef()  {}
 func (*PartitionByDef) tableDef() {}
+func (*PrimaryIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics

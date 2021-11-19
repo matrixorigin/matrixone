@@ -28,6 +28,7 @@ const (
 	Merge = iota
 	Normal
 	Remote
+	Insert
 	CreateDatabase
 	CreateTable
 	CreateIndex

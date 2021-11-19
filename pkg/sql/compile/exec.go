@@ -62,6 +62,13 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 			return nil, err
 		}
 		return e.compileVTree(vtree.New().Build(ft), qry.VarsMap)
+	case *plan.Insert:
+		// todo: insert into tbl select a, b from tbl2 should deal next time.
+		return &Scope{
+			Magic: Insert,
+			Plan:  pn,
+			Proc:  e.c.proc,
+		}, nil
 	case *plan.CreateDatabase:
 		return &Scope{
 			Magic: CreateDatabase,
@@ -136,10 +143,6 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
-func (e *Exec) IncreaseAffectedRows(n uint64) {
-	e.affectRows += n
-}
-
 func (e *Exec) SetAffectedRows(n uint64) {
 	e.affectRows = n
 }
@@ -159,6 +162,13 @@ func (e *Exec) Run(ts uint64) error {
 		return e.scope.MergeRun(e.c.e)
 	case Remote:
 		return e.scope.RemoteRun(e.c.e)
+	case Insert:
+		affectedRows, err := e.scope.Insert(ts)
+		if err != nil {
+			return err
+		}
+		e.SetAffectedRows(affectedRows)
+		return nil
 	case CreateDatabase:
 		return e.scope.CreateDatabase(ts)
 	case CreateTable:
