@@ -28,7 +28,7 @@ import (
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -408,7 +408,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	return fs
 }
 
-func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables, mtMgr mtif.IManager) {
+func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables, mtMgr base.IManager) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)

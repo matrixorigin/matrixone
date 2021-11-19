@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-package memtable
+package muthandle
 
 import (
 	"os"
@@ -37,8 +37,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMutCollection(t *testing.T) {
-	dir := "/tmp/memtable/mc"
+func TestMutTable(t *testing.T) {
+	dir := "/tmp/muthandle/mc"
 	os.RemoveAll(dir)
 	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)
@@ -77,7 +77,7 @@ func TestMutCollection(t *testing.T) {
 	assert.Nil(t, err)
 
 	t0.Ref()
-	c0 := newCollection(manager, t0)
+	c0 := newMutableTable(manager, t0)
 	blks := uint64(20)
 	expectBlks := blks
 	batchSize := uint64(4)

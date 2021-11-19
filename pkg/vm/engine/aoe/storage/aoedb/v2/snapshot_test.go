@@ -665,9 +665,10 @@ func TestSnapshot8(t *testing.T) {
 
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
+	var createCtx *CreateTableCtx
 	for i, _ := range schemas {
 		schema := metadata.MockSchema(i + 1)
-		createCtx := &CreateTableCtx{
+		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
 			Schema:        schema,
 		}
@@ -689,6 +690,13 @@ func TestSnapshot8(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
+	{
+		t1 := database.SimpleGetTableByName(schemas[1].Name)
+		data1, _ := inst.GetTableData(t1)
+		defer data1.Unref()
+		assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	}
+
 	// 6. Create snapshot
 	createSSCtx := &CreateSnapshotCtx{
 		DB:   database.Name,
@@ -700,7 +708,7 @@ func TestSnapshot8(t *testing.T) {
 	assert.Equal(t, database.GetCheckpointId(), index)
 
 	// 12. Create another db instance
-	aoedb2, _, _ := initTestDBWithOptions(t, "aoedb2", database.Name, defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
+	aoedb2, gen2, _ := initTestDBWithOptions(t, "aoedb2", database.Name, defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
 
 	// 13. Apply snapshot
 	applySSCtx := &ApplySnapshotCtx{
@@ -730,5 +738,26 @@ func TestSnapshot8(t *testing.T) {
 		return sorted == 2
 	})
 	assert.Equal(t, 2, sorted)
+
+	gen2.Reset(db2.GetShardId(), db2.GetCheckpointId())
+	appendCtx = CreateAppendCtx(db2, gen2, schemas[0].Name, ck0)
+	err = aoedb2.Append(appendCtx)
+	assert.Nil(t, err)
+
+	t0 := db2.SimpleGetTableByName(schemas[0].Name)
+	assert.Equal(t, 4, t0.SimpleGetSegmentCount())
+
+	data0, _ := aoedb2.GetTableData(t0)
+	defer data0.Unref()
+	assert.Equal(t, 2*ck0.Length(), int(data0.GetRowCount()))
+
+	t1 := db2.SimpleGetTableByName(schemas[1].Name)
+	assert.Equal(t, 2, t1.SimpleGetSegmentCount())
+
+	data1, _ := aoedb2.GetTableData(t1)
+	defer data1.Unref()
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	t.Log(t1.PString(metadata.PPL1, 0))
+
 	aoedb2.Close()
 }

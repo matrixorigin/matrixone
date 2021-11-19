@@ -238,6 +238,7 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
+	ss.mloader.Addresses().PrintDebugInfo()
 	return ss.Preprocess(processor)
 }
 
@@ -260,7 +261,3 @@ func (ss *ssLoader) ScheduleEvents(d *DB) error {
 	}
 	return nil
 }
-
-// func (ss *ssLoader) GetTables() map[uint64]*Table {
-// 	return ss.mloader.GetTables()
-// }

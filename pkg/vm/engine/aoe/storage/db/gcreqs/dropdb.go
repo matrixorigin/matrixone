@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
@@ -31,14 +31,14 @@ type dropDBRequest struct {
 	gc.BaseRequest
 	Tables         *table.Tables
 	DB             *metadata.Database
-	MemTableMgr    mtif.IManager
+	MemTableMgr    base.IManager
 	Opts           *storage.Options
 	Cleaner        *metadata.Cleaner
 	needReschedule bool
 	startTime      time.Time
 }
 
-func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr mtif.IManager) *dropDBRequest {
+func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr base.IManager) *dropDBRequest {
 	req := new(dropDBRequest)
 	req.DB = meta
 	req.Tables = tables

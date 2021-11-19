@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
@@ -31,12 +31,12 @@ type dropTblRequest struct {
 	Tables *table.Tables
 	// Table id of the dropped table
 	Meta        *metadata.Table
-	MemTableMgr mtif.IManager
+	MemTableMgr base.IManager
 	Opts        *storage.Options
 	CB          dbi.OnTableDroppedCB
 }
 
-func NewDropTblRequest(opts *storage.Options, meta *metadata.Table, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
+func NewDropTblRequest(opts *storage.Options, meta *metadata.Table, tables *table.Tables, mtMgr base.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
 	req := new(dropTblRequest)
 	req.Meta = meta
 	req.Tables = tables
@@ -69,12 +69,12 @@ func (req *dropTblRequest) Execute() error {
 	} else {
 		e.Data.Unref()
 	}
-	c, err := req.MemTableMgr.UnregisterCollection(req.Meta.Id)
+	c, err := req.MemTableMgr.UnregisterTable(req.Meta.Id)
 	if err != nil {
 		segIds := req.Meta.SimpleGetSegmentIds()
 		if len(segIds) == 0 {
 			err = nil
-		} else if c = req.MemTableMgr.WeakRefCollection(req.Meta.Id); c == nil {
+		} else if c = req.MemTableMgr.WeakRefTable(req.Meta.Id); c == nil {
 			err = nil
 		} else {
 			if req.Iteration < 3 {

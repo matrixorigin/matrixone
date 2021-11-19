@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type ICollection interface {
+type MutableTable interface {
 	common.IRef
 	Append(bat *batch.Batch, index *metadata.LogIndex) (err error)
 	Flush() error
@@ -29,10 +29,10 @@ type ICollection interface {
 }
 
 type IManager interface {
-	WeakRefCollection(id uint64) ICollection
-	StrongRefCollection(id uint64) ICollection
-	RegisterCollection(interface{}) (c ICollection, err error)
-	UnregisterCollection(id uint64) (c ICollection, err error)
-	CollectionIDs() map[uint64]uint64
+	WeakRefTable(id uint64) MutableTable
+	StrongRefTable(id uint64) MutableTable
+	RegisterTable(interface{}) (c MutableTable, err error)
+	UnregisterTable(id uint64) (c MutableTable, err error)
+	TableIds() map[uint64]uint64
 	String() string
 }
