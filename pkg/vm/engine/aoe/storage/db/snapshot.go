@@ -260,7 +260,3 @@ func (ss *ssLoader) ScheduleEvents(d *DB) error {
 	}
 	return nil
 }
-
-// func (ss *ssLoader) GetTables() map[uint64]*Table {
-// 	return ss.mloader.GetTables()
-// }

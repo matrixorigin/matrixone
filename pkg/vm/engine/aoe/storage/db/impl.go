@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -129,31 +130,43 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 }
 
 func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) error {
+	handle, err := d.MakeTableMutationHandle(meta)
+	if err != nil {
+		return err
+	}
+	defer handle.Unref()
+	return handle.Append(data, index)
+}
+
+func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (mtif.ICollection, error) {
 	var err error
 	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
+	if collection != nil {
+		return collection, nil
 	}
-	defer collection.Unref()
-	return collection.Append(data, index)
+	eCtx := &memdata.Context{
+		Opts:        d.Opts,
+		MTMgr:       d.MemTableMgr,
+		TableMeta:   meta,
+		IndexBufMgr: d.IndexBufMgr,
+		MTBufMgr:    d.MTBufMgr,
+		SSTBufMgr:   d.SSTBufMgr,
+		FsMgr:       d.FsMgr,
+		Tables:      d.Store.DataTables,
+		Waitable:    true,
+	}
+	e := memdata.NewCreateTableEvent(eCtx)
+	if err = d.Scheduler.Schedule(e); err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	if err = e.WaitDone(); err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	collection = e.Collection
+	if collection == nil {
+		err = ErrNotFound
+	}
+	return collection, err
 }
 
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
