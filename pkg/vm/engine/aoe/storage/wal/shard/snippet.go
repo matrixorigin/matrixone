@@ -45,7 +45,7 @@ func (g *snippets) Extend(snips ...*Snippet) {
 	g.snips = append(g.snips, snips...)
 }
 
-func (g *snippets) ForEach(fn func(*IndexId)) {
+func (g *snippets) ForEach(fn func(*Index)) {
 	for _, seq := range g.snips {
 		seq.CompletedRange(nil, fn)
 	}
@@ -110,7 +110,7 @@ func (s *Snippet) LastIndex() *Index {
 	return s.indice[len(s.indice)-1]
 }
 
-func (s *Snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) common.Range {
+func (s *Snippet) CompletedRange(exclude *common.Range, fn func(*Index)) common.Range {
 	count := uint64(0)
 	if exclude == nil {
 		r := common.Range{}
@@ -122,7 +122,7 @@ func (s *Snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) commo
 			r.Left = uint64(i)
 			count++
 			if fn != nil {
-				fn(&s.indice[i].Id)
+				fn(s.indice[i])
 			}
 		}
 		if count > 0 {
@@ -140,7 +140,7 @@ func (s *Snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) commo
 		count++
 		r.Left = uint64(i)
 		if fn != nil {
-			fn(&s.indice[i].Id)
+			fn(s.indice[i])
 		}
 	}
 	if count > 0 {

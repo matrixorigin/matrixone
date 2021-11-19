@@ -142,7 +142,7 @@ func (p *proxy) AppendIndex(index *Index) {
 }
 
 func (p *proxy) AppendSnippet(snip *Snippet) {
-	// logutil.Infof("append snippet: %s", snip.String())
+	// logutil.Infof("[WAL] Append Snippet: %s", snip.String())
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
 	pos, ok := p.snipIdx[snip.GetId()]
@@ -189,20 +189,20 @@ func (p *proxy) Checkpoint() {
 
 	mask := roaring64.NewBitmap()
 	for _, snip := range snips {
-		snip.ForEach(func(id *IndexId) {
-			if id.IsSingle() {
-				mask.Add(id.Id)
+		snip.ForEach(func(idx *Index) {
+			if idx.Id.IsSingle() {
+				mask.Add(idx.Id.Id)
 				return
 			}
-			node := p.indice[id.Id]
+			node := p.indice[idx.Id.Id]
 			if node == nil {
-				node = newCommitEntry(id)
-				p.indice[id.Id] = node
+				node = newCommitEntry(&idx.Id)
+				p.indice[idx.Id.Id] = node
 			}
-			node.mask.Add(uint64(id.Offset))
+			node.mask.Add(uint64(idx.Id.Offset))
 			if node.Committed() {
 				mask.Add(node.GetId())
-				delete(p.indice, id.Id)
+				delete(p.indice, idx.Id.Id)
 			}
 		})
 	}

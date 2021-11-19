@@ -139,7 +139,7 @@ func TestSequence(t *testing.T) {
 	}
 	for _, group := range groups {
 		total := 0
-		fn := func(*IndexId) {
+		fn := func(*Index) {
 			total++
 		}
 		group.ForEach(fn)
