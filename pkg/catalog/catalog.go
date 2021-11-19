@@ -264,11 +264,14 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
+		tableName:=tbl.Name
+		aoeTableName:=c.encodeTabletName(shardId, tbl.Id)
+		tbl.Name=aoeTableName
+		if err := c.Driver.CreateTablet(aoeTableName, shardId, &tbl); err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
-
+		tbl.Name=tableName
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {

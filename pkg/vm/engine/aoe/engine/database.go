@@ -22,7 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
+	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	log "github.com/sirupsen/logrus"
 )
@@ -103,7 +104,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
-			if lRelation, err := ldb.Relation(tbl.ShardId, tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(aoedbName.ShardIdToName(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
 			for _, id := range ids.Ids {

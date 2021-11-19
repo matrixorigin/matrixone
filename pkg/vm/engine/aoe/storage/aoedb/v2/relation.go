@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -111,6 +112,7 @@ func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 	}
 	r.tree.Segments[id] = seg
 	r.tree.Unlock()
+	logutil.Infof("data is %v , ids is %v", seg.Data,seg.Ids)
 	return seg
 }
 
