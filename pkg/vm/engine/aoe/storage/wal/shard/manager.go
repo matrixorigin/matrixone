@@ -170,7 +170,7 @@ func (mgr *manager) Checkpoint(v interface{}) {
 		bat := NewSimpleBatchIndice(vv)
 		mgr.EnqueueCheckpoint(bat)
 		return
-	case *BatchIndice:
+	case *SliceIndice:
 		if vv == nil {
 			return
 		}
@@ -253,7 +253,7 @@ func (mgr *manager) logEntry(entry *Entry) {
 func (mgr *manager) onSnippets(items ...interface{}) {
 	shards := make(map[uint64]*proxy)
 	for _, item := range items {
-		bat := item.(*BatchIndice)
+		bat := item.(*SliceIndice)
 		shardId := bat.GetShardId()
 		shard, err := mgr.GetShard(shardId)
 		if err != nil {

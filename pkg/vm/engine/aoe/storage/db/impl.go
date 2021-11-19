@@ -112,7 +112,7 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 	return index, nil
 }
 
-func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.BatchIndex) error {
+func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.SliceIndex) error {
 	handle, err := d.MakeTableMutationHandle(meta)
 	if err != nil {
 		return err

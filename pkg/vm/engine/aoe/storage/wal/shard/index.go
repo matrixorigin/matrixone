@@ -139,8 +139,8 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 	return
 }
 
-func (idx *Index) ToBatchIndex() *BatchIndex {
-	return NewBatchIndex(idx)
+func (idx *Index) AsSlice() *SliceIndex {
+	return NewSliceIndex(idx)
 }
 
 func (idx *Index) CompareID(o *Index) int {

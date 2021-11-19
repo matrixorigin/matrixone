@@ -99,7 +99,7 @@ func TestMutTable(t *testing.T) {
 				Id:       gen.Next(shardId).Id,
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
-			err := c0.Append(insert, index.ToBatchIndex())
+			err := c0.Append(insert, index.AsSlice())
 			assert.Nil(t, err)
 		}(&wg)
 	}

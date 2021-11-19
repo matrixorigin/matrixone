@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type Impl = db.DB
@@ -158,7 +157,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err == metadata.IdempotenceErr {
 		return nil
 	}
-	return d.DoAppend(tbl, ctx.Data, shard.NewBatchIndex(index))
+	return d.DoAppend(tbl, ctx.Data, index.AsSlice())
 }
 
 func (d *DB) CreateSnapshot(shardId uint64, path string, forcesync bool) (uint64, error) {

@@ -28,11 +28,11 @@ import (
 )
 
 type sliceEntry struct {
-	idx  *BatchIndex
+	idx  *SliceIndex
 	mask *roaring64.Bitmap
 }
 
-func newSliceEntry(idx *BatchIndex) *sliceEntry {
+func newSliceEntry(idx *SliceIndex) *sliceEntry {
 	return &sliceEntry{
 		idx:  idx,
 		mask: roaring64.NewBitmap(),
@@ -59,7 +59,7 @@ func (s *sliceEntry) String() string {
 }
 
 type commitEntry struct {
-	idx    *BatchIndex
+	idx    *SliceIndex
 	mask   *roaring64.Bitmap
 	slices map[uint32]*sliceEntry
 }
@@ -79,7 +79,7 @@ func (n *commitEntry) String() string {
 	return s
 }
 
-func (n *commitEntry) Commit(idx *BatchIndex) {
+func (n *commitEntry) Commit(idx *SliceIndex) {
 	if idx.IsSlice() {
 		if n.slices == nil {
 			n.slices = make(map[uint32]*sliceEntry)
@@ -118,7 +118,7 @@ func (n *commitEntry) GetId() uint64 {
 	return n.idx.Id.Id
 }
 
-func newCommitEntry(idx *BatchIndex) *commitEntry {
+func newCommitEntry(idx *SliceIndex) *commitEntry {
 	n := &commitEntry{
 		idx:  idx,
 		mask: roaring64.NewBitmap(),
@@ -133,7 +133,7 @@ type proxy struct {
 	mgr        *manager
 	mask       *roaring64.Bitmap
 	stopmask   *roaring64.Bitmap
-	batches    []*BatchIndice
+	batches    []*SliceIndice
 	lastIndex  uint64
 	safeId     uint64
 	lastSafeId uint64
@@ -148,7 +148,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		mgr:      mgr,
 		mask:     roaring64.New(),
 		stopmask: roaring64.New(),
-		batches:  make([]*BatchIndice, 0, 10),
+		batches:  make([]*SliceIndice, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
 	if mgr != nil && mgr.GetRole() == wal.HolderRole {
@@ -217,7 +217,7 @@ func (p *proxy) AppendIndex(index *Index) {
 	p.AppendBatchIndice(bat)
 }
 
-func (p *proxy) AppendBatchIndice(bat *BatchIndice) {
+func (p *proxy) AppendBatchIndice(bat *SliceIndice) {
 	// logutil.Infof("[WAL] Append: %s", bat.String())
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
@@ -228,7 +228,7 @@ func (p *proxy) Checkpoint() {
 	now := time.Now()
 	p.alumu.Lock()
 	bats := p.batches
-	p.batches = make([]*BatchIndice, 0, 100)
+	p.batches = make([]*SliceIndice, 0, 100)
 	p.alumu.Unlock()
 
 	mask := roaring64.NewBitmap()

@@ -46,7 +46,7 @@ func (e *blockLogEntry) Unmarshal(buf []byte) error {
 
 type IndiceMemo struct {
 	mu     *sync.Mutex
-	indice *shard.BatchIndice
+	indice *shard.SliceIndice
 }
 
 func NewIndiceMemo(e *Block) *IndiceMemo {
@@ -56,7 +56,7 @@ func NewIndiceMemo(e *Block) *IndiceMemo {
 	return i
 }
 
-func (memo *IndiceMemo) Append(index *shard.BatchIndex) {
+func (memo *IndiceMemo) Append(index *shard.SliceIndex) {
 	if memo == nil {
 		return
 	}
@@ -65,7 +65,7 @@ func (memo *IndiceMemo) Append(index *shard.BatchIndex) {
 	memo.mu.Unlock()
 }
 
-func (memo *IndiceMemo) Fetch(block *Block) *shard.BatchIndice {
+func (memo *IndiceMemo) Fetch(block *Block) *shard.SliceIndice {
 	if memo == nil {
 		return nil
 	}
@@ -134,7 +134,7 @@ func (e *Block) DebugCheckReplayedState() {
 	}
 }
 
-func (e *Block) CreateSnippet() *shard.BatchIndice {
+func (e *Block) CreateSnippet() *shard.SliceIndice {
 	tableLogIndex := e.Segment.Table.GetCommit().LogIndex
 	if tableLogIndex == nil {
 		return nil
@@ -142,7 +142,7 @@ func (e *Block) CreateSnippet() *shard.BatchIndice {
 	return shard.NewBatchIndice(tableLogIndex.ShardId)
 }
 
-func (e *Block) ConsumeSnippet(reset bool) *shard.BatchIndice {
+func (e *Block) ConsumeSnippet(reset bool) *shard.SliceIndice {
 	e.RLock()
 	indice := e.IndiceMemo.Fetch(e)
 	e.RUnlock()
@@ -201,7 +201,7 @@ func (e *Block) HasMaxRowsLocked() bool {
 }
 
 // Not safe
-func (e *Block) SetIndexLocked(index *shard.BatchIndex) error {
+func (e *Block) SetIndexLocked(index *shard.SliceIndex) error {
 	idx := index.Clone()
 	err := e.CommitInfo.SetIndex(*idx.Index)
 	if err != nil {

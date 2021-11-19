@@ -120,7 +120,7 @@ func (c *mutableTable) onImmut() {
 	c.onNoMut()
 }
 
-func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.BatchIndex) (n uint64, err error) {
+func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.SliceIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -147,7 +147,7 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 		if left%meta.Segment.Table.Schema.BlockMaxRows != 0 {
 			slices += 1
 		}
-		index.Info = &shard.BatchInfo{
+		index.Info = &shard.SliceInfo{
 			Offset: 0,
 			Size:   uint32(slices),
 		}
@@ -164,7 +164,7 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	return n, nil
 }
 
-func (c *mutableTable) Append(bat *batch.Batch, index *shard.BatchIndex) (err error) {
+func (c *mutableTable) Append(bat *batch.Batch, index *shard.SliceIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()

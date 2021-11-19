@@ -23,7 +23,7 @@ import (
 
 type MutableTable interface {
 	common.IRef
-	Append(bat *batch.Batch, index *shard.BatchIndex) (err error)
+	Append(bat *batch.Batch, index *shard.SliceIndex) (err error)
 	Flush() error
 	String() string
 	GetMeta() *metadata.Table

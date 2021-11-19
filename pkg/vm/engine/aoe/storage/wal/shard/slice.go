@@ -4,29 +4,29 @@ import (
 	"fmt"
 )
 
-type BatchInfo struct {
+type SliceInfo struct {
 	Offset uint32
 	Size   uint32
 }
 
-func (info *BatchInfo) Repr() string {
+func (info *SliceInfo) Repr() string {
 	return fmt.Sprintf("[%d/%d]", info.Offset, info.Size)
 }
 
-type BatchIndex struct {
+type SliceIndex struct {
 	*Index
-	Info *BatchInfo
+	Info *SliceInfo
 }
 
-func NewBatchIndex(index *Index) *BatchIndex {
-	return &BatchIndex{
+func NewSliceIndex(index *Index) *SliceIndex {
+	return &SliceIndex{
 		Index: index,
 	}
 }
 
-func (idx *BatchIndex) Clone() *BatchIndex {
+func (idx *SliceIndex) Clone() *SliceIndex {
 	index := *idx.Index
-	clone := &BatchIndex{
+	clone := &SliceIndex{
 		Index: &index,
 	}
 	if idx.Info != nil {
@@ -36,7 +36,7 @@ func (idx *BatchIndex) Clone() *BatchIndex {
 	return clone
 }
 
-func (idx *BatchIndex) Valid() bool {
+func (idx *SliceIndex) Valid() bool {
 	if idx.Info == nil {
 		return idx.Index.Id.Valid()
 	}
@@ -47,63 +47,63 @@ func (idx *BatchIndex) Valid() bool {
 	return idx.Info.Offset < idx.Info.Size
 }
 
-func (idx *BatchIndex) IsSlice() bool {
+func (idx *SliceIndex) IsSlice() bool {
 	if idx.Info == nil {
 		return false
 	}
 	return idx.Info.Size > 1
 }
 
-func (idx *BatchIndex) SliceSize() uint32 {
+func (idx *SliceIndex) SliceSize() uint32 {
 	if idx.Info == nil {
 		return 1
 	}
 	return idx.Info.Size
 }
 
-func (idx *BatchIndex) String() string {
+func (idx *SliceIndex) String() string {
 	if idx.Info == nil {
 		return idx.Index.String()
 	}
 	return fmt.Sprintf("%s-%s", idx.Index.String(), idx.Info.Repr())
 }
 
-type BatchIndice struct {
+type SliceIndice struct {
 	shardId uint64
-	indice  []*BatchIndex
+	indice  []*SliceIndex
 }
 
-func NewBatchIndice(shardId uint64) *BatchIndice {
-	return &BatchIndice{
+func NewBatchIndice(shardId uint64) *SliceIndice {
+	return &SliceIndice{
 		shardId: shardId,
-		indice:  make([]*BatchIndex, 0, 10),
+		indice:  make([]*SliceIndex, 0, 10),
 	}
 }
 
-func NewSimpleBatchIndice(index *Index) *BatchIndice {
-	return &BatchIndice{
+func NewSimpleBatchIndice(index *Index) *SliceIndice {
+	return &SliceIndice{
 		shardId: index.ShardId,
-		indice:  []*BatchIndex{&BatchIndex{Index: index}},
+		indice:  []*SliceIndex{&SliceIndex{Index: index}},
 	}
 }
 
-func (bi *BatchIndice) GetShardId() uint64 {
+func (bi *SliceIndice) GetShardId() uint64 {
 	return bi.shardId
 }
 
-func (bi *BatchIndice) AppendIndex(index *Index) {
-	bi.indice = append(bi.indice, &BatchIndex{Index: index})
+func (bi *SliceIndice) AppendIndex(index *Index) {
+	bi.indice = append(bi.indice, &SliceIndex{Index: index})
 }
 
-func (bi *BatchIndice) Append(index *BatchIndex) {
+func (bi *SliceIndice) Append(index *SliceIndex) {
 	bi.indice = append(bi.indice, index)
 }
 
-func (bi *BatchIndice) String() string {
+func (bi *SliceIndice) String() string {
 	if bi == nil {
 		return "nil"
 	}
-	str := fmt.Sprintf("<BatchIndice>(ShardId-%d,Cnt-%d){", bi.shardId, len(bi.indice))
+	str := fmt.Sprintf("<SliceIndice>(ShardId-%d,Cnt-%d){", bi.shardId, len(bi.indice))
 	for _, index := range bi.indice {
 		str = fmt.Sprintf("%s\n%s", str, index.String())
 	}

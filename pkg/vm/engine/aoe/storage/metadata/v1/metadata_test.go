@@ -117,7 +117,7 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
 				db.SyncLog(index)
-				blk.SetIndexLocked(index.ToBatchIndex())
+				blk.SetIndexLocked(index.AsSlice())
 				blk.GetCommit().SetSize(mockBlockSize)
 				err := blk.SimpleUpgrade(nil)
 				db.Checkpoint(index)
@@ -602,7 +602,7 @@ func TestAppliedIndex(t *testing.T) {
 		Count:    blkRows,
 		Capacity: blkRows * 3 / 2,
 	}
-	blk.SetIndexLocked(index.ToBatchIndex())
+	blk.SetIndexLocked(index.AsSlice())
 	blk.SetCount(blkRows)
 	err = blk.SimpleUpgrade(nil)
 	assert.Nil(t, err)
@@ -622,7 +622,7 @@ func TestAppliedIndex(t *testing.T) {
 	}
 
 	indexWal.SyncLog(index)
-	blk.SetIndexLocked(index.ToBatchIndex())
+	blk.SetIndexLocked(index.AsSlice())
 	snip = blk.ConsumeSnippet(false)
 	t.Log(snip.String())
 	indexWal.Checkpoint(snip)
@@ -640,7 +640,7 @@ func TestAppliedIndex(t *testing.T) {
 		Capacity: blkRows / 2,
 	}
 	indexWal.SyncLog(index)
-	blk.SetIndexLocked(index.ToBatchIndex())
+	blk.SetIndexLocked(index.AsSlice())
 	err = blk.SimpleUpgrade(nil)
 	assert.Nil(t, err)
 	snip = blk.ConsumeSnippet(false)

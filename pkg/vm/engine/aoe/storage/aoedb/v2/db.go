@@ -17,7 +17,6 @@ package aoedb
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type Impl = db.DB
@@ -186,7 +185,7 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 			d.Wal.Checkpoint(index)
 		}
 	}()
-	err = d.DoAppend(meta, ctx.Data, shard.NewBatchIndex(index))
+	err = d.DoAppend(meta, ctx.Data, index.AsSlice())
 	return err
 }
 

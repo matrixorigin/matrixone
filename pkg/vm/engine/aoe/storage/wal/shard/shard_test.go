@@ -86,7 +86,7 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 
 type mockConsumer struct {
 	shardId uint64
-	indice  *BatchIndice
+	indice  *SliceIndice
 }
 
 func newMockConsumer(shardId uint64) *mockConsumer {
