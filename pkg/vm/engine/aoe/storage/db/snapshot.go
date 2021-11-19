@@ -248,7 +248,6 @@ func (ss *ssLoader) CommitLoad() error {
 }
 
 func (ss *ssLoader) ScheduleEvents(d *DB) error {
-	return nil
 	for _, meta := range ss.flushsegs {
 		table, _ := d.GetTableData(meta.Table)
 		defer table.Unref()

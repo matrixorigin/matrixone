@@ -83,6 +83,8 @@ func (d *DB) GetTempDir() string {
 	return common.MakeTempDir(d.Dir)
 }
 
+// FIXME: start txn should not accept log index. For create database, the index
+// is comfirmed until then end
 func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
 	return d.Store.Catalog.StartTxn(index)
 }

@@ -710,6 +710,25 @@ func TestSnapshot8(t *testing.T) {
 	err = aoedb2.ApplySnapshot(applySSCtx)
 	assert.Nil(t, err)
 	t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
-
+	db2, err := aoedb2.Store.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, err)
+	sorted := 0
+	processor := new(metadata.LoopProcessor)
+	processor.SegmentFn = func(segment *metadata.Segment) error {
+		segment.RLock()
+		defer segment.RUnlock()
+		if segment.IsSortedLocked() {
+			sorted++
+		}
+		return nil
+	}
+	testutils.WaitExpect(200, func() bool {
+		sorted = 0
+		db2.RLock()
+		defer db2.RUnlock()
+		db2.RecurLoopLocked(processor)
+		return sorted == 2
+	})
+	assert.Equal(t, 2, sorted)
 	aoedb2.Close()
 }
