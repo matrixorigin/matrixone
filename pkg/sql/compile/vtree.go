@@ -42,13 +42,32 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	if err != nil {
 		return nil, err
 	}
-	s.Instructions = append(s.Instructions, vm.Instruction{
-		Op: vm.UnTransform,
-		Arg: &untransform.Argument{
-			IsBare:   isB,
-			FreeVars: vt.FreeVars,
-		},
-	})
+	switch {
+	case depth(vt.Views) == 1:
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Op: vm.UnTransform,
+			Arg: &untransform.Argument{
+				FreeVars: vt.FreeVars,
+				Type:     untransform.Single,
+			},
+		})
+	case isB:
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Op: vm.UnTransform,
+			Arg: &untransform.Argument{
+				FreeVars: vt.FreeVars,
+				Type:     untransform.Bare,
+			},
+		})
+	default:
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Op: vm.UnTransform,
+			Arg: &untransform.Argument{
+				FreeVars: vt.FreeVars,
+				Type:     untransform.FreeVarsAndBoundVars,
+			},
+		})
+	}
 	if vt.Projection != nil {
 		s.Instructions = append(s.Instructions, vm.Instruction{
 			Op:  vm.Projection,
@@ -152,7 +171,7 @@ func (e *Exec) compileView(vs []*vtree.View, varsMap map[string]int) (*Scope, er
 	for i := 0; i < len(ss); i++ {
 		rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 			Ctx: ctx,
-			Ch:  make(chan *batch.Batch, 1),
+			Ch:  make(chan *batch.Batch, 4),
 		}
 	}
 	for i := range ss {
@@ -216,9 +235,6 @@ func (e *Exec) compileBaseView(isM bool, v *vtree.View) (*Scope, error) {
 		ss[i].Proc.Id = e.c.proc.Id
 		ss[i].Proc.Lim = e.c.proc.Lim
 	}
-	{
-		return ss[0], nil
-	}
 	if len(ss) == 1 {
 		return ss[0], nil
 	}
@@ -247,7 +263,7 @@ func (e *Exec) compileBaseView(isM bool, v *vtree.View) (*Scope, error) {
 		for i := 0; i < len(ss); i++ {
 			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
+				Ch:  make(chan *batch.Batch, 4),
 			}
 		}
 	}

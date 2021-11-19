@@ -103,7 +103,7 @@ func (r *UInt16Ring) Grow(m *mheap.Mheap) error {
 }
 
 func (r *UInt16Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.([]uint16)[sel]; r.Ns[i] == 0 || v > r.Vs[i] {
+	if v := vec.Col.([]uint16)[sel]; v > r.Vs[i] {
 		r.Vs[i] = v
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -114,7 +114,7 @@ func (r *UInt16Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
 func (r *UInt16Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.([]uint16)
 	for _, v := range vs {
-		if r.Ns[i] == 0 || v > r.Vs[i] {
+		if v > r.Vs[i] {
 			r.Vs[i] = v
 		}
 	}
@@ -123,7 +123,7 @@ func (r *UInt16Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *UInt16Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*UInt16Ring)
-	if r.Ns[x] == 0 || r.Vs[x] < ar.Vs[y] {
+	if r.Vs[x] < ar.Vs[y] {
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]

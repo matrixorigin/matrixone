@@ -76,7 +76,6 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			return err
 		}
 	}
-	qry.Reduce()
 	return nil
 }
 

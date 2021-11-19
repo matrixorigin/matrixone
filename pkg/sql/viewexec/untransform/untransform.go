@@ -44,17 +44,20 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
-	switch {
-	case n.IsBare:
-		return n.ctr.processBare(proc)
-	case !n.IsBare && len(n.FreeVars) == 0:
-		return n.ctr.processBoundVars(proc)
+	switch n.Type {
+	case Bare:
+		return n.ctr.processBare(n.FreeVars, proc)
+	case Single:
+		return n.ctr.processSingle(n.FreeVars, proc)
 	default:
+		if len(n.FreeVars) == 0 {
+			return n.ctr.processBoundVars(proc)
+		}
 		return n.ctr.processFreeVars(n.FreeVars, proc)
 	}
 }
 
-func (ctr *Container) processBare(proc *process.Process) (bool, error) {
+func (ctr *Container) processBare(fvars []string, proc *process.Process) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		return true, nil
@@ -67,6 +70,34 @@ func (ctr *Container) processBare(proc *process.Process) (bool, error) {
 		vec := r.Eval(bat.Zs)
 		vec.Ref = bat.Refs[i]
 		bat.Vecs = append(bat.Vecs, vec)
+	}
+	bat.Rs = nil
+	if len(fvars) > 0 {
+		batch.Reduce(bat, fvars, proc.Mp)
+	}
+	return false, nil
+}
+
+func (ctr *Container) processSingle(fvars []string, proc *process.Process) (bool, error) {
+	bat := proc.Reg.InputBatch
+	if bat == nil {
+		return true, nil
+	}
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
+	for i, r := range bat.Rs {
+		bat.Attrs = append(bat.Attrs, bat.As[i])
+		vec := r.Eval(bat.Zs)
+		vec.Ref = bat.Refs[i]
+		bat.Vecs = append(bat.Vecs, vec)
+	}
+	bat.Rs = nil
+	if len(fvars) > 0 {
+		batch.Reduce(bat, fvars, proc.Mp)
+	}
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
 	}
 	return false, nil
 }
@@ -297,6 +328,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 		vec.Ref = ctr.bat.Refs[i]
 		ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	}
+	ctr.bat.Rs = nil
 	for i := range ctr.bat.Zs {
 		ctr.bat.Zs[i] = 1
 	}
@@ -420,6 +452,7 @@ func (ctr *Container) processH16(fvars []string, bat *batch.Batch, proc *process
 		vec.Ref = ctr.bat.Refs[i]
 		ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	}
+	ctr.bat.Rs = nil
 	for i := range ctr.bat.Zs {
 		ctr.bat.Zs[i] = 1
 	}
@@ -543,6 +576,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 		vec.Ref = ctr.bat.Refs[i]
 		ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	}
+	ctr.bat.Rs = nil
 	for i := range ctr.bat.Zs {
 		ctr.bat.Zs[i] = 1
 	}
@@ -670,6 +704,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 		vec.Ref = ctr.bat.Refs[i]
 		ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
 	}
+	ctr.bat.Rs = nil
 	for i := range ctr.bat.Zs {
 		ctr.bat.Zs[i] = 1
 	}

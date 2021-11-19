@@ -43,13 +43,16 @@ type Container struct {
 	n       int
 	typ     int
 	rows    uint64
+	is      []int
 	vars    []string
 	key     []byte
 	inserts []bool
 	hashs   []uint64
 	values  []*uint64
 	h8      struct {
-		keys []uint64
+		keys  []uint64
+		zkeys []uint64
+		sizes []int
 	}
 	h16 struct {
 		keys [][2]uint64

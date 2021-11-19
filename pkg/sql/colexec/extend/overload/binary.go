@@ -49,14 +49,14 @@ var (
 
 	// variants only used to init and get items from binOpsReturnType and binOpsTypeCastRules
 	// binOperators does not include comparison operators because their returns are always T_sel.
-	binOperators = []int{Or, And, Plus, Minus, Mult, Div, IntegerDiv, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
+	binOperators  = []int{Or, And, Plus, Minus, Mult, Div, IntegerDiv, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
 	firstBinaryOp = binOperators[0]
 )
 
 type castResult struct {
-	has      bool
-	leftCast types.Type
-	rightCast types.Type
+	has           bool
+	leftCast      types.Type
+	rightCast     types.Type
 	newReturnType types.T
 }
 
@@ -212,7 +212,7 @@ func initCastRulesForBinaryOps() {
 	}
 	// Div cast rule
 	{
-		index := Div-firstBinaryOp
+		index := Div - firstBinaryOp
 
 		// cast to float64 / float64 = float64
 		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_float64
@@ -310,7 +310,7 @@ func initCastRulesForBinaryOps() {
 	}
 	// IntegerDiv cast rule
 	{
-		index := IntegerDiv-firstBinaryOp
+		index := IntegerDiv - firstBinaryOp
 
 		// cast to float64 / float64 = int64
 		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_int64

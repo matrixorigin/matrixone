@@ -206,6 +206,6 @@ func (r *AvgRing) Eval(zs []int64) *vector.Vector {
 		Data: r.Da,
 		Col:  r.Vs,
 		Or:   false,
-		Typ:  types.Type{Oid: types.T_int64, Size: 8},
+		Typ:  types.Type{Oid: types.T_float64, Size: 8},
 	}
 }

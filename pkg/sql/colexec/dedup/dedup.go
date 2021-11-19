@@ -44,6 +44,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	defer batch.Clean(bat, proc.Mp)
 	if n.ctr == nil {
 		size := 0
+		n.ctr = new(Container)
 		n.ctr.bat = batch.New(true, bat.Attrs)
 		n.ctr.mp = &hashtable.MockStringHashTable{}
 		n.ctr.mp.Init()
@@ -78,34 +79,26 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		switch {
 		case size <= 8:
-			n.ctr = &Container{
-				typ:     H8,
-				inserts: make([]bool, UnitLimit),
-				hashs:   make([]uint64, UnitLimit),
-				values:  make([]*uint64, UnitLimit),
-			}
+			n.ctr.typ = H8
+			n.ctr.inserts = make([]bool, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
 			n.ctr.h8.keys = make([]uint64, UnitLimit)
 		case size <= 16:
-			n.ctr = &Container{
-				typ:     H16,
-				inserts: make([]bool, UnitLimit),
-				hashs:   make([]uint64, UnitLimit),
-				values:  make([]*uint64, UnitLimit),
-			}
+			n.ctr.typ = H16
+			n.ctr.inserts = make([]bool, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
 			n.ctr.h16.keys = make([][2]uint64, UnitLimit)
 		case size <= 24:
-			n.ctr = &Container{
-				typ:     H24,
-				inserts: make([]bool, UnitLimit),
-				hashs:   make([]uint64, UnitLimit),
-				values:  make([]*uint64, UnitLimit),
-			}
+			n.ctr.typ = H24
+			n.ctr.inserts = make([]bool, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
 			n.ctr.h24.keys = make([][3]uint64, UnitLimit)
 		default:
-			n.ctr = &Container{
-				typ: HStr,
-				key: make([]byte, 0, size),
-			}
+			n.ctr.typ = HStr
+			n.ctr.key = make([]byte, 0, size)
 		}
 	}
 	switch n.ctr.typ {
@@ -122,6 +115,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		batch.Clean(n.ctr.bat, proc.Mp)
 		proc.Reg.InputBatch = nil
 		return false, err
+	}
+	for i := range n.ctr.bat.Zs {
+		n.ctr.bat.Zs[i] = 1
 	}
 	proc.Reg.InputBatch = n.ctr.bat
 	return false, err

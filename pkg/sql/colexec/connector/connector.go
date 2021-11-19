@@ -34,7 +34,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	reg := n.Reg
 	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if bat == nil {
 		select {
 		case <-reg.Ctx.Done():
 			process.FreeRegisters(proc)
@@ -42,6 +42,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		case reg.Ch <- bat:
 			return false, nil
 		}
+	}
+	if len(bat.Zs) == 0 {
+		return false, nil
 	}
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {

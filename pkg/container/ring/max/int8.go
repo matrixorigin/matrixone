@@ -16,6 +16,7 @@ package max
 
 import (
 	"fmt"
+	"math"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/ring"
 	"matrixone/pkg/container/types"
@@ -97,13 +98,13 @@ func (r *Int8Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeInt8Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = 0
+	r.Vs[n] = math.MinInt8
 	r.Ns = append(r.Ns, 0)
 	return nil
 }
 
 func (r *Int8Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.([]int8)[sel]; r.Ns[i] == 0 || v > r.Vs[i] {
+	if v := vec.Col.([]int8)[sel]; v > r.Vs[i] {
 		r.Vs[i] = v
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -114,7 +115,7 @@ func (r *Int8Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
 func (r *Int8Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.([]int8)
 	for _, v := range vs {
-		if r.Ns[i] == 0 || v > r.Vs[i] {
+		if v > r.Vs[i] {
 			r.Vs[i] = v
 		}
 	}
@@ -123,7 +124,7 @@ func (r *Int8Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *Int8Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Int8Ring)
-	if r.Ns[x] == 0 || r.Vs[x] < ar.Vs[y] {
+	if r.Vs[x] < ar.Vs[y] {
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]

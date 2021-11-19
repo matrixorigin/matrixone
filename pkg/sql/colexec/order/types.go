@@ -38,7 +38,7 @@ type Field struct {
 
 type Argument struct {
 	Fs  []Field
-	Ctr Container
+	ctr *Container
 }
 
 var directionName = [...]string{

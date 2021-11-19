@@ -34,6 +34,7 @@ import (
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/pipeline"
 	"matrixone/pkg/vm/process"
+	"runtime"
 	"strings"
 )
 
@@ -323,8 +324,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var rds []engine.Reader
 
-	//	mcpu := runtime.NumCPU()
-	mcpu := 1
+	mcpu := runtime.NumCPU()
 	ss := make([]*Scope, mcpu)
 	{
 		db, err := e.Database(s.DataSource.SchemaName)
@@ -386,7 +386,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 		for i := 0; i < len(ss); i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 1),
+				Ch:  make(chan *batch.Batch, 4),
 			}
 		}
 	}
