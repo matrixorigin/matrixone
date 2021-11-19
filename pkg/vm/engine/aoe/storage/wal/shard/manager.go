@@ -167,10 +167,10 @@ func (mgr *manager) EnqueueEntry(entry *Entry) error {
 func (mgr *manager) Checkpoint(v interface{}) {
 	switch vv := v.(type) {
 	case *Index:
-		snip := NewSimpleSnippet(vv)
-		mgr.EnqueueCheckpoint(snip)
+		bat := NewSimpleBatchIndice(vv)
+		mgr.EnqueueCheckpoint(bat)
 		return
-	case *Snippet:
+	case *BatchIndice:
 		if vv == nil {
 			return
 		}
@@ -253,13 +253,13 @@ func (mgr *manager) logEntry(entry *Entry) {
 func (mgr *manager) onSnippets(items ...interface{}) {
 	shards := make(map[uint64]*proxy)
 	for _, item := range items {
-		snip := item.(*Snippet)
-		shardId := snip.GetShardId()
+		bat := item.(*BatchIndice)
+		shardId := bat.GetShardId()
 		shard, err := mgr.GetShard(shardId)
 		if err != nil {
 			panic(fmt.Sprintf("%d: %s", shardId, err))
 		}
-		shard.AppendSnippet(snip)
+		shard.AppendBatchIndice(bat)
 		shards[shardId] = shard
 	}
 	for _, shard := range shards {
