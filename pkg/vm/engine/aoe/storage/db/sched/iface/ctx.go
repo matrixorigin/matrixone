@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sched
+package iface
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -45,11 +44,6 @@ type Context struct {
 	Waitable bool
 	// Influence scope
 	Scope *Scope
-}
-
-type BaseEvent struct {
-	sched.BaseEvent
-	Ctx *Context
 }
 
 func (ctx *Context) addScope(t scopeType) {

@@ -15,6 +15,7 @@
 package sched
 
 import (
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -32,7 +33,7 @@ type upgradeBlkEvent struct {
 	SegmentClosed bool
 }
 
-func NewUpgradeBlkEvent(ctx *Context, meta *metadata.Block, td iface.ITableData) *upgradeBlkEvent {
+func NewUpgradeBlkEvent(ctx *sif.Context, meta *metadata.Block, td iface.ITableData) *upgradeBlkEvent {
 	e := &upgradeBlkEvent{
 		TableData: td,
 		Meta:      meta,

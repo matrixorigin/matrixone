@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	me "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -90,7 +91,7 @@ func (c *mutableTable) String() string {
 }
 
 func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
-	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
+	ctx := &sif.Context{Opts: c.mgr.opts, Waitable: true}
 	var prevMeta *metadata.Block
 	if c.mutBlk != nil {
 		prevMeta = c.mutBlk.GetMeta()
@@ -114,7 +115,7 @@ func (c *mutableTable) onNoMut() error {
 }
 
 func (c *mutableTable) onImmut() {
-	ctx := &sched.Context{Opts: c.mgr.opts}
+	ctx := &sif.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
 	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()

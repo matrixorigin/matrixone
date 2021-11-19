@@ -23,6 +23,7 @@ import (
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -114,7 +115,7 @@ func TestMutTable(t *testing.T) {
 	t.Log(sstBufMgr.String())
 	assert.Equal(t, 0, mgr.Count())
 
-	ctx := &sched.Context{
+	ctx := &iface.Context{
 		Waitable: true,
 		Opts:     opts,
 	}

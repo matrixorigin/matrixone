@@ -20,6 +20,7 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -63,7 +64,7 @@ func (p *metablkCommiter) Register(blkid uint64) {
 }
 
 func (p *metablkCommiter) doSchedule(meta *metadata.Block) {
-	ctx := &Context{Opts: p.opts}
+	ctx := &iface.Context{Opts: p.opts}
 	commit := NewCommitBlkEvent(ctx, meta)
 	p.scheduler.Schedule(commit)
 }
@@ -237,7 +238,7 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 		return
 	}
 	newMeta := event.Meta
-	mctx := &Context{Opts: s.opts}
+	mctx := &iface.Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.Id)
 	if err != nil {
 		s.opts.EventListener.BackgroundErrorCB(err)
@@ -274,7 +275,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 		return
 	}
 	logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.Id)
-	flushCtx := &Context{Opts: s.opts}
+	flushCtx := &iface.Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
 	s.Schedule(flushEvent)
 }
@@ -288,7 +289,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
-	ctx := &Context{Opts: s.opts}
+	ctx := &iface.Context{Opts: s.opts}
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {

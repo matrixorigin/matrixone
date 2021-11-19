@@ -16,6 +16,7 @@ package meta
 
 import (
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -37,7 +38,7 @@ type createBlkEvent struct {
 }
 
 // NewCreateBlkEvent creates a logical Block event
-func NewCreateBlkEvent(ctx *dbsched.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
+func NewCreateBlkEvent(ctx *sif.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
 		TableMeta: tableMeta,
