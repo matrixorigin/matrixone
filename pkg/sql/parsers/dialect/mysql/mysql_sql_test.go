@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into uus values (255, 65535, 4294967295, 18446744073709551615)",
+		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}
 )
 
@@ -55,6 +55,21 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create table t (a int, b char, check (1 + 1) enforced)",
+	}, {
+		input: "create table t (a int, b char, foreign key sdf (a, b) references B(a asc, b desc))",
+	}, {
+		input: "create table t (a int, b char, unique key idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, index if not exists idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, fulltext idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
+		output: "create table t (a int, b char, primary key p1 using none (a, b))",
+	}, {
+		input: "create table t (a int, b char, primary key idx (a, b))",
+	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set NAMES = utf8mb4 utf8mb4_general_ci",
 	}, {
