@@ -25,7 +25,10 @@ import (
 )
 
 func NewFloat32(typ types.Type) *Float32Ring {
-	return &Float32Ring{Typ: typ}
+	return &Float32Ring{
+		Typ: typ,
+		IsE: true,
+	}
 }
 
 func (r *Float32Ring) String() string {
@@ -51,6 +54,7 @@ func (r *Float32Ring) Size() int {
 
 func (r *Float32Ring) Dup() ring.Ring {
 	return &Float32Ring{
+		IsE: true,
 		Typ: r.Typ,
 	}
 }
@@ -103,7 +107,8 @@ func (r *Float32Ring) Grow(m *mheap.Mheap) error {
 }
 
 func (r *Float32Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.([]float32)[sel]; r.Ns[i] == 0 || v > r.Vs[i] {
+	if v := vec.Col.([]float32)[sel]; r.IsE || v > r.Vs[i] {
+		r.IsE = false
 		r.Vs[i] = v
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -114,7 +119,8 @@ func (r *Float32Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
 func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.([]float32)
 	for _, v := range vs {
-		if r.Ns[i] == 0 || v > r.Vs[i] {
+		if r.IsE || v > r.Vs[i] {
+			r.IsE = false
 			r.Vs[i] = v
 		}
 	}
@@ -123,7 +129,8 @@ func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *Float32Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Float32Ring)
-	if r.Ns[x] == 0 || ar.Vs[y] > r.Vs[x] {
+	if r.IsE || ar.Vs[y] > r.Vs[x] {
+		r.IsE = false
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]

@@ -285,7 +285,7 @@ func CreateT1(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "spID",
-				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+				Type: types.Type{types.T(types.T_int32), 8, 0, 0},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
@@ -302,6 +302,92 @@ func CreateT1(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
+	r, err := db.Relation("t1")
+	if err != nil {
+		log.Fatal(err)
+	}
+	{
+		bat := batch.New(true, []string{"spID", "userID", "score"})
+		{
+			vec := vector.New(types.Type{types.T(types.T_int32), 4, 4, 0})
+			vs := make([]int32, 5)
+			vs[0] = 1
+			vs[1] = 2
+			vs[2] = 2
+			vs[3] = 3
+			vs[4] = 1
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[0] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_int32), 4, 4, 0})
+			vs := make([]int32, 5)
+			vs[0] = 1
+			vs[1] = 2
+			vs[2] = 1
+			vs[3] = 3
+			vs[4] = 1
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[1] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_int8), 1, 1, 0})
+			vs := make([]int8, 5)
+			vs[0] = 1
+			vs[1] = 2
+			vs[2] = 4
+			vs[3] = 3
+			vs[4] = 5
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[2] = vec
+		}
+		if err := r.Write(0, bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+	{
+		bat := batch.New(true, []string{"spID", "userID", "score"})
+		{
+			vec := vector.New(types.Type{types.T(types.T_int32), 4, 4, 0})
+			vs := make([]int32, 2)
+			vs[0] = 4
+			vs[1] = 5
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[0] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_int32), 4, 4, 0})
+			vs := make([]int32, 2)
+			vs[0] = 6
+			vs[1] = 11
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[1] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_int8), 1, 1, 0})
+			vs := make([]int8, 2)
+			vs[0] = 10
+			vs[1] = 99
+			if err := vector.Append(vec, vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[2] = vec
+		}
+		if err := r.Write(0, bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+
 }
 
 func CreateCustomer(db engine.Database) {

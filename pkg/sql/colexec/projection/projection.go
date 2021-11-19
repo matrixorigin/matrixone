@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/process"
 )
@@ -48,9 +49,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	rbat := batch.New(true, n.As)
 	for i, e := range n.Es {
-		if attr, ok := e.(*extend.Attribute); !ok { // vector reuse
-			rbat.Vecs[i] = batch.GetVector(bat, attr.Name)
-			rbat.Vecs[i].Link++
+		if attr, ok := e.(*extend.Attribute); ok { // vector reuse
+			vec := batch.GetVector(bat, attr.Name)
+			rbat.Vecs[i] = &vector.Vector{
+				Or:   vec.Or,
+				Data: vec.Data,
+				Typ:  vec.Typ,
+				Col:  vec.Col,
+				Nsp:  vec.Nsp,
+			}
+			vec.Link++
 		} else {
 			if rbat.Vecs[i], _, err = e.Eval(bat, proc); err != nil {
 				rbat.Vecs = rbat.Vecs[:i]
@@ -62,15 +70,15 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		rbat.Vecs[i].Ref = n.Rs[i]
 	}
-	for _, e := range n.Es {
-		batch.Reduce(bat, e.Attributes(), proc.Mp)
-	}
 	if bat.Ro {
 		batch.Cow(bat)
 	}
 	for i := range rbat.Vecs {
 		bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
 		bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
+	}
+	for _, e := range n.Es {
+		batch.Reduce(bat, e.Attributes(), proc.Mp)
 	}
 	proc.Reg.InputBatch = bat
 	return false, nil

@@ -21,14 +21,12 @@ func HostSize(m *Mheap) int64 {
 }
 
 func Free(m *Mheap, data []byte) {
-	mempool.Free(m.Mp, data)
 	m.Gm.Free(int64(cap(data)))
 }
 
 func Alloc(m *Mheap, size int64) ([]byte, error) {
 	data := mempool.Alloc(m.Mp, int(size))
 	if err := m.Gm.Alloc(int64(cap(data))); err != nil {
-		mempool.Free(m.Mp, data)
 		return nil, err
 	}
 	return data[:size], nil

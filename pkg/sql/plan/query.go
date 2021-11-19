@@ -35,6 +35,7 @@ func (qry *Query) backFill() {
 			qry.VarsMap[name]++
 			if agg.Op == transformer.StarCount {
 				agg.Name = rel.Attrs[0]
+				rel.AttrsMap[agg.Name].Ref++
 			}
 		}
 		for _, e := range rel.ProjectionExtends {
@@ -46,6 +47,7 @@ func (qry *Query) backFill() {
 		_, name := util.SplitTableAndColumn(e.Alias)
 		qry.VarsMap[name]++
 	}
+	qry.reduce()
 }
 
 // If flg is set, then it will increase the reference count

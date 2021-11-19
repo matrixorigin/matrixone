@@ -1656,7 +1656,7 @@ func (v *Vector) String() string {
 			if nulls.Contains(v.Nsp, 0) {
 				fmt.Print("null")
 			} else {
-				return fmt.Sprintf("%s", col.Data[:col.Lengths[0]])
+				return fmt.Sprintf("%s\n", col.Get(0))
 			}
 		}
 	}

@@ -89,7 +89,7 @@ func (r *StrRing) Grow(m *mheap.Mheap) error {
 }
 
 func (r *StrRing) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.(*types.Bytes).Get(sel); r.Ns[i] == 0 || bytes.Compare(v, r.Vs[i]) > 0 {
+	if v := vec.Col.(*types.Bytes).Get(sel); bytes.Compare(v, r.Vs[i]) > 0 {
 		r.Vs[i] = append(r.Vs[i][:0], v...)
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -101,7 +101,7 @@ func (r *StrRing) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
 	for j, o := range vs.Offsets {
 		v := vs.Data[o : o+vs.Lengths[j]]
-		if r.Ns[i] == 0 || bytes.Compare(v, r.Vs[i]) > 0 {
+		if bytes.Compare(v, r.Vs[i]) > 0 {
 			r.Vs[i] = append(r.Vs[i][:0], v...)
 		}
 	}
@@ -110,7 +110,7 @@ func (r *StrRing) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *StrRing) Add(a interface{}, x, y int64) {
 	ar := a.(*StrRing)
-	if r.Ns[x] == 0 || bytes.Compare(ar.Vs[y], r.Vs[x]) > 0 {
+	if bytes.Compare(ar.Vs[y], r.Vs[x]) > 0 {
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]
