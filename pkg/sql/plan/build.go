@@ -56,6 +56,12 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 		}
 		qry.backFill()
 		return qry, nil
+	case *tree.Insert:
+		plan := &Insert{}
+		if err := b.BuildInsert(stmt, plan); err != nil {
+			return nil, err
+		}
+		return plan, nil
 	case *tree.CreateDatabase:
 		plan := &CreateDatabase{E: b.e}
 		if err := b.BuildCreateDatabase(stmt, plan); err != nil {
