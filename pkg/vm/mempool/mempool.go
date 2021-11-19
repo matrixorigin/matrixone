@@ -18,15 +18,66 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/malloc"
 )
 
+type Mempool struct {
+	Buckets []*Bucket
+}
+
+type Bucket struct {
+	Size int
+	Page *Page
+}
+
+var sizes = func() (ret []int) {
+	for size := 8; size <= PageSize; size *= 2 {
+		ret = append(ret, size)
+	}
+	return
+}()
+
 func New() *Mempool {
-	m := &Mempool{buckets: make([]bucket, 0, 10)}
-	for size := PageSize; size <= MaxSize; size *= Factor {
-		m.buckets = append(m.buckets, bucket{
-			size:  size,
-			slots: make([][]byte, 0, 8),
-		})
+	m := &Mempool{
+		Buckets: make([]*Bucket, len(sizes)),
+	}
+	for i, size := range sizes {
+		m.Buckets[i] = &Bucket{
+			Size: size,
+		}
 	}
 	return m
+}
+
+func (m *Mempool) Alloc(size int) (ret []byte) {
+	if size > PageSize {
+		return malloc.Malloc(size)
+	}
+	for _, bucket := range m.Buckets {
+		if bucket.Size < size {
+			continue
+		}
+		if bucket.Page == nil {
+			bucket.Page = getPage()
+		}
+		newLen := len(bucket.Page.Buf) + size
+		if newLen > cap(bucket.Page.Buf) {
+			page := newPage()
+			page.Next = bucket.Page
+			bucket.Page = page
+			newLen = size
+		}
+		ret = bucket.Page.Buf[len(bucket.Page.Buf):newLen]
+		bucket.Page.Buf = bucket.Page.Buf[:newLen]
+		return
+	}
+	panic("impossible")
+}
+
+func (m *Mempool) Free(data []byte) {
+}
+
+func (m *Mempool) Release() {
+	for _, bucket := range m.Buckets {
+		releasePages(bucket.Page)
+	}
 }
 
 func Realloc(data []byte, size int64) int64 {
@@ -54,50 +105,4 @@ func Realloc(data []byte, size int64) int64 {
 		}
 	}
 	return newcap
-}
-
-func (m *Mempool) Alloc(size int) []byte {
-	if size <= MaxSize {
-		for i, b := range m.buckets {
-			if b.size >= size {
-				if len(b.slots) > 0 {
-					data := b.slots[0]
-					m.buckets[i].slots[0] = m.buckets[i].slots[len(m.buckets[i].slots)-1]
-					m.buckets[i].slots[len(m.buckets[i].slots)-1] = nil
-					m.buckets[i].slots = m.buckets[i].slots[:len(m.buckets[i].slots)-1]
-					return data
-				}
-				return malloc.Malloc(b.size)
-			}
-		}
-	}
-	for i, buf := range m.buffers {
-		if cap(buf) >= size {
-			m.size -= cap(buf)
-			m.buffers[i] = m.buffers[len(m.buffers)-1]
-			m.buffers[len(m.buffers)-1] = nil
-			m.buffers = m.buffers[:len(m.buffers)-1]
-			return buf[:size]
-		}
-	}
-	return malloc.Malloc(size)
-}
-
-func (m *Mempool) Free(data []byte) {
-	size := cap(data)
-	if size <= MaxSize {
-		for i, j := 0, len(m.buckets); i < j; i++ {
-			if size == m.buckets[i].size {
-				m.buckets[i].slots = append(m.buckets[i].slots, data)
-				return
-			}
-		}
-		return
-	}
-	if m.size+cap(data) > Limit {
-		return
-	}
-	m.size += cap(data)
-	m.buffers = append(m.buffers, data)
-	return
 }

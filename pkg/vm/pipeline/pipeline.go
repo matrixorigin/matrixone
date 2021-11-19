@@ -49,7 +49,9 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 	var end bool //exit flag
 	var err error
 
-	proc.Mp = mempool.New()
+	pool := mempool.New()
+	defer pool.Release()
+	proc.Mp = pool
 	defer func() {
 		proc.Reg.InputBatch = nil
 		vm.Run(p.instructions, proc)
@@ -91,7 +93,9 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
-	proc.Mp = mempool.New()
+	pool := mempool.New()
+	defer pool.Release()
+	proc.Mp = pool
 	defer func() {
 		proc.Reg.InputBatch = nil
 		vm.Run(p.instructions, proc)
