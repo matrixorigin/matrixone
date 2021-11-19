@@ -37,7 +37,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMutCollection(t *testing.T) {
+func TestMutTable(t *testing.T) {
 	dir := "/tmp/memtable/mc"
 	os.RemoveAll(dir)
 	colcnt := 4
@@ -77,7 +77,7 @@ func TestMutCollection(t *testing.T) {
 	assert.Nil(t, err)
 
 	t0.Ref()
-	c0 := newCollection(manager, t0)
+	c0 := newMutableTable(manager, t0)
 	blks := uint64(20)
 	expectBlks := blks
 	batchSize := uint64(4)

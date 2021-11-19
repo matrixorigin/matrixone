@@ -27,7 +27,7 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 )
 
-type collection struct {
+type mutableTable struct {
 	common.RefHelper
 	mgr    *manager
 	data   iface.ITableData
@@ -36,8 +36,8 @@ type collection struct {
 	mutBlk iface.IMutBlock
 }
 
-func newCollection(mgr *manager, data iface.ITableData) *collection {
-	c := &collection{
+func newMutableTable(mgr *manager, data iface.ITableData) *mutableTable {
+	c := &mutableTable{
 		mgr:  mgr,
 		data: data,
 		meta: data.GetMeta(),
@@ -56,11 +56,11 @@ func newCollection(mgr *manager, data iface.ITableData) *collection {
 	return c
 }
 
-func (c *collection) GetMeta() *metadata.Table {
+func (c *mutableTable) GetMeta() *metadata.Table {
 	return c.data.GetMeta()
 }
 
-func (c *collection) close() {
+func (c *mutableTable) close() {
 	if c.data != nil {
 		c.data.Unref()
 	}
@@ -69,7 +69,7 @@ func (c *collection) close() {
 	}
 }
 
-func (c *collection) Flush() error {
+func (c *mutableTable) Flush() error {
 	c.mu.RLock()
 	if c.mutBlk == nil {
 		c.mu.RUnlock()
@@ -82,13 +82,13 @@ func (c *collection) Flush() error {
 	return blk.Flush()
 }
 
-func (c *collection) String() string {
+func (c *mutableTable) String() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mutBlk.String()
 }
 
-func (c *collection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
+func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
 	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
 	var prevMeta *metadata.Block
 	if c.mutBlk != nil {
@@ -103,7 +103,7 @@ func (c *collection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err e
 	return meta, e.Block, nil
 }
 
-func (c *collection) onNoMut() error {
+func (c *mutableTable) onNoMut() error {
 	_, data, err := c.onNoBlock()
 	if err != nil {
 		return err
@@ -112,14 +112,14 @@ func (c *collection) onNoMut() error {
 	return nil
 }
 
-func (c *collection) onImmut() {
+func (c *mutableTable) onImmut() {
 	ctx := &sched.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
 	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()
 }
 
-func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
+func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -152,7 +152,7 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 	return n, nil
 }
 
-func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
+func (c *mutableTable) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()

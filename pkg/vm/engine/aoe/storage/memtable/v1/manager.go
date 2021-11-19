@@ -22,11 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
 var (
-	CollectionNotFoundErr = errors.New("collection not found")
+	ErrTableNotFound = metadata.TableNotFoundErr
 )
 
 // manager is the collection manager, it's global,
@@ -37,8 +38,8 @@ type manager struct {
 	// opts is the options of aoe
 	opts *storage.Options
 
-	// collections are containers of managed collection
-	collections map[uint64]imem.ICollection
+	// tables are containers of managed collection
+	tables map[uint64]imem.MutableTable
 
 	aware shard.NodeAware
 }
@@ -49,26 +50,26 @@ var (
 
 func NewManager(opts *storage.Options, aware shard.NodeAware) *manager {
 	m := &manager{
-		opts:        opts,
-		aware:       aware,
-		collections: make(map[uint64]imem.ICollection),
+		opts:   opts,
+		aware:  aware,
+		tables: make(map[uint64]imem.MutableTable),
 	}
 	return m
 }
 
-func (m *manager) CollectionIDs() map[uint64]uint64 {
+func (m *manager) TableIds() map[uint64]uint64 {
 	ids := make(map[uint64]uint64)
 	m.RLock()
-	for k, _ := range m.collections {
+	for k, _ := range m.tables {
 		ids[k] = k
 	}
 	m.RUnlock()
 	return ids
 }
 
-func (m *manager) WeakRefCollection(id uint64) imem.ICollection {
+func (m *manager) WeakRefTable(id uint64) imem.MutableTable {
 	m.RLock()
-	c, ok := m.collections[id]
+	c, ok := m.tables[id]
 	m.RUnlock()
 	if !ok {
 		return nil
@@ -76,9 +77,9 @@ func (m *manager) WeakRefCollection(id uint64) imem.ICollection {
 	return c
 }
 
-func (m *manager) StrongRefCollection(id uint64) imem.ICollection {
+func (m *manager) StrongRefTable(id uint64) imem.MutableTable {
 	m.RLock()
-	c, ok := m.collections[id]
+	c, ok := m.tables[id]
 	if ok {
 		c.Ref()
 	}
@@ -92,23 +93,23 @@ func (m *manager) StrongRefCollection(id uint64) imem.ICollection {
 func (m *manager) String() string {
 	m.RLock()
 	defer m.RUnlock()
-	s := fmt.Sprintf("<MTManager>(TableCnt=%d)", len(m.collections))
-	for _, c := range m.collections {
+	s := fmt.Sprintf("<MTManager>(TableCnt=%d)", len(m.tables))
+	for _, c := range m.tables {
 		s = fmt.Sprintf("%s\n\t%s", s, c.String())
 	}
 	return s
 }
 
-func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
+func (m *manager) RegisterTable(td interface{}) (c imem.MutableTable, err error) {
 	m.Lock()
 	tableData := td.(iface.ITableData)
-	_, ok := m.collections[tableData.GetID()]
+	_, ok := m.tables[tableData.GetID()]
 	if ok {
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = newCollection(m, tableData)
-	m.collections[tableData.GetID()] = c
+	c = newMutableTable(m, tableData)
+	m.tables[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()
 	if m.aware != nil {
@@ -118,14 +119,14 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 	return c, err
 }
 
-func (m *manager) UnregisterCollection(id uint64) (c imem.ICollection, err error) {
+func (m *manager) UnregisterTable(id uint64) (c imem.MutableTable, err error) {
 	m.Lock()
-	c, ok := m.collections[id]
+	c, ok := m.tables[id]
 	if ok {
-		delete(m.collections, id)
+		delete(m.tables, id)
 	} else {
 		m.Unlock()
-		return nil, CollectionNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	m.Unlock()
 	if m.aware != nil {

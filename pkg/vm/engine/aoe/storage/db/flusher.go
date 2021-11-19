@@ -39,7 +39,7 @@ func (driver *flusherDriver) GetId() uint64 {
 }
 
 func (driver *flusherDriver) FlushNode(id uint64) error {
-	c := driver.mgr.StrongRefCollection(id)
+	c := driver.mgr.StrongRefTable(id)
 	if c == nil {
 		return nil
 	}

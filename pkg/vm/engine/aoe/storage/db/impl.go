@@ -120,9 +120,9 @@ func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) 
 	return handle.Append(data, index)
 }
 
-func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (mtif.ICollection, error) {
+func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (mtif.MutableTable, error) {
 	var err error
-	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
+	collection := d.MemTableMgr.StrongRefTable(meta.Id)
 	if collection != nil {
 		return collection, nil
 	}

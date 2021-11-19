@@ -69,12 +69,12 @@ func (req *dropTblRequest) Execute() error {
 	} else {
 		e.Data.Unref()
 	}
-	c, err := req.MemTableMgr.UnregisterCollection(req.Meta.Id)
+	c, err := req.MemTableMgr.UnregisterTable(req.Meta.Id)
 	if err != nil {
 		segIds := req.Meta.SimpleGetSegmentIds()
 		if len(segIds) == 0 {
 			err = nil
-		} else if c = req.MemTableMgr.WeakRefCollection(req.Meta.Id); c == nil {
+		} else if c = req.MemTableMgr.WeakRefTable(req.Meta.Id); c == nil {
 			err = nil
 		} else {
 			if req.Iteration < 3 {
