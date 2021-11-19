@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -61,6 +59,21 @@ type Addresses struct {
 	Segment  map[uint64]uint64
 	Block    map[uint64]uint64
 	ShardId  map[uint64]uint64
+}
+
+func (m *Addresses) PrintDebugInfo() {
+	for src, dest := range m.Database {
+		logutil.Infof("Mapping Database %d------->%d", src, dest)
+	}
+	for src, dest := range m.Table {
+		logutil.Infof("Mapping Table %d------->%d", src, dest)
+	}
+	for src, dest := range m.Segment {
+		logutil.Infof("Mapping Segment %d------->%d", src, dest)
+	}
+	for src, dest := range m.Block {
+		logutil.Infof("Mapping Block %d------->%d", src, dest)
+	}
 }
 
 func (m *Addresses) GetBlkAddr(addr *common.ID) (*common.ID, error) {
@@ -109,41 +122,6 @@ func (m *Addresses) GetDBAddr(addr uint64) (uint64, error) {
 		return 0, AddressNotFoundErr
 	}
 	return id, nil
-}
-
-func (m *Addresses) RewriteSegmentFile(filename string) (string, error) {
-	arr := strings.Split(strings.TrimSuffix(filename, ".seg"), "_")
-	tableId, err := strconv.Atoi(arr[0])
-	if err != nil {
-		return "", err
-	}
-	arr[0] = strconv.Itoa(int(m.Table[uint64(tableId)]))
-	segId, err := strconv.Atoi(arr[1])
-	if err != nil {
-		return "", err
-	}
-	arr[1] = strconv.Itoa(int(m.Segment[uint64(segId)]))
-	return arr[0] + "_" + arr[1] + ".seg", nil
-}
-
-func (m *Addresses) RewriteBlockFile(filename string) (string, error) {
-	arr := strings.Split(strings.TrimSuffix(filename, ".blk"), "_")
-	tableId, err := strconv.Atoi(arr[0])
-	if err != nil {
-		return "", err
-	}
-	arr[0] = strconv.Itoa(int(m.Table[uint64(tableId)]))
-	segId, err := strconv.Atoi(arr[1])
-	if err != nil {
-		return "", err
-	}
-	arr[1] = strconv.Itoa(int(m.Segment[uint64(segId)]))
-	blkId, err := strconv.Atoi(arr[2])
-	if err != nil {
-		return "", err
-	}
-	arr[2] = strconv.Itoa(int(m.Block[uint64(blkId)]))
-	return arr[0] + "_" + arr[1] + "_" + arr[2] + ".blk", nil
 }
 
 type dbSnapshoter struct {
@@ -241,15 +219,6 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 		return err
 	}
 	ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
-	// for src, dest := range ss.addresses.Table {
-	// 	logutil.Infof("map table %d------->%d", src, dest)
-	// }
-	// for src, dest := range ss.addresses.Segment {
-	// 	logutil.Infof("map segment %d------->%d", src, dest)
-	// }
-	// for src, dest := range ss.addresses.Block {
-	// 	logutil.Infof("map block %d------->%d", src, dest)
-	// }
 	return nil
 }
 

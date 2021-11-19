@@ -121,8 +121,10 @@ func (ss *ssWriter) onTableData(data iface.ITableData) error {
 	return nil
 }
 
-func (ss *ssWriter) validatePrepare() error {
-	// TODO
+func (ss *ssWriter) validateAndRewrite() error {
+	// FIXME:
+	// 1. Validate the metadata
+	// 2. Rewrite the metadata base on copied data files: unsorted -> sorted .etc
 	return nil
 }
 
@@ -142,7 +144,7 @@ func (ss *ssWriter) PrepareWrite() error {
 	if err = ss.mwriter.PrepareWrite(); err != nil {
 		return err
 	}
-	return ss.validatePrepare()
+	return ss.validateAndRewrite()
 }
 
 func (ss *ssWriter) CommitWrite() error {
