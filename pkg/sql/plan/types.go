@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"fmt"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/viewexec/transformer"
@@ -151,6 +152,13 @@ type ShowTables struct {
 type ShowColumns struct {
 	Relation engine.Relation
 	Like     []byte
+}
+
+type Insert struct {
+	Id string
+	Db string
+	Bat *batch.Batch
+	Relation engine.Relation
 }
 
 type build struct {
@@ -523,4 +531,16 @@ func (s ShowColumns) ResultColumns() []*Attribute {
 		&Attribute{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
+}
+
+func (i Insert) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("insert into")
+	// index
+	// values
+	return buf.String()
+}
+
+func (i Insert) ResultColumns() []*Attribute {
+	return nil
 }

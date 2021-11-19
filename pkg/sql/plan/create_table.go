@@ -57,7 +57,7 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 		defs = append(defs, def)
 	}
 	if addPrimaryIndex && primaryKeys != nil {
-		defs = append(defs, engine.PrimaryIndexDef{Names: primaryKeys})
+		defs = append(defs, &engine.PrimaryIndexDef{Names: primaryKeys})
 	}
 
 	if stmt.PartitionOption != nil {

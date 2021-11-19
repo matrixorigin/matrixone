@@ -401,3 +401,10 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	}
 	return s.MergeRun(e)
 }
+
+// Insert will insert a batch into relation and return affectedRow
+func (s *Scope) Insert(ts uint64) (uint64, error) {
+	p, _ := s.Plan.(*plan.Insert)
+	defer p.Relation.Close()
+	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+}
