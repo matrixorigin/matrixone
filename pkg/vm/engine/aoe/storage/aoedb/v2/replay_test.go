@@ -506,3 +506,54 @@ func TestReplay4(t *testing.T) {
 
 	inst.Close()
 }
+
+func TestReplay5(t *testing.T) {
+	initTestEnv(t)
+
+	inst, gen, database := initTestDB1(t)
+	schema := metadata.MockSchema(3)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	meta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 15 / 10
+	ck := mock.MockBatch(meta.Schema.Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, ck)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+	time.Sleep(time.Duration(40) * time.Millisecond)
+	assert.Equal(t, 1, database.UncheckpointedCnt())
+
+	data, err := inst.GetTableData(meta)
+	assert.Nil(t, err)
+	assert.Equal(t, rows, data.GetRowCount())
+	data.Unref()
+
+	inst.Close()
+	inst, _, _ = initTestDB2(t)
+	defer inst.Close()
+
+	meta, err = inst.Store.Catalog.SimpleGetTableByName(database.Name, schema.Name)
+	assert.Nil(t, err)
+	data, err = inst.GetTableData(meta)
+	assert.Nil(t, err)
+	assert.Equal(t, rows/15*10, data.GetRowCount())
+	defer data.Unref()
+
+	err = inst.Append(appendCtx)
+	assert.Equal(t, rows, data.GetRowCount())
+	assert.Equal(t, createCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, 1, meta.Database.UncheckpointedCnt())
+
+	err = inst.FlushDatabase(meta.Database.Name)
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return meta.Database.UncheckpointedCnt() == 0
+	})
+	assert.Equal(t, appendCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, 0, meta.Database.UncheckpointedCnt())
+}
