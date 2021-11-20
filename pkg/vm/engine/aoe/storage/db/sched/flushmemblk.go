@@ -16,12 +16,10 @@ package sched
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 // flushMemblockEvent supports flushing not-full block.
@@ -33,15 +31,12 @@ type flushMemblockEvent struct {
 	Meta *metadata.Block
 }
 
-func NewFlushMemBlockEvent(ctx *sif.Context, blk iface.IMutBlock) *flushMemblockEvent {
+func NewFlushMemBlockEvent(ctx *Context, blk iface.IMutBlock) *flushMemblockEvent {
 	e := &flushMemblockEvent{
 		Block: blk,
 		Meta:  blk.GetMeta(),
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, FlushBlkTask, ctx)
 	return e
 }
 

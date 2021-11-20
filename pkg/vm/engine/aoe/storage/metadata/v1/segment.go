@@ -421,7 +421,7 @@ func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	var ret *Block
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]
-		if !blk.IsFullLocked() && from.Less(blk) {
+		if !blk.IsFull() && from.Less(blk) {
 			ret = blk
 		} else {
 			break

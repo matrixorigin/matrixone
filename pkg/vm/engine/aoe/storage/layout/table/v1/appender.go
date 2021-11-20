@@ -1,27 +1,12 @@
-// Copyright 2021 Matrix Origin
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-
-package muthandle
+package table
 
 import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -29,28 +14,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
-type mutableTable struct {
+type tableAppender struct {
 	common.RefHelper
-	mgr    *manager
-	data   iface.ITableData
-	meta   *metadata.Table
-	mu     *sync.RWMutex
-	mutBlk iface.IMutBlock
+	data        iface.ITableData
+	meta        *metadata.Table
+	mu          *sync.RWMutex
+	blkAppender iface.IMutBlock
+	opts        *storage.Options
 }
 
-func newMutableTable(mgr *manager, data iface.ITableData) *mutableTable {
-	c := &mutableTable{
-		mgr:  mgr,
+func newTableAppender(opts *storage.Options, data iface.ITableData) *tableAppender {
+	c := &tableAppender{
+		opts: opts,
 		data: data,
 		meta: data.GetMeta(),
 		mu:   &sync.RWMutex{},
 	}
-	mutBlk := data.StrongRefLastBlock()
-	if mutBlk != nil {
-		if mutBlk.GetType() == base.TRANSIENT_BLK {
-			c.mutBlk = mutBlk.(iface.IMutBlock)
+	blkAppender := data.StrongRefLastBlock()
+	if blkAppender != nil {
+		if blkAppender.GetType() == base.TRANSIENT_BLK {
+			c.blkAppender = blkAppender.(iface.IMutBlock)
 		} else {
-			mutBlk.Unref()
+			blkAppender.Unref()
 		}
 	}
 	c.Ref()
@@ -58,70 +43,60 @@ func newMutableTable(mgr *manager, data iface.ITableData) *mutableTable {
 	return c
 }
 
-func (c *mutableTable) GetMeta() *metadata.Table {
-	return c.data.GetMeta()
+func (c *tableAppender) GetMeta() *metadata.Table {
+	return c.meta
 }
 
-func (c *mutableTable) close() {
-	if c.data != nil {
-		c.data.Unref()
-	}
-	if c.mutBlk != nil {
-		c.mutBlk.Unref()
+func (c *tableAppender) close() {
+	if c.blkAppender != nil {
+		c.blkAppender.Unref()
 	}
 }
 
-func (c *mutableTable) Flush() error {
+func (c *tableAppender) Flush() error {
 	c.mu.RLock()
-	if c.mutBlk == nil {
+	if c.blkAppender == nil {
 		c.mu.RUnlock()
 		return nil
 	}
-	blkHandle := c.mutBlk.MakeHandle()
+	blkHandle := c.blkAppender.MakeHandle()
 	c.mu.RUnlock()
 	defer blkHandle.Close()
 	blk := blkHandle.GetNode().(mb.IMutableBlock)
 	return blk.Flush()
 }
 
-func (c *mutableTable) String() string {
+func (c *tableAppender) String() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.mutBlk.String()
+	return c.blkAppender.String()
 }
 
-func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
+func (c *tableAppender) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
 	var prevMeta *metadata.Block
-	if c.mutBlk != nil {
-		prevMeta = c.mutBlk.GetMeta()
+	if c.blkAppender != nil {
+		prevMeta = c.blkAppender.GetMeta()
 	}
 	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
-	ctx := &memdata.Context{Opts: c.mgr.opts, Waitable: true}
-	e := memdata.NewCreateSegBlkEvent(ctx, meta, c.data)
-	c.mgr.opts.Scheduler.Schedule(e)
-	if err = e.WaitDone(); err != nil {
-		return nil, nil, err
-	}
-	return meta, e.Block, nil
+	data, err = c.opts.Scheduler.InstallBlock(meta, c.data)
+	return
 }
 
-func (c *mutableTable) onNoMut() error {
+func (c *tableAppender) onNoMut() error {
 	_, data, err := c.onNoBlock()
 	if err != nil {
 		return err
 	}
-	c.mutBlk = data.(iface.IMutBlock)
+	c.blkAppender = data.(iface.IMutBlock)
 	return nil
 }
 
-func (c *mutableTable) onImmut() {
-	ctx := &sif.Context{Opts: c.mgr.opts}
-	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
-	c.mgr.opts.Scheduler.Schedule(e)
+func (c *tableAppender) onImmut() {
+	c.opts.Scheduler.AsyncFlushBlock(c.blkAppender)
 	c.onNoMut()
 }
 
-func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.SliceIndex) (n uint64, err error) {
+func (c *tableAppender) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.SliceIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -165,23 +140,23 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	return n, nil
 }
 
-func (c *mutableTable) Append(bat *batch.Batch, index *shard.SliceIndex) (err error) {
+func (c *tableAppender) Append(bat *batch.Batch, index *shard.SliceIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.mutBlk == nil {
+	if c.blkAppender == nil {
 		c.onNoMut()
-	} else if c.mutBlk.GetMeta().HasMaxRowsLocked() {
+	} else if c.blkAppender.GetMeta().HasMaxRowsLocked() {
 		c.onImmut()
 	}
 
 	offset := index.Start
-	blkHandle := c.mutBlk.MakeHandle()
+	blkHandle := c.blkAppender.MakeHandle()
 	for {
-		if c.mutBlk.GetMeta().HasMaxRowsLocked() {
+		if c.blkAppender.GetMeta().HasMaxRowsLocked() {
 			c.onImmut()
 			blkHandle.Close()
-			blkHandle = c.mutBlk.MakeHandle()
+			blkHandle = c.blkAppender.MakeHandle()
 		}
 		blk := blkHandle.GetNode().(mb.IMutableBlock)
 		n, err := c.doAppend(blk, bat, offset, index)
@@ -200,4 +175,10 @@ func (c *mutableTable) Append(bat *batch.Batch, index *shard.SliceIndex) (err er
 	blkHandle.Close()
 
 	return err
+}
+
+func (c *tableAppender) Close() error {
+	c.data.Unref()
+	c.Unref()
+	return nil
 }

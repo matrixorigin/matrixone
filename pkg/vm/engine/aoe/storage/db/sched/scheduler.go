@@ -20,8 +20,9 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	tif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -64,7 +65,7 @@ func (p *metablkCommiter) Register(blkid uint64) {
 }
 
 func (p *metablkCommiter) doSchedule(meta *metadata.Block) {
-	ctx := &iface.Context{Opts: p.opts}
+	ctx := &Context{Opts: p.opts}
 	commit := NewCommitBlkEvent(ctx, meta)
 	p.scheduler.Schedule(commit)
 }
@@ -167,34 +168,34 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	statelessHandler.Start()
 
 	// Register different events to its belonged handler
-	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
-	dispatcher.RegisterHandler(sched.FlushSegTask, flushsegHandler)
-	dispatcher.RegisterHandler(sched.FlushBlkTask, flushblkHandler)
-	dispatcher.RegisterHandler(sched.CommitBlkTask, metaHandler)
-	dispatcher.RegisterHandler(sched.UpgradeBlkTask, memdataHandler)
-	dispatcher.RegisterHandler(sched.UpgradeSegTask, memdataHandler)
-	dispatcher.RegisterHandler(sched.MetaCreateTableTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MetaDropTableTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MetaCreateBlkTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataHandler)
-	dispatcher.RegisterHandler(sched.FlushTableMetaTask, metaHandler)
-	dispatcher.RegisterHandler(sched.PrecommitBlkMetaTask, metaHandler)
-	dispatcher.RegisterHandler(sched.FlushTBlkTask, flushtblkHandler)
+	dispatcher.RegisterHandler(StatelessEvent, statelessHandler)
+	dispatcher.RegisterHandler(FlushSegTask, flushsegHandler)
+	dispatcher.RegisterHandler(FlushBlkTask, flushblkHandler)
+	dispatcher.RegisterHandler(CommitBlkTask, metaHandler)
+	dispatcher.RegisterHandler(UpgradeBlkTask, memdataHandler)
+	dispatcher.RegisterHandler(UpgradeSegTask, memdataHandler)
+	dispatcher.RegisterHandler(MetaCreateTableTask, metaHandler)
+	dispatcher.RegisterHandler(MetaDropTableTask, metaHandler)
+	dispatcher.RegisterHandler(MetaCreateBlkTask, metaHandler)
+	dispatcher.RegisterHandler(MemdataUpdateEvent, memdataHandler)
+	dispatcher.RegisterHandler(FlushTableMetaTask, metaHandler)
+	dispatcher.RegisterHandler(PrecommitBlkMetaTask, metaHandler)
+	dispatcher.RegisterHandler(FlushTBlkTask, flushtblkHandler)
 
 	// Register dispatcher
-	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
-	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
-	s.RegisterDispatcher(sched.FlushBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.CommitBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.UpgradeBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.UpgradeSegTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaCreateTableTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaDropTableTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaCreateBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
-	s.RegisterDispatcher(sched.FlushTableMetaTask, dispatcher)
-	s.RegisterDispatcher(sched.PrecommitBlkMetaTask, dispatcher)
-	s.RegisterDispatcher(sched.FlushTBlkTask, dispatcher)
+	s.RegisterDispatcher(StatelessEvent, dispatcher)
+	s.RegisterDispatcher(FlushSegTask, dispatcher)
+	s.RegisterDispatcher(FlushBlkTask, dispatcher)
+	s.RegisterDispatcher(CommitBlkTask, dispatcher)
+	s.RegisterDispatcher(UpgradeBlkTask, dispatcher)
+	s.RegisterDispatcher(UpgradeSegTask, dispatcher)
+	s.RegisterDispatcher(MetaCreateTableTask, dispatcher)
+	s.RegisterDispatcher(MetaDropTableTask, dispatcher)
+	s.RegisterDispatcher(MetaCreateBlkTask, dispatcher)
+	s.RegisterDispatcher(MemdataUpdateEvent, dispatcher)
+	s.RegisterDispatcher(FlushTableMetaTask, dispatcher)
+	s.RegisterDispatcher(PrecommitBlkMetaTask, dispatcher)
+	s.RegisterDispatcher(FlushTBlkTask, dispatcher)
 	s.Start()
 	return s
 }
@@ -238,7 +239,7 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 		return
 	}
 	newMeta := event.Meta
-	mctx := &iface.Context{Opts: s.opts}
+	mctx := &Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.Id)
 	if err != nil {
 		s.opts.EventListener.BackgroundErrorCB(err)
@@ -275,7 +276,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 		return
 	}
 	logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.Id)
-	flushCtx := &iface.Context{Opts: s.opts}
+	flushCtx := &Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
 	s.Schedule(flushEvent)
 }
@@ -289,7 +290,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
-	ctx := &iface.Context{Opts: s.opts}
+	ctx := &Context{Opts: s.opts}
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
@@ -318,17 +319,17 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 func (s *scheduler) OnExecDone(op interface{}) {
 	e := op.(sched.Event)
 	switch e.Type() {
-	case sched.FlushBlkTask:
+	case FlushBlkTask:
 		s.onFlushBlkDone(e)
-	case sched.CommitBlkTask:
+	case CommitBlkTask:
 		s.onCommitBlkDone(e)
-	case sched.UpgradeBlkTask:
+	case UpgradeBlkTask:
 		s.onUpgradeBlkDone(e)
-	case sched.FlushSegTask:
+	case FlushSegTask:
 		s.onFlushSegDone(e)
-	case sched.UpgradeSegTask:
+	case UpgradeSegTask:
 		s.onUpgradeSegDone(e)
-	case sched.PrecommitBlkMetaTask:
+	case PrecommitBlkMetaTask:
 		s.onPrecommitBlkDone(e)
 	}
 }
@@ -347,7 +348,7 @@ func (s *scheduler) onPreScheduleFlushBlkTask(e sched.Event) {
 
 func (s *scheduler) preprocess(e sched.Event) {
 	switch e.Type() {
-	case sched.FlushBlkTask:
+	case FlushBlkTask:
 		s.onPreScheduleFlushBlkTask(e)
 	}
 	e.AddObserver(s)
@@ -371,4 +372,21 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 		return nil
 	}
 	panic("not supported")
+}
+
+func (s *scheduler) InstallBlock(meta *metadata.Block, tableData tif.ITableData) (block tif.IBlock, err error) {
+	ctx := &Context{Opts: s.opts, Waitable: true}
+	e := NewInstallBlockEvent(ctx, meta, tableData)
+	s.Schedule(e)
+	if err = e.WaitDone(); err != nil {
+		return
+	}
+	block = e.Block
+	return
+}
+
+func (s *scheduler) AsyncFlushBlock(block iface.IMutBlock) {
+	ctx := &Context{Opts: s.opts}
+	e := NewFlushMemBlockEvent(ctx, block)
+	s.Schedule(e)
 }

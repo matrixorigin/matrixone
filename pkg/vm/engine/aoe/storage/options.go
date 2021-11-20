@@ -19,11 +19,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
@@ -76,7 +76,7 @@ type Options struct {
 
 	Mu sync.RWMutex
 
-	Scheduler    sched.Scheduler
+	Scheduler    iface.DBScheduler
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
 	WalRole wal.Role

@@ -15,15 +15,13 @@
 package db
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
@@ -52,11 +50,11 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
 func (d *DB) DoFlushTable(meta *metadata.Table) error {
-	handle, err := d.MakeTableMutationHandle(meta)
+	handle, err := d.MakeMutationHandle(meta)
 	if err != nil {
 		return err
 	}
-	defer handle.Unref()
+	defer handle.Close()
 	return handle.Flush()
 }
 
@@ -113,83 +111,48 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 }
 
 func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.SliceIndex) error {
-	handle, err := d.MakeTableMutationHandle(meta)
+	handle, err := d.MakeMutationHandle(meta)
 	if err != nil {
 		return err
 	}
-	defer handle.Unref()
+	defer handle.Close()
 	return handle.Append(data, index)
 }
 
-func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, error) {
-	var err error
-	handle := d.MemTableMgr.StrongRefTable(meta.Id)
-	if handle != nil {
-		return handle, nil
+func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, error) {
+	handle, err := d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+	if err != nil {
+		tableData, err := d.Store.DataTables.RegisterTable(meta)
+		if err == nil {
+			handle = tableData.MakeMutationHandle()
+		} else if err == metadata.DuplicateErr {
+			handle, err = d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
-	eCtx := &memdata.Context{
-		Opts:        d.Opts,
-		MTMgr:       d.MemTableMgr,
-		TableMeta:   meta,
-		IndexBufMgr: d.IndexBufMgr,
-		MTBufMgr:    d.MTBufMgr,
-		SSTBufMgr:   d.SSTBufMgr,
-		FsMgr:       d.FsMgr,
-		Tables:      d.Store.DataTables,
-		Waitable:    true,
-	}
-	e := memdata.NewCreateTableEvent(eCtx)
-	if err = d.Scheduler.Schedule(e); err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if err = e.WaitDone(); err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	handle = e.Handle
-	if handle == nil {
-		err = ErrNotFound
-	}
-	return handle, err
+	return handle, nil
 }
 
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		handle := e.Handle
+		d.Store.DataTables.RegisterTable(meta)
 		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			handle.Unref()
 			return nil, err
 		}
-		handle.Unref()
 	}
 	return data, nil
 }
 
 func (d *DB) ScheduleGCDatabase(database *metadata.Database) {
-	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
 
 func (d *DB) ScheduleGCTable(meta *metadata.Table) {
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, nil)
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, nil)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
 

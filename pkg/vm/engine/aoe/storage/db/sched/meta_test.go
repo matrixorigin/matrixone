@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package sched
 
 import (
 	"os"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -38,7 +36,7 @@ func TestBasicOps(t *testing.T) {
 	opts.Meta.Catalog, _ = opts.CreateCatalog(workDir)
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
-	opts.Scheduler = sched.NewScheduler(opts, nil)
+	opts.Scheduler = NewScheduler(opts, nil)
 
 	now := time.Now()
 
@@ -51,7 +49,7 @@ func TestBasicOps(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, tbl)
 
-	eCtx := &sif.Context{Opts: opts, Waitable: true}
+	eCtx := &Context{Opts: opts, Waitable: true}
 	createBlkE := NewCreateBlkEvent(eCtx, tbl, nil, nil)
 	opts.Scheduler.Schedule(createBlkE)
 	err = createBlkE.WaitDone()
@@ -63,13 +61,13 @@ func TestBasicOps(t *testing.T) {
 
 	blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
 
-	schedCtx := &sif.Context{
+	schedCtx := &Context{
 		Opts:     opts,
 		Waitable: true,
 	}
-	commitCtx := &sif.Context{Opts: opts, Waitable: true}
+	commitCtx := &Context{Opts: opts, Waitable: true}
 	commitCtx.AddMetaScope()
-	commitE := sched.NewCommitBlkEvent(commitCtx, blk1)
+	commitE := NewCommitBlkEvent(commitCtx, blk1)
 	opts.Scheduler.Schedule(commitE)
 	err = commitE.WaitDone()
 	assert.Nil(t, err)

@@ -25,11 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -409,20 +407,20 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	return fs
 }
 
-func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables, mtMgr base.IManager) {
+func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)
 		if segment == nil {
 			panic(fmt.Sprintf("segment %d is nil", ctx.id.SegmentID))
 		}
-		flushCtx := &sif.Context{Opts: opts}
-		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		flushCtx := &sched.Context{Opts: opts}
+		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
 		opts.Scheduler.Schedule(flushEvent)
 	}
 	h.flushsegs = h.flushsegs[:0]
 	for _, database := range h.compactdbs {
-		gcReq := gcreqs.NewDropDBRequest(opts, database, tables, mtMgr)
+		gcReq := gcreqs.NewDropDBRequest(opts, database, tables)
 		opts.GC.Acceptor.Accept(gcReq)
 	}
 	h.compactdbs = h.compactdbs[:0]
