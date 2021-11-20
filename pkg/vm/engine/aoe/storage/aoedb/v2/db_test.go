@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"math/rand"
+	"os"
 	"path"
 	"strconv"
 	"sync"
@@ -908,13 +909,21 @@ func TestRebuildIndices(t *testing.T) {
 	time.Sleep(10*time.Millisecond)
 	t.Log(tblData.GetIndexHolder().StringIndicesRefs())
 	inst.Close()
+	// manually delete some index files, and during replaying the file could
+	// be flushed automatically.
+	os.Remove("/tmp/AOEDB/TestRebuildIndices/aoedb/data/0_1_7_1.bsi")
 
-	//inst, gen, database = initTestDB3(t)
-	//tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
-	//assert.Nil(t, err)
+	inst, gen, database = initTestDB3(t)
+	tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
 	//t.Log(tblData.String())
 	//t.Log(tblData.GetIndexHolder().String())
-	//inst.Close()
+	time.Sleep(100*time.Millisecond)
+	for _, segId := range segs {
+		seg := tblData.StrongRefSegment(segId)
+		t.Log(seg.GetIndexHolder().StringIndicesRefsNoLock())
+	}
+	inst.Close()
 }
 
 func TestEngine(t *testing.T) {

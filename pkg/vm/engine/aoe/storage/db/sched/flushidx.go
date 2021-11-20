@@ -15,7 +15,6 @@
 package sched
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -32,10 +31,12 @@ import (
 type flushIndexEvent struct {
 	BaseEvent
 	Segment iface.ISegment
+	Cols []uint16
+	FlushAll bool
 }
 
 func NewFlushIndexEvent(ctx *sif.Context, host iface.ISegment) *flushIndexEvent {
-	e := &flushIndexEvent{Segment: host}
+	e := &flushIndexEvent{Segment: host, Cols: make([]uint16, 0)}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.FlushIndexTask, ctx.DoneCB, ctx.Waitable),
@@ -51,7 +52,15 @@ func (e *flushIndexEvent) Execute() error {
 	for _, idx := range meta.Table.Schema.Indices {
 		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 			for _, col := range idx.Columns {
-				bsiEnabled = append(bsiEnabled, int(col))
+				if e.FlushAll {
+					bsiEnabled = append(bsiEnabled, int(col))
+					continue
+				}
+				for _, include := range e.Cols {
+					if col == include {
+						bsiEnabled = append(bsiEnabled, int(col))
+					}
+				}
 			}
 		}
 	}
@@ -77,14 +86,14 @@ func (e *flushIndexEvent) Execute() error {
 			panic(err)
 		}
 		version := 0
-		filename := fmt.Sprintf("%d_%d_%d_%d.bsi", version, meta.Table.Id, meta.Id, colIdx)
+		filename := common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
 		for {
 			if _, err := os.Stat(filepath.Join(dir, filename)); os.IsNotExist(err) {
 				filename = filepath.Join(dir, filename)
 				break
 			}
 			version++
-			filename = fmt.Sprintf("%d_%d_%d_%d.bsi", version, meta.Table.Id, meta.Id, colIdx)
+			filename = common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
 		}
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
 			panic(err)

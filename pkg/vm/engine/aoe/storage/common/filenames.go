@@ -81,6 +81,10 @@ func MakeLockFileName(dirname, name string) string {
 	return MakeFilename(dirname, FTLock, name, false)
 }
 
+func MakeBitSlicedIndexFileName(version, tid, sid uint64, col uint16) string {
+	return fmt.Sprintf("%d_%d_%d_%d.bsi", version, tid, sid, col)
+}
+
 func ParseSegmentFileName(filename string) (name string, ok bool) {
 	name = strings.TrimSuffix(filename, SegSuffix)
 	if len(name) == len(filename) {

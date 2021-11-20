@@ -319,6 +319,7 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	// start flush index
 	flushCtx := &iface.Context{Opts: s.opts}
 	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
+	newevent.FlushAll = true
 	s.Schedule(newevent)
 }
 
