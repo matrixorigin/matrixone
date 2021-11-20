@@ -476,8 +476,8 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		if segment == nil {
 			panic("unexpected error")
 		}
-		flushCtx := &sif.Context{Opts: opts}
-		flushEvent := dbsched.NewFlushIndexEvent(flushCtx, segment)
+		flushCtx := &sched.Context{Opts: opts}
+		flushEvent := sched.NewFlushIndexEvent(flushCtx, segment)
 		flushEvent.Cols = cols
 		opts.Scheduler.Schedule(flushEvent)
 	}

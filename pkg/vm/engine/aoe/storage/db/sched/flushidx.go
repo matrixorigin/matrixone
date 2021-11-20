@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -35,11 +34,11 @@ type flushIndexEvent struct {
 	FlushAll bool
 }
 
-func NewFlushIndexEvent(ctx *sif.Context, host iface.ISegment) *flushIndexEvent {
+func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
 	e := &flushIndexEvent{Segment: host, Cols: make([]uint16, 0)}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushIndexTask, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, FlushIndexTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

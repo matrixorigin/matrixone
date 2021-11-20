@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"math/rand"
 	"os"
@@ -901,7 +900,7 @@ func TestRebuildIndices(t *testing.T) {
 		//t.Log(f.Eq("mock_0", int32(-1)))
 		//t.Log(sumr.Count("mock_0", nil))
 		t.Log(inst.IndexBufMgr.String())
-		e := sched.NewFlushIndexEvent(&iface.Context{}, seg)
+		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
 		inst.Scheduler.Schedule(e)
 		time.Sleep(10*time.Millisecond)
 		t.Log(inst.IndexBufMgr.String())
