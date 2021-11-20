@@ -108,7 +108,7 @@ func (m *manager) RegisterTable(td interface{}) (c base.MutableTable, err error)
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = newMutableTable(m, tableData)
+	c = NewMutableTable(m, tableData)
 	m.tables[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()

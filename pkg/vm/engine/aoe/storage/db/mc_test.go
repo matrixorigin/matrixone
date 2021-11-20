@@ -11,10 +11,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 
-package muthandle
+package db
 
 import (
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
@@ -35,8 +35,7 @@ import (
 )
 
 func TestMutTable(t *testing.T) {
-	dir := "/tmp/muthandle/mc"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)
 
@@ -47,7 +46,7 @@ func TestMutTable(t *testing.T) {
 
 	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
-	manager := NewManager(opts, nil)
+	manager := muthandle.NewManager(opts, nil)
 	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
 	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
@@ -74,7 +73,7 @@ func TestMutTable(t *testing.T) {
 	assert.Nil(t, err)
 
 	t0.Ref()
-	c0 := newMutableTable(manager, t0)
+	c0 := muthandle.NewMutableTable(manager, t0)
 	blks := uint64(20)
 	expectBlks := blks
 	batchSize := uint64(4)

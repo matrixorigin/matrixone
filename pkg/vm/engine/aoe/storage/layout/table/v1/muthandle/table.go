@@ -35,7 +35,7 @@ type mutableTable struct {
 	mutBlk iface.IMutBlock
 }
 
-func newMutableTable(mgr *manager, data iface.ITableData) *mutableTable {
+func NewMutableTable(mgr *manager, data iface.ITableData) *mutableTable {
 	c := &mutableTable{
 		mgr:  mgr,
 		data: data,
