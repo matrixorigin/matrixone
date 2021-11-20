@@ -86,7 +86,7 @@ func (ctx *installContext) HasSegementFile(id *common.ID) bool {
 }
 
 func (ctx *installContext) PresentedBsiFiles(id common.ID) []string {
-	panic("unimplemented")
+	return nil
 }
 
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {

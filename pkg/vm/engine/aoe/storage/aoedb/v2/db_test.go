@@ -26,6 +26,7 @@ import (
 	"math/rand"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -910,7 +911,17 @@ func TestRebuildIndices(t *testing.T) {
 	inst.Close()
 	// manually delete some index files, and during replaying the file could
 	// be flushed automatically.
-	os.Remove("/tmp/AOEDB/TestRebuildIndices/aoedb/data/0_1_7_1.bsi")
+	os.Remove(filepath.Join(inst.Dir, "data/0_1_7_1.bsi"))
+
+	// manually create useless index files, and during replaying the file
+	// would be GCed automatically.
+	os.Create(filepath.Join(inst.Dir, "data/0_1_11_1.bsi"))
+
+	// manually rename some index files to higher version, create a stale version
+	// to simulate upgrade scenario. And during replaying, stale index file woould
+	// be GCed as well.
+	os.Rename(filepath.Join(inst.Dir, "data/0_1_6_1.bsi"), filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
+	os.Create(filepath.Join(inst.Dir, "data/0_1_6_1.bsi"))
 
 	inst, gen, database = initTestDB3(t)
 	tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)

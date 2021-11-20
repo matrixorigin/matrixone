@@ -603,7 +603,7 @@ func (h *replayHandle) addIndexFile(fname string) {
 			panic("unexpected error")
 		}
 		id := &common.ID{TableID: tid, SegmentID: sid}
-		if !h.files[tid].HasSegementFile(id) {
+		if h.files[tid] == nil || !h.files[tid].HasSegementFile(id) {
 			h.others = append(h.others, path.Join(h.dataDir, fname))
 			return
 		}
