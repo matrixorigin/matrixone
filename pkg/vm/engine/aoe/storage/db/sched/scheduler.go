@@ -32,6 +32,15 @@ type CommandType = sched.CommandType
 const (
 	TurnOffFlushSegmentCmd = iota + sched.CustomizedCmd
 	TurnOnFlushSegmentCmd
+	TurnOffUpgradeSegmentCmd
+	TurnOnUpgradeSegmentCmd
+)
+
+type commandMask = uint64
+
+const (
+	flushSegMask commandMask = iota
+	upgradeSegMask
 )
 
 type metablkCommiter struct {
@@ -108,22 +117,20 @@ func newController() *controller {
 	}
 }
 
-func (c *controller) turnOnFlushSegment() {
+func (c *controller) updateMask(mask commandMask, on bool) {
 	c.cmu.Lock()
 	defer c.cmu.Unlock()
-	c.mask.Remove(1)
+	if on {
+		c.mask.Remove(mask)
+	} else {
+		c.mask.Add(mask)
+	}
 }
 
-func (c *controller) turnOffFlushSegment() {
-	c.cmu.Lock()
-	defer c.cmu.Unlock()
-	c.mask.Add(1)
-}
-
-func (c *controller) canFlushSegment() bool {
+func (c *controller) isOn(mask commandMask) bool {
 	c.cmu.RLock()
 	defer c.cmu.RLock()
-	return !c.mask.Contains(1)
+	return !c.mask.Contains(mask)
 }
 
 // scheduler is the global event scheduler for AOE. It wraps the
@@ -266,7 +273,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if !event.SegmentClosed {
 		return
 	}
-	if !s.canFlushSegment() {
+	if !s.isOn(flushSegMask) {
 		logutil.Warn("[Scheduler] Flush Segment Is Turned-Off")
 		return
 	}
@@ -287,6 +294,11 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	event := e.(*flushSegEvent)
 	if err := e.GetError(); err != nil {
 		// s.opts.EventListener.BackgroundErrorCB(err)
+		event.Segment.Unref()
+		return
+	}
+	if !s.isOn(upgradeSegMask) {
+		logutil.Warn("[Scheduler] Upgrade Segment Is Turned-Off")
 		event.Segment.Unref()
 		return
 	}
@@ -365,10 +377,16 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 	case sched.NoopCmd:
 		return nil
 	case TurnOnFlushSegmentCmd:
-		s.turnOnFlushSegment()
+		s.updateMask(flushSegMask, true)
 		return nil
 	case TurnOffFlushSegmentCmd:
-		s.turnOffFlushSegment()
+		s.updateMask(flushSegMask, false)
+		return nil
+	case TurnOnUpgradeSegmentCmd:
+		s.updateMask(upgradeSegMask, true)
+		return nil
+	case TurnOffUpgradeSegmentCmd:
+		s.updateMask(upgradeSegMask, false)
 		return nil
 	}
 	panic("not supported")
