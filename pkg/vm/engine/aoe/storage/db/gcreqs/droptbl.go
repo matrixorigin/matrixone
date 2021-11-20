@@ -16,6 +16,7 @@ package gcreqs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
@@ -51,12 +52,11 @@ func NewDropTblRequest(opts *storage.Options, meta *metadata.Table, tables *tabl
 }
 
 func (req *dropTblRequest) Execute() error {
-	ctx := &memdata.Context{
+	ctx := &sched.Context{
 		Opts:     req.Opts,
-		Tables:   req.Tables,
 		Waitable: true,
 	}
-	e := memdata.NewDropTableEvent(ctx, req.Meta.Id)
+	e := memdata.NewDropTableEvent(ctx, req.Meta.Id, req.Tables)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {
 		return err

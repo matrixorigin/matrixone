@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
@@ -127,18 +128,11 @@ func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, e
 	if handle != nil {
 		return handle, nil
 	}
-	eCtx := &memdata.Context{
-		Opts:        d.Opts,
-		MTMgr:       d.MemTableMgr,
-		TableMeta:   meta,
-		IndexBufMgr: d.IndexBufMgr,
-		MTBufMgr:    d.MTBufMgr,
-		SSTBufMgr:   d.SSTBufMgr,
-		FsMgr:       d.FsMgr,
-		Tables:      d.Store.DataTables,
-		Waitable:    true,
+	eCtx := &sched.Context{
+		Opts:     d.Opts,
+		Waitable: true,
 	}
-	e := memdata.NewCreateTableEvent(eCtx)
+	e := memdata.NewCreateTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
 	if err = d.Scheduler.Schedule(e); err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
 	}
@@ -155,18 +149,11 @@ func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, e
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
+		eCtx := &sched.Context{
+			Opts:     d.Opts,
+			Waitable: true,
 		}
-		e := memdata.NewCreateTableEvent(eCtx)
+		e := memdata.NewCreateTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
 		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}

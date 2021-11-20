@@ -15,33 +15,34 @@
 package memdata
 
 import (
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type dropTableEvent struct {
-	BaseEvent
+	sched.BaseEvent
 
 	// Table's id, aoe is generated when the table is created
 	TableId uint64
 
 	// Data is Table's metadata in memory
-	Data iface.ITableData
+	Data   iface.ITableData
+	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *Context, tableId uint64) *dropTableEvent {
-	e := &dropTableEvent{TableId: tableId}
-	e.BaseEvent = BaseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, dbsched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
-		Ctx:       ctx,
+func NewDropTableEvent(ctx *sched.Context, tableId uint64, tables *table.Tables) *dropTableEvent {
+	e := &dropTableEvent{
+		TableId: tableId,
+		Tables:  tables,
 	}
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx)
 	return e
 }
 
 // Remove and release a table from Tables
 func (e *dropTableEvent) Execute() error {
-	tbl, err := e.Ctx.Tables.DropTable(e.TableId)
+	tbl, err := e.Tables.DropTable(e.TableId)
 	e.Data = tbl
 	return err
 }

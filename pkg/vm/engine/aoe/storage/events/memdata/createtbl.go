@@ -15,25 +15,31 @@
 package memdata
 
 import (
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
+	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type createTableEvent struct {
-	BaseEvent
+	sched.BaseEvent
 
 	// Handle manages the memTable data of a table(creates Block and
 	// creates memTable) and provides Append() interface externally
 	Handle base.MutableTable
+	MTMgr  mtif.IManager
+	Tables *table.Tables
+	Meta   *metadata.Table
 }
 
-func NewCreateTableEvent(ctx *Context) *createTableEvent {
-	e := &createTableEvent{}
-	e.BaseEvent = BaseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, dbsched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
-		Ctx:       ctx,
+func NewCreateTableEvent(ctx *sched.Context, meta *metadata.Table, mtMgr mtif.IManager, tables *table.Tables) *createTableEvent {
+	e := &createTableEvent{
+		MTMgr:  mtMgr,
+		Meta:   meta,
+		Tables: tables,
 	}
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx)
 	return e
 }
 
@@ -41,25 +47,24 @@ func NewCreateTableEvent(ctx *Context) *createTableEvent {
 // 2. Create and register a TableData
 // 3. Register Handle to the memTable manager
 func (e *createTableEvent) Execute() error {
-	handle := e.Ctx.MTMgr.StrongRefTable(e.Ctx.TableMeta.Id)
+	handle := e.MTMgr.StrongRefTable(e.Meta.Id)
 	if handle != nil {
 		e.Handle = handle
 		return nil
 	}
-	meta := e.Ctx.TableMeta
 
 	// FIXME: table is dropped by another thread
-	tableData, err := e.Ctx.Tables.StrongRefTable(meta.Id)
+	data, err := e.Tables.StrongRefTable(e.Meta.Id)
 	if err != nil {
-		tableData, err = e.Ctx.Tables.RegisterTable(meta)
+		data, err = e.Tables.RegisterTable(e.Meta)
 		if err != nil {
 			return err
 		}
-		tableData.Ref()
+		data.Ref()
 	}
-	handle, err = e.Ctx.MTMgr.RegisterTable(tableData)
+	handle, err = e.MTMgr.RegisterTable(data)
 	if err != nil {
-		tableData.Unref()
+		data.Unref()
 		return err
 	}
 

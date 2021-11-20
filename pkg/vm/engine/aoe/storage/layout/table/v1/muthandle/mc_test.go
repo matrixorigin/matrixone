@@ -124,19 +124,16 @@ func TestMutTable(t *testing.T) {
 	err = dropBlkE.WaitDone()
 	assert.Nil(t, err)
 
-	eCtx := &memdata.Context{
-		Opts:      opts,
-		MTMgr:     manager,
-		Tables:    tables,
-		TableMeta: tbl,
-		Waitable:  true,
+	eCtx := &sched.Context{
+		Opts:     opts,
+		Waitable: true,
 	}
-	createTblE := memdata.NewCreateTableEvent(eCtx)
+	createTblE := memdata.NewCreateTableEvent(eCtx, tbl, manager, tables)
 	opts.Scheduler.Schedule(createTblE)
 	err = createTblE.WaitDone()
 	assert.Nil(t, err)
 
-	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.Id)
+	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.Id, tables)
 	opts.Scheduler.Schedule(dropTblE)
 	err = dropTblE.WaitDone()
 	assert.Nil(t, err)
