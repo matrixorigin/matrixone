@@ -52,7 +52,7 @@ func TestUpgradeBlk(t *testing.T) {
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager(dir, true)
 
-	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
 
 	dbName := "db1"
 	gen := shard.NewMockIndexAllocator()
@@ -130,7 +130,7 @@ func TestUpgradeSeg(t *testing.T) {
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager(dir, true)
 
-	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
 
 	dbName := "db1"
 	gen := shard.NewMockIndexAllocator()

@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
 var (
@@ -440,9 +441,10 @@ type Tables struct {
 	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
 
 	MutFactory fb.MutFactory
+	Aware      shard.NodeAware
 }
 
-func NewTables(opts *storage.Options, mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
+func NewTables(opts *storage.Options, mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager, aware shard.NodeAware) *Tables {
 	return &Tables{
 		RWMutex:     mu,
 		Data:        make(map[uint64]iface.ITableData),
@@ -453,6 +455,7 @@ func NewTables(opts *storage.Options, mu *sync.RWMutex, fsMgr base.IManager, mtB
 		IndexBufMgr: indexBufMgr,
 		FsMgr:       fsMgr,
 		Opts:        opts,
+		Aware:       aware,
 	}
 }
 
@@ -483,9 +486,12 @@ func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) 
 		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
 		return tbl, NotExistErr
 	}
-	// ts.Tombstone[tid] = tbl
 	delete(ts.ids, tid)
 	delete(ts.Data, tid)
+	if ts.Aware != nil {
+		meta := tbl.GetMeta()
+		ts.Aware.ShardNodeDeleted(meta.Database.GetShardId(), meta.Id)
+	}
 	return tbl, nil
 }
 
@@ -567,6 +573,10 @@ func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	}
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl
+	if ts.Aware != nil {
+		meta := tbl.GetMeta()
+		ts.Aware.ShardNodeCreated(meta.Database.GetShardId(), meta.Id)
+	}
 	return nil
 }
 

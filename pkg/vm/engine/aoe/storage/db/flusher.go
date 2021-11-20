@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
@@ -29,7 +29,7 @@ var (
 )
 
 type flusherDriver struct {
-	mgr     base.IManager
+	tables  *table.Tables
 	id      uint64
 	checker func(int64) bool
 }
@@ -39,24 +39,24 @@ func (driver *flusherDriver) GetId() uint64 {
 }
 
 func (driver *flusherDriver) FlushNode(id uint64) error {
-	c := driver.mgr.StrongRefTable(id)
-	if c == nil {
-		return nil
+	handle, err := driver.tables.MakeTableMutationHandle(id)
+	if err != nil {
+		return err
 	}
-	defer c.Unref()
-	meta := c.GetMeta()
+	defer handle.Close()
+	meta := handle.GetMeta()
 	if !driver.checker(meta.GetFlushTS()) {
 		return nil
 	}
 	logutil.Infof("TimedFlushing | Shard-%d | Node-%d", driver.id, id)
-	return c.Flush()
+	return handle.Flush()
 }
 
-func createFlusherFactory(mgr base.IManager) flusher.DriverFactory {
+func createFlusherFactory(tables *table.Tables) flusher.DriverFactory {
 	return func(id uint64) flusher.NodeDriver {
 		driver := &flusherDriver{
-			mgr: mgr,
-			id:  id,
+			tables: tables,
+			id:     id,
 			checker: func(ts int64) bool {
 				return time.Now().UnixMicro()-ts > DefaultNodeFlushInterval.Microseconds()
 			},

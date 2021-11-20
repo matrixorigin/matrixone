@@ -52,7 +52,7 @@ func TestSnapshot(t *testing.T) {
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tables := table.NewTables(opts, new(sync.RWMutex), ldio.NewManager(dir, false), mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), ldio.NewManager(dir, false), mtBufMgr, sstBufMgr, indexBufMgr, nil)
 
 	catalog := opts.Meta.Catalog
 	defer catalog.Close()

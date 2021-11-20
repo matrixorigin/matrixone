@@ -66,7 +66,6 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
 	memtblMgr := muthandle.NewManager(opts, flushDriver)
-	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
 	db = &DB{
 		Dir:            dirname,
@@ -77,15 +76,17 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 		MTBufMgr:       mtBufMgr,
 		SSTBufMgr:      sstBufMgr,
 		MutationBufMgr: mutNodeMgr,
-		FlushDriver:    flushDriver,
 		ClosedC:        make(chan struct{}),
 		Closed:         new(atomic.Value),
 	}
 
 	db.Store.Mu = &opts.Mu
-	db.Store.DataTables = table.NewTables(opts, &opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
+	db.Store.DataTables = table.NewTables(opts, &opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr, flushDriver)
 	factory := factories.NewMutFactory(mutNodeMgr, nil)
 	db.Store.DataTables.MutFactory = factory
+
+	flushDriver.InitFactory(createFlusherFactory(db.Store.DataTables))
+	db.FlushDriver = flushDriver
 
 	store, err := logstore.NewBatchStore(common.MakeMetaDir(dirname), "store", nil)
 	if err != nil {

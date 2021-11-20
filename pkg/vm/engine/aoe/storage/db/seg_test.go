@@ -52,7 +52,7 @@ func TestSegment(t *testing.T) {
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager(dir, true)
 
-	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
 	gen := shard.NewMockIndexAllocator()
 	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, segCnt*blkCnt, gen.Shard(0))
 	tableData, err := tables.RegisterTable(tableMeta)
