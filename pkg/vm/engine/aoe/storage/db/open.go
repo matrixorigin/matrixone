@@ -113,13 +113,14 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Opts.Scheduler = sched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
+	db.startWorkers()
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
 	if err = replayHandle.Replay(); err != nil {
 		opts.Meta.Catalog.Close()
+		db.stopWorkers()
 		return nil, err
 	}
 
-	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
 	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables)
 
