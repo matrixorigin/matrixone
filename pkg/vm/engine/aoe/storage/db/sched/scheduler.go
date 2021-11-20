@@ -317,7 +317,7 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	}
 	event.Segment.Unref()
 	// start flush index
-	flushCtx := &Context{Opts: s.opts}
+	flushCtx := &iface.Context{Opts: s.opts}
 	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
 	s.Schedule(newevent)
 }
