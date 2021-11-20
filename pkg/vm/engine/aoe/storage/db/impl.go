@@ -25,6 +25,7 @@ import (
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 // There is a premise here, that is, all mutation requests of a database are
@@ -111,7 +112,7 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 	return index, nil
 }
 
-func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) error {
+func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.SliceIndex) error {
 	handle, err := d.MakeTableMutationHandle(meta)
 	if err != nil {
 		return err

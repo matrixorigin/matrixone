@@ -15,6 +15,7 @@
 package sched
 
 import (
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -29,7 +30,7 @@ type upgradeSegEvent struct {
 	OldSegment iface.ISegment
 }
 
-func NewUpgradeSegEvent(ctx *Context, old iface.ISegment, td iface.ITableData) *upgradeSegEvent {
+func NewUpgradeSegEvent(ctx *sif.Context, old iface.ISegment, td iface.ITableData) *upgradeSegEvent {
 	e := &upgradeSegEvent{
 		OldSegment: old,
 		TableData:  td,

@@ -233,12 +233,9 @@ func (e *Segment) SimpleCreateBlock() *Block {
 	return ctx.block
 }
 
-// Safe
-func (e *Segment) Appendable() bool {
-	e.RLock()
-	defer e.RUnlock()
+func (e *Segment) AppendableLocked() bool {
 	if e.HasMaxBlocks() {
-		return !e.BlockSet[len(e.BlockSet)-1].IsFullLocked()
+		return !e.BlockSet[len(e.BlockSet)-1].IsFull()
 	}
 	return true
 }
@@ -416,7 +413,9 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 // Not safe
 // One writer, multi-readers
 func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	e.RLock()
 	if len(e.BlockSet) == 0 {
+		e.RUnlock()
 		return e.SimpleCreateBlock()
 	}
 	var ret *Block
@@ -429,8 +428,10 @@ func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
 		}
 	}
 	if ret != nil || e.HasMaxBlocks() {
+		e.RUnlock()
 		return ret
 	}
+	e.RUnlock()
 	return e.SimpleCreateBlock()
 }
 

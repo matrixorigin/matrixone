@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -255,7 +256,7 @@ func (ss *ssLoader) ScheduleEvents(d *DB) error {
 		table, _ := d.GetTableData(meta.Table)
 		defer table.Unref()
 		segment := table.StrongRefSegment(meta.Id)
-		flushCtx := &dbsched.Context{Opts: d.Opts}
+		flushCtx := &sif.Context{Opts: d.Opts}
 		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
 		d.Scheduler.Schedule(flushEvent)
 	}

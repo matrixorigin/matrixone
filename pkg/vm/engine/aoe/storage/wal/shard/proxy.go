@@ -27,22 +27,100 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
 
-type commitEntry struct {
-	id   *IndexId
+type sliceEntry struct {
+	idx  *SliceIndex
 	mask *roaring64.Bitmap
 }
 
+func newSliceEntry(idx *SliceIndex) *sliceEntry {
+	return &sliceEntry{
+		idx:  idx,
+		mask: roaring64.NewBitmap(),
+	}
+}
+
+func (s *sliceEntry) Committed() bool {
+	return uint32(s.mask.GetCardinality()) == s.idx.Info.Size
+}
+
+func (s *sliceEntry) Commit(offset uint32) {
+	s.mask.Add(uint64(offset))
+}
+
+func (s *sliceEntry) Repr() string {
+	return s.idx.Info.Repr()
+}
+
+func (s *sliceEntry) String() string {
+	if s.Committed() {
+		return fmt.Sprintf("%s-{C}", s.Repr())
+	}
+	return fmt.Sprintf("%d-%s", s.idx.Id.Offset, s.mask.String())
+}
+
+type commitEntry struct {
+	idx    *SliceIndex
+	mask   *roaring64.Bitmap
+	slices map[uint32]*sliceEntry
+}
+
+func (n *commitEntry) Repr() string {
+	return n.idx.Id.String()
+}
+
+func (n *commitEntry) String() string {
+	if n.Committed() {
+		return fmt.Sprintf("%s-{C}", n.Repr())
+	}
+	s := fmt.Sprintf("%s-%s", n.Repr(), n.mask.String())
+	for _, slice := range n.slices {
+		s = fmt.Sprintf("%s\n\t%s", s, slice.String())
+	}
+	return s
+}
+
+func (n *commitEntry) Commit(idx *SliceIndex) {
+	if idx.IsSlice() {
+		if n.slices == nil {
+			n.slices = make(map[uint32]*sliceEntry)
+		}
+		slice := n.slices[idx.Id.Offset]
+		if slice == nil {
+			slice = newSliceEntry(idx)
+			n.slices[idx.Id.Offset] = slice
+		}
+		slice.Commit(idx.Info.Offset)
+	} else {
+		n.mask.Add(uint64(idx.Id.Offset))
+	}
+}
+
 func (n *commitEntry) Committed() bool {
-	return uint32(n.mask.GetCardinality()) == n.id.Size
+	if uint32(n.mask.GetCardinality()) == n.idx.Id.Size {
+		return true
+	}
+	updated := false
+	if n.slices != nil {
+		for offset, slice := range n.slices {
+			if slice.Committed() {
+				n.mask.Add(uint64(offset))
+				updated = true
+			}
+		}
+	}
+	if updated {
+		return uint32(n.mask.GetCardinality()) == n.idx.Id.Size
+	}
+	return false
 }
 
 func (n *commitEntry) GetId() uint64 {
-	return n.id.Id
+	return n.idx.Id.Id
 }
 
-func newCommitEntry(id *IndexId) *commitEntry {
+func newCommitEntry(idx *SliceIndex) *commitEntry {
 	n := &commitEntry{
-		id:   id,
+		idx:  idx,
 		mask: roaring64.NewBitmap(),
 	}
 	return n
@@ -55,8 +133,7 @@ type proxy struct {
 	mgr        *manager
 	mask       *roaring64.Bitmap
 	stopmask   *roaring64.Bitmap
-	snippets   []*snippets
-	snipIdx    map[uint64]int
+	batches    []*SliceIndice
 	lastIndex  uint64
 	safeId     uint64
 	lastSafeId uint64
@@ -71,8 +148,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		mgr:      mgr,
 		mask:     roaring64.New(),
 		stopmask: roaring64.New(),
-		snipIdx:  make(map[uint64]int),
-		snippets: make([]*snippets, 0, 10),
+		batches:  make([]*SliceIndice, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
 	if mgr != nil && mgr.GetRole() == wal.HolderRole {
@@ -137,75 +213,51 @@ func (p *proxy) LogIndex(index *Index) {
 }
 
 func (p *proxy) AppendIndex(index *Index) {
-	snip := NewSimpleSnippet(index)
-	p.AppendSnippet(snip)
+	bat := NewSimpleBatchIndice(index)
+	p.AppendBatchIndice(bat)
 }
 
-func (p *proxy) AppendSnippet(snip *Snippet) {
-	// logutil.Infof("append snippet: %s", snip.String())
+func (p *proxy) AppendBatchIndice(bat *SliceIndice) {
+	// logutil.Infof("[WAL] Append: %s", bat.String())
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
-	pos, ok := p.snipIdx[snip.GetId()]
-	if ok {
-		p.snippets[pos].Append(snip)
-		return
-	}
-	p.snipIdx[snip.GetId()] = len(p.snippets)
-	group := newSnippets(snip.GetId())
-	group.Append(snip)
-	p.snippets = append(p.snippets, group)
-}
-
-func (p *proxy) ExtendSnippets(snips []*Snippet) {
-	if len(snips) == 0 {
-		return
-	}
-	mapped := make(map[uint64][]*Snippet)
-	for _, snip := range snips {
-		mapped[snip.GetId()] = append(mapped[snip.GetId()], snip)
-	}
-	p.alumu.Lock()
-	defer p.alumu.Unlock()
-	for id, ss := range mapped {
-		pos, ok := p.snipIdx[id]
-		if ok {
-			p.snippets[pos].Extend(ss...)
-			continue
-		}
-		p.snipIdx[id] = len(p.snippets)
-		group := newSnippets(id)
-		group.Extend(ss...)
-		p.snippets = append(p.snippets, group)
-	}
+	p.batches = append(p.batches, bat)
 }
 
 func (p *proxy) Checkpoint() {
 	now := time.Now()
 	p.alumu.Lock()
-	snips := p.snippets
-	p.snippets = make([]*snippets, 0, 100)
-	p.snipIdx = make(map[uint64]int)
+	bats := p.batches
+	p.batches = make([]*SliceIndice, 0, 100)
 	p.alumu.Unlock()
 
 	mask := roaring64.NewBitmap()
-	for _, snip := range snips {
-		snip.ForEach(func(id *IndexId) {
-			if id.IsSingle() {
-				mask.Add(id.Id)
-				return
+	for _, bat := range bats {
+		for _, idx := range bat.indice {
+			if !idx.IsSlice() && idx.Id.IsSingle() {
+				mask.Add(idx.Id.Id)
+				continue
 			}
-			node := p.indice[id.Id]
+			node := p.indice[idx.Id.Id]
 			if node == nil {
-				node = newCommitEntry(id)
-				p.indice[id.Id] = node
+				node = newCommitEntry(idx)
+				p.indice[idx.Id.Id] = node
 			}
-			node.mask.Add(uint64(id.Offset))
-			if node.Committed() {
-				mask.Add(node.GetId())
-				delete(p.indice, id.Id)
-			}
-		})
+			node.Commit(idx)
+		}
 	}
+	deletes := make([]uint64, 0, 10)
+	for i, node := range p.indice {
+		if node.Committed() {
+			deletes = append(deletes, i)
+			mask.Add(node.GetId())
+		}
+		// logutil.Info(node.String())
+	}
+	for _, id := range deletes {
+		delete(p.indice, id)
+	}
+
 	p.logmu.Lock()
 	p.mask.Xor(mask)
 	// logutil.Infof("p.mask is %s", p.mask.String())

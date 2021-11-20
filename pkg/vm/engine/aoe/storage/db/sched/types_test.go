@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -78,7 +79,7 @@ func TestUpgradeBlk(t *testing.T) {
 		assert.NotNil(t, segMeta)
 		blkMeta := segMeta.BlockSet[0]
 		assert.Nil(t, err)
-		ctx := &Context{
+		ctx := &iface.Context{
 			Opts:     opts,
 			Waitable: true,
 		}
@@ -153,7 +154,7 @@ func TestUpgradeSeg(t *testing.T) {
 	}
 
 	for _, segID := range segIds {
-		ctx := &Context{
+		ctx := &iface.Context{
 			Waitable: true,
 			Opts:     opts,
 		}

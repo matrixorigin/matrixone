@@ -406,7 +406,9 @@ func (e *Table) getFirstInfullSegment(from *Segment) (*Segment, *Segment) {
 	var curr, next *Segment
 	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
 		seg := e.SegmentSet[i]
-		if seg.Appendable() && from.LE(seg) {
+		seg.RLock()
+		defer seg.RUnlock()
+		if seg.AppendableLocked() && from.LE(seg) {
 			curr, next = seg, curr
 		} else {
 			break
@@ -421,7 +423,9 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	if from != nil {
 		fromSeg = from.Segment
 	}
+	e.RLock()
 	curr, next := e.getFirstInfullSegment(fromSeg)
+	e.RUnlock()
 	// logutil.Infof("%s, %s", curr.PString(PPL0), fromSeg.PString(PPL1))
 	if curr == nil {
 		curr = e.SimpleCreateSegment()

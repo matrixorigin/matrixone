@@ -185,7 +185,7 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 			d.Wal.Checkpoint(index)
 		}
 	}()
-	err = d.DoAppend(meta, ctx.Data, index)
+	err = d.DoAppend(meta, ctx.Data, index.AsSlice())
 	return err
 }
 

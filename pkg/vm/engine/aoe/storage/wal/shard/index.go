@@ -139,6 +139,10 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 	return
 }
 
+func (idx *Index) AsSlice() *SliceIndex {
+	return NewSliceIndex(idx)
+}
+
 func (idx *Index) CompareID(o *Index) int {
 	if idx.ShardId != o.ShardId {
 		panic("cannot compare index with diff shard id")

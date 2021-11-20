@@ -20,11 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	me "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type mutableTable struct {
@@ -89,17 +91,17 @@ func (c *mutableTable) String() string {
 }
 
 func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
-	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
 	var prevMeta *metadata.Block
 	if c.mutBlk != nil {
 		prevMeta = c.mutBlk.GetMeta()
 	}
-	e := me.NewCreateBlkEvent(ctx, c.data.GetMeta(), prevMeta, c.data)
+	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
+	ctx := &memdata.Context{Opts: c.mgr.opts, Waitable: true}
+	e := memdata.NewCreateSegBlkEvent(ctx, meta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err
 	}
-	meta = e.GetBlock()
 	return meta, e.Block, nil
 }
 
@@ -113,13 +115,13 @@ func (c *mutableTable) onNoMut() error {
 }
 
 func (c *mutableTable) onImmut() {
-	ctx := &sched.Context{Opts: c.mgr.opts}
+	ctx := &sif.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
 	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()
 }
 
-func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
+func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.SliceIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -140,7 +142,18 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	index.Count = n
 	meta.Lock()
 	defer meta.Unlock()
-	if err = meta.SetIndexLocked(*index); err != nil {
+	if !index.IsApplied() && !index.IsSlice() {
+		left := index.Capacity - index.Start - index.Count
+		slices := 1 + left/meta.Segment.Table.Schema.BlockMaxRows
+		if left%meta.Segment.Table.Schema.BlockMaxRows != 0 {
+			slices += 1
+		}
+		index.Info = &shard.SliceInfo{
+			Offset: 0,
+			Size:   uint32(slices),
+		}
+	}
+	if err = meta.SetIndexLocked(index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
@@ -152,7 +165,7 @@ func (c *mutableTable) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offse
 	return n, nil
 }
 
-func (c *mutableTable) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
+func (c *mutableTable) Append(bat *batch.Batch, index *shard.SliceIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -182,6 +195,7 @@ func (c *mutableTable) Append(bat *batch.Batch, index *metadata.LogIndex) (err e
 		}
 		index.Start += n
 		index.Count = uint64(0)
+		index.Info.Offset += 1
 	}
 	blkHandle.Close()
 

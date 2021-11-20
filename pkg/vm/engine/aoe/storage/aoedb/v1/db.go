@@ -157,7 +157,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err == metadata.IdempotenceErr {
 		return nil
 	}
-	return d.DoAppend(tbl, ctx.Data, index)
+	return d.DoAppend(tbl, ctx.Data, index.AsSlice())
 }
 
 func (d *DB) CreateSnapshot(shardId uint64, path string, forcesync bool) (uint64, error) {

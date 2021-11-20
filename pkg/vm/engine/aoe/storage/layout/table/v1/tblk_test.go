@@ -116,7 +116,7 @@ func TestTBlock(t *testing.T) {
 			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
 			_, err = n.Meta.AddCountLocked(num)
 			assert.Nil(t, err)
-			n.Meta.SetIndexLocked(*idx)
+			n.Meta.SetIndexLocked(idx.AsSlice())
 			return nil
 		}
 	}

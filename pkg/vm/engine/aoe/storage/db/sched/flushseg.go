@@ -17,6 +17,7 @@ package sched
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -28,7 +29,7 @@ type flushSegEvent struct {
 	Segment iface.ISegment
 }
 
-func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
+func NewFlushSegEvent(ctx *sif.Context, seg iface.ISegment) *flushSegEvent {
 	e := &flushSegEvent{Segment: seg}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
