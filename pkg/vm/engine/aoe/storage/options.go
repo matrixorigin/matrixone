@@ -64,6 +64,7 @@ type MetaCfg struct {
 type SchedulerCfg struct {
 	BlockWriters     uint16 `toml:"block-writers"`
 	SegmentWriters   uint16 `toml:"segment-writers"`
+	IndexWriters     uint16 `toml:"index-writers"`
 	StatelessWorkers uint16 `toml:"stateless-workers"`
 }
 

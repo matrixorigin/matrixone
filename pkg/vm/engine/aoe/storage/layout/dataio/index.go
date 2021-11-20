@@ -16,9 +16,11 @@ package dataio
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
+	"runtime/debug"
 )
 
 type EmbedIndexFile struct {
@@ -79,8 +81,24 @@ func newIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVF
 			osize: int64(meta.Ptr.Len),
 		},
 	}
+	f.OnZeroCB = f.close
 	f.Ref()
 	return f
+}
+
+func (f *IndexFile) close() {
+	if err := f.Close(); err != nil {
+		panic(err)
+	}
+	logutil.Infof("Destroy index file | %s", f.Name())
+	if err := os.Remove(f.Name()); err != nil {
+		panic(err)
+	}
+}
+
+func (f *IndexFile) Unref() {
+	debug.PrintStack()
+	f.RefHelper.Unref()
 }
 
 func (f *IndexFile) Stat() common.FileInfo {

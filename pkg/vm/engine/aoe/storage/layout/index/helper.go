@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"io"
 	"os"
@@ -167,5 +168,6 @@ func (h *RWHelper) FlushBitSlicedIndex(idx Index, filename string) error {
 	if err = binary.Write(f, binary.BigEndian, buf); err != nil {
 		return err
 	}
+	logutil.Infof("Flush BSI file | %s", f.Name())
 	return f.Close()
 }

@@ -496,6 +496,9 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addSegment(id, fullname)
 		return
 	}
+	//if name, ok := common.ParseBitSlicedIndexFileName(fname); ok {
+	//
+	//}
 	h.others = append(h.others, path.Join(h.dataDir, fname))
 }
 

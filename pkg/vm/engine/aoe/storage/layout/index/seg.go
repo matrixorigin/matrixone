@@ -19,13 +19,12 @@ import (
 	"fmt"
 	roaring2 "github.com/RoaringBitmap/roaring"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -41,6 +40,7 @@ type SegmentHolder struct {
 		sync.RWMutex
 		Indices    []*Node
 		ColIndices map[int][]int
+		VersionMap map[int]uint64
 	}
 	tree struct {
 		sync.RWMutex
@@ -58,6 +58,7 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.ColIndices = make(map[int][]int)
 	holder.self.Indices = make([]*Node, 0)
+	holder.self.VersionMap = make(map[int]uint64)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -73,46 +74,7 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		return
 	}
 
-	// collect attached index files and make file for them
-	dir := segFile.GetDir()
-	infos, err := ioutil.ReadDir(dir)
-	if err != nil {
-		panic(err)
-	}
-	bsiFiles := make([]string, 0)
-	for _, info := range infos {
-		if strings.HasSuffix(info.Name(), ".bsi") && strings.HasPrefix(info.Name(), fmt.Sprintf("1_%d", holder.ID.SegmentID)) {
-			bsiFiles = append(bsiFiles, info.Name())
-		}
-	}
-
-	for _, filename := range bsiFiles {
-		file, err := os.Open(filepath.Join(dir, filename))
-		if err != nil {
-			panic(err)
-		}
-		idxMeta, err := DefaultRWHelper.ReadIndicesMeta(*file)
-		if err != nil {
-			panic(err)
-		}
-		if idxMeta.Data == nil || len(idxMeta.Data) != 1 {
-			panic("logic error")
-		}
-		col := int(idxMeta.Data[0].Cols.ToArray()[0])
-		id := common.ID{}
-		id.SegmentID = holder.ID.SegmentID
-		id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
-		vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
-		// TODO: str bsi
-		node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
-		idxes, ok := holder.self.ColIndices[col]
-		if !ok {
-			idxes = make([]int, 0)
-			holder.self.ColIndices[col] = idxes
-		}
-		holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
-		holder.self.Indices = append(holder.self.Indices, node)
-	}
+	//holder.LoadIndex(segFile)
 
 	// init embed index
 	for _, meta := range indicesMeta.Data {
@@ -138,6 +100,64 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		holder.self.Indices = append(holder.self.Indices, node)
 	}
 	holder.Inited = true
+}
+
+func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
+	// collect attached index files and make file for them
+	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
+		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
+			panic("unexpected error")
+		}
+		build := false
+		if v, ok := holder.self.VersionMap[int(col)]; !ok {
+			holder.self.VersionMap[int(col)] = version
+			build = true
+		} else {
+			if version > v {
+				holder.self.VersionMap[int(col)] = version
+				build = true
+			} else {
+				// stale index
+				build = false
+			}
+		}
+		if build {
+			file, err := os.Open(filename)
+			if err != nil {
+				panic(err)
+			}
+			idxMeta, err := DefaultRWHelper.ReadIndicesMeta(*file)
+			if err != nil {
+				panic(err)
+			}
+			if idxMeta.Data == nil || len(idxMeta.Data) != 1 {
+				panic("logic error")
+			}
+			col := int(idxMeta.Data[0].Cols.ToArray()[0])
+			id := common.ID{}
+			id.SegmentID = holder.ID.SegmentID
+			id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
+			vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
+			// TODO: str bsi
+			node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+			idxes, ok := holder.self.ColIndices[col]
+			if !ok {
+				idxes = make([]int, 0)
+				holder.self.ColIndices[col] = idxes
+			}
+			holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
+			holder.self.Indices = append(holder.self.Indices, node)
+			logutil.Infof("BSI load successfully | %s", filename)
+			return
+		}
+		logutil.Warnf("stale index")
+		return
+	}
+	panic("unexpected error")
 }
 
 func (holder *SegmentHolder) close() {
@@ -393,6 +413,14 @@ func (holder *SegmentHolder) stringNoLock() string {
 		holder.tree.BlockCnt, holder.RefCount())
 	for _, blk := range holder.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.stringNoLock())
+	}
+	return s
+}
+
+func (holder *SegmentHolder) stringIndicesRefsNoLock() string {
+	s := fmt.Sprintf("<SEGHOLDER[%s]>[Indices cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
+	for i, idx := range holder.self.Indices {
+		s += fmt.Sprintf("<Index[%d]>[Ref cnt=%d]\n", i, idx.RefCount())
 	}
 	return s
 }

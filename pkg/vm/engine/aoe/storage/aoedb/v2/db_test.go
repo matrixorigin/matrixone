@@ -736,7 +736,7 @@ func TestDropTable2(t *testing.T) {
 }
 
 // Test bsi file flushed with segment file when metadata contains bsi.
-func TestE2E(t *testing.T) {
+func TestFilters(t *testing.T) {
 	if !dataio.FlushIndex {
 		dataio.FlushIndex = true
 		defer func() {
@@ -821,6 +821,89 @@ func TestE2E(t *testing.T) {
 	t.Log(inst.IndexBufMgr.String())
 	inst.Close()
 }
+
+func TestRebuildIndices(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchema(2)
+	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
+		Id:      0,
+		Type:    metadata.NumBsi,
+		Columns: []uint16{1},
+	})
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(10)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	//t.Log(tblData.String())
+	//t.Log(tblData.GetIndexHolder().String())
+
+	segs := tblData.SegmentIds()
+	for _, segId := range segs {
+		seg := tblData.WeakRefSegment(segId)
+		seg.GetIndexHolder().Init(seg.GetSegmentFile())
+		//t.Log(seg.GetIndexHolder().Inited)
+		segment := &db.Segment{
+			Data: seg,
+			Ids:  new(atomic.Value),
+		}
+		spf := segment.NewSparseFilter()
+		f := segment.NewFilter()
+		sumr := segment.NewSummarizer()
+		t.Log(spf.Eq("mock_0", int32(1)))
+		t.Log(f == nil)
+		t.Log(sumr.Count("mock_1", nil))
+		//t.Log(spf.Eq("mock_0", int32(1)))
+		//t.Log(f.Eq("mock_0", int32(-1)))
+		//t.Log(sumr.Count("mock_0", nil))
+		t.Log(inst.IndexBufMgr.String())
+	}
+	time.Sleep(10*time.Millisecond)
+	t.Log(tblData.GetIndexHolder().StringIndicesRefs())
+	inst.Close()
+
+	//inst, gen, database = initTestDB3(t)
+	//tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	//assert.Nil(t, err)
+	//t.Log(tblData.String())
+	//t.Log(tblData.GetIndexHolder().String())
+	//inst.Close()
+}
+
 func TestEngine(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)

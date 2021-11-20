@@ -160,6 +160,8 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	flushblkHandler.Start()
 	flushsegHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.SegmentWriters), nil)
 	flushsegHandler.Start()
+	flushIndexHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.IndexWriters), nil)
+	flushIndexHandler.Start()
 	metaHandler := sched.NewSingleWorkerHandler("metaHandler")
 	metaHandler.Start()
 	memdataHandler := sched.NewSingleWorkerHandler("memdataHandler")
@@ -314,6 +316,10 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 		return
 	}
 	event.Segment.Unref()
+	// start flush index
+	flushCtx := &Context{Opts: s.opts}
+	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
+	s.Schedule(newevent)
 }
 
 func (s *scheduler) OnExecDone(op interface{}) {
