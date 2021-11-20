@@ -15,16 +15,13 @@
 package db
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
@@ -138,50 +135,13 @@ func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, err
 	return handle, nil
 }
 
-func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, error) {
-	var err error
-	handle := d.MemTableMgr.StrongRefTable(meta.Id)
-	if handle != nil {
-		return handle, nil
-	}
-	eCtx := &sched.Context{
-		Opts:     d.Opts,
-		Waitable: true,
-	}
-	e := sched.NewInstallTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
-	if err = d.Scheduler.Schedule(e); err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if err = e.WaitDone(); err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	handle = e.Handle
-	if handle == nil {
-		err = ErrNotFound
-	}
-	return handle, err
-}
-
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
-		eCtx := &sched.Context{
-			Opts:     d.Opts,
-			Waitable: true,
-		}
-		e := sched.NewInstallTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		handle := e.Handle
+		d.Store.DataTables.RegisterTable(meta)
 		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			handle.Unref()
 			return nil, err
 		}
-		handle.Unref()
 	}
 	return data, nil
 }
