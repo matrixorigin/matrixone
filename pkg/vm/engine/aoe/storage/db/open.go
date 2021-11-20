@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	sched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -112,7 +112,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.Catalog = opts.Meta.Catalog
 	db.Store.Catalog.Start()
 
-	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
+	db.Opts.Scheduler = sched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -51,7 +50,7 @@ func TestBasicOps(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, tbl)
 
-	eCtx := &dbsched.Context{Opts: opts, Waitable: true}
+	eCtx := &sched.Context{Opts: opts, Waitable: true}
 	createBlkE := NewCreateBlkEvent(eCtx, tbl, nil, nil)
 	opts.Scheduler.Schedule(createBlkE)
 	err = createBlkE.WaitDone()
@@ -63,11 +62,11 @@ func TestBasicOps(t *testing.T) {
 
 	blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
 
-	schedCtx := &dbsched.Context{
+	schedCtx := &sched.Context{
 		Opts:     opts,
 		Waitable: true,
 	}
-	commitCtx := &dbsched.Context{Opts: opts, Waitable: true}
+	commitCtx := &sched.Context{Opts: opts, Waitable: true}
 	commitCtx.AddMetaScope()
 	commitE := sched.NewCommitBlkEvent(commitCtx, blk1)
 	opts.Scheduler.Schedule(commitE)

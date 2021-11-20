@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -257,7 +256,7 @@ func (ss *ssLoader) ScheduleEvents(d *DB) error {
 		defer table.Unref()
 		segment := table.StrongRefSegment(meta.Id)
 		flushCtx := &sched.Context{Opts: d.Opts}
-		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
 		d.Scheduler.Schedule(flushEvent)
 	}
 	return nil
