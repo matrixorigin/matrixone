@@ -548,7 +548,7 @@ func (ts *Tables) InstallTableLocked(table iface.ITableData) error {
 func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) (iface.ITableData, error) {
 	data := newTableData(ts, meta)
 	for _, segMeta := range meta.SegmentSet {
-		if segMeta.IsSortedLocked() || !segMeta.Appendable() {
+		if segMeta.IsSortedLocked() || !segMeta.AppendableLocked() {
 			segData, err := data.RegisterSegment(segMeta)
 			if err != nil {
 				return nil, err

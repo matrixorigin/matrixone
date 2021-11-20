@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
-	me "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -91,17 +91,17 @@ func (c *mutableTable) String() string {
 }
 
 func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
-	ctx := &sif.Context{Opts: c.mgr.opts, Waitable: true}
 	var prevMeta *metadata.Block
 	if c.mutBlk != nil {
 		prevMeta = c.mutBlk.GetMeta()
 	}
-	e := me.NewCreateBlkEvent(ctx, c.data.GetMeta(), prevMeta, c.data)
+	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
+	ctx := &memdata.Context{Opts: c.mgr.opts, Waitable: true}
+	e := memdata.NewCreateSegBlkEvent(ctx, meta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err
 	}
-	meta = e.GetBlock()
 	return meta, e.Block, nil
 }
 
