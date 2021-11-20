@@ -15,6 +15,7 @@
 package memdata
 
 import (
+	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -30,7 +31,7 @@ type createTableEvent struct {
 func NewCreateTableEvent(ctx *Context) *createTableEvent {
 	e := &createTableEvent{}
 	e.BaseEvent = BaseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, dbsched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 		Ctx:       ctx,
 	}
 	return e

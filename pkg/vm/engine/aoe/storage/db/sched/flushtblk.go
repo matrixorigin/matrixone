@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
@@ -39,7 +38,7 @@ func NewFlushTransientBlockEvent(ctx *Context, n base.INode, data batch.IBatch, 
 		Data: data,
 		Meta: meta,
 	}
-	e.BaseEvent = *NewBaseEvent(e, sched.FlushTBlkTask, ctx)
+	e.BaseEvent = *NewBaseEvent(e, FlushTBlkTask, ctx)
 	return e
 }
 

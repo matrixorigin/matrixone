@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type flushSegEvent struct {
@@ -30,7 +29,7 @@ type flushSegEvent struct {
 
 func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 	e := &flushSegEvent{Segment: seg}
-	e.BaseEvent = *NewBaseEvent(e, sched.FlushSegTask, ctx)
+	e.BaseEvent = *NewBaseEvent(e, FlushSegTask, ctx)
 	return e
 }
 

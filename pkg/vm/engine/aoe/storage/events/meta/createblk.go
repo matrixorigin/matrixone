@@ -15,15 +15,14 @@
 package meta
 
 import (
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type createBlkEvent struct {
-	dbsched.BaseEvent
+	sched.BaseEvent
 
 	TableMeta *metadata.Table
 
@@ -37,13 +36,13 @@ type createBlkEvent struct {
 }
 
 // NewCreateBlkEvent creates a logical Block event
-func NewCreateBlkEvent(ctx *dbsched.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
+func NewCreateBlkEvent(ctx *sched.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
 		TableMeta: tableMeta,
 		PrevMeta:  prevBlock,
 	}
-	e.BaseEvent = *dbsched.NewBaseEvent(e, sched.MetaCreateBlkTask, ctx)
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.MetaCreateBlkTask, ctx)
 	return e
 }
 

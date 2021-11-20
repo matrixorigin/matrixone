@@ -18,15 +18,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type dropTableEvent struct {
-	dbsched.BaseEvent
+	sched.BaseEvent
 
 	// reqCtx is Op context, record the raft log index and table name
 	reqCtx dbi.DropTableCtx
@@ -39,13 +38,13 @@ type dropTableEvent struct {
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr base.IManager, tables *table.Tables) *dropTableEvent {
+func NewDropTableEvent(ctx *sched.Context, reqCtx dbi.DropTableCtx, mtMgr base.IManager, tables *table.Tables) *dropTableEvent {
 	e := &dropTableEvent{
 		reqCtx: reqCtx,
 		Tables: tables,
 		MTMgr:  mtMgr,
 	}
-	e.BaseEvent = *dbsched.NewBaseEvent(e, sched.MetaDropTableTask, ctx)
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.MetaDropTableTask, ctx)
 	return e
 }
 

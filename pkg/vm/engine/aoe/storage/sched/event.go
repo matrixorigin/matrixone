@@ -32,26 +32,7 @@ type EventType uint16
 const (
 	EmptyEvent EventType = iota
 	MockEvent
-	IOBoundEvent
-	CpuBoundEvent
-	StatelessEvent
-	MetaUpdateEvent
-	MemdataUpdateEvent
-	MergeSortEvent
-
-	PrepareCommitBlockTask
-	PrecommitBlkMetaTask
-	FlushBlkTask
-	FlushTBlkTask
-	MetaCreateTableTask
-	MetaDropTableTask
-	MetaCreateBlkTask
-	CommitBlkTask
-	FlushTableMetaTask
-	FlushInfoMetaTask
-	UpgradeBlkTask
-	UpgradeSegTask
-	FlushSegTask
+	CustomizedEvent
 )
 
 func GetNextEventId() uint64 {
