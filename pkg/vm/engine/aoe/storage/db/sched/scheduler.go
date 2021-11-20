@@ -373,14 +373,13 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 	panic("not supported")
 }
 
-func (s *scheduler) InstallBlock(meta *metadata.Block, table tif.ITableData) (block tif.IBlock, err error) {
-	segment := table.StrongRefSegment(meta.Segment.Id)
-	if segment == nil {
-		if segment, err = table.RegisterSegment(meta.Segment); err != nil {
-			return
-		}
+func (s *scheduler) InstallBlock(meta *metadata.Block, tableData tif.ITableData) (block tif.IBlock, err error) {
+	ctx := &Context{Opts: s.opts, Waitable: true}
+	e := NewInstallBlockEvent(ctx, meta, tableData)
+	s.Schedule(e)
+	if err = e.WaitDone(); err != nil {
+		return
 	}
-	defer segment.Unref()
-	block, err = table.RegisterBlock(meta)
+	block = e.Block
 	return
 }

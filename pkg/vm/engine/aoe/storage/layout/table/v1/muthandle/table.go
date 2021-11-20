@@ -94,13 +94,8 @@ func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err
 		prevMeta = c.mutBlk.GetMeta()
 	}
 	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
-	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
-	e := sched.NewInstallBlockEvent(ctx, meta, c.data)
-	c.mgr.opts.Scheduler.Schedule(e)
-	if err = e.WaitDone(); err != nil {
-		return nil, nil, err
-	}
-	return meta, e.Block, nil
+	data, err = c.mgr.opts.Scheduler.InstallBlock(meta, c.data)
+	return
 }
 
 func (c *mutableTable) onNoMut() error {
