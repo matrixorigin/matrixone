@@ -103,6 +103,5 @@ func (e *flushIndexEvent) Execute() error {
 		}
 	}
 	defer release()
-
 	return nil
 }
