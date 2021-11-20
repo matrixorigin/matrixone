@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
@@ -65,13 +64,11 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
-	memtblMgr := muthandle.NewManager(opts, flushDriver)
 
 	db = &DB{
 		Dir:            dirname,
 		Opts:           opts,
 		FsMgr:          fsMgr,
-		MemTableMgr:    memtblMgr,
 		IndexBufMgr:    indexBufMgr,
 		MTBufMgr:       mtBufMgr,
 		SSTBufMgr:      sstBufMgr,

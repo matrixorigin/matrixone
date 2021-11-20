@@ -498,7 +498,6 @@ func TestConcurrency(t *testing.T) {
 
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
-	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
 	// t.Log(common.GPool.String())
@@ -981,7 +980,6 @@ func TestEngine(t *testing.T) {
 	twg.Wait()
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
-	t.Log(inst.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
