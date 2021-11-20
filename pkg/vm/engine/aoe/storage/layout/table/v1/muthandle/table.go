@@ -95,7 +95,7 @@ func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err
 		prevMeta = c.mutBlk.GetMeta()
 	}
 	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
-	ctx := &memdata.Context{Opts: c.mgr.opts, Waitable: true}
+	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
 	e := memdata.NewCreateSegBlkEvent(ctx, meta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {

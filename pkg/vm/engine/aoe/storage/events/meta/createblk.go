@@ -59,7 +59,7 @@ func (e *createBlkEvent) Execute() error {
 	e.Result = blk
 
 	if e.TableData != nil {
-		ctx := &memdata.Context{Opts: e.Ctx.Opts, Waitable: true}
+		ctx := &sched.Context{Opts: e.Ctx.Opts, Waitable: true}
 		event := memdata.NewCreateSegBlkEvent(ctx, blk, e.TableData)
 		if err := e.Ctx.Opts.Scheduler.Schedule(event); err != nil {
 			return err

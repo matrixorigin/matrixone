@@ -15,14 +15,13 @@
 package memdata
 
 import (
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type createSegBlkEvent struct {
-	BaseEvent
+	sched.BaseEvent
 
 	// TableData is Table's metadata in memory
 	TableData iface.ITableData
@@ -35,12 +34,9 @@ type createSegBlkEvent struct {
 	Block iface.IBlock
 }
 
-func NewCreateSegBlkEvent(ctx *Context, meta *metadata.Block, tableData iface.ITableData) *createSegBlkEvent {
+func NewCreateSegBlkEvent(ctx *sched.Context, meta *metadata.Block, tableData iface.ITableData) *createSegBlkEvent {
 	e := &createSegBlkEvent{TableData: tableData, BlkMeta: meta}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, dbsched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx)
 	return e
 }
 
