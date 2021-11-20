@@ -97,7 +97,7 @@ func (holder *TableHolder) StringIndicesRefs() string {
 	defer holder.tree.RUnlock()
 	s := ""
 	for _, seg := range holder.tree.Segments {
-		s += seg.stringIndicesRefsNoLock()
+		s += seg.StringIndicesRefsNoLock()
 	}
 	return s
 }

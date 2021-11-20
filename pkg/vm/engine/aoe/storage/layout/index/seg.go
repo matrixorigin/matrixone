@@ -181,9 +181,6 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	}
 	var err error
 	for _, idx := range idxes {
-		val := ctx.Val
-		valMax := ctx.ValMax
-		valMin := ctx.ValMin
 		node := holder.self.Indices[idx].GetManagedNode()
 		err = node.DataNode.(Index).Eval(ctx)
 		if err != nil {
@@ -191,9 +188,6 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 			return err
 		}
 		node.Close()
-		ctx.Val = val
-		ctx.ValMax = valMax
-		ctx.ValMin = valMin
 	}
 	return nil
 }
@@ -417,7 +411,7 @@ func (holder *SegmentHolder) stringNoLock() string {
 	return s
 }
 
-func (holder *SegmentHolder) stringIndicesRefsNoLock() string {
+func (holder *SegmentHolder) StringIndicesRefsNoLock() string {
 	s := fmt.Sprintf("<SEGHOLDER[%s]>[Indices cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
 	for i, idx := range holder.self.Indices {
 		s += fmt.Sprintf("<Index[%d]>[Ref cnt=%d]\n", i, idx.RefCount())
