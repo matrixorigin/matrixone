@@ -9,4 +9,5 @@ import (
 type DBScheduler interface {
 	sched.Scheduler
 	InstallBlock(meta *metadata.Block, table iface.ITableData) (iface.IBlock, error)
+	AsyncFlushBlock(block iface.IMutBlock)
 }

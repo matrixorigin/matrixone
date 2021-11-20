@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	tif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -382,4 +383,10 @@ func (s *scheduler) InstallBlock(meta *metadata.Block, tableData tif.ITableData)
 	}
 	block = e.Block
 	return
+}
+
+func (s *scheduler) AsyncFlushBlock(block iface.IMutBlock) {
+	ctx := &Context{Opts: s.opts}
+	e := NewFlushMemBlockEvent(ctx, block)
+	s.Schedule(e)
 }
