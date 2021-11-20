@@ -178,7 +178,7 @@ func (c *tableAppender) Append(bat *batch.Batch, index *shard.SliceIndex) (err e
 }
 
 func (c *tableAppender) Close() error {
-	c.Unref()
 	c.data.Unref()
+	c.Unref()
 	return nil
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -52,11 +53,11 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
 func (d *DB) DoFlushTable(meta *metadata.Table) error {
-	handle, err := d.MakeTableMutationHandle(meta)
+	handle, err := d.MakeMutationHandle(meta)
 	if err != nil {
 		return err
 	}
-	defer handle.Unref()
+	defer handle.Close()
 	return handle.Flush()
 }
 
@@ -113,12 +114,28 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 }
 
 func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.SliceIndex) error {
-	handle, err := d.MakeTableMutationHandle(meta)
+	handle, err := d.MakeMutationHandle(meta)
 	if err != nil {
 		return err
 	}
-	defer handle.Unref()
+	defer handle.Close()
 	return handle.Append(data, index)
+}
+
+func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, error) {
+	handle, err := d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+	if err != nil {
+		tableData, err := d.Store.DataTables.RegisterTable(meta)
+		if err == nil {
+			handle = tableData.MakeMutationHandle()
+		} else if err == metadata.DuplicateErr {
+			handle, err = d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return handle, nil
 }
 
 func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, error) {

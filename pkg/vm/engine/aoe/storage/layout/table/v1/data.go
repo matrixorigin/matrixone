@@ -48,8 +48,6 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)
 
-	data.appender = newTableAppender(host.Opts, data)
-
 	data.OnZeroCB = data.close
 	data.Ref()
 	return data
@@ -70,6 +68,10 @@ type tableData struct {
 	indexHolder *index.TableHolder
 	blkFactory  iface.IBlockFactory
 	appender    *tableAppender
+}
+
+func (td *tableData) InitAppender() {
+	td.appender = newTableAppender(td.host.Opts, td)
 }
 
 func (td *tableData) MakeMutationHandle() iface.MutationHandle {
@@ -514,13 +516,32 @@ func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
 
 func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) {
 	tbl := newTableData(ts, meta)
+	tbl.InitAppender()
 	ts.Lock()
 	defer ts.Unlock()
+	if meta.IsCloseLocked() {
+		return nil, metadata.TableNotFoundErr
+	}
 	if err := ts.CreateTableNoLock(tbl); err != nil {
 		tbl.Unref()
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func (ts *Tables) MakeTableMutationHandle(id uint64) (handle iface.MutationHandle, err error) {
+	var t iface.ITableData
+	ts.RLock()
+	t, err = ts.GetTableNoLock(id)
+	if err != nil {
+		ts.RUnlock()
+		return
+	}
+	t.Ref()
+	ts.RUnlock()
+	handle = t.MakeMutationHandle()
+	t.Unref()
+	return
 }
 
 func (ts *Tables) ForTables(fn func(iface.ITableData) error) error {
@@ -542,7 +563,7 @@ func (ts *Tables) ForTablesLocked(fn func(iface.ITableData) error) error {
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
-		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))
+		return metadata.DuplicateErr
 	}
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl
@@ -556,6 +577,7 @@ func (ts *Tables) InstallTable(table iface.ITableData) error {
 }
 
 func (ts *Tables) InstallTableLocked(table iface.ITableData) error {
+	table.InitAppender()
 	return ts.CreateTableNoLock(table)
 }
 

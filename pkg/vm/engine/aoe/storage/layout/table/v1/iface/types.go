@@ -39,6 +39,7 @@ type MutationHandle interface {
 	Flush() error
 	String() string
 	GetMeta() *metadata.Table
+	RefCount() int64
 }
 
 type ITableData interface {
@@ -70,6 +71,7 @@ type ITableData interface {
 
 	// init ReplayIndex and rowCount
 	InitReplay()
+	InitAppender()
 
 	// RegisterSegment creates and registers a logical segment
 	RegisterSegment(meta *metadata.Segment) (seg ISegment, err error)
