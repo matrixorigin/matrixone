@@ -12,18 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memdata
+package sched
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type createTableEvent struct {
-	sched.BaseEvent
+type installTableEvent struct {
+	BaseEvent
 
 	// Handle manages the memTable data of a table(creates Block and
 	// creates memTable) and provides Append() interface externally
@@ -33,20 +32,20 @@ type createTableEvent struct {
 	Meta   *metadata.Table
 }
 
-func NewCreateTableEvent(ctx *sched.Context, meta *metadata.Table, mtMgr mtif.IManager, tables *table.Tables) *createTableEvent {
-	e := &createTableEvent{
+func NewInstallTableEvent(ctx *Context, meta *metadata.Table, mtMgr mtif.IManager, tables *table.Tables) *installTableEvent {
+	e := &installTableEvent{
 		MTMgr:  mtMgr,
 		Meta:   meta,
 		Tables: tables,
 	}
-	e.BaseEvent = *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx)
+	e.BaseEvent = *NewBaseEvent(e, MemdataUpdateEvent, ctx)
 	return e
 }
 
 // 1. Create a Handle
 // 2. Create and register a TableData
 // 3. Register Handle to the memTable manager
-func (e *createTableEvent) Execute() error {
+func (e *installTableEvent) Execute() error {
 	handle := e.MTMgr.StrongRefTable(e.Meta.Id)
 	if handle != nil {
 		e.Handle = handle

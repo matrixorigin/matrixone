@@ -16,7 +16,6 @@ package meta
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -60,7 +59,7 @@ func (e *createBlkEvent) Execute() error {
 
 	if e.TableData != nil {
 		ctx := &sched.Context{Opts: e.Ctx.Opts, Waitable: true}
-		event := memdata.NewCreateSegBlkEvent(ctx, blk, e.TableData)
+		event := sched.NewInstallBlockEvent(ctx, blk, e.TableData)
 		if err := e.Ctx.Opts.Scheduler.Schedule(event); err != nil {
 			return err
 		}

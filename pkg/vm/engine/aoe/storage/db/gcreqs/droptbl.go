@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
@@ -56,7 +55,7 @@ func (req *dropTblRequest) Execute() error {
 		Opts:     req.Opts,
 		Waitable: true,
 	}
-	e := memdata.NewDropTableEvent(ctx, req.Meta.Id, req.Tables)
+	e := sched.NewUninstallTableEvent(ctx, req.Meta.Id, req.Tables)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {
 		return err

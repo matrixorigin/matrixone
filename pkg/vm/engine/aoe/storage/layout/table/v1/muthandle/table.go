@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -96,7 +95,7 @@ func (c *mutableTable) onNoBlock() (meta *metadata.Block, data iface.IBlock, err
 	}
 	meta = c.meta.SimpleGetOrCreateNextBlock(prevMeta)
 	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
-	e := memdata.NewCreateSegBlkEvent(ctx, meta, c.data)
+	e := sched.NewInstallBlockEvent(ctx, meta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err

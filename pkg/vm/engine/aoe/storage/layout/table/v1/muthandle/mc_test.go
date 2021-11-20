@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -128,12 +127,12 @@ func TestMutTable(t *testing.T) {
 		Opts:     opts,
 		Waitable: true,
 	}
-	createTblE := memdata.NewCreateTableEvent(eCtx, tbl, manager, tables)
+	createTblE := sched.NewInstallTableEvent(eCtx, tbl, manager, tables)
 	opts.Scheduler.Schedule(createTblE)
 	err = createTblE.WaitDone()
 	assert.Nil(t, err)
 
-	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.Id, tables)
+	dropTblE := sched.NewUninstallTableEvent(eCtx, tbl.Id, tables)
 	opts.Scheduler.Schedule(dropTblE)
 	err = dropTblE.WaitDone()
 	assert.Nil(t, err)

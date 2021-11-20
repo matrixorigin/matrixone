@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memdata
+package sched
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 )
 
-type dropTableEvent struct {
-	sched.BaseEvent
+type uninstallTableEvent struct {
+	BaseEvent
 
 	// Table's id, aoe is generated when the table is created
 	TableId uint64
@@ -31,17 +30,17 @@ type dropTableEvent struct {
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *sched.Context, tableId uint64, tables *table.Tables) *dropTableEvent {
-	e := &dropTableEvent{
+func NewUninstallTableEvent(ctx *Context, tableId uint64, tables *table.Tables) *uninstallTableEvent {
+	e := &uninstallTableEvent{
 		TableId: tableId,
 		Tables:  tables,
 	}
-	e.BaseEvent = *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx)
+	e.BaseEvent = *NewBaseEvent(e, MemdataUpdateEvent, ctx)
 	return e
 }
 
 // Remove and release a table from Tables
-func (e *dropTableEvent) Execute() error {
+func (e *uninstallTableEvent) Execute() error {
 	tbl, err := e.Tables.DropTable(e.TableId)
 	e.Data = tbl
 	return err

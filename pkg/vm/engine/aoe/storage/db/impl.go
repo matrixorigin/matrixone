@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -132,7 +131,7 @@ func (d *DB) MakeTableMutationHandle(meta *metadata.Table) (base.MutableTable, e
 		Opts:     d.Opts,
 		Waitable: true,
 	}
-	e := memdata.NewCreateTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
+	e := sched.NewInstallTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
 	if err = d.Scheduler.Schedule(e); err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
 	}
@@ -153,7 +152,7 @@ func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 			Opts:     d.Opts,
 			Waitable: true,
 		}
-		e := memdata.NewCreateTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
+		e := sched.NewInstallTableEvent(eCtx, meta, d.MemTableMgr, d.Store.DataTables)
 		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
