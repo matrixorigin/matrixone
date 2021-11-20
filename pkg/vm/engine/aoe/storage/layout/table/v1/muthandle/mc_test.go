@@ -23,8 +23,6 @@ import (
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -113,14 +111,7 @@ func TestMutTable(t *testing.T) {
 	t.Log(sstBufMgr.String())
 	assert.Equal(t, 0, mgr.Count())
 
-	ctx := &sched.Context{
-		Waitable: true,
-		Opts:     opts,
-	}
-	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{ShardId: shardId, DBName: database.Name, TableName: tbl.Schema.Name,
-		OpIndex: gen.Alloc(shardId)}, manager, tables)
-	opts.Scheduler.Schedule(dropBlkE)
-	err = dropBlkE.WaitDone()
+	err = tbl.SimpleSoftDelete(gen.Next(database.GetShardId()))
 	assert.Nil(t, err)
 
 	eCtx := &sched.Context{
