@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
@@ -416,7 +416,7 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		if segment == nil {
 			panic(fmt.Sprintf("segment %d is nil", ctx.id.SegmentID))
 		}
-		flushCtx := &sif.Context{Opts: opts}
+		flushCtx := &sched.Context{Opts: opts}
 		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
 		opts.Scheduler.Schedule(flushEvent)
 	}

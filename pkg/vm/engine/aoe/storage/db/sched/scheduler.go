@@ -20,8 +20,8 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	tif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -64,7 +64,7 @@ func (p *metablkCommiter) Register(blkid uint64) {
 }
 
 func (p *metablkCommiter) doSchedule(meta *metadata.Block) {
-	ctx := &iface.Context{Opts: p.opts}
+	ctx := &Context{Opts: p.opts}
 	commit := NewCommitBlkEvent(ctx, meta)
 	p.scheduler.Schedule(commit)
 }
@@ -238,7 +238,7 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 		return
 	}
 	newMeta := event.Meta
-	mctx := &iface.Context{Opts: s.opts}
+	mctx := &Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.Id)
 	if err != nil {
 		s.opts.EventListener.BackgroundErrorCB(err)
@@ -275,7 +275,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 		return
 	}
 	logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.Id)
-	flushCtx := &iface.Context{Opts: s.opts}
+	flushCtx := &Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
 	s.Schedule(flushEvent)
 }
@@ -289,7 +289,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
-	ctx := &iface.Context{Opts: s.opts}
+	ctx := &Context{Opts: s.opts}
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
@@ -371,4 +371,16 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 		return nil
 	}
 	panic("not supported")
+}
+
+func (s *scheduler) InstallBlock(meta *metadata.Block, table tif.ITableData) (block tif.IBlock, err error) {
+	segment := table.StrongRefSegment(meta.Segment.Id)
+	if segment == nil {
+		if segment, err = table.RegisterSegment(meta.Segment); err != nil {
+			return
+		}
+	}
+	defer segment.Unref()
+	block, err = table.RegisterBlock(meta)
+	return
 }

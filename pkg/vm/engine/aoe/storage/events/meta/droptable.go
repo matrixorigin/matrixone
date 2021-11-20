@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/muthandle/base"
@@ -40,16 +39,13 @@ type dropTableEvent struct {
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *iface.Context, reqCtx dbi.DropTableCtx, mtMgr base.IManager, tables *table.Tables) *dropTableEvent {
+func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr base.IManager, tables *table.Tables) *dropTableEvent {
 	e := &dropTableEvent{
 		reqCtx: reqCtx,
 		Tables: tables,
 		MTMgr:  mtMgr,
 	}
-	e.BaseEvent = dbsched.BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaDropTableTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *dbsched.NewBaseEvent(e, sched.MetaDropTableTask, ctx)
 	return e
 }
 

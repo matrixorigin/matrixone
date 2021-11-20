@@ -16,7 +16,6 @@ package sched
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
@@ -26,14 +25,11 @@ type precommitBlockEvent struct {
 	Id common.ID
 }
 
-func NewPrecommitBlockEvent(ctx *iface.Context, id common.ID) *precommitBlockEvent {
+func NewPrecommitBlockEvent(ctx *Context, id common.ID) *precommitBlockEvent {
 	e := &precommitBlockEvent{
 		Id: id,
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.PrecommitBlkMetaTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, sched.PrecommitBlkMetaTask, ctx)
 	return e
 }
 

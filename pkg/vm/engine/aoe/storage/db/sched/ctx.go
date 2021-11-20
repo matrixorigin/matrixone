@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package iface
+package sched
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"

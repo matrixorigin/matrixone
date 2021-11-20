@@ -15,7 +15,6 @@ package sched
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
@@ -33,17 +32,14 @@ type flushTransientBlockEvent struct {
 	File *dataio.TransientBlockFile
 }
 
-func NewFlushTransientBlockEvent(ctx *iface.Context, n base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) *flushTransientBlockEvent {
+func NewFlushTransientBlockEvent(ctx *Context, n base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) *flushTransientBlockEvent {
 	e := &flushTransientBlockEvent{
 		Node: n,
 		File: file,
 		Data: data,
 		Meta: meta,
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushTBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, sched.FlushTBlkTask, ctx)
 	return e
 }
 

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -115,7 +114,7 @@ func (c *mutableTable) onNoMut() error {
 }
 
 func (c *mutableTable) onImmut() {
-	ctx := &sif.Context{Opts: c.mgr.opts}
+	ctx := &sched.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
 	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()
