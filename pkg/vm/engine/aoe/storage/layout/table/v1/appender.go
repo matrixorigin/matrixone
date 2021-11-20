@@ -1,7 +1,6 @@
 package table
 
 import (
-	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -14,14 +13,6 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
-
-type MutationHandle interface {
-	io.Closer
-	Append(bat *batch.Batch, index *shard.SliceIndex) (err error)
-	Flush() error
-	String() string
-	GetMeta() *metadata.Table
-}
 
 type tableAppender struct {
 	common.RefHelper

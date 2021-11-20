@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"io"
 
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -29,7 +30,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
+
+type MutationHandle interface {
+	io.Closer
+	Append(bat *gbat.Batch, index *shard.SliceIndex) (err error)
+	Flush() error
+	String() string
+	GetMeta() *metadata.Table
+}
 
 type ITableData interface {
 	common.IRef
@@ -102,6 +112,8 @@ type ITableData interface {
 	// GetRowCount to get the row count of the table
 	GetRowCount() uint64
 	AddRows(uint64) uint64
+
+	MakeMutationHandle() MutationHandle
 
 	// GetMeta to get the Table's metadate when the Table is created
 	GetMeta() *metadata.Table

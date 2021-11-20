@@ -72,7 +72,7 @@ type tableData struct {
 	appender    *tableAppender
 }
 
-func (td *tableData) MakeMutationHandle() MutationHandle {
+func (td *tableData) MakeMutationHandle() iface.MutationHandle {
 	td.Ref()
 	td.appender.Ref()
 	return td.appender
