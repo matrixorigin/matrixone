@@ -56,7 +56,7 @@ func TestBlock(t *testing.T) {
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager("/tmp", true)
 
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
 
 	dbName := "db1"
 	shardId := uint64(0)

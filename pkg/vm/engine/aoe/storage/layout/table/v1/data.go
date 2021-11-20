@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
@@ -46,6 +47,9 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)
+
+	data.appender = newTableAppender(host.Opts, data)
+
 	data.OnZeroCB = data.close
 	data.Ref()
 	return data
@@ -65,6 +69,13 @@ type tableData struct {
 	meta        *metadata.Table
 	indexHolder *index.TableHolder
 	blkFactory  iface.IBlockFactory
+	appender    *tableAppender
+}
+
+func (td *tableData) MakeMutationHandle() MutationHandle {
+	td.Ref()
+	td.appender.Ref()
+	return td.appender
 }
 
 func (td *tableData) StrongRefLastBlock() iface.IBlock {
@@ -80,6 +91,7 @@ func (td *tableData) StrongRefLastBlock() iface.IBlock {
 
 func (td *tableData) close() {
 	td.indexHolder.Unref()
+	td.appender.Unref()
 	for _, segment := range td.tree.segments {
 		segment.Unref()
 	}
@@ -421,13 +433,14 @@ type Tables struct {
 	ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
 
+	Opts                             *storage.Options
 	FsMgr                            base.IManager
 	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
 
 	MutFactory fb.MutFactory
 }
 
-func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
+func NewTables(opts *storage.Options, mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
 	return &Tables{
 		RWMutex:     mu,
 		Data:        make(map[uint64]iface.ITableData),
@@ -437,6 +450,7 @@ func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, index
 		SSTBufMgr:   sstBufMgr,
 		IndexBufMgr: indexBufMgr,
 		FsMgr:       fsMgr,
+		Opts:        opts,
 	}
 }
 

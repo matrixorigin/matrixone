@@ -55,7 +55,7 @@ func TestBase1(t *testing.T) {
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(2000)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tables := NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	tblData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 

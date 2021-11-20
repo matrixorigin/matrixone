@@ -83,7 +83,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	}
 
 	db.Store.Mu = &opts.Mu
-	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
+	db.Store.DataTables = table.NewTables(opts, &opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	factory := factories.NewMutFactory(mutNodeMgr, nil)
 	db.Store.DataTables.MutFactory = factory
 

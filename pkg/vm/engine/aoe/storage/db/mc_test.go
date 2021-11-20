@@ -51,7 +51,7 @@ func TestMutTable(t *testing.T) {
 	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
 	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
 	sstBufMgr := bmgr.NewBufferManager(dir, capacity)
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	opts.Scheduler = sched.NewScheduler(opts, tables)
 
 	schema := metadata.MockSchema(2)
