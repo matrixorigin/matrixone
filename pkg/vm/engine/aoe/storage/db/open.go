@@ -124,7 +124,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
-	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables, db.MemTableMgr)
+	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables)
 
 	db.Opts.GC.Acceptor.Accept(gcreqs.NewCatalogCompactionRequest(db.Store.Catalog, db.Opts.MetaCleanerCfg.Interval))
 	os.RemoveAll(db.GetTempDir())

@@ -147,12 +147,12 @@ func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 }
 
 func (d *DB) ScheduleGCDatabase(database *metadata.Database) {
-	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
 
 func (d *DB) ScheduleGCTable(meta *metadata.Table) {
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, nil)
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, nil)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
 
