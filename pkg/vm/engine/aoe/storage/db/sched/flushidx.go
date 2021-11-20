@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	sif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -33,7 +34,7 @@ type flushIndexEvent struct {
 	Segment iface.ISegment
 }
 
-func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
+func NewFlushIndexEvent(ctx *sif.Context, host iface.ISegment) *flushIndexEvent {
 	e := &flushIndexEvent{Segment: host}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
