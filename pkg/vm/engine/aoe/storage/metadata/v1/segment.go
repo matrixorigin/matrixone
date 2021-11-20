@@ -410,6 +410,11 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
+func (e *Segment) DryUpgrade(size int64) {
+	e.CommitInfo.Op = OpUpgradeSorted
+	e.CommitInfo.Size = size
+}
+
 // Not safe
 // One writer, multi-readers
 func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {

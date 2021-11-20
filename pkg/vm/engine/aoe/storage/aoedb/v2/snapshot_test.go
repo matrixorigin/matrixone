@@ -761,3 +761,128 @@ func TestSnapshot8(t *testing.T) {
 
 	aoedb2.Close()
 }
+
+// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// 1.  Create db isntance and create a database           [   0,        0     ]
+// 2.  Disable upgrade segment                            [   0,        0     ]
+// 3.  Create 2 tables: 1-1 [1,?], 1-2 [2,?]              [   2,        ?     ]
+// 4.  Append 35/10 (MaxBlockRows) rows into (1-1)        [   3,        2     ]
+// 5.  Append 35/10 (MaxBlockRows) rows into (1-2)        [   4,        2     ]
+// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
+// 7.  Create snapshot, the snapshot index should be [4]  [   -,        4     ]
+// 8.  Create another db instance
+// 9.  Apply previous created snapshot
+// 10. Check:
+//     1) database exists 2) database checkpoint id is
+//     3) check segment flushed
+// 11. Restart new db instance and check again
+func TestSnapshot9(t *testing.T) {
+	initTestEnv(t)
+	prepareSnapshotPath(defaultSnapshotPath, t)
+	// 1. Create a db instance and a database
+	inst, gen, database := initTestDB1(t)
+	defer inst.Close()
+	// shardId := database.GetShardId()
+	// idxGen := gen.Shard(shardId)
+
+	// 2. Disable upgrade segment
+	inst.Scheduler.ExecCmd(sched.TurnOffUpgradeSegmentMetaCmd)
+
+	// 3. Create 2 tables
+	schemas := make([]*metadata.Schema, 2)
+	var createCtx *CreateTableCtx
+	for i, _ := range schemas {
+		schema := metadata.MockSchema(i + 1)
+		createCtx = &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
+		assert.Nil(t, err)
+		schemas[i] = schema
+	}
+
+	// 4. Append rows to 1-1
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
+	ck0 := mock.MockBatch(schemas[0].Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
+	err := inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 5. Append rows to 1-2
+	ck1 := mock.MockBatch(schemas[1].Types(), rows)
+	appendCtx = CreateAppendCtx(database, gen, schemas[1].Name, ck1)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	{
+		t1 := database.SimpleGetTableByName(schemas[1].Name)
+		data1, _ := inst.GetTableData(t1)
+		defer data1.Unref()
+		assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	}
+
+	// 6. Create snapshot
+	createSSCtx := &CreateSnapshotCtx{
+		DB:   database.Name,
+		Path: getSnapshotPath(defaultSnapshotPath, t),
+		Sync: true,
+	}
+	index, err := inst.CreateSnapshot(createSSCtx)
+	assert.Equal(t, 0, database.UncheckpointedCnt())
+	assert.Equal(t, database.GetCheckpointId(), index)
+
+	// 12. Create another db instance
+	aoedb2, gen2, _ := initTestDBWithOptions(t, "aoedb2", database.Name, defaultTestBlockRows, defaultTestSegmentBlocks, nil, wal.BrokerRole)
+
+	// 13. Apply snapshot
+	applySSCtx := &ApplySnapshotCtx{
+		DB:   createSSCtx.DB,
+		Path: createSSCtx.Path,
+	}
+	err = aoedb2.ApplySnapshot(applySSCtx)
+	assert.Nil(t, err)
+	t.Log(aoedb2.Store.Catalog.PString(metadata.PPL1, 0))
+	db2, err := aoedb2.Store.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, err)
+	sorted := 0
+	processor := new(metadata.LoopProcessor)
+	processor.SegmentFn = func(segment *metadata.Segment) error {
+		segment.RLock()
+		defer segment.RUnlock()
+		if segment.IsSortedLocked() {
+			sorted++
+		}
+		return nil
+	}
+	testutils.WaitExpect(200, func() bool {
+		sorted = 0
+		db2.RLock()
+		defer db2.RUnlock()
+		db2.RecurLoopLocked(processor)
+		return sorted == 2
+	})
+	assert.Equal(t, 2, sorted)
+
+	gen2.Reset(db2.GetShardId(), db2.GetCheckpointId())
+	appendCtx = CreateAppendCtx(db2, gen2, schemas[0].Name, ck0)
+	err = aoedb2.Append(appendCtx)
+	assert.Nil(t, err)
+
+	t0 := db2.SimpleGetTableByName(schemas[0].Name)
+	assert.Equal(t, 4, t0.SimpleGetSegmentCount())
+
+	data0, _ := aoedb2.GetTableData(t0)
+	defer data0.Unref()
+	assert.Equal(t, 2*ck0.Length(), int(data0.GetRowCount()))
+
+	t1 := db2.SimpleGetTableByName(schemas[1].Name)
+	assert.Equal(t, 2, t1.SimpleGetSegmentCount())
+
+	data1, _ := aoedb2.GetTableData(t1)
+	defer data1.Unref()
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	t.Log(t1.PString(metadata.PPL1, 0))
+
+	aoedb2.Close()
+}

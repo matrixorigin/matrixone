@@ -34,13 +34,16 @@ const (
 	TurnOnFlushSegmentCmd
 	TurnOffUpgradeSegmentCmd
 	TurnOnUpgradeSegmentCmd
+	TurnOnUpgradeSegmentMetaCmd
+	TurnOffUpgradeSegmentMetaCmd
 )
 
-type commandMask = uint64
+type CmdMask = uint64
 
 const (
-	flushSegMask commandMask = iota
-	upgradeSegMask
+	FlushSegMask CmdMask = iota
+	UpgradeSegMask
+	UpgradeSegMetaMask
 )
 
 type metablkCommiter struct {
@@ -106,18 +109,18 @@ func (p *metablkCommiter) Accept(meta *metadata.Block) {
 	p.Unlock()
 }
 
-type controller struct {
+type Controller struct {
 	cmu  sync.RWMutex
 	mask *roaring64.Bitmap
 }
 
-func newController() *controller {
-	return &controller{
+func NewController() *Controller {
+	return &Controller{
 		mask: roaring64.NewBitmap(),
 	}
 }
 
-func (c *controller) updateMask(mask commandMask, on bool) {
+func (c *Controller) UpdateMask(mask CmdMask, on bool) {
 	c.cmu.Lock()
 	defer c.cmu.Unlock()
 	if on {
@@ -127,7 +130,10 @@ func (c *controller) updateMask(mask commandMask, on bool) {
 	}
 }
 
-func (c *controller) isOn(mask commandMask) bool {
+func (c *Controller) IsOn(mask CmdMask) bool {
+	if c == nil {
+		return true
+	}
 	c.cmu.RLock()
 	defer c.cmu.RLock()
 	return !c.mask.Contains(mask)
@@ -140,7 +146,7 @@ func (c *controller) isOn(mask commandMask) bool {
 // DB space. Basically you can refer to code under sched/ for more
 // implementation details for scheduler itself.
 type scheduler struct {
-	*controller
+	*Controller
 	sched.BaseScheduler
 	opts      *storage.Options
 	tables    *table.Tables
@@ -155,7 +161,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 		BaseScheduler: *sched.NewBaseScheduler("scheduler"),
 		opts:          opts,
 		tables:        tables,
-		controller:    newController(),
+		Controller:    NewController(),
 	}
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
@@ -273,7 +279,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if !event.SegmentClosed {
 		return
 	}
-	if !s.isOn(flushSegMask) {
+	if !s.IsOn(FlushSegMask) {
 		logutil.Warn("[Scheduler] Flush Segment Is Turned-Off")
 		return
 	}
@@ -297,12 +303,13 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
-	if !s.isOn(upgradeSegMask) {
+	if !s.IsOn(UpgradeSegMask) {
 		logutil.Warn("[Scheduler] Upgrade Segment Is Turned-Off")
 		event.Segment.Unref()
 		return
 	}
 	ctx := &Context{Opts: s.opts}
+	ctx.Controller = s.Controller
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
@@ -377,16 +384,22 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 	case sched.NoopCmd:
 		return nil
 	case TurnOnFlushSegmentCmd:
-		s.updateMask(flushSegMask, true)
+		s.UpdateMask(FlushSegMask, true)
 		return nil
 	case TurnOffFlushSegmentCmd:
-		s.updateMask(flushSegMask, false)
+		s.UpdateMask(FlushSegMask, false)
 		return nil
 	case TurnOnUpgradeSegmentCmd:
-		s.updateMask(upgradeSegMask, true)
+		s.UpdateMask(UpgradeSegMask, true)
 		return nil
 	case TurnOffUpgradeSegmentCmd:
-		s.updateMask(upgradeSegMask, false)
+		s.UpdateMask(UpgradeSegMask, false)
+		return nil
+	case TurnOnUpgradeSegmentMetaCmd:
+		s.UpdateMask(UpgradeSegMetaMask, true)
+		return nil
+	case TurnOffUpgradeSegmentMetaCmd:
+		s.UpdateMask(UpgradeSegMetaMask, false)
 		return nil
 	}
 	panic("not supported")
