@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -188,8 +189,10 @@ func TestSplit2(t *testing.T) {
 	err = inst.ExecSplitDatabase(execCtx)
 	assert.Nil(t, err)
 
+	// inst.Scheduler.ExecCmd(sched.TurnOnUpgradeSegmentMetaCmd)
+
+	tables := make([]iface.ITableData, 0)
 	totalRows := uint64(0)
-	// sorted := 0
 	processor := new(metadata.LoopProcessor)
 	processor.TableFn = func(tbl *metadata.Table) error {
 		tbl.RLock()
@@ -197,6 +200,7 @@ func TestSplit2(t *testing.T) {
 		td, err := inst.Store.DataTables.WeakRefTable(tbl.Id)
 		assert.Nil(t, err)
 		totalRows += td.GetRowCount()
+		tables = append(tables, td)
 		return nil
 	}
 
@@ -219,13 +223,15 @@ func TestSplit2(t *testing.T) {
 	t.Log(database.Catalog.PString(metadata.PPL0, 0))
 	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
 
-	// gen2.Reset(db2.GetShardId(), db2.GetCheckpointId())
-	// appendCtx = CreateAppendCtx(db2, gen2, schemas[0].Name, ck0)
-	// err = aoedb2.Append(appendCtx)
-	// assert.Nil(t, err)
+	active := tables[0]
+	activeMeta := active.GetMeta()
+	rows1 := active.GetRowCount()
 
-	// t0 := db2.SimpleGetTableByName(schemas[0].Name)
-	// assert.Equal(t, 4, t0.SimpleGetSegmentCount())
+	ck := mock.MockBatch(activeMeta.Schema.Types(), rows)
+	appendCtx = CreateAppendCtx(activeMeta.Database, gen, activeMeta.Schema.Name, ck)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+	assert.Equal(t, rows+rows1, active.GetRowCount())
 
 	// data0, _ := aoedb2.GetTableData(t0)
 	// defer data0.Unref()

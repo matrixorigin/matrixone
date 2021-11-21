@@ -525,6 +525,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			BaseEntry:  baseEntry,
 			SegmentSet: make([]*Segment, 0),
 			Database:   db,
+			IdIndex:    make(map[uint64]int),
 		}
 		db.onNewTable(table)
 		tables[i] = table
@@ -566,7 +567,9 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			splitSpec.BlockTrace[*obid] = nbid
 			logutil.Infof("[Trace] %s -> %s", obid.BlockString(), nbid.BlockString())
 		}
-		table.SegmentSet = append(table.SegmentSet, segment)
+		segment.rebuild(table, false)
+		table.onNewSegment(segment)
+		// table.SegmentSet = append(table.SegmentSet, segment)
 		nsid := &common.ID{
 			TableID:   table.Id,
 			SegmentID: segment.Id,
