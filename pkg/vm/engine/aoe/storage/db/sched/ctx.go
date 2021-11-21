@@ -43,7 +43,8 @@ type Context struct {
 	// If the event is waitable
 	Waitable bool
 	// Influence scope
-	Scope *Scope
+	Scope      *Scope
+	Controller *Controller
 }
 
 func (ctx *Context) addScope(t scopeType) {

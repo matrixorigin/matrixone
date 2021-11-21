@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -200,12 +201,20 @@ func (ss *ssLoader) PrepareLoad() error {
 	blkFiles := make(map[common.ID]bool)
 	segFiles := make(map[common.ID]bool)
 	blkMapFn := func(id *common.ID) (*common.ID, error) {
-		blkFiles[*id] = true
-		return ss.mloader.Addresses().GetBlkAddr(id)
+		nid, err := ss.mloader.Addresses().GetBlkAddr(id)
+		if err != nil {
+			return nil, err
+		}
+		blkFiles[*nid] = true
+		return nid, nil
 	}
 	segMapFn := func(id *common.ID) (*common.ID, error) {
-		segFiles[*id] = true
-		return ss.mloader.Addresses().GetSegAddr(id)
+		nid, err := ss.mloader.Addresses().GetSegAddr(id)
+		if err != nil {
+			return nil, err
+		}
+		segFiles[*nid] = true
+		return nid, nil
 	}
 	if err = CopyDataFiles(tblks, blks, segs, ss.src, destDir, blkMapFn, segMapFn); err != nil {
 		return err
@@ -222,12 +231,26 @@ func (ss *ssLoader) PrepareLoad() error {
 	}
 	processor.SegmentFn = func(segment *metadata.Segment) error {
 		if segment.IsUpgradable() {
-			ss.flushsegs = append(ss.flushsegs, segment)
+			id := segment.AsCommonID()
+			_, found := segFiles[*id]
+			if !found {
+				ss.flushsegs = append(ss.flushsegs, segment)
+			} else {
+				name := common.MakeSegmentFileName(destDir, id.ToSegmentFileName(), id.TableID, false)
+				info, err := os.Stat(name)
+				if err != nil {
+					return err
+				}
+				segment.DryUpgrade(info.Size())
+			}
 		}
 		return nil
 	}
 	processor.BlockFn = func(block *metadata.Block) error {
 		return nil
+	}
+	if err = ss.Preprocess(processor); err != nil {
+		return err
 	}
 	tables := ss.mloader.GetTables()
 	ctx := new(installContext)
@@ -243,7 +266,7 @@ func (ss *ssLoader) PrepareLoad() error {
 	}
 
 	ss.mloader.Addresses().PrintDebugInfo()
-	return ss.Preprocess(processor)
+	return err
 }
 
 func (ss *ssLoader) CommitLoad() error {
