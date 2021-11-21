@@ -189,6 +189,16 @@ type unsortedSegmentFile struct {
 	meta       *metadata.Segment
 }
 
+type bsiFile struct {
+	h *replayHandle
+	id common.ID
+	name string
+}
+
+func (bf *bsiFile) clean() {
+	bf.h.doRemove(bf.name)
+}
+
 func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
 		h:          h,
@@ -322,6 +332,7 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *meta
 type tableDataFiles struct {
 	sortedfiles   map[common.ID]*sortedSegmentFile
 	unsortedfiles map[common.ID]*unsortedSegmentFile
+	bsifiles      map[common.ID]*bsiFile
 }
 
 func (tdf *tableDataFiles) HasBlockFile(id *common.ID) bool {
@@ -342,11 +353,24 @@ func (tdf *tableDataFiles) HasSegementFile(id *common.ID) bool {
 	return sorted != nil
 }
 
+func (ctx *tableDataFiles) PresentedBsiFiles(id common.ID) []string {
+	files := make([]string, 0)
+	for cid, file := range ctx.bsifiles {
+		if cid.IsSameSegment(id) {
+			files = append(files, file.name)
+		}
+	}
+	return files
+}
+
 func (tdf *tableDataFiles) clean() {
 	for _, file := range tdf.sortedfiles {
 		file.clean()
 	}
 	for _, file := range tdf.unsortedfiles {
+		file.clean()
+	}
+	for _, file := range tdf.bsifiles {
 		file.clean()
 	}
 }
@@ -361,6 +385,7 @@ type replayHandle struct {
 	cleanables []cleanable
 	files      map[uint64]*tableDataFiles
 	flushsegs  []flushsegCtx
+	indicesMap map[common.ID][]uint16
 	compactdbs []*metadata.Database
 	observer   IReplayObserver
 	cbs        []func() error
@@ -376,6 +401,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
+		indicesMap: make(map[common.ID][]uint16),
 		compactdbs: make([]*metadata.Database, 0),
 		observer:   observer,
 		cbs:        make([]func() error, 0),
@@ -401,8 +427,33 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	if err != nil {
 		panic(fmt.Sprintf("err: %s", err))
 	}
+
+	for _, database := range catalog.Databases {
+		for _, tbl := range database.TableSet {
+			indices := tbl.Schema.Indices
+			for _, idx := range indices {
+				// todo: str bsi
+				if idx.Type == metadata.NumBsi {
+					for _, seg := range tbl.SegmentSet {
+						if !seg.IsSortedLocked() {
+							continue
+						}
+						for _, col := range idx.Columns {
+							id := seg.AsCommonID()
+							id.Idx = col
+							fs.indicesMap[*id] = append(fs.indicesMap[*id], col)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for _, file := range dataFiles {
 		fs.addDataFile(file.Name())
+	}
+	for _, file := range dataFiles {
+		fs.addIndexFile(file.Name())
 	}
 	return fs
 }
@@ -419,6 +470,18 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		opts.Scheduler.Schedule(flushEvent)
 	}
 	h.flushsegs = h.flushsegs[:0]
+	for id, cols := range h.indicesMap {
+		t, _ := tables.WeakRefTable(id.TableID)
+		segment := t.StrongRefSegment(id.SegmentID)
+		if segment == nil {
+			panic("unexpected error")
+		}
+		flushCtx := &sched.Context{Opts: opts}
+		flushEvent := sched.NewFlushIndexEvent(flushCtx, segment)
+		flushEvent.Cols = cols
+		opts.Scheduler.Schedule(flushEvent)
+	}
+	h.indicesMap = make(map[common.ID][]uint16)
 	for _, database := range h.compactdbs {
 		gcReq := gcreqs.NewDropDBRequest(opts, database, tables)
 		opts.GC.Acceptor.Accept(gcReq)
@@ -436,6 +499,7 @@ func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
 		}
 		h.files[id.TableID] = tbl
 	}
@@ -454,6 +518,7 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
 		}
 		h.files[id.TableID] = tbl
 	}
@@ -465,6 +530,35 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		h:    h,
 		id:   id,
 		name: name,
+	}
+}
+
+func (h *replayHandle) addBSI(id common.ID, filename string) {
+	tbl, ok := h.files[id.TableID]
+	if !ok {
+		tbl = &tableDataFiles{
+			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
+			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
+		}
+		h.files[id.TableID] = tbl
+	}
+	tbl.bsifiles[id] = &bsiFile{
+		h:    h,
+		id:   id,
+		name: filename,
+	}
+	if cols, ok := h.indicesMap[id]; ok {
+		for i, col := range cols {
+			if col == id.Idx {
+				if i == len(cols)-1 {
+					cols = cols[:len(cols)-1]
+				} else {
+					cols = append(cols[:i], cols[i+1:]...)
+				}
+			}
+		}
+		h.indicesMap[id] = cols
 	}
 }
 
@@ -496,7 +590,36 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addSegment(id, fullname)
 		return
 	}
+	if _, ok := common.ParseBitSlicedIndexFileName(fname); ok {
+		return
+	}
 	h.others = append(h.others, path.Join(h.dataDir, fname))
+}
+
+func (h *replayHandle) addIndexFile(fname string) {
+	if name, ok := common.ParseBitSlicedIndexFileName(fname); ok {
+		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		id := &common.ID{TableID: tid, SegmentID: sid}
+		if h.files[tid] == nil || !h.files[tid].HasSegementFile(id) {
+			h.others = append(h.others, path.Join(h.dataDir, fname))
+			return
+		}
+		id.Idx = col
+		if bf, ok := h.files[tid].bsifiles[*id]; ok {
+			fn, _ := common.ParseBitSlicedIndexFileName(bf.name)
+			v, _, _, _, _ := common.ParseBitSlicedIndexFileNameToInfo(fn)
+			if version > v {
+				h.others = append(h.others, bf.name)
+				h.addBSI(*id, path.Join(h.dataDir, fname))
+			}
+		} else {
+			h.addBSI(*id, path.Join(h.dataDir, fname))
+		}
+		return
+	}
 }
 
 func (h *replayHandle) rebuildTable(meta *metadata.Table) error {

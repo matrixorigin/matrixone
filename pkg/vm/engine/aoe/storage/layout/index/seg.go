@@ -19,9 +19,12 @@ import (
 	"fmt"
 	roaring2 "github.com/RoaringBitmap/roaring"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
@@ -37,6 +40,7 @@ type SegmentHolder struct {
 		sync.RWMutex
 		Indices    []*Node
 		ColIndices map[int][]int
+		VersionMap map[int]uint64
 	}
 	tree struct {
 		sync.RWMutex
@@ -54,6 +58,7 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.ColIndices = make(map[int][]int)
 	holder.self.Indices = make([]*Node, 0)
+	holder.self.VersionMap = make(map[int]uint64)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -61,6 +66,8 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 }
 
 func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
 	if holder.Inited {
 		panic("logic error")
 	}
@@ -68,6 +75,10 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	if indicesMeta == nil {
 		return
 	}
+
+	//holder.LoadIndex(segFile)
+
+	// init embed index
 	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])
@@ -75,12 +86,11 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		switch meta.Type {
 		case base.ZoneMap:
 			node = newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
-		case base.NumBsi:
-			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
+		//case base.NumBsi:
+		//	node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
 			//log.Info(node.GetManagedNode().DataNode.(*NumericBsiIndex).Get(uint64(39)))
 			//node.Close()
 		default:
-			// todo: str bsi
 			panic("unsupported index type")
 		}
 		idxes, ok := holder.self.ColIndices[col]
@@ -92,6 +102,66 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		holder.self.Indices = append(holder.self.Indices, node)
 	}
 	holder.Inited = true
+}
+
+func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
+	// collect attached index files and make file for them
+	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
+		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
+			panic("unexpected error")
+		}
+		build := false
+		if v, ok := holder.self.VersionMap[int(col)]; !ok {
+			holder.self.VersionMap[int(col)] = version
+			build = true
+		} else {
+			if version > v {
+				holder.self.VersionMap[int(col)] = version
+				build = true
+			} else {
+				// stale index
+				build = false
+			}
+		}
+		if build {
+			file, err := os.Open(filename)
+			if err != nil {
+				panic(err)
+			}
+			idxMeta, err := DefaultRWHelper.ReadIndicesMeta(*file)
+			if err != nil {
+				panic(err)
+			}
+			if idxMeta.Data == nil || len(idxMeta.Data) != 1 {
+				panic("logic error")
+			}
+			col := int(idxMeta.Data[0].Cols.ToArray()[0])
+			id := common.ID{}
+			id.SegmentID = holder.ID.SegmentID
+			id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
+			vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
+			// TODO: str bsi
+			node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+			idxes, ok := holder.self.ColIndices[col]
+			if !ok {
+				idxes = make([]int, 0)
+				holder.self.ColIndices[col] = idxes
+			}
+			holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
+			holder.self.Indices = append(holder.self.Indices, node)
+			logutil.Infof("BSI load successfully | %s", filename)
+			return
+		}
+		logutil.Warnf("stale index")
+		return
+	}
+	panic("unexpected error")
 }
 
 func (holder *SegmentHolder) close() {
@@ -341,6 +411,14 @@ func (holder *SegmentHolder) stringNoLock() string {
 		holder.tree.BlockCnt, holder.RefCount())
 	for _, blk := range holder.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.stringNoLock())
+	}
+	return s
+}
+
+func (holder *SegmentHolder) StringIndicesRefsNoLock() string {
+	s := fmt.Sprintf("<SEGHOLDER[%s]>[Indices cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
+	for i, idx := range holder.self.Indices {
+		s += fmt.Sprintf("<Index[%d]>[Ref cnt=%d]\n", i, idx.RefCount())
 	}
 	return s
 }

@@ -90,6 +90,10 @@ func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.I
 	return newEmbedIndexFile(sf, meta)
 }
 
+func (sf *SortedSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+	return newIndexFile(file, id, meta)
+}
+
 func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, sf, false)
 }

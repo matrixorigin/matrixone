@@ -428,6 +428,8 @@ func MockSegments(meta *metadata.Table, tblData iface.ITableData) []uint64 {
 type InstallContext interface {
 	HasSegementFile(*common.ID) bool
 	HasBlockFile(*common.ID) bool
+	PresentedBsiFiles(id common.ID) []string
+	//HasBitSlicedIndexFile(*common.ID) bool
 }
 
 type Tables struct {
@@ -607,6 +609,13 @@ func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) 
 					return nil, err
 				}
 				defer blkData.Unref()
+			}
+
+			bsiFiles := ctx.PresentedBsiFiles(*segMeta.AsCommonID())
+			segFile := segData.GetSegmentFile()
+			holder := segData.GetIndexHolder()
+			for _, file := range bsiFiles {
+				holder.LoadIndex(segFile, file)
 			}
 			continue
 		}

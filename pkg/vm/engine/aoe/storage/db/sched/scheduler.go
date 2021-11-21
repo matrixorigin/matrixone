@@ -170,6 +170,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	// Register different events to its belonged handler
 	dispatcher.RegisterHandler(StatelessEvent, statelessHandler)
 	dispatcher.RegisterHandler(FlushSegTask, flushsegHandler)
+	dispatcher.RegisterHandler(FlushIndexTask, flushsegHandler)
 	dispatcher.RegisterHandler(FlushBlkTask, flushblkHandler)
 	dispatcher.RegisterHandler(CommitBlkTask, metaHandler)
 	dispatcher.RegisterHandler(UpgradeBlkTask, memdataHandler)
@@ -185,6 +186,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	// Register dispatcher
 	s.RegisterDispatcher(StatelessEvent, dispatcher)
 	s.RegisterDispatcher(FlushSegTask, dispatcher)
+	s.RegisterDispatcher(FlushIndexTask, dispatcher)
 	s.RegisterDispatcher(FlushBlkTask, dispatcher)
 	s.RegisterDispatcher(CommitBlkTask, dispatcher)
 	s.RegisterDispatcher(UpgradeBlkTask, dispatcher)
@@ -314,6 +316,11 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 		return
 	}
 	event.Segment.Unref()
+	// start flush index
+	flushCtx := &Context{Opts: s.opts}
+	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
+	newevent.FlushAll = true
+	s.Schedule(newevent)
 }
 
 func (s *scheduler) OnExecDone(op interface{}) {

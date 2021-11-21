@@ -27,6 +27,7 @@ const (
 	UpgradeBlkTask
 	UpgradeSegTask
 	FlushSegTask
+	FlushIndexTask
 )
 
 type BaseEvent struct {

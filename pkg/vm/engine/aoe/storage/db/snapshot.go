@@ -85,6 +85,10 @@ func (ctx *installContext) HasSegementFile(id *common.ID) bool {
 	return ok
 }
 
+func (ctx *installContext) PresentedBsiFiles(id common.ID) []string {
+	return nil
+}
+
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {
 	w := &ssWriter{
 		data:   make(map[uint64]iface.ITableData),
