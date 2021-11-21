@@ -135,7 +135,7 @@ func (c *Controller) IsOn(mask CmdMask) bool {
 		return true
 	}
 	c.cmu.RLock()
-	defer c.cmu.RLock()
+	defer c.cmu.RUnlock()
 	return !c.mask.Contains(mask)
 }
 

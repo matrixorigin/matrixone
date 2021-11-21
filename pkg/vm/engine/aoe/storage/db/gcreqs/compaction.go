@@ -103,7 +103,6 @@ func (req *catalogCompactionRequest) DoRun() error {
 	processor.DatabaseFn = func(database *metadata.Database) error {
 		if database.IsDeleted() {
 			if !database.IsHardDeleted() {
-				logutil.Infof("xxxxxxxxxxxxxxxxxxxxxxx-%s", database.PString(metadata.PPL0, 0))
 				deleted = append(deleted, database)
 			}
 		}

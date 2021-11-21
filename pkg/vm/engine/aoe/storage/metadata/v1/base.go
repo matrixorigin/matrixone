@@ -89,7 +89,7 @@ func (e *BaseEntry) IsSortedLocked() bool {
 }
 
 func (e *BaseEntry) checkStale1(info *CommitInfo) error {
-	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil {
+	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil || info.LogIndex == nil {
 		return nil
 	}
 	switch info.Op {
