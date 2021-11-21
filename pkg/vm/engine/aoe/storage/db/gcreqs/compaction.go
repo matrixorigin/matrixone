@@ -94,6 +94,10 @@ func (req *catalogCompactionRequest) Execute() error {
 	if !req.checkInterval() {
 		return nil
 	}
+	return req.DoRun()
+}
+
+func (req *catalogCompactionRequest) DoRun() error {
 	deleted := make([]*metadata.Database, 0, 4)
 	processor := new(metadata.LoopProcessor)
 	processor.DatabaseFn = func(database *metadata.Database) error {

@@ -18,11 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"math/rand"
 	"os"
 	"path"
@@ -32,6 +27,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -903,10 +904,10 @@ func TestRebuildIndices(t *testing.T) {
 		t.Log(inst.IndexBufMgr.String())
 		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
 		inst.Scheduler.Schedule(e)
-		time.Sleep(10*time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 		t.Log(inst.IndexBufMgr.String())
 	}
-	time.Sleep(10*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	t.Log(tblData.GetIndexHolder().StringIndicesRefs())
 	inst.Close()
 	// manually delete some index files, and during replaying the file could
@@ -928,11 +929,11 @@ func TestRebuildIndices(t *testing.T) {
 	assert.Nil(t, err)
 	//t.Log(tblData.String())
 	//t.Log(tblData.GetIndexHolder().String())
-	time.Sleep(100*time.Millisecond)
-	for _, segId := range segs {
-		seg := tblData.StrongRefSegment(segId)
-		t.Log(seg.GetIndexHolder().StringIndicesRefsNoLock())
-	}
+	time.Sleep(100 * time.Millisecond)
+	// for _, segId := range segs {
+	// 	seg := tblData.StrongRefSegment(segId)
+	// 	t.Log(seg.GetIndexHolder().StringIndicesRefsNoLock())
+	// }
 	inst.Close()
 }
 

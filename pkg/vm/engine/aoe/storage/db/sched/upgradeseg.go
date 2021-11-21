@@ -44,7 +44,9 @@ func (e *upgradeSegEvent) Execute() error {
 	if err == nil {
 		if e.Ctx.Controller.IsOn(UpgradeSegMetaMask) {
 			newSize := e.Segment.GetSegmentFile().Stat().Size()
-			e.Segment.GetMeta().SimpleUpgrade(newSize, nil)
+			if err = e.Segment.GetMeta().SimpleUpgrade(newSize, nil); err != nil {
+				panic(err)
+			}
 		}
 	}
 	return err

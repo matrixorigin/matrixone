@@ -346,7 +346,7 @@ func (e *Block) GetCoarseSize() int64 {
 func (e *Block) PString(level PPLevel) string {
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<%d. Block %s>[Size=%d]", e.Idx, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
+	s := fmt.Sprintf("<%d. Block[%d] %s>[Size=%d]", e.Idx, e.Id, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }
 

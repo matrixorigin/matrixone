@@ -158,5 +158,5 @@ func (d *DB) ScheduleGCTable(meta *metadata.Table) {
 
 func (d *DB) ForceCompactCatalog() error {
 	compactReq := gcreqs.NewCatalogCompactionRequest(d.Store.Catalog, d.Opts.MetaCleanerCfg.Interval)
-	return compactReq.Execute()
+	return compactReq.DoRun()
 }
