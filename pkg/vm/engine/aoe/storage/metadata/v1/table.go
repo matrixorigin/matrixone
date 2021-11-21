@@ -546,6 +546,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 		segment.CommitInfo.TranId = tranId
 		segment.CommitInfo.CommitId = tranId
 		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		segment.Table = table
 		for _, block := range segment.BlockSet {
 			obid := &common.ID{
 				TableID:   e.Id,
@@ -556,6 +557,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			block.CommitInfo.TranId = tranId
 			block.CommitInfo.CommitId = tranId
 			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+			block.Segment = segment
 			nbid := &common.ID{
 				TableID:   table.Id,
 				SegmentID: segment.Id,

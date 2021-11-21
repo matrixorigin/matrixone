@@ -229,6 +229,7 @@ func (d *DB) ExecSplitDatabase(ctx *ExecSplitCtx) error {
 	if err = splitter.Commit(); err != nil {
 		return err
 	}
+	splitter.ScheduleEvents(&d.Impl)
 	d.ScheduleGCDatabase(database)
 	return err
 }

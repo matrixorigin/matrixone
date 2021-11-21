@@ -267,3 +267,13 @@ func (splitter *ShardSplitter) Prepare() error {
 func (splitter *ShardSplitter) Commit() error {
 	return splitter.Catalog.CommitSplit(splitter.ReplaceCtx)
 }
+
+func (splitter *ShardSplitter) Preprocess(processor Processor) error {
+	var err error
+	for _, database := range splitter.ReplaceCtx.Replacer {
+		if err = database.RecurLoopLocked(processor); err != nil {
+			break
+		}
+	}
+	return err
+}

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -87,4 +88,156 @@ func TestSplit1(t *testing.T) {
 	t.Log(inst1.Store.Catalog.PString(metadata.PPL1, 0))
 
 	inst1.Close()
+}
+
+// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// 1.  Create db isntance and create a database           [   0,        0     ]
+// 2.  Disable upgrade meta segment                       [   0,        0     ]
+// 3.  Create 2 tables: 1-1 [1,?], 1-2 [2,?]              [   2,        ?     ]
+// 4.  Append 35/10 (MaxBlockRows) rows into (1-1)        [   3,        2     ]
+// 5.  Append 35/10 (MaxBlockRows) rows into (1-2)        [   4,        2     ]
+// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
+// 7.  Split index should be [4]                          [   -,        4     ]
+// 8.  Create another db instance
+// 9.  Apply previous created snapshot
+// 10. Check:
+//     1) database exists 2) database checkpoint id is
+//     3) check segment flushed
+// 11. Restart new db instance and check again
+func TestSplit2(t *testing.T) {
+	initTestEnv(t)
+	prepareSnapshotPath(defaultSnapshotPath, t)
+	// 1. Create a db instance and a database
+	inst, gen, database := initTestDB1(t)
+	defer inst.Close()
+	// shardId := database.GetShardId()
+	// idxGen := gen.Shard(shardId)
+
+	// 2. Disable upgrade segment
+	inst.Scheduler.ExecCmd(sched.TurnOffUpgradeSegmentMetaCmd)
+
+	// 3. Create 2 tables
+	schemas := make([]*metadata.Schema, 2)
+	var createCtx *CreateTableCtx
+	for i, _ := range schemas {
+		schema := metadata.MockSchema(i + 1)
+		createCtx = &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
+		assert.Nil(t, err)
+		schemas[i] = schema
+	}
+
+	// 4. Append rows to 1-1
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
+	ck0 := mock.MockBatch(schemas[0].Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
+	err := inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 5. Append rows to 1-2
+	ck1 := mock.MockBatch(schemas[1].Types(), rows)
+	appendCtx = CreateAppendCtx(database, gen, schemas[1].Name, ck1)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	t0 := database.SimpleGetTableByName(schemas[0].Name)
+	data0, _ := inst.GetTableData(t0)
+	defer data0.Unref()
+	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
+
+	t1 := database.SimpleGetTableByName(schemas[1].Name)
+	data1, _ := inst.GetTableData(t1)
+	defer data1.Unref()
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+
+	// 6. Flush
+	err = inst.FlushDatabase(database.Name)
+	assert.Nil(t, err)
+	testutils.WaitExpect(500, func() bool {
+		return database.UncheckpointedCnt() == 0
+	})
+	coarseSize := database.GetSize()
+	size := coarseSize
+
+	// 7. Split
+	prepareCtx := &PrepareSplitCtx{
+		DB:   database.Name,
+		Size: uint64(size),
+	}
+	_, _, keys, ctx, err := inst.PrepareSplitDatabase(prepareCtx)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(keys))
+
+	newNames := make([]string, len(keys))
+	for i, _ := range newNames {
+		newNames[i] = fmt.Sprintf("splitted-%d", i)
+	}
+	renameTable := func(oldName, newDBName string) string {
+		return oldName
+	}
+	execCtx := &ExecSplitCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		NewNames:      newNames,
+		RenameTable:   renameTable,
+		SplitKeys:     keys,
+		SplitCtx:      ctx,
+	}
+	err = inst.ExecSplitDatabase(execCtx)
+	assert.Nil(t, err)
+
+	totalRows := uint64(0)
+	// sorted := 0
+	processor := new(metadata.LoopProcessor)
+	processor.TableFn = func(tbl *metadata.Table) error {
+		tbl.RLock()
+		defer tbl.RUnlock()
+		td, err := inst.Store.DataTables.WeakRefTable(tbl.Id)
+		assert.Nil(t, err)
+		totalRows += td.GetRowCount()
+		return nil
+	}
+
+	var dbs []*metadata.Database
+	for _, name := range newNames {
+		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
+		assert.Nil(t, err)
+		dbs = append(dbs, db)
+		db.RLock()
+		err = db.RecurLoopLocked(processor)
+		assert.Nil(t, err)
+		db.RUnlock()
+	}
+	assert.Equal(t, rows*2, totalRows)
+	testutils.WaitExpect(500, func() bool {
+		return t0.IsHardDeleted() && t1.IsHardDeleted()
+	})
+	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
+	inst.ForceCompactCatalog()
+	t.Log(database.Catalog.PString(metadata.PPL0, 0))
+	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
+
+	// gen2.Reset(db2.GetShardId(), db2.GetCheckpointId())
+	// appendCtx = CreateAppendCtx(db2, gen2, schemas[0].Name, ck0)
+	// err = aoedb2.Append(appendCtx)
+	// assert.Nil(t, err)
+
+	// t0 := db2.SimpleGetTableByName(schemas[0].Name)
+	// assert.Equal(t, 4, t0.SimpleGetSegmentCount())
+
+	// data0, _ := aoedb2.GetTableData(t0)
+	// defer data0.Unref()
+	// assert.Equal(t, 2*ck0.Length(), int(data0.GetRowCount()))
+
+	// t1 := db2.SimpleGetTableByName(schemas[1].Name)
+	// assert.Equal(t, 2, t1.SimpleGetSegmentCount())
+
+	// data1, _ := aoedb2.GetTableData(t1)
+	// defer data1.Unref()
+	// assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	// t.Log(t1.PString(metadata.PPL1, 0))
+
+	// aoedb2.Close()
 }
