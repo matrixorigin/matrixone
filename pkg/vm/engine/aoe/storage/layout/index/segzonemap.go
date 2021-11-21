@@ -91,6 +91,10 @@ func (i *SegmentZoneMapIndex) FreeMemory() {
 	}
 }
 
+func (i *SegmentZoneMapIndex) IndexFile() common.IVFile {
+	return i.File
+}
+
 func (i *SegmentZoneMapIndex) GetMemorySize() uint64 {
 	if i.UseCompress {
 		return uint64(i.File.Stat().Size())

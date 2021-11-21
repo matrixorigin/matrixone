@@ -937,6 +937,80 @@ func TestRebuildIndices(t *testing.T) {
 	inst.Close()
 }
 
+func TestManyLoadAndDrop(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchema(2)
+	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
+		Id:      0,
+		Type:    metadata.NumBsi,
+		Columns: []uint16{1},
+	})
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(10)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+
+	segId := tblData.SegmentIds()[0]
+	seg := tblData.StrongRefSegment(segId)
+	holder := seg.GetIndexHolder()
+	f1 := func() {
+		holder.Count(1, nil)
+		wg.Done()
+	}
+	f2 := func() {
+		holder.Min(1, nil)
+		wg.Done()
+	}
+	f3 := func() {
+		holder.Max(1, nil)
+		wg.Done()
+	}
+	cnt := 10
+	for i := 0; i < cnt; i++ {
+		wg.Add(3)
+		go f1()
+		go f2()
+		go f3()
+	}
+	wg.Wait()
+	holder.DropIndex(filepath.Join(inst.Dir, "data/0_1_1_1.bsi"))
+}
+
 func TestEngine(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)

@@ -27,6 +27,11 @@ import (
 	"sync"
 )
 
+// flushIndexEvent would generate, flush, and load index for the given segment.
+// Columns are configurable. Notice that no matter how many versions of the same
+// index for the same column of one segment exists, we always generate the newest
+// version and try loading it on that segment. During loading phase there would
+// also be a stale check to ensure never load stale versions.
 type flushIndexEvent struct {
 	BaseEvent
 	Segment iface.ISegment

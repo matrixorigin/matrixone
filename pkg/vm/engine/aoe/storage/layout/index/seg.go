@@ -39,8 +39,10 @@ type SegmentHolder struct {
 	self   struct {
 		sync.RWMutex
 		Indices    []*Node
-		ColIndices map[int][]int
-		VersionMap map[int]uint64
+		ColIndices     map[int][]int
+		loadedVersion  map[int]uint64
+		droppedVersion map[int]uint64
+		FileHelper map[string]*Node
 	}
 	tree struct {
 		sync.RWMutex
@@ -58,7 +60,9 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.ColIndices = make(map[int][]int)
 	holder.self.Indices = make([]*Node, 0)
-	holder.self.VersionMap = make(map[int]uint64)
+	holder.self.loadedVersion = make(map[int]uint64)
+	holder.self.FileHelper = make(map[string]*Node)
+	holder.self.droppedVersion = make(map[int]uint64)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -104,6 +108,85 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	holder.Inited = true
 }
 
+// DropIndex trying to drop the given index from holder. In detail, we only has 2 types
+// of dropping:
+// 1. explicit dropping by calling this function, remove the entry in `loadedVersion`,
+//    and increase the `droppedVersion` to avoid scenario like: load 2 -> drop 2 ->
+//    load1 => reversion. That is to say, only drop the newest version from this path.
+//    If failed, i.e. the `loadedVersion` says the given version has been replaced by
+//    a newer version, the given version should already been dropped via `LoadIndex`,
+//    so that we can return directly saying dropped successfully.
+// 2. implicit dropping by kicking out stale version during loading newer version.
+//    By calling `LoadIndex`, if we detect stale version via versionMap, it would
+//    be replaced by a newer version and dropped by the way.
+// In this way, as the newer versions continuously generated and dropped, we could
+// easily handle the multi-version indices control.
+func (holder *SegmentHolder) DropIndex(filename string) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
+	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
+		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
+			panic("unexpected error")
+		}
+		if v, ok := holder.self.loadedVersion[int(col)]; ok {
+			if version > v {
+				panic("dropping index is newer than the latest version")
+			} else if version < v {
+				// stale index, has already been dropped
+				return
+			} else {
+				// start explicit dropping
+				staleName := common.MakeBitSlicedIndexFileName(version, tid, sid, col)
+				//logutil.Infof("%s\n%+v", staleName, holder.self.FileHelper)
+				node := holder.self.FileHelper[staleName]
+				for i, idx := range holder.self.ColIndices[int(col)] {
+					if holder.self.Indices[idx] == node {
+						idxes := holder.self.ColIndices[int(col)]
+						if i == len(idxes)-1 {
+							idxes = idxes[:len(idxes)-1]
+						} else {
+							idxes = append(idxes[:i], idxes[i+1:]...)
+						}
+						break
+					}
+				}
+				node.VFile.Unref()
+				delete(holder.self.FileHelper, staleName)
+				delete(holder.self.loadedVersion, int(col))
+				holder.self.droppedVersion[int(col)] = version
+				logutil.Infof("dropping newest index explicitly | version-%d", version)
+				return
+			}
+		} else {
+			if dv, ok := holder.self.droppedVersion[int(col)]; ok {
+				if dv >= version {
+					// already dropped explicitly
+					return
+				} else {
+					panic("dropping non-existent index")
+				}
+			} else {
+				panic("dropping non-existent index")
+			}
+		}
+	}
+	panic("unexpected error")
+}
+
+// LoadIndex would not even make the VirtualFile if stale, so no need to worry about
+// the resource leak like: load stale version 1 -> load fresher version -> load stale
+// version 2, and 1 < 2 < fresh version -> loadedVersion updated -> stale version 2 never
+// GCed. BTW, we always deal with Load/Drop in strict monotonically increase order, in
+// detail we always explicitly drop only the newest version(that means only drop the
+// version from loadedVersion), and remove the dropped version from loadedVersion. When
+// stale version detected during loading, the stale version would be dropped implicitly
+// and loadedVersion & droppedVersion would be refreshed as well.
+// Notice: if given version < current newest version, no resource would be allocated, then
+// no need to GC anything.
 func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
 	holder.self.Lock()
 	defer holder.self.Unlock()
@@ -117,12 +200,36 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 			panic("unexpected error")
 		}
 		isLatest := false
-		if v, ok := holder.self.VersionMap[int(col)]; !ok {
-			holder.self.VersionMap[int(col)] = version
+		if v, ok := holder.self.loadedVersion[int(col)]; !ok {
+			if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
+				if dropped >= v {
+					// newer version used to be loaded, but dropped explicitly
+					logutil.Infof("detect stale index")
+					return
+				}
+			}
+			holder.self.loadedVersion[int(col)] = version
 			isLatest = true
 		} else {
 			if version > v {
-				holder.self.VersionMap[int(col)] = version
+				holder.self.loadedVersion[int(col)] = version
+				// GC stale version
+				staleName := common.MakeBitSlicedIndexFileName(v, tid, sid, col)
+				node := holder.self.FileHelper[staleName]
+				for i, idx := range holder.self.ColIndices[int(col)] {
+					if holder.self.Indices[idx] == node {
+						idxes := holder.self.ColIndices[int(col)]
+						if i == len(idxes)-1 {
+							idxes = idxes[:len(idxes)-1]
+						} else {
+							idxes = append(idxes[:i], idxes[i+1:]...)
+						}
+						break
+					}
+				}
+				node.VFile.Unref()
+				delete(holder.self.FileHelper, staleName)
+				logutil.Infof("dropping stale index implicitly | version-%d", v)
 				isLatest = true
 			} else {
 				// stale index
@@ -156,6 +263,7 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 			}
 			holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
 			holder.self.Indices = append(holder.self.Indices, node)
+			holder.self.FileHelper[filepath.Base(filename)] = node
 			logutil.Infof("BSI load successfully | %s", filename)
 			return
 		}
@@ -186,11 +294,15 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	var err error
 	for _, idx := range idxes {
 		node := holder.self.Indices[idx].GetManagedNode()
-		err = node.DataNode.(Index).Eval(ctx)
+		index := node.DataNode.(Index)
+		index.IndexFile().Ref()
+		err = index.Eval(ctx)
 		if err != nil {
 			node.Close()
+			index.IndexFile().Unref()
 			return err
 		}
+		index.IndexFile().Unref()
 		node.Close()
 	}
 	return nil
@@ -236,6 +348,7 @@ func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, 
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
+			index.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -248,8 +361,10 @@ func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, 
 			count := index.Count(bm)
 			err := node.Close()
 			if err != nil {
+				index.IndexFile().Unref()
 				return count, err
 			}
+			index.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -271,6 +386,7 @@ func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
+			index.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -283,8 +399,10 @@ func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint
 			count := index.NullCount(bm)
 			err := node.Close()
 			if err != nil {
+				index.IndexFile().Unref()
 				return count, err
 			}
+			index.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -306,6 +424,7 @@ func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
+			index.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -318,8 +437,10 @@ func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{
 			min, _ := index.Min(bm)
 			err := node.Close()
 			if err != nil {
+				index.IndexFile().Unref()
 				return min, err
 			}
+			index.IndexFile().Unref()
 			return min, nil
 		}
 		err := node.Close()
@@ -340,6 +461,7 @@ func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
+			index.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -352,8 +474,10 @@ func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{
 			max, _ := index.Max(bm)
 			err := node.Close()
 			if err != nil {
+				index.IndexFile().Unref()
 				return max, err
 			}
+			index.IndexFile().Unref()
 			return max, nil
 		}
 		err := node.Close()
@@ -374,6 +498,7 @@ func (holder *SegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uin
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
+			index.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -394,8 +519,10 @@ func (holder *SegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uin
 			}
 			err := node.Close()
 			if err != nil {
+				index.IndexFile().Unref()
 				return res, cnt, nil
 			}
+			index.IndexFile().Unref()
 			return res, cnt, nil
 		}
 		err := node.Close()

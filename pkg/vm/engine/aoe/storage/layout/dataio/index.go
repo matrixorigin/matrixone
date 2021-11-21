@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
-	"runtime/debug"
 )
 
 type EmbedIndexFile struct {
@@ -97,8 +96,13 @@ func (f *IndexFile) close() {
 }
 
 func (f *IndexFile) Unref() {
-	debug.PrintStack()
 	f.RefHelper.Unref()
+	//logutil.Infof("unref index file %s | ref count: %d", filepath.Base(f.Name()), f.Refs)
+}
+
+func (f *IndexFile) Ref() {
+	f.RefHelper.Ref()
+	//logutil.Infof("ref index file %s | ref count: %d", filepath.Base(f.Name()), f.Refs)
 }
 
 func (f *IndexFile) Stat() common.FileInfo {
