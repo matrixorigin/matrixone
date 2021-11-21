@@ -66,6 +66,8 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 }
 
 func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
 	if holder.Inited {
 		panic("logic error")
 	}
@@ -103,6 +105,8 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 }
 
 func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
 	// collect attached index files and make file for them
 	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
 		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)

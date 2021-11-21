@@ -160,8 +160,6 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	flushblkHandler.Start()
 	flushsegHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.SegmentWriters), nil)
 	flushsegHandler.Start()
-	flushIndexHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.IndexWriters), nil)
-	flushIndexHandler.Start()
 	metaHandler := sched.NewSingleWorkerHandler("metaHandler")
 	metaHandler.Start()
 	memdataHandler := sched.NewSingleWorkerHandler("memdataHandler")
@@ -172,7 +170,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	// Register different events to its belonged handler
 	dispatcher.RegisterHandler(StatelessEvent, statelessHandler)
 	dispatcher.RegisterHandler(FlushSegTask, flushsegHandler)
-	dispatcher.RegisterHandler(FlushIndexTask, flushIndexHandler)
+	dispatcher.RegisterHandler(FlushIndexTask, flushsegHandler)
 	dispatcher.RegisterHandler(FlushBlkTask, flushblkHandler)
 	dispatcher.RegisterHandler(CommitBlkTask, metaHandler)
 	dispatcher.RegisterHandler(UpgradeBlkTask, memdataHandler)

@@ -39,7 +39,6 @@ const (
 
 	DefaultBlockWriters     = uint16(8)
 	DefaultSegmentWriters   = uint16(4)
-	DefaultIndexWriters     = uint16(4)
 	DefaultStatelessWorkers = uint16(1)
 )
 
@@ -65,7 +64,6 @@ type MetaCfg struct {
 type SchedulerCfg struct {
 	BlockWriters     uint16 `toml:"block-writers"`
 	SegmentWriters   uint16 `toml:"segment-writers"`
-	IndexWriters     uint16 `toml:"index-writers"`
 	StatelessWorkers uint16 `toml:"stateless-workers"`
 }
 
@@ -109,7 +107,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.SchedulerCfg = &SchedulerCfg{
 			BlockWriters:     DefaultBlockWriters,
 			SegmentWriters:   DefaultSegmentWriters,
-			IndexWriters: DefaultIndexWriters,
 			StatelessWorkers: DefaultStatelessWorkers,
 		}
 	} else {
@@ -118,9 +115,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 		if o.SchedulerCfg.SegmentWriters == 0 {
 			o.SchedulerCfg.SegmentWriters = DefaultSegmentWriters
-		}
-		if o.SchedulerCfg.IndexWriters == 0 {
-			o.SchedulerCfg.IndexWriters = DefaultIndexWriters
 		}
 		if o.SchedulerCfg.StatelessWorkers == 0 {
 			o.SchedulerCfg.StatelessWorkers = DefaultStatelessWorkers
