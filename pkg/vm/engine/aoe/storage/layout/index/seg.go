@@ -116,20 +116,21 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
 			panic("unexpected error")
 		}
-		build := false
+		isLatest := false
 		if v, ok := holder.self.VersionMap[int(col)]; !ok {
 			holder.self.VersionMap[int(col)] = version
-			build = true
+			isLatest = true
 		} else {
 			if version > v {
 				holder.self.VersionMap[int(col)] = version
-				build = true
+				isLatest = true
 			} else {
 				// stale index
-				build = false
+				isLatest = false
+				logutil.Infof("loading stale index | %s received, but v-%d already loaded", filename, v)
 			}
 		}
-		if build {
+		if isLatest {
 			file, err := os.Open(filename)
 			if err != nil {
 				panic(err)
@@ -158,7 +159,6 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 			logutil.Infof("BSI load successfully | %s", filename)
 			return
 		}
-		logutil.Warnf("stale index")
 		return
 	}
 	panic("unexpected error")
