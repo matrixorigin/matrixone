@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"unsafe"
 )
@@ -38,7 +37,6 @@ func (a aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error)
 	if err != nil {
 		return nil, err
 	}
-	logutil.Infof("vecs len is %d", vector.Length(bat.Vecs[0]))
 
 	//zs, err := mheap.Alloc(a.mp, int64(vector.Length(bat.Vecs[0])))
 	zs := make([]*bytes.Buffer, int64(vector.Length(bat.Vecs[0])))
@@ -55,6 +53,5 @@ func (a aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error)
 	} else if len(*(a.blocks)) == 1 {
 		*(a.blocks) = (*(a.blocks))[0:0]
 	}
-	logutil.Infof("bat is %v", bat)
 	return bat, nil
 }
