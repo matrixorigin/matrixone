@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	aoedb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
-	segdb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -187,7 +186,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 	schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
 	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
-			Id:     shardId,
+			Id:     index,
 			Offset: offset,
 			Size:   batchsize,
 			DB:     aoedbName.ShardIdToName(shardId),
@@ -199,7 +198,6 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 		buf := errDriver.ErrorResp(err)
 		return 0, 0, buf
 	}
-	logutil.Infof("createTable")
 	buf := codec.Uint642Bytes(tbl.Id)
 	writtenBytes := uint64(len(key) + len(customReq.TableInfo))
 	changedBytes := int64(writtenBytes)
@@ -214,7 +212,7 @@ func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64,
 
 	ctx := aoedb.DropTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
-			Id:     shardId,
+			Id:     index,
 			Offset: offset,
 			Size:   batchsize,
 			DB:     aoedbName.ShardIdToName(shardId),
@@ -313,8 +311,6 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			}
 			segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
 			seg := rel.Segment(segment.Id, nil)
-			logutil.Infof("segment.id is ", segment.Id)
-			logutil.Infof("table name is %v, seg len is %v, seg data is %v, seg ids is %v", tblName, len(rel.Meta.SegmentSet), seg.(*segdb.Segment).Data, seg.(*segdb.Segment).Ids)
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1], nil)
 			cds := make([]*bytes.Buffer, len(attrs))
@@ -391,8 +387,8 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 }
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
-	rsp := s.DB.GetShardCheckpointId(shardID)
-	//fixme:No need to fix logindex
+	db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(shardID))
+	rsp := s.DB.GetShardCheckpointId(db.GetShardId())
 	if rsp == 0 {
 		rsp = 1
 	}
