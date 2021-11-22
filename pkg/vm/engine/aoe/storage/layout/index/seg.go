@@ -205,8 +205,6 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
 	holder.self.Lock()
 	defer holder.self.Unlock()
-	logutil.Infof("%+v", holder.self.loadedVersion)
-	logutil.Infof("%+v", holder.self.droppedVersion)
 	// collect attached index files and make file for them
 	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
 		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)

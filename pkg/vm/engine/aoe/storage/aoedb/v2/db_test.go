@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"os"
 	"path"
@@ -1067,7 +1068,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 		holder.DropIndex(filename)
 		wg.Done()
 	}
-	for i := uint64(1); i <= uint64(10); i++ {
+	for i := uint64(1); i < uint64(10); i++ {
 		wg.Add(1)
 		go loader(i)
 		if i % 4 == 0 {
