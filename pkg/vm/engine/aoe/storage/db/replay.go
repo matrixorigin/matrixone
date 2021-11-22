@@ -533,6 +533,7 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 	}
 }
 
+// addBSI basically means replace if exists
 func (h *replayHandle) addBSI(id common.ID, filename string) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
@@ -614,6 +615,10 @@ func (h *replayHandle) addIndexFile(fname string) {
 			if version > v {
 				h.others = append(h.others, bf.name)
 				h.addBSI(*id, path.Join(h.dataDir, fname))
+				logutil.Infof("detect stale index file | %s", bf.name)
+			} else {
+				h.others = append(h.others, path.Join(h.dataDir, fname))
+				logutil.Infof("detect stale index file | %s", fname)
 			}
 		} else {
 			h.addBSI(*id, path.Join(h.dataDir, fname))

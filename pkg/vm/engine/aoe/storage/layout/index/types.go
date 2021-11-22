@@ -16,6 +16,7 @@ package index
 
 import (
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/RoaringBitmap/roaring"
@@ -80,4 +81,5 @@ type Index interface {
 	Type() base.IndexType
 	GetCol() int16
 	Eval(ctx *FilterCtx) error
+	IndexFile() common.IVFile
 }

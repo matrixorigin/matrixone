@@ -162,6 +162,10 @@ func (i *NumericBsiIndex) FreeMemory() {
 	}
 }
 
+func (i *NumericBsiIndex) IndexFile() common.IVFile {
+	return i.File
+}
+
 func (i *NumericBsiIndex) Type() base.IndexType {
 	return base.NumBsi
 }

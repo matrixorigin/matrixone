@@ -22,11 +22,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
-	"os"
 	"path/filepath"
 	"sync"
 )
 
+// flushIndexEvent would generate, flush, and load index for the given segment.
+// Columns are configurable. Notice that no matter how many versions of the same
+// index for the same column of one segment exists, we always generate the newest
+// version and try loading it on that segment. During loading phase there would
+// also be a stale check to ensure never load stale versions.
 type flushIndexEvent struct {
 	BaseEvent
 	Segment iface.ISegment
@@ -84,16 +88,10 @@ func (e *flushIndexEvent) Execute() error {
 		if err != nil {
 			panic(err)
 		}
-		version := 0
-		filename := common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
-		for {
-			if _, err := os.Stat(filepath.Join(dir, filename)); os.IsNotExist(err) {
-				filename = filepath.Join(dir, filename)
-				break
-			}
-			version++
-			filename = common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
-		}
+		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
+		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
+		filename = filepath.Join(dir, filename)
+		//logutil.Infof("%s", filename)
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
 			panic(err)
 		}

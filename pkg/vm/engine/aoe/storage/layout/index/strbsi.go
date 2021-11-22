@@ -16,12 +16,13 @@ package index
 
 import (
 	"bytes"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/index/bsi"
+	"io"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -76,6 +77,10 @@ func (i *StringBsiIndex) FreeMemory() {
 	if i.FreeFunc != nil {
 		i.FreeFunc(i)
 	}
+}
+
+func (i *StringBsiIndex) IndexFile() common.IVFile {
+	return nil
 }
 
 func (i *StringBsiIndex) Type() base.IndexType {
