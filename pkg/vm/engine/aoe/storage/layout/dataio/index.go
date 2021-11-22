@@ -101,6 +101,9 @@ func (f *IndexFile) Unref() {
 }
 
 func (f *IndexFile) Ref() {
+	if f.RefHelper.RefCount() == 0 {
+
+	}
 	f.RefHelper.Ref()
 	//logutil.Infof("ref index file %s | ref count: %d", filepath.Base(f.Name()), f.Refs)
 }

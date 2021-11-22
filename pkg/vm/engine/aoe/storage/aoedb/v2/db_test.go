@@ -912,17 +912,17 @@ func TestRebuildIndices(t *testing.T) {
 	inst.Close()
 	// manually delete some index files, and during replaying the file could
 	// be flushed automatically.
-	os.Remove(filepath.Join(inst.Dir, "data/0_1_7_1.bsi"))
+	os.Remove(filepath.Join(inst.Dir, "data/1_1_7_1.bsi"))
 
 	// manually create useless index files, and during replaying the file
 	// would be GCed automatically.
-	os.Create(filepath.Join(inst.Dir, "data/0_1_11_1.bsi"))
+	os.Create(filepath.Join(inst.Dir, "data/1_1_11_1.bsi"))
 
 	// manually rename some index files to higher version, create a stale version
 	// to simulate upgrade scenario. And during replaying, stale index file woould
 	// be GCed as well.
-	os.Rename(filepath.Join(inst.Dir, "data/0_1_6_1.bsi"), filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
-	os.Create(filepath.Join(inst.Dir, "data/0_1_6_1.bsi"))
+	os.Rename(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"), filepath.Join(inst.Dir, "data/2_1_6_1.bsi"))
+	os.Create(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
 
 	inst, gen, database = initTestDB3(t)
 	tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
@@ -1000,15 +1000,83 @@ func TestManyLoadAndDrop(t *testing.T) {
 		holder.Max(1, nil)
 		wg.Done()
 	}
-	cnt := 10
+	cnt := 100
 	for i := 0; i < cnt; i++ {
 		wg.Add(3)
 		go f1()
 		go f2()
 		go f3()
 	}
+	// dropped explicitly, but some indices are still in use, so when those
+	// query finished, they would unref index and once the ref count reaches
+	// 0 the index file would be removed.
+	holder.DropIndex(filepath.Join(inst.Dir, "data/1_1_1_1.bsi"))
 	wg.Wait()
-	holder.DropIndex(filepath.Join(inst.Dir, "data/0_1_1_1.bsi"))
+
+
+	// test continuously load new index, check if stale versions are GCed correctly
+	segId = tblData.SegmentIds()[1]
+	seg = tblData.StrongRefSegment(segId)
+	holder = seg.GetIndexHolder()
+
+	loader := func(i uint64) {
+		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e.Cols = []uint16{1}
+		inst.Scheduler.Schedule(e)
+		wg.Done()
+	}
+	for i := 1; i < 10; i++ {
+		wg.Add(1)
+		go loader(uint64(i))
+	}
+	wg.Wait()
+
+	time.Sleep(300*time.Millisecond)
+
+	infos, err := ioutil.ReadDir(filepath.Join(inst.Dir, "data"))
+	assert.Nil(t, err)
+	versions := make([]uint64, 0)
+	for _, info := range infos {
+		if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(info.Name())); ok {
+			if v, _, sid, _, ok := common.ParseBitSlicedIndexFileNameToInfo(name); ok {
+				if sid == uint64(2) {
+					versions = append(versions, v)
+				}
+			}
+		}
+	}
+	t.Log(versions)
+	assert.Equal(t, 1, len(versions))
+	assert.Equal(t, uint64(10), versions[0])
+
+	// test continuous load and dropping, speculative dropping could be
+	// handled correctly.
+	segId = tblData.SegmentIds()[2]
+	seg = tblData.StrongRefSegment(segId)
+	holder = seg.GetIndexHolder()
+
+	loader = func(i uint64) {
+		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e.Cols = []uint16{1}
+		inst.Scheduler.Schedule(e)
+		wg.Done()
+	}
+
+	dropper := func(i uint64) {
+		filename := filepath.Join(inst.Dir, fmt.Sprintf("data/%d_1_3_1.bsi", i))
+		holder.DropIndex(filename)
+		wg.Done()
+	}
+	for i := uint64(1); i <= uint64(10); i++ {
+		wg.Add(1)
+		go loader(i)
+		if i % 4 == 0 {
+			wg.Add(1)
+			go dropper(i)
+		}
+	}
+	wg.Wait()
+	inst.Close()
 }
 
 func TestEngine(t *testing.T) {

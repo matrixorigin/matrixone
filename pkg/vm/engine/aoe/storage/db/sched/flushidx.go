@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
-	"os"
 	"path/filepath"
 	"sync"
 )
@@ -89,16 +88,10 @@ func (e *flushIndexEvent) Execute() error {
 		if err != nil {
 			panic(err)
 		}
-		version := 0
-		filename := common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
-		for {
-			if _, err := os.Stat(filepath.Join(dir, filename)); os.IsNotExist(err) {
-				filename = filepath.Join(dir, filename)
-				break
-			}
-			version++
-			filename = common.MakeBitSlicedIndexFileName(uint64(version), meta.Table.Id, meta.Id, uint16(colIdx))
-		}
+		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
+		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
+		filename = filepath.Join(dir, filename)
+		//logutil.Infof("%s", filename)
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
 			panic(err)
 		}

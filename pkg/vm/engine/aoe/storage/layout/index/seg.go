@@ -36,6 +36,7 @@ type SegmentHolder struct {
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
 	Inited bool
+	VersionAllocator map[int]*common.IdAlloctor
 	self   struct {
 		sync.RWMutex
 		Indices    []*Node
@@ -63,6 +64,7 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.self.loadedVersion = make(map[int]uint64)
 	holder.self.FileHelper = make(map[string]*Node)
 	holder.self.droppedVersion = make(map[int]uint64)
+	holder.VersionAllocator = make(map[int]*common.IdAlloctor)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -108,6 +110,13 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	holder.Inited = true
 }
 
+func (holder *SegmentHolder) AllocateVersion(colIdx int) uint64 {
+	if holder.VersionAllocator[colIdx] == nil {
+		holder.VersionAllocator[colIdx] = common.NewIdAlloctor(uint64(1))
+	}
+	return holder.VersionAllocator[colIdx].Alloc()
+}
+
 // DropIndex trying to drop the given index from holder. In detail, we only has 2 types
 // of dropping:
 // 1. explicit dropping by calling this function, remove the entry in `loadedVersion`,
@@ -119,8 +128,12 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 // 2. implicit dropping by kicking out stale version during loading newer version.
 //    By calling `LoadIndex`, if we detect stale version via versionMap, it would
 //    be replaced by a newer version and dropped by the way.
-// In this way, as the newer versions continuously generated and dropped, we could
-// easily handle the multi-version indices control.
+//
+// Notice that only when the index loaded(that is to say, resources have been allocated
+// to the index) could it be added to the `loadedVersion`, so consider the following case:
+// try generating and loading index 1, but not loaded yet -> try drop index 1, failed for
+// dropping non-existent index. To solve this problem, we update `droppedVersion` anyway,
+// so that when the "future" index comes, it would be cancelled.
 func (holder *SegmentHolder) DropIndex(filename string) {
 	holder.self.Lock()
 	defer holder.self.Unlock()
@@ -134,7 +147,14 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 		}
 		if v, ok := holder.self.loadedVersion[int(col)]; ok {
 			if version > v {
-				panic("dropping index is newer than the latest version")
+				// speculative dropping
+				if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
+					if dropped >= version {
+						return
+					}
+				}
+				holder.self.droppedVersion[int(col)] = version
+				return
 			} else if version < v {
 				// stale index, has already been dropped
 				return
@@ -143,14 +163,9 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 				staleName := common.MakeBitSlicedIndexFileName(version, tid, sid, col)
 				//logutil.Infof("%s\n%+v", staleName, holder.self.FileHelper)
 				node := holder.self.FileHelper[staleName]
-				for i, idx := range holder.self.ColIndices[int(col)] {
+				for _, idx := range holder.self.ColIndices[int(col)] {
 					if holder.self.Indices[idx] == node {
-						idxes := holder.self.ColIndices[int(col)]
-						if i == len(idxes)-1 {
-							idxes = idxes[:len(idxes)-1]
-						} else {
-							idxes = append(idxes[:i], idxes[i+1:]...)
-						}
+						holder.self.Indices[idx] = nil
 						break
 					}
 				}
@@ -166,12 +181,12 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 				if dv >= version {
 					// already dropped explicitly
 					return
-				} else {
-					panic("dropping non-existent index")
 				}
-			} else {
-				panic("dropping non-existent index")
 			}
+			// drop "future" index, i.e. when the designated index comes, it
+			// would be cancelled directly.
+			holder.self.droppedVersion[int(col)] = version
+			return
 		}
 	}
 	panic("unexpected error")
@@ -190,6 +205,8 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
 	holder.self.Lock()
 	defer holder.self.Unlock()
+	logutil.Infof("%+v", holder.self.loadedVersion)
+	logutil.Infof("%+v", holder.self.droppedVersion)
 	// collect attached index files and make file for them
 	if name, ok := common.ParseBitSlicedIndexFileName(filepath.Base(filename)); ok {
 		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
@@ -200,14 +217,19 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 			panic("unexpected error")
 		}
 		isLatest := false
-		if v, ok := holder.self.loadedVersion[int(col)]; !ok {
-			if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
-				if dropped >= v {
-					// newer version used to be loaded, but dropped explicitly
-					logutil.Infof("detect stale index")
-					return
+		if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
+			if dropped >= version {
+				// newer version used to be loaded, but dropped explicitly
+				// or dropped speculatively in the past.
+				isLatest = false
+				if err := os.Remove(filename); err != nil {
+					panic(err)
 				}
+				logutil.Infof("detect stale index, version: %d, already dropped v-%d", version, dropped)
+				return
 			}
+		}
+		if v, ok := holder.self.loadedVersion[int(col)]; !ok {
 			holder.self.loadedVersion[int(col)] = version
 			isLatest = true
 		} else {
@@ -216,14 +238,9 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 				// GC stale version
 				staleName := common.MakeBitSlicedIndexFileName(v, tid, sid, col)
 				node := holder.self.FileHelper[staleName]
-				for i, idx := range holder.self.ColIndices[int(col)] {
+				for _, idx := range holder.self.ColIndices[int(col)] {
 					if holder.self.Indices[idx] == node {
-						idxes := holder.self.ColIndices[int(col)]
-						if i == len(idxes)-1 {
-							idxes = idxes[:len(idxes)-1]
-						} else {
-							idxes = append(idxes[:i], idxes[i+1:]...)
-						}
+						holder.self.Indices[idx] = nil
 						break
 					}
 				}
@@ -232,8 +249,11 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 				logutil.Infof("dropping stale index implicitly | version-%d", v)
 				isLatest = true
 			} else {
-				// stale index
+				// stale index, but not allocate resource yet, simply remove physical file
 				isLatest = false
+				if err := os.Remove(filename); err != nil {
+					panic(err)
+				}
 				logutil.Infof("loading stale index | %s received, but v-%d already loaded", filename, v)
 			}
 		}
@@ -286,6 +306,8 @@ func (holder *SegmentHolder) close() {
 }
 
 func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		ctx.BoolRes = true
@@ -293,6 +315,9 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	}
 	var err error
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		index := node.DataNode.(Index)
 		index.IndexFile().Ref()
@@ -309,12 +334,17 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 }
 
 func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max []interface{}, err error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return nil, nil, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() != base.ZoneMap {
 			err = node.Close()
@@ -339,12 +369,17 @@ func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max [
 }
 
 func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return 0, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
@@ -377,12 +412,17 @@ func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, 
 }
 
 func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return 0, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
@@ -415,12 +455,17 @@ func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint
 }
 
 func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return 0, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
@@ -452,12 +497,17 @@ func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{
 }
 
 func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return 0, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
@@ -489,12 +539,17 @@ func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{
 }
 
 func (holder *SegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		return 0, 0, errors.New("no index found")
 	}
 
 	for _, idx := range idxes {
+		if holder.self.Indices[idx] == nil {
+			continue
+		}
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
