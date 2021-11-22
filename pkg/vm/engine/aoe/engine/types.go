@@ -35,7 +35,7 @@ type SegmentInfo struct {
 }
 
 type aoeReader struct {
-	blocks []aoe.Block
+	blocks *[]aoe.Block
 }
 
 type database struct {
@@ -45,12 +45,11 @@ type database struct {
 }
 
 type relation struct {
-	pid      uint64                  //database id
-	tbl      *aoe.TableInfo          //table of the tablets
-	catalog  *catalog3.Catalog       //the catalog
-	nodes	 engine.Nodes
-	segments []SegmentInfo    //segments of the table
+	pid      uint64            //database id
+	tbl      *aoe.TableInfo    //table of the tablets
+	catalog  *catalog3.Catalog //the catalog
+	nodes    engine.Nodes
+	segments []SegmentInfo           //segments of the table
 	tablets  []aoe.TabletInfo        //tablets of the table
 	mp       map[string]*db.Relation //a map of each tablet and its relation
 }
-
