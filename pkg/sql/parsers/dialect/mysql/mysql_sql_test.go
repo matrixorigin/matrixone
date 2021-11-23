@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table t (a int, b char, check (1 + 1) enforced)",
+		input: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 escaped by \\ lines",
 	}
 )
 
@@ -55,6 +56,9 @@ var (
 		input  string
 		output string
 	}{{
+		input: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 escaped by \\ lines",
+	}, {
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references B(a asc, b desc))",
