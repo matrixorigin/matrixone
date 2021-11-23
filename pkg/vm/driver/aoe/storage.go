@@ -95,6 +95,7 @@ func (s *Storage) Stats() stats.Stats {
 
 //Append appends batch in the table
 func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	logutil.Infof("Append, log index is %v, shard id is %v", index, shardId)
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("[logIndex:%d,%d]append handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
@@ -172,6 +173,7 @@ func (s *Storage) getSegmentedId(cmd []byte) []byte {
 //It returns the id of the created table.
 //If the storage is closed, it panics.
 func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	logutil.Infof("createTable, log index is %v,shard id is %v", index, shardId)
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -211,6 +213,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
 func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	logutil.Infof("dropTable, log index is %v, shard id is %v", index, shardId)
 	customReq := &pb.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 
@@ -342,7 +345,7 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 
 		}
 	}
-	logutil.Infof("GetInitialStates, len is %v",len(values))
+	logutil.Infof("GetInitialStates, len is %v", len(values))
 	return values, nil
 }
 
@@ -405,7 +408,9 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 }
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
+	var index uint64
 	for _, metadata := range metadatas {
+		logutil.Infof("SaveShardMetadata,LogIndex is %v, shard id is %v", metadata.LogIndex, metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
@@ -453,6 +458,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			offset := 0
 			size := 2
 			if createDatabase {
+				index = metadata.LogIndex + 1
 				offset = 1
 				size = 3
 			}
@@ -495,17 +501,19 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		offset := 0
 		size := 1
 		if createTable {
+			index = metadata.LogIndex + 1
 			offset = 1
 			size = 2
 		}
 		if createDatabase {
+			index = metadata.LogIndex + 2
 			offset = 2
 			size = 3
 		}
 		ctx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     metadata.LogIndex,
+					Id:     index,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedbName.ShardIdToName(metadata.ShardID),

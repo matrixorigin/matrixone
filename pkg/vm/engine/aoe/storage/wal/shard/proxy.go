@@ -268,12 +268,14 @@ func (p *proxy) Checkpoint() {
 		if stopNum != 0 {
 			p.stopmask.Clear()
 		}
+		logutil.Infof("SetSafeId(p.lastIndex), p.lastIndex is %v", p.lastIndex)
 		p.SetSafeId(p.lastIndex)
 	} else if stopNum > 0 {
 		it := p.mask.Iterator()
 		start := it.Next()
 		for pos := start - 1; pos >= uint64(0); pos-- {
 			if !p.stopmask.Contains(pos) {
+				logutil.Infof("SetSafeId(pos), pos is %v", pos)
 				p.SetSafeId(pos)
 				break
 			}
@@ -283,8 +285,10 @@ func (p *proxy) Checkpoint() {
 		it := p.mask.Iterator()
 		pos := it.Next()
 		if pos == 0 {
+			logutil.Infof("SetSafeId(pos), pos is %v", pos)
 			p.SetSafeId(pos)
 		} else {
+			logutil.Infof("SetSafeId(pos - 1), pos is %v", pos)
 			p.SetSafeId(pos - 1)
 		}
 	}
