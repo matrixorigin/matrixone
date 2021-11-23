@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
@@ -31,19 +30,17 @@ type dropDBRequest struct {
 	gc.BaseRequest
 	Tables         *table.Tables
 	DB             *metadata.Database
-	MemTableMgr    mtif.IManager
 	Opts           *storage.Options
 	Cleaner        *metadata.Cleaner
 	needReschedule bool
 	startTime      time.Time
 }
 
-func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr mtif.IManager) *dropDBRequest {
+func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables) *dropDBRequest {
 	req := new(dropDBRequest)
 	req.DB = meta
 	req.Tables = tables
 	req.Opts = opts
-	req.MemTableMgr = mtMgr
 	req.StartTime = time.Now()
 	req.Cleaner = metadata.NewCleaner(opts.Meta.Catalog)
 	req.Op = ops.Op{
@@ -56,9 +53,9 @@ func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *ta
 func (req *dropDBRequest) IncIteration() {}
 
 func (req *dropDBRequest) dropTable(meta *metadata.Table) error {
-	task := NewDropTblRequest(req.Opts, meta, req.Tables, req.MemTableMgr, nil)
+	task := NewDropTblRequest(req.Opts, meta, req.Tables, nil)
 	if err := task.Execute(); err != nil {
-		logutil.Warn(err.Error())
+		logutil.Warnf("%s, %s", meta.Repr(false), err.Error())
 		req.needReschedule = true
 	}
 	return nil

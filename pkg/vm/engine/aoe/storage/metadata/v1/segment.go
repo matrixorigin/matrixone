@@ -178,7 +178,7 @@ func (e *Segment) PString(level PPLevel, depth int) string {
 	ident2 := " " + ident
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
+	s := fmt.Sprintf("<Segment[%d] %s", e.Id, e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {
@@ -233,12 +233,9 @@ func (e *Segment) SimpleCreateBlock() *Block {
 	return ctx.block
 }
 
-// Safe
-func (e *Segment) Appendable() bool {
-	e.RLock()
-	defer e.RUnlock()
+func (e *Segment) AppendableLocked() bool {
 	if e.HasMaxBlocks() {
-		return !e.BlockSet[len(e.BlockSet)-1].IsFullLocked()
+		return !e.BlockSet[len(e.BlockSet)-1].IsFull()
 	}
 	return true
 }
@@ -301,6 +298,27 @@ func (e *Segment) FirstInFullBlock() *Block {
 		}
 	}
 	return found
+}
+
+func (e *Segment) IsUpgradable() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsUpgradableLocked()
+}
+
+func (e *Segment) IsUpgradableLocked() bool {
+	if e.IsSortedLocked() {
+		return false
+	}
+	if len(e.BlockSet) != int(e.Table.Schema.SegmentMaxBlocks) {
+		return false
+	}
+	for _, block := range e.BlockSet {
+		if !block.IsFull() {
+			return false
+		}
+	}
+	return true
 }
 
 // Not safe
@@ -392,24 +410,33 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
+func (e *Segment) DryUpgrade(size int64) {
+	e.CommitInfo.Op = OpUpgradeSorted
+	e.CommitInfo.Size = size
+}
+
 // Not safe
 // One writer, multi-readers
 func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	e.RLock()
 	if len(e.BlockSet) == 0 {
+		e.RUnlock()
 		return e.SimpleCreateBlock()
 	}
 	var ret *Block
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]
-		if !blk.IsFullLocked() && from.Less(blk) {
+		if !blk.IsFull() && from.Less(blk) {
 			ret = blk
 		} else {
 			break
 		}
 	}
 	if ret != nil || e.HasMaxBlocks() {
+		e.RUnlock()
 		return ret
 	}
+	e.RUnlock()
 	return e.SimpleCreateBlock()
 }
 

@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memdata
+package sched
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
-type createSegBlkEvent struct {
+type installBlockEvent struct {
 	BaseEvent
 
 	// TableData is Table's metadata in memory
@@ -34,18 +33,15 @@ type createSegBlkEvent struct {
 	Block iface.IBlock
 }
 
-func NewCreateSegBlkEvent(ctx *Context, meta *metadata.Block, tableData iface.ITableData) *createSegBlkEvent {
-	e := &createSegBlkEvent{TableData: tableData, BlkMeta: meta}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
-	}
+func NewInstallBlockEvent(ctx *Context, meta *metadata.Block, tableData iface.ITableData) *installBlockEvent {
+	e := &installBlockEvent{TableData: tableData, BlkMeta: meta}
+	e.BaseEvent = *NewBaseEvent(e, MemdataUpdateEvent, ctx)
 	return e
 }
 
 // 1. Create and register a segment in TableData
 // 2. Create and register a Block in TableData
-func (e *createSegBlkEvent) Execute() error {
+func (e *installBlockEvent) Execute() error {
 	var err error
 	seg := e.TableData.StrongRefSegment(e.BlkMeta.Segment.Id)
 	if seg == nil {

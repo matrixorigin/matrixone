@@ -40,11 +40,24 @@ func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
 	return NewRelation(d, data, meta), nil
 }
 
+// FIXME: Log index first. Since the shard is should be defined first, we
+// have to prepare create first to get a shard id and then use the shard id
+// to log wal
 func (d *DB) CreateDatabase(ctx *CreateDBCtx) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	return d.Store.Catalog.SimpleCreateDatabase(ctx.DB, nil)
+	database, err := d.Store.Catalog.SimpleCreateDatabase(ctx.DB, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	index := ctx.ToLogIndex(database)
+	index.Id.Size = 1
+	d.Wal.SyncLog(index)
+	d.Wal.Checkpoint(index)
+
+	return database, err
 }
 
 func (d *DB) DropDatabase(ctx *DropDBCtx) (*metadata.Database, error) {
@@ -172,7 +185,7 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 			d.Wal.Checkpoint(index)
 		}
 	}()
-	err = d.DoAppend(meta, ctx.Data, index)
+	err = d.DoAppend(meta, ctx.Data, index.AsSlice())
 	return err
 }
 
@@ -216,6 +229,7 @@ func (d *DB) ExecSplitDatabase(ctx *ExecSplitCtx) error {
 	if err = splitter.Commit(); err != nil {
 		return err
 	}
+	splitter.ScheduleEvents(&d.Impl)
 	d.ScheduleGCDatabase(database)
 	return err
 }

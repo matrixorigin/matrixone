@@ -16,7 +16,6 @@ package sched
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type commitBlkEvent struct {
@@ -26,10 +25,7 @@ type commitBlkEvent struct {
 
 func NewCommitBlkEvent(ctx *Context, meta *metadata.Block) *commitBlkEvent {
 	e := &commitBlkEvent{Meta: meta}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.CommitBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, CommitBlkTask, ctx)
 	return e
 }
 

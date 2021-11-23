@@ -16,12 +16,12 @@ package index
 
 import (
 	"bytes"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"io"
 )
 
 // TODO: Just for temp test, rework later
@@ -349,4 +349,8 @@ func (i *ZoneMapIndex) Ge(v interface{}) bool {
 
 func (i *ZoneMapIndex) Btw(v interface{}) bool {
 	panic("TODO")
+}
+
+func (i *ZoneMapIndex) IndexFile() common.IVFile {
+	return nil
 }

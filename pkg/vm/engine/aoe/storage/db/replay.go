@@ -25,10 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -190,6 +189,16 @@ type unsortedSegmentFile struct {
 	meta       *metadata.Segment
 }
 
+type bsiFile struct {
+	h *replayHandle
+	id common.ID
+	name string
+}
+
+func (bf *bsiFile) clean() {
+	bf.h.doRemove(bf.name)
+}
+
 func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
 		h:          h,
@@ -323,6 +332,35 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *meta
 type tableDataFiles struct {
 	sortedfiles   map[common.ID]*sortedSegmentFile
 	unsortedfiles map[common.ID]*unsortedSegmentFile
+	bsifiles      map[common.ID]*bsiFile
+}
+
+func (tdf *tableDataFiles) HasBlockFile(id *common.ID) bool {
+	sid := id.AsSegmentID()
+	unsorted := tdf.unsortedfiles[sid]
+	if unsorted == nil {
+		return false
+	}
+	return unsorted.hasblock(*id)
+}
+
+func (tdf *tableDataFiles) HasSegementFile(id *common.ID) bool {
+	unsorted := tdf.unsortedfiles[*id]
+	if unsorted != nil {
+		return true
+	}
+	sorted := tdf.sortedfiles[*id]
+	return sorted != nil
+}
+
+func (ctx *tableDataFiles) PresentedBsiFiles(id common.ID) []string {
+	files := make([]string, 0)
+	for cid, file := range ctx.bsifiles {
+		if cid.IsSameSegment(id) {
+			files = append(files, file.name)
+		}
+	}
+	return files
 }
 
 func (tdf *tableDataFiles) clean() {
@@ -330,6 +368,9 @@ func (tdf *tableDataFiles) clean() {
 		file.clean()
 	}
 	for _, file := range tdf.unsortedfiles {
+		file.clean()
+	}
+	for _, file := range tdf.bsifiles {
 		file.clean()
 	}
 }
@@ -344,6 +385,7 @@ type replayHandle struct {
 	cleanables []cleanable
 	files      map[uint64]*tableDataFiles
 	flushsegs  []flushsegCtx
+	indicesMap map[common.ID][]uint16
 	compactdbs []*metadata.Database
 	observer   IReplayObserver
 	cbs        []func() error
@@ -359,6 +401,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
+		indicesMap: make(map[common.ID][]uint16),
 		compactdbs: make([]*metadata.Database, 0),
 		observer:   observer,
 		cbs:        make([]func() error, 0),
@@ -384,26 +427,63 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	if err != nil {
 		panic(fmt.Sprintf("err: %s", err))
 	}
+
+	for _, database := range catalog.Databases {
+		for _, tbl := range database.TableSet {
+			indices := tbl.Schema.Indices
+			for _, idx := range indices {
+				// todo: str bsi
+				if idx.Type == metadata.NumBsi {
+					for _, seg := range tbl.SegmentSet {
+						if !seg.IsSortedLocked() {
+							continue
+						}
+						for _, col := range idx.Columns {
+							id := seg.AsCommonID()
+							id.Idx = col
+							fs.indicesMap[*id] = append(fs.indicesMap[*id], col)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	for _, file := range dataFiles {
 		fs.addDataFile(file.Name())
+	}
+	for _, file := range dataFiles {
+		fs.addIndexFile(file.Name())
 	}
 	return fs
 }
 
-func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables, mtMgr mtif.IManager) {
+func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)
 		if segment == nil {
 			panic(fmt.Sprintf("segment %d is nil", ctx.id.SegmentID))
 		}
-		flushCtx := &dbsched.Context{Opts: opts}
-		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		flushCtx := &sched.Context{Opts: opts}
+		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
 		opts.Scheduler.Schedule(flushEvent)
 	}
 	h.flushsegs = h.flushsegs[:0]
+	for id, cols := range h.indicesMap {
+		t, _ := tables.WeakRefTable(id.TableID)
+		segment := t.StrongRefSegment(id.SegmentID)
+		if segment == nil {
+			panic("unexpected error")
+		}
+		flushCtx := &sched.Context{Opts: opts}
+		flushEvent := sched.NewFlushIndexEvent(flushCtx, segment)
+		flushEvent.Cols = cols
+		opts.Scheduler.Schedule(flushEvent)
+	}
+	h.indicesMap = make(map[common.ID][]uint16)
 	for _, database := range h.compactdbs {
-		gcReq := gcreqs.NewDropDBRequest(opts, database, tables, mtMgr)
+		gcReq := gcreqs.NewDropDBRequest(opts, database, tables)
 		opts.GC.Acceptor.Accept(gcReq)
 	}
 	h.compactdbs = h.compactdbs[:0]
@@ -420,6 +500,7 @@ func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
 		}
 		logutil.Infof("addBlock, id is %v",id.TableID)
 		h.files[id.TableID] = tbl
@@ -440,6 +521,7 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
 		}
 		logutil.Infof("addSegment, id is %v",id.TableID)
 		h.files[id.TableID] = tbl
@@ -452,6 +534,36 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		h:    h,
 		id:   id,
 		name: name,
+	}
+}
+
+// addBSI basically means replace if exists
+func (h *replayHandle) addBSI(id common.ID, filename string) {
+	tbl, ok := h.files[id.TableID]
+	if !ok {
+		tbl = &tableDataFiles{
+			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
+			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
+			bsifiles: make(map[common.ID]*bsiFile),
+		}
+		h.files[id.TableID] = tbl
+	}
+	tbl.bsifiles[id] = &bsiFile{
+		h:    h,
+		id:   id,
+		name: filename,
+	}
+	if cols, ok := h.indicesMap[id]; ok {
+		for i, col := range cols {
+			if col == id.Idx {
+				if i == len(cols)-1 {
+					cols = cols[:len(cols)-1]
+				} else {
+					cols = append(cols[:i], cols[i+1:]...)
+				}
+			}
+		}
+		h.indicesMap[id] = cols
 	}
 }
 
@@ -483,7 +595,40 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addSegment(id, fullname)
 		return
 	}
+	if _, ok := common.ParseBitSlicedIndexFileName(fname); ok {
+		return
+	}
 	h.others = append(h.others, path.Join(h.dataDir, fname))
+}
+
+func (h *replayHandle) addIndexFile(fname string) {
+	if name, ok := common.ParseBitSlicedIndexFileName(fname); ok {
+		version, tid, sid, col, ok := common.ParseBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		id := &common.ID{TableID: tid, SegmentID: sid}
+		if h.files[tid] == nil || !h.files[tid].HasSegementFile(id) {
+			h.others = append(h.others, path.Join(h.dataDir, fname))
+			return
+		}
+		id.Idx = col
+		if bf, ok := h.files[tid].bsifiles[*id]; ok {
+			fn, _ := common.ParseBitSlicedIndexFileName(bf.name)
+			v, _, _, _, _ := common.ParseBitSlicedIndexFileNameToInfo(fn)
+			if version > v {
+				h.others = append(h.others, bf.name)
+				h.addBSI(*id, path.Join(h.dataDir, fname))
+				logutil.Infof("detect stale index file | %s", bf.name)
+			} else {
+				h.others = append(h.others, path.Join(h.dataDir, fname))
+				logutil.Infof("detect stale index file | %s", fname)
+			}
+		} else {
+			h.addBSI(*id, path.Join(h.dataDir, fname))
+		}
+		return
+	}
 }
 
 func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
@@ -571,55 +716,12 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 		return nil
 	}
 
-	tableData, err := h.tables.RegisterTable(meta)
+	data, err := h.tables.PrepareInstallTable(meta, tablesFiles)
 	if err != nil {
 		return err
 	}
-	for _, segMeta := range meta.SegmentSet {
-		if segMeta.IsSortedLocked() || !segMeta.Appendable() {
-			segData, err := tableData.RegisterSegment(segMeta)
-			if err != nil {
-				return err
-			}
-			defer segData.Unref()
-
-			for _, blkMeta := range segMeta.BlockSet {
-				blkData, err := tableData.RegisterBlock(blkMeta)
-				if err != nil {
-					return err
-				}
-				defer blkData.Unref()
-			}
-			continue
-		}
-		id := segMeta.AsCommonID()
-		segFile := tablesFiles.unsortedfiles[*id]
-		if segFile == nil {
-			break
-		}
-		logutil.Infof("set id", segMeta.Id)
-		segData, err := tableData.RegisterSegment(segMeta)
-		if err != nil {
-			return err
-		}
-		defer segData.Unref()
-		for _, blkMeta := range segMeta.BlockSet {
-			id = blkMeta.AsCommonID()
-			if !segFile.hasblock(*id) {
-				break
-			}
-			blkData, err := tableData.RegisterBlock(blkMeta)
-			if err != nil {
-				return err
-			}
-			defer blkData.Unref()
-		}
-
-		break
-	}
-	tableData.InitReplay()
-	// logutil.Info(tableData.String())
-	return nil
+	err = h.tables.InstallTable(data)
+	return err
 }
 
 func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {

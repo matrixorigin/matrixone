@@ -17,7 +17,6 @@ package sched
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -44,12 +43,8 @@ type Context struct {
 	// If the event is waitable
 	Waitable bool
 	// Influence scope
-	Scope *Scope
-}
-
-type BaseEvent struct {
-	sched.BaseEvent
-	Ctx *Context
+	Scope      *Scope
+	Controller *Controller
 }
 
 func (ctx *Context) addScope(t scopeType) {

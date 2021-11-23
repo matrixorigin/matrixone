@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -173,8 +172,7 @@ func TestReplay1(t *testing.T) {
 	assert.Equal(t, ckId, database.GetCheckpointId())
 	t.Log(inst1.Store.Catalog.PString(metadata.PPL0, 0))
 
-	gcreq := gcreqs.NewCatalogCompactionRequest(inst1.Store.Catalog, time.Duration(1)*time.Millisecond)
-	err = gcreq.Execute()
+	err = inst1.ForceCompactCatalog()
 	assert.Nil(t, err)
 
 	inst1.Close()
@@ -350,7 +348,7 @@ func TestReplay3(t *testing.T) {
 		return gen.Get(shardId)-1 == database.GetCheckpointId()
 	})
 	assert.Equal(t, gen.Get(shardId)-1, database.GetCheckpointId())
-	time.Sleep(time.Duration(20) * time.Millisecond)
+	time.Sleep(time.Duration(80) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()
@@ -507,4 +505,55 @@ func TestReplay4(t *testing.T) {
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
 
 	inst.Close()
+}
+
+func TestReplay5(t *testing.T) {
+	initTestEnv(t)
+
+	inst, gen, database := initTestDB1(t)
+	schema := metadata.MockSchema(3)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	meta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 15 / 10
+	ck := mock.MockBatch(meta.Schema.Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, ck)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+	time.Sleep(time.Duration(40) * time.Millisecond)
+	assert.Equal(t, 1, database.UncheckpointedCnt())
+
+	data, err := inst.GetTableData(meta)
+	assert.Nil(t, err)
+	assert.Equal(t, rows, data.GetRowCount())
+	data.Unref()
+
+	inst.Close()
+	inst, _, _ = initTestDB2(t)
+	defer inst.Close()
+
+	meta, err = inst.Store.Catalog.SimpleGetTableByName(database.Name, schema.Name)
+	assert.Nil(t, err)
+	data, err = inst.GetTableData(meta)
+	assert.Nil(t, err)
+	assert.Equal(t, rows/15*10, data.GetRowCount())
+	defer data.Unref()
+
+	err = inst.Append(appendCtx)
+	assert.Equal(t, rows, data.GetRowCount())
+	assert.Equal(t, createCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, 1, meta.Database.UncheckpointedCnt())
+
+	err = inst.FlushDatabase(meta.Database.Name)
+	assert.Nil(t, err)
+
+	testutils.WaitExpect(200, func() bool {
+		return meta.Database.UncheckpointedCnt() == 0
+	})
+	assert.Equal(t, appendCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, 0, meta.Database.UncheckpointedCnt())
 }

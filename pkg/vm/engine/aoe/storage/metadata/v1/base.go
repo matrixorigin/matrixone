@@ -71,6 +71,11 @@ func (e *BaseEntry) GetCommit() *CommitInfo {
 	return e.CommitInfo
 }
 
+func (e *BaseEntry) IsFull() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.Op == OpUpgradeFull
+}
 func (e *BaseEntry) IsFullLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeFull
 }
@@ -84,7 +89,7 @@ func (e *BaseEntry) IsSortedLocked() bool {
 }
 
 func (e *BaseEntry) checkStale1(info *CommitInfo) error {
-	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil {
+	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil || info.LogIndex == nil {
 		return nil
 	}
 	switch info.Op {

@@ -17,14 +17,34 @@ package sched
 import (
 	"sync"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	tif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
-var DisableFlushSegment = false
+type CommandType = sched.CommandType
+
+const (
+	TurnOffFlushSegmentCmd = iota + sched.CustomizedCmd
+	TurnOnFlushSegmentCmd
+	TurnOffUpgradeSegmentCmd
+	TurnOnUpgradeSegmentCmd
+	TurnOnUpgradeSegmentMetaCmd
+	TurnOffUpgradeSegmentMetaCmd
+)
+
+type CmdMask = uint64
+
+const (
+	FlushSegMask CmdMask = iota
+	UpgradeSegMask
+	UpgradeSegMetaMask
+)
 
 type metablkCommiter struct {
 	sync.RWMutex
@@ -89,6 +109,36 @@ func (p *metablkCommiter) Accept(meta *metadata.Block) {
 	p.Unlock()
 }
 
+type Controller struct {
+	cmu  sync.RWMutex
+	mask *roaring64.Bitmap
+}
+
+func NewController() *Controller {
+	return &Controller{
+		mask: roaring64.NewBitmap(),
+	}
+}
+
+func (c *Controller) UpdateMask(mask CmdMask, on bool) {
+	c.cmu.Lock()
+	defer c.cmu.Unlock()
+	if on {
+		c.mask.Remove(mask)
+	} else {
+		c.mask.Add(mask)
+	}
+}
+
+func (c *Controller) IsOn(mask CmdMask) bool {
+	if c == nil {
+		return true
+	}
+	c.cmu.RLock()
+	defer c.cmu.RUnlock()
+	return !c.mask.Contains(mask)
+}
+
 // scheduler is the global event scheduler for AOE. It wraps the
 // BaseScheduler with some DB metadata and block committers.
 //
@@ -96,6 +146,7 @@ func (p *metablkCommiter) Accept(meta *metadata.Block) {
 // DB space. Basically you can refer to code under sched/ for more
 // implementation details for scheduler itself.
 type scheduler struct {
+	*Controller
 	sched.BaseScheduler
 	opts      *storage.Options
 	tables    *table.Tables
@@ -110,6 +161,7 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 		BaseScheduler: *sched.NewBaseScheduler("scheduler"),
 		opts:          opts,
 		tables:        tables,
+		Controller:    NewController(),
 	}
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
@@ -129,34 +181,36 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	statelessHandler.Start()
 
 	// Register different events to its belonged handler
-	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
-	dispatcher.RegisterHandler(sched.FlushSegTask, flushsegHandler)
-	dispatcher.RegisterHandler(sched.FlushBlkTask, flushblkHandler)
-	dispatcher.RegisterHandler(sched.CommitBlkTask, metaHandler)
-	dispatcher.RegisterHandler(sched.UpgradeBlkTask, memdataHandler)
-	dispatcher.RegisterHandler(sched.UpgradeSegTask, memdataHandler)
-	dispatcher.RegisterHandler(sched.MetaCreateTableTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MetaDropTableTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MetaCreateBlkTask, metaHandler)
-	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataHandler)
-	dispatcher.RegisterHandler(sched.FlushTableMetaTask, metaHandler)
-	dispatcher.RegisterHandler(sched.PrecommitBlkMetaTask, metaHandler)
-	dispatcher.RegisterHandler(sched.FlushTBlkTask, flushtblkHandler)
+	dispatcher.RegisterHandler(StatelessEvent, statelessHandler)
+	dispatcher.RegisterHandler(FlushSegTask, flushsegHandler)
+	dispatcher.RegisterHandler(FlushIndexTask, flushsegHandler)
+	dispatcher.RegisterHandler(FlushBlkTask, flushblkHandler)
+	dispatcher.RegisterHandler(CommitBlkTask, metaHandler)
+	dispatcher.RegisterHandler(UpgradeBlkTask, memdataHandler)
+	dispatcher.RegisterHandler(UpgradeSegTask, memdataHandler)
+	dispatcher.RegisterHandler(MetaCreateTableTask, metaHandler)
+	dispatcher.RegisterHandler(MetaDropTableTask, metaHandler)
+	dispatcher.RegisterHandler(MetaCreateBlkTask, metaHandler)
+	dispatcher.RegisterHandler(MemdataUpdateEvent, memdataHandler)
+	dispatcher.RegisterHandler(FlushTableMetaTask, metaHandler)
+	dispatcher.RegisterHandler(PrecommitBlkMetaTask, metaHandler)
+	dispatcher.RegisterHandler(FlushTBlkTask, flushtblkHandler)
 
 	// Register dispatcher
-	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
-	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
-	s.RegisterDispatcher(sched.FlushBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.CommitBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.UpgradeBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.UpgradeSegTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaCreateTableTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaDropTableTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaCreateBlkTask, dispatcher)
-	s.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
-	s.RegisterDispatcher(sched.FlushTableMetaTask, dispatcher)
-	s.RegisterDispatcher(sched.PrecommitBlkMetaTask, dispatcher)
-	s.RegisterDispatcher(sched.FlushTBlkTask, dispatcher)
+	s.RegisterDispatcher(StatelessEvent, dispatcher)
+	s.RegisterDispatcher(FlushSegTask, dispatcher)
+	s.RegisterDispatcher(FlushIndexTask, dispatcher)
+	s.RegisterDispatcher(FlushBlkTask, dispatcher)
+	s.RegisterDispatcher(CommitBlkTask, dispatcher)
+	s.RegisterDispatcher(UpgradeBlkTask, dispatcher)
+	s.RegisterDispatcher(UpgradeSegTask, dispatcher)
+	s.RegisterDispatcher(MetaCreateTableTask, dispatcher)
+	s.RegisterDispatcher(MetaDropTableTask, dispatcher)
+	s.RegisterDispatcher(MetaCreateBlkTask, dispatcher)
+	s.RegisterDispatcher(MemdataUpdateEvent, dispatcher)
+	s.RegisterDispatcher(FlushTableMetaTask, dispatcher)
+	s.RegisterDispatcher(PrecommitBlkMetaTask, dispatcher)
+	s.RegisterDispatcher(FlushTBlkTask, dispatcher)
 	s.Start()
 	return s
 }
@@ -227,8 +281,8 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if !event.SegmentClosed {
 		return
 	}
-	// TODO: remove later
-	if DisableFlushSegment {
+	if !s.IsOn(FlushSegMask) {
+		logutil.Warn("[Scheduler] Flush Segment Is Turned-Off")
 		return
 	}
 	segment := event.TableData.StrongRefSegment(event.Meta.Segment.Id)
@@ -251,7 +305,13 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
+	if !s.IsOn(UpgradeSegMask) {
+		logutil.Warn("[Scheduler] Upgrade Segment Is Turned-Off")
+		event.Segment.Unref()
+		return
+	}
 	ctx := &Context{Opts: s.opts}
+	ctx.Controller = s.Controller
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
@@ -275,22 +335,27 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 		return
 	}
 	event.Segment.Unref()
+	// start flush index
+	flushCtx := &Context{Opts: s.opts}
+	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
+	newevent.FlushAll = true
+	s.Schedule(newevent)
 }
 
 func (s *scheduler) OnExecDone(op interface{}) {
 	e := op.(sched.Event)
 	switch e.Type() {
-	case sched.FlushBlkTask:
+	case FlushBlkTask:
 		s.onFlushBlkDone(e)
-	case sched.CommitBlkTask:
+	case CommitBlkTask:
 		s.onCommitBlkDone(e)
-	case sched.UpgradeBlkTask:
+	case UpgradeBlkTask:
 		s.onUpgradeBlkDone(e)
-	case sched.FlushSegTask:
+	case FlushSegTask:
 		s.onFlushSegDone(e)
-	case sched.UpgradeSegTask:
+	case UpgradeSegTask:
 		s.onUpgradeSegDone(e)
-	case sched.PrecommitBlkMetaTask:
+	case PrecommitBlkMetaTask:
 		s.onPrecommitBlkDone(e)
 	}
 }
@@ -309,7 +374,7 @@ func (s *scheduler) onPreScheduleFlushBlkTask(e sched.Event) {
 
 func (s *scheduler) preprocess(e sched.Event) {
 	switch e.Type() {
-	case sched.FlushBlkTask:
+	case FlushBlkTask:
 		s.onPreScheduleFlushBlkTask(e)
 	}
 	e.AddObserver(s)
@@ -319,4 +384,47 @@ func (s *scheduler) preprocess(e sched.Event) {
 func (s *scheduler) Schedule(e sched.Event) error {
 	s.preprocess(e)
 	return s.BaseScheduler.Schedule(e)
+}
+
+func (s *scheduler) ExecCmd(cmd CommandType) error {
+	switch cmd {
+	case sched.NoopCmd:
+		return nil
+	case TurnOnFlushSegmentCmd:
+		s.UpdateMask(FlushSegMask, true)
+		return nil
+	case TurnOffFlushSegmentCmd:
+		s.UpdateMask(FlushSegMask, false)
+		return nil
+	case TurnOnUpgradeSegmentCmd:
+		s.UpdateMask(UpgradeSegMask, true)
+		return nil
+	case TurnOffUpgradeSegmentCmd:
+		s.UpdateMask(UpgradeSegMask, false)
+		return nil
+	case TurnOnUpgradeSegmentMetaCmd:
+		s.UpdateMask(UpgradeSegMetaMask, true)
+		return nil
+	case TurnOffUpgradeSegmentMetaCmd:
+		s.UpdateMask(UpgradeSegMetaMask, false)
+		return nil
+	}
+	panic("not supported")
+}
+
+func (s *scheduler) InstallBlock(meta *metadata.Block, tableData tif.ITableData) (block tif.IBlock, err error) {
+	ctx := &Context{Opts: s.opts, Waitable: true}
+	e := NewInstallBlockEvent(ctx, meta, tableData)
+	s.Schedule(e)
+	if err = e.WaitDone(); err != nil {
+		return
+	}
+	block = e.Block
+	return
+}
+
+func (s *scheduler) AsyncFlushBlock(block iface.IMutBlock) {
+	ctx := &Context{Opts: s.opts}
+	e := NewFlushMemBlockEvent(ctx, block)
+	s.Schedule(e)
 }

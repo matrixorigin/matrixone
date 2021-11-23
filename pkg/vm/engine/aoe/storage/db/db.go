@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -45,8 +44,6 @@ type DB struct {
 	Opts *storage.Options
 	// FsMgr manages all file related usages including virtual file.
 	FsMgr base.IManager
-	// MemTableMgr manages memtables.
-	MemTableMgr mtif.IManager
 	// IndexBufMgr manages all segment/block indices in memory.
 	IndexBufMgr bmgrif.IBufferManager
 
@@ -83,6 +80,8 @@ func (d *DB) GetTempDir() string {
 	return common.MakeTempDir(d.Dir)
 }
 
+// FIXME: start txn should not accept log index. For create database, the index
+// is comfirmed until then end
 func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
 	return d.Store.Catalog.StartTxn(index)
 }
@@ -263,6 +262,7 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	if err = loader.CommitLoad(); err != nil {
 		return err
 	}
+	loader.ScheduleEvents(d)
 	d.ScheduleGCDatabase(database)
 	return err
 }

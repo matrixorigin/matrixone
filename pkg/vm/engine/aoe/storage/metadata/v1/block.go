@@ -45,35 +45,35 @@ func (e *blockLogEntry) Unmarshal(buf []byte) error {
 }
 
 type IndiceMemo struct {
-	mu      *sync.Mutex
-	snippet *shard.Snippet
+	mu     *sync.Mutex
+	indice *shard.SliceIndice
 }
 
 func NewIndiceMemo(e *Block) *IndiceMemo {
 	i := new(IndiceMemo)
 	i.mu = new(sync.Mutex)
-	i.snippet = e.CreateSnippet()
+	i.indice = e.CreateSnippet()
 	return i
 }
 
-func (memo *IndiceMemo) Append(index *LogIndex) {
+func (memo *IndiceMemo) Append(index *shard.SliceIndex) {
 	if memo == nil {
 		return
 	}
 	memo.mu.Lock()
-	memo.snippet.Append(index)
+	memo.indice.Append(index)
 	memo.mu.Unlock()
 }
 
-func (memo *IndiceMemo) Fetch(block *Block) *shard.Snippet {
+func (memo *IndiceMemo) Fetch(block *Block) *shard.SliceIndice {
 	if memo == nil {
 		return nil
 	}
 	memo.mu.Lock()
 	defer memo.mu.Unlock()
-	snippet := memo.snippet
-	memo.snippet = block.CreateSnippet()
-	return snippet
+	indice := memo.indice
+	memo.indice = block.CreateSnippet()
+	return indice
 }
 
 type Block struct {
@@ -99,10 +99,10 @@ func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 			},
 		},
 	}
-	snippet := e.CreateSnippet()
-	if snippet != nil {
+	indice := e.CreateSnippet()
+	if indice != nil {
 		e.IndiceMemo = new(IndiceMemo)
-		e.IndiceMemo.snippet = snippet
+		e.IndiceMemo.indice = indice
 		e.IndiceMemo.mu = new(sync.Mutex)
 	}
 	return e
@@ -113,10 +113,10 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 		Segment:   segment,
 		BaseEntry: base,
 	}
-	snippet := e.CreateSnippet()
-	if snippet != nil {
+	indice := e.CreateSnippet()
+	if indice != nil {
 		e.IndiceMemo = new(IndiceMemo)
-		e.IndiceMemo.snippet = snippet
+		e.IndiceMemo.indice = indice
 		e.IndiceMemo.mu = new(sync.Mutex)
 	}
 	return e
@@ -134,24 +134,24 @@ func (e *Block) DebugCheckReplayedState() {
 	}
 }
 
-func (e *Block) CreateSnippet() *shard.Snippet {
+func (e *Block) CreateSnippet() *shard.SliceIndice {
 	tableLogIndex := e.Segment.Table.GetCommit().LogIndex
 	if tableLogIndex == nil {
 		return nil
 	}
-	return shard.NewSnippet(tableLogIndex.ShardId, e.Id, uint32(0))
+	return shard.NewBatchIndice(tableLogIndex.ShardId)
 }
 
-func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
+func (e *Block) ConsumeSnippet(reset bool) *shard.SliceIndice {
 	e.RLock()
-	snippet := e.IndiceMemo.Fetch(e)
+	indice := e.IndiceMemo.Fetch(e)
 	e.RUnlock()
 	if reset {
 		e.Lock()
 		defer e.Unlock()
 		e.IndiceMemo = nil
 	}
-	return snippet
+	return indice
 }
 
 func (e *Block) View() (view *Block) {
@@ -201,12 +201,13 @@ func (e *Block) HasMaxRowsLocked() bool {
 }
 
 // Not safe
-func (e *Block) SetIndexLocked(idx LogIndex) error {
-	err := e.CommitInfo.SetIndex(idx)
+func (e *Block) SetIndexLocked(index *shard.SliceIndex) error {
+	idx := index.Clone()
+	err := e.CommitInfo.SetIndex(*idx.Index)
 	if err != nil {
 		return err
 	}
-	e.IndiceMemo.Append(&idx)
+	e.IndiceMemo.Append(idx)
 	return err
 }
 
@@ -345,7 +346,7 @@ func (e *Block) GetCoarseSize() int64 {
 func (e *Block) PString(level PPLevel) string {
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<%d. Block %s>[Size=%d]", e.Idx, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
+	s := fmt.Sprintf("<%d. Block[%d] %s>[Size=%d]", e.Idx, e.Id, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }
 

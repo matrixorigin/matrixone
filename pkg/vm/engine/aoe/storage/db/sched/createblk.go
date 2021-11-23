@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package meta
+package sched
 
 import (
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type createBlkEvent struct {
-	dbsched.BaseEvent
+	BaseEvent
 
 	TableMeta *metadata.Table
 
@@ -37,16 +34,13 @@ type createBlkEvent struct {
 }
 
 // NewCreateBlkEvent creates a logical Block event
-func NewCreateBlkEvent(ctx *dbsched.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
+func NewCreateBlkEvent(ctx *Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
 		TableMeta: tableMeta,
 		PrevMeta:  prevBlock,
 	}
-	e.BaseEvent = dbsched.BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaCreateBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, MetaCreateBlkTask, ctx)
 	return e
 }
 
@@ -63,8 +57,8 @@ func (e *createBlkEvent) Execute() error {
 	e.Result = blk
 
 	if e.TableData != nil {
-		ctx := &memdata.Context{Opts: e.Ctx.Opts, Waitable: true}
-		event := memdata.NewCreateSegBlkEvent(ctx, blk, e.TableData)
+		ctx := &Context{Opts: e.Ctx.Opts, Waitable: true}
+		event := NewInstallBlockEvent(ctx, blk, e.TableData)
 		if err := e.Ctx.Opts.Scheduler.Schedule(event); err != nil {
 			return err
 		}

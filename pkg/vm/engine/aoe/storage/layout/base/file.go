@@ -16,9 +16,9 @@ package base
 
 import (
 	"fmt"
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"io"
+	"os"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -154,6 +154,8 @@ type ISegmentFile interface {
 	GetBlockIndicesMeta(id common.ID) *IndicesMeta
 
 	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
+
+	MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *IndexMeta) common.IVFile
 
 	// MakeVirtualPartFile creates a new column part. ColumnPart provides external Read services
 	MakeVirtualPartFile(id *common.ID) common.IVFile

@@ -406,7 +406,9 @@ func (e *Table) getFirstInfullSegment(from *Segment) (*Segment, *Segment) {
 	var curr, next *Segment
 	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
 		seg := e.SegmentSet[i]
-		if seg.Appendable() && from.LE(seg) {
+		seg.RLock()
+		defer seg.RUnlock()
+		if seg.AppendableLocked() && from.LE(seg) {
 			curr, next = seg, curr
 		} else {
 			break
@@ -421,7 +423,9 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	if from != nil {
 		fromSeg = from.Segment
 	}
+	e.RLock()
 	curr, next := e.getFirstInfullSegment(fromSeg)
+	e.RUnlock()
 	// logutil.Infof("%s, %s", curr.PString(PPL0), fromSeg.PString(PPL1))
 	if curr == nil {
 		curr = e.SimpleCreateSegment()
@@ -521,6 +525,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			BaseEntry:  baseEntry,
 			SegmentSet: make([]*Segment, 0),
 			Database:   db,
+			IdIndex:    make(map[uint64]int),
 		}
 		db.onNewTable(table)
 		tables[i] = table
@@ -542,6 +547,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 		segment.CommitInfo.TranId = tranId
 		segment.CommitInfo.CommitId = tranId
 		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		segment.Table = table
 		for _, block := range segment.BlockSet {
 			obid := &common.ID{
 				TableID:   e.Id,
@@ -552,6 +558,7 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			block.CommitInfo.TranId = tranId
 			block.CommitInfo.CommitId = tranId
 			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+			block.Segment = segment
 			nbid := &common.ID{
 				TableID:   table.Id,
 				SegmentID: segment.Id,
@@ -560,7 +567,9 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			splitSpec.BlockTrace[*obid] = nbid
 			logutil.Infof("[Trace] %s -> %s", obid.BlockString(), nbid.BlockString())
 		}
-		table.SegmentSet = append(table.SegmentSet, segment)
+		segment.rebuild(table, false)
+		table.onNewSegment(segment)
+		// table.SegmentSet = append(table.SegmentSet, segment)
 		nsid := &common.ID{
 			TableID:   table.Id,
 			SegmentID: segment.Id,

@@ -15,15 +15,15 @@
 package db
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	tiface "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 // There is a premise here, that is, all mutation requests of a database are
@@ -50,30 +50,12 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 // There is a premise here, that is, all change requests of a database are
 // single-threaded
 func (d *DB) DoFlushTable(meta *metadata.Table) error {
-	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err := d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err := e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
+	handle, err := d.MakeMutationHandle(meta)
+	if err != nil {
+		return err
 	}
-	defer collection.Unref()
-	return collection.Flush()
+	defer handle.Close()
+	return handle.Flush()
 }
 
 func (d *DB) DoCreateSnapshot(database *metadata.Database, path string, forcesync bool) (uint64, error) {
@@ -128,71 +110,53 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 	return index, nil
 }
 
-func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *LogIndex) error {
-	var err error
-	collection := d.MemTableMgr.StrongRefCollection(meta.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
+func (d *DB) DoAppend(meta *metadata.Table, data *batch.Batch, index *shard.SliceIndex) error {
+	handle, err := d.MakeMutationHandle(meta)
+	if err != nil {
+		return err
 	}
-	defer collection.Unref()
-	return collection.Append(data, index)
+	defer handle.Close()
+	return handle.Append(data, index)
+}
+
+func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, error) {
+	handle, err := d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+	if err != nil {
+		tableData, err := d.Store.DataTables.RegisterTable(meta)
+		if err == nil {
+			handle = tableData.MakeMutationHandle()
+		} else if err == metadata.DuplicateErr {
+			handle, err = d.Store.DataTables.MakeTableMutationHandle(meta.Id)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return handle, nil
 }
 
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   meta,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err = d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err = e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection := e.Collection
+		d.Store.DataTables.RegisterTable(meta)
 		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
-			collection.Unref()
 			return nil, err
 		}
-		collection.Unref()
 	}
 	return data, nil
 }
 
 func (d *DB) ScheduleGCDatabase(database *metadata.Database) {
-	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables)
 	d.Opts.GC.Acceptor.Accept(gcReq)
 }
 
 func (d *DB) ScheduleGCTable(meta *metadata.Table) {
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, d.MemTableMgr, nil)
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, meta, d.Store.DataTables, nil)
 	d.Opts.GC.Acceptor.Accept(gcReq)
+}
+
+func (d *DB) ForceCompactCatalog() error {
+	compactReq := gcreqs.NewCatalogCompactionRequest(d.Store.Catalog, d.Opts.MetaCleanerCfg.Interval)
+	return compactReq.DoRun()
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -70,7 +71,7 @@ func TestTBlock(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tables := NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := NewTables(new(storage.Options), new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tabledata, err := tables.RegisterTable(tablemeta)
 	assert.Nil(t, err)
 
@@ -116,7 +117,7 @@ func TestTBlock(t *testing.T) {
 			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
 			_, err = n.Meta.AddCountLocked(num)
 			assert.Nil(t, err)
-			n.Meta.SetIndexLocked(*idx)
+			n.Meta.SetIndexLocked(idx.AsSlice())
 			return nil
 		}
 	}

@@ -18,6 +18,8 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -33,6 +35,7 @@ type Splitter struct {
 	dbImpl      *DB
 	tables      map[uint64]iface.ITableData
 	tempDir     string
+	flushsegs   []*metadata.Segment
 }
 
 func NewSplitter(database *metadata.Database, newDBNames []string, rename RenameTableFactory,
@@ -45,6 +48,7 @@ func NewSplitter(database *metadata.Database, newDBNames []string, rename Rename
 		index:       index,
 		dbImpl:      dbImpl,
 		tables:      make(map[uint64]iface.ITableData),
+		flushsegs:   make([]*metadata.Segment, 0),
 	}
 	splitter.dbSpecs = make([]*metadata.DBSpec, len(splitter.keys))
 	for i, _ := range splitter.dbSpecs {
@@ -81,12 +85,66 @@ func (splitter *Splitter) prepareData() error {
 	if err != nil {
 		return err
 	}
+
 	destDir := splitter.database.Catalog.Cfg.Dir
-	blkMapFn := splitter.msplitter.Spec.GetBlkAddr
-	segMapFn := splitter.msplitter.Spec.GetSegAddr
+	blkFiles := make(map[common.ID]bool)
+	segFiles := make(map[common.ID]bool)
+	blkMapFn := func(id *common.ID) (*common.ID, error) {
+		nid, err := splitter.msplitter.Spec.GetBlkAddr(id)
+		if err != nil {
+			return nil, err
+		}
+		blkFiles[*nid] = true
+		return nid, nil
+	}
+	segMapFn := func(id *common.ID) (*common.ID, error) {
+		nid, err := splitter.msplitter.Spec.GetSegAddr(id)
+		if err != nil {
+			return nil, err
+		}
+		segFiles[*nid] = true
+		return nid, nil
+	}
+
 	if err = CopyDataFiles(tblks, blks, segs, splitter.tempDir, destDir, blkMapFn, segMapFn); err != nil {
 		return err
 	}
+
+	processor := new(metadata.LoopProcessor)
+	processor.SegmentFn = func(segment *metadata.Segment) error {
+		if segment.IsUpgradable() {
+			id := segment.AsCommonID()
+			_, found := segFiles[*id]
+			if !found {
+				splitter.flushsegs = append(splitter.flushsegs, segment)
+			} else {
+				name := common.MakeSegmentFileName(destDir, id.ToSegmentFileName(), id.TableID, false)
+				info, err := os.Stat(name)
+				if err != nil {
+					return err
+				}
+				segment.DryUpgrade(info.Size())
+			}
+		}
+		return nil
+	}
+	if err = splitter.msplitter.Preprocess(processor); err != nil {
+		return err
+	}
+	ctx := new(installContext)
+	ctx.blkfiles = blkFiles
+	ctx.sortedsegs = segFiles
+	ctx.Preprocess()
+	for _, database := range splitter.msplitter.ReplaceCtx.Replacer {
+		tablesData, err := splitter.dbImpl.Store.DataTables.PrepareInstallTables(database.TableSet, ctx)
+		if err != nil {
+			return err
+		}
+		if err = splitter.dbImpl.Store.DataTables.CommitInstallTables(tablesData); err != nil {
+			return err
+		}
+	}
+
 	return err
 }
 
@@ -120,6 +178,18 @@ func (splitter *Splitter) Close() error {
 	}
 	if splitter.tempDir != "" {
 		os.RemoveAll(splitter.tempDir)
+	}
+	return nil
+}
+
+func (splitter *Splitter) ScheduleEvents(d *DB) error {
+	for _, meta := range splitter.flushsegs {
+		table, _ := d.GetTableData(meta.Table)
+		defer table.Unref()
+		segment := table.StrongRefSegment(meta.Id)
+		flushCtx := &sched.Context{Opts: d.Opts}
+		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
+		d.Scheduler.Schedule(flushEvent)
 	}
 	return nil
 }

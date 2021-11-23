@@ -16,7 +16,6 @@ package shard
 
 import (
 	"math/rand"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,11 +24,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
-
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+var (
+	moduleName = "ShardWal"
+)
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
 
 var (
 	logSizes = []int{2, 4, 6, 8, 10}
@@ -74,12 +86,12 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 
 type mockConsumer struct {
 	shardId uint64
-	snippet *Snippet
+	indice  *SliceIndice
 }
 
 func newMockConsumer(shardId uint64) *mockConsumer {
 	c := &mockConsumer{
-		snippet: NewSnippet(shardId, nextMockId(), uint32(0)),
+		indice:  NewBatchIndice(shardId),
 		shardId: shardId,
 	}
 	return c
@@ -87,64 +99,11 @@ func newMockConsumer(shardId uint64) *mockConsumer {
 
 func (mc *mockConsumer) consume(index *Index) {
 	index.Count = index.Capacity
-	mc.snippet.Append(index)
+	mc.indice.AppendIndex(index)
 }
 
 func (mc *mockConsumer) reset() {
-	mc.snippet = NewSnippet(mc.shardId, nextMockId(), uint32(0))
-}
-
-func TestSequence(t *testing.T) {
-	producer := mockProducer{}
-	cnt := 3
-	consumers := make([]*mockConsumer, cnt)
-	for i, _ := range consumers {
-		consumers[i] = newMockConsumer(uint64(1))
-	}
-	ii := 0
-	for i := 0; i < 100; i++ {
-		logBat := producer.nextLogBatch()
-		for _, index := range logBat.indice {
-			ic := ii % cnt
-			consumers[ic].consume(index)
-			ii++
-		}
-	}
-
-	groups := make([]*snippets, cnt)
-
-	for i, c := range consumers {
-		r := c.snippet.CompletedRange(nil, nil)
-		assert.Equal(t, uint64(0), r.Left)
-		assert.Equal(t, uint64(200)-1, r.Right)
-		t.Logf("seq %d range start %d, end %d", c.snippet.id, r.Left, r.Right)
-		groups[i] = newSnippets(c.snippet.id)
-		groups[i].Append(c.snippet)
-	}
-
-	for i, _ := range consumers {
-		consumers[i] = newMockConsumer(uint64(1))
-	}
-	for i := 0; i < 100; i++ {
-		logBat := producer.nextLogBatch()
-		for _, index := range logBat.indice {
-			ic := ii % cnt
-			consumers[ic].consume(index)
-			ii++
-		}
-	}
-
-	for i, c := range consumers {
-		groups[i].Append(c.snippet)
-	}
-	for _, group := range groups {
-		total := 0
-		fn := func(*IndexId) {
-			total++
-		}
-		group.ForEach(fn)
-		assert.Equal(t, 400, total)
-	}
+	mc.indice = NewBatchIndice(mc.shardId)
 }
 
 func TestShardProxy(t *testing.T) {
@@ -167,7 +126,7 @@ func TestShardProxy(t *testing.T) {
 		}
 	}
 	for _, c := range consumers {
-		shardProxy.AppendSnippet(c.snippet)
+		shardProxy.AppendBatchIndice(c.indice)
 		c.reset()
 		shardProxy.Checkpoint()
 	}
@@ -183,7 +142,7 @@ func TestShardProxy(t *testing.T) {
 		}
 	}
 	for _, c := range consumers {
-		shardProxy.AppendSnippet(c.snippet)
+		shardProxy.AppendBatchIndice(c.indice)
 		shardProxy.Checkpoint()
 	}
 	now := time.Now()
@@ -192,8 +151,7 @@ func TestShardProxy(t *testing.T) {
 }
 
 func TestShardManager(t *testing.T) {
-	dir := "/tmp/testshardmanager"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	driver, err := logstore.NewBatchStore(dir, "wal", nil)
 	assert.Nil(t, err)
 	mgr := NewManagerWithDriver(driver, true, wal.BrokerRole)
@@ -220,7 +178,7 @@ func TestShardManager(t *testing.T) {
 						consumer.consume(index)
 					}
 				}
-				mgr.Checkpoint(consumer.snippet)
+				mgr.Checkpoint(consumer.indice)
 				consumer.reset()
 			}
 		}

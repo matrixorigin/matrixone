@@ -24,12 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	sched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	mt "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -65,27 +64,26 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
-	memtblMgr := mt.NewManager(opts, flushDriver)
-	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
 	db = &DB{
 		Dir:            dirname,
 		Opts:           opts,
 		FsMgr:          fsMgr,
-		MemTableMgr:    memtblMgr,
 		IndexBufMgr:    indexBufMgr,
 		MTBufMgr:       mtBufMgr,
 		SSTBufMgr:      sstBufMgr,
 		MutationBufMgr: mutNodeMgr,
-		FlushDriver:    flushDriver,
 		ClosedC:        make(chan struct{}),
 		Closed:         new(atomic.Value),
 	}
 
 	db.Store.Mu = &opts.Mu
-	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
+	db.Store.DataTables = table.NewTables(opts, &opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr, flushDriver)
 	factory := factories.NewMutFactory(mutNodeMgr, nil)
 	db.Store.DataTables.MutFactory = factory
+
+	flushDriver.InitFactory(createFlusherFactory(db.Store.DataTables))
+	db.FlushDriver = flushDriver
 
 	store, err := logstore.NewBatchStore(common.MakeMetaDir(dirname), "store", nil)
 	if err != nil {
@@ -112,18 +110,19 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.Catalog = opts.Meta.Catalog
 	db.Store.Catalog.Start()
 
-	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
+	db.Opts.Scheduler = sched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
+	db.startWorkers()
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
 	if err = replayHandle.Replay(); err != nil {
 		opts.Meta.Catalog.Close()
+		db.stopWorkers()
 		return nil, err
 	}
 
-	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
-	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables, db.MemTableMgr)
+	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables)
 
 	db.Opts.GC.Acceptor.Accept(gcreqs.NewCatalogCompactionRequest(db.Store.Catalog, db.Opts.MetaCleanerCfg.Interval))
 	os.RemoveAll(db.GetTempDir())

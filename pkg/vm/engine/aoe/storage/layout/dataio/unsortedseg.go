@@ -17,6 +17,7 @@ package dataio
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 
@@ -116,6 +117,10 @@ func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base
 		return nil
 	}
 	return blk.MakeVirtualIndexFile(meta)
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+	return nil
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
