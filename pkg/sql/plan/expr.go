@@ -717,6 +717,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				}
 				return int64(floatResult - 0.5), nil
 			}
+			return int64(floatResult), nil
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			if floatResult < 0 || floatResult + 0.5 > math.MaxInt64{
 				return nil, errBinaryOutRange
