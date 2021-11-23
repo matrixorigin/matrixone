@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"bytes"
 	catalog3 "matrixone/pkg/catalog"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
@@ -35,7 +36,10 @@ type SegmentInfo struct {
 }
 
 type aoeReader struct {
-	blocks *[]aoe.Block
+	zs     []int64
+	cds    []*bytes.Buffer
+	dds    []*bytes.Buffer
+	blocks []aoe.Block
 }
 
 type database struct {
