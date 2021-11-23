@@ -150,10 +150,10 @@ func (r *relation) NewReader(num int) []engine.Reader {
 			blocks: blocks[i*mod : (i+1)*mod],
 		}
 	}
-	if len(readers) < num {
-		n := num - len(readers)
-		for j := 0; j < n; j++ {
-			readers[i+j] = &aoeReader{blocks: nil}
+	i++
+	if i < num {
+		for j := i; j < num; j++ {
+			readers[j] = &aoeReader{blocks: nil}
 		}
 	}
 	return readers
