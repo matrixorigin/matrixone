@@ -283,6 +283,9 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case string:
 		switch typ.Oid {
 		case types.T_char, types.T_varchar: // string family should compare the length but not value
+			if len(v) > math.MaxUint16 {
+				return nil, errors.New(errno.DataException, "length out of uint16 is unexpected for char / varchar value")
+			}
 			if len(v) <= int(typ.Width) {
 				return v, nil
 			}
