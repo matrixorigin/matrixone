@@ -50,12 +50,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 }
 
 func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata.Schema {
-	schema := &metadata.Schema{
-		Name:      info.Name,
-		ColDefs:   make([]*metadata.ColDef, 0),
-		Indices2:  make([]*metadata.IndexInfo, 0),
-		NameIndex: make(map[string]int),
-	}
+	schema := metadata.NewEmptySchema(info.Name)
 	for idx, colInfo := range info.Columns {
 		newInfo := &metadata.ColDef{
 			Name: colInfo.Name,
@@ -78,7 +73,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 		for _, col := range indexInfo.Columns {
 			newInfo.Columns = append(newInfo.Columns, uint16(col))
 		}
-		schema.Indices2 = append(schema.Indices2, newInfo)
+		schema.Indices2.Register(newInfo)
 	}
 
 	return schema

@@ -430,7 +430,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 
 	for _, database := range catalog.Databases {
 		for _, tbl := range database.TableSet {
-			indices := tbl.Schema.Indices2
+			indices := tbl.Schema.Indices2.Indices3
 			for _, idx := range indices {
 				// todo: str bsi
 				if idx.Type == metadata.NumBsi {

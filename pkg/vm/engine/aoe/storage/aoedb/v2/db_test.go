@@ -759,7 +759,7 @@ func TestBuildIndex(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2 = append(schema.Indices2, &metadata.IndexInfo{
+	schema.Indices2.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -845,7 +845,7 @@ func TestRebuildIndices(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2 = append(schema.Indices2, &metadata.IndexInfo{
+	schema.Indices2.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -952,7 +952,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2 = append(schema.Indices2, &metadata.IndexInfo{
+	schema.Indices2.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -1362,9 +1362,11 @@ func TestFilter(t *testing.T) {
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
 	schema := metadata.MockSchemaAll(14)
-	schema.Indices2 = append(schema.Indices2, &metadata.IndexInfo{Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{}})
+	schema.Indices2.Register(&metadata.IndexInfo{
+		Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{},
+	})
 	for i := uint16(0); i < 12; i++ {
-		schema.Indices2[0].Columns = append(schema.Indices2[0].Columns, i)
+		schema.Indices2.Indices3[0].Columns = append(schema.Indices2.Indices3[0].Columns, i)
 	}
 
 	createCtx := &CreateTableCtx{

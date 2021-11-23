@@ -115,13 +115,14 @@ func (r *LogRange) Unmarshal(data []byte) error {
 
 type CommitInfo struct {
 	common.SSLLNode `json:"-"`
-	CommitId        uint64    `json:"cid"`
-	TranId          uint64    `json:"tid"`
-	Op              OpT       `json:"op"`
-	Size            int64     `json:"size"`
-	LogIndex        *LogIndex `json:"idx"`
-	PrevIndex       *LogIndex `json:"pidx"`
-	LogRange        *LogRange `json:"range"`
+	CommitId        uint64      `json:"cid"`
+	TranId          uint64      `json:"tid"`
+	Op              OpT         `json:"op"`
+	Size            int64       `json:"size"`
+	LogIndex        *LogIndex   `json:"idx"`
+	PrevIndex       *LogIndex   `json:"pidx"`
+	LogRange        *LogRange   `json:"range"`
+	Payload         interface{} `json:"payload"`
 }
 
 func (info *CommitInfo) Clone() *CommitInfo {
