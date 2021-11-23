@@ -103,7 +103,7 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 			name := fmt.Sprintf("t%d", index.Id.Id)
 			schema.Name = mockFactory.Encode(db.Name, name)
 			db.SyncLog(index)
-			tbl, err := db.SimpleCreateTable(schema, index)
+			tbl, err := db.SimpleCreateTable(schema, nil, index)
 			assert.Nil(t, err)
 			db.Checkpoint(index)
 			var prev *Block
@@ -209,7 +209,7 @@ func TestCreateTable(t *testing.T) {
 			defer wg.Done()
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
-			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
+			t1, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -251,7 +251,7 @@ func TestTables(t *testing.T) {
 		name := fmt.Sprintf("m1_%d", i)
 		schema := MockSchema(2)
 		schema.Name = name
-		_, err := db.SimpleCreateTable(schema, gen.Next(0))
+		_, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 		assert.Nil(t, err)
 	}
 
@@ -259,7 +259,7 @@ func TestTables(t *testing.T) {
 		name := fmt.Sprintf("m2_%d", i)
 		schema := MockSchema(2)
 		schema.Name = name
-		_, err := db.SimpleCreateTable(schema, gen.Next(0))
+		_, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 		assert.Nil(t, err)
 	}
 }
@@ -281,14 +281,14 @@ func TestDropTable(t *testing.T) {
 	schema1 := MockSchema(2)
 	schema1.Name = "m1"
 
-	t1, err := db.SimpleCreateTable(schema1, gen.Next(0))
+	t1, err := db.SimpleCreateTable(schema1, nil, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t1)
 
 	assert.False(t, t1.IsSoftDeleted())
 	assert.True(t, t1.HasCommitted())
 
-	t1_1, err := db.SimpleCreateTable(schema1, gen.Next(0))
+	t1_1, err := db.SimpleCreateTable(schema1, nil, gen.Next(0))
 	assert.NotNil(t, err)
 	assert.Nil(t, t1_1)
 
@@ -300,13 +300,13 @@ func TestDropTable(t *testing.T) {
 
 	schema2 := MockSchema(3)
 	schema2.Name = schema1.Name
-	t2, err := db.SimpleCreateTable(schema2, gen.Next(0))
+	t2, err := db.SimpleCreateTable(schema2, nil, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t2)
 
 	schema3 := MockSchema(4)
 	schema3.Name = schema1.Name
-	t3, err := db.SimpleCreateTable(schema3, gen.Next(0))
+	t3, err := db.SimpleCreateTable(schema3, nil, gen.Next(0))
 	assert.NotNil(t, err)
 	assert.Nil(t, t3)
 
@@ -318,7 +318,7 @@ func TestDropTable(t *testing.T) {
 
 	db.SimpleHardDeleteTable(t2.Id)
 
-	t3, err = db.SimpleCreateTable(schema3, gen.Next(0))
+	t3, err = db.SimpleCreateTable(schema3, nil, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t3)
 
@@ -364,7 +364,7 @@ func TestDropTable(t *testing.T) {
 	assert.Equal(t, 0, len(db.TableSet))
 
 	index := gen.Next(99)
-	t4, err := db.SimpleCreateTable(schema1, index)
+	t4, err := db.SimpleCreateTable(schema1, nil, index)
 	assert.Nil(t, err)
 	assert.NotNil(t, t4)
 
@@ -422,7 +422,7 @@ func TestSegment(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
+			t1, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -433,7 +433,7 @@ func TestSegment(t *testing.T) {
 
 			schema2 := MockSchema(2)
 			schema2.Name = fmt.Sprintf("m%d", i+100)
-			t2, err := db.SimpleCreateTable(schema2, gen.Next(0))
+			t2, err := db.SimpleCreateTable(schema2, nil, gen.Next(0))
 			t2.SimpleCreateSegment()
 			// t.Log(segment.String())
 
@@ -474,7 +474,7 @@ func TestBlock(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
+			t1, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -500,7 +500,7 @@ func TestBlock(t *testing.T) {
 
 	schema := MockSchema(2)
 	schema.Name = "mm"
-	t2, err := db.SimpleCreateTable(schema, gen.Next(0))
+	t2, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 	assert.Nil(t, err)
 	var prev *Block
 	for i := 0; i < 2*int(cfg.SegmentMaxBlocks)+int(cfg.SegmentMaxBlocks)/2; i++ {
@@ -752,7 +752,7 @@ func TestUpgrade(t *testing.T) {
 	schema := MockSchema(2)
 	schema.Name = "mock"
 
-	t1, err := db.SimpleCreateTable(schema, gen.Next(0))
+	t1, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t1)
 
@@ -872,7 +872,7 @@ func TestOpen(t *testing.T) {
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
 	schema := MockSchema(2)
-	_, err = db.SimpleCreateTable(schema, nil)
+	_, err = db.SimpleCreateTable(schema, nil, nil)
 	assert.Nil(t, err)
 	catalog.Close()
 }
@@ -906,7 +906,7 @@ func TestCatalog2(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
+			t1, err := db.SimpleCreateTable(schema, nil, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 

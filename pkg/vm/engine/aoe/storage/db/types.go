@@ -23,4 +23,5 @@ type RenameTableFactory = metadata.RenameTableFactory
 type IndexT = metadata.IndexT
 type IndexInfo = metadata.IndexInfo
 type TableSchema = metadata.Schema
+type IndexSchema = metadata.IndexSchema
 type ColDef = metadata.ColDef

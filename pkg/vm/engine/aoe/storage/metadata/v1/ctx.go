@@ -50,6 +50,7 @@ type addTableCtx struct {
 type createTableCtx struct {
 	writeCtx
 	schema   *Schema
+	indice   *IndexSchema
 	table    *Table
 	database *Database
 }

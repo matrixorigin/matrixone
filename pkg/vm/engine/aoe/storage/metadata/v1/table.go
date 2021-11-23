@@ -647,7 +647,7 @@ func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Tabl
 		}
 	}
 	logFn(idx)
-	tbl, err := db.SimpleCreateTable(schema, idx)
+	tbl, err := db.SimpleCreateTable(schema, nil, idx)
 	if err != nil {
 		panic(err)
 	}

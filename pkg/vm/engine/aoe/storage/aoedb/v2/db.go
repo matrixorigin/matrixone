@@ -108,7 +108,7 @@ func (d *DB) CreateTable(ctx *CreateTableCtx) (*metadata.Table, error) {
 		}
 	}
 
-	return database.SimpleCreateTable(ctx.Schema, index)
+	return database.SimpleCreateTable(ctx.Schema, ctx.Indice, index)
 }
 
 func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {

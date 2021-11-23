@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -49,7 +50,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 	return tblInfo
 }
 
-func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata.Schema {
+func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.TableSchema, *db.IndexSchema) {
 	schema := metadata.NewEmptySchema(info.Name)
 	for idx, colInfo := range info.Columns {
 		newInfo := &metadata.ColDef{
@@ -64,6 +65,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
+	indice := metadata.NewIndexSchema()
 	for _, indexInfo := range info.Indices {
 		newInfo := &metadata.IndexInfo{
 			Id:      catalog.NextIndexId(),
@@ -73,10 +75,10 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 		for _, col := range indexInfo.Columns {
 			newInfo.Columns = append(newInfo.Columns, uint16(col))
 		}
-		schema.Indices2.Register(newInfo)
+		indice.Register(newInfo)
 	}
 
-	return schema
+	return schema, indice
 }
 
 func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {

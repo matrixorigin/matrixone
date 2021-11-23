@@ -64,6 +64,7 @@ type DropTableCtx = TableMutationCtx
 type CreateTableCtx struct {
 	DBMutationCtx
 	Schema *db.TableSchema
+	Indice *db.IndexSchema
 }
 
 type AppendCtx struct {

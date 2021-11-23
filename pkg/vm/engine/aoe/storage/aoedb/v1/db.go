@@ -53,7 +53,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 		panic(err)
 	}
 	info.Name = ctx.TableName
-	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
+	schema, indice := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
 	logutil.Debugf("Create table, schema.Primarykey is %d", schema.PrimaryKey)
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
 	if err = d.Wal.SyncLog(index); err != nil {
@@ -68,7 +68,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 		d.AbortTxn(txn)
 		return
 	}
-	table, err := database.CreateTableInTxn(txn, schema)
+	table, err := database.CreateTableInTxn(txn, schema, indice)
 	if err != nil {
 		d.AbortTxn(txn)
 		return
