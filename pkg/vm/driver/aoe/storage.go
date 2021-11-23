@@ -408,7 +408,7 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 }
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
-	var index uint64
+	// var index uint64
 	for _, metadata := range metadatas {
 		logutil.Infof("SaveShardMetadata,LogIndex is %v, shard id is %v", metadata.LogIndex, metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
@@ -458,7 +458,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			offset := 0
 			size := 2
 			if createDatabase {
-				index = metadata.LogIndex + 1
+				// index = metadata.LogIndex + 1
 				offset = 1
 				size = 3
 			}
@@ -501,19 +501,19 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		offset := 0
 		size := 1
 		if createTable {
-			index = metadata.LogIndex + 1
+			// index = metadata.LogIndex + 1
 			offset = 1
 			size = 2
 		}
 		if createDatabase {
-			index = metadata.LogIndex + 2
+			// index = metadata.LogIndex + 2
 			offset = 2
 			size = 3
 		}
 		ctx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     index,
+					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedbName.ShardIdToName(metadata.ShardID),
