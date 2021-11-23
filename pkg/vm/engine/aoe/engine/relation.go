@@ -133,31 +133,27 @@ func (r *relation) NewReader(num int) []engine.Reader {
 			blocks = append(blocks, segment.Block(id))
 		}
 	}
-	readers := make([]engine.Reader, 0)
+	readers := make([]engine.Reader, num)
 	mod := blockNum / num
 	if mod == 0 {
 		mod = 1
 	}
-	for i := 0; i < num; i++ {
+	var i int
+	for i = 0; i < num; i++ {
 		if i == num-1 || i == blockNum-1 {
-			b := blocks[i*mod:]
-			reader := aoeReader{
-				blocks: &b,
+			readers[i] = &aoeReader{
+				blocks: blocks[i*mod:],
 			}
-			readers = append(readers, reader)
 			break
 		}
-		b := blocks[i*mod : (i+1)*mod]
-		reader := aoeReader{
-			blocks: &b,
+		readers[i] = &aoeReader{
+			blocks: blocks[i*mod : (i+1)*mod],
 		}
-		readers = append(readers, reader)
 	}
 	if len(readers) < num {
 		n := num - len(readers)
 		for j := 0; j < n; j++ {
-			reader := aoeReader{blocks: nil}
-			readers = append(readers, reader)
+			readers[i+j] = &aoeReader{blocks: nil}
 		}
 	}
 	return readers
