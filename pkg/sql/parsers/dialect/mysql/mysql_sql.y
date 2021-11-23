@@ -721,9 +721,15 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
+        var b byte
+        if len(str) != 0 {
+        	b = byte(str[0])
+        } else {
+        	b = 0
+        }
         $$ = &tree.Fields{
             Optionally: true,
-            EscapedBy: byte(str[0]),
+            EscapedBy: b,
         }
     }
 |   ENCLOSED BY field_terminator
@@ -733,8 +739,14 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
+        var b byte
+        if len(str) != 0 {
+           b = byte(str[0])
+        } else {
+           b = 0
+        }
         $$ = &tree.Fields{
-            EnclosedBy: byte(str[0]),
+            EnclosedBy: b,
         }
     }
 |   ESCAPED BY field_terminator
@@ -744,8 +756,14 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
+        var b byte
+        if len(str) != 0 {
+           b = byte(str[0])
+        } else {
+           b = 0
+        }
         $$ = &tree.Fields{
-            EscapedBy: byte(str[0]),
+            EscapedBy: b,
         }
     }
 
