@@ -50,10 +50,12 @@ type Table struct {
 	FlushTS           int64          `json:"-"`
 }
 
-// func NewTableEntry(db *Database, schema *Schema, indice *IndexSchema, tranId uint64, exIndex *LogIndex) *Table {
-func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
+func NewTableEntry(db *Database, schema *Schema, indice *IndexSchema, tranId uint64, exIndex *LogIndex) *Table {
 	schema.BlockMaxRows = db.Catalog.Cfg.BlockMaxRows
 	schema.SegmentMaxBlocks = db.Catalog.Cfg.SegmentMaxBlocks
+	if indice == nil {
+		indice = NewIndexSchema()
+	}
 	e := &Table{
 		BaseEntry: &BaseEntry{
 			Id: db.Catalog.NextTableId(),
@@ -63,6 +65,7 @@ func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogInde
 				SSLLNode: *common.NewSSLLNode(),
 				Op:       OpCreate,
 				LogIndex: exIndex,
+				Indice:   indice,
 			},
 		},
 		Schema:     schema,

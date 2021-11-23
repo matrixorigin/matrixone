@@ -609,7 +609,7 @@ func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error
 
 func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
-	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
+	entry := NewTableEntry(db, ctx.schema, ctx.schema.Indices2, ctx.tranId, ctx.exIndex)
 	db.Lock()
 	if db.IsSoftDeletedLocked() {
 		db.Unlock()

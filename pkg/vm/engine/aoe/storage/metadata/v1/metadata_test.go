@@ -175,7 +175,7 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 
 	schema := MockSchema(2)
-	e := NewTableEntry(db, schema, uint64(0), nil)
+	e := NewTableEntry(db, schema, nil, uint64(0), nil)
 	buf, err := e.Marshal()
 	assert.Nil(t, err)
 
