@@ -61,6 +61,8 @@ const (
 	OpSoftDelete
 	OpReplaced
 	OpHardDelete
+	OpCreateIndex
+	OpDropIndex
 )
 
 var OpNames = map[OpT]string{

@@ -44,7 +44,7 @@ type ColDef struct {
 
 type Schema struct {
 	Name             string         `json:"name"`
-	Indices          []*IndexInfo   `json:"indice"`
+	Indices2         []*IndexInfo   `json:"indice"`
 	ColDefs          []*ColDef      `json:"cols"`
 	NameIndex        map[string]int `json:"nindex"`
 	BlockMaxRows     uint64         `json:"blkrows"`
@@ -101,7 +101,7 @@ func MockSchema(colCnt int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := &Schema{
 		ColDefs:   make([]*ColDef, colCnt),
-		Indices:   make([]*IndexInfo, 0),
+		Indices2:  make([]*IndexInfo, 0),
 		NameIndex: make(map[string]int),
 		Name:      fmt.Sprintf("%d", rand.Intn(1000000)),
 	}
@@ -122,7 +122,7 @@ func MockSchema(colCnt int) *Schema {
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 func MockSchemaAll(colCnt int) *Schema {
 	schema := &Schema{
-		Indices:   make([]*IndexInfo, 0),
+		Indices2:  make([]*IndexInfo, 0),
 		ColDefs:   make([]*ColDef, colCnt),
 		NameIndex: make(map[string]int),
 	}
