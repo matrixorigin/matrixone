@@ -63,9 +63,12 @@ type Storage struct {
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
-		s.DB.FlushDatabase(aoedbName.ShardIdToName(shardId))
+		err := s.DB.FlushDatabase(aoedbName.ShardIdToName(shardId))
+		logutil.Infof("Sync FlushDatabase, shard id is %v", shardId)
+		if err != nil {
+			return err
+		}
 	}
-	//TODO: implement me
 	return nil
 }
 
@@ -184,6 +187,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 		return 0, 0, buf
 	}
 	schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
+	schema.Name = customReq.Name
 	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
@@ -207,7 +211,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
 func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
-	customReq := &pb.CreateTabletRequest{}
+	customReq := &pb.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 
 	ctx := aoedb.DropTableCtx{
@@ -227,7 +231,7 @@ func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64,
 		return 0, 0, buf
 	}
 	buf := codec.Uint642Bytes(tbl.Id)
-	writtenBytes := uint64(len(key) + len(customReq.TableInfo))
+	writtenBytes := uint64(len(key) + len(customReq.Name))
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, buf
 }
@@ -237,11 +241,11 @@ func (s *Storage) tableIDs() []byte {
 	var ids []uint64
 	dbs := s.DB.DatabaseNames()
 	for _, db := range dbs {
-		tbNames, err := s.DB.TableIDs(db)
+		tableIDs, err := s.DB.TableIDs(db)
 		if err != nil {
 			return errDriver.ErrorResp(err)
 		}
-		ids = append(ids, tbNames...)
+		ids = append(ids, tableIDs...)
 	}
 	rep, _ := json.Marshal(ids)
 	return rep
@@ -338,6 +342,7 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 
 		}
 	}
+	logutil.Infof("GetInitialStates, len is %v",len(values))
 	return values, nil
 }
 
@@ -388,6 +393,10 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 	db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(shardID))
+	logutil.Infof("GetPersistentLogIndex, shard id is %v, db is %v", shardID, db)
+	if db == nil {
+		panic("db is nil")
+	}
 	rsp := s.DB.GetShardCheckpointId(db.GetShardId())
 	if rsp == 0 {
 		rsp = 1

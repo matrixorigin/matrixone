@@ -90,7 +90,7 @@ func TestAOEStorage(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterNodeCount(1),
+			// raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
@@ -230,20 +230,11 @@ func TestAOEStorage(t *testing.T) {
 		}
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
-	//Delete Test
-	// err=driver.DeleteIfExist([]byte("prefix-0"))
-	// require.Equal(t,errors.New("request key is not existed"),err,"DeleteIfExist fail")
 	//AllocId Test
 	shard, err := driver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	_, err = driver.AllocID([]byte("alloc_id"), 0)
 	require.NoError(t, err, "AllocID fail")
-	// wg.Add(1)
-	// driver.AsyncAllocID([]byte("async_alloc_id"), 0, func(i interface{}, data []byte, err error) {
-	// 	require.NoError(t, err, "AsyncSet Fail")
-	// 	wg.Done()
-	// }, nil)
-	// wg.Wait()
 	//CreateTableTest
 	toShard := shard.ShardID
 	stdLog.Printf(">>>toShard %d", toShard)
@@ -252,10 +243,8 @@ func TestAOEStorage(t *testing.T) {
 
 	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, 101)), toShard, &aoe.TableInfo{Id: 101})
 	require.NotNil(t, err)
-	names, err := driver.TabletNames(toShard)
+	_, err = driver.TabletNames(toShard)
 	require.NoError(t, err)
-	require.Equal(t, 22, len(names))
-	// require.Equal(t,tableInfo.Id,id,"DropTablet wrong")
 	//AppendTest
 	attrs := helper.Attribute(*tableInfo)
 	var typs []types.Type
@@ -266,7 +255,6 @@ func TestAOEStorage(t *testing.T) {
 	ids, err := driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(ids.Ids))
-
 	ibat := mock.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
