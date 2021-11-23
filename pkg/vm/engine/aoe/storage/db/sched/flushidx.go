@@ -53,8 +53,8 @@ func (e *flushIndexEvent) Execute() error {
 	meta := e.Segment.GetMeta()
 	dir := e.Segment.GetSegmentFile().GetDir()
 	bsiEnabled := make([]int, 0)
-	indice := meta.Table.Schema.Indices2.Indices3
-	for _, idx := range indice {
+	indice := meta.Table.GetCommit().Indice
+	for _, idx := range indice.Indices3 {
 		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 			for _, col := range idx.Columns {
 				if e.FlushAll {

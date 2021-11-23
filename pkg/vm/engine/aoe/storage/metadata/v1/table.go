@@ -255,6 +255,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
 	}
 	cInfo.LogIndex = e.CommitInfo.LogIndex
+	cInfo.Indice = e.CommitInfo.Indice
 	if err := e.onCommit(cInfo); err != nil {
 		return nil, err
 	}
@@ -293,6 +294,7 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		e.Unlock()
 		return nil, TableNotFoundErr
 	}
+	cInfo.Indice = e.CommitInfo.Indice
 	err := e.onCommit(cInfo)
 	e.Unlock()
 	if err != nil {

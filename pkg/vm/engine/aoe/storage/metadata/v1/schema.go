@@ -58,7 +58,6 @@ func NewIndexSchema() *IndexSchema {
 
 type Schema struct {
 	Name             string         `json:"name"`
-	Indices2         *IndexSchema   `json:"indice"`
 	ColDefs          []*ColDef      `json:"cols"`
 	NameIndex        map[string]int `json:"nindex"`
 	BlockMaxRows     uint64         `json:"blkrows"`
@@ -70,7 +69,6 @@ func NewEmptySchema(name string) *Schema {
 	return &Schema{
 		Name:      name,
 		ColDefs:   make([]*ColDef, 0),
-		Indices2:  NewIndexSchema(),
 		NameIndex: make(map[string]int),
 	}
 }

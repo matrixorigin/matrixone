@@ -759,7 +759,8 @@ func TestBuildIndex(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2.Register(&metadata.IndexInfo{
+	indice := metadata.NewIndexSchema()
+	indice.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -767,6 +768,7 @@ func TestBuildIndex(t *testing.T) {
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -845,7 +847,8 @@ func TestRebuildIndices(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2.Register(&metadata.IndexInfo{
+	indice := metadata.NewIndexSchema()
+	indice.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -853,6 +856,7 @@ func TestRebuildIndices(t *testing.T) {
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -952,7 +956,8 @@ func TestManyLoadAndDrop(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices2.Register(&metadata.IndexInfo{
+	indice := metadata.NewIndexSchema()
+	indice.Register(&metadata.IndexInfo{
 		Id:      0,
 		Type:    metadata.NumBsi,
 		Columns: []uint16{1},
@@ -960,6 +965,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -1362,16 +1368,18 @@ func TestFilter(t *testing.T) {
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
 	schema := metadata.MockSchemaAll(14)
-	schema.Indices2.Register(&metadata.IndexInfo{
+	indice := metadata.NewIndexSchema()
+	indice.Register(&metadata.IndexInfo{
 		Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{},
 	})
 	for i := uint16(0); i < 12; i++ {
-		schema.Indices2.Indices3[0].Columns = append(schema.Indices2.Indices3[0].Columns, i)
+		indice.Indices3[0].Columns = append(indice.Indices3[0].Columns, i)
 	}
 
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
