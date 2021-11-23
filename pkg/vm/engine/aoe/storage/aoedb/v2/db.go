@@ -53,7 +53,9 @@ func (d *DB) CreateDatabase(ctx *CreateDBCtx) (*metadata.Database, error) {
 	}
 
 	index := ctx.ToLogIndex(database)
-	index.Id.Size = 1
+	if index.Id.Size == 0 {
+		index.Id.Size = 1
+	}
 	d.Wal.SyncLog(index)
 	d.Wal.Checkpoint(index)
 
