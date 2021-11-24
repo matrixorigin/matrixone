@@ -91,15 +91,15 @@ func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
 		dbEntry := &databaseLogEntry{}
 		dbEntry.Unmarshal(entry.GetPayload())
 		cache.replayer.catalog.onReplaySoftDeleteDatabase(dbEntry)
+	case ETSoftDeleteTable:
+		tblEntry := &tableLogEntry{}
+		tblEntry.Unmarshal(entry.GetPayload())
+		cache.replayer.catalog.onReplayTableOperation(tblEntry)
 	case ETCreateTable:
 		tblEntry := &tableLogEntry{}
 		tblEntry.Unmarshal(entry.GetPayload())
 		cache.replayer.catalog.Sequence.TryUpdateTableId(tblEntry.Table.Id)
 		cache.replayer.catalog.onReplayCreateTable(tblEntry)
-	case ETSoftDeleteTable:
-		tblEntry := &tableLogEntry{}
-		tblEntry.Unmarshal(entry.GetPayload())
-		cache.replayer.catalog.onReplaySoftDeleteTable(tblEntry)
 	default:
 		panic("not supported")
 	}
@@ -158,14 +158,8 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 	case ETCreateTable:
 		catalog.Sequence.TryUpdateTableId(entry.tblEntry.Table.Id)
 		err = catalog.onReplayCreateTable(entry.tblEntry)
-	case ETSoftDeleteTable:
-		err = catalog.onReplaySoftDeleteTable(entry.tblEntry)
-	case ETHardDeleteTable:
-		err = catalog.onReplayHardDeleteTable(entry.tblEntry)
-	case ETAddIndice:
-		err = catalog.onReplayAddIndice(entry.tblEntry)
-	case ETDropIndice:
-		err = catalog.onReplayDropIndice(entry.tblEntry)
+	case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
+		err = catalog.onReplayTableOperation(entry.tblEntry)
 	case ETCreateSegment:
 		catalog.Sequence.TryUpdateSegmentId(entry.segEntry.Id)
 		err = catalog.onReplayCreateSegment(entry.segEntry)
@@ -423,24 +417,7 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 			tblEntry: tbl,
 			commitId: GetCommitIdFromLogEntry(entry),
 		})
-	case ETSoftDeleteTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETSoftDeleteTable,
-			tblEntry: tbl,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETHardDeleteTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETHardDeleteTable,
-			tblEntry: tbl,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETAddIndice:
-	case ETDropIndice:
+	case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
 		tbl := &tableLogEntry{}
 		tbl.Unmarshal(entry.GetPayload())
 		replayer.cache.Append(&replayEntry{

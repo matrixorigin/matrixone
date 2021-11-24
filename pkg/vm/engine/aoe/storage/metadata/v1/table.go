@@ -448,8 +448,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 			DatabaseId: e.Database.Id,
 		}
 		buf, _ = entry.Marshal()
-	case ETAddIndice:
-	case ETDropIndice:
+	case ETAddIndice, ETDropIndice:
 		entry := tableLogEntry{
 			BaseEntry:  e.BaseEntry,
 			DatabaseId: e.Database.Id,
