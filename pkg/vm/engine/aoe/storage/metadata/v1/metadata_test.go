@@ -1365,7 +1365,7 @@ func TestSplit2(t *testing.T) {
 	indexWal2.Close()
 }
 
-func TestCreateIndice(t *testing.T) {
+func TestIndice(t *testing.T) {
 	dir := initTestEnv(t)
 	// catalog, indexWal := MockCatalogAndWal(dir, uint64(10), uint64(2))
 	cfg := new(CatalogCfg)
@@ -1392,6 +1392,26 @@ func TestCreateIndice(t *testing.T) {
 	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
 	assert.Nil(t, err)
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
+
+	indice = NewIndexSchema()
+	_, err = indice.MakeIndex("idx-1", NumBsi, 1)
+	assert.Nil(t, err)
+	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
+	assert.Nil(t, err)
+	assert.Equal(t, 2, table.GetIndexSchema().IndiceNum())
+
+	names := []string{"idx-2"}
+	logIndex := gen.Next(database.ShardId)
+	err = table.SimpleDropIndice(names, logIndex)
+	assert.Equal(t, IndexNotFoundErr, err)
+	assert.Equal(t, 2, table.GetIndexSchema().IndiceNum())
+
+	names = []string{"idx-0"}
+	err = table.SimpleDropIndice(names, logIndex)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
+	assert.Equal(t, "idx-1", table.GetIndexSchema().Indices3[0].Name)
+
 	t.Log(catalog.PString(PPL0, 0))
 
 	catalog.Close()
@@ -1400,6 +1420,7 @@ func TestCreateIndice(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(catalog.PString(PPL0, 0))
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
+	assert.Equal(t, "idx-1", table.GetIndexSchema().Indices3[0].Name)
 
 	catalog.Close()
 }

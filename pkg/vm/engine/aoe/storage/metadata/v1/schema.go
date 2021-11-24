@@ -92,6 +92,43 @@ func (is *IndexSchema) Extend(indice []*IndexInfo) error {
 	return nil
 }
 
+func (is *IndexSchema) DropByName(name string) error {
+	found := false
+	dropIdx := 0
+	for i, index := range is.Indices3 {
+		if name == index.Name {
+			found = true
+			dropIdx = i
+			break
+		}
+	}
+	if !found {
+		return IndexNotFoundErr
+	}
+	is.Indices3 = append(is.Indices3[:dropIdx], is.Indices3[dropIdx+1:]...)
+	return nil
+}
+
+func (is *IndexSchema) DropByNames(names []string) error {
+	nameMap := make(map[string]int)
+	idx := make([]int, 0)
+	for i, index := range is.Indices3 {
+		nameMap[index.Name] = i
+	}
+	for _, name := range names {
+		pos, ok := nameMap[name]
+		if !ok {
+			return IndexNotFoundErr
+		}
+		idx = append(idx, pos)
+	}
+	for i := len(idx) - 1; i >= 0; i-- {
+		pos := idx[i]
+		is.Indices3 = append(is.Indices3[:pos], is.Indices3[pos+1:]...)
+	}
+	return nil
+}
+
 func (is *IndexSchema) Merge(schema *IndexSchema) error {
 	return is.Extend(schema.Indices3)
 }

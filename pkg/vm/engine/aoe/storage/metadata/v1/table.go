@@ -371,6 +371,55 @@ func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
+func (e *Table) SimpleDropIndice(names []string, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(dropIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.names = names
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareDropIndice(ctx *dropIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpDropIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Merge(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	if err = indice.DropByNames(ctx.names); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETDropIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETDropIndice, nil)
+	return logEntry, nil
+}
+
 // Not safe
 func (e *Table) Marshal() ([]byte, error) {
 	return json.Marshal(e)
@@ -400,6 +449,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 		}
 		buf, _ = entry.Marshal()
 	case ETAddIndice:
+	case ETDropIndice:
 		entry := tableLogEntry{
 			BaseEntry:  e.BaseEntry,
 			DatabaseId: e.Database.Id,

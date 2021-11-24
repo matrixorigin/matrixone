@@ -696,6 +696,12 @@ func (catalog *Catalog) onReplayAddIndice(entry *tableLogEntry) error {
 	return tbl.onCommit(entry.CommitInfo)
 }
 
+func (catalog *Catalog) onReplayDropIndice(entry *tableLogEntry) error {
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.Id]
+	return tbl.onCommit(entry.CommitInfo)
+}
+
 func (catalog *Catalog) onReplaySoftDeleteTable(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl := db.TableSet[entry.Id]

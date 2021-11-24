@@ -53,6 +53,8 @@ func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return v.table.prepareHardDelete(v)
 	case *addIndiceCtx:
 		return v.table.prepareAddIndice(v)
+	case *dropIndiceCtx:
+		return v.table.prepareDropIndice(v)
 	case *createSegmentCtx:
 		return v.table.prepareCreateSegment(v)
 	case *upgradeSegmentCtx:

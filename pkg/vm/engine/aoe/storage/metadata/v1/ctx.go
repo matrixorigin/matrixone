@@ -71,6 +71,12 @@ type addIndiceCtx struct {
 	indice []*IndexInfo
 }
 
+type dropIndiceCtx struct {
+	writeCtx
+	table *Table
+	names []string
+}
+
 type createSegmentCtx struct {
 	writeCtx
 	segment *Segment

@@ -58,11 +58,11 @@ const (
 	OpUpgradeFull
 	OpUpgradeClose
 	OpUpgradeSorted
+	OpAddIndice
+	OpDropIndice
 	OpSoftDelete
 	OpReplaced
 	OpHardDelete
-	OpAddIndice
-	OpDropIndice
 )
 
 var OpNames = map[OpT]string{
