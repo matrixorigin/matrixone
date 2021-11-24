@@ -2633,7 +2633,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 	}
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
-	schema := metadata.MockSchema(12)
+	schema := metadata.MockSchema(4)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -2646,7 +2646,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
-	insertCnt := uint64(10)
+	insertCnt := uint64(5)
 
 	var wg sync.WaitGroup
 	{
@@ -2690,25 +2690,32 @@ func TestCreateAndDropIndex(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 4; i++ {
 		creater(i)()
-		if i == 6 {
+		if i == 2 {
 			dropper(0, i)()
 		}
 	}
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 6, tblMeta.GetIndexSchema().IndiceNum())
-	for i := 0; i < 6; i++ {
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
 		creater(i)()
 	}
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 12, tblMeta.GetIndexSchema().IndiceNum())
-	dropper(0, 1)()
-	dropper(11, 12)()
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 2)()
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
+		creater(i)()
+	}
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 10, tblMeta.GetIndexSchema().IndiceNum())
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 1)()
+	assert.Equal(t, 3, tblMeta.GetIndexSchema().IndiceNum())
+	creater(0)()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 
-	time.Sleep(waitTime)
 
 	dataPath := filepath.Join(inst.Dir, "data")
 	infos, err := ioutil.ReadDir(dataPath)
@@ -2717,10 +2724,12 @@ func TestCreateAndDropIndex(t *testing.T) {
 		bn := filepath.Base(info.Name())
 		if fn, ok := common.ParseBitSlicedIndexFileName(bn); ok {
 			if v, _, _, col, ok := common.ParseBitSlicedIndexFileNameToInfo(fn); ok {
-				if col == 1 || col == 2 || col == 3 || col == 4 || col == 5 {
-					assert.Equal(t, v, uint64(2))
-				} else if col == 6 || col == 7 || col == 8 || col == 9 || col == 10 {
-					assert.Equal(t, v, uint64(1))
+				if col == 0 {
+					assert.Equal(t, uint64(4), v)
+				} else if col == 1 {
+					assert.Equal(t, uint64(3), v)
+				} else if col == 3 || col == 2 {
+					assert.Equal(t, uint64(1), v)
 				} else {
 					t.Error("invalid column")
 				}

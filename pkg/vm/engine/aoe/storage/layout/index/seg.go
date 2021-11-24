@@ -223,7 +223,7 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 				if err := os.Remove(filename); err != nil {
 					panic(err)
 				}
-				logutil.Infof("detect stale index, version: %d, already dropped v-%d", version, dropped)
+				logutil.Infof("detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
 				return
 			}
 		}
