@@ -32,8 +32,21 @@ const (
 
 type IndexInfo struct {
 	Id      uint64   `json:"id"`
+	Name    string   `json:"name"`
 	Type    IndexT   `json:"type"`
 	Columns []uint16 `json:"cols"`
+}
+
+func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
+	index := &IndexInfo{
+		Name:    name,
+		Type:    typ,
+		Columns: make([]uint16, 0),
+	}
+	for _, col := range colIdx {
+		index.Columns = append(index.Columns, uint16(col))
+	}
+	return index
 }
 
 type ColDef struct {
@@ -46,22 +59,54 @@ type IndexSchema struct {
 	Indices3 []*IndexInfo `json:"indice"`
 }
 
-func (is *IndexSchema) Register(index *IndexInfo) error {
-	// TODO: check dup
+func (is *IndexSchema) MakeIndex(name string, typ IndexT, colIdx ...int) (*IndexInfo, error) {
+	index := NewIndexInfo(name, typ, colIdx...)
+	err := is.Append(index)
+	return index, err
+}
+
+func (is *IndexSchema) Append(index *IndexInfo) error {
+	// TODO: validation
+	for _, index := range is.Indices3 {
+		if index.Name == index.Name {
+			return DupIndexErr
+		}
+	}
 	is.Indices3 = append(is.Indices3, index)
 	return nil
 }
 
-func (is *IndexSchema) ExtendIndice(indice []*IndexInfo) error {
-	// TODO: check dup
+func (is *IndexSchema) Extend(indice []*IndexInfo) error {
+	// TODO: validation
+	names := make(map[string]bool)
+	for _, index := range is.Indices3 {
+		names[index.Name] = true
+	}
+	for _, index := range indice {
+		_, ok := names[index.Name]
+		if ok {
+			return DupIndexErr
+		}
+	}
 	is.Indices3 = append(is.Indices3, indice...)
 	return nil
 }
 
-func (is *IndexSchema) Extend(schema *IndexSchema) error {
-	// TODO: check dup
-	is.Indices3 = append(is.Indices3, schema.Indices3...)
-	return nil
+func (is *IndexSchema) Merge(schema *IndexSchema) error {
+	return is.Extend(schema.Indices3)
+}
+
+func (is *IndexSchema) String() string {
+	if is == nil {
+		return "null"
+	}
+	s := fmt.Sprintf("Indice[%d][", len(is.Indices3))
+	names := ""
+	for _, index := range is.Indices3 {
+		names = fmt.Sprintf("%s\"%s\",", names, index.Name)
+	}
+	s = fmt.Sprintf("%s%s]", s, names)
+	return s
 }
 
 func (is *IndexSchema) IndiceNum() int {

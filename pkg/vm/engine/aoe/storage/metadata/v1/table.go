@@ -344,12 +344,15 @@ func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
 	}
 	lastIndice := e.CommitInfo.Indice
 	indice := NewIndexSchema()
-	err := indice.Extend(lastIndice)
+	err := indice.Merge(lastIndice)
 	if err != nil {
 		e.Unlock()
 		return nil, err
 	}
-	if err = indice.ExtendIndice(ctx.indice); err != nil {
+	for _, index := range ctx.indice {
+		index.Id = e.Database.Catalog.NextIndexId()
+	}
+	if err = indice.Extend(ctx.indice); err != nil {
 		e.Unlock()
 		return nil, err
 	}

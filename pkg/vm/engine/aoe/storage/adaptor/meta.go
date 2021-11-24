@@ -66,16 +66,16 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
 	indice := metadata.NewIndexSchema()
+	cols := make([]int, 0)
+	var err error
 	for _, indexInfo := range info.Indices {
-		newInfo := &metadata.IndexInfo{
-			Id:      catalog.NextIndexId(),
-			Type:    metadata.IndexT(indexInfo.Type),
-			Columns: make([]uint16, 0),
-		}
+		cols = cols[:0]
 		for _, col := range indexInfo.Columns {
-			newInfo.Columns = append(newInfo.Columns, uint16(col))
+			cols = append(cols, int(col))
 		}
-		indice.Register(newInfo)
+		if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+			panic(err)
+		}
 	}
 
 	return schema, indice

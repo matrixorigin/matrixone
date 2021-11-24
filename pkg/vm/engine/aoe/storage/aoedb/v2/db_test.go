@@ -760,11 +760,7 @@ func TestBuildIndex(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
 	indice := metadata.NewIndexSchema()
-	indice.Register(&metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -848,11 +844,8 @@ func TestRebuildIndices(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
 	indice := metadata.NewIndexSchema()
-	indice.Register(&metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -957,11 +950,8 @@ func TestManyLoadAndDrop(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
 	indice := metadata.NewIndexSchema()
-	indice.Register(&metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -1367,15 +1357,15 @@ func TestFilter(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
-	schema := metadata.MockSchemaAll(14)
-	indice := metadata.NewIndexSchema()
-	indice.Register(&metadata.IndexInfo{
-		Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{},
-	})
-	for i := uint16(0); i < 12; i++ {
-		indice.Indices3[0].Columns = append(indice.Indices3[0].Columns, i)
+	colIdx := make([]int, 0)
+	for i := 0; i < 12; i++ {
+		colIdx = append(colIdx, i)
 	}
 
+	schema := metadata.MockSchemaAll(14)
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, colIdx...)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,

@@ -44,6 +44,8 @@ var (
 	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
 	CommitStaleErr         = errors.New("aoe: commit stale info")
 	IdempotenceErr         = errors.New("aoe: idempotence error")
+	DupIndexErr            = errors.New("aoe: dup index")
+	IndexNotFoundErr       = errors.New("aoe: index not found")
 )
 
 type CatalogCfg struct {

@@ -214,12 +214,13 @@ func (info *CommitInfo) PString(level PPLevel) string {
 		}
 		s = fmt.Sprintf("%s<%s,T-%d,C-%d>", s, OpName(cInfo.Op), cInfo.TranId-MinUncommitId, cInfo.CommitId)
 		if cInfo.Indice != nil {
-			s = fmt.Sprintf("%s:Indice[", s)
-			ids := ""
-			for _, index := range cInfo.Indice.Indices3 {
-				ids = fmt.Sprintf("%s%d,", ids, index.Id)
-			}
-			s = fmt.Sprintf("%s%s]", s, ids)
+			s = fmt.Sprintf("%s%s", s, cInfo.Indice.String())
+			// s = fmt.Sprintf("%s:Indice[", s)
+			// ids := ""
+			// for _, index := range cInfo.Indice.Indices3 {
+			// 	ids = fmt.Sprintf("%s%d,", ids, index.Id)
+			// }
+			// s = fmt.Sprintf("%s%s]", s, ids)
 		}
 		prev = curr
 		curr = curr.GetNext()

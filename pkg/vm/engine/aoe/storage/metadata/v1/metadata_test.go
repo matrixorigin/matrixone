@@ -1383,12 +1383,11 @@ func TestCreateIndice(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 0, table.GetIndexSchema().IndiceNum())
 
-	index := &IndexInfo{
-		Type:    NumBsi,
-		Columns: []uint16{uint16(0)},
-	}
 	indice := NewIndexSchema()
-	indice.Register(index)
+	_, err = indice.MakeIndex("idx-0", NumBsi, 0)
+	assert.Nil(t, err)
+	_, err = indice.MakeIndex("idx-0", NumBsi, 1)
+	assert.Equal(t, DupIndexErr, err)
 
 	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
 	assert.Nil(t, err)
