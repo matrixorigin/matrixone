@@ -2646,7 +2646,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
-	insertCnt := uint64(5)
+	insertCnt := uint64(3)
 
 	var wg sync.WaitGroup
 	{
