@@ -62,7 +62,7 @@ func TestBlock(t *testing.T) {
 	shardId := uint64(0)
 	gen := shard.NewMockIndexAllocator()
 
-	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, segCnt*blkCnt, gen.Shard(shardId))
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, segCnt*blkCnt, gen.Shard(shardId))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

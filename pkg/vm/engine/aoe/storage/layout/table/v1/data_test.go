@@ -49,7 +49,7 @@ func TestBase1(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, segCnt*blkCnt, gen.Shard(shardId))
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(shardId))
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)

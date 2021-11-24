@@ -585,7 +585,7 @@ func TestAppliedIndex(t *testing.T) {
 
 	index := gen.Next(0)
 	indexWal.SyncLog(index)
-	tbl := MockTable(db, nil, 0, index)
+	tbl := MockTable(db, nil, nil, 0, index)
 	assert.NotNil(t, tbl)
 	indexWal.Checkpoint(index)
 	testutils.WaitExpect(10, func() bool {

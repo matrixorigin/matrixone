@@ -613,7 +613,7 @@ func (e *Table) PString(level PPLevel, depth int) string {
 	return s
 }
 
-func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
+func MockDBTable(catalog *Catalog, dbName string, schema *Schema, indice *IndexSchema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
 	var index *LogIndex
 	index = idxGen.Next()
 	if catalog.IndexWal != nil {
@@ -626,10 +626,10 @@ func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64,
 	if catalog.IndexWal != nil {
 		catalog.IndexWal.Checkpoint(index)
 	}
-	return MockTable(db, schema, blkCnt, idxGen.Next())
+	return MockTable(db, schema, indice, blkCnt, idxGen.Next())
 }
 
-func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Table {
+func MockTable(db *Database, schema *Schema, indice *IndexSchema, blkCnt uint64, idx *LogIndex) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
@@ -649,7 +649,7 @@ func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Tabl
 		}
 	}
 	logFn(idx)
-	tbl, err := db.SimpleCreateTable(schema, nil, idx)
+	tbl, err := db.SimpleCreateTable(schema, indice, idx)
 	if err != nil {
 		panic(err)
 	}
