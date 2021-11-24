@@ -98,6 +98,16 @@ func (e *Table) Repr(short bool) string {
 	return s
 }
 
+func (e *Table) GetIndexSchemaLocked() *IndexSchema {
+	return e.CommitInfo.Indice
+}
+
+func (e *Table) GetIndexSchema() *IndexSchema {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.Indice
+}
+
 func (e *Table) DebugCheckReplayedState() {
 	if e.Database == nil {
 		panic("database is missing")

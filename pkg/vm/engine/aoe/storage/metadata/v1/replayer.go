@@ -162,6 +162,8 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 		err = catalog.onReplaySoftDeleteTable(entry.tblEntry)
 	case ETHardDeleteTable:
 		err = catalog.onReplayHardDeleteTable(entry.tblEntry)
+	case ETAddIndice:
+		err = catalog.onReplayAddIndice(entry.tblEntry)
 	case ETCreateSegment:
 		catalog.Sequence.TryUpdateSegmentId(entry.segEntry.Id)
 		err = catalog.onReplayCreateSegment(entry.segEntry)
@@ -432,6 +434,14 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		tbl.Unmarshal(entry.GetPayload())
 		replayer.cache.Append(&replayEntry{
 			typ:      ETHardDeleteTable,
+			tblEntry: tbl,
+			commitId: GetCommitIdFromLogEntry(entry),
+		})
+	case ETAddIndice:
+		tbl := &tableLogEntry{}
+		tbl.Unmarshal(entry.GetPayload())
+		replayer.cache.Append(&replayEntry{
+			typ:      ETAddIndice,
 			tblEntry: tbl,
 			commitId: GetCommitIdFromLogEntry(entry),
 		})

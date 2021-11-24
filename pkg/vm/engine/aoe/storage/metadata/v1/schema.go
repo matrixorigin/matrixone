@@ -64,6 +64,13 @@ func (is *IndexSchema) Extend(schema *IndexSchema) error {
 	return nil
 }
 
+func (is *IndexSchema) IndiceNum() int {
+	if is == nil {
+		return 0
+	}
+	return len(is.Indices3)
+}
+
 func NewIndexSchema() *IndexSchema {
 	return &IndexSchema{
 		Indices3: make([]*IndexInfo, 0),

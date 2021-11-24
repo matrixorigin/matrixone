@@ -41,6 +41,19 @@ var (
 	mockFactory           = new(mockNameFactory)
 )
 
+var (
+	moduleName = "Meta"
+)
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
+
 func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup bool) (*Catalog, Wal) {
 	if cleanup {
 		os.RemoveAll(dir)
@@ -1350,4 +1363,44 @@ func TestSplit2(t *testing.T) {
 	doCompareCatalog(t, catalog, catalog2)
 	catalog2.Close()
 	indexWal2.Close()
+}
+
+func TestCreateIndice(t *testing.T) {
+	dir := initTestEnv(t)
+	// catalog, indexWal := MockCatalogAndWal(dir, uint64(10), uint64(2))
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
+	cfg.RotationFileMaxSize = 20 * int(common.K)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+
+	schema := MockSchema(2)
+	database, err := catalog.SimpleCreateDatabase("db1", nil)
+	assert.Nil(t, err)
+	gen := shard.NewMockIndexAllocator()
+	table, err := database.SimpleCreateTable(schema, nil, gen.Next(database.ShardId))
+	assert.Nil(t, err)
+	assert.Equal(t, 0, table.GetIndexSchema().IndiceNum())
+
+	index := &IndexInfo{
+		Type:    NumBsi,
+		Columns: []uint16{uint16(0)},
+	}
+	indice := NewIndexSchema()
+	indice.Register(index)
+
+	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
+	assert.Nil(t, err)
+	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
+	t.Log(catalog.PString(PPL0, 0))
+
+	catalog.Close()
+
+	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
+	assert.Nil(t, err)
+	t.Log(catalog.PString(PPL0, 0))
+	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
+
+	catalog.Close()
 }
