@@ -309,6 +309,16 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
+func (e *Table) SimpleAddIndice(indice []*IndexInfo, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(addIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.indice = indice
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
 func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
 		TranId:   ctx.tranId,
@@ -373,6 +383,12 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	case ETCreateTable:
 		entry := tableLogEntry{
 			Table:      e,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
+	case ETAddIndice:
+		entry := tableLogEntry{
+			BaseEntry:  e.BaseEntry,
 			DatabaseId: e.Database.Id,
 		}
 		buf, _ = entry.Marshal()
