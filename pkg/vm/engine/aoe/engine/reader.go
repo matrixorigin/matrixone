@@ -43,12 +43,12 @@ func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 	if n > cap(a.zs) {
 		a.zs = make([]int64, n)
 	}
-	bat.Zs = a.zs
+	bat.Zs = a.zs[:n]
 	for i := 0; i < n; i++ {
 		bat.Zs[i] = 1
 	}
 	if len(a.blocks) > 1 {
-		a.blocks = append(a.blocks[:1], a.blocks[2:]...)
+		a.blocks = append(a.blocks[:0], a.blocks[1:]...)
 	} else if len(a.blocks) == 1 {
 		a.blocks = a.blocks[0:0]
 	}
