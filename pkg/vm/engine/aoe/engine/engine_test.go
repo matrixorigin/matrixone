@@ -108,7 +108,6 @@ func TestAOEEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterRecreate(true),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),

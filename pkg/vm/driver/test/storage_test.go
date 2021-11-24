@@ -90,7 +90,7 @@ func TestAOEStorage(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterNodeCount(1),
+			// raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
