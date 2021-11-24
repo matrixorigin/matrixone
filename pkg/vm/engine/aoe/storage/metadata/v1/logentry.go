@@ -33,6 +33,8 @@ const (
 	ETCreateTable
 	ETSoftDeleteTable
 	ETHardDeleteTable
+	ETAddIndice
+	ETDropIndice
 	ETCreateSegment
 	ETUpgradeSegment
 	ETDropSegment

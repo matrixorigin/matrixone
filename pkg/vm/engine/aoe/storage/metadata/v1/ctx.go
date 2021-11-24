@@ -65,6 +65,12 @@ type deleteTableCtx struct {
 	table *Table
 }
 
+type addIndiceCtx struct {
+	writeCtx
+	table  *Table
+	indice []*IndexInfo
+}
+
 type createSegmentCtx struct {
 	writeCtx
 	segment *Segment

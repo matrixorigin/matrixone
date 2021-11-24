@@ -309,6 +309,45 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
+func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpAddIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Extend(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	if err = indice.ExtendIndice(ctx.indice); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETAddIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETAddIndice, nil)
+	return logEntry, nil
+}
+
 // Not safe
 func (e *Table) Marshal() ([]byte, error) {
 	return json.Marshal(e)

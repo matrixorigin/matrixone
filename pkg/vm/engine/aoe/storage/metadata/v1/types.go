@@ -61,8 +61,8 @@ const (
 	OpSoftDelete
 	OpReplaced
 	OpHardDelete
-	OpCreateIndex
-	OpDropIndex
+	OpAddIndice
+	OpDropIndice
 )
 
 var OpNames = map[OpT]string{
@@ -73,6 +73,8 @@ var OpNames = map[OpT]string{
 	OpSoftDelete:    "SoftDelete",
 	OpReplaced:      "Replaced",
 	OpHardDelete:    "HardDelete",
+	OpAddIndice:     "AddIndice",
+	OpDropIndice:    "DropIndice",
 }
 
 func OpName(op OpT) string {

@@ -46,8 +46,22 @@ type IndexSchema struct {
 	Indices3 []*IndexInfo `json:"indice"`
 }
 
-func (is *IndexSchema) Register(index *IndexInfo) {
+func (is *IndexSchema) Register(index *IndexInfo) error {
+	// TODO: check dup
 	is.Indices3 = append(is.Indices3, index)
+	return nil
+}
+
+func (is *IndexSchema) ExtendIndice(indice []*IndexInfo) error {
+	// TODO: check dup
+	is.Indices3 = append(is.Indices3, indice...)
+	return nil
+}
+
+func (is *IndexSchema) Extend(schema *IndexSchema) error {
+	// TODO: check dup
+	is.Indices3 = append(is.Indices3, schema.Indices3...)
+	return nil
 }
 
 func NewIndexSchema() *IndexSchema {
