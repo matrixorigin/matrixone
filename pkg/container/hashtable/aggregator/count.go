@@ -15,7 +15,6 @@
 package aggregator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"unsafe"
 )
 
@@ -29,31 +28,26 @@ func (agg *Count) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Count) Init(state, data []byte) {
-	*(*uint64)(unsafe.Pointer(&state[0])) = 1
+func (agg *Count) NeedsInit() bool {
+	return false
 }
 
-func (agg *Count) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := int(agg.StateSize()); i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Count) Init(state unsafe.Pointer) {}
+
+func (agg *Count) AddBatch(states []unsafe.Pointer, _ unsafe.Pointer) {
+	for _, s := range states {
+		*(*uint64)(s)++
 	}
 }
 
-func (agg *Count) Aggregate(state, data []byte) {
-	*(*uint64)(unsafe.Pointer(&state[0]))++
+func (agg *Count) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*uint64)(s) += *(*uint64)(rstates[i])
+	}
 }
 
-func (agg *Count) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Count) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Uint64Add(lslice, rslice, lslice)
-}
-
-func (agg *Count) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Count) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*uint64)(results[i]) = *(*uint64)(s)
+	}
 }

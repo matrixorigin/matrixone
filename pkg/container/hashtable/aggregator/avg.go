@@ -42,43 +42,35 @@ func (agg *Int8Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int8Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Int8Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int8Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int8Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Int8Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*int8AvgState)(s)
+		sImpl.sum += int64(*(*int8)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 1)
 	}
 }
 
-func (agg *Int8Avg) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int8)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Int8Avg) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Int8Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int8AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*int8AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Int8Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*int8AvgState)(s)
+		rsImpl := (*int8AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Int8Avg) Finalize(state, result []byte) {
-	sum := *(*int64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Int8Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*int8AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type int16AvgState struct {
@@ -94,43 +86,35 @@ func (agg *Int16Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int16Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Int16Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int16Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int16Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Int16Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*int16AvgState)(s)
+		sImpl.sum += int64(*(*int16)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 2)
 	}
 }
 
-func (agg *Int16Avg) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int16)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Int16Avg) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Int16Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int16AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*int16AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Int16Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*int16AvgState)(s)
+		rsImpl := (*int16AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Int16Avg) Finalize(state, result []byte) {
-	sum := *(*int64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Int16Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*int16AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type int32AvgState struct {
@@ -146,43 +130,35 @@ func (agg *Int32Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int32Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Int32Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int32Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int32Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Int32Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*int32AvgState)(s)
+		sImpl.sum += int64(*(*int32)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Int32Avg) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int32)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Int32Avg) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Int32Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int32AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*int32AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Int32Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*int32AvgState)(s)
+		rsImpl := (*int32AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Int32Avg) Finalize(state, result []byte) {
-	sum := *(*int64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Int32Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*int32AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type int64AvgState struct {
@@ -198,43 +174,35 @@ func (agg *Int64Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int64Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Int64Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int64Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int64Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Int64Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*int64AvgState)(s)
+		sImpl.sum += int64(*(*int64)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Int64Avg) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int64)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Int64Avg) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Int64Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int64AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*int64AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Int64Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*int64AvgState)(s)
+		rsImpl := (*int64AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Int64Avg) Finalize(state, result []byte) {
-	sum := *(*int64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Int64Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*int64AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type uint8AvgState struct {
@@ -250,43 +218,35 @@ func (agg *Uint8Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint8Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Uint8Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint8Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint8Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Uint8Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*uint8AvgState)(s)
+		sImpl.sum += uint64(*(*uint8)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 1)
 	}
 }
 
-func (agg *Uint8Avg) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint8)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Uint8Avg) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Uint8Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint8AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*uint8AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Uint8Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*uint8AvgState)(s)
+		rsImpl := (*uint8AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Uint8Avg) Finalize(state, result []byte) {
-	sum := *(*uint64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Uint8Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*uint8AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type uint16AvgState struct {
@@ -302,43 +262,35 @@ func (agg *Uint16Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint16Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Uint16Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint16Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint16Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Uint16Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*uint16AvgState)(s)
+		sImpl.sum += uint64(*(*uint16)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 2)
 	}
 }
 
-func (agg *Uint16Avg) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint16)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Uint16Avg) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Uint16Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint16AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*uint16AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Uint16Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*uint16AvgState)(s)
+		rsImpl := (*uint16AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Uint16Avg) Finalize(state, result []byte) {
-	sum := *(*uint64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Uint16Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*uint16AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type uint32AvgState struct {
@@ -354,43 +306,35 @@ func (agg *Uint32Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint32Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Uint32Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint32Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint32Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Uint32Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*uint32AvgState)(s)
+		sImpl.sum += uint64(*(*uint32)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Uint32Avg) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint32)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Uint32Avg) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Uint32Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint32AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*uint32AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Uint32Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*uint32AvgState)(s)
+		rsImpl := (*uint32AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Uint32Avg) Finalize(state, result []byte) {
-	sum := *(*uint64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Uint32Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*uint32AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type uint64AvgState struct {
@@ -406,43 +350,35 @@ func (agg *Uint64Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint64Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Uint64Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint64Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint64Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Uint64Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*uint64AvgState)(s)
+		sImpl.sum += uint64(*(*uint64)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Uint64Avg) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint64)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Uint64Avg) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Uint64Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*uint64AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Uint64Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*uint64AvgState)(s)
+		rsImpl := (*uint64AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Uint64Avg) Finalize(state, result []byte) {
-	sum := *(*uint64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Uint64Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*uint64AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type float32AvgState struct {
@@ -458,43 +394,35 @@ func (agg *Float32Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Float32Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Float32Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Float32Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Float32Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Float32Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*float32AvgState)(s)
+		sImpl.sum += float64(*(*float32)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Float32Avg) Aggregate(state, data []byte) {
-	lhs := (*float64)(unsafe.Pointer(&state[0]))
-	rhs := *(*float32)(unsafe.Pointer(&data[0]))
-	*lhs += float64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Float32Avg) Merge(lstate, rstate []byte) {
-	*(*float64)(unsafe.Pointer(&lstate[0])) += *(*float64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Float32Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*float32AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*float32AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Float32Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*float32AvgState)(s)
+		rsImpl := (*float32AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Float32Avg) Finalize(state, result []byte) {
-	sum := *(*float64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Float32Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*float32AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
 
 type float64AvgState struct {
@@ -510,41 +438,33 @@ func (agg *Float64Avg) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Float64Avg) Init(state, data []byte) {
-	copy(state, data)
-	*(*uint64)(unsafe.Pointer(&state[8])) = 0
+func (agg *Float64Avg) NeedsInit() bool {
+	return false
 }
 
-func (agg *Float64Avg) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Float64Avg) Init(state unsafe.Pointer) {}
+
+func (agg *Float64Avg) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		sImpl := (*float64AvgState)(s)
+		sImpl.sum += float64(*(*float64)(values))
+		sImpl.cnt++
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Float64Avg) Aggregate(state, data []byte) {
-	lhs := (*float64)(unsafe.Pointer(&state[0]))
-	rhs := *(*float64)(unsafe.Pointer(&data[0]))
-	*lhs += float64(rhs)
-	*(*uint64)(unsafe.Pointer(&state[8]))++
-}
-
-func (agg *Float64Avg) Merge(lstate, rstate []byte) {
-	*(*float64)(unsafe.Pointer(&lstate[0])) += *(*float64)(unsafe.Pointer(&rstate[0]))
-	*(*uint64)(unsafe.Pointer(&lstate[8])) += *(*uint64)(unsafe.Pointer(&rstate[8]))
-}
-
-func (agg *Float64Avg) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*float64AvgState)(unsafe.Pointer(&larray[0])), len(larray)/16)
-	rslice := unsafe.Slice((*float64AvgState)(unsafe.Pointer(&rarray[0])), len(rarray)/16)
-	for i := range lslice {
-		lslice[i].sum += rslice[i].sum
-		lslice[i].cnt += rslice[i].cnt
+func (agg *Float64Avg) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		sImpl := (*float64AvgState)(s)
+		rsImpl := (*float64AvgState)(rstates[i])
+		sImpl.sum += rsImpl.sum
+		sImpl.cnt += rsImpl.cnt
 	}
 }
 
-func (agg *Float64Avg) Finalize(state, result []byte) {
-	sum := *(*float64)(unsafe.Pointer(&state[0]))
-	cnt := *(*uint64)(unsafe.Pointer(&state[8]))
-	*(*float64)(unsafe.Pointer(&result[0])) = float64(sum) / float64(cnt)
+func (agg *Float64Avg) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		sImpl := (*float64AvgState)(s)
+		*(*float64)(results[i]) = float64(sImpl.sum) / float64(sImpl.cnt)
+	}
 }
