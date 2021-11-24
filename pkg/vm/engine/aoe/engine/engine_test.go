@@ -108,7 +108,7 @@ func TestAOEEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			// raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterRecreate(true),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
@@ -126,7 +126,7 @@ func TestAOEEngine(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	var catalogs []*catalog2.Catalog
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 1; i++ {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 

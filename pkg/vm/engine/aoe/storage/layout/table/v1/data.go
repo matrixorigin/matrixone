@@ -199,10 +199,6 @@ func (td *tableData) StrongRefSegment(id uint64) iface.ISegment {
 	td.tree.RLock()
 	defer td.tree.RUnlock()
 	idx, ok := td.tree.helper[id]
-	logutil.Infof("id is %v, all the ids in helper are:", id)
-	for helperId := range td.tree.helper {
-		logutil.Infof("%v", helperId)
-	}
 	if !ok {
 		return nil
 	}
@@ -228,7 +224,6 @@ func (td *tableData) StrongRefBlock(segId, blkId uint64) iface.IBlock {
 }
 
 func (td *tableData) RegisterSegment(meta *metadata.Segment) (seg iface.ISegment, err error) {
-	logutil.Infof("set help id, id is %v", meta.Id)
 	seg, err = newSegment(td, meta)
 	if err != nil {
 		panic(err)
@@ -247,7 +242,6 @@ func (td *tableData) RegisterSegment(meta *metadata.Segment) (seg iface.ISegment
 
 	td.tree.segments = append(td.tree.segments, seg)
 	td.tree.ids = append(td.tree.ids, seg.GetMeta().Id)
-	logutil.Infof("set help id, id is %v", meta.Id)
 	td.tree.helper[meta.Id] = int(td.tree.segmentCnt)
 	atomic.AddUint32(&td.tree.segmentCnt, uint32(1))
 	seg.Ref()

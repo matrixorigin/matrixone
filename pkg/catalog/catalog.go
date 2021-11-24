@@ -264,14 +264,13 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		tableName:=tbl.Name
-		aoeTableName:=c.encodeTabletName(shardId, tbl.Id)
-		tbl.Name=aoeTableName
+		tableName := tbl.Name
+		aoeTableName := c.encodeTabletName(shardId, tbl.Id)
 		if err := c.Driver.CreateTablet(aoeTableName, shardId, &tbl); err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
-		tbl.Name=tableName
+		tbl.Name = tableName
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
@@ -634,7 +633,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 
 //encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return strconv.Itoa(int(groupId))+strconv.Itoa(int(tableId))
+	return strconv.Itoa(int(groupId)) + strconv.Itoa(int(tableId))
 }
 
 //genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.

@@ -145,7 +145,6 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 	ctx.DBName = ShardIdToName(ctx.ShardId)
 	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
-	logutil.Infof("aoedb append, table name is %v, err is %v",ctx.TableName,)
 	if err != nil {
 		return err
 	}

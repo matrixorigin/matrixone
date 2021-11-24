@@ -495,14 +495,12 @@ func (h *replayHandle) addCleanable(f cleanable) {
 
 func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient bool) {
 	tbl, ok := h.files[id.TableID]
-	logutil.Infof("addBlock, id is %v",id.TableID)
 	if !ok {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
 			bsifiles: make(map[common.ID]*bsiFile),
 		}
-		logutil.Infof("addBlock, id is %v",id.TableID)
 		h.files[id.TableID] = tbl
 	}
 	segId := id.AsSegmentID()
@@ -516,14 +514,12 @@ func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient
 
 func (h *replayHandle) addSegment(id common.ID, name string) {
 	tbl, ok := h.files[id.TableID]
-	logutil.Infof("addSegment, id is %v",id.TableID)
 	if !ok {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
 			bsifiles: make(map[common.ID]*bsiFile),
 		}
-		logutil.Infof("addSegment, id is %v",id.TableID)
 		h.files[id.TableID] = tbl
 	}
 	_, ok = tbl.sortedfiles[id]
@@ -636,25 +632,17 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 	tablesFiles, ok := h.files[meta.Id]
 	if !ok {
 		// No need to change the table metadata if there is no table files
-		logutil.Infof("meta.id is %v, all the ids in h.files are:", meta.Id)
-		for id := range h.files {
-			logutil.Infof("%v", id)
-		}
 		if h.tables != nil && !meta.IsDeleted() {
 			_, err = h.tables.RegisterTable(meta)
-			logutil.Infof("rebuildTable, h.tables is %v",h.tables)
 		}
-		logutil.Infof("err is %v", err)
 		return err
 	}
 	if meta.IsDeleted() {
 		h.addCleanable(tablesFiles)
 		if meta.IsHardDeleted() {
-			logutil.Infof("err is %v", nil)
 			return nil
 		}
 		err = meta.HardDelete()
-		logutil.Infof("err is %v", err)
 		return err
 	}
 
@@ -785,9 +773,7 @@ func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile,
 func (h *replayHandle) Replay() error {
 	for _, database := range h.catalog.Databases {
 		for _, tbl := range database.TableSet {
-			logutil.Infof("len(database.TableSet) is %v", len(database.TableSet))
 			if err := h.rebuildTable(tbl); err != nil {
-				logutil.Infof("err is %v", err)
 				return err
 			}
 		}
