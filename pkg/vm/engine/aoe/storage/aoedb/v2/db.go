@@ -204,6 +204,7 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 			segMeta.RLock()
 			if !segMeta.IsSortedLocked() {
 				seg.Unref()
+				segMeta.RUnlock()
 				continue
 			}
 			segMeta.RUnlock()
