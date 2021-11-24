@@ -67,8 +67,8 @@ func (is *IndexSchema) MakeIndex(name string, typ IndexT, colIdx ...int) (*Index
 
 func (is *IndexSchema) Append(index *IndexInfo) error {
 	// TODO: validation
-	for _, index := range is.Indice {
-		if index.Name == index.Name {
+	for _, idx := range is.Indice {
+		if idx.Name == index.Name {
 			return DupIndexErr
 		}
 	}

@@ -33,6 +33,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		Indices: make([]aoe.IndexInfo, 0),
 	}
 	prefix := "mock_"
+	indexId := 0
 	for i := 0; i < colCnt; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		colInfo := aoe.ColumnInfo{
@@ -43,7 +44,12 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
-		indexInfo := aoe.IndexInfo{Type: uint64(metadata.ZoneMap), Columns: []uint64{uint64(i)}}
+		indexId++
+		indexInfo := aoe.IndexInfo{
+			Type:    uint64(metadata.ZoneMap),
+			Columns: []uint64{uint64(i)},
+			Name:    fmt.Sprintf("idx-%d", indexId),
+		}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
 		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
