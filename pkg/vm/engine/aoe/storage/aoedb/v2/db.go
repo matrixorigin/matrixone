@@ -200,6 +200,13 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 		// time, need some refactor.
 		for _, segId := range meta.SimpleGetSegmentIds() {
 			seg := tblData.StrongRefSegment(segId)
+			segMeta := seg.GetMeta()
+			segMeta.RLock()
+			if !segMeta.IsSortedLocked() {
+				seg.Unref()
+				continue
+			}
+			segMeta.RUnlock()
 			e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
 			e.Cols = cols
 			d.Scheduler.Schedule(e)

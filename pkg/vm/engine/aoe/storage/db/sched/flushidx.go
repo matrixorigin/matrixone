@@ -15,7 +15,6 @@
 package sched
 
 import (
-	"errors"
 	"path/filepath"
 	"sync"
 
@@ -52,11 +51,6 @@ func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
 func (e *flushIndexEvent) Execute() error {
 	ids := e.Segment.BlockIds()
 	meta := e.Segment.GetMeta()
-	meta.RLock()
-	if !meta.IsSortedLocked() {
-		return errors.New("can not create index on unclosed segment")
-	}
-	meta.RUnlock()
 	dir := e.Segment.GetSegmentFile().GetDir()
 	bsiEnabled := make([]int, 0)
 	indice := meta.Table.GetIndexSchema()

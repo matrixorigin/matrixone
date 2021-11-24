@@ -2709,7 +2709,6 @@ func TestCreateAndDropIndex(t *testing.T) {
 	assert.Equal(t, 10, tblMeta.GetIndexSchema().IndiceNum())
 
 	time.Sleep(waitTime)
-	//t.Log(tblMeta.GetIndexSchema())
 
 	dataPath := filepath.Join(inst.Dir, "data")
 	infos, err := ioutil.ReadDir(dataPath)
@@ -2718,9 +2717,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 		bn := filepath.Base(info.Name())
 		if fn, ok := common.ParseBitSlicedIndexFileName(bn); ok {
 			if v, _, _, col, ok := common.ParseBitSlicedIndexFileNameToInfo(fn); ok {
-				if col == 0 {
-					assert.Equal(t, v, uint64(3))
-				} else if col == 1 || col == 2 || col == 3 || col == 4 || col == 5 || col == 11 {
+				if col == 1 || col == 2 || col == 3 || col == 4 || col == 5 {
 					assert.Equal(t, v, uint64(2))
 				} else if col == 6 || col == 7 || col == 8 || col == 9 || col == 10 {
 					assert.Equal(t, v, uint64(1))
