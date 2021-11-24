@@ -409,7 +409,10 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 		res := value.(int64)
 		str := strconv.FormatInt(res, 10)
-		return tree.NewNumVal(constant.MakeInt64(res), str, res < 0)
+		if res < 0 {
+			return tree.NewNumVal(constant.MakeUint64(uint64(-res)), str, true)
+		}
+		return tree.NewNumVal(constant.MakeInt64(res), str, false)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		res := value.(uint64)
 		str := strconv.FormatUint(res, 10)
