@@ -431,7 +431,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	for _, database := range catalog.Databases {
 		for _, tbl := range database.TableSet {
 			indice := tbl.GetCommit().Indice
-			for _, idx := range indice.Indices3 {
+			for _, idx := range indice.Indice {
 				// todo: str bsi
 				if idx.Type == metadata.NumBsi {
 					for _, seg := range tbl.SegmentSet {

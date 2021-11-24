@@ -54,7 +54,7 @@ func (e *flushIndexEvent) Execute() error {
 	dir := e.Segment.GetSegmentFile().GetDir()
 	bsiEnabled := make([]int, 0)
 	indice := meta.Table.GetIndexSchema()
-	for _, idx := range indice.Indices3 {
+	for _, idx := range indice.Indice {
 		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 			for _, col := range idx.Columns {
 				if e.FlushAll {

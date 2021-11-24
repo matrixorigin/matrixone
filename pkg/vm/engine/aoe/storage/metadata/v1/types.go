@@ -217,7 +217,7 @@ func (info *CommitInfo) PString(level PPLevel) string {
 			s = fmt.Sprintf("%s%s", s, cInfo.Indice.String())
 			// s = fmt.Sprintf("%s:Indice[", s)
 			// ids := ""
-			// for _, index := range cInfo.Indice.Indices3 {
+			// for _, index := range cInfo.Indice.Indice {
 			// 	ids = fmt.Sprintf("%s%d,", ids, index.Id)
 			// }
 			// s = fmt.Sprintf("%s%s]", s, ids)

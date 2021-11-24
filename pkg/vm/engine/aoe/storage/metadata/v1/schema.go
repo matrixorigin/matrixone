@@ -56,7 +56,7 @@ type ColDef struct {
 }
 
 type IndexSchema struct {
-	Indices3 []*IndexInfo `json:"indice"`
+	Indice []*IndexInfo `json:"indice"`
 }
 
 func (is *IndexSchema) MakeIndex(name string, typ IndexT, colIdx ...int) (*IndexInfo, error) {
@@ -67,19 +67,19 @@ func (is *IndexSchema) MakeIndex(name string, typ IndexT, colIdx ...int) (*Index
 
 func (is *IndexSchema) Append(index *IndexInfo) error {
 	// TODO: validation
-	for _, index := range is.Indices3 {
+	for _, index := range is.Indice {
 		if index.Name == index.Name {
 			return DupIndexErr
 		}
 	}
-	is.Indices3 = append(is.Indices3, index)
+	is.Indice = append(is.Indice, index)
 	return nil
 }
 
 func (is *IndexSchema) Extend(indice []*IndexInfo) error {
 	// TODO: validation
 	names := make(map[string]bool)
-	for _, index := range is.Indices3 {
+	for _, index := range is.Indice {
 		names[index.Name] = true
 	}
 	for _, index := range indice {
@@ -88,14 +88,14 @@ func (is *IndexSchema) Extend(indice []*IndexInfo) error {
 			return DupIndexErr
 		}
 	}
-	is.Indices3 = append(is.Indices3, indice...)
+	is.Indice = append(is.Indice, indice...)
 	return nil
 }
 
 func (is *IndexSchema) DropByName(name string) error {
 	found := false
 	dropIdx := 0
-	for i, index := range is.Indices3 {
+	for i, index := range is.Indice {
 		if name == index.Name {
 			found = true
 			dropIdx = i
@@ -105,14 +105,14 @@ func (is *IndexSchema) DropByName(name string) error {
 	if !found {
 		return IndexNotFoundErr
 	}
-	is.Indices3 = append(is.Indices3[:dropIdx], is.Indices3[dropIdx+1:]...)
+	is.Indice = append(is.Indice[:dropIdx], is.Indice[dropIdx+1:]...)
 	return nil
 }
 
 func (is *IndexSchema) DropByNames(names []string) error {
 	nameMap := make(map[string]int)
 	idx := make([]int, 0)
-	for i, index := range is.Indices3 {
+	for i, index := range is.Indice {
 		nameMap[index.Name] = i
 	}
 	for _, name := range names {
@@ -124,22 +124,22 @@ func (is *IndexSchema) DropByNames(names []string) error {
 	}
 	for i := len(idx) - 1; i >= 0; i-- {
 		pos := idx[i]
-		is.Indices3 = append(is.Indices3[:pos], is.Indices3[pos+1:]...)
+		is.Indice = append(is.Indice[:pos], is.Indice[pos+1:]...)
 	}
 	return nil
 }
 
 func (is *IndexSchema) Merge(schema *IndexSchema) error {
-	return is.Extend(schema.Indices3)
+	return is.Extend(schema.Indice)
 }
 
 func (is *IndexSchema) String() string {
 	if is == nil {
 		return "null"
 	}
-	s := fmt.Sprintf("Indice[%d][", len(is.Indices3))
+	s := fmt.Sprintf("Indice[%d][", len(is.Indice))
 	names := ""
-	for _, index := range is.Indices3 {
+	for _, index := range is.Indice {
 		names = fmt.Sprintf("%s\"%s\",", names, index.Name)
 	}
 	s = fmt.Sprintf("%s%s]", s, names)
@@ -150,12 +150,12 @@ func (is *IndexSchema) IndiceNum() int {
 	if is == nil {
 		return 0
 	}
-	return len(is.Indices3)
+	return len(is.Indice)
 }
 
 func NewIndexSchema() *IndexSchema {
 	return &IndexSchema{
-		Indices3: make([]*IndexInfo, 0),
+		Indice: make([]*IndexInfo, 0),
 	}
 }
 

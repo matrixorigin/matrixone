@@ -1389,14 +1389,14 @@ func TestIndice(t *testing.T) {
 	_, err = indice.MakeIndex("idx-0", NumBsi, 1)
 	assert.Equal(t, DupIndexErr, err)
 
-	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
+	err = table.SimpleAddIndice(indice.Indice, gen.Next(database.ShardId))
 	assert.Nil(t, err)
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
 
 	indice = NewIndexSchema()
 	_, err = indice.MakeIndex("idx-1", NumBsi, 1)
 	assert.Nil(t, err)
-	err = table.SimpleAddIndice(indice.Indices3, gen.Next(database.ShardId))
+	err = table.SimpleAddIndice(indice.Indice, gen.Next(database.ShardId))
 	assert.Nil(t, err)
 	assert.Equal(t, 2, table.GetIndexSchema().IndiceNum())
 
@@ -1410,7 +1410,7 @@ func TestIndice(t *testing.T) {
 	err = table.SimpleDropIndice(names, logIndex)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
-	assert.Equal(t, "idx-1", table.GetIndexSchema().Indices3[0].Name)
+	assert.Equal(t, "idx-1", table.GetIndexSchema().Indice[0].Name)
 
 	t.Log(catalog.PString(PPL0, 0))
 
@@ -1420,7 +1420,7 @@ func TestIndice(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(catalog.PString(PPL0, 0))
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
-	assert.Equal(t, "idx-1", table.GetIndexSchema().Indices3[0].Name)
+	assert.Equal(t, "idx-1", table.GetIndexSchema().Indice[0].Name)
 
 	catalog.Close()
 }
