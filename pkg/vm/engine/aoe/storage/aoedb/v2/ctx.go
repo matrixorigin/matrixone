@@ -67,6 +67,18 @@ type CreateTableCtx struct {
 	Indice *db.IndexSchema
 }
 
+type CreateIndexCtx struct {
+	DBMutationCtx
+	Table string
+	Indices *db.IndexSchema
+}
+
+type DropIndexCtx struct {
+	DBMutationCtx
+	Table string
+	IndexNames []string
+}
+
 type AppendCtx struct {
 	TableMutationCtx
 	Data *batch.Batch
