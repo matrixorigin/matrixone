@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -223,6 +224,7 @@ func (bw *BlockWriter) executeIVecs() error {
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
 	stat, _ := os.Stat(filename)
+	logutil.Infof("filename is %v",filename)
 	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }

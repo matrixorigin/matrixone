@@ -704,7 +704,7 @@ func (c *Catalog) deletedPrefix() []byte {
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
+		logutil.Infof("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
 	}()
 	timeoutC := time.After(timeout)
 	for {

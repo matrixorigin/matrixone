@@ -114,8 +114,8 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterNodeCount(1),
-			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
+			// raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
@@ -124,9 +124,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	// c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
-	
-	// c.RaftCluster.WaitShardByCountPerNode(preAllocShardNum + 1, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*60)
 
 	stdLog.Printf("driver all started.")
 

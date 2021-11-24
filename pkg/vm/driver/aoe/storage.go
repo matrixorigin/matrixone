@@ -64,7 +64,6 @@ type Storage struct {
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
 		err := s.DB.FlushDatabase(aoedbName.ShardIdToName(shardId))
-		logutil.Infof("Sync FlushDatabase, shard id is %v", shardId)
 		if err != nil {
 			return err
 		}
@@ -95,7 +94,6 @@ func (s *Storage) Stats() stats.Stats {
 
 //Append appends batch in the table
 func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
-	logutil.Infof("Append, log index is %v, shard id is %v", index, shardId)
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("[logIndex:%d,%d]append handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
@@ -173,7 +171,6 @@ func (s *Storage) getSegmentedId(cmd []byte) []byte {
 //It returns the id of the created table.
 //If the storage is closed, it panics.
 func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
-	logutil.Infof("createTable, log index is %v,shard id is %v", index, shardId)
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -213,7 +210,6 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
 func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
-	logutil.Infof("dropTable, log index is %v, shard id is %v", index, shardId)
 	customReq := &pb.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 
@@ -345,7 +341,6 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 
 		}
 	}
-	logutil.Infof("GetInitialStates, len is %v", len(values))
 	return values, nil
 }
 
@@ -396,9 +391,9 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 	db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(shardID))
-	logutil.Infof("GetPersistentLogIndex, shard id is %v, db is %v", shardID, db)
+	logutil.Infof("GetPersistentLogIndex, shard id is %v, storage is %v", shardID, s)
 	if db == nil {
-		panic("db is nil")
+		return 0, nil
 	}
 	rsp := s.DB.GetShardCheckpointId(db.GetShardId())
 	if rsp == 0 {
@@ -410,7 +405,6 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	// var index uint64
 	for _, metadata := range metadatas {
-		logutil.Infof("SaveShardMetadata,LogIndex is %v, shard id is %v", metadata.LogIndex, metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
@@ -425,6 +419,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				DB:     aoedbName.ShardIdToName(metadata.ShardID),
 			}
 			db, err = s.DB.CreateDatabase(&ctx)
+			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.",metadata.ShardID,db.Id,s)
 			if err != nil {
 				return err
 			}
@@ -524,12 +519,6 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		}
 		err = s.DB.Append(&ctx)
 		if err != nil {
-			db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
-			index := ctx.ToLogIndex(db)
-			tbl, _ := db.GetTableByNameAndLogIndex(tableName, index)
-			tbls := s.DB.TableNames(aoedbName.ShardIdToName(metadata.ShardID))
-			logutil.Infof("SaveShardMetadata, offset is %v, tbl is %v,index is %v, table name is %v", offset, tbl, index, tableName)
-			logutil.Infof("SaveShardMetadata, shard id is %v, tbls are %v", metadata.ShardID, tbls)
 			logutil.Errorf("SaveShardMetadata is failed: %v\n", err.Error())
 			return err
 		}
