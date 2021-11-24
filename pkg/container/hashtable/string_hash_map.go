@@ -15,9 +15,8 @@
 package hashtable
 
 import (
+	"errors"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type StringRef struct {
@@ -40,19 +39,10 @@ type StringHashMap struct {
 	bucketData    []StringHashMapCell
 }
 
-func (ht *StringHashMap) Init(proc *process.Process) error {
+func (ht *StringHashMap) Init() {
 	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
 
-	var rawData []byte
-	var err error
-	if proc != nil {
-		rawData, err = proc.Alloc(int64(cellSize) * kInitialBucketCnt)
-	} else {
-		rawData = make([]byte, cellSize*kInitialBucketCnt)
-	}
-	if err != nil {
-		return err
-	}
+	rawData := make([]byte, cellSize*kInitialBucketCnt)
 
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
@@ -60,15 +50,10 @@ func (ht *StringHashMap) Init(proc *process.Process) error {
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
 	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), cap(rawData)/cellSize)[:len(rawData)/cellSize]
-
-	return nil
 }
 
-func (ht *StringHashMap) Insert(hash uint64, key StringRef, proc *process.Process) (inserted bool, value *uint64, err error) {
-	err = ht.resizeOnDemand(proc)
-	if err != nil {
-		return
-	}
+func (ht *StringHashMap) Insert(hash uint64, key StringRef) (inserted bool, value *uint64) {
+	ht.resizeOnDemand()
 
 	if hash == 0 {
 		if key.Len <= 8 {
@@ -133,7 +118,7 @@ func (ht *StringHashMap) findBucket(hash uint64, key128 *[2]uint64) (empty bool,
 	return
 }
 
-func (ht *StringHashMap) resizeOnDemand(proc *process.Process) error {
+func (ht *StringHashMap) resizeOnDemand() error {
 	if ht.elemCnt < ht.maxElemCnt {
 		return nil
 	}
@@ -150,21 +135,8 @@ func (ht *StringHashMap) resizeOnDemand(proc *process.Process) error {
 
 	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
 
-	var newRawData []byte
-	var err error
-	if proc != nil {
-		newRawData, err = proc.Alloc(int64(cellSize) * int64(newBucketCnt))
-		if err != nil {
-			return err
-		}
-	} else {
-		newRawData = make([]byte, uint64(cellSize)*newBucketCnt)
-	}
-
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
 	copy(newRawData, ht.rawData)
-	if proc != nil {
-		proc.Free(ht.rawData)
-	}
 
 	oldBucketCnt := ht.bucketCnt
 	ht.bucketCntBits = newBucketCntBits
@@ -206,14 +178,30 @@ func (ht *StringHashMap) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
-func (ht *StringHashMap) Destroy(proc *process.Process) {
-	if ht == nil || proc == nil {
+type StringHashMapIterator struct {
+	table *StringHashMap
+	pos   uint64
+}
+
+func (it *StringHashMapIterator) Init(ht *StringHashMap) {
+	it.table = ht
+}
+
+func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
+	for it.pos < it.table.bucketCnt {
+		cell = &it.table.bucketData[it.pos]
+		if cell.Hash != 0 {
+			break
+		}
+		it.pos++
+	}
+
+	if it.pos >= it.table.bucketCnt {
+		err = errors.New("out of range")
 		return
 	}
 
-	if ht.rawData != nil {
-		proc.Free(ht.rawData)
-		ht.rawData = nil
-		ht.bucketData = nil
-	}
+	it.pos++
+
+	return
 }

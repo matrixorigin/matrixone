@@ -15,10 +15,9 @@
 package hashtable
 
 import (
+	"errors"
 	"math/bits"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type String32HashMapCell struct {
@@ -43,19 +42,10 @@ type String32HashMap struct {
 	bucketData    []String32HashMapCell
 }
 
-func (ht *String32HashMap) Init(proc *process.Process) error {
+func (ht *String32HashMap) Init() {
 	const cellSize = int(unsafe.Sizeof(String32HashMapCell{}))
 
-	var rawData []byte
-	var err error
-	if proc != nil {
-		rawData, err = proc.Alloc(int64(cellSize) * kInitialBucketCnt)
-	} else {
-		rawData = make([]byte, cellSize*kInitialBucketCnt)
-	}
-	if err != nil {
-		return err
-	}
+	rawData := make([]byte, cellSize*kInitialBucketCnt)
 
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
@@ -63,15 +53,10 @@ func (ht *String32HashMap) Init(proc *process.Process) error {
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
 	ht.bucketData = unsafe.Slice((*String32HashMapCell)(unsafe.Pointer(&rawData[0])), cap(rawData)/cellSize)[:len(rawData)/cellSize]
-
-	return nil
 }
 
-func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64, proc *process.Process) (inserted bool, value *uint64, err error) {
-	err = ht.resizeOnDemand(1, proc)
-	if err != nil {
-		return
-	}
+func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) (inserted bool, value *uint64) {
+	ht.resizeOnDemand(1)
 
 	if hash == 0 {
 		hash = crc32Int256HashAsm(key)
@@ -89,11 +74,8 @@ func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64, proc *process.Pro
 	return
 }
 
-func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64, proc *process.Process) (err error) {
-	err = ht.resizeOnDemand(uint64(len(keys)), proc)
-	if err != nil {
-		return
-	}
+func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
 		crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
@@ -109,8 +91,6 @@ func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, insert
 		}
 		values[i] = &cell.Mapped
 	}
-
-	return
 }
 
 func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
@@ -152,10 +132,10 @@ func (ht *String32HashMap) findBucket(hash uint64, key *[4]uint64) (empty bool, 
 	return
 }
 
-func (ht *String32HashMap) resizeOnDemand(n uint64, proc *process.Process) error {
+func (ht *String32HashMap) resizeOnDemand(n uint64) {
 	targetCnt := ht.elemCnt + n
 	if targetCnt <= ht.maxElemCnt {
-		return nil
+		return
 	}
 
 	var newBucketCntBits uint8
@@ -175,21 +155,8 @@ func (ht *String32HashMap) resizeOnDemand(n uint64, proc *process.Process) error
 
 	const cellSize = int(unsafe.Sizeof(String32HashMapCell{}))
 
-	var newRawData []byte
-	var err error
-	if proc != nil {
-		newRawData, err = proc.Alloc(int64(cellSize) * int64(newBucketCnt))
-		if err != nil {
-			return err
-		}
-	} else {
-		newRawData = make([]byte, uint64(cellSize)*newBucketCnt)
-	}
-
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
 	copy(newRawData, ht.rawData)
-	if proc != nil {
-		proc.Free(ht.rawData)
-	}
 
 	oldBucketCnt := ht.bucketCnt
 	ht.bucketCntBits = newBucketCntBits
@@ -206,8 +173,6 @@ func (ht *String32HashMap) resizeOnDemand(n uint64, proc *process.Process) error
 	for ht.reinsert(i) {
 		i++
 	}
-
-	return nil
 }
 
 func (ht *String32HashMap) reinsert(idx uint64) bool {
@@ -231,14 +196,30 @@ func (ht *String32HashMap) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
-func (ht *String32HashMap) Destroy(proc *process.Process) {
-	if ht == nil || proc == nil {
+type String32HashMapIterator struct {
+	table *String32HashMap
+	pos   uint64
+}
+
+func (it *String32HashMapIterator) Init(ht *String32HashMap) {
+	it.table = ht
+}
+
+func (it *String32HashMapIterator) Next() (cell *String32HashMapCell, err error) {
+	for it.pos < it.table.bucketCnt {
+		cell = &it.table.bucketData[it.pos]
+		if cell.Hash != 0 {
+			break
+		}
+		it.pos++
+	}
+
+	if it.pos >= it.table.bucketCnt {
+		err = errors.New("out of range")
 		return
 	}
 
-	if ht.rawData != nil {
-		proc.Free(ht.rawData)
-		ht.rawData = nil
-		ht.bucketData = nil
-	}
+	it.pos++
+
+	return
 }
