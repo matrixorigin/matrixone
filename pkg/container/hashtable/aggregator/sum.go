@@ -15,7 +15,6 @@
 package aggregator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"unsafe"
 )
 
@@ -38,35 +37,29 @@ func (agg *Int8Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int8Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Int8Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int8Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int8Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Int8Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*int64)(s) += *(*int64)(values)
+		values = unsafe.Add(values, 1)
 	}
 }
 
-func (agg *Int8Sum) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int8)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
+func (agg *Int8Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*int64)(s) += *(*int64)(rstates[i])
+	}
 }
 
-func (agg *Int8Sum) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Int8Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*int64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Int64Add(lslice, rslice, lslice)
-}
-
-func (agg *Int8Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Int8Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*int64)(results[i]) += *(*int64)(s)
+	}
 }
 
 func (agg *Int16Sum) StateSize() uint8 {
@@ -77,35 +70,29 @@ func (agg *Int16Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int16Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Int16Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int16Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int16Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Int16Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*int64)(s) += *(*int64)(values)
+		values = unsafe.Add(values, 2)
 	}
 }
 
-func (agg *Int16Sum) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int16)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
+func (agg *Int16Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*int64)(s) += *(*int64)(rstates[i])
+	}
 }
 
-func (agg *Int16Sum) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Int16Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*int64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Int64Add(lslice, rslice, lslice)
-}
-
-func (agg *Int16Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Int16Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*int64)(results[i]) += *(*int64)(s)
+	}
 }
 
 func (agg *Int32Sum) StateSize() uint8 {
@@ -116,35 +103,29 @@ func (agg *Int32Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int32Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Int32Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int32Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int32Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Int32Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*int64)(s) += *(*int64)(values)
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Int32Sum) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int32)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
+func (agg *Int32Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*int64)(s) += *(*int64)(rstates[i])
+	}
 }
 
-func (agg *Int32Sum) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Int32Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*int64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Int64Add(lslice, rslice, lslice)
-}
-
-func (agg *Int32Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Int32Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*int64)(results[i]) += *(*int64)(s)
+	}
 }
 
 func (agg *Int64Sum) StateSize() uint8 {
@@ -155,35 +136,29 @@ func (agg *Int64Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int64Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Int64Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Int64Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Int64Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Int64Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*int64)(s) += *(*int64)(values)
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Int64Sum) Aggregate(state, data []byte) {
-	lhs := (*int64)(unsafe.Pointer(&state[0]))
-	rhs := *(*int64)(unsafe.Pointer(&data[0]))
-	*lhs += int64(rhs)
+func (agg *Int64Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*int64)(s) += *(*int64)(rstates[i])
+	}
 }
 
-func (agg *Int64Sum) Merge(lstate, rstate []byte) {
-	*(*int64)(unsafe.Pointer(&lstate[0])) += *(*int64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Int64Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*int64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*int64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Int64Add(lslice, rslice, lslice)
-}
-
-func (agg *Int64Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Int64Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*int64)(results[i]) += *(*int64)(s)
+	}
 }
 
 func (agg *Uint8Sum) StateSize() uint8 {
@@ -194,35 +169,29 @@ func (agg *Uint8Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint8Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Uint8Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint8Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint8Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Uint8Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*uint64)(s) += *(*uint64)(values)
+		values = unsafe.Add(values, 1)
 	}
 }
 
-func (agg *Uint8Sum) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint8)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
+func (agg *Uint8Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*uint64)(s) += *(*uint64)(rstates[i])
+	}
 }
 
-func (agg *Uint8Sum) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Uint8Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Uint64Add(lslice, rslice, lslice)
-}
-
-func (agg *Uint8Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Uint8Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*uint64)(results[i]) += *(*uint64)(s)
+	}
 }
 
 func (agg *Uint16Sum) StateSize() uint8 {
@@ -233,35 +202,29 @@ func (agg *Uint16Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint16Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Uint16Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint16Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint16Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Uint16Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*uint64)(s) += *(*uint64)(values)
+		values = unsafe.Add(values, 2)
 	}
 }
 
-func (agg *Uint16Sum) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint16)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
+func (agg *Uint16Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*uint64)(s) += *(*uint64)(rstates[i])
+	}
 }
 
-func (agg *Uint16Sum) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Uint16Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Uint64Add(lslice, rslice, lslice)
-}
-
-func (agg *Uint16Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Uint16Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*uint64)(results[i]) += *(*uint64)(s)
+	}
 }
 
 func (agg *Uint32Sum) StateSize() uint8 {
@@ -272,35 +235,29 @@ func (agg *Uint32Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint32Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Uint32Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint32Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint32Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Uint32Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*uint64)(s) += *(*uint64)(values)
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Uint32Sum) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint32)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
+func (agg *Uint32Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*uint64)(s) += *(*uint64)(rstates[i])
+	}
 }
 
-func (agg *Uint32Sum) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Uint32Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Uint64Add(lslice, rslice, lslice)
-}
-
-func (agg *Uint32Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Uint32Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*uint64)(results[i]) += *(*uint64)(s)
+	}
 }
 
 func (agg *Uint64Sum) StateSize() uint8 {
@@ -311,35 +268,29 @@ func (agg *Uint64Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint64Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Uint64Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Uint64Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Uint64Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Uint64Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*uint64)(s) += *(*uint64)(values)
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Uint64Sum) Aggregate(state, data []byte) {
-	lhs := (*uint64)(unsafe.Pointer(&state[0]))
-	rhs := *(*uint64)(unsafe.Pointer(&data[0]))
-	*lhs += uint64(rhs)
+func (agg *Uint64Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*uint64)(s) += *(*uint64)(rstates[i])
+	}
 }
 
-func (agg *Uint64Sum) Merge(lstate, rstate []byte) {
-	*(*uint64)(unsafe.Pointer(&lstate[0])) += *(*uint64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Uint64Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Uint64Add(lslice, rslice, lslice)
-}
-
-func (agg *Uint64Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Uint64Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*uint64)(results[i]) += *(*uint64)(s)
+	}
 }
 
 func (agg *Float32Sum) StateSize() uint8 {
@@ -350,35 +301,29 @@ func (agg *Float32Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Float32Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Float32Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Float32Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Float32Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Float32Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*float64)(s) += *(*float64)(values)
+		values = unsafe.Add(values, 4)
 	}
 }
 
-func (agg *Float32Sum) Aggregate(state, data []byte) {
-	lhs := (*float64)(unsafe.Pointer(&state[0]))
-	rhs := *(*float32)(unsafe.Pointer(&data[0]))
-	*lhs += float64(rhs)
+func (agg *Float32Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*float64)(s) += *(*float64)(rstates[i])
+	}
 }
 
-func (agg *Float32Sum) Merge(lstate, rstate []byte) {
-	*(*float64)(unsafe.Pointer(&lstate[0])) += *(*float64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Float32Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*float64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*float64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Float64Add(lslice, rslice, lslice)
-}
-
-func (agg *Float32Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Float32Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*float64)(results[i]) += *(*float64)(s)
+	}
 }
 
 func (agg *Float64Sum) StateSize() uint8 {
@@ -389,33 +334,27 @@ func (agg *Float64Sum) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Float64Sum) Init(state, data []byte) {
-	copy(state, data)
+func (agg *Float64Sum) NeedsInit() bool {
+	return false
 }
 
-func (agg *Float64Sum) ArrayInit(array []byte) {
-	*(*uint64)(unsafe.Pointer(&array[0])) = 0
-	for i := 8; i < len(array); i *= 2 {
-		copy(array[i:], array[:i])
+func (agg *Float64Sum) Init(state unsafe.Pointer) {}
+
+func (agg *Float64Sum) AddBatch(states []unsafe.Pointer, values unsafe.Pointer) {
+	for _, s := range states {
+		*(*float64)(s) += *(*float64)(values)
+		values = unsafe.Add(values, 8)
 	}
 }
 
-func (agg *Float64Sum) Aggregate(state, data []byte) {
-	lhs := (*float64)(unsafe.Pointer(&state[0]))
-	rhs := *(*float64)(unsafe.Pointer(&data[0]))
-	*lhs += float64(rhs)
+func (agg *Float64Sum) MergeBatch(lstates, rstates []unsafe.Pointer) {
+	for i, s := range lstates {
+		*(*float64)(s) += *(*float64)(rstates[i])
+	}
 }
 
-func (agg *Float64Sum) Merge(lstate, rstate []byte) {
-	*(*float64)(unsafe.Pointer(&lstate[0])) += *(*float64)(unsafe.Pointer(&rstate[0]))
-}
-
-func (agg *Float64Sum) ArrayMerge(larray, rarray []byte) {
-	lslice := unsafe.Slice((*float64)(unsafe.Pointer(&larray[0])), len(larray)/8)
-	rslice := unsafe.Slice((*float64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
-	add.Float64Add(lslice, rslice, lslice)
-}
-
-func (agg *Float64Sum) Finalize(state, result []byte) {
-	copy(result, state)
+func (agg *Float64Sum) Finalize(states, results []unsafe.Pointer) {
+	for i, s := range states {
+		*(*float64)(results[i]) += *(*float64)(s)
+	}
 }

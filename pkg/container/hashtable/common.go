@@ -12,24 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package hashtable
 
-import (
-	"golang.org/x/sys/cpu"
+import "unsafe"
+
+const (
+	kInitialBucketCntBits = 10
+	kInitialBucketCnt     = 1 << kInitialBucketCntBits
+
+	kLoadFactorNumerator   = 5
+	kLoadFactorDenominator = 10
+
+	kTwoLevelBucketBits = 8
+	kTwoLevelBucketNum  = 1 << kTwoLevelBucketBits
+	kMaxTwoLevelBucket  = kTwoLevelBucketNum - 1
 )
 
-func crc32BytesHashAsm(data []byte) uint64
-func crc32IntHashAsm(data uint64) uint64
+type Aggregator interface {
+	StateSize() uint8
+	ResultSize() uint8
+	NeedsInit() bool
 
-func init() {
-	if cpu.X86.HasSSE42 {
-		BytesHash = crc32BytesHashAsm
-		IntHash = crc32IntHashAsm
-	} else {
-		BytesHash = wyhash
-		IntHash = intHash64
-	}
+	Init(state unsafe.Pointer)
+	AddBatch(states []unsafe.Pointer, values unsafe.Pointer)
+	MergeBatch(lstates, rstates []unsafe.Pointer)
+
+	Finalize(states, results []unsafe.Pointer)
 }
