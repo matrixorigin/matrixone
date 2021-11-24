@@ -33,11 +33,15 @@ func TestInsertFunction(t *testing.T) {
 		"create table ffs(f1 float, f2 double);",
 		"create table ccs(c1 char(10), c2 varchar(15));",
 		"create table def1 (i1 int default 888, i2 int default 888, i3 int default 888);",
+		"create table def2 (id int default 1, name varchar(255) unique, age int);",
+		"create table def3 (i int default -1, v varchar(10) default 'abc', c char(10) default '', price double default 0.00);",
 		"insert into iis values (1, 2, 3, 4), (1+1, 2-2, 3*3, 4/4), (1 div 1, 2+2/3, 3 mod 3, 4 + 0.5), (0, 0, 0, 0);",
 		"insert into uus values (0, 0, 1, 1), (0.5, 3+4, 4-1, 2*7), (3/4, 4 div 5, 5 mod 6, 0);",
 		"insert into ffs values (1.1, 2.2), (1, 2), (1+0.5, 2.5*3.5);",
 		"insert into ccs values ('123', '34567');",
 		"insert into def1 values (default, default, default), (1, default, default), (default, -1, default), (default, default, 0);",
+		"insert into def2 (name, age) values ('Abby', 24);",
+		"insert into def3 () values (), ();",
 	}
 	works := [][]string{ // First string is relation name, Second string is expected result.
 		{"iis", "i1\n\t[1 2 1 0]-&{<nil>}\ni2\n\t[2 0 3 0]-&{<nil>}\ni3\n\t[3 9 0 0]-&{<nil>}\ni4\n\t[4 1 5 0]-&{<nil>}\n\n"},
@@ -45,6 +49,8 @@ func TestInsertFunction(t *testing.T) {
 		{"ffs", "f1\n\t[1.1 1 1.5]-&{<nil>}\nf2\n\t[2.2 2 8.75]-&{<nil>}\n\n"},
 		{"ccs", "c1\n\t123\n\nc2\n\t34567\n\n\n"},
 		{"def1", "i1\n\t[888 1 888 888]-&{<nil>}\ni2\n\t[888 888 -1 888]-&{<nil>}\ni3\n\t[888 888 888 0]-&{<nil>}\n\n"},
+		{"def2", "id\n\t1\nname\n\tAbby\n\nage\n\t24\n\n"},
+		{"def3", "i\n\t[-1 -1]-&{<nil>}\nv\n\t[abc abc]-&{<nil>}\nc\n\t[ ]-&{<nil>}\nprice\n\t[0 0]-&{<nil>}\n\n"},
 	}
 
 	for _, p := range prepares {
@@ -123,7 +129,10 @@ func TestOperators(t *testing.T) {
 // sqlRun compile and run a sql, return error if happens
 func sqlRun(sql string, e engine.Engine, proc *process.Process) error {
 	c := compile.New("test", sql, "", e, proc)
-	es, _ := c.Build()
+	es, err := c.Build()
+	if err != nil {
+		return err
+	}
 	for _, e := range es {
 		err := e.Compile(nil, func(i interface{}, batch *batch.Batch) error {
 			return nil
@@ -143,8 +152,14 @@ func sqlRun(sql string, e engine.Engine, proc *process.Process) error {
 func TempSelect(e engine.Engine, schema, name string) string {
 	var buff bytes.Buffer
 
-	db, _ := e.Database(schema)
-	r, _ := db.Relation(name)
+	db, err := e.Database(schema)
+	if err != nil {
+		return err.Error()
+	}
+	r, err := db.Relation(name)
+	if err != nil {
+		return err.Error()
+	}
 	defs := r.TableDefs()
 	attrs := make([]string, 0, len(defs))
 	{
@@ -160,7 +175,10 @@ func TempSelect(e engine.Engine, schema, name string) string {
 	}
 	rd := r.NewReader(1)[0]
 	{
-		bat, _ := rd.Read(cs, attrs)
+		bat, err := rd.Read(cs, attrs)
+		if err != nil {
+			return err.Error()
+		}
 		buff.WriteString(fmt.Sprintf("%s\n", bat))
 	}
 	return buff.String()
