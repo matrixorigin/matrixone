@@ -31,12 +31,17 @@ import (
 
 type PostCloseCB = func(interface{})
 
+type ColumnsAllocator struct {
+	sync.RWMutex
+	Allocators map[int]*common.IdAlloctor
+}
+
 type SegmentHolder struct {
 	common.RefHelper
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
 	Inited bool
-	VersionAllocator map[int]*common.IdAlloctor
+	VersionAllocator ColumnsAllocator
 	self   struct {
 		sync.RWMutex
 		Indices    []*Node
@@ -64,7 +69,10 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.self.loadedVersion = make(map[int]uint64)
 	holder.self.FileHelper = make(map[string]*Node)
 	holder.self.droppedVersion = make(map[int]uint64)
-	holder.VersionAllocator = make(map[int]*common.IdAlloctor)
+	holder.VersionAllocator = ColumnsAllocator{
+		RWMutex:    sync.RWMutex{},
+		Allocators: make(map[int]*common.IdAlloctor),
+	}
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -111,10 +119,12 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 }
 
 func (holder *SegmentHolder) AllocateVersion(colIdx int) uint64 {
-	if holder.VersionAllocator[colIdx] == nil {
-		holder.VersionAllocator[colIdx] = common.NewIdAlloctor(uint64(1))
+	holder.VersionAllocator.Lock()
+	defer holder.VersionAllocator.Unlock()
+	if holder.VersionAllocator.Allocators[colIdx] == nil {
+		holder.VersionAllocator.Allocators[colIdx] = common.NewIdAlloctor(uint64(1))
 	}
-	return holder.VersionAllocator[colIdx].Alloc()
+	return holder.VersionAllocator.Allocators[colIdx].Alloc()
 }
 
 // DropIndex trying to drop the given index from holder. In detail, we only has 2 types
