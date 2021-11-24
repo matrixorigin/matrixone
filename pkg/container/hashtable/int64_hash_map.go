@@ -17,8 +17,6 @@ package hashtable
 import (
 	"errors"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Int64HashMapCell struct {
@@ -42,19 +40,10 @@ type Int64HashMapIterator struct {
 	pos   uint64
 }
 
-func (ht *Int64HashMap) Init(proc *process.Process) error {
+func (ht *Int64HashMap) Init() {
 	const cellSize = int(unsafe.Sizeof(Int64HashMapCell{}))
 
-	var rawData []byte
-	var err error
-	if proc != nil {
-		rawData, err = proc.Alloc(int64(cellSize) * kInitialBucketCnt)
-		if err != nil {
-			return err
-		}
-	} else {
-		rawData = make([]byte, cellSize*kInitialBucketCnt)
-	}
+	rawData := make([]byte, cellSize*kInitialBucketCnt)
 
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
@@ -62,11 +51,9 @@ func (ht *Int64HashMap) Init(proc *process.Process) error {
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
 	ht.bucketData = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&rawData[0])), cap(rawData)/cellSize)[:len(rawData)/cellSize]
-
-	return nil
 }
 
-func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer, proc *process.Process) (inserted bool, value *uint64, err error) {
+func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted bool, value *uint64) {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
 		inserted = ht.hasZero == 0
@@ -75,10 +62,7 @@ func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer, proc *process
 		return
 	}
 
-	err = ht.resizeOnDemand(1, proc)
-	if err != nil {
-		return
-	}
+	ht.resizeOnDemand(1)
 
 	if hash == 0 {
 		hash = crc32Int64HashAsm(key)
@@ -95,11 +79,8 @@ func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer, proc *process
 	return
 }
 
-func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []*uint64, proc *process.Process) (err error) {
-	err = ht.resizeOnDemand(n, proc)
-	if err != nil {
-		return
-	}
+func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []*uint64) {
+	ht.resizeOnDemand(n)
 
 	if hashes[0] == 0 {
 		crc32Int64BatchHashAsm(keysPtr, &hashes[0], n)
@@ -121,8 +102,6 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 			values[i] = &cell.Mapped
 		}
 	}
-
-	return
 }
 
 func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64) {
@@ -141,6 +120,14 @@ func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64)
 	empty, _, cell := ht.findBucket(hash, key)
 	if !empty {
 		value = &cell.Mapped
+	}
+
+	return
+}
+
+func (ht *Int64HashMap) ZeroMapped() (value *uint64) {
+	if ht.hasZero > 0 {
+		value = &ht.zeroMapped
 	}
 
 	return
@@ -180,10 +167,10 @@ func (ht *Int64HashMap) findBucket(hash uint64, key uint64) (empty bool, idx uin
 	return
 }
 
-func (ht *Int64HashMap) resizeOnDemand(n int, proc *process.Process) error {
+func (ht *Int64HashMap) resizeOnDemand(n int) {
 	targetCnt := ht.elemCnt + uint64(n)
 	if targetCnt <= ht.maxElemCnt {
-		return nil
+		return
 	}
 
 	var newBucketCntBits uint8
@@ -203,21 +190,8 @@ func (ht *Int64HashMap) resizeOnDemand(n int, proc *process.Process) error {
 
 	const cellSize = int(unsafe.Sizeof(Int64HashMapCell{}))
 
-	var newRawData []byte
-	var err error
-	if proc != nil {
-		newRawData, err = proc.Alloc(int64(cellSize) * int64(newBucketCnt))
-		if err != nil {
-			return err
-		}
-	} else {
-		newRawData = make([]byte, uint64(cellSize)*newBucketCnt)
-	}
-
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
 	copy(newRawData, ht.rawData)
-	if proc != nil {
-		proc.Free(ht.rawData)
-	}
 
 	oldBucketCnt := ht.bucketCnt
 	ht.bucketCntBits = newBucketCntBits
@@ -242,8 +216,6 @@ func (ht *Int64HashMap) resizeOnDemand(n int, proc *process.Process) error {
 			break
 		}
 	}
-
-	return nil
 }
 
 func (ht *Int64HashMap) reinsert(idx uint64) bool {
@@ -289,21 +261,8 @@ func (ht *Int64HashMap) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
-func (ht *Int64HashMap) Destroy(proc *process.Process) {
-	if ht == nil || proc == nil {
-		return
-	}
-
-	if ht.rawData != nil {
-		proc.Free(ht.rawData)
-		ht.rawData = nil
-		ht.bucketData = nil
-	}
-}
-
 func (it *Int64HashMapIterator) Init(ht *Int64HashMap) {
 	it.table = ht
-	it.pos = 0
 }
 
 func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {

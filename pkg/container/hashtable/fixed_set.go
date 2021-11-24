@@ -18,8 +18,6 @@ import (
 	"errors"
 	"math/bits"
 	"unsafe"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type FixedSet struct {
@@ -35,24 +33,12 @@ type FixedSetIterator struct {
 	bitmapVal  uint64
 }
 
-func (ht *FixedSet) Init(bucketCnt uint32, proc *process.Process) error {
-	var occupiedRaw []byte
-	var err error
-
-	if proc != nil {
-		occupiedRaw, err = proc.Alloc(((int64(bucketCnt)-1)/64 + 1) * 8)
-		if err != nil {
-			return err
-		}
-	} else {
-		occupiedRaw = make([]byte, ((int64(bucketCnt)-1)/64+1)*8)
-	}
+func (ht *FixedSet) Init(bucketCnt uint32) {
+	rawBitmap := make([]byte, ((int64(bucketCnt)-1)/64+1)*8)
 
 	ht.bucketCnt = bucketCnt
-	ht.rawBitmap = occupiedRaw
-	ht.bitmap = unsafe.Slice((*uint64)(unsafe.Pointer(&occupiedRaw[0])), cap(occupiedRaw)/8)[:len(occupiedRaw)/8]
-
-	return nil
+	ht.rawBitmap = rawBitmap
+	ht.bitmap = unsafe.Slice((*uint64)(unsafe.Pointer(&rawBitmap[0])), cap(rawBitmap)/8)[:len(rawBitmap)/8]
 }
 
 func (ht *FixedSet) Insert(key uint32) (inserted bool) {
@@ -72,18 +58,6 @@ func (ht *FixedSet) Cardinality() (cnt uint64) {
 		cnt += uint64(bits.OnesCount64(v))
 	}
 	return
-}
-
-func (ht *FixedSet) Destroy(proc *process.Process) {
-	if ht == nil {
-		return
-	}
-
-	if ht.bitmap != nil {
-		proc.Free(ht.rawBitmap)
-		ht.rawBitmap = nil
-		ht.bitmap = nil
-	}
 }
 
 func (it *FixedSetIterator) Init(ht *FixedSet) {
