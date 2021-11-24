@@ -759,14 +759,12 @@ func TestBuildIndex(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -845,14 +843,13 @@ func TestRebuildIndices(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -952,14 +949,13 @@ func TestManyLoadAndDrop(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -1014,7 +1010,6 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder.DropIndex(filepath.Join(inst.Dir, "data/1_1_1_1.bsi"))
 	wg.Wait()
 
-
 	// test continuously load new index, check if stale versions are GCed correctly
 	segId = tblData.SegmentIds()[1]
 	seg = tblData.StrongRefSegment(segId)
@@ -1032,7 +1027,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	}
 	wg.Wait()
 
-	time.Sleep(300*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	infos, err := ioutil.ReadDir(filepath.Join(inst.Dir, "data"))
 	assert.Nil(t, err)
@@ -1071,7 +1066,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	for i := uint64(1); i < uint64(10); i++ {
 		wg.Add(1)
 		go loader(i)
-		if i % 4 == 0 {
+		if i%4 == 0 {
 			wg.Add(1)
 			go dropper(i)
 		}
@@ -1362,15 +1357,19 @@ func TestFilter(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
-	schema := metadata.MockSchemaAll(14)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{}})
-	for i := uint16(0); i < 12; i++ {
-		schema.Indices[0].Columns = append(schema.Indices[0].Columns, i)
+	colIdx := make([]int, 0)
+	for i := 0; i < 12; i++ {
+		colIdx = append(colIdx, i)
 	}
 
+	schema := metadata.MockSchemaAll(14)
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, colIdx...)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)

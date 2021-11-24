@@ -44,6 +44,8 @@ var (
 	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
 	CommitStaleErr         = errors.New("aoe: commit stale info")
 	IdempotenceErr         = errors.New("aoe: idempotence error")
+	DupIndexErr            = errors.New("aoe: dup index")
+	IndexNotFoundErr       = errors.New("aoe: index not found")
 )
 
 type CatalogCfg struct {
@@ -686,6 +688,18 @@ func (catalog *Catalog) onReplayCreateTable(entry *tableLogEntry) error {
 	tbl.BaseEntry = entry.Table.BaseEntry
 	tbl.Schema = entry.Table.Schema
 	return db.onNewTable(tbl)
+}
+
+func (catalog *Catalog) onReplayAddIndice(entry *tableLogEntry) error {
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.Id]
+	return tbl.onCommit(entry.CommitInfo)
+}
+
+func (catalog *Catalog) onReplayDropIndice(entry *tableLogEntry) error {
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.Id]
+	return tbl.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplaySoftDeleteTable(entry *tableLogEntry) error {

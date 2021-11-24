@@ -49,7 +49,7 @@ func TestMutableBlockNode(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(shardId))
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, nil, 2, gen.Shard(shardId))
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)

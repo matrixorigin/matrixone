@@ -101,7 +101,7 @@ func (d *DB) CreateDatabaseInTxn(txn *TxnCtx, name string) (*metadata.Database, 
 	return d.Store.Catalog.CreateDatabaseInTxn(txn, name)
 }
 
-func (d *DB) CreateTableInTxn(txn *TxnCtx, dbName string, schema *metadata.Schema) (*metadata.Table, error) {
+func (d *DB) CreateTableInTxn(txn *TxnCtx, dbName string, schema *TableSchema, indice *IndexSchema) (*metadata.Table, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -109,7 +109,7 @@ func (d *DB) CreateTableInTxn(txn *TxnCtx, dbName string, schema *metadata.Schem
 	if err != nil {
 		return nil, err
 	}
-	return database.CreateTableInTxn(txn, schema)
+	return database.CreateTableInTxn(txn, schema, indice)
 }
 
 func (d *DB) FlushDatabase(dbName string) error {

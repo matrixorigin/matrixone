@@ -200,7 +200,7 @@ func TestSegmentWriter(t *testing.T) {
 	segCnt, blkCnt := uint64(4), uint64(4)
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	table := metadata.MockDBTable(catalog, "db1", schema, segCnt*blkCnt, gen.Shard(shardId))
+	table := metadata.MockDBTable(catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(shardId))
 	segment := table.SimpleCreateSegment()
 	assert.NotNil(t, segment)
 	batches := make([]*gbatch.Batch, 0)
@@ -335,7 +335,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	schema.PrimaryKey = 1
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tblMeta := metadata.MockDBTable(catalog, "db1", schema, 1, gen.Shard(shardId))
+	tblMeta := metadata.MockDBTable(catalog, "db1", schema, nil, 1, gen.Shard(shardId))
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
 	meta := segMeta.SimpleGetBlock(uint64(1))
@@ -444,7 +444,7 @@ func TestTransientBlock(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tbl := metadata.MockDBTable(catalog, "db1", schema, 1, gen.Shard(shardId))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, 1, gen.Shard(shardId))
 
 	segMeta := tbl.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)

@@ -58,7 +58,7 @@ func TestUpgradeBlk(t *testing.T) {
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(99)
 	idxGen := gen.Shard(shardId)
-	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, seg_cnt*blk_cnt, idxGen)
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, seg_cnt*blk_cnt, idxGen)
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)
@@ -136,7 +136,7 @@ func TestUpgradeSeg(t *testing.T) {
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(0)
 
-	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, seg_cnt*blk_cnt, gen.Shard(shardId))
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, seg_cnt*blk_cnt, gen.Shard(shardId))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

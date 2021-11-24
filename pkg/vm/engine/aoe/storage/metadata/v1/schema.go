@@ -32,8 +32,21 @@ const (
 
 type IndexInfo struct {
 	Id      uint64   `json:"id"`
+	Name    string   `json:"name"`
 	Type    IndexT   `json:"type"`
 	Columns []uint16 `json:"cols"`
+}
+
+func NewIndexInfo(name string, typ IndexT, colIdx ...int) *IndexInfo {
+	index := &IndexInfo{
+		Name:    name,
+		Type:    typ,
+		Columns: make([]uint16, 0),
+	}
+	for _, col := range colIdx {
+		index.Columns = append(index.Columns, uint16(col))
+	}
+	return index
 }
 
 type ColDef struct {
@@ -42,14 +55,135 @@ type ColDef struct {
 	Type types.Type `json:"type"`
 }
 
+type IndexSchema struct {
+	Indice []*IndexInfo `json:"indice"`
+}
+
+func (is *IndexSchema) MakeIndex(name string, typ IndexT, colIdx ...int) (*IndexInfo, error) {
+	index := NewIndexInfo(name, typ, colIdx...)
+	err := is.Append(index)
+	return index, err
+}
+
+func (is *IndexSchema) Append(index *IndexInfo) error {
+	// TODO: validation
+	for _, idx := range is.Indice {
+		if idx.Name == index.Name {
+			return DupIndexErr
+		}
+	}
+	is.Indice = append(is.Indice, index)
+	return nil
+}
+
+func (is *IndexSchema) Extend(indice []*IndexInfo) error {
+	// TODO: validation
+	names := make(map[string]bool)
+	for _, index := range is.Indice {
+		names[index.Name] = true
+	}
+	for _, index := range indice {
+		_, ok := names[index.Name]
+		if ok {
+			return DupIndexErr
+		}
+	}
+	is.Indice = append(is.Indice, indice...)
+	return nil
+}
+
+func (is *IndexSchema) DropByName(name string) error {
+	found := false
+	dropIdx := 0
+	for i, index := range is.Indice {
+		if name == index.Name {
+			found = true
+			dropIdx = i
+			break
+		}
+	}
+	if !found {
+		return IndexNotFoundErr
+	}
+	is.Indice = append(is.Indice[:dropIdx], is.Indice[dropIdx+1:]...)
+	return nil
+}
+
+func (is *IndexSchema) DropByNames(names []string) error {
+	nameMap := make(map[string]int)
+	idx := make([]int, 0)
+	for i, index := range is.Indice {
+		nameMap[index.Name] = i
+	}
+	for _, name := range names {
+		pos, ok := nameMap[name]
+		if !ok {
+			return IndexNotFoundErr
+		}
+		idx = append(idx, pos)
+	}
+	for i := len(idx) - 1; i >= 0; i-- {
+		pos := idx[i]
+		is.Indice = append(is.Indice[:pos], is.Indice[pos+1:]...)
+	}
+	return nil
+}
+
+func (is *IndexSchema) Merge(schema *IndexSchema) error {
+	return is.Extend(schema.Indice)
+}
+
+func (is *IndexSchema) String() string {
+	if is == nil {
+		return "null"
+	}
+	s := fmt.Sprintf("Indice[%d][", len(is.Indice))
+	names := ""
+	for _, index := range is.Indice {
+		names = fmt.Sprintf("%s\"%s\",", names, index.Name)
+	}
+	s = fmt.Sprintf("%s%s]", s, names)
+	return s
+}
+
+func (is *IndexSchema) IndiceNum() int {
+	if is == nil {
+		return 0
+	}
+	return len(is.Indice)
+}
+
+func NewIndexSchema() *IndexSchema {
+	return &IndexSchema{
+		Indice: make([]*IndexInfo, 0),
+	}
+}
+
 type Schema struct {
 	Name             string         `json:"name"`
-	Indices          []*IndexInfo   `json:"indice"`
 	ColDefs          []*ColDef      `json:"cols"`
 	NameIndex        map[string]int `json:"nindex"`
 	BlockMaxRows     uint64         `json:"blkrows"`
 	PrimaryKey       int            `json:"primarykey"`
 	SegmentMaxBlocks uint64         `json:"segblocks"`
+}
+
+func NewEmptySchema(name string) *Schema {
+	return &Schema{
+		Name:      name,
+		ColDefs:   make([]*ColDef, 0),
+		NameIndex: make(map[string]int),
+	}
+}
+
+func (s *Schema) AppendCol(name string, typ types.Type) {
+	colDef := &ColDef{
+		Name: name,
+		Type: typ,
+		Idx:  len(s.ColDefs),
+	}
+	s.ColDefs = append(s.ColDefs, colDef)
+	s.NameIndex[name] = colDef.Idx
 }
 
 func (s *Schema) String() string {
@@ -99,128 +233,108 @@ func (s *Schema) GetColIdx(attr string) int {
 
 func MockSchema(colCnt int) *Schema {
 	rand.Seed(time.Now().UnixNano())
-	schema := &Schema{
-		ColDefs:   make([]*ColDef, colCnt),
-		Indices:   make([]*IndexInfo, 0),
-		NameIndex: make(map[string]int),
-		Name:      fmt.Sprintf("%d", rand.Intn(1000000)),
-	}
+	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
-		name := fmt.Sprintf("%s%d", prefix, i)
-		colDef := &ColDef{
-			Idx:  i,
-			Name: name,
-			Type: types.Type{Oid: types.T_int32, Size: 4, Width: 4},
-		}
-		schema.ColDefs[i] = colDef
-		schema.NameIndex[colDef.Name] = i
+		schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 4})
 	}
 	return schema
 }
 
 // MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
 func MockSchemaAll(colCnt int) *Schema {
-	schema := &Schema{
-		Indices:   make([]*IndexInfo, 0),
-		ColDefs:   make([]*ColDef, colCnt),
-		NameIndex: make(map[string]int),
-	}
+	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
-		colDef := &ColDef{
-			Name: name,
-			Idx:  i,
-		}
-		schema.ColDefs[i] = colDef
-		schema.NameIndex[colDef.Name] = i
+		var typ types.Type
 		switch i {
 		case 0:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_int8,
 				Size:  1,
 				Width: 8,
 			}
 		case 1:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_int16,
 				Size:  2,
 				Width: 16,
 			}
 		case 2:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_int32,
 				Size:  4,
 				Width: 32,
 			}
 		case 3:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_int64,
 				Size:  8,
 				Width: 64,
 			}
 		case 4:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_uint8,
 				Size:  1,
 				Width: 8,
 			}
 		case 5:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_uint16,
 				Size:  2,
 				Width: 16,
 			}
 		case 6:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_uint32,
 				Size:  4,
 				Width: 32,
 			}
 		case 7:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_uint64,
 				Size:  8,
 				Width: 64,
 			}
 		case 8:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_float32,
 				Size:  4,
 				Width: 32,
 			}
 		case 9:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_float64,
 				Size:  8,
 				Width: 64,
 			}
 		case 10:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_date,
 				Size:  4,
 				Width: 32,
 			}
 		case 11:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_datetime,
 				Size:  8,
 				Width: 64,
 			}
 		case 12:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_varchar,
 				Size:  24,
 				Width: 100,
 			}
 		case 13:
-			colDef.Type = types.Type{
+			typ = types.Type{
 				Oid:   types.T_char,
 				Size:  24,
 				Width: 100,
 			}
 		}
+		schema.AppendCol(name, typ)
 	}
 	return schema
 }

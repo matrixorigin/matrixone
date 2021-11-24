@@ -50,6 +50,7 @@ type addTableCtx struct {
 type createTableCtx struct {
 	writeCtx
 	schema   *Schema
+	indice   *IndexSchema
 	table    *Table
 	database *Database
 }
@@ -62,6 +63,18 @@ type dropTableCtx struct {
 type deleteTableCtx struct {
 	writeCtx
 	table *Table
+}
+
+type addIndiceCtx struct {
+	writeCtx
+	table  *Table
+	indice []*IndexInfo
+}
+
+type dropIndiceCtx struct {
+	writeCtx
+	table *Table
+	names []string
 }
 
 type createSegmentCtx struct {

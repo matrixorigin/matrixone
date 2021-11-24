@@ -58,7 +58,7 @@ func TestSnapshot(t *testing.T) {
 	defer catalog.Close()
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tableMeta := metadata.MockDBTable(catalog, "db1", schema, uint64(blk_cnt*seg_cnt), gen.Shard(shardId))
+	tableMeta := metadata.MockDBTable(catalog, "db1", schema, nil, uint64(blk_cnt*seg_cnt), gen.Shard(shardId))
 
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)

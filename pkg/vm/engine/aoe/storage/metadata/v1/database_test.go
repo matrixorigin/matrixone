@@ -73,7 +73,7 @@ func TestDatabase3(t *testing.T) {
 
 	err = indexWal.SyncLog(gen.Next())
 	assert.Nil(t, err)
-	t1, err := db2.SimpleCreateTable(schema, gen.Curr())
+	t1, err := db2.SimpleCreateTable(schema, nil, gen.Curr())
 	assert.Nil(t, err)
 	assert.Equal(t, schema.Name, t1.Schema.Name)
 	indexWal.Checkpoint(gen.Curr())
@@ -96,7 +96,7 @@ func TestDatabase3(t *testing.T) {
 
 	err = indexWal.SyncLog(gen.Next())
 	assert.Nil(t, err)
-	_, err = db2.SimpleCreateTable(schema, gen.Curr())
+	_, err = db2.SimpleCreateTable(schema, nil, gen.Curr())
 	assert.Nil(t, err)
 	indexWal.Checkpoint(gen.Curr())
 
@@ -133,14 +133,14 @@ func TestDatabase3(t *testing.T) {
 
 	err = indexWal.SyncLog(gen.Next())
 	assert.Nil(t, err)
-	_, err = db4.SimpleCreateTable(schema, gen.Curr())
+	_, err = db4.SimpleCreateTable(schema, nil, gen.Curr())
 	assert.Nil(t, err)
 
 	schema2 := MockSchema(3)
 	schema2.Name = "t2"
 	err = indexWal.SyncLog(gen.Next())
 	assert.Nil(t, err)
-	t2, err := db4.SimpleCreateTable(schema2, gen.Curr())
+	t2, err := db4.SimpleCreateTable(schema2, nil, gen.Curr())
 	assert.Nil(t, err)
 	createIdx := gen.Curr()
 
@@ -241,7 +241,7 @@ func TestTxn(t *testing.T) {
 	assert.False(t, db1.HasCommitted())
 	schema := MockSchema(2)
 	schema.Name = "t1"
-	_, err = db1.CreateTableInTxn(txn, schema)
+	_, err = db1.CreateTableInTxn(txn, schema, nil)
 	assert.Nil(t, err)
 	t.Log(db1.PString(PPL0, 0))
 
@@ -265,7 +265,7 @@ func TestTxn(t *testing.T) {
 	assert.True(t, db1.HasCommitted())
 	schema2 := MockSchema(3)
 	schema2.Name = "t2"
-	t2, err := db1.CreateTableInTxn(txn, schema2)
+	t2, err := db1.CreateTableInTxn(txn, schema2, nil)
 	assert.Nil(t, err)
 	assert.False(t, t2.HasCommitted())
 	foundT := db1.GetTableByNameInTxn(txn, schema2.Name)
@@ -281,7 +281,7 @@ func TestTxn(t *testing.T) {
 	err = db1.SimpleDropTableByName(schema2.Name, gen.Next(shardId))
 	assert.NotNil(t, err)
 
-	_, err = db1.SimpleCreateTable(schema2, gen.Next(shardId))
+	_, err = db1.SimpleCreateTable(schema2, nil, gen.Next(shardId))
 	assert.NotNil(t, err)
 
 	err = db1.SoftDeleteInTxn(txn)

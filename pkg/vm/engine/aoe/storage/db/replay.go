@@ -190,8 +190,8 @@ type unsortedSegmentFile struct {
 }
 
 type bsiFile struct {
-	h *replayHandle
-	id common.ID
+	h    *replayHandle
+	id   common.ID
 	name string
 }
 
@@ -430,8 +430,8 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 
 	for _, database := range catalog.Databases {
 		for _, tbl := range database.TableSet {
-			indices := tbl.Schema.Indices
-			for _, idx := range indices {
+			indice := tbl.GetCommit().Indice
+			for _, idx := range indice.Indice {
 				// todo: str bsi
 				if idx.Type == metadata.NumBsi {
 					for _, seg := range tbl.SegmentSet {
@@ -499,7 +499,7 @@ func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
-			bsifiles: make(map[common.ID]*bsiFile),
+			bsifiles:      make(map[common.ID]*bsiFile),
 		}
 		h.files[id.TableID] = tbl
 	}
@@ -518,7 +518,7 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
-			bsifiles: make(map[common.ID]*bsiFile),
+			bsifiles:      make(map[common.ID]*bsiFile),
 		}
 		h.files[id.TableID] = tbl
 	}
@@ -540,7 +540,7 @@ func (h *replayHandle) addBSI(id common.ID, filename string) {
 		tbl = &tableDataFiles{
 			unsortedfiles: make(map[common.ID]*unsortedSegmentFile),
 			sortedfiles:   make(map[common.ID]*sortedSegmentFile),
-			bsifiles: make(map[common.ID]*bsiFile),
+			bsifiles:      make(map[common.ID]*bsiFile),
 		}
 		h.files[id.TableID] = tbl
 	}

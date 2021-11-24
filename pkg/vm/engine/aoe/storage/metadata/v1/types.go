@@ -58,6 +58,8 @@ const (
 	OpUpgradeFull
 	OpUpgradeClose
 	OpUpgradeSorted
+	OpAddIndice
+	OpDropIndice
 	OpSoftDelete
 	OpReplaced
 	OpHardDelete
@@ -71,6 +73,8 @@ var OpNames = map[OpT]string{
 	OpSoftDelete:    "SoftDelete",
 	OpReplaced:      "Replaced",
 	OpHardDelete:    "HardDelete",
+	OpAddIndice:     "AddIndice",
+	OpDropIndice:    "DropIndice",
 }
 
 func OpName(op OpT) string {
@@ -113,13 +117,14 @@ func (r *LogRange) Unmarshal(data []byte) error {
 
 type CommitInfo struct {
 	common.SSLLNode `json:"-"`
-	CommitId        uint64    `json:"cid"`
-	TranId          uint64    `json:"tid"`
-	Op              OpT       `json:"op"`
-	Size            int64     `json:"size"`
-	LogIndex        *LogIndex `json:"idx"`
-	PrevIndex       *LogIndex `json:"pidx"`
-	LogRange        *LogRange `json:"range"`
+	CommitId        uint64       `json:"cid"`
+	TranId          uint64       `json:"tid"`
+	Op              OpT          `json:"op"`
+	Size            int64        `json:"size"`
+	LogIndex        *LogIndex    `json:"idx"`
+	PrevIndex       *LogIndex    `json:"pidx"`
+	LogRange        *LogRange    `json:"range"`
+	Indice          *IndexSchema `json:"indice"`
 }
 
 func (info *CommitInfo) Clone() *CommitInfo {
@@ -208,6 +213,15 @@ func (info *CommitInfo) PString(level PPLevel) string {
 			s = fmt.Sprintf("%s[%s]", s, cInfo.LogIndex.String())
 		}
 		s = fmt.Sprintf("%s<%s,T-%d,C-%d>", s, OpName(cInfo.Op), cInfo.TranId-MinUncommitId, cInfo.CommitId)
+		if cInfo.Indice != nil {
+			s = fmt.Sprintf("%s%s", s, cInfo.Indice.String())
+			// s = fmt.Sprintf("%s:Indice[", s)
+			// ids := ""
+			// for _, index := range cInfo.Indice.Indice {
+			// 	ids = fmt.Sprintf("%s%d,", ids, index.Id)
+			// }
+			// s = fmt.Sprintf("%s%s]", s, ids)
+		}
 		prev = curr
 		curr = curr.GetNext()
 	}

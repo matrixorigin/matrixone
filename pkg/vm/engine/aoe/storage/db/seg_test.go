@@ -54,7 +54,7 @@ func TestSegment(t *testing.T) {
 
 	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
 	gen := shard.NewMockIndexAllocator()
-	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, segCnt*blkCnt, gen.Shard(0))
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(0))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

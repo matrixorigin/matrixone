@@ -15,6 +15,9 @@
 package sched
 
 import (
+	"path/filepath"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -22,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
-	"path/filepath"
-	"sync"
 )
 
 // flushIndexEvent would generate, flush, and load index for the given segment.
@@ -33,8 +34,8 @@ import (
 // also be a stale check to ensure never load stale versions.
 type flushIndexEvent struct {
 	BaseEvent
-	Segment iface.ISegment
-	Cols []uint16
+	Segment  iface.ISegment
+	Cols     []uint16
 	FlushAll bool
 }
 
@@ -52,7 +53,8 @@ func (e *flushIndexEvent) Execute() error {
 	meta := e.Segment.GetMeta()
 	dir := e.Segment.GetSegmentFile().GetDir()
 	bsiEnabled := make([]int, 0)
-	for _, idx := range meta.Table.Schema.Indices {
+	indice := meta.Table.GetIndexSchema()
+	for _, idx := range indice.Indice {
 		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 			for _, col := range idx.Columns {
 				if e.FlushAll {
