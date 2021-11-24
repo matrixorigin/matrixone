@@ -46,7 +46,7 @@ func TestEpochGC(t *testing.T) {
 
 	//go DC.DCRoutine()
 
-	nodeCnt := 3
+	nodeCnt := 1
 
 	pcis := make([]*PDCallbackImpl, nodeCnt)
 	cf := make([]*CloseFlag, nodeCnt)
@@ -64,6 +64,7 @@ func TestEpochGC(t *testing.T) {
 		return
 	}
 
+	c.Applications[0].Start()
 	defer c.Stop()
 
 	time.Sleep(3 * time.Second)
