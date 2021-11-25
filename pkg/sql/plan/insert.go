@@ -54,9 +54,9 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	plan.Relation = r
 	plan.Db = db
 
-	attrType := make(map[string]types.Type) // Map from relation's attribute name to its type
+	attrType := make(map[string]types.Type)   // Map from relation's attribute name to its type
 	attrDefault := make(map[string]tree.Expr) // Map from relation's attribute name to its default value
-	orderAttr := make([]string, 0, 32)	// order relation's attribute names
+	orderAttr := make([]string, 0, 32)        // order relation's attribute names
 	{
 		count := 0
 		for _, def := range r.TableDefs() {
@@ -144,7 +144,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(int16)
@@ -166,7 +166,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(int32)
@@ -188,7 +188,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(int64)
@@ -210,7 +210,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(uint8)
@@ -232,7 +232,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(uint16)
@@ -254,7 +254,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(uint32)
@@ -276,7 +276,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(uint64)
@@ -298,7 +298,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(float32), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(float32), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(float32)
@@ -320,7 +320,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(float64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(float64), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = vv.(float64)
@@ -342,7 +342,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 					if v == nil {
 						nulls.Add(vec.Nsp, uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(string), vec.Typ, bat.Attrs[i], j + 1); err != nil {
+						if vv, err := rangeCheck(v.(string), vec.Typ, bat.Attrs[i], j+1); err != nil {
 							return err
 						} else {
 							vs[j] = []byte(vv.(string))
@@ -434,7 +434,7 @@ func rewriteInsertRows(noInsertTarget bool, finalInsertTargets []string, relatio
 	var ok bool
 	var targetLen int
 	var orderDefault []*tree.Expr
-	useOrder := false	// true means use orderDefault to find default value
+	useOrder := false // true means use orderDefault to find default value
 	allRowsNil := true
 
 	// if length of finalInsertTargets less than relation columns
@@ -454,7 +454,7 @@ func rewriteInsertRows(noInsertTarget bool, finalInsertTargets []string, relatio
 			}
 		}
 	}
-	targetLen  = len(finalInsertTargets)
+	targetLen = len(finalInsertTargets)
 
 	// if insert to many values,  do not use map to found default value but an order slice
 	if len(rows) > 10 {
@@ -482,7 +482,7 @@ func rewriteInsertRows(noInsertTarget bool, finalInsertTargets []string, relatio
 			// nil expr will convert to defaultExpr when insertTargets and rows are both nil.
 			if noInsertTarget && allRowsNil {
 				rows[i] = make(tree.Exprs, targetLen)
-				for j := 0; j < targetLen; j++{
+				for j := 0; j < targetLen; j++ {
 					rows[i][j] = tree.NewDefaultVal(nil)
 				}
 			}

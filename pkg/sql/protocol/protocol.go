@@ -197,11 +197,11 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 	case vm.Times:
 		arg := in.Arg.(*times.Argument)
 		data, err := encoding.Encode(TimesArgument{
-			IsBare: arg.IsBare,
-			R: arg.R,
-			Rvars: arg.Rvars,
-			Ss: arg.Ss,
-			Svars: arg.Svars,
+			IsBare:  arg.IsBare,
+			R:       arg.R,
+			Rvars:   arg.Rvars,
+			Ss:      arg.Ss,
+			Svars:   arg.Svars,
 			VarsMap: arg.VarsMap,
 		})
 		if err != nil {
@@ -343,7 +343,7 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			return in, nil, err
 		}
 		in.Arg = &limit.Argument{
-			Seen: arg.Seen,
+			Seen:  arg.Seen,
 			Limit: arg.Limit,
 		}
 		data = data[n:]
@@ -356,11 +356,11 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			return in, nil, err
 		}
 		in.Arg = &times.Argument{
-			IsBare: arg.IsBare,
-			R: arg.R,
-			Rvars: arg.Rvars,
-			Ss: arg.Ss,
-			Svars: arg.Svars,
+			IsBare:  arg.IsBare,
+			R:       arg.R,
+			Rvars:   arg.Rvars,
+			Ss:      arg.Ss,
+			Svars:   arg.Svars,
 			VarsMap: arg.VarsMap,
 		}
 		data = data[n:]
@@ -424,7 +424,7 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			return in, nil, err
 		}
 		in.Arg = &offset.Argument{
-			Seen: arg.Seen,
+			Seen:   arg.Seen,
 			Offset: arg.Offset,
 		}
 		data = data[n:]
@@ -443,7 +443,7 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 		}
 		in.Arg = &restrict.Argument{
 			Attrs: arg.Attrs,
-			E: e,
+			E:     e,
 		}
 		data = d
 	case vm.Projection:
@@ -480,7 +480,7 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			return in, nil, err
 		}
 		in.Arg = &untransform.Argument{
-			Type: arg.Type,
+			Type:     arg.Type,
 			FreeVars: arg.FreeVars,
 		}
 		data = data[n:]
@@ -1018,11 +1018,13 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 	case *max.Float32Ring:
 		buf.WriteByte(Float32Ring)
 		// IsE
-		var isE uint8
-		if v.IsE {
-			isE = 1
-		}
-		buf.Write(encoding.EncodeUint8(isE))
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
 		// Da
 		n := len(v.Da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1047,11 +1049,13 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 	case *max.Float64Ring:
 		buf.WriteByte(Float64Ring)
 		// IsE
-		var isE uint8
-		if v.IsE {
-			isE = 1
-		}
-		buf.Write(encoding.EncodeUint8(isE))
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
 		// Da
 		n := len(v.Da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1396,10 +1400,12 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		r := new(max.Float32Ring)
 		data = data[1:]
 		// IsE
-		isE := encoding.DecodeUint8(data[:1])
-		if isE > 0 {
-			r.IsE = true
-		}
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+		*/
 		data = data[1:]
 		// Da
 		n := encoding.DecodeUint32(data[:4])
@@ -1431,10 +1437,12 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		r := new(max.Float64Ring)
 		data = data[1:]
 		// IsE
-		isE := encoding.DecodeUint8(data[:1])
-		if isE > 0 {
-			r.IsE = true
-		}
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+		*/
 		data = data[1:]
 		// Da
 		n := encoding.DecodeUint32(data[:4])

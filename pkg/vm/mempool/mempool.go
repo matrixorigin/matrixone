@@ -14,16 +14,12 @@
 
 package mempool
 
-import (
-	"matrixone/pkg/vm/malloc"
-)
-
 func New() *Mempool {
 	return &Mempool{}
 }
 
 func Alloc(m *Mempool, size int) (ret []byte) {
-	return malloc.Malloc(size)
+	return make([]byte, size)
 }
 
 func Realloc(data []byte, size int64) int64 {

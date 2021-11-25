@@ -155,9 +155,9 @@ type ShowColumns struct {
 }
 
 type Insert struct {
-	Id string
-	Db string
-	Bat *batch.Batch
+	Id       string
+	Db       string
+	Bat      *batch.Batch
 	Relation engine.Relation
 }
 

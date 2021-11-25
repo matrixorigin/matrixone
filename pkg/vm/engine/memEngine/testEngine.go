@@ -36,17 +36,26 @@ func CreateR(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "orderId",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+				Type: types.Type{
+					Size: 24,
+					Oid:  types.T(types.T_varchar),
+				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+				Type: types.Type{
+					Size: 4,
+					Oid:  types.T(types.T_uint32),
+				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
-				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+				Type: types.Type{
+					Size: 8,
+					Oid:  types.T(types.T_float64),
+				},
 			}})
 		}
 		if err := db.Create(0, "R", attrs); err != nil {
@@ -61,7 +70,10 @@ func CreateR(db engine.Database) {
 		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
 			{
-				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vec := vector.New(types.Type{
+					Size: 24,
+					Oid:  types.T(types.T_varchar),
+				})
 				vs := make([][]byte, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i))
@@ -72,10 +84,13 @@ func CreateR(db engine.Database) {
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-				vs := make([][]byte, 10)
+				vec := vector.New(types.Type{
+					Size: 4,
+					Oid:  types.T(types.T_uint32),
+				})
+				vs := make([]uint32, 10)
 				for i := 0; i < 10; i++ {
-					vs[i] = []byte(fmt.Sprintf("%v", i%4))
+					vs[i] = uint32(i % 4)
 				}
 				if err := vector.Append(vec, vs); err != nil {
 					log.Fatal(err)
@@ -83,7 +98,10 @@ func CreateR(db engine.Database) {
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+				vec := vector.New(types.Type{
+					Size: 8,
+					Oid:  types.T(types.T_float64),
+				})
 				vs := make([]float64, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
@@ -101,7 +119,10 @@ func CreateR(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
-			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vec := vector.New(types.Type{
+				Size: 24,
+				Oid:  types.T(types.T_varchar),
+			})
 			vs := make([][]byte, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
@@ -112,10 +133,13 @@ func CreateR(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-			vs := make([][]byte, 10)
+			vec := vector.New(types.Type{
+				Size: 4,
+				Oid:  types.T(types.T_uint32),
+			})
+			vs := make([]uint32, 10)
 			for i := 10; i < 20; i++ {
-				vs[i-10] = []byte(fmt.Sprintf("%v", i%4))
+				vs[i-10] = uint32(i % 4)
 			}
 			if err := vector.Append(vec, vs); err != nil {
 				log.Fatal(err)
@@ -123,7 +147,10 @@ func CreateR(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+			vec := vector.New(types.Type{
+				Size: 8,
+				Oid:  types.T(types.T_float64),
+			})
 			vs := make([]float64, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
@@ -147,17 +174,26 @@ func CreateS(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "orderId",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+				Type: types.Type{
+					Size: 24,
+					Oid:  types.T(types.T_varchar),
+				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+				Type: types.Type{
+					Size: 4,
+					Oid:  types.T(types.T_uint32),
+				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
-				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+				Type: types.Type{
+					Size: 8,
+					Oid:  types.T(types.T_float64),
+				},
 			}})
 		}
 		if err := db.Create(0, "S", attrs); err != nil {
@@ -172,7 +208,10 @@ func CreateS(db engine.Database) {
 		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
 			{
-				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vec := vector.New(types.Type{
+					Size: 24,
+					Oid:  types.T(types.T_varchar),
+				})
 				vs := make([][]byte, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i*2))
@@ -183,10 +222,13 @@ func CreateS(db engine.Database) {
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-				vs := make([][]byte, 10)
+				vec := vector.New(types.Type{
+					Size: 4,
+					Oid:  types.T(types.T_uint32),
+				})
+				vs := make([]uint32, 10)
 				for i := 0; i < 10; i++ {
-					vs[i] = []byte(fmt.Sprintf("%v", i%2))
+					vs[i] = uint32(i % 2)
 				}
 				if err := vector.Append(vec, vs); err != nil {
 					log.Fatal(err)
@@ -194,7 +236,10 @@ func CreateS(db engine.Database) {
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+				vec := vector.New(types.Type{
+					Size: 8,
+					Oid:  types.T(types.T_float64),
+				})
 				vs := make([]float64, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
@@ -212,7 +257,10 @@ func CreateS(db engine.Database) {
 	{
 		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
-			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vec := vector.New(types.Type{
+				Size: 24,
+				Oid:  types.T(types.T_varchar),
+			})
 			vs := make([][]byte, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
@@ -223,10 +271,13 @@ func CreateS(db engine.Database) {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-			vs := make([][]byte, 10)
+			vec := vector.New(types.Type{
+				Size: 4,
+				Oid:  types.T(types.T_uint32),
+			})
+			vs := make([]uint32, 10)
 			for i := 10; i < 20; i++ {
-				vs[i-10] = []byte(fmt.Sprintf("%v", i%2))
+				vs[i-10] = uint32(i % 2)
 			}
 			if err := vector.Append(vec, vs); err != nil {
 				log.Fatal(err)
@@ -234,7 +285,10 @@ func CreateS(db engine.Database) {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+			vec := vector.New(types.Type{
+				Size: 8,
+				Oid:  types.T(types.T_float64),
+			})
 			vs := make([]float64, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
@@ -275,6 +329,7 @@ func CreateT(db engine.Database) {
 			log.Fatal(err)
 		}
 	}
+
 }
 
 func CreateT1(db engine.Database) {

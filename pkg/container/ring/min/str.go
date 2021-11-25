@@ -27,7 +27,6 @@ import (
 func NewStr(typ types.Type) *StrRing {
 	return &StrRing{
 		Typ: typ,
-		IsE: true,
 	}
 }
 
@@ -50,7 +49,6 @@ func (r *StrRing) Size() int {
 
 func (r *StrRing) Dup() ring.Ring {
 	return &StrRing{
-		IsE: true,
 		Typ: r.Typ,
 	}
 }
@@ -62,15 +60,18 @@ func (r *StrRing) Type() types.Type {
 func (r *StrRing) SetLength(n int) {
 	r.Vs = r.Vs[:n]
 	r.Ns = r.Ns[:n]
+	r.Es = r.Es[:n]
 }
 
 func (r *StrRing) Shrink(sels []int64) {
 	for i, sel := range sels {
 		r.Vs[i] = r.Vs[sel]
 		r.Ns[i] = r.Ns[sel]
+		r.Es[i] = r.Es[sel]
 	}
 	r.Vs = r.Vs[:len(sels)]
 	r.Ns = r.Ns[:len(sels)]
+	r.Es = r.Es[:len(sels)]
 }
 
 func (r *StrRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
@@ -82,17 +83,19 @@ func (r *StrRing) Grow(m *mheap.Mheap) error {
 		r.Mp = m
 	}
 	if len(r.Vs) == 0 {
+		r.Es = make([]bool, 0, 8)
 		r.Ns = make([]int64, 0, 8)
 		r.Vs = make([][]byte, 0, 8)
 	}
 	r.Ns = append(r.Ns, 0)
+	r.Es = append(r.Es, true)
 	r.Vs = append(r.Vs, make([]byte, 0, 4))
 	return nil
 }
 
 func (r *StrRing) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.(*types.Bytes).Get(sel); r.IsE || bytes.Compare(v, r.Vs[i]) < 0 {
-		r.IsE = false
+	if v := vec.Col.(*types.Bytes).Get(sel); r.Es[i] || bytes.Compare(v, r.Vs[i]) < 0 {
+		r.Es[i] = false
 		r.Vs[i] = append(r.Vs[i][:0], v...)
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
@@ -104,8 +107,8 @@ func (r *StrRing) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
 	for j, o := range vs.Offsets {
 		v := vs.Data[o : o+vs.Lengths[j]]
-		if r.IsE || bytes.Compare(v, r.Vs[i]) < 0 {
-			r.IsE = false
+		if r.Es[i] || bytes.Compare(v, r.Vs[i]) < 0 {
+			r.Es[i] = false
 			r.Vs[i] = append(r.Vs[i][:0], v...)
 		}
 	}
@@ -114,9 +117,9 @@ func (r *StrRing) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *StrRing) Add(a interface{}, x, y int64) {
 	ar := a.(*StrRing)
-	if r.IsE || bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
-		r.IsE = false
-		r.Vs[x] = ar.Vs[y]
+	if r.Es[x] || bytes.Compare(ar.Vs[y], r.Vs[x]) < 0 {
+		r.Es[x] = false
+		r.Vs[x] = append(r.Vs[x][:0], ar.Vs[y]...)
 	}
 	r.Ns[x] += ar.Ns[y]
 }

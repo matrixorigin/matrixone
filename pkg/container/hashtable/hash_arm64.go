@@ -15,24 +15,18 @@
 package hashtable
 
 import (
-	"unsafe"
-
 	"golang.org/x/sys/cpu"
 )
-
-func Crc32BytesHashAsm(data unsafe.Pointer, length int) uint64
-func Crc32IntHashAsm(data uint64) uint64
-func Crc32Int8BatchHashAsm(data *uint8, hashes *uint64, length int)
-func Crc32Int16BatchHashAsm(data *uint16, hashes *uint64, length int)
-func Crc32Int32BatchHashAsm(data *uint32, hashes *uint64, length int)
-func Crc32Int64BatchHashAsm(data *uint64, hashes *uint64, length int)
 
 func init() {
 	if cpu.ARM64.HasCRC32 {
 		BytesHash = Crc32BytesHashAsm
-		IntHash = Crc32IntHashAsm
-	} else {
-		BytesHash = wyhash
-		IntHash = intHash64
+		IntHash = Crc32Int64HashAsm
+		IntBatchHash = Crc32Int64BatchHashAsm
+		intCellBatchHash = Crc32Int64CellBatchHashAsm
+	}
+
+	if cpu.ARM64.HasAES {
+		AltBytesHash = aesBytesHashAsm
 	}
 }
