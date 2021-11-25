@@ -796,7 +796,7 @@ func TestBuildIndex(t *testing.T) {
 	segs := tblData.SegmentIds()
 	for _, segId := range segs {
 		seg := tblData.WeakRefSegment(segId)
-		seg.GetIndexHolder().Init(seg.GetSegmentFile())
+		//seg.GetIndexHolder().Init(seg.GetSegmentFile())
 		//t.Log(seg.GetIndexHolder().Inited)
 		segment := &db.Segment{
 			Data: seg,
