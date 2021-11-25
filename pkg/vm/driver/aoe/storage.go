@@ -185,7 +185,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 		buf := errDriver.ErrorResp(err)
 		return 0, 0, buf
 	}
-	schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
+	schema,indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
 	schema.Name = customReq.Name
 	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
@@ -195,6 +195,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 			DB:     aoedbName.ShardIdToName(shardId),
 		},
 		Schema: schema,
+		Indice: indexSchema,
 	}
 	tbl, err := s.DB.CreateTable(&ctx)
 	if err != nil {
@@ -457,7 +458,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				offset = 1
 				size = 3
 			}
-			schema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
+			schema,indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
 			ctx := aoedb.CreateTableCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     metadata.LogIndex,
@@ -466,6 +467,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					DB:     aoedbName.ShardIdToName(metadata.ShardID),
 				},
 				Schema: schema,
+				Indice: indexSchema,
 			}
 			_, err = s.DB.CreateTable(&ctx)
 			if err != nil {
