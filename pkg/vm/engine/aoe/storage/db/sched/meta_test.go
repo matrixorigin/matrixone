@@ -45,7 +45,7 @@ func TestBasicOps(t *testing.T) {
 	gen := shard.NewMockIndexAllocator()
 	database, err := catalog.SimpleCreateDatabase("db1", gen.Shard(100).First())
 	assert.Nil(t, err)
-	tbl, err := database.SimpleCreateTable(schema, gen.Next(100))
+	tbl, err := database.SimpleCreateTable(schema, nil, gen.Next(100))
 	assert.Nil(t, err)
 	assert.NotNil(t, tbl)
 

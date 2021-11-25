@@ -759,14 +759,12 @@ func TestBuildIndex(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -845,14 +843,13 @@ func TestRebuildIndices(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -952,14 +949,13 @@ func TestManyLoadAndDrop(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{
-		Id:      0,
-		Type:    metadata.NumBsi,
-		Columns: []uint16{1},
-	})
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -1014,7 +1010,6 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder.DropIndex(filepath.Join(inst.Dir, "data/1_1_1_1.bsi"))
 	wg.Wait()
 
-
 	// test continuously load new index, check if stale versions are GCed correctly
 	segId = tblData.SegmentIds()[1]
 	seg = tblData.StrongRefSegment(segId)
@@ -1032,7 +1027,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	}
 	wg.Wait()
 
-	time.Sleep(300*time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	infos, err := ioutil.ReadDir(filepath.Join(inst.Dir, "data"))
 	assert.Nil(t, err)
@@ -1071,7 +1066,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	for i := uint64(1); i < uint64(10); i++ {
 		wg.Add(1)
 		go loader(i)
-		if i % 4 == 0 {
+		if i%4 == 0 {
 			wg.Add(1)
 			go dropper(i)
 		}
@@ -1362,15 +1357,19 @@ func TestFilter(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
-	schema := metadata.MockSchemaAll(14)
-	schema.Indices = append(schema.Indices, &metadata.IndexInfo{Id: uint64(0), Type: metadata.NumBsi, Columns: []uint16{}})
-	for i := uint16(0); i < 12; i++ {
-		schema.Indices[0].Columns = append(schema.Indices[0].Columns, i)
+	colIdx := make([]int, 0)
+	for i := 0; i < 12; i++ {
+		colIdx = append(colIdx, i)
 	}
 
+	schema := metadata.MockSchemaAll(14)
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, colIdx...)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -2617,6 +2616,126 @@ func TestFilter(t *testing.T) {
 	assert.NotNil(t, err)
 	_, err = summarizer.NullCount("xxxx", nil)
 	assert.NotNil(t, err)
+
+	inst.Close()
+}
+
+func TestCreateAndDropIndex(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchema(4)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	tblName := schema.Name
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(3)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+
+	creater := func(i int) func() {
+		return func() {
+			indice := metadata.NewIndexSchema()
+			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
+			ctx := &CreateIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				Indices:       indice,
+			}
+			assert.Nil(t, inst.CreateIndex(ctx))
+		}
+	}
+
+	dropper := func(s, i int) func() {
+		return func() {
+			indexNames := make([]string, 0)
+			for j := s; j < i; j += 1 {
+				indexNames = append(indexNames, fmt.Sprintf("idx-%d", j))
+			}
+			ctx := &DropIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				IndexNames:    indexNames,
+			}
+			assert.Nil(t, inst.DropIndex(ctx))
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		creater(i)()
+		if i == 2 {
+			dropper(0, i)()
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
+		creater(i)()
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 2)()
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
+		creater(i)()
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 1)()
+	assert.Equal(t, 3, tblMeta.GetIndexSchema().IndiceNum())
+	creater(0)()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+
+
+	dataPath := filepath.Join(inst.Dir, "data")
+	infos, err := ioutil.ReadDir(dataPath)
+	assert.Nil(t, err)
+	for _, info := range infos {
+		bn := filepath.Base(info.Name())
+		if fn, ok := common.ParseBitSlicedIndexFileName(bn); ok {
+			if v, _, _, col, ok := common.ParseBitSlicedIndexFileNameToInfo(fn); ok {
+				if col == 0 {
+					assert.Equal(t, uint64(4), v)
+				} else if col == 1 {
+					assert.Equal(t, uint64(3), v)
+				} else if col == 3 || col == 2 {
+					assert.Equal(t, uint64(1), v)
+				} else {
+					t.Error("invalid column")
+				}
+			}
+		}
+	}
 
 	inst.Close()
 }

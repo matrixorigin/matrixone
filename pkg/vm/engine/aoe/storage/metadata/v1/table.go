@@ -50,9 +50,12 @@ type Table struct {
 	FlushTS           int64          `json:"-"`
 }
 
-func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
+func NewTableEntry(db *Database, schema *Schema, indice *IndexSchema, tranId uint64, exIndex *LogIndex) *Table {
 	schema.BlockMaxRows = db.Catalog.Cfg.BlockMaxRows
 	schema.SegmentMaxBlocks = db.Catalog.Cfg.SegmentMaxBlocks
+	if indice == nil {
+		indice = NewIndexSchema()
+	}
 	e := &Table{
 		BaseEntry: &BaseEntry{
 			Id: db.Catalog.NextTableId(),
@@ -62,6 +65,7 @@ func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogInde
 				SSLLNode: *common.NewSSLLNode(),
 				Op:       OpCreate,
 				LogIndex: exIndex,
+				Indice:   indice,
 			},
 		},
 		Schema:     schema,
@@ -92,6 +96,16 @@ func (e *Table) Repr(short bool) string {
 		s = fmt.Sprintf("%s-%s", s, e.Database.Repr())
 	}
 	return s
+}
+
+func (e *Table) GetIndexSchemaLocked() *IndexSchema {
+	return e.CommitInfo.Indice
+}
+
+func (e *Table) GetIndexSchema() *IndexSchema {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.Indice
 }
 
 func (e *Table) DebugCheckReplayedState() {
@@ -251,6 +265,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
 	}
 	cInfo.LogIndex = e.CommitInfo.LogIndex
+	cInfo.Indice = e.CommitInfo.Indice
 	if err := e.onCommit(cInfo); err != nil {
 		return nil, err
 	}
@@ -289,6 +304,7 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		e.Unlock()
 		return nil, TableNotFoundErr
 	}
+	cInfo.Indice = e.CommitInfo.Indice
 	err := e.onCommit(cInfo)
 	e.Unlock()
 	if err != nil {
@@ -300,6 +316,107 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	}
 	// PXU TODO: ToLogEntry should work on specified tranId node in the chain
 	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, nil)
+	return logEntry, nil
+}
+
+func (e *Table) SimpleAddIndice(indice []*IndexInfo, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(addIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.indice = indice
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpAddIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Merge(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	for _, index := range ctx.indice {
+		index.Id = e.Database.Catalog.NextIndexId()
+	}
+	if err = indice.Extend(ctx.indice); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETAddIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETAddIndice, nil)
+	return logEntry, nil
+}
+
+func (e *Table) SimpleDropIndice(names []string, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(dropIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.names = names
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareDropIndice(ctx *dropIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpDropIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Merge(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	if err = indice.DropByNames(ctx.names); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETDropIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETDropIndice, nil)
 	return logEntry, nil
 }
 
@@ -328,6 +445,12 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	case ETCreateTable:
 		entry := tableLogEntry{
 			Table:      e,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
+	case ETAddIndice, ETDropIndice:
+		entry := tableLogEntry{
+			BaseEntry:  e.BaseEntry,
 			DatabaseId: e.Database.Id,
 		}
 		buf, _ = entry.Marshal()
@@ -607,7 +730,7 @@ func (e *Table) PString(level PPLevel, depth int) string {
 	return s
 }
 
-func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
+func MockDBTable(catalog *Catalog, dbName string, schema *Schema, indice *IndexSchema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
 	var index *LogIndex
 	index = idxGen.Next()
 	if catalog.IndexWal != nil {
@@ -620,10 +743,10 @@ func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64,
 	if catalog.IndexWal != nil {
 		catalog.IndexWal.Checkpoint(index)
 	}
-	return MockTable(db, schema, blkCnt, idxGen.Next())
+	return MockTable(db, schema, indice, blkCnt, idxGen.Next())
 }
 
-func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Table {
+func MockTable(db *Database, schema *Schema, indice *IndexSchema, blkCnt uint64, idx *LogIndex) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
@@ -643,7 +766,7 @@ func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Tabl
 		}
 	}
 	logFn(idx)
-	tbl, err := db.SimpleCreateTable(schema, idx)
+	tbl, err := db.SimpleCreateTable(schema, indice, idx)
 	if err != nil {
 		panic(err)
 	}

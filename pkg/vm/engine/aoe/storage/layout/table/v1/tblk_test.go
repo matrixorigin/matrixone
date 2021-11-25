@@ -58,7 +58,7 @@ func TestTBlock(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
 	shardId := uint64(100)
-	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(shardId))
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, nil, 2, gen.Shard(shardId))
 	seg1 := tablemeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, seg1)
 	meta1 := seg1.SimpleGetBlock(uint64(1))

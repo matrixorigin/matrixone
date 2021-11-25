@@ -15,8 +15,12 @@
 package aoedb
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"path/filepath"
 )
 
 type Impl = db.DB
@@ -108,7 +112,7 @@ func (d *DB) CreateTable(ctx *CreateTableCtx) (*metadata.Table, error) {
 		}
 	}
 
-	return database.SimpleCreateTable(ctx.Schema, index)
+	return database.SimpleCreateTable(ctx.Schema, ctx.Indice, index)
 }
 
 func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {
@@ -148,6 +152,139 @@ func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {
 	}
 	d.ScheduleGCTable(meta)
 	return meta, err
+}
+
+func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return err
+			}
+		}
+	}
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return err
+	}
+
+	if err = meta.SimpleAddIndice(ctx.Indices.Indice, index); err != nil {
+		return err
+	}
+
+	tblData, err := d.GetTableData(meta)
+	if err != nil {
+		return err
+	}
+	for _, info := range ctx.Indices.Indice {
+		cols := info.Columns
+		// currently, only num/str bsi is supported for one column, if
+		// more kinds of indices are loaded for one column at the same
+		// time, need some refactor.
+		for _, segId := range meta.SimpleGetSegmentIds() {
+			seg := tblData.StrongRefSegment(segId)
+			segMeta := seg.GetMeta()
+			segMeta.RLock()
+			if !segMeta.IsSortedLocked() {
+				seg.Unref()
+				segMeta.RUnlock()
+				continue
+			}
+			segMeta.RUnlock()
+			e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+			e.Cols = cols
+			d.Scheduler.Schedule(e)
+			seg.Unref()
+		}
+	}
+	return nil
+}
+
+func (d *DB) DropIndex(ctx *DropIndexCtx) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return err
+			}
+		}
+	}
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return err
+	}
+
+	names := ctx.IndexNames
+	segIds := meta.SimpleGetSegmentIds()
+	tblId := meta.Id
+	tblData, err := d.GetTableData(meta)
+	if err != nil {
+		return err
+	}
+	for _, segId := range segIds {
+		seg := tblData.StrongRefSegment(segId)
+		holder := seg.GetIndexHolder()
+		for _, info := range meta.GetIndexSchema().Indice {
+			if !util.ContainsString(names, info.Name) {
+				continue
+			}
+			cols := info.Columns
+			for _, col := range cols {
+				var currVersion uint64
+				holder.VersionAllocator.RLock()
+				if alloc, ok := holder.VersionAllocator.Allocators[int(col)]; ok {
+					currVersion = alloc.Get()
+				} else {
+					currVersion = uint64(1)
+				}
+				holder.VersionAllocator.RUnlock()
+				bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
+				fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+				holder.DropIndex(fullname)
+			}
+		}
+		seg.Unref()
+	}
+
+	if err = meta.SimpleDropIndice(names, index); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (d *DB) Append(ctx *AppendCtx) (err error) {

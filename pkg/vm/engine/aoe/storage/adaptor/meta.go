@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -32,6 +33,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		Indices: make([]aoe.IndexInfo, 0),
 	}
 	prefix := "mock_"
+	indexId := 0
 	for i := 0; i < colCnt; i++ {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		colInfo := aoe.ColumnInfo{
@@ -42,20 +44,20 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
-		indexInfo := aoe.IndexInfo{Type: uint64(metadata.ZoneMap), Columns: []uint64{uint64(i)}}
+		indexId++
+		indexInfo := aoe.IndexInfo{
+			Type:    uint64(metadata.ZoneMap),
+			Columns: []uint64{uint64(i)},
+			Name:    fmt.Sprintf("idx-%d", indexId),
+		}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
 		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
 	return tblInfo
 }
 
-func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata.Schema {
-	schema := &metadata.Schema{
-		Name:      info.Name,
-		ColDefs:   make([]*metadata.ColDef, 0),
-		Indices:   make([]*metadata.IndexInfo, 0),
-		NameIndex: make(map[string]int),
-	}
+func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.TableSchema, *db.IndexSchema) {
+	schema := metadata.NewEmptySchema(info.Name)
 	for idx, colInfo := range info.Columns {
 		newInfo := &metadata.ColDef{
 			Name: colInfo.Name,
@@ -69,19 +71,20 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
+	indice := metadata.NewIndexSchema()
+	cols := make([]int, 0)
+	var err error
 	for _, indexInfo := range info.Indices {
-		newInfo := &metadata.IndexInfo{
-			Id:      catalog.NextIndexId(),
-			Type:    metadata.IndexT(indexInfo.Type),
-			Columns: make([]uint16, 0),
-		}
+		cols = cols[:0]
 		for _, col := range indexInfo.Columns {
-			newInfo.Columns = append(newInfo.Columns, uint16(col))
+			cols = append(cols, int(col))
 		}
-		schema.Indices = append(schema.Indices, newInfo)
+		if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+			panic(err)
+		}
 	}
 
-	return schema
+	return schema, indice
 }
 
 func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {

@@ -54,7 +54,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	shardId := uint64(99)
 	dbName := shardIdToName(shardId)
 	idxGen := gen.Shard(shardId)
-	tablemeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, 2, idxGen)
+	tablemeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, 2, idxGen)
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)

@@ -89,7 +89,7 @@ func TestReplay2(t *testing.T) {
 	totalBlks := segBlkCount
 
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	opts := new(storage.Options)
 	opts.Meta.Catalog = catalog
 	opts.FillDefaults(dir)
@@ -151,7 +151,7 @@ func TestReplay3(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -192,7 +192,7 @@ func TestReplay4(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -245,7 +245,7 @@ func TestReplay5(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -312,7 +312,7 @@ func TestReplay6(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
@@ -384,7 +384,7 @@ func TestReplay7(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -455,7 +455,7 @@ func TestReplay8(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -528,7 +528,7 @@ func TestReplay9(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -647,7 +647,7 @@ func TestReplay10(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -716,7 +716,7 @@ func TestReplay11(t *testing.T) {
 
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet); i++ {

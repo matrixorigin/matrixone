@@ -578,7 +578,7 @@ func (db *Database) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Block, 
 	return block, nil
 }
 
-func (db *Database) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table, error) {
+func (db *Database) SimpleCreateTable(schema *Schema, indice *IndexSchema, exIndex *LogIndex) (*Table, error) {
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}
@@ -587,12 +587,13 @@ func (db *Database) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table
 	ctx.tranId = tranId
 	ctx.exIndex = exIndex
 	ctx.schema = schema
+	ctx.indice = indice
 	ctx.database = db
 	err := db.Catalog.onCommitRequest(ctx, true)
 	return ctx.table, err
 }
 
-func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error) {
+func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema, indice *IndexSchema) (*Table, error) {
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}
@@ -600,6 +601,7 @@ func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error
 	ctx.tranId = txn.tranId
 	ctx.exIndex = txn.index
 	ctx.schema = schema
+	ctx.indice = indice
 	ctx.database = db
 	ctx.txn = txn
 	ctx.inTran = true
@@ -609,7 +611,7 @@ func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error
 
 func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
-	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
+	entry := NewTableEntry(db, ctx.schema, ctx.indice, ctx.tranId, ctx.exIndex)
 	db.Lock()
 	if db.IsSoftDeletedLocked() {
 		db.Unlock()

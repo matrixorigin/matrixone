@@ -19,8 +19,13 @@ import (
 	"unsafe"
 )
 
-var BytesHash func([]byte) uint64
-var IntHash func(uint64) uint64
+var BytesHash = wyhash
+var AltBytesHash = dummyBytesHash
+
+var IntHash = intHash64
+var IntBatchHash = intHash64Batch
+
+var intCellBatchHash = intHash64CellBatch
 
 const (
 	m1 = 0xa0761d6478bd642f
@@ -30,17 +35,34 @@ const (
 	m5 = 0x1d8e4e27c47d124f
 )
 
-func wyhash(data []byte) uint64 {
-	s := len(data)
+func crc32BytesHashAsm(data unsafe.Pointer, length int) uint64
+func crc32Int64HashAsm(data uint64) uint64
+func crc32Int64SliceHashAsm(data *uint64, length int) uint64
+
+func crc32Int64BatchHashAsm(data unsafe.Pointer, hashes *uint64, length int)
+func crc32Int64CellBatchHashAsm(data unsafe.Pointer, hashes *uint64, length int)
+
+func aesBytesHashAsm(data unsafe.Pointer, length int) [2]uint64
+
+func crc32Int192HashAsm(data *[3]uint64) uint64
+func crc32Int192BatchHashAsm(data *[3]uint64, hashes *uint64, length int)
+
+func crc32Int256HashAsm(data *[4]uint64) uint64
+func crc32Int256BatchHashAsm(data *[4]uint64, hashes *uint64, length int)
+
+func crc32Int320HashAsm(data *[5]uint64) uint64
+func crc32Int320BatchHashAsm(data *[5]uint64, hashes *uint64, length int)
+
+func wyhash(data unsafe.Pointer, s int) uint64 {
 	var a, b uint64
 	seed := uint64(m3 ^ m1)
 	switch {
 	case s == 0:
 		return seed
 	case s < 4:
-		a = uint64(data[0])
-		a |= uint64(data[s>>1]) << 8
-		a |= uint64(data[s-1]) << 16
+		a = uint64(*(*byte)(data))
+		a |= uint64(*(*byte)(unsafe.Add(data, s>>1))) << 8
+		a |= uint64(*(*byte)(unsafe.Add(data, s-1))) << 16
 	case s == 4:
 		a = r4(data, 0)
 		b = a
@@ -62,13 +84,13 @@ func wyhash(data []byte) uint64 {
 				seed = mix(r8(data, 0)^m2, r8(data, 8)^seed)
 				seed1 = mix(r8(data, 16)^m3, r8(data, 24)^seed1)
 				seed2 = mix(r8(data, 32)^m4, r8(data, 40)^seed2)
-				data = data[48:]
+				data = unsafe.Add(data, 48)
 			}
 			seed ^= seed1 ^ seed2
 		}
 		for ; l > 16; l -= 16 {
 			seed = mix(r8(data, 0)^m2, r8(data, 8)^seed)
-			data = data[16:]
+			data = unsafe.Add(data, 16)
 		}
 		a = r8(data, l-16)
 		b = r8(data, l-8)
@@ -82,12 +104,12 @@ func mix(a, b uint64) uint64 {
 	return hi ^ lo
 }
 
-func r4(data []byte, p int) uint64 {
-	return uint64(*(*uint32)(unsafe.Pointer(&data[p])))
+func r4(data unsafe.Pointer, p int) uint64 {
+	return uint64(*(*uint32)(unsafe.Add(data, p)))
 }
 
-func r8(data []byte, p int) uint64 {
-	return *(*uint64)(unsafe.Pointer(&data[p]))
+func r8(data unsafe.Pointer, p int) uint64 {
+	return *(*uint64)(unsafe.Add(data, p))
 }
 
 func intHash64(x uint64) uint64 {
@@ -98,4 +120,28 @@ func intHash64(x uint64) uint64 {
 	x ^= x >> 33
 
 	return x
+}
+
+func intHash64Batch(data unsafe.Pointer, hashes *uint64, length int) {
+	dataSlice := unsafe.Slice((*uint64)(data), length)
+	hashSlice := unsafe.Slice(hashes, length)
+
+	for i := 0; i < length; i++ {
+		hashSlice[i] = intHash64(dataSlice[i])
+	}
+}
+
+func intHash64CellBatch(data unsafe.Pointer, hashes *uint64, length int) {
+	dataSlice := unsafe.Slice((*Int64HashMapCell)(data), length)
+	hashSlice := unsafe.Slice(hashes, length)
+
+	for i := 0; i < length; i++ {
+		hashSlice[i] = intHash64(dataSlice[i].Key)
+	}
+}
+
+func dummyBytesHash(data unsafe.Pointer, length int) [2]uint64 {
+	var hash [2]uint64
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&hash[0])), 16), unsafe.Slice((*byte)(data), length))
+	return hash
 }

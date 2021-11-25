@@ -12,24 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build arm64
-// +build arm64
-
 package hashtable
 
 import (
 	"golang.org/x/sys/cpu"
 )
 
-func crc32BytesHashAsm(data []byte) uint64
-func crc32IntHashAsm(data uint64) uint64
-
 func init() {
 	if cpu.ARM64.HasCRC32 {
 		BytesHash = crc32BytesHashAsm
-		IntHash = crc32IntHashAsm
-	} else {
-		BytesHash = wyhash
-		IntHash = intHash64
+		IntHash = crc32Int64HashAsm
+		IntBatchHash = crc32Int64BatchHashAsm
+		intCellBatchHash = crc32Int64CellBatchHashAsm
+	}
+
+	if cpu.ARM64.HasAES {
+		AltBytesHash = aesBytesHashAsm
 	}
 }

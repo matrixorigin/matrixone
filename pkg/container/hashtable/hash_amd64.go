@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,16 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package hashtable
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+import (
+	"golang.org/x/sys/cpu"
+)
 
-type TxnCtx = metadata.TxnCtx
-type IndexId = metadata.IndexId
-type LogIndex = metadata.LogIndex
-type RenameTableFactory = metadata.RenameTableFactory
-type IndexT = metadata.IndexT
-type IndexInfo = metadata.IndexInfo
-type TableSchema = metadata.Schema
-type IndexSchema = metadata.IndexSchema
-type ColDef = metadata.ColDef
+func init() {
+	if cpu.X86.HasSSE42 {
+		BytesHash = crc32BytesHashAsm
+		IntHash = crc32Int64HashAsm
+		IntBatchHash = crc32Int64BatchHashAsm
+		intCellBatchHash = crc32Int64CellBatchHashAsm
+	}
+
+	if cpu.X86.HasAES {
+		AltBytesHash = aesBytesHashAsm
+	}
+}
