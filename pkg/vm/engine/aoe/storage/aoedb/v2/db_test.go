@@ -2619,3 +2619,123 @@ func TestFilter(t *testing.T) {
 
 	inst.Close()
 }
+
+func TestCreateAndDropIndex(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchema(4)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	tblName := schema.Name
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(3)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+
+	creater := func(i int) func() {
+		return func() {
+			indice := metadata.NewIndexSchema()
+			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
+			ctx := &CreateIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				Indices:       indice,
+			}
+			assert.Nil(t, inst.CreateIndex(ctx))
+		}
+	}
+
+	dropper := func(s, i int) func() {
+		return func() {
+			indexNames := make([]string, 0)
+			for j := s; j < i; j += 1 {
+				indexNames = append(indexNames, fmt.Sprintf("idx-%d", j))
+			}
+			ctx := &DropIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				IndexNames:    indexNames,
+			}
+			assert.Nil(t, inst.DropIndex(ctx))
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		creater(i)()
+		if i == 2 {
+			dropper(0, i)()
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
+		creater(i)()
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 2)()
+	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
+	for i := 0; i < 2; i++ {
+		creater(i)()
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+	dropper(0, 1)()
+	assert.Equal(t, 3, tblMeta.GetIndexSchema().IndiceNum())
+	creater(0)()
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
+
+
+	dataPath := filepath.Join(inst.Dir, "data")
+	infos, err := ioutil.ReadDir(dataPath)
+	assert.Nil(t, err)
+	for _, info := range infos {
+		bn := filepath.Base(info.Name())
+		if fn, ok := common.ParseBitSlicedIndexFileName(bn); ok {
+			if v, _, _, col, ok := common.ParseBitSlicedIndexFileNameToInfo(fn); ok {
+				if col == 0 {
+					assert.Equal(t, uint64(4), v)
+				} else if col == 1 {
+					assert.Equal(t, uint64(3), v)
+				} else if col == 3 || col == 2 {
+					assert.Equal(t, uint64(1), v)
+				} else {
+					t.Error("invalid column")
+				}
+			}
+		}
+	}
+
+	inst.Close()
+}
