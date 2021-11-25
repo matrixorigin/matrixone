@@ -52,7 +52,7 @@ func (ht *String24HashMap) Init() {
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), cap(rawData)/cellSize)[:len(rawData)/cellSize]
+	ht.bucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
 func (ht *String24HashMap) Insert(hash uint64, key *[3]uint64) (inserted bool, value *uint64) {
@@ -155,41 +155,25 @@ func (ht *String24HashMap) resizeOnDemand(n uint64) {
 
 	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
 
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	copy(newRawData, ht.rawData)
-
 	oldBucketCnt := ht.bucketCnt
+	oldBucketData := ht.bucketData
+
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
+	newBucketData := unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
+
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
 	ht.rawData = newRawData
-	ht.bucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&newRawData[0])), cap(newRawData)/cellSize)[:len(newRawData)/cellSize]
+	ht.bucketData = newBucketData
 
-	var i uint64
-	for i = 0; i < oldBucketCnt; i++ {
-		ht.reinsert(i)
+	for i := uint64(0); i < oldBucketCnt; i++ {
+		cell := &oldBucketData[i]
+		if cell.Hash != 0 {
+			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key)
+			ht.bucketData[newIdx] = *cell
+		}
 	}
-
-	for ht.reinsert(i) {
-		i++
-	}
-}
-
-func (ht *String24HashMap) reinsert(idx uint64) bool {
-	cell := &ht.bucketData[idx]
-	if cell.Hash == 0 {
-		return false
-	}
-
-	_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key)
-	if newIdx == idx {
-		return false
-	}
-
-	ht.bucketData[newIdx] = *cell
-	*cell = String24HashMapCell{}
-
-	return true
 }
 
 func (ht *String24HashMap) Cardinality() uint64 {
