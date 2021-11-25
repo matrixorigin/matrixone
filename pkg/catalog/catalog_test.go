@@ -16,14 +16,13 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,7 +46,7 @@ const (
 	restart            = false
 	tableCount         = 20
 	databaseCount      = 50
-	preAllocShardNum   = 50
+	preAllocShardNum   = 20
 )
 
 var (
@@ -90,7 +89,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
-			c.ServerConfig.ExternalServer = true
+			// c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -115,7 +114,8 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterLogLevel("info"),
+			// raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
@@ -124,7 +124,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*60)
 
 	stdLog.Printf("driver all started.")
 
@@ -192,7 +192,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	idxTableInfo, _ = catalog.GetTable(dbids[0], testTables[0].Name)
 	idxs = idxTableInfo.Indices
 	require.Equal(t, 0, len(idxs))
-	
+
 	err = catalog.DropIndex(0, idxTableInfo.Id, idxTableInfo.SchemaId, "mock_idx")
 	require.Equal(t, ErrIndexNotExist, err)
 
@@ -278,46 +278,4 @@ func TestCatalogWithUtil(t *testing.T) {
 
 	err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(0))
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: DropDatabase wrong err")
-
-	//Test parallel
-	wg := sync.WaitGroup{}
-
-	m := 4
-	//create database
-	dbCnt := int32(0)
-	wg.Add(m)
-	for j := 0; j < m; j++ {
-		go func() {
-			for i := 0; i < databaseCount; i++ {
-				if _, err := catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(i), 0); err == nil {
-					atomic.AddInt32(&dbCnt, 1)
-				}
-			}
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-	schemas, _ = catalog.ListDatabases()
-	require.Equal(t, databaseCount, len(schemas), "parallel: CreateDatabase wrong len")
-
-	// create table
-	tbCnt := int32(0)
-	wg.Add(m)
-	dbid := schemas[0].Id
-	tables, _ = catalog.ListTables(dbid)
-	for j := 0; j < m; j++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < tableCount; i++ {
-				if _, err := catalog.CreateTable(0, dbid, *testTables[i]); err == nil {
-					atomic.AddInt32(&tbCnt, 1)
-				} else {
-					logutil.Infof("create table failed, %v, %v", *testTables[i], err)
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	tables, _ = catalog.ListTables(dbid)
-	require.Equal(t, tableCount, len(tables), "parallel: CreateTable wrong len")
 }

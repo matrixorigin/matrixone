@@ -27,15 +27,27 @@ import (
 
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/storage"
-	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
+	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+
+	"go.uber.org/zap/zapcore"
+	stdLog "log"
+
+	cconfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
+	// cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
 
+var preAllocShardNum = uint64(20)
+
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	// cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()
@@ -58,17 +70,58 @@ func TestEpochGC(t *testing.T) {
 		go testPCI(i, cf[i], pcis[i])
 	}
 
-	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
-	if err != nil {
-		t.Errorf("new cube failed %v", err)
-		return
-	}
+	// c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
+	// if err != nil {
+	// 	t.Errorf("new cube failed %v", err)
+	// 	return
+	// }
 
-	defer c.Stop()
+	// c.Applications[0].Start()
+	// c.Applications[1].Start()
+	// c.Applications[2].Start()
+	// defer c.Stop()
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
+			c.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = NewPDCallbackImpl(ppu)
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &aoeStorage.Options{}
+			mdCfg := &aoeStorage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &aoeStorage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &aoeStorage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Worker.RaftEventWorkers = 8
+			}),
+			// raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath("./test")))
+
+	c.Start()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
 
 	time.Sleep(3 * time.Second)
 
-	c.Applications[0].Close()
+	c.CubeDrivers[0].Close()
 
 	fmt.Println("-------------------close node 0----------------")
 
@@ -260,14 +313,14 @@ func Test_Multi_Server(t *testing.T) {
 
 	var dbs []*sql.DB = nil
 	for i, port := range testPorts {
-		dbs = append(dbs,open_db(t,port))
+		dbs = append(dbs, open_db(t, port))
 		require.True(t, dbs[i] != nil)
 	}
 
 	time.Sleep(100 * time.Millisecond)
 
 	for i := 0; i < len(testPorts); i++ {
-		close_db(t,dbs[i])
+		close_db(t, dbs[i])
 	}
 
 	for _, sv := range svs {

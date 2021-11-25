@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/server"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -263,11 +264,13 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
+		tableName := tbl.Name
+		aoeTableName := c.encodeTabletName(shardId, tbl.Id)
+		if err := c.Driver.CreateTablet(aoeTableName, shardId, &tbl); err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
-
+		tbl.Name = tableName
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
@@ -275,7 +278,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			return tid, err
 		}
 		wg.Add(1)
-		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i server.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -283,7 +286,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			}
 		}, nil)
 		wg.Add(1)
-		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i server.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -630,7 +633,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 
 //encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return strconv.Itoa(int(groupId))+strconv.Itoa(int(tableId))
+	return strconv.Itoa(int(groupId)) + strconv.Itoa(int(tableId))
 }
 
 //genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.
@@ -701,7 +704,7 @@ func (c *Catalog) deletedPrefix() []byte {
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
+		logutil.Infof("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
 	}()
 	timeoutC := time.After(timeout)
 	for {
@@ -794,7 +797,7 @@ func (c *Catalog) refreshTableIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
@@ -830,7 +833,7 @@ func (c *Catalog) refreshDBIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)

@@ -35,9 +35,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"go.uber.org/zap/zapcore"
 
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
@@ -82,12 +81,12 @@ var (
 )
 
 func TestAOEEngine(t *testing.T) {
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	//putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			c.ServerConfig.ExternalServer = true
+			//c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -110,7 +109,7 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 				cfg.Worker.RaftEventWorkers = uint64(32)
@@ -126,7 +125,7 @@ func TestAOEEngine(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	var catalogs []*catalog2.Catalog
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 1; i++ {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
@@ -255,12 +254,12 @@ func TestAOEEngine(t *testing.T) {
 }
 
 func doRestartEngine(t *testing.T) {
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	//putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			c.ServerConfig.ExternalServer = true
+			//c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -282,7 +281,7 @@ func doRestartEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {
