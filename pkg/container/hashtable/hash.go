@@ -19,8 +19,13 @@ import (
 	"unsafe"
 )
 
-var BytesHash func(unsafe.Pointer, int) uint64
-var IntHash func(uint64) uint64
+var BytesHash = wyhash
+var AltBytesHash = dummyBytesHash
+
+var IntHash = intHash64
+var IntBatchHash = intHash64Batch
+
+var intCellBatchHash = intHash64CellBatch
 
 const (
 	m1 = 0xa0761d6478bd642f
@@ -29,6 +34,24 @@ const (
 	m4 = 0x589965cc75374cc3
 	m5 = 0x1d8e4e27c47d124f
 )
+
+func Crc32BytesHashAsm(data unsafe.Pointer, length int) uint64
+func Crc32Int64HashAsm(data uint64) uint64
+func Crc32Int64SliceHashAsm(data *uint64, length int) uint64
+
+func Crc32Int64BatchHashAsm(data unsafe.Pointer, hashes *uint64, length int)
+func Crc32Int64CellBatchHashAsm(data unsafe.Pointer, hashes *uint64, length int)
+
+func aesBytesHashAsm(data unsafe.Pointer, length int) [2]uint64
+
+func Crc32Int192HashAsm(data *[3]uint64) uint64
+func Crc32Int192BatchHashAsm(data *[3]uint64, hashes *uint64, length int)
+
+func Crc32Int256HashAsm(data *[4]uint64) uint64
+func Crc32Int256BatchHashAsm(data *[4]uint64, hashes *uint64, length int)
+
+func Crc32Int320HashAsm(data *[5]uint64) uint64
+func Crc32Int320BatchHashAsm(data *[5]uint64, hashes *uint64, length int)
 
 func wyhash(data unsafe.Pointer, s int) uint64 {
 	var a, b uint64
@@ -97,4 +120,28 @@ func intHash64(x uint64) uint64 {
 	x ^= x >> 33
 
 	return x
+}
+
+func intHash64Batch(data unsafe.Pointer, hashes *uint64, length int) {
+	dataSlice := unsafe.Slice((*uint64)(data), length)
+	hashSlice := unsafe.Slice(hashes, length)
+
+	for i := 0; i < length; i++ {
+		hashSlice[i] = intHash64(dataSlice[i])
+	}
+}
+
+func intHash64CellBatch(data unsafe.Pointer, hashes *uint64, length int) {
+	dataSlice := unsafe.Slice((*Int64HashMapCell)(data), length)
+	hashSlice := unsafe.Slice(hashes, length)
+
+	for i := 0; i < length; i++ {
+		hashSlice[i] = intHash64(dataSlice[i].Key)
+	}
+}
+
+func dummyBytesHash(data unsafe.Pointer, length int) [2]uint64 {
+	var hash [2]uint64
+	copy(unsafe.Slice((*byte)(unsafe.Pointer(&hash[0])), 16), unsafe.Slice((*byte)(data), length))
+	return hash
 }

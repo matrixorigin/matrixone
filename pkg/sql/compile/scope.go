@@ -26,6 +26,7 @@ import (
 	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/plan"
 	"matrixone/pkg/sql/viewexec/plus"
+	"matrixone/pkg/sql/viewexec/times"
 	"matrixone/pkg/sql/viewexec/transform"
 	"matrixone/pkg/vectorize/like"
 	"matrixone/pkg/vm"
@@ -281,6 +282,14 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	bat.InitZsOne(count)
 	return fill(u, bat)
 }
+
+// Insert will insert a batch into relation and return affectedRow
+func (s *Scope) Insert(ts uint64) (uint64, error) {
+	p, _ := s.Plan.(*plan.Insert)
+	defer p.Relation.Close()
+	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+}
+
 func (s *Scope) Run(e engine.Engine) error {
 	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
 	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
@@ -312,6 +321,12 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 					err = rerr
 				}
 			}(s.PreScopes[i])
+		case Parallel:
+			go func(s *Scope) {
+				if rerr := s.ParallelRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
 		}
 	}
 	p := pipeline.NewMerge(s.Instructions)
@@ -322,6 +337,20 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 }
 
 func (s *Scope) RemoteRun(e engine.Engine) error {
+	return s.ParallelRun(e)
+}
+
+func (s *Scope) ParallelRun(e engine.Engine) error {
+	switch s.Instructions[0].Arg.(type) {
+	case *times.Argument:
+		return s.RunCAQ(e)
+	case *transform.Argument:
+		return s.RunAQ(e)
+	}
+	return nil
+}
+
+func (s *Scope) RunAQ(e engine.Engine) error {
 	var rds []engine.Reader
 
 	mcpu := runtime.NumCPU()
@@ -386,7 +415,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 		for i := 0; i < len(ss); i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 4),
+				Ch:  make(chan *batch.Batch, 2),
 			}
 		}
 	}
@@ -402,9 +431,170 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	return s.MergeRun(e)
 }
 
-// Insert will insert a batch into relation and return affectedRow
-func (s *Scope) Insert(ts uint64) (uint64, error) {
-	p, _ := s.Plan.(*plan.Insert)
-	defer p.Relation.Close()
-	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+func (s *Scope) RunCAQ(e engine.Engine) error {
+	var err error
+	var rds []engine.Reader
+	var arg *times.Argument
+
+	mcpu := runtime.NumCPU()
+	ss := make([]*Scope, mcpu)
+	{
+		s0 := s.PreScopes[0]
+		db, err := e.Database(s0.DataSource.SchemaName)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(s0.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rds = rel.NewReader(mcpu)
+		s.DataSource = s0.DataSource
+		arg = s.Instructions[0].Arg.(*times.Argument)
+		arg.Arg = s0.Instructions[0].Arg.(*transform.Argument)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rds[i],
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+	}
+	s.PreScopes = s.PreScopes[1:]
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(s.PreScopes))
+	{
+		for i := 0; i < len(s.PreScopes); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 2),
+			}
+		}
+	}
+	for i := range s.PreScopes {
+		s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Normal:
+			go func(s *Scope) {
+				if rerr := s.Run(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Merge:
+			go func(s *Scope) {
+				if rerr := s.MergeRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Remote:
+			go func(s *Scope) {
+				if rerr := s.RemoteRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Parallel:
+			go func(s *Scope) {
+				if rerr := s.ParallelRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		}
+	}
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+		reg := s.Proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
+		if bat == nil {
+			continue
+		}
+		if len(bat.Zs) == 0 {
+			i--
+			continue
+		}
+		arg.Bats = append(arg.Bats, bat)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i].Instructions = vm.Instructions{vm.Instruction{
+			Op: vm.Times,
+			Arg: &times.Argument{
+				IsBare:   arg.IsBare,
+				SisBares: arg.SisBares,
+				R:        arg.R,
+				Rvars:    arg.Rvars,
+				Ss:       arg.Ss,
+				Svars:    arg.Svars,
+				VarsMap:  arg.VarsMap,
+				Bats:     arg.Bats,
+				Arg: &transform.Argument{
+					Typ:        arg.Arg.Typ,
+					IsMerge:    arg.Arg.IsMerge,
+					FreeVars:   arg.Arg.FreeVars,
+					Restrict:   arg.Arg.Restrict,
+					Projection: arg.Arg.Projection,
+					BoundVars:  arg.Arg.BoundVars,
+				},
+			},
+		}}
+	}
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op:  vm.UnTransform,
+		Arg: s.Instructions[2].Arg,
+	})
+	rs.Instructions = append(rs.Instructions, s.Instructions[2:]...)
+	{
+		ctx, cancel := context.WithCancel(context.Background())
+		rs.Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		rs.Proc.Cancel = cancel
+		rs.Proc.Cancel = cancel
+		rs.Proc.Id = s.Proc.Id
+		rs.Proc.Lim = s.Proc.Lim
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+		{
+			for i := 0; i < len(ss); i++ {
+				rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+					Ctx: ctx,
+					Ch:  make(chan *batch.Batch, 2),
+				}
+			}
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op: vm.Connector,
+				Arg: &connector.Argument{
+					Mmu: rs.Proc.Mp.Gm,
+					Reg: rs.Proc.Reg.MergeReceivers[i],
+				},
+			})
+		}
+	}
+	{
+		p := pipeline.NewMerge(rs.Instructions)
+		fmt.Printf("p: %v\n", p)
+	}
+	return rs.MergeRun(e)
 }

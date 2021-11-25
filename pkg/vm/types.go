@@ -22,6 +22,7 @@ const (
 	Merge
 	Dedup
 	Order
+	Oplus
 	Output
 	Offset
 	Restrict

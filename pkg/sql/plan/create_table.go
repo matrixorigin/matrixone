@@ -28,7 +28,7 @@ import (
 )
 
 func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) error {
-	var primaryKeys []string// stores primary key column's names.
+	var primaryKeys []string // stores primary key column's names.
 	defs := make([]engine.TableDef, 0, len(stmt.Defs))
 
 	// semantic analysis
@@ -105,10 +105,10 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 
 		return &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Name:       n.Name.Parts[0],
-				Alg:        compress.Lz4,
-				Type:       *typ,
-				Default:    defaultExpr,
+				Name:    n.Name.Parts[0],
+				Alg:     compress.Lz4,
+				Type:    *typ,
+				Default: defaultExpr,
 			},
 		}, primaryKeys, nil
 	case *tree.PrimaryKeyIndex: // todo: need to change if parser will use another AST
@@ -204,7 +204,7 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 			if value, err = buildConstant(*typ, defaultExpr); err != nil { // build constant failed
 				return engine.EmptyDefaultExpr, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			}
-			if _ ,err = rangeCheck(value, *typ, "", 0); err != nil { // value out of range
+			if _, err = rangeCheck(value, *typ, "", 0); err != nil { // value out of range
 				return engine.EmptyDefaultExpr, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			}
 			return engine.MakeDefaultExpr(true, value, false), nil
@@ -240,9 +240,9 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		case types.T_int64:
 			return v, nil
 		default:
-			return nil, errors.New(errno.DatatypeMismatch,"unexpected type and value")
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
-		return nil, errors.New(errno.DataException , fmt.Sprintf(errString, columnName, rowNumber))
+		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case uint64:
 		switch typ.Oid {
 		case types.T_uint8:
@@ -260,14 +260,14 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		case types.T_uint64:
 			return v, nil
 		default:
-			return nil, errors.New(errno.DatatypeMismatch,"unexpected type and value")
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case float32:
 		if typ.Oid == types.T_float32 {
 			return v, nil
 		}
-		return nil, errors.New(errno.DatatypeMismatch,"unexpected type and value")
+		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 	case float64:
 		switch typ.Oid {
 		case types.T_float32:
@@ -277,7 +277,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		case types.T_float64:
 			return v, nil
 		default:
-			return nil, errors.New(errno.DatatypeMismatch,"unexpected type and value")
+			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case string:
@@ -294,7 +294,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
 	default:
-		return nil, errors.New(errno.DatatypeMismatch,"unexpected type and value")
+		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 	}
 }
 

@@ -61,7 +61,7 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		return e.compileVTree(vtree.New().Build(ft), qry.VarsMap)
+		return e.compileVTree(qry.FreeAttrs, vtree.New().Build(ft), qry.VarsMap)
 	case *plan.Insert:
 		// todo: insert into tbl select a, b from tbl2 should deal next time.
 		return &Scope{
@@ -143,6 +143,10 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
+func (e *Exec) IncreaseAffectedRows(n uint64) {
+	e.affectRows += n
+}
+
 func (e *Exec) SetAffectedRows(n uint64) {
 	e.affectRows = n
 }
@@ -162,6 +166,8 @@ func (e *Exec) Run(ts uint64) error {
 		return e.scope.MergeRun(e.c.e)
 	case Remote:
 		return e.scope.RemoteRun(e.c.e)
+	case Parallel:
+		return e.scope.ParallelRun(e.c.e)
 	case Insert:
 		affectedRows, err := e.scope.Insert(ts)
 		if err != nil {

@@ -88,6 +88,7 @@ func (r *UIntRing) Grow(m *mheap.Mheap) error {
 		r.Ns = make([]int64, 0, 8)
 		r.Vs = unsafe.Slice((*uint64)(unsafe.Pointer(&data[0])), cap(data)/8)[:len(data)/8]
 	} else if n+1 > cap(r.Vs) {
+		r.Da = r.Da[:n*8]
 		data, err := mheap.Grow(m, r.Da, int64(n+1)*8)
 		if err != nil {
 			return err

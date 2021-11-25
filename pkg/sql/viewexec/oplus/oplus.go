@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plus
+package oplus
 
 import (
 	"bytes"
@@ -31,7 +31,6 @@ func String(_ interface{}, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
-	n.ctr.state = Fill
 	return nil
 }
 
@@ -48,75 +47,56 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 }
 
 func (ctr *Container) processBoundVars(proc *process.Process) (bool, error) {
-	for {
-		switch ctr.state {
-		case Fill:
-			for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-				bat := <-proc.Reg.MergeReceivers[i].Ch
-				if bat == nil {
-					continue
-				}
-				if len(bat.Zs) == 0 {
-					i--
-					continue
-				}
-				if ctr.bat == nil {
-					ctr.bat = bat
-				} else {
-					ctr.bat.Zs[0] += bat.Zs[0]
-					for j, r := range ctr.bat.Rs {
-						r.Add(bat.Rs[j], 0, 0)
-					}
-					batch.Clean(bat, proc.Mp)
-				}
-			}
-			ctr.state = Eval
-		case Eval:
-			if ctr.bat != nil {
-				proc.Reg.InputBatch = ctr.bat
-				ctr.bat = nil
-			}
-			return true, nil
+	bat := proc.Reg.InputBatch
+	if bat == nil { // begin eval
+		if ctr.bat != nil {
+			proc.Reg.InputBatch = ctr.bat
+			ctr.bat = nil
 		}
+		return true, nil
 	}
+	if len(bat.Zs) == 0 {
+		return false, nil
+	}
+	if ctr.bat == nil {
+		ctr.bat = bat
+	} else {
+		ctr.bat.Zs[0] += bat.Zs[0]
+		for j, r := range ctr.bat.Rs {
+			r.Add(bat.Rs[j], 0, 0)
+		}
+		batch.Clean(bat, proc.Mp)
+	}
+	proc.Reg.InputBatch = &batch.Batch{}
+	return false, nil
 }
 
 func (ctr *Container) processFreeVars(proc *process.Process) (bool, error) {
-	for {
-		switch ctr.state {
-		case Fill:
-			if err := ctr.fill(proc); err != nil {
-				batch.Clean(ctr.bat, proc.Mp)
-				proc.Reg.InputBatch = nil
-				ctr.state = Eval
-				return true, err
-			}
-			ctr.state = Eval
-		case Eval:
-			if ctr.bat != nil {
-				proc.Reg.InputBatch = ctr.bat
-				ctr.bat = nil
-			}
-			return true, nil
+	bat := proc.Reg.InputBatch
+	if bat == nil { // begin eval
+		if ctr.bat != nil {
+			proc.Reg.InputBatch = ctr.bat
+			ctr.bat = nil
 		}
+		return true, nil
 	}
-}
-
-func (ctr *Container) fill(proc *process.Process) error {
-	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		bat := <-proc.Reg.MergeReceivers[i].Ch
-		if bat == nil {
-			continue
-		}
-		if len(bat.Zs) == 0 {
-			i--
-			continue
-		}
-		if err := ctr.fillBatch(bat, proc); err != nil {
-			return err
-		}
+	if len(bat.Zs) == 0 {
+		return false, nil
 	}
-	return nil
+	if len(bat.Attrs) == 0 {
+		if ctr.bat == nil {
+			ctr.bat = bat
+		} else {
+			ctr.bat.Zs[0] += bat.Zs[0]
+			for j, r := range ctr.bat.Rs {
+				r.Add(bat.Rs[j], 0, 0)
+			}
+			batch.Clean(bat, proc.Mp)
+		}
+		proc.Reg.InputBatch = &batch.Batch{}
+	}
+	proc.Reg.InputBatch = &batch.Batch{}
+	return false, ctr.fillBatch(bat, proc)
 }
 
 func (ctr *Container) fillBatch(bat *batch.Batch, proc *process.Process) error {
@@ -944,7 +924,6 @@ func (ctr *Container) fillH40(bat *batch.Batch, proc *process.Process) error {
 			for j, r := range ctr.bat.Rs {
 				r.Add(bat.Rs[j], ai, i+int64(k))
 			}
-
 		}
 	}
 	return nil

@@ -89,6 +89,7 @@ func (r *UInt64Ring) Grow(m *mheap.Mheap) error {
 		r.Ns = make([]int64, 0, 8)
 		r.Vs = encoding.DecodeUint64Slice(data)
 	} else if n+1 >= cap(r.Vs) {
+		r.Da = r.Da[:n*8]
 		data, err := mheap.Grow(m, r.Da, int64(n+1)*8)
 		if err != nil {
 			return err
