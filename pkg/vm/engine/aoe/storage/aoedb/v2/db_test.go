@@ -1388,7 +1388,7 @@ func TestFilter(t *testing.T) {
 	assert.Nil(t, err)
 	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
 	seg := tblData.WeakRefSegment(segId)
-	seg.GetIndexHolder().Init(seg.GetSegmentFile())
+	//seg.GetIndexHolder().Init(seg.GetSegmentFile())
 	segment := &db.Segment{
 		Data: seg,
 		Ids:  new(atomic.Value),
