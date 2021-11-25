@@ -2783,3 +2783,99 @@ func TestCreateAndDropIndex(t *testing.T) {
 
 	inst.Close()
 }
+
+func TestRepeatCreateAndDropIndex(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchema(4)
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-0", metadata.NumBsi, 1)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+		Indice:        indice,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	tblName := schema.Name
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(3)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+
+	creater := func(i int) func() {
+		return func() {
+			indice := metadata.NewIndexSchema()
+			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
+			ctx := &CreateIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				Indices:       indice,
+			}
+			assert.Nil(t, inst.CreateIndex(ctx))
+		}
+	}
+
+	dropper := func(s, i int) func() {
+		return func() {
+			indexNames := make([]string, 0)
+			for j := s; j < i; j += 1 {
+				indexNames = append(indexNames, fmt.Sprintf("idx-%d", j))
+			}
+			ctx := &DropIndexCtx{
+				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+				Table:         tblName,
+				IndexNames:    indexNames,
+			}
+			assert.Nil(t, inst.DropIndex(ctx))
+		}
+	}
+
+	for i := 0; i < 10; i++ {
+		creater(1)()
+		dropper(1, 2)()
+	}
+
+	tblData, err := inst.GetTableData(tblMeta)
+	assert.Nil(t, err)
+	seg := tblData.StrongRefSegment(uint64(1))
+	holder := seg.GetIndexHolder()
+	t.Log(holder.StringIndicesRefsNoLock())
+
+	inst.Close()
+
+	inst, _, _ = initTestDB3(t)
+	tblData, err = inst.GetTableData(tblMeta)
+	assert.Nil(t, err)
+	seg = tblData.StrongRefSegment(uint64(1))
+	holder = seg.GetIndexHolder()
+	assert.Equal(t, 5, holder.IndicesCount())
+
+	inst.Close()
+}

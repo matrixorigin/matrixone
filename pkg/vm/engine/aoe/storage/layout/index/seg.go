@@ -616,6 +616,10 @@ func (holder *SegmentHolder) stringNoLock() string {
 func (holder *SegmentHolder) StringIndicesRefsNoLock() string {
 	s := fmt.Sprintf("<SEGHOLDER[%s]>[Indices cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
 	for i, idx := range holder.self.Indices {
+		if idx == nil {
+			s += fmt.Sprintf("<Index[%d]><NULL>\n", i)
+			continue
+		}
 		s += fmt.Sprintf("<Index[%d]>[Ref cnt=%d]\n", i, idx.RefCount())
 	}
 	return s
