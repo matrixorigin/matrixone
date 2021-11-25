@@ -49,25 +49,26 @@ func (ht *StringHashMap) Init() {
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), cap(rawData)/cellSize)[:len(rawData)/cellSize]
+	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
-func (ht *StringHashMap) Insert(hash uint64, key StringRef) (inserted bool, value *uint64) {
+func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
 	ht.resizeOnDemand()
 
-	if hash == 0 {
-		if key.Len <= 8 {
-			copy(unsafe.Slice((*byte)(unsafe.Pointer(&hash)), 8), unsafe.Slice(key.Ptr, key.Len))
-			hash = crc32Int64HashAsm(hash) | (uint64(key.Len) << 32)
-		} else {
-			hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		}
-	}
-
+	var hash uint64
 	var key128 [2]uint64
-	if key.Len <= 16 {
+
+	switch key.Len >> 3 {
+	case 0:
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
+		hash = crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
+
+	case 1:
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-	} else {
+		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+
+	default:
+		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
 		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
@@ -83,20 +84,21 @@ func (ht *StringHashMap) Insert(hash uint64, key StringRef) (inserted bool, valu
 	return
 }
 
-func (ht *StringHashMap) Find(hash uint64, key StringRef) *uint64 {
-	if hash == 0 {
-		if key.Len <= 8 {
-			copy(unsafe.Slice((*byte)(unsafe.Pointer(&hash)), 8), unsafe.Slice(key.Ptr, key.Len))
-			hash = crc32Int64HashAsm(hash) | (uint64(key.Len) << 32)
-		} else {
-			hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		}
-	}
-
+func (ht *StringHashMap) Find(key StringRef) *uint64 {
+	var hash uint64
 	var key128 [2]uint64
-	if key.Len <= 16 {
+
+	switch key.Len >> 3 {
+	case 0:
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
+		hash = crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
+
+	case 1:
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-	} else {
+		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+
+	default:
+		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
 		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
@@ -118,9 +120,9 @@ func (ht *StringHashMap) findBucket(hash uint64, key128 *[2]uint64) (empty bool,
 	return
 }
 
-func (ht *StringHashMap) resizeOnDemand() error {
+func (ht *StringHashMap) resizeOnDemand() {
 	if ht.elemCnt < ht.maxElemCnt {
-		return nil
+		return
 	}
 
 	var newBucketCntBits uint8
@@ -135,43 +137,25 @@ func (ht *StringHashMap) resizeOnDemand() error {
 
 	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
 
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	copy(newRawData, ht.rawData)
-
 	oldBucketCnt := ht.bucketCnt
+	oldBucketData := ht.bucketData
+
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
+	newBucketData := unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
+
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
 	ht.rawData = newRawData
-	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&newRawData[0])), cap(newRawData)/cellSize)[:len(newRawData)/cellSize]
+	ht.bucketData = newBucketData
 
-	var i uint64
-	for i = 0; i < oldBucketCnt; i++ {
-		ht.reinsert(i)
+	for i := uint64(0); i < oldBucketCnt; i++ {
+		cell := &oldBucketData[i]
+		if cell.Hash != 0 {
+			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key128)
+			ht.bucketData[newIdx] = *cell
+		}
 	}
-
-	for ht.reinsert(i) {
-		i++
-	}
-
-	return nil
-}
-
-func (ht *StringHashMap) reinsert(idx uint64) bool {
-	cell := &ht.bucketData[idx]
-	if cell.Hash == 0 {
-		return false
-	}
-
-	_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key128)
-	if newIdx == idx {
-		return false
-	}
-
-	ht.bucketData[newIdx] = *cell
-	*cell = StringHashMapCell{}
-
-	return true
 }
 
 func (ht *StringHashMap) Cardinality() uint64 {

@@ -229,7 +229,7 @@ tail3:
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 
-// func crc32Int192HashAsm(data *[3]uint64)
+// func crc32Int192HashAsm(data *[3]uint64) uint64
 // Requires: SSE4.2
 TEXT ·crc32Int192HashAsm(SB), NOSPLIT, $0-16
 	MOVQ data+0(FP), AX
@@ -240,7 +240,7 @@ TEXT ·crc32Int192HashAsm(SB), NOSPLIT, $0-16
 	MOVQ   DX, ret+8(FP)
 	RET
 
-// func crc32Int256HashAsm(data *[4]uint64)
+// func crc32Int256HashAsm(data *[4]uint64) uint64
 // Requires: SSE4.2
 TEXT ·crc32Int256HashAsm(SB), NOSPLIT, $0-16
 	MOVQ data+0(FP), AX
@@ -252,7 +252,7 @@ TEXT ·crc32Int256HashAsm(SB), NOSPLIT, $0-16
 	MOVQ   DX, ret+8(FP)
 	RET
 
-// func crc32Int320HashAsm(data *[4]uint64)
+// func crc32Int320HashAsm(data *[4]uint64) uint64
 // Requires: SSE4.2
 TEXT ·crc32Int320HashAsm(SB), NOSPLIT, $0-16
 	MOVQ data+0(FP), AX
