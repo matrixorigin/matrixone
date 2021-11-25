@@ -114,6 +114,7 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 		}
 		holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
 		holder.self.Indices = append(holder.self.Indices, node)
+		logutil.Infof("Zone map load successfully, current indices count: %d | %s", len(holder.self.Indices), holder.ID.SegmentString())
 	}
 	holder.Inited = true
 }
@@ -125,6 +126,13 @@ func (holder *SegmentHolder) AllocateVersion(colIdx int) uint64 {
 		holder.VersionAllocator.Allocators[colIdx] = common.NewIdAlloctor(uint64(1))
 	}
 	return holder.VersionAllocator.Allocators[colIdx].Alloc()
+}
+
+// IndicesCount returns count of indices separated from segment file
+func (holder *SegmentHolder) IndicesCount() int {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	return len(holder.self.Indices)
 }
 
 // DropIndex trying to drop the given index from holder. In detail, we only has 2 types
@@ -292,7 +300,7 @@ func (holder *SegmentHolder) LoadIndex(segFile base.ISegmentFile, filename strin
 			holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
 			holder.self.Indices = append(holder.self.Indices, node)
 			holder.self.FileHelper[filepath.Base(filename)] = node
-			logutil.Infof("BSI load successfully | %s", filename)
+			logutil.Infof("BSI load successfully, current indices count: %d | %s", len(holder.self.Indices), holder.ID.SegmentString())
 			return
 		}
 		return

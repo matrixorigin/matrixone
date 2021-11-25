@@ -2738,4 +2738,48 @@ func TestCreateAndDropIndex(t *testing.T) {
 	}
 
 	inst.Close()
+
+	inst, _, _ = initTestDB3(t)
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	tblMeta = tblData.GetMeta()
+	//t.Log(tblData.GetIndexHolder().StringIndicesRefs())
+	for _, segId := range tblMeta.SimpleGetSegmentIds() {
+		segMeta := tblMeta.SimpleGetSegment(segId)
+		segMeta.RLock()
+		if !segMeta.IsSortedLocked() {
+			segMeta.RUnlock()
+			continue
+		}
+		segMeta.RUnlock()
+		seg := tblData.StrongRefSegment(segId)
+		holder := seg.GetIndexHolder()
+		// 4 columns * (1 bsi + 1 zone map)
+		assert.Equal(t, 8, holder.IndicesCount())
+		seg.Unref()
+	}
+
+	for i := 0; i < 2; i++ {
+		appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+		inst.Append(appendCtx)
+		time.Sleep(waitTime)
+	}
+
+	time.Sleep(waitTime)
+
+	for _, segId := range tblMeta.SimpleGetSegmentIds() {
+		segMeta := tblMeta.SimpleGetSegment(segId)
+		segMeta.RLock()
+		if !segMeta.IsSortedLocked() {
+			segMeta.RUnlock()
+			continue
+		}
+		segMeta.RUnlock()
+		seg := tblData.StrongRefSegment(segId)
+		holder := seg.GetIndexHolder()
+		assert.Equal(t, 8, holder.IndicesCount())
+		seg.Unref()
+	}
+
+	inst.Close()
 }
