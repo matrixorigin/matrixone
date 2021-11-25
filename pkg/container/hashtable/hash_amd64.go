@@ -14,14 +14,19 @@
 
 package hashtable
 
-const (
-	kInitialBucketCntBits = 10
-	kInitialBucketCnt     = 1 << kInitialBucketCntBits
-
-	kLoadFactorNumerator   = 5
-	kLoadFactorDenominator = 10
-
-	kTwoLevelBucketBits = 8
-	kTwoLevelBucketNum  = 1 << kTwoLevelBucketBits
-	kMaxTwoLevelBucket  = kTwoLevelBucketNum - 1
+import (
+	"golang.org/x/sys/cpu"
 )
+
+func init() {
+	if cpu.X86.HasSSE42 {
+		BytesHash = Crc32BytesHashAsm
+		IntHash = Crc32Int64HashAsm
+		IntBatchHash = Crc32Int64BatchHashAsm
+		intCellBatchHash = Crc32Int64CellBatchHashAsm
+	}
+
+	if cpu.X86.HasAES {
+		AltBytesHash = aesBytesHashAsm
+	}
+}

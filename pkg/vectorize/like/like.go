@@ -27,13 +27,13 @@ import (
 )
 
 var (
-	SliceLikePure  func(*types.Bytes, []byte, []int64) ([]int64, error)
-	SliceLikeSlice func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
-	PureLikeSlice  func([]byte, *types.Bytes, []int64) ([]int64, error)
-	PureLikePure   func([]byte, []byte, []int64) ([]int64, error)
-	SliceNullLikePure func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
+	SliceLikePure          func(*types.Bytes, []byte, []int64) ([]int64, error)
+	SliceLikeSlice         func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
+	PureLikeSlice          func([]byte, *types.Bytes, []int64) ([]int64, error)
+	PureLikePure           func([]byte, []byte, []int64) ([]int64, error)
+	SliceNullLikePure      func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
 	SliceNullLikeSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
-	PureLikeSliceNull func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	PureLikeSliceNull      func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
 )
 
 var _ = SliceLikePure
@@ -128,7 +128,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 			prefix := expr[:n-1]
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] >= n - 1 && bytes.HasPrefix(s.Get(int64(i)), prefix) {
+				if s.Lengths[i] >= n-1 && bytes.HasPrefix(s.Get(int64(i)), prefix) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -269,7 +269,7 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 			return nil, nil
 		case c1 == '%' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			if len(p) >= n - 1 && bytes.HasPrefix(p[:n-1], prefix) {
+			if len(p) >= n-1 && bytes.HasPrefix(p[:n-1], prefix) {
 				rs[0] = int64(0)
 				return rs[:1], nil
 			}
@@ -391,7 +391,7 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 					}
 				case c1 == '%' && !(c0 == '%' || c0 == '_'):
 					prefix := expr[:n-1]
-					if len(p) >= n - 1 && bytes.HasPrefix(p[:n-1], prefix) {
+					if len(p) >= n-1 && bytes.HasPrefix(p[:n-1], prefix) {
 						rs[count] = int64(i)
 						count++
 					}

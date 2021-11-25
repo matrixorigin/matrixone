@@ -28,6 +28,7 @@ const (
 	Merge = iota
 	Normal
 	Remote
+	Parallel
 	Insert
 	CreateDatabase
 	CreateTable

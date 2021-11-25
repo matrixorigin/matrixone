@@ -90,7 +90,7 @@ type Float64Ring struct {
 }
 
 type StrRing struct {
-	IsE bool // isEmpty
+	Es  []bool // isEmpty
 	Ns  []int64
 	Vs  [][]byte
 	Typ types.Type

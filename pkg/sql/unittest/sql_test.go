@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package unittest
 
 import (
@@ -15,7 +29,7 @@ import (
 	"testing"
 )
 
-func newTestEngine () (engine.Engine, *process.Process) {
+func newTestEngine() (engine.Engine, *process.Process) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
@@ -65,7 +79,7 @@ func TestInsertFunction(t *testing.T) {
 func TestDDLFunction(t *testing.T) {
 	e, proc := newTestEngine()
 
-	ddls := []string {
+	ddls := []string{
 		// support
 		"create database d1;",
 		"create table ddlt1 (a int, b int);",
@@ -95,7 +109,7 @@ func TestDDLFunction(t *testing.T) {
 func TestOperators(t *testing.T) {
 	e, proc := newTestEngine()
 
-	supports := []string {
+	supports := []string{
 		"create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);",
 		"create table ffs (f1 float, f2 double);",
 		"create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);",
@@ -163,14 +177,14 @@ func TempSelect(e engine.Engine, schema, name string) string {
 	defs := r.TableDefs()
 	attrs := make([]string, 0, len(defs))
 	{
-		for _, def := range defs{
-			if v, ok := def.(*engine.AttributeDef); ok{
+		for _, def := range defs {
+			if v, ok := def.(*engine.AttributeDef); ok {
 				attrs = append(attrs, v.Attr.Name)
 			}
 		}
 	}
 	cs := make([]uint64, len(attrs))
-	for i := range cs{
+	for i := range cs {
 		cs[i] = 1
 	}
 	rd := r.NewReader(1)[0]

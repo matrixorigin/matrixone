@@ -27,7 +27,6 @@ import (
 func NewFloat32(typ types.Type) *Float32Ring {
 	return &Float32Ring{
 		Typ: typ,
-		IsE: true,
 	}
 }
 
@@ -54,7 +53,6 @@ func (r *Float32Ring) Size() int {
 
 func (r *Float32Ring) Dup() ring.Ring {
 	return &Float32Ring{
-		IsE: true,
 		Typ: r.Typ,
 	}
 }
@@ -66,15 +64,18 @@ func (r *Float32Ring) Type() types.Type {
 func (r *Float32Ring) SetLength(n int) {
 	r.Vs = r.Vs[:n]
 	r.Ns = r.Ns[:n]
+	r.Es = r.Es[:n]
 }
 
 func (r *Float32Ring) Shrink(sels []int64) {
 	for i, sel := range sels {
 		r.Vs[i] = r.Vs[sel]
 		r.Ns[i] = r.Ns[sel]
+		r.Es[i] = r.Es[sel]
 	}
 	r.Vs = r.Vs[:len(sels)]
 	r.Ns = r.Ns[:len(sels)]
+	r.Es = r.Es[:len(sels)]
 }
 
 func (r *Float32Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
@@ -92,6 +93,7 @@ func (r *Float32Ring) Grow(m *mheap.Mheap) error {
 		r.Ns = make([]int64, 0, 8)
 		r.Vs = encoding.DecodeFloat32Slice(data)
 	} else if n+1 >= cap(r.Vs) {
+		r.Da = r.Da[:n*4]
 		data, err := mheap.Grow(m, r.Da, int64(n+1)*4)
 		if err != nil {
 			return err
@@ -103,13 +105,14 @@ func (r *Float32Ring) Grow(m *mheap.Mheap) error {
 	r.Vs = r.Vs[:n+1]
 	r.Vs[n] = 0
 	r.Ns = append(r.Ns, 0)
+	r.Es = append(r.Es, true)
 	return nil
 }
 
 func (r *Float32Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
-	if v := vec.Col.([]float32)[sel]; r.IsE || v > r.Vs[i] {
-		r.IsE = false
+	if v := vec.Col.([]float32)[sel]; r.Es[i] || v > r.Vs[i] {
 		r.Vs[i] = v
+		r.Es[i] = false
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
 		r.Ns[i]++
@@ -119,9 +122,9 @@ func (r *Float32Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
 func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 	vs := vec.Col.([]float32)
 	for _, v := range vs {
-		if r.IsE || v > r.Vs[i] {
-			r.IsE = false
+		if r.Es[i] || v > r.Vs[i] {
 			r.Vs[i] = v
+			r.Es[i] = false
 		}
 	}
 	r.Ns[i] += int64(nulls.Length(vec.Nsp))
@@ -129,8 +132,8 @@ func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 
 func (r *Float32Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Float32Ring)
-	if r.IsE || ar.Vs[y] > r.Vs[x] {
-		r.IsE = false
+	if r.Es[x] || ar.Vs[y] > r.Vs[x] {
+		r.Es[x] = false
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]

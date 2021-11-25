@@ -98,7 +98,6 @@ func (*CommentDef) tableDef()     {}
 func (*AttributeDef) tableDef()   {}
 func (*IndexTableDef) tableDef()  {}
 func (*PartitionByDef) tableDef() {}
-func (*PrimaryIndexDef) tableDef() {}
 
 type Relation interface {
 	Statistics

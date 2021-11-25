@@ -12,16 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plus
+package oplus
 
 import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/hashtable"
-)
-
-const (
-	Fill = iota
-	Eval
 )
 
 const (
@@ -43,7 +38,6 @@ const (
 )
 
 type Container struct {
-	state    int
 	typ      int
 	rows     uint64
 	vars     []string
