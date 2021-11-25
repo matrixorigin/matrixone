@@ -884,7 +884,7 @@ func TestRebuildIndices(t *testing.T) {
 		if seg.GetType() != base.SORTED_SEG {
 			continue
 		}
-		seg.GetIndexHolder().Init(seg.GetSegmentFile())
+		//seg.GetIndexHolder().Init(seg.GetSegmentFile())
 		//t.Log(seg.GetIndexHolder().Inited)
 		segment := &db.Segment{
 			Data: seg,
