@@ -325,6 +325,8 @@ github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7C
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
 github.com/matrixorigin/matrixcube v0.0.0-20211123083716-45493f5f0bac h1:6/4Da0G5RRggq+NaS2pA2MUhZAVNnBOCr9Le4XB0RIQ=
 github.com/matrixorigin/matrixcube v0.0.0-20211123083716-45493f5f0bac/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
+github.com/matrixorigin/matrixcube v0.0.0-20211124114820-5a4415521df1 h1:2UTxSLrAwvZTB0qoD4sjCXFc48kFdGGB6ypQcGp7Fkk=
+github.com/matrixorigin/matrixcube v0.0.0-20211124114820-5a4415521df1/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
