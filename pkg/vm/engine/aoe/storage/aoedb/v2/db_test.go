@@ -2918,10 +2918,11 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	assert.Nil(t, inst.DropIndex(dropIdxCtx))
 	time.Sleep(50 * time.Millisecond)
 
-	// TODO: detect bsi not found issue in segment filter
-	//filter := s.NewFilter()
-	//_, err = filter.Eq("mock_3", int32(1))
-	//assert.NotNil(t, err)
+	filter := s.NewFilter()
+	_, err = filter.Eq("mock_3", int32(1))
+	assert.NotNil(t, err)
+	_, err = filter.Ge("mock_2", int32(2))
+	assert.Nil(t, err)
 
 	inst.Close()
 }
