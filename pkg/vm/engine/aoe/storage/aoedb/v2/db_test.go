@@ -2866,7 +2866,7 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	assert.Nil(t, err)
 	seg := tblData.StrongRefSegment(uint64(1))
 	holder := seg.GetIndexHolder()
-	t.Log(holder.StringIndicesRefsNoLock())
+	//t.Log(holder.StringIndicesRefsNoLock())
 
 	inst.Close()
 
@@ -2876,6 +2876,24 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	seg = tblData.StrongRefSegment(uint64(1))
 	holder = seg.GetIndexHolder()
 	assert.Equal(t, 5, holder.IndicesCount())
+
+	s := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+
+	filter := s.NewFilter()
+	res, err :=filter.Eq("mock_1", int32(100))
+	assert.Nil(t, err)
+	assert.Equal(t, res.ToArray()[0], uint64(100))
+	sparse := s.NewSparseFilter()
+	ret, err := sparse.Eq("mock_1", int32(100))
+	assert.Nil(t, err)
+	rets := decodeBlockIds(ret)
+	t.Log(rets)
+	summ := s.NewSummarizer()
+	count, err := summ.Count("mock_1", nil)
+	assert.Equal(t, uint64(4000), count)
 
 	inst.Close()
 }
