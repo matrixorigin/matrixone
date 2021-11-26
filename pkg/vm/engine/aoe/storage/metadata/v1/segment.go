@@ -455,3 +455,24 @@ func (e *Segment) GetBlock(id, tranId uint64) *Block {
 	entry := e.BlockSet[pos]
 	return entry
 }
+
+func (e *Segment) GetRowCount() uint64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetRowCountLocked()
+}
+
+func (e *Segment) GetRowCountLocked() uint64 {
+	if e.CommitInfo.Op >= OpUpgradeClose {
+		return e.Table.Schema.BlockMaxRows * e.Table.Schema.SegmentMaxBlocks
+	}
+	var ret uint64
+	e.RLock()
+	for _, blk := range e.BlockSet {
+		blk.RLock()
+		ret += blk.GetCountLocked()
+		blk.RUnlock()
+	}
+	e.RUnlock()
+	return ret
+}

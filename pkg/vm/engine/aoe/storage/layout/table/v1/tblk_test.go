@@ -15,7 +15,6 @@ package table
 
 import (
 	"bytes"
-	"os"
 	"sync"
 	"testing"
 
@@ -49,8 +48,7 @@ func (p *testProcessor) execute(bat batch.IBatch) {
 }
 
 func TestTBlock(t *testing.T) {
-	dir := "/tmp/table/tblk"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	rowCount, blkCount := uint64(30), uint64(4)
 	catalog, indexWal := metadata.MockCatalogAndWal(dir, rowCount, blkCount)
 	defer indexWal.Close()

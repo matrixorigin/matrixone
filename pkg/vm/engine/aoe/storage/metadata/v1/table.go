@@ -48,6 +48,7 @@ type Table struct {
 	IdIndex           map[uint64]int `json:"-"`
 	Database          *Database      `json:"-"`
 	FlushTS           int64          `json:"-"`
+	rowCount          uint64
 }
 
 func NewTableEntry(db *Database, schema *Schema, indice *IndexSchema, tranId uint64, exIndex *LogIndex) *Table {
@@ -96,6 +97,20 @@ func (e *Table) Repr(short bool) string {
 		s = fmt.Sprintf("%s-%s", s, e.Database.Repr())
 	}
 	return s
+}
+
+func (e *Table) ReplayRowCount() {
+	for _, seg := range e.SegmentSet {
+		e.rowCount += seg.GetRowCount()
+	}
+}
+
+func (e *Table) AddRows(count uint64) uint64 {
+	return atomic.AddUint64(&e.rowCount, count)
+}
+
+func (e *Table) GetRowCount() uint64 {
+	return atomic.LoadUint64(&e.rowCount)
 }
 
 func (e *Table) GetIndexSchemaLocked() *IndexSchema {

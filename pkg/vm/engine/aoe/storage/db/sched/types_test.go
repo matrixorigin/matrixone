@@ -15,7 +15,6 @@
 package sched
 
 import (
-	"os"
 	"sync"
 	"testing"
 
@@ -25,6 +24,7 @@ import (
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
@@ -34,8 +34,7 @@ func TestUpgradeBlk(t *testing.T) {
 	row_count := uint64(64)
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
-	dir := "/tmp/testupgradeblk"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{
@@ -112,8 +111,7 @@ func TestUpgradeSeg(t *testing.T) {
 	row_count := uint64(64)
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
-	dir := "/tmp/testupgradeblk"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{

@@ -15,7 +15,6 @@
 package handle
 
 import (
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -25,14 +24,18 @@ import (
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	moduleName = "handle"
+)
+
 func TestSnapshot(t *testing.T) {
-	dir := "/tmp/testss"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
 	row_count := uint64(64)
 	seg_cnt := 4

@@ -23,7 +23,7 @@ import (
 )
 
 func TestDatabase3(t *testing.T) {
-	dir := "/tmp/metadata/testdatabase"
+	dir := initTestEnv(t)
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, indexWal := initTest(dir, blockRows, segmentBlocks, true, true)
 
@@ -227,7 +227,7 @@ func TestDatabase3(t *testing.T) {
 }
 
 func TestTxn(t *testing.T) {
-	dir := "/tmp/metadata/testtxn"
+	dir := initTestEnv(t)
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	gen := shard.NewMockIndexAllocator()

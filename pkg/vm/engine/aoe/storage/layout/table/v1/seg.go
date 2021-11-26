@@ -135,16 +135,7 @@ func (seg *segment) CanUpgrade() bool {
 }
 
 func (seg *segment) GetRowCount() uint64 {
-	if seg.meta.CommitInfo.Op >= metadata.OpUpgradeClose {
-		return seg.meta.Table.Schema.BlockMaxRows * seg.meta.Table.Schema.SegmentMaxBlocks
-	}
-	var ret uint64
-	seg.tree.RLock()
-	for _, blk := range seg.tree.blocks {
-		ret += blk.GetRowCount()
-	}
-	seg.tree.RUnlock()
-	return ret
+	return seg.meta.GetRowCount()
 }
 
 func (seg *segment) Size(attr string) uint64 {

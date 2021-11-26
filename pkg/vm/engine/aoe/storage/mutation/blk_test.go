@@ -29,15 +29,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	moduleName = "mutation"
+)
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
+
 func TestMutableBlockNode(t *testing.T) {
-	dir := "/tmp/mutableblk"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)

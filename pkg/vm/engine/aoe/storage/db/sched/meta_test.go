@@ -15,11 +15,11 @@
 package sched
 
 import (
-	"os"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
@@ -27,13 +27,13 @@ import (
 )
 
 var (
-	workDir = "/tmp/mevents"
+	moduleName = "sched"
 )
 
 func TestBasicOps(t *testing.T) {
-	os.RemoveAll(workDir)
-	opts := config.NewOptions(workDir, config.CST_Customize, config.BST_S, config.SST_S)
-	opts.Meta.Catalog, _ = opts.CreateCatalog(workDir)
+	dir := testutils.InitTestEnv(moduleName, t)
+	opts := config.NewOptions(dir, config.CST_Customize, config.BST_S, config.SST_S)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = NewScheduler(opts, nil)

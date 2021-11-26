@@ -173,8 +173,7 @@ func doCompare(t *testing.T, expected, actual *databaseLogEntry) {
 
 func TestTable(t *testing.T) {
 	cfg := new(CatalogCfg)
-	cfg.Dir = "/tmp/testtable"
-	os.RemoveAll(cfg.Dir)
+	cfg.Dir = initTestEnv(t)
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.Start()
@@ -200,8 +199,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestCreateTable(t *testing.T) {
-	dir := "/tmp/createtable"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
@@ -243,8 +241,7 @@ func TestCreateTable(t *testing.T) {
 }
 
 func TestTables(t *testing.T) {
-	dir := "/tmp/testtables"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
@@ -278,8 +275,7 @@ func TestTables(t *testing.T) {
 }
 
 func TestDropTable(t *testing.T) {
-	dir := "/tmp/droptable"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
@@ -411,9 +407,7 @@ func TestDropTable(t *testing.T) {
 }
 
 func TestSegment(t *testing.T) {
-	dir := "/tmp/testsegment"
-	os.RemoveAll(dir)
-
+	dir := initTestEnv(t)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
@@ -462,9 +456,7 @@ func TestSegment(t *testing.T) {
 }
 
 func TestBlock(t *testing.T) {
-	dir := "/tmp/testblock"
-	os.RemoveAll(dir)
-
+	dir := initTestEnv(t)
 	cfg := new(CatalogCfg)
 	cfg.BlockMaxRows = uint64(10)
 	cfg.SegmentMaxBlocks = uint64(4)
@@ -541,8 +533,7 @@ func (hb *mockGetSegmentedHB) processTable(tbl *Table) error {
 }
 
 func TestReplay(t *testing.T) {
-	dir := "/tmp/testreplay"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -584,8 +575,7 @@ func TestReplay(t *testing.T) {
 }
 
 func TestAppliedIndex(t *testing.T) {
-	dir := "/tmp/testappliedindex"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	blkRows, segBlks := uint64(10), uint64(2)
 	catalog, indexWal := MockCatalogAndWal(dir, blkRows, segBlks)
 	defer indexWal.Close()
@@ -687,8 +677,7 @@ func TestAppliedIndex(t *testing.T) {
 }
 
 func TestUpgrade(t *testing.T) {
-	dir := "/tmp/testupgradeblock"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	delta := DefaultCheckpointDelta
 	DefaultCheckpointDelta = uint64(10)
 	defer func() {
@@ -863,8 +852,7 @@ func TestUpgrade(t *testing.T) {
 }
 
 func TestOpen(t *testing.T) {
-	dir := "/tmp/meta/testopen"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	err := os.MkdirAll(dir, os.FileMode(0755))
 	assert.Nil(t, err)
 	cfg := new(CatalogCfg)
@@ -891,8 +879,7 @@ func TestOpen(t *testing.T) {
 }
 
 func TestCatalog2(t *testing.T) {
-	dir := "/tmp/testcatalog2"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	delta := DefaultCheckpointDelta
 	DefaultCheckpointDelta = uint64(400000)
 	defer func() {
@@ -947,7 +934,7 @@ func TestCatalog2(t *testing.T) {
 }
 
 func TestDatabase1(t *testing.T) {
-	dir := "/tmp/metadata/testdbs1"
+	dir := initTestEnv(t)
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	defer catalog.Close()
@@ -1050,7 +1037,7 @@ type testCfg struct {
 }
 
 func TestDatabase2(t *testing.T) {
-	dir := "/tmp/metadata/testdbs2"
+	dir := initTestEnv(t)
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	gen := shard.NewMockIndexAllocator()
@@ -1178,7 +1165,7 @@ func TestDatabase2(t *testing.T) {
 }
 
 func TestSplit1(t *testing.T) {
-	dir := "/tmp/metadata/testsplit"
+	dir := initTestEnv(t)
 	catalog, _ := initTest(dir, uint64(100), uint64(2), false, true)
 
 	gen := shard.NewMockIndexAllocator()
@@ -1255,7 +1242,7 @@ func TestSplit1(t *testing.T) {
 }
 
 func TestSplit2(t *testing.T) {
-	dir := "/tmp/metadata/testsplit2"
+	dir := initTestEnv(t)
 	catalog, indexWal := initTest(dir, uint64(100), uint64(2), true, true)
 
 	gen := shard.NewMockIndexAllocator()
