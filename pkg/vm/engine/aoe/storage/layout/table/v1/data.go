@@ -62,7 +62,6 @@ type tableData struct {
 		ids        []uint64
 		helper     map[uint64]int
 		segmentCnt uint32
-		rowCount   uint64
 	}
 	host        *Tables
 	meta        *metadata.Table
@@ -326,21 +325,15 @@ func (td *tableData) CopyTo(dir string) error {
 }
 
 func (td *tableData) GetRowCount() uint64 {
-	return atomic.LoadUint64(&td.tree.rowCount)
+	return td.meta.GetRowCount()
 }
 
 func (td *tableData) AddRows(rows uint64) uint64 {
-	return atomic.AddUint64(&td.tree.rowCount, rows)
+	return td.meta.AddRows(rows)
 }
 
 func (td *tableData) InitReplay() {
-	td.initRowCount()
-}
-
-func (td *tableData) initRowCount() {
-	for _, seg := range td.tree.segments {
-		td.tree.rowCount += seg.GetRowCount()
-	}
+	td.meta.ReplayRowCount()
 }
 
 func (td *tableData) RegisterBlock(meta *metadata.Block) (blk iface.IBlock, err error) {
