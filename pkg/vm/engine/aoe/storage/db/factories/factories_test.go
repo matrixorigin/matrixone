@@ -14,7 +14,6 @@
 package factories
 
 import (
-	"os"
 	"strconv"
 	"sync"
 	"testing"
@@ -30,10 +29,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
+)
+
+var (
+	moduleName = "factories"
 )
 
 func shardIdToName(id uint64) string {
@@ -42,8 +46,7 @@ func shardIdToName(id uint64) string {
 
 func TestMutBlockNodeFactory(t *testing.T) {
 	rowCount, blkCount := uint64(30), uint64(4)
-	dir := "/tmp/mublknodefactory"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount, nil)
 	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
 	opts.Meta.Catalog.Start()

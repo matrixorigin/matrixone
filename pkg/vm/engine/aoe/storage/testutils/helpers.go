@@ -43,3 +43,8 @@ func RemoveDefaultTestPath(module string, t *testing.T) {
 	path := GetDefaultTestPath(module, t)
 	os.RemoveAll(path)
 }
+
+func InitTestEnv(module string, t *testing.T) string {
+	RemoveDefaultTestPath(module, t)
+	return MakeDefaultTestPath(module, t)
+}

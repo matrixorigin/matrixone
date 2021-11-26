@@ -17,17 +17,19 @@ package logstore
 import (
 	"encoding/binary"
 	"io"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"os"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	mockETDDL = ETCustomizeStart + 1
+	moduleName = "logstore"
+	mockETDDL  = ETCustomizeStart + 1
 )
 
 type mockDDLOp uint8
@@ -73,8 +75,7 @@ func mockETDDLHandler(r io.Reader, meta *EntryMeta) (Entry, int64, error) {
 }
 
 func TestStore(t *testing.T) {
-	dir := "/tmp/teststore"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	name := "sstore"
 	roCfg := &RotationCfg{}
 	store, err := New(dir, name, roCfg)
@@ -174,8 +175,7 @@ func TestStore(t *testing.T) {
 // }
 
 func TestBatchStore(t *testing.T) {
-	dir := "/tmp/testbatchstore"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	cfg := &RotationCfg{
 		RotateChecker: &MaxSizeRotationChecker{MaxSize: 100 * int(common.M)},
 	}

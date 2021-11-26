@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,8 +35,7 @@ func TestBlock(t *testing.T) {
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(64)
-	dir := "/tmp/testblock"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	schema := metadata.MockSchema(2)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{

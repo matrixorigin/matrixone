@@ -15,7 +15,6 @@
 package table
 
 import (
-	"os"
 	"sync"
 	"testing"
 
@@ -23,27 +22,30 @@ import (
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
-var WORK_DIR = "/tmp/layout/data_test"
+var (
+	moduleName = "table"
+)
 
 func TestBase1(t *testing.T) {
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
 	capacity := uint64(200)
-	os.RemoveAll(WORK_DIR)
+	dir := testutils.InitTestEnv(moduleName, t)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{
 		BlockMaxRows:     rowCount,
 		SegmentMaxBlocks: blkCnt,
 	}
 	opts.Meta.Conf = cfg
-	opts.FillDefaults(WORK_DIR)
-	opts.Meta.Catalog, _ = opts.CreateCatalog(WORK_DIR)
+	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
@@ -51,7 +53,7 @@ func TestBase1(t *testing.T) {
 	shardId := uint64(100)
 	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(shardId))
 
-	fsMgr := ldio.NewManager(WORK_DIR, true)
+	fsMgr := ldio.NewManager(dir, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(2000)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
