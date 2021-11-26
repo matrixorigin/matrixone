@@ -34,6 +34,11 @@ type RoutineManager struct {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
+	defer func() {
+		if err := recover(); err != nil {
+			logutil.Errorf("create routine manager failed. err:%v",err)
+		}
+	}()
 	IO := NewIOPackage(true)
 	pro := NewMysqlClientProtocol(IO, nextConnectionID())
 	exe := NewMysqlCmdExecutor()
@@ -57,6 +62,11 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
+	defer func() {
+		if err := recover(); err != nil {
+			logutil.Errorf("close routine manager failed. err:%v",err)
+		}
+	}()
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
 	defer delete(rm.clients, rs)
@@ -70,6 +80,11 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
+	defer func() {
+		if err := recover(); err != nil {
+			logutil.Errorf("handle message failed. err:%v",err)
+		}
+	}()
 	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		if !rm.pdHook.CanAcceptSomething() {
 			fmt.Printf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.\n")
@@ -114,6 +129,12 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	// finish handshake process
 	if !routine.established {
 		logutil.Infof("HANDLE HANDSHAKE")
+
+		/*
+		di := MakeDebugInfo(payload,80,8)
+		logutil.Infof("RP[%v] Payload80[%v]",rs.RemoteAddr(),di)
+		*/
+
 		err := protocol.handleHandshake(payload)
 		if err != nil {
 			return err
