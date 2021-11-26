@@ -1297,15 +1297,15 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 
 				err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
 				if err == nil {
-					handler.result.Records += uint64(handler.batchSize)
+					handler.result.Records += uint64(needLen)
 				}else if isWriteBatchTimeoutError(err) {
 					logutil.Errorf("write failed. err: %v",err)
-					handler.result.WriteTimeout += uint64(handler.batchSize)
+					handler.result.WriteTimeout += uint64(needLen)
 					//clean timeout error
 					err = nil
 				}else{
 					logutil.Errorf("write failed. err:%v \n", err)
-					handler.result.Skipped += uint64(handler.batchSize)
+					handler.result.Skipped += uint64(needLen)
 				}
 			}
 		}
