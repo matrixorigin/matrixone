@@ -36,14 +36,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	workDir = "/tmp/dataio_test"
+	moduleName = "Meta"
 )
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
 
 func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices []index.Index, blkCnt int) base.ISegmentFile {
 	baseid := id
@@ -119,6 +129,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 }
 
 func TestAll(t *testing.T) {
+	dir := initTestEnv(t)
 	bufMgr := bmgr.MockBufMgr(26 * 4)
 	colCnt := 2
 	indices := index.MockInt32ZmIndices(colCnt)
@@ -128,7 +139,7 @@ func TestAll(t *testing.T) {
 	blkCB := func(v interface{}) {
 		droppedBlocks = append(droppedBlocks, v.(*index.BlockHolder).ID.BlockID)
 	}
-	segFile := mockUnSortedSegmentFile(t, workDir, id, indices, blkCnt)
+	segFile := mockUnSortedSegmentFile(t, dir, id, indices, blkCnt)
 	tblHolder := index.NewTableHolder(bufMgr, id.TableID)
 	segHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, nil)
 	segHolder.Unref()
@@ -170,7 +181,7 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, 1, len(droppedBlocks))
 	assert.Equal(t, droppedBlocks[0], dropblkid)
 
-	fsMgr := NewManager(workDir, false)
+	fsMgr := NewManager(dir, false)
 	segFile = fsMgr.GetUnsortedFile(id)
 	assert.Nil(t, segFile)
 	segFile, err := fsMgr.RegisterUnsortedFiles(id)
@@ -190,8 +201,7 @@ func TestSegmentWriter(t *testing.T) {
 			FlushIndex = false
 		}()
 	}
-	dir := "/tmp/testsegmentwriter"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	rowCount, blkCount := uint64(10), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	defer catalog.Close()
@@ -274,7 +284,10 @@ func TestSegmentWriter(t *testing.T) {
 	col1Vf.Unref()
 
 	// test ingest sorted segment file with different metadata
-	assert.Nil(t, os.Link("/tmp/testsegmentwriter/data/1_5.seg", "/tmp/testsegmentwriter/data/1_6.seg"))
+	dataDir := common.MakeDataDir(dir)
+	src := filepath.Join(dataDir, "1_5.seg")
+	dest := filepath.Join(dataDir, "1_6.seg")
+	assert.Nil(t, os.Link(src, dest))
 	segment = table.SimpleCreateSegment()
 	blocks := make([]*metadata.Block, 0)
 	for i := 0; i < int(blkCount); i++ {
@@ -313,8 +326,7 @@ func TestSegmentWriter(t *testing.T) {
 }
 
 func TestIVectorNodeWriter(t *testing.T) {
-	dir := "/tmp/blktest"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	vecType := types.Type{types.T_int32, 4, 4, 0}
 	capacity := uint64(40)
 	vec0 := vector.NewStdVector(vecType, 4)
@@ -437,8 +449,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 }
 
 func TestTransientBlock(t *testing.T) {
-	dir := "/tmp/tblktest"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	rowCount, blkCount := uint64(10), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchema(2)
