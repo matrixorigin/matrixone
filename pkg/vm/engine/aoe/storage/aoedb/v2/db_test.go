@@ -2796,7 +2796,7 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 		waitTime *= 2
 	}
 	initTestEnv(t)
-	inst, gen, database := initTestDB3(t)
+	inst, gen, database := initTestDB1(t)
 	schema := metadata.MockSchema(4)
 	indice := metadata.NewIndexSchema()
 	indice.MakeIndex("idx-0", metadata.NumBsi, 1)
@@ -2870,7 +2870,7 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 
 	inst.Close()
 
-	inst, _, _ = initTestDB3(t)
+	inst, _, _ = initTestDB2(t)
 	tblData, err = inst.GetTableData(tblMeta)
 	assert.Nil(t, err)
 	seg = tblData.StrongRefSegment(uint64(1))
@@ -2882,18 +2882,46 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 		Ids:  new(atomic.Value),
 	}
 
-	filter := s.NewFilter()
-	res, err :=filter.Eq("mock_1", int32(100))
-	assert.Nil(t, err)
-	assert.Equal(t, res.ToArray()[0], uint64(100))
-	sparse := s.NewSparseFilter()
-	ret, err := sparse.Eq("mock_1", int32(100))
-	assert.Nil(t, err)
-	rets := decodeBlockIds(ret)
-	t.Log(rets)
-	summ := s.NewSummarizer()
-	count, err := summ.Count("mock_1", nil)
-	assert.Equal(t, uint64(4000), count)
+	indice = metadata.NewIndexSchema()
+	indice.MakeIndex("idx-1", metadata.NumBsi, 0)
+	indice.MakeIndex("idx-2", metadata.NumBsi, 2)
+	indice.MakeIndex("idx-3", metadata.NumBsi, 3)
+	createIdxCtx := &CreateIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		Indices:       indice,
+	}
+	assert.Nil(t, inst.CreateIndex(createIdxCtx))
+	time.Sleep(100 * time.Millisecond)
+
+	for i := 0; i < 4; i++ {
+		column := fmt.Sprintf("mock_%d", i)
+		filter := s.NewFilter()
+		res, err := filter.Eq(column, int32(100))
+		assert.Nil(t, err)
+		assert.Equal(t, res.ToArray()[0], uint64(100))
+		sparse := s.NewSparseFilter()
+		ret, err := sparse.Eq(column, int32(100))
+		assert.Nil(t, err)
+		rets := decodeBlockIds(ret)
+		assert.Equal(t, strconv.Itoa(1), rets[0])
+		summ := s.NewSummarizer()
+		count, err := summ.Count(column, nil)
+		assert.Equal(t, uint64(4000), count)
+	}
+
+	dropIdxCtx := &DropIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		IndexNames:    []string{"idx-3"},
+	}
+	assert.Nil(t, inst.DropIndex(dropIdxCtx))
+	time.Sleep(50 * time.Millisecond)
+
+	// TODO: detect bsi not found issue in segment filter
+	//filter := s.NewFilter()
+	//_, err = filter.Eq("mock_3", int32(1))
+	//assert.NotNil(t, err)
 
 	inst.Close()
 }
