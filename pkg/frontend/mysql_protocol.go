@@ -19,10 +19,10 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"github.com/huandu/go-clone"
-	"math/rand"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -864,7 +864,7 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 
 	//ensured by capturing packets
 	//it only works on MAC
-	//pos = mp.io.WriteUint8(data,pos,0x2f)
+	pos = mp.io.WriteUint8(data,pos,0x2f)
 
 	if mp.capability&CLIENT_SESSION_TRACK != 0 {
 		//TODO:implement it
