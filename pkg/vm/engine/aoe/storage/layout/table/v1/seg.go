@@ -340,7 +340,7 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment
 	if indexHolder.Type == base.UNSORTED_SEG {
 		indexHolder.Unref()
 		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.meta.Id, base.SORTED_SEG)
-		seg.indexHolder.Init(segFile)
+		indexHolder.Init(segFile)
 	}
 	cloned.indexHolder = indexHolder
 	cloned.segFile = segFile
