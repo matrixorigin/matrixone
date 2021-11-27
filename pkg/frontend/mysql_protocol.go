@@ -19,10 +19,10 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"github.com/huandu/go-clone"
-	"math/rand"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -850,7 +850,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 
 //make a OK packet
 func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
-	var data = make([]byte, 128)
+	var data = make([]byte, 128+len(message)+10)
 	var pos = 0
 	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
@@ -862,21 +862,11 @@ func (mp *MysqlProtocolImpl) makeOKPayload(affectedRows, lastInsertId uint64, st
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 	}
 
-	//ensured by capturing packets
-	//it only works on MAC
-	//pos = mp.io.WriteUint8(data,pos,0x2f)
-
 	if mp.capability&CLIENT_SESSION_TRACK != 0 {
 		//TODO:implement it
 	} else {
-		alen := Min(len(data)-pos, len(message))
-		blen := len(message) - alen
-		if alen > 0 {
-			pos = mp.writeStringFix(data, pos, message, alen)
-		}
-		if blen > 0 {
-			return mp.appendStringFix(data, message, blen)
-		}
+		//string<lenenc> instead of string<EOF> in the manual of mysql
+		pos = mp.writeStringLenEnc(data,pos,message)
 		return data[:pos]
 	}
 	return data
