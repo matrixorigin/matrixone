@@ -104,34 +104,103 @@ func (r *UInt16Ring) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
-func (r *UInt16Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
+func (r *UInt16Ring) Grows(size int, m *mheap.Mheap) error {
+	n := len(r.Vs)
+	if n == 0 {
+		data, err := mheap.Alloc(m, int64(size*2))
+		if err != nil {
+			return err
+		}
+		r.Da = data
+		r.Ns = make([]int64, 0, size)
+		r.Vs = encoding.DecodeUint16Slice(data)
+	} else if n+size >= cap(r.Vs) {
+		r.Da = r.Da[:n*2]
+		data, err := mheap.Grow(m, r.Da, int64(n+size)*2)
+		if err != nil {
+			return err
+		}
+		mheap.Free(m, r.Da)
+		r.Da = data
+		r.Vs = encoding.DecodeUint16Slice(data)
+	}
+	r.Vs = r.Vs[:n+size]
+	for i := 0; i < size; i++ {
+		r.Ns = append(r.Ns, 0)
+		r.Vs[i+n] = math.MaxUint16
+	}
+	return nil
+}
+
+func (r *UInt16Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	if v := vec.Col.([]uint16)[sel]; v < r.Vs[i] {
 		r.Vs[i] = v
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i]++
+		r.Ns[i] += z
 	}
 }
 
-func (r *UInt16Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
+func (r *UInt16Ring) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+	vs := vec.Col.([]uint16)
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if vs[int64(i)+start] < r.Vs[j] {
+				r.Vs[j] = vs[int64(i)+start]
+			}
+		}
+	}
+	if nulls.Any(vec.Nsp) {
+		for i, o := range os {
+			if o == 1 {
+				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+					r.Ns[*vps[i]] += zs[int64(i)+start]
+				}
+			}
+		}
+	}
+}
+
+func (r *UInt16Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]uint16)
 	for _, v := range vs {
 		if v < r.Vs[i] {
 			r.Vs[i] = v
 		}
 	}
-	r.Ns[i] += int64(nulls.Length(vec.Nsp))
+	if nulls.Any(vec.Nsp) {
+		for j := range vs {
+			if nulls.Contains(vec.Nsp, uint64(j)) {
+				r.Ns[i] += zs[j]
+			}
+		}
+	}
 }
 
 func (r *UInt16Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*UInt16Ring)
-	if r.Vs[x] > ar.Vs[y] {
+	if ar.Vs[y] < r.Vs[x] {
 		r.Vs[x] = ar.Vs[y]
 	}
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *UInt16Ring) Mul(_, _ int64) {
+func (r *UInt16Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+	ar := a.(*UInt16Ring)
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if ar.Vs[int64(i)+start] < r.Vs[j] {
+				r.Vs[j] = ar.Vs[int64(i)+start]
+			}
+			r.Ns[j] += ar.Ns[int64(i)+start]
+		}
+	}
+}
+
+func (r *UInt16Ring) Mul(x, z int64) {
+	r.Ns[x] *= z
 }
 
 func (r *UInt16Ring) Eval(zs []int64) *vector.Vector {

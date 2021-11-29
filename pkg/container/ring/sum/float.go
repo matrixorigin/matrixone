@@ -103,6 +103,33 @@ func (r *FloatRing) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
+func (r *FloatRing) Grows(size int, m *mheap.Mheap) error {
+	n := len(r.Vs)
+	if n == 0 {
+		data, err := mheap.Alloc(m, int64(size*8))
+		if err != nil {
+			return err
+		}
+		r.Da = data
+		r.Ns = make([]int64, 0, size)
+		r.Vs = encoding.DecodeFloat64Slice(data)
+	} else if n+size >= cap(r.Vs) {
+		r.Da = r.Da[:n*8]
+		data, err := mheap.Grow(m, r.Da, int64(n+size)*8)
+		if err != nil {
+			return err
+		}
+		mheap.Free(m, r.Da)
+		r.Da = data
+		r.Vs = encoding.DecodeFloat64Slice(data)
+	}
+	r.Vs = r.Vs[:n+size]
+	for i := 0; i < size; i++ {
+		r.Ns = append(r.Ns, 0)
+	}
+	return nil
+}
+
 func (r *FloatRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_float32:
@@ -111,7 +138,49 @@ func (r *FloatRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 		r.Vs[i] += float64(vec.Col.([]float64)[sel]) * float64(z)
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i]++
+		r.Ns[i] += z
+	}
+}
+
+func (r *FloatRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		vs := vec.Col.([]int8)
+		for i, o := range os {
+			if o == 1 {
+				r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			}
+		}
+	case types.T_int16:
+		vs := vec.Col.([]int16)
+		for i, o := range os {
+			if o == 1 {
+				r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			}
+		}
+	case types.T_int32:
+		vs := vec.Col.([]int32)
+		for i, o := range os {
+			if o == 1 {
+				r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			}
+		}
+	case types.T_int64:
+		vs := vec.Col.([]int64)
+		for i, o := range os {
+			if o == 1 {
+				r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			}
+		}
+	}
+	if nulls.Any(vec.Nsp) {
+		for i, o := range os {
+			if o == 1 {
+				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+					r.Ns[*vps[i]] += zs[int64(i)+start]
+				}
+			}
+		}
 	}
 }
 
@@ -122,19 +191,42 @@ func (r *FloatRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 		for j, v := range vs {
 			r.Vs[i] += float64(v) * float64(zs[j])
 		}
+		if nulls.Any(vec.Nsp) {
+			for j := range vs {
+				if nulls.Contains(vec.Nsp, uint64(j)) {
+					r.Ns[i] += zs[j]
+				}
+			}
+		}
 	case types.T_float64:
 		vs := vec.Col.([]float64)
 		for j, v := range vs {
 			r.Vs[i] += v * float64(zs[j])
 		}
+		if nulls.Any(vec.Nsp) {
+			for j := range vs {
+				if nulls.Contains(vec.Nsp, uint64(j)) {
+					r.Ns[i] += zs[j]
+				}
+			}
+		}
 	}
-	r.Ns[i] += int64(nulls.Length(vec.Nsp))
 }
 
 func (r *FloatRing) Add(a interface{}, x, y int64) {
 	ar := a.(*FloatRing)
 	r.Vs[x] += ar.Vs[y]
 	r.Ns[x] += ar.Ns[y]
+}
+
+func (r *FloatRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+	ar := a.(*FloatRing)
+	for i, o := range os {
+		if o == 1 {
+			r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
+			r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
+		}
+	}
 }
 
 func (r *FloatRing) Mul(x, z int64) {

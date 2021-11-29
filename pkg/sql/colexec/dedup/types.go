@@ -25,9 +25,9 @@ const (
 
 const (
 	H8 = iota
-	H16
 	H24
 	H32
+	H40
 	HStr
 )
 
@@ -43,25 +43,23 @@ type Container struct {
 		zkeys []uint64
 		ht    *hashtable.Int64HashMap
 	}
-	/*
-		h16 struct {
-			keys  [][2]uint64
-			zkeys [][2]uint64
-			ht    *hashtable.String16HashTable
-		}
-		h24 struct {
-			keys  [][3]uint64
-			zkeys [][3]uint64
-			ht    *hashtable.String24HashTable
-		}
-		h32 struct {
-			keys  [][4]uint64
-			zkeys [][4]uint64
-			ht    *hashtable.String32HashTable
-		}
-	*/
+	h24 struct {
+		keys  [][3]uint64
+		zkeys [][3]uint64
+		ht    *hashtable.String24HashMap
+	}
+	h32 struct {
+		keys  [][4]uint64
+		zkeys [][4]uint64
+		ht    *hashtable.String32HashMap
+	}
+	h40 struct {
+		keys  [][5]uint64
+		zkeys [][5]uint64
+		ht    *hashtable.String40HashMap
+	}
 	hstr struct {
-		keys [][]byte
+		keys []byte
 		ht   *hashtable.StringHashMap
 	}
 	bat *batch.Batch
