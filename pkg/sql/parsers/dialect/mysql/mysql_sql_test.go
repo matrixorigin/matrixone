@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "create index idx1 using bsi on A (a) ",
+		input: "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
 	}
 )
 
@@ -55,6 +56,9 @@ var (
 		input  string
 		output string
 	}{{
+		input: "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
+	}, {
 		input: "create index idx1 using bsi on A (a) ",
 	}, {
 		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
