@@ -2,7 +2,7 @@
 
 ## **Architecture**
 MatrixOne is totally redesigned. It consists of multiple components and form a complete system. The architecture is as follows:
-![MatrixOne Architecture](./imgs/MatrixOne-Architecture.png)
+![MatrixOne Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true)
 
 ## **Query Parser Layer**
 * **Parser:** Parses SQL, Streaming Query, or Python language into an abstract syntax tree for further processing.
