@@ -49,6 +49,8 @@ type FilterCtx struct {
 	BoolRes bool
 	BMRes   *roaring.Bitmap
 	Err     error
+
+	BsiRequired bool
 }
 
 func NewFilterCtx(t OpType) *FilterCtx {

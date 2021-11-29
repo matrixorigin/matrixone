@@ -43,7 +43,7 @@ By streaming SQL and user-defined functions, MatrixOne provides end-to-end data 
 MatrixCube is a fundamental library for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
 -   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
 -   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
--   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
+-   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hybrid logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
 ### Replicated Storage Layer
 -   **Row Storage**: Stores serving workload, metadata, and catalog.
 -   **Column Storage**: Stores analytical workload and materialized views.

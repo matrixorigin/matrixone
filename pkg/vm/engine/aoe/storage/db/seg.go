@@ -69,25 +69,16 @@ func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 
 // NewFilter generates a Filter for segment.
 func (seg *Segment) NewFilter() engine.Filter {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentFilter(seg)
 }
 
 // NewSummarizer generates a Summarizer for segment.
 func (seg *Segment) NewSummarizer() engine.Summarizer {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentSummarizer(seg)
 }
 
 // NewSparseFilter generates a SparseFilter for segment.
 func (seg *Segment) NewSparseFilter() engine.SparseFilter {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentSparseFilter(seg)
 }
 

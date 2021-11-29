@@ -508,6 +508,32 @@ func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
 }
 
 /*
+handle "SELECT @@version_comment"
+*/
+func (mce *MysqlCmdExecutor) handleVersionComment() error {
+	var err error = nil
+	ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("@@version_comment")
+	ses.Mrs.AddColumn(col)
+
+	var data = make([]interface{}, 1)
+	data[0] = "MatrixOne"
+	ses.Mrs.AddRow(data)
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+/*
 handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
@@ -584,8 +610,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		response
 	*/
-	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), " "+info)
+	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
+	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
@@ -734,6 +760,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
 						if strings.ToLower(ve.Name) == "max_allowed_packet" {
 							err = mce.handleMaxAllowedPacket()
+							if err != nil {
+								return err
+							}
+
+							//next statement
+							continue
+						}else if strings.ToLower(ve.Name) == "version_comment" {
+							err = mce.handleVersionComment()
 							if err != nil {
 								return err
 							}

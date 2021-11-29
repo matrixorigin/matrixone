@@ -586,10 +586,10 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 }
 
 // Execute steps as follows:
-// 1. Create a temp block file.
+// 1. Create a temp segment file.
 // 3. Flush indices.
 // 4. Compress column data and flush them.
-// 5. Rename .tmp file to .blk file.
+// 5. Rename .tmp file to .seg file.
 func (sw *SegmentWriter) Execute() error {
 	if sw.preprocessor != nil {
 		if err := sw.preprocessor(sw.data, sw.meta); err != nil {
