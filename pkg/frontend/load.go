@@ -27,6 +27,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 )
 
 type LoadResult struct {
-	Records, Deleted, Skipped, Warnings uint64
+	Records, Deleted, Skipped, Warnings, WriteTimeout uint64
 }
 
 type DebugTime struct {
@@ -461,18 +462,22 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	return nil
 }
 
-func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler) {
+func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, err error) {
 	//fmt.Printf("++++> %d %d %d %d \n",
 	//	wh.result.Skipped,
 	//	wh.result.Deleted,
 	//	wh.result.Warnings,
 	//	wh.result.Records,
 	//)
+	if wh == nil {
+		return
+	}
 
 	handler.result.Skipped += wh.result.Skipped
 	handler.result.Deleted += wh.result.Deleted
 	handler.result.Warnings += wh.result.Warnings
 	handler.result.Records += wh.result.Records
+	handler.result.WriteTimeout += wh.result.WriteTimeout
 	//
 	handler.row2col += wh.row2col
 	handler.fillBlank += wh.fillBlank
@@ -511,6 +516,20 @@ func errorCanBeIgnored(err error) bool {
 	default:
 		return true
 	}
+}
+
+/*
+isWriteBatchTimeoutError returns true when the err is a write batch timeout.
+ */
+func isWriteBatchTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	es := err.Error()
+	if strings.Index(es,"exec timeout") != -1 {
+		return true
+	}
+	return false
 }
 
 func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) error {
@@ -1121,11 +1140,8 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 		write batch into the engine
 	*/
 	//the second parameter must be FALSE here
-	err = writeBatchToStorage(handler, forceConvert)
-	if err != nil {
-		logutil.Errorf("saveBatchToStorage failed. err:%v", err)
-		return err
-	}
+	err = writeBatchToStorage(handler,forceConvert)
+
 	toStorage += time.Since(wait_c)
 
 	allFetchCnt += fetchCnt
@@ -1138,6 +1154,11 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 	//fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
 	//	row2col,fillBlank,toStorage)
 
+	if err != nil {
+		logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+		return err
+	}
+
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
 	}
@@ -1149,8 +1170,9 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 save batch to storage.
 when force is true, batchsize will be changed.
 */
-func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
-	if handler.batchFilled == handler.batchSize {
+func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
+	var err error = nil
+	if handler.batchFilled == handler.batchSize{
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
 		//	//fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
@@ -1166,15 +1188,20 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		//fmt.Printf("----batchBytes %v B %v MB\n",batchBytes,batchBytes / 1024.0 / 1024.0)
 		//
 		wait_a := time.Now()
-		err := handler.tableHandler.Write(handler.timestamp, handler.batchData)
-		if err != nil {
-			logutil.Errorf("write failed. err: %v", err)
-			return err
+		err = handler.tableHandler.Write(handler.timestamp,handler.batchData)
+		if err == nil {
+			handler.result.Records += uint64(handler.batchSize)
+		}else if isWriteBatchTimeoutError(err) {
+			logutil.Errorf("write failed. err: %v",err)
+			handler.result.WriteTimeout += uint64(handler.batchSize)
+			//clean timeout error
+			err = nil
+		}else{
+			logutil.Errorf("write failed. err: %v",err)
+			handler.result.Skipped += uint64(handler.batchSize)
 		}
 
 		handler.writeBatch += time.Since(wait_a)
-
-		handler.result.Records += uint64(handler.batchSize)
 
 		wait_b := time.Now()
 		//clear batch
@@ -1249,17 +1276,22 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
 				//}
 
-				err := handler.tableHandler.Write(handler.timestamp, handler.batchData)
-				if err != nil {
+				err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+				if err == nil {
+					handler.result.Records += uint64(needLen)
+				}else if isWriteBatchTimeoutError(err) {
+					logutil.Errorf("write failed. err: %v",err)
+					handler.result.WriteTimeout += uint64(needLen)
+					//clean timeout error
+					err = nil
+				}else{
 					logutil.Errorf("write failed. err:%v \n", err)
-					return err
+					handler.result.Skipped += uint64(needLen)
 				}
 			}
-
-			handler.result.Records += uint64(needLen)
 		}
 	}
-	return nil
+	return err
 }
 
 func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
@@ -1448,7 +1480,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		case ne = <-handler.simdCsvNotiyEventChan:
 			switch ne.neType {
 			case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-				collectWriteBatchResult(handler, ne.wbh)
+				collectWriteBatchResult(handler, ne.wbh, nil)
 			case NOTIFY_EVENT_END:
 				err = nil
 				quit = true
@@ -1459,6 +1491,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 					err = ne.err
 					quit = true
 				}
+				collectWriteBatchResult(handler, ne.wbh, ne.err)
 			default:
 				logutil.Errorf("get unsupported notify event %d", ne.neType)
 				quit = true
@@ -1495,9 +1528,13 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 		switch ne.neType {
 		case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-			collectWriteBatchResult(handler, ne.wbh)
+			collectWriteBatchResult(handler, ne.wbh, nil)
+		case NOTIFY_EVENT_END:
+		case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
+			NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
+			NOTIFY_EVENT_WRITE_BATCH_ERROR:
+			collectWriteBatchResult(handler, ne.wbh, ne.err)
 		default:
-
 		}
 	}
 
