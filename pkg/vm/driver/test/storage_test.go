@@ -56,9 +56,11 @@ const (
 )
 
 var tableInfo *aoe.TableInfo
+var idxInfo *aoe.IndexInfo
 
 func init() {
 	tableInfo = adaptor.MockTableInfo(colCnt)
+	idxInfo = adaptor.MockIndexInfo()
 	tableInfo.Id = 100
 }
 
@@ -274,7 +276,16 @@ func TestAOEStorage(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
 	require.Equal(t, segmentCnt, len(ids.Ids))
-
+	//CreateIndexTest
+	err = driver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)),idxInfo,toShard)
+	require.NoError(t, err)
+	err = driver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)),idxInfo,toShard)
+	require.NotNil(t,err)
+	//DropIndexTest
+	err = driver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)),idxInfo.Name,toShard)
+	require.NoError(t, err)
+	err = driver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)),idxInfo.Name,toShard)
+	require.NotNil(t,err)
 	//DropTableTest
 	_, err = driver.DropTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err, "DropTablet fail")

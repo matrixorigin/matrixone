@@ -55,6 +55,14 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
+func MockIndexInfo() *aoe.IndexInfo {
+	idxInfo := aoe.IndexInfo{
+		Type:    aoe.IndexT(metadata.ZoneMap),
+		Columns: []uint64{uint64(0)},
+		Name:    fmt.Sprintf("idx-%d", 0),
+	}
+	return &idxInfo
+}
 
 func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.TableSchema, *db.IndexSchema) {
 	schema := metadata.NewEmptySchema(info.Name)

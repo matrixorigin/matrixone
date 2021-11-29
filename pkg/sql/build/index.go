@@ -36,7 +36,7 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 		treeIndexType = stmt.IndexOption.IType
 		switch treeIndexType{
 		case tree.INDEX_TYPE_BTREE:
-			engineIndexType = engine.Invalid
+			engineIndexType = engine.BsiIndex
 		default:
 			return nil, errors.New("index type invalid")
 			// engineIndexType = engine.Invalid
