@@ -473,9 +473,9 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*8]
@@ -484,28 +484,56 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
 		ctr.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
-			if ok == 1 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
-						return err
+		{ // batch
+			cnt := 0
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
 					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					cnt++
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
 				}
-				*ctr.values[k] = ctr.rows
-				ctr.rows++
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grow(proc.Mp); err != nil {
-						return err
-					}
-				}
-				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			ai := int64(*ctr.values[k])
-			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+			for _, r := range ctr.bat.Rs {
+				if err := r.Grows(cnt, proc.Mp); err != nil {
+					return err
+				}
+			}
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				r.BatchFill(i, ctr.inserts[:n], ctr.values, bat.Zs, bat.Vecs[ctr.Is[j]])
 			}
 		}
+		/*
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
+					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					for _, r := range ctr.bat.Rs {
+						if err := r.Grow(proc.Mp); err != nil {
+							return err
+						}
+					}
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				}
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+				for j, r := range ctr.bat.Rs {
+					r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				}
+			}
+		*/
 	}
 	return nil
 }
@@ -599,9 +627,9 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*24]
@@ -610,28 +638,56 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
 		ctr.h24.ht.InsertBatch(ctr.hashs, ctr.h24.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
-			if ok == 1 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
-						return err
+		{ // batch fill
+			cnt := 0
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
 					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					cnt++
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
 				}
-				*ctr.values[k] = ctr.rows
-				ctr.rows++
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grow(proc.Mp); err != nil {
-						return err
-					}
-				}
-				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			ai := int64(*ctr.values[k])
-			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+			for _, r := range ctr.bat.Rs {
+				if err := r.Grows(cnt, proc.Mp); err != nil {
+					return err
+				}
+			}
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				r.BatchFill(i, ctr.inserts[:n], ctr.values, bat.Zs, bat.Vecs[ctr.Is[j]])
 			}
 		}
+		/*
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
+					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					for _, r := range ctr.bat.Rs {
+						if err := r.Grow(proc.Mp); err != nil {
+							return err
+						}
+					}
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				}
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+				for j, r := range ctr.bat.Rs {
+					r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				}
+			}
+		*/
 	}
 	return nil
 }
@@ -725,9 +781,9 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*32]
@@ -736,28 +792,56 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
 		ctr.h32.ht.InsertBatch(ctr.hashs, ctr.h32.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
-			if ok == 1 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
-						return err
+		{ // batch
+			cnt := 0
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
 					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					cnt++
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
 				}
-				*ctr.values[k] = ctr.rows
-				ctr.rows++
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grow(proc.Mp); err != nil {
-						return err
-					}
-				}
-				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			ai := int64(*ctr.values[k])
-			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+			for _, r := range ctr.bat.Rs {
+				if err := r.Grows(cnt, proc.Mp); err != nil {
+					return err
+				}
+			}
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				r.BatchFill(i, ctr.inserts[:n], ctr.values, bat.Zs, bat.Vecs[ctr.Is[j]])
 			}
 		}
+		/*
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
+					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					for _, r := range ctr.bat.Rs {
+						if err := r.Grow(proc.Mp); err != nil {
+							return err
+						}
+					}
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				}
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+				for j, r := range ctr.bat.Rs {
+					r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				}
+			}
+		*/
 	}
 	return nil
 }
@@ -851,9 +935,9 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*40]
@@ -862,28 +946,57 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
 		ctr.h40.ht.InsertBatch(ctr.hashs, ctr.h40.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
-			if ok == 1 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
-						return err
+		{ // batch
+			cnt := 0
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
 					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					cnt++
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
 				}
-				*ctr.values[k] = ctr.rows
-				ctr.rows++
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grow(proc.Mp); err != nil {
-						return err
-					}
-				}
-				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			ai := int64(*ctr.values[k])
-			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+			for _, r := range ctr.bat.Rs {
+				if err := r.Grows(cnt, proc.Mp); err != nil {
+					return err
+				}
+			}
 			for j, r := range ctr.bat.Rs {
-				r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				r.BatchFill(i, ctr.inserts[:n], ctr.values, bat.Zs, bat.Vecs[ctr.Is[j]])
 			}
 		}
+
+		/*
+			for k, ok := range ctr.inserts[:n] {
+				if ok == 1 {
+					for j, vec := range ctr.bat.Vecs {
+						if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+							return err
+						}
+					}
+					*ctr.values[k] = ctr.rows
+					ctr.rows++
+					for _, r := range ctr.bat.Rs {
+						if err := r.Grow(proc.Mp); err != nil {
+							return err
+						}
+					}
+					ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				}
+				ai := int64(*ctr.values[k])
+				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+				for j, r := range ctr.bat.Rs {
+					r.Fill(ai, i+int64(k), bat.Zs[i+int64(k)], bat.Vecs[ctr.Is[j]])
+				}
+			}
+		*/
 	}
 	return nil
 }
@@ -943,60 +1056,127 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 		}
 	}
 	count := int64(len(bat.Zs))
-	for i := int64(0); i < count; i++ {
-		data := make([]byte, 0, 8)
-		{
+	for i := int64(0); i < count; i += UnitLimit { // batch
+		n := int(count - i)
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		cnt := 0
+		for k := 0; k < n; k++ {
+			o := int(i) + k // offset
+			data := make([]byte, 0, 8)
 			for j, vec := range vecs {
 				switch vec.Typ.Oid {
 				case types.T_int8:
-					data = append(data, keys[j][i*1:(i+1)*1]...)
+					data = append(data, keys[j][o*1:(o+1)*1]...)
 				case types.T_int16:
-					data = append(data, keys[j][i*2:(i+1)*2]...)
+					data = append(data, keys[j][o*2:(o+1)*2]...)
 				case types.T_int32:
-					data = append(data, keys[j][i*4:(i+1)*4]...)
+					data = append(data, keys[j][o*4:(o+1)*4]...)
 				case types.T_int64:
-					data = append(data, keys[j][i*8:(i+1)*8]...)
+					data = append(data, keys[j][o*8:(o+1)*8]...)
 				case types.T_uint8:
-					data = append(data, keys[j][i*1:(i+1)*1]...)
+					data = append(data, keys[j][o*1:(o+1)*1]...)
 				case types.T_uint16:
-					data = append(data, keys[j][i*2:(i+1)*2]...)
+					data = append(data, keys[j][o*2:(o+1)*2]...)
 				case types.T_uint32:
-					data = append(data, keys[j][i*4:(i+1)*4]...)
+					data = append(data, keys[j][o*4:(o+1)*4]...)
 				case types.T_uint64:
-					data = append(data, keys[j][i*8:(i+1)*8]...)
+					data = append(data, keys[j][o*8:(o+1)*8]...)
 				case types.T_float32:
-					data = append(data, keys[j][i*4:(i+1)*4]...)
+					data = append(data, keys[j][o*4:(o+1)*4]...)
 				case types.T_float64:
-					data = append(data, keys[j][i*8:(i+1)*8]...)
+					data = append(data, keys[j][o*8:(o+1)*8]...)
 				case types.T_char:
-					data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+					data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 				case types.T_varchar:
-					data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+					data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 				}
+			}
+			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &data[0], Len: len(data)})
+			if ok {
+				ctr.inserts[i+int64(k)] = 1
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+						return err
+					}
+				}
+				*vp = ctr.rows
+				ctr.rows++
+				cnt++
+				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ctr.hstr.keys = append(ctr.hstr.keys, data...)
+			}
+			ai := int64(*vp)
+			ctr.values[k] = vp
+			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+		}
+		for _, r := range ctr.bat.Rs {
+			if err := r.Grows(cnt, proc.Mp); err != nil {
+				return err
 			}
 		}
-		ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &data[0], Len: len(data)})
-		if ok {
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionOne(vec, vecs[j], i, proc.Mp); err != nil {
-					return err
-				}
-			}
-			*vp = ctr.rows
-			ctr.rows++
-			for _, r := range ctr.bat.Rs {
-				if err := r.Grow(proc.Mp); err != nil {
-					return err
-				}
-			}
-			ctr.bat.Zs = append(ctr.bat.Zs, 0)
-			ctr.hstr.keys = append(ctr.hstr.keys, data...)
-		}
-		ai := int64(*vp)
-		ctr.bat.Zs[ai] += bat.Zs[i]
 		for j, r := range ctr.bat.Rs {
-			r.Fill(ai, i, bat.Zs[i], bat.Vecs[ctr.Is[j]])
+			r.BatchFill(i, ctr.inserts[:n], ctr.values, bat.Zs, bat.Vecs[ctr.Is[j]])
 		}
 	}
+	/*
+		for i := int64(0); i < count; i++ {
+			data := make([]byte, 0, 8)
+			{
+				for j, vec := range vecs {
+					switch vec.Typ.Oid {
+					case types.T_int8:
+						data = append(data, keys[j][i*1:(i+1)*1]...)
+					case types.T_int16:
+						data = append(data, keys[j][i*2:(i+1)*2]...)
+					case types.T_int32:
+						data = append(data, keys[j][i*4:(i+1)*4]...)
+					case types.T_int64:
+						data = append(data, keys[j][i*8:(i+1)*8]...)
+					case types.T_uint8:
+						data = append(data, keys[j][i*1:(i+1)*1]...)
+					case types.T_uint16:
+						data = append(data, keys[j][i*2:(i+1)*2]...)
+					case types.T_uint32:
+						data = append(data, keys[j][i*4:(i+1)*4]...)
+					case types.T_uint64:
+						data = append(data, keys[j][i*8:(i+1)*8]...)
+					case types.T_float32:
+						data = append(data, keys[j][i*4:(i+1)*4]...)
+					case types.T_float64:
+						data = append(data, keys[j][i*8:(i+1)*8]...)
+					case types.T_char:
+						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+					case types.T_varchar:
+						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+					}
+				}
+			}
+			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &data[0], Len: len(data)})
+			if ok {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionOne(vec, vecs[j], i, proc.Mp); err != nil {
+						return err
+					}
+				}
+				*vp = ctr.rows
+				ctr.rows++
+				for _, r := range ctr.bat.Rs {
+					if err := r.Grow(proc.Mp); err != nil {
+						return err
+					}
+				}
+				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+				ctr.hstr.keys = append(ctr.hstr.keys, data...)
+			}
+			ai := int64(*vp)
+			ctr.bat.Zs[ai] += bat.Zs[i]
+			for j, r := range ctr.bat.Rs {
+				r.Fill(ai, i, bat.Zs[i], bat.Vecs[ctr.Is[j]])
+			}
+		}
+	*/
 	return nil
 }

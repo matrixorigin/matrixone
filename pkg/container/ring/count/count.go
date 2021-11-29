@@ -103,24 +103,91 @@ func (r *CountRing) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
+func (r *CountRing) Grows(size int, m *mheap.Mheap) error {
+	n := len(r.Vs)
+	if n == 0 {
+		data, err := mheap.Alloc(m, int64(size*8))
+		if err != nil {
+			return err
+		}
+		r.Da = data
+		r.Ns = make([]int64, 0, size)
+		r.Vs = encoding.DecodeInt64Slice(data)
+	} else if n+size >= cap(r.Vs) {
+		r.Da = r.Da[:n*8]
+		data, err := mheap.Grow(m, r.Da, int64(n+size)*8)
+		if err != nil {
+			return err
+		}
+		mheap.Free(m, r.Da)
+		r.Da = data
+		r.Vs = encoding.DecodeInt64Slice(data)
+	}
+	r.Vs = r.Vs[:n+size]
+	for i := 0; i < size; i++ {
+		r.Ns = append(r.Ns, 0)
+	}
+	return nil
+}
+
 func (r *CountRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i]++
+		r.Ns[i] += z
 	} else {
-		r.Vs[i]++
+		r.Vs[i] += z
+	}
+}
+
+func (r *CountRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+	if nulls.Any(vec.Nsp) {
+		for i, o := range os {
+			if o == 1 {
+				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+					r.Ns[*vps[i]] += zs[int64(i)+start]
+				} else {
+					r.Vs[*vps[i]] += zs[int64(i)+start]
+				}
+			}
+		}
+	} else {
+		for i, o := range os {
+			if o == 1 {
+				r.Vs[*vps[i]] += zs[int64(i)+start]
+			}
+		}
 	}
 }
 
 func (r *CountRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
-	n := int64(nulls.Length(vec.Nsp))
-	r.Ns[i] += n
-	r.Vs[i] += int64(vector.Length(vec)) - n
+	if nulls.Any(vec.Nsp) {
+		for j, z := range zs {
+			if nulls.Contains(vec.Nsp, uint64(j)) {
+				r.Ns[i] += z
+			} else {
+				r.Vs[i] += z
+			}
+		}
+	} else {
+		for _, z := range zs {
+			r.Vs[i] += z
+		}
+	}
 }
 
 func (r *CountRing) Add(a interface{}, x, y int64) {
 	ar := a.(*CountRing)
 	r.Vs[x] += ar.Vs[y]
 	r.Ns[x] += ar.Ns[y]
+}
+
+func (r *CountRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+	ar := a.(*CountRing)
+	for i, o := range os {
+		if o == 1 {
+			r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
+			r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
+		}
+	}
 }
 
 func (r *CountRing) Mul(x, z int64) {
