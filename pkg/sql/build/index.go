@@ -38,7 +38,7 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 		case tree.INDEX_TYPE_BTREE:
 			engineIndexType = engine.Invalid
 		default:
-			return nil, errors.New("column not exist")
+			return nil, errors.New("index type invalid")
 			// engineIndexType = engine.Invalid
 		}
 	} else {
