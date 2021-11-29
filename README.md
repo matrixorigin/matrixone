@@ -29,7 +29,7 @@ An important goal of MatrixOne is to make it easy for users to operate and manag
 By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science applications.
 
 ## Architecture
-![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
+![Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png)
 
 ### Query Parser Layer
 -   **Parser**: Parses SQL, Streaming Query, or Python language into an abstract syntax tree for further processing.
