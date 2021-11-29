@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
+		input: "create index idx1 using bsi on A (a) ",
 	}
 )
 
@@ -55,6 +55,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create index idx1 using bsi on A (a) ",
+	}, {
 		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
 	}, {
 		input: `revoke super(a, b, c) 
