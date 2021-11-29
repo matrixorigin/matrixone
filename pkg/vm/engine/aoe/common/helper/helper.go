@@ -81,7 +81,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, string, []en
 	}
 	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
-			Typ:      int(idx.Type),
+			Typ:      engine.IndexT(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		})
@@ -116,12 +116,21 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 
 	for _, def := range defs {
 		if v, ok := def.(*engine.IndexTableDef); ok {
+			var tp aoe.IndexT
+			switch v.Typ {
+			case engine.ZoneMap:
+				tp = aoe.ZoneMap
+			case engine.BsiIndex:
+				tp = aoe.Bsi
+			default:
+				tp = aoe.Invalid
+			}
 			idx := aoe.IndexInfo{
 				SchemaId: sid,
 				TableId:  tid,
 				// Id:       id,
-				Type:     uint64(v.Typ),
-				Name:     v.Name,
+				Type: tp,
+				Name: v.Name,
 			}
 			for _, name := range v.ColNames {
 				idx.ColumnNames = append(idx.ColumnNames, name)
@@ -144,14 +153,14 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, aoe.ColumnInfo{
-				SchemaId:   sid,
-				TableID:    tid,
-				Id:         id,
-				Name:       v.Attr.Name,
-				Alg:        v.Attr.Alg,
-				Type:       v.Attr.Type,
-				Default:    v.Attr.Default,
-				PrimaryKey: v.Attr.PrimaryKey,
+				SchemaId:    sid,
+				TableID:     tid,
+				Id:          id,
+				Name:        v.Attr.Name,
+				Alg:         v.Attr.Alg,
+				Type:        v.Attr.Type,
+				Default:     v.Attr.Default,
+				PrimaryKey:  v.Attr.PrimaryKey,
 				NullAbility: v.Attr.Nullability,
 			})
 			id++
@@ -172,7 +181,7 @@ func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	defs := make([]*engine.IndexTableDef, len(tbl.Indices))
 	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
-			Typ:      int(idx.Type),
+			Typ:      engine.IndexT(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		}
@@ -184,11 +193,11 @@ func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
 	attrs := make([]metadata.Attribute, len(tbl.Columns))
 	for i, col := range tbl.Columns {
 		attrs[i] = metadata.Attribute{
-			Alg:     col.Alg,
-			Name:    col.Name,
-			Type:    col.Type,
-			Default: col.Default,
-			PrimaryKey: col.PrimaryKey,
+			Alg:         col.Alg,
+			Name:        col.Name,
+			Type:        col.Type,
+			Default:     col.Default,
+			PrimaryKey:  col.PrimaryKey,
 			Nullability: col.NullAbility,
 		}
 	}

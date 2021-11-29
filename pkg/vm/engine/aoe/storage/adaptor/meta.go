@@ -46,7 +46,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		}
 		indexId++
 		indexInfo := aoe.IndexInfo{
-			Type:    uint64(metadata.ZoneMap),
+			Type:    aoe.IndexT(metadata.ZoneMap),
 			Columns: []uint64{uint64(i)},
 			Name:    fmt.Sprintf("idx-%d", indexId),
 		}
@@ -79,7 +79,9 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 		for _, col := range indexInfo.Columns {
 			cols = append(cols, int(col))
 		}
-		if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+		tp:=metadata.ZoneMap
+		// if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+		if _, err = indice.MakeIndex(indexInfo.Name, tp, cols...); err != nil {
 			panic(err)
 		}
 	}

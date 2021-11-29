@@ -355,17 +355,25 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	if err != nil {
 		return err
 	}
-	//TODO
-	for _, idx := range idxInfo.ColumnNames {
-		for _, col := range tbl.Columns {
-			if idx == col.Name {
-				idxInfo.Columns = append(idxInfo.Columns, col.Id)
-			}
-		}
-	}
 	for _, indice := range tbl.Indices {
 		if indice.Name == idxInfo.Name {
 			return ErrIndexExist
+		}
+	}
+	if idxInfo.Type == aoe.Invalid{
+		return ErrInvalidIndexType
+	}
+	//TODO
+	for _, idx := range idxInfo.ColumnNames {
+		columnExist:=false
+		for _, col := range tbl.Columns {
+			if idx == col.Name {
+				columnExist=true
+				idxInfo.Columns = append(idxInfo.Columns, col.Id)
+			}
+		}
+		if !columnExist{
+			return ErrColumnNotExist
 		}
 	}
 	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)

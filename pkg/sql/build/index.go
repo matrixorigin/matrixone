@@ -15,6 +15,8 @@
 package build
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
@@ -28,13 +30,21 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 	if err != nil {
 		return nil, err
 	}
-	var typ tree.IndexType
+	var treeIndexType tree.IndexType
+	var engineIndexType engine.IndexT
 	if stmt.IndexOption != nil {
-		typ = stmt.IndexOption.IType
+		treeIndexType = stmt.IndexOption.IType
+		switch treeIndexType{
+		case tree.INDEX_TYPE_BTREE:
+			engineIndexType = engine.Invalid
+		default:
+			return nil, errors.New("column not exist")
+			// engineIndexType = engine.Invalid
+		}
 	} else {
-		typ = tree.INDEX_TYPE_INVALID
+		engineIndexType = engine.ZoneMap
 	}
-	def := engine.IndexTableDef{Typ: int(typ), ColNames: stmt.KeyParts[0].ColName.Parts[:1], Name: string(stmt.Name)}
+	def := engine.IndexTableDef{Typ: engineIndexType, ColNames: stmt.KeyParts[0].ColName.Parts[:1], Name: string(stmt.Name)}
 	defs = append(defs, &def)
 	return createIndex.New(stmt.IfNotExists, r, defs), nil
 }
