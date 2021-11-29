@@ -257,3 +257,24 @@ func PathExists(path string) (bool, bool, error) {
 
 	return false, false, err
 }
+
+/*
+MakeDebugInfo prints bytes in multi-lines.
+ */
+func MakeDebugInfo(data []byte,bytesCount int,bytesPerLine int) string {
+	if len(data) == 0 || bytesCount == 0 || bytesPerLine == 0 {
+		return ""
+	}
+	pl := Min(bytesCount,len(data))
+	ps := ""
+	for i := 0; i < pl; i++ {
+		if i > 0 && (i % bytesPerLine == 0) {
+			ps += "\n"
+		}
+		if i % bytesPerLine == 0 {
+			ps += fmt.Sprintf("%d",i / bytesPerLine) + " : "
+		}
+		ps += fmt.Sprintf("%02x ",data[i])
+	}
+	return ps
+}
