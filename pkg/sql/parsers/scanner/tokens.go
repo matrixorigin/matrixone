@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		BSI = MYSQL_BSI
 		INT1 = MYSQL_INT1
 		INT2 = MYSQL_INT2
 		INT3 = MYSQL_INT3
@@ -447,6 +448,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"both":                     UNUSED,
 		"by":                       BY,
 		"btree":                    BTREE,
+		"bsi": 						BSI,
 		"call":                     UNUSED,
 		"cascade":                  CASCADE,
 		"case":                     CASE,
@@ -852,6 +854,7 @@ func initTokens(dialectType dialect.DialectType) {
 
 // mysql
 var (
+	BSI 					 int
 	TERMINATED               int
 	ENCLOSED                 int
 	OPTIONALLY               int
