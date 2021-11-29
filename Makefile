@@ -4,6 +4,13 @@ BIN_NAME := mo-server
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 
+# generate files generated from .template and needs to delete when clean
+GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
+GENERATE_OVERLOAD_MATH := ./pkg/sql/colexec/extend/overload/div.go ./pkg/sql/colexec/extend/overload/minus.go ./pkg/sql/colexec/extend/overload/mod.go ./pkg/sql/colexec/extend/overload/plus.go ./pkg/sql/colexec/extend/overload/mult.go 
+GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/ne.go /pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/gt.go ./pkg/sql/colexec/extend/overload/le.go ./pkg/sql/colexec/extend/overload/lt.go
+GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
+GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
+
 # Creating build config
 .PHONY: config
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
@@ -66,6 +73,11 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
+	@rm -f $(GENERATE_OVERLOAD_LOGIC)
+	@rm -f $(GENERATE_OVERLOAD_MATH)
+	@rm -f $(GENERATE_OVERLOAD_COMPARE)
+	@rm -f $(GENERATE_OVERLOAD_OTHERS)
+	@rm -f $(GENERATE_OVERLOAD_UNARYS)
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))
 	@rm -f $(BIN_NAME)
@@ -74,4 +86,3 @@ ifneq ($(wildcard $(BUILD_CFG)),)
 	$(info Remove file $(BUILD_CFG))
 	@rm -f $(BUILD_CFG)
 endif
-
