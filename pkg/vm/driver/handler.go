@@ -98,6 +98,18 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.CustomType = uint64(pb.Append)
 		req.Write = true
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.CreateIndex:
+		msg := customReq.CreateIndex
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.CreateIndex)
+		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.DropIndex:
+		msg := customReq.DropIndex
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.DropIndex)
+		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.TabletNames:
 		msg := customReq.TabletIds
 		req.Group = uint64(customReq.Group)

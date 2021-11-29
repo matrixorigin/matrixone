@@ -87,15 +87,16 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 	return schema, indice
 }
 
-func IndiceInfoToIndiceSchema(catalog *metadata.Catalog, info *aoe.IndexInfo) *db.IndexSchema {
-
+func IndiceInfoToIndiceSchema(info *aoe.IndexInfo) *db.IndexSchema {
+	columns := make([]int, len(info.Columns))
 	for _, col := range info.Columns {
-		cols = append(cols, int(col))
+		columns = append(columns, int(col))
 	}
-	if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex(info.Name, metadata.IndexT(info.Type), columns...)
+	if err != nil {
 		panic(err)
 	}
-
 	return indice
 }
 

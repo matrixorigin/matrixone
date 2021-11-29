@@ -368,6 +368,26 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 			return ErrIndexExist
 		}
 	}
+	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
+	if err != nil {
+		return err
+	}
+	for _, shardId := range shardIds {
+		sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):])
+		if err != nil {
+			logutil.Errorf("convert shardid failed, %v", err)
+			break
+		}
+		aoeTableName := c.encodeTabletName(sid, tbl.Id)
+		err = c.Driver.CreateIndex(aoeTableName, &idxInfo, sid)
+		if err != nil {
+			logutil.Errorf("call local create index failed %d, %d, %v", sid, tbl.Id, err)
+			break
+		}
+	}
+	if err != nil {
+		return err
+	}
 	tbl.Epoch = epoch
 	tbl.Indices = append(tbl.Indices, idxInfo)
 	err = c.updateTableInfo(idxInfo.SchemaId, tbl)
@@ -385,6 +405,26 @@ func (c *Catalog) DropIndex(epoch, tid, dbid uint64, idxName string) error {
 		return err
 	}
 	tbl, err := c.checkTableExists(dbid, tid)
+	if err != nil {
+		return err
+	}
+	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
+	if err != nil {
+		return err
+	}
+	for _, shardId := range shardIds {
+		sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):])
+		if err != nil {
+			logutil.Errorf("convert shardid failed, %v", err)
+			break
+		}
+		aoeTableName := c.encodeTabletName(sid, tbl.Id)
+		err = c.Driver.DropIndex(aoeTableName, idxName, sid)
+		if err != nil {
+			logutil.Errorf("call local drop index failed %d, %d, %v", sid, tbl.Id, err)
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
