@@ -15,7 +15,6 @@
 package build
 
 import (
-	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
@@ -38,8 +37,7 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 		case tree.INDEX_TYPE_BTREE:
 			engineIndexType = engine.BsiIndex
 		default:
-			return nil, errors.New("index type invalid")
-			// engineIndexType = engine.Invalid
+			engineIndexType = engine.Invalid
 		}
 	} else {
 		engineIndexType = engine.ZoneMap
