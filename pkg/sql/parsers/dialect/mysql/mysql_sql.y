@@ -200,7 +200,7 @@ import (
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8
 
-// CreateTable
+// Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
 %token <str> SCHEMA TABLE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
@@ -212,8 +212,8 @@ import (
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 
-// CreateIndex
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE
+// Create Index
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
 
 // Alter
 %token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER
@@ -438,6 +438,7 @@ import (
 %type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
+// type <str> mo_keywords
 
 %start start_command
 
@@ -2813,6 +2814,10 @@ using_opt:
     {
         $$ = tree.INDEX_TYPE_RTREE
     }
+|	USING BSI
+	{
+		$$ = tree.INDEX_TYPE_BSI
+	}
 
 create_database_stmt:
     CREATE database_or_schema not_exists_opt ident create_option_list_opt
@@ -5522,5 +5527,8 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+
+//mo_keywords:
+//	BSI
 
 %%
