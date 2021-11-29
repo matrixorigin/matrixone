@@ -92,6 +92,66 @@ func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
+func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[logIndex:%d,%d]createIndex handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
+	}()
+	customReq := &pb.CreateIndexRequest{}
+	protoc.MustUnmarshal(customReq, cmd)
+	indiceInfo, err := helper.DecodeIndex(customReq.Indices)
+	indice:=adaptor.IndiceInfoToIndiceSchema(indiceInfo)
+	if err != nil {
+		resp := errDriver.ErrorResp(err)
+		return 0, 0, resp
+	}
+	ctx := aoedb.CreateIndexCtx{
+		DBMutationCtx: aoedb.DBMutationCtx{
+			Id:     index,
+			Offset: offset,
+			Size:   batchSize,
+			DB:     aoedbName.ShardIdToName(shardId),
+		},
+		Table:  customReq.TableName,
+		Indice: ,
+	}
+	err := s.DB.CreateIndex(&ctx)
+	if err != nil {
+		resp := errDriver.ErrorResp(err)
+		return 0, 0, resp
+	}
+	writtenBytes := uint64(len(key) + len(customReq.Indices))
+	changedBytes := int64(writtenBytes)
+	return writtenBytes, changedBytes, nil
+}
+
+func (s *Storage) dropIndex(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[logIndex:%d,%d]createIndex handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
+	}()
+	customReq := &pb.AppendRequest{}
+	protoc.MustUnmarshal(customReq, cmd)
+	ctx := aoedb.DropIndexCtx{
+		DBMutationCtx: aoedb.DBMutationCtx{
+			Id:     index,
+			Offset: offset,
+			Size:   batchSize,
+			DB:     aoedbName.ShardIdToName(shardId),
+		},
+		Table:  customReq.TabletName,
+		Indice: customReq.TabletName,
+	}
+	err := s.DB.CreateIndex(&ctx)
+	if err != nil {
+		resp := errDriver.ErrorResp(err)
+		return 0, 0, resp
+	}
+	writtenBytes := uint64(len(key) + len(customReq.Data))
+	changedBytes := int64(writtenBytes)
+	return writtenBytes, changedBytes, nil
+}
+
 //Append appends batch in the table
 func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	t0 := time.Now()
@@ -185,7 +245,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 		buf := errDriver.ErrorResp(err)
 		return 0, 0, buf
 	}
-	schema,indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
+	schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &tblInfo)
 	schema.Name = customReq.Name
 	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
@@ -420,7 +480,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				DB:     aoedbName.ShardIdToName(metadata.ShardID),
 			}
 			db, err = s.DB.CreateDatabase(&ctx)
-			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.",metadata.ShardID,db.Id,s)
+			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
 			if err != nil {
 				return err
 			}
@@ -458,7 +518,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				offset = 1
 				size = 3
 			}
-			schema,indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
+			schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, &mateTblInfo)
 			ctx := aoedb.CreateTableCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     metadata.LogIndex,

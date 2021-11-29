@@ -100,6 +100,13 @@ func DecodeTable(data []byte) (aoe.TableInfo, error) {
 	return tbl, err
 }
 
+func DecodeIndex(data []byte) (aoe.IndexInfo, error) {
+	var idx aoe.IndexInfo
+
+	err := encoding.Decode(data, &idx)
+	return idx, err
+}
+
 func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []aoe.IndexInfo {
 	var id uint64
 	var idxs []aoe.IndexInfo

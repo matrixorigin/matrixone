@@ -30,6 +30,8 @@ enum Type {
   TabletNames = 106;
   GetSegmentIds = 107;
   GetSegmentedId = 108;
+  CreateIndex = 109;
+  DropIndex = 110;
 }
 
 message Request {
@@ -51,6 +53,8 @@ message Request {
   DropTabletRequest dropTablet = 104 [(gogoproto.nullable) = false];
   GetSegmentIdsRequest getSegmentIds = 105 [(gogoproto.nullable) = false];
   GetSegmentedIdRequest getSegmentedId = 106 [(gogoproto.nullable) = false];
+  CreateIndexRequest createIndex = 107 [(gogoproto.nullable) = false];
+  DropIndexRequest dropIndex = 108 [(gogoproto.nullable) = false];
 }
 
 
@@ -124,6 +128,17 @@ message GetSegmentedIdRequest {
   uint64 shardId = 1;
 }
 
+//CreateIndexRequest create an index
+message CreateIndexRequest {
+  string tableName = 1;
+  bytes indices = 2;
+}
+
+//DropIndexRequest drops an index
+message DropIndexRequest {
+  string tableName = 1;
+  string indexName = 2;
+}
 //TabletIDsRequest gets the ids of all the tablets of the table.
 message TabletIDsRequest {
 }

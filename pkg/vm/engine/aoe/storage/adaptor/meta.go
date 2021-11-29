@@ -87,6 +87,18 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 	return schema, indice
 }
 
+func IndiceInfoToIndiceSchema(catalog *metadata.Catalog, info *aoe.IndexInfo) *db.IndexSchema {
+
+	for _, col := range info.Columns {
+		cols = append(cols, int(col))
+	}
+	if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+		panic(err)
+	}
+
+	return indice
+}
+
 func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {
 	return &shard.Index{
 		ShardId: ctx.ShardId,
