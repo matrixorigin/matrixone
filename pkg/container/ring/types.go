@@ -33,6 +33,8 @@ type Ring interface {
 	Free(*mheap.Mheap)
 	Grow(*mheap.Mheap) error
 
+	Grows(int, *mheap.Mheap) error
+
 	SetLength(int)
 	Shrink([]int64)
 
@@ -44,6 +46,11 @@ type Ring interface {
 
 	BulkFill(int64, []int64, *vector.Vector)
 
+	BatchFill(int64, []uint8, []*uint64, []int64, *vector.Vector)
+
 	Mul(int64, int64)
+
 	Add(interface{}, int64, int64)
+
+	BatchAdd(interface{}, int64, []uint8, []*uint64)
 }

@@ -88,24 +88,65 @@ func (r *StrRing) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
-func (r *StrRing) Fill(i int64, sel, _ int64, vec *vector.Vector) {
+func (r *StrRing) Grows(size int, m *mheap.Mheap) error {
+	if r.Mp == nil {
+		r.Mp = m
+	}
+	if len(r.Vs) == 0 {
+		r.Ns = make([]int64, 0, size)
+		r.Vs = make([][]byte, 0, size)
+	}
+	for i := 0; i < size; i++ {
+		r.Ns = append(r.Ns, 0)
+		r.Vs = append(r.Vs, make([]byte, 0, 4))
+	}
+	return nil
+}
+
+func (r *StrRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	if v := vec.Col.(*types.Bytes).Get(sel); bytes.Compare(v, r.Vs[i]) > 0 {
 		r.Vs[i] = append(r.Vs[i][:0], v...)
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i]++
+		r.Ns[i] += z
 	}
 }
 
-func (r *StrRing) BulkFill(i int64, _ []int64, vec *vector.Vector) {
+func (r *StrRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
-	for j, o := range vs.Offsets {
-		v := vs.Data[o : o+vs.Lengths[j]]
-		if bytes.Compare(v, r.Vs[i]) > 0 {
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if v := vs.Get(int64(i) + start); bytes.Compare(v, r.Vs[j]) > 0 {
+				r.Vs[j] = append(r.Vs[j][:0], v...)
+			}
+		}
+	}
+	if nulls.Any(vec.Nsp) {
+		for i, o := range os {
+			if o == 1 {
+				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+					r.Ns[*vps[i]] += zs[int64(i)+start]
+				}
+			}
+		}
+	}
+}
+
+func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
+	vs := vec.Col.(*types.Bytes)
+	for i := range zs {
+		if v := vs.Get(int64(i)); bytes.Compare(v, r.Vs[i]) > 0 {
 			r.Vs[i] = append(r.Vs[i][:0], v...)
 		}
 	}
-	r.Ns[i] += int64(nulls.Length(vec.Nsp))
+	if nulls.Any(vec.Nsp) {
+		for j := range zs {
+			if nulls.Contains(vec.Nsp, uint64(j)) {
+				r.Ns[i] += zs[j]
+			}
+		}
+	}
 }
 
 func (r *StrRing) Add(a interface{}, x, y int64) {
@@ -116,7 +157,21 @@ func (r *StrRing) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *StrRing) Mul(_, _ int64) {
+func (r *StrRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+	ar := a.(*StrRing)
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if bytes.Compare(ar.Vs[int64(i)+start], r.Vs[j]) > 0 {
+				r.Vs[j] = ar.Vs[int64(i)+start]
+			}
+			r.Ns[j] += ar.Ns[int64(i)+start]
+		}
+	}
+}
+
+func (r *StrRing) Mul(x, z int64) {
+	r.Ns[x] *= z
 }
 
 func (r *StrRing) Eval(zs []int64) *vector.Vector {

@@ -1405,8 +1405,8 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 			if isE > 0 {
 				r.IsE = true
 			}
+			data = data[1:]
 		*/
-		data = data[1:]
 		// Da
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
@@ -1442,8 +1442,8 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 			if isE > 0 {
 				r.IsE = true
 			}
+			data = data[1:]
 		*/
-		data = data[1:]
 		// Da
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]

@@ -91,6 +91,7 @@ func (r *Float32Ring) Grow(m *mheap.Mheap) error {
 		}
 		r.Da = data
 		r.Ns = make([]int64, 0, 8)
+		r.Es = make([]bool, 0, 8)
 		r.Vs = encoding.DecodeFloat32Slice(data)
 	} else if n+1 >= cap(r.Vs) {
 		r.Da = r.Da[:n*4]
@@ -109,17 +110,68 @@ func (r *Float32Ring) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
-func (r *Float32Ring) Fill(i int64, sel, _ int64, vec *vector.Vector) {
+func (r *Float32Ring) Grows(size int, m *mheap.Mheap) error {
+	n := len(r.Vs)
+	if n == 0 {
+		data, err := mheap.Alloc(m, int64(size*4))
+		if err != nil {
+			return err
+		}
+		r.Da = data
+		r.Ns = make([]int64, 0, size)
+		r.Es = make([]bool, 0, size)
+		r.Vs = encoding.DecodeFloat32Slice(data)
+	} else if n+size >= cap(r.Vs) {
+		r.Da = r.Da[:n*4]
+		data, err := mheap.Grow(m, r.Da, int64(n+size)*4)
+		if err != nil {
+			return err
+		}
+		mheap.Free(m, r.Da)
+		r.Da = data
+		r.Vs = encoding.DecodeFloat32Slice(data)
+	}
+	r.Vs = r.Vs[:n+size]
+	for i := 0; i < size; i++ {
+		r.Ns = append(r.Ns, 0)
+		r.Es = append(r.Es, true)
+	}
+	return nil
+}
+
+func (r *Float32Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	if v := vec.Col.([]float32)[sel]; r.Es[i] || v > r.Vs[i] {
 		r.Vs[i] = v
 		r.Es[i] = false
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i]++
+		r.Ns[i] += z
 	}
 }
 
-func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
+func (r *Float32Ring) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+	vs := vec.Col.([]float32)
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if r.Es[j] || vs[int64(i)+start] > r.Vs[j] {
+				r.Vs[j] = vs[int64(i)+start]
+				r.Es[j] = false
+			}
+		}
+	}
+	if nulls.Any(vec.Nsp) {
+		for i, o := range os {
+			if o == 1 {
+				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+					r.Ns[*vps[i]] += zs[int64(i)+start]
+				}
+			}
+		}
+	}
+}
+
+func (r *Float32Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]float32)
 	for _, v := range vs {
 		if r.Es[i] || v > r.Vs[i] {
@@ -127,7 +179,13 @@ func (r *Float32Ring) BulkFill(i int64, _ []int64, vec *vector.Vector) {
 			r.Es[i] = false
 		}
 	}
-	r.Ns[i] += int64(nulls.Length(vec.Nsp))
+	if nulls.Any(vec.Nsp) {
+		for j := range vs {
+			if nulls.Contains(vec.Nsp, uint64(j)) {
+				r.Ns[i] += zs[j]
+			}
+		}
+	}
 }
 
 func (r *Float32Ring) Add(a interface{}, x, y int64) {
@@ -139,7 +197,22 @@ func (r *Float32Ring) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *Float32Ring) Mul(_, _ int64) {
+func (r *Float32Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+	ar := a.(*Float32Ring)
+	for i, o := range os {
+		if o == 1 {
+			j := *vps[i]
+			if r.Es[j] || ar.Vs[int64(i)+start] > r.Vs[j] {
+				r.Es[j] = false
+				r.Vs[j] = ar.Vs[int64(i)+start]
+			}
+			r.Ns[j] += ar.Ns[int64(i)+start]
+		}
+	}
+}
+
+func (r *Float32Ring) Mul(x, z int64) {
+	r.Ns[x] *= z
 }
 
 func (r *Float32Ring) Eval(zs []int64) *vector.Vector {
