@@ -95,42 +95,39 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			n.ctr.h8.zkeys = make([]uint64, UnitLimit)
 			n.ctr.h8.ht = &hashtable.Int64HashMap{}
 			n.ctr.h8.ht.Init()
-			/*
-				case size <= 16:
-					n.ctr.typ = H16
-					n.ctr.inserts = make([]uint8, UnitLimit)
-					n.ctr.zinserts = make([]uint8, UnitLimit)
-					n.ctr.hashs = make([]uint64, UnitLimit)
-					n.ctr.hashs = make([]uint64, UnitLimit)
-					n.ctr.values = make([]*uint64, UnitLimit)
-					n.ctr.h16.keys = make([][2]uint64, UnitLimit)
-					n.ctr.h16.zkeys = make([][2]uint64, UnitLimit)
-					n.ctr.h16.ht = &hashtable.String16HashTable{}
-					n.ctr.h16.ht.Init()
-				case size <= 24:
-					n.ctr.typ = H24
-					n.ctr.inserts = make([]uint8, UnitLimit)
-					n.ctr.zinserts = make([]uint8, UnitLimit)
-					n.ctr.hashs = make([]uint64, UnitLimit)
-					n.ctr.values = make([]*uint64, UnitLimit)
-					n.ctr.h24.keys = make([][3]uint64, UnitLimit)
-					n.ctr.h24.zkeys = make([][3]uint64, UnitLimit)
-					n.ctr.h24.ht = &hashtable.String24HashTable{}
-					n.ctr.h24.ht.Init()
-				case size <= 32:
-					n.ctr.typ = H32
-					n.ctr.inserts = make([]uint8, UnitLimit)
-					n.ctr.zinserts = make([]uint8, UnitLimit)
-					n.ctr.hashs = make([]uint64, UnitLimit)
-					n.ctr.values = make([]*uint64, UnitLimit)
-					n.ctr.h32.keys = make([][4]uint64, UnitLimit)
-					n.ctr.h32.zkeys = make([][4]uint64, UnitLimit)
-					n.ctr.h32.ht = &hashtable.String32HashTable{}
-					n.ctr.h32.ht.Init()
-			*/
+		case size <= 24:
+			n.ctr.typ = H24
+			n.ctr.inserts = make([]uint8, UnitLimit)
+			n.ctr.zinserts = make([]uint8, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
+			n.ctr.h24.keys = make([][3]uint64, UnitLimit)
+			n.ctr.h24.zkeys = make([][3]uint64, UnitLimit)
+			n.ctr.h24.ht = &hashtable.String24HashMap{}
+			n.ctr.h24.ht.Init()
+		case size <= 32:
+			n.ctr.typ = H32
+			n.ctr.inserts = make([]uint8, UnitLimit)
+			n.ctr.zinserts = make([]uint8, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
+			n.ctr.h32.keys = make([][4]uint64, UnitLimit)
+			n.ctr.h32.zkeys = make([][4]uint64, UnitLimit)
+			n.ctr.h32.ht = &hashtable.String32HashMap{}
+			n.ctr.h32.ht.Init()
+		case size <= 40:
+			n.ctr.typ = H40
+			n.ctr.inserts = make([]uint8, UnitLimit)
+			n.ctr.zinserts = make([]uint8, UnitLimit)
+			n.ctr.hashs = make([]uint64, UnitLimit)
+			n.ctr.values = make([]*uint64, UnitLimit)
+			n.ctr.h40.keys = make([][5]uint64, UnitLimit)
+			n.ctr.h40.zkeys = make([][5]uint64, UnitLimit)
+			n.ctr.h40.ht = &hashtable.String40HashMap{}
+			n.ctr.h40.ht.Init()
 		default:
 			n.ctr.typ = HStr
-			n.ctr.hstr.keys = make([][]byte, 0, 8)
+			n.ctr.hstr.keys = make([]byte, 0, 1<<20)
 			n.ctr.hstr.ht = &hashtable.StringHashMap{}
 			n.ctr.hstr.ht.Init()
 		}
@@ -138,14 +135,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	switch n.ctr.typ {
 	case H8:
 		err = n.ctr.processH8(bat, proc)
-		/*
-			case H16:
-				err = n.ctr.processH16(bat, proc)
-			case H24:
-				err = n.ctr.processH24(bat, proc)
-			case H32:
-				err = n.ctr.processH32(bat, proc)
-		*/
+	case H24:
+		err = n.ctr.processH24(bat, proc)
+	case H32:
+		err = n.ctr.processH32(bat, proc)
+	case H40:
+		err = n.ctr.processH40(bat, proc)
 	default:
 		err = n.ctr.processHStr(bat, proc)
 	}
@@ -250,9 +245,9 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*8]
@@ -261,123 +256,6 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
 		ctr.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
-			if ok == 1 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
-						return err
-					}
-				}
-				*ctr.values[k] = ctr.rows
-				ctr.rows++
-				ctr.bat.Zs = append(ctr.bat.Zs, 0)
-			}
-			ai := int64(*ctr.values[k])
-			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
-		}
-	}
-	return nil
-}
-
-/*
-func (ctr *Container) processH16(bat *batch.Batch, proc *process.Process) error {
-	var keys [][]byte
-	var os, ns [][]uint32
-
-	vecs := bat.Vecs
-	{
-		os = make([][]uint32, len(vecs))
-		ns = make([][]uint32, len(vecs))
-		keys = make([][]byte, len(vecs))
-		for i := range vecs {
-			switch vecs[i].Typ.Oid {
-			case types.T_int8:
-				vs := vecs[i].Col.([]int8)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
-			case types.T_int16:
-				vs := vecs[i].Col.([]int16)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
-			case types.T_int32:
-				vs := vecs[i].Col.([]int32)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
-			case types.T_int64:
-				vs := vecs[i].Col.([]int64)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
-			case types.T_uint8:
-				vs := vecs[i].Col.([]uint8)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
-			case types.T_uint16:
-				vs := vecs[i].Col.([]uint16)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
-			case types.T_uint32:
-				vs := vecs[i].Col.([]uint32)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
-			case types.T_uint64:
-				vs := vecs[i].Col.([]uint64)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
-			case types.T_float32:
-				vs := vecs[i].Col.([]float32)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
-			case types.T_float64:
-				vs := vecs[i].Col.([]float64)
-				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
-			case types.T_char:
-				vs := vecs[i].Col.(*types.Bytes)
-				keys[i] = vs.Data
-				os[i] = vs.Offsets
-				ns[i] = vs.Lengths
-			case types.T_varchar:
-				vs := vecs[i].Col.(*types.Bytes)
-				keys[i] = vs.Data
-				os[i] = vs.Offsets
-				ns[i] = vs.Lengths
-			}
-		}
-	}
-	count := int64(len(bat.Zs))
-	for i := int64(0); i < count; i += UnitLimit {
-		n := int(count - i)
-		if n > UnitLimit {
-			n = UnitLimit
-		}
-		{
-			copy(ctr.h16.keys, ctr.h16.zkeys)
-			data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h16.keys[0])), cap(ctr.h16.keys)*16)[:len(ctr.h16.keys)*16]
-			data = data[:0]
-			for k := 0; k < n; k++ {
-				o := int(i) + k // offset
-				for j, vec := range vecs {
-					switch vec.Typ.Oid {
-					case types.T_int8:
-						data = append(data, keys[j][o*1:(o+1)*1]...)
-					case types.T_int16:
-						data = append(data, keys[j][o*2:(o+1)*2]...)
-					case types.T_int32:
-						data = append(data, keys[j][o*4:(o+1)*4]...)
-					case types.T_int64:
-						data = append(data, keys[j][o*8:(o+1)*8]...)
-					case types.T_uint8:
-						data = append(data, keys[j][o*1:(o+1)*1]...)
-					case types.T_uint16:
-						data = append(data, keys[j][o*2:(o+1)*2]...)
-					case types.T_uint32:
-						data = append(data, keys[j][o*4:(o+1)*4]...)
-					case types.T_uint64:
-						data = append(data, keys[j][o*8:(o+1)*8]...)
-					case types.T_float32:
-						data = append(data, keys[j][o*4:(o+1)*4]...)
-					case types.T_float64:
-						data = append(data, keys[j][o*8:(o+1)*8]...)
-					}
-				}
-				data = data[:(k+1)*16]
-			}
-		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
-		if err := ctr.h16.ht.InsertBatch(ctr.hashs, ctr.h16.keys[:n], ctr.inserts, ctr.values); err != nil {
-			return err
-		}
 		for k, ok := range ctr.inserts[:n] {
 			if ok == 1 {
 				for j, vec := range ctr.bat.Vecs {
@@ -484,6 +362,10 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 						data = append(data, keys[j][o*4:(o+1)*4]...)
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
+					case types.T_char:
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
+					case types.T_varchar:
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*24]
@@ -491,9 +373,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 		}
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
-		if err := ctr.h24.ht.InsertBatch(ctr.hashs, ctr.h24.keys[:n], ctr.inserts, ctr.values); err != nil {
-			return err
-		}
+		ctr.h24.ht.InsertBatch(ctr.hashs, ctr.h24.keys[:n], ctr.inserts, ctr.values)
 		for k, ok := range ctr.inserts[:n] {
 			if ok == 1 {
 				for j, vec := range ctr.bat.Vecs {
@@ -601,9 +481,9 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 					case types.T_float64:
 						data = append(data, keys[j][o*8:(o+1)*8]...)
 					case types.T_char:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					case types.T_varchar:
-						data = append(data, keys[j][os[j][i]:os[j][i]+ns[j][i]]...)
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
 					}
 				}
 				data = data[:(k+1)*32]
@@ -611,9 +491,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 		}
 		ctr.hashs[0] = 0
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
-		if err := ctr.h32.ht.InsertBatch(ctr.hashs, ctr.h32.keys[:n], ctr.inserts, ctr.values); err != nil {
-			return err
-		}
+		ctr.h32.ht.InsertBatch(ctr.hashs, ctr.h32.keys[:n], ctr.inserts, ctr.values)
 		for k, ok := range ctr.inserts[:n] {
 			if ok == 1 {
 				for j, vec := range ctr.bat.Vecs {
@@ -631,7 +509,124 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 	}
 	return nil
 }
-*/
+
+func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error {
+	var keys [][]byte
+	var os, ns [][]uint32
+
+	vecs := bat.Vecs
+	{
+		os = make([][]uint32, len(vecs))
+		ns = make([][]uint32, len(vecs))
+		keys = make([][]byte, len(vecs))
+		for i := range vecs {
+			switch vecs[i].Typ.Oid {
+			case types.T_int8:
+				vs := vecs[i].Col.([]int8)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+			case types.T_int16:
+				vs := vecs[i].Col.([]int16)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
+			case types.T_int32:
+				vs := vecs[i].Col.([]int32)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+			case types.T_int64:
+				vs := vecs[i].Col.([]int64)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+			case types.T_uint8:
+				vs := vecs[i].Col.([]uint8)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+			case types.T_uint16:
+				vs := vecs[i].Col.([]uint16)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
+			case types.T_uint32:
+				vs := vecs[i].Col.([]uint32)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+			case types.T_uint64:
+				vs := vecs[i].Col.([]uint64)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+			case types.T_float32:
+				vs := vecs[i].Col.([]float32)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+			case types.T_float64:
+				vs := vecs[i].Col.([]float64)
+				keys[i] = unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+			case types.T_char:
+				vs := vecs[i].Col.(*types.Bytes)
+				keys[i] = vs.Data
+				os[i] = vs.Offsets
+				ns[i] = vs.Lengths
+			case types.T_varchar:
+				vs := vecs[i].Col.(*types.Bytes)
+				keys[i] = vs.Data
+				os[i] = vs.Offsets
+				ns[i] = vs.Lengths
+			}
+		}
+	}
+	count := int64(len(bat.Zs))
+	for i := int64(0); i < count; i += UnitLimit {
+		n := int(count - i)
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		{
+			copy(ctr.h40.keys, ctr.h40.zkeys)
+			data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
+			data = data[:0]
+			for k := 0; k < n; k++ {
+				o := int(i) + k // offset
+				for j, vec := range vecs {
+					switch vec.Typ.Oid {
+					case types.T_int8:
+						data = append(data, keys[j][o*1:(o+1)*1]...)
+					case types.T_int16:
+						data = append(data, keys[j][o*2:(o+1)*2]...)
+					case types.T_int32:
+						data = append(data, keys[j][o*4:(o+1)*4]...)
+					case types.T_int64:
+						data = append(data, keys[j][o*8:(o+1)*8]...)
+					case types.T_uint8:
+						data = append(data, keys[j][o*1:(o+1)*1]...)
+					case types.T_uint16:
+						data = append(data, keys[j][o*2:(o+1)*2]...)
+					case types.T_uint32:
+						data = append(data, keys[j][o*4:(o+1)*4]...)
+					case types.T_uint64:
+						data = append(data, keys[j][o*8:(o+1)*8]...)
+					case types.T_float32:
+						data = append(data, keys[j][o*4:(o+1)*4]...)
+					case types.T_float64:
+						data = append(data, keys[j][o*8:(o+1)*8]...)
+					case types.T_char:
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
+					case types.T_varchar:
+						data = append(data, keys[j][os[j][o]:os[j][o]+ns[j][o]]...)
+					}
+				}
+				data = data[:(k+1)*40]
+			}
+		}
+		ctr.hashs[0] = 0
+		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.h40.ht.InsertBatch(ctr.hashs, ctr.h40.keys[:n], ctr.inserts, ctr.values)
+		for k, ok := range ctr.inserts[:n] {
+			if ok == 1 {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
+						return err
+					}
+				}
+				*ctr.values[k] = ctr.rows
+				ctr.rows++
+				ctr.bat.Zs = append(ctr.bat.Zs, 0)
+			}
+			ai := int64(*ctr.values[k])
+			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
+		}
+	}
+	return nil
+}
 
 func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	var keys [][]byte
@@ -730,7 +725,7 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 			*vp = ctr.rows
 			ctr.rows++
 			ctr.bat.Zs = append(ctr.bat.Zs, 0)
-			ctr.hstr.keys = append(ctr.hstr.keys, data)
+			ctr.hstr.keys = append(ctr.hstr.keys, data...)
 		}
 		ai := int64(*vp)
 		ctr.bat.Zs[ai] += bat.Zs[i]
