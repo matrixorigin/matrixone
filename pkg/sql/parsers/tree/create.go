@@ -613,6 +613,8 @@ func (it IndexType) ToString() string {
 		return "hash"
 	case INDEX_TYPE_RTREE:
 		return "rtree"
+	case INDEX_TYPE_BSI:
+		return "bsi"
 	default:
 		return "Unknown IndexType"
 	}
@@ -623,6 +625,7 @@ const (
 	INDEX_TYPE_BTREE
 	INDEX_TYPE_HASH
 	INDEX_TYPE_RTREE
+	INDEX_TYPE_BSI
 )
 
 type VisibleType int
@@ -1618,7 +1621,7 @@ func (node *CreateIndex) Format(ctx *FmtCtx) {
 		}
 	}
 	ctx.WriteString(")")
-	if node.IndexOption != nil {
+	if node.IndexOption != nil{
 		ctx.WriteByte(' ')
 		node.IndexOption.Format(ctx)
 	}
