@@ -100,6 +100,8 @@ type IndexT uint16
 const (
 	ZoneMap IndexT = iota
 	Bsi
+	NumBsi
+	FixStrBsi
 	Invalid
 )
 

@@ -121,7 +121,7 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 			case engine.ZoneMap:
 				tp = aoe.ZoneMap
 			case engine.BsiIndex:
-				tp = aoe.Bsi
+				tp = aoe.NumBsi
 			default:
 				tp = aoe.Invalid
 			}

@@ -103,7 +103,16 @@ func IndiceInfoToIndiceSchema(info *aoe.IndexInfo) *db.IndexSchema {
 		columns = append(columns, int(col))
 	}
 	indice := metadata.NewIndexSchema()
-	_, err := indice.MakeIndex(info.Name, metadata.IndexT(info.Type), columns...)
+	var tp metadata.IndexT
+	switch info.Type{
+	case aoe.NumBsi:
+		tp=metadata.NumBsi
+	case aoe.FixStrBsi:
+		tp=metadata.FixStrBsi
+	case aoe.ZoneMap:
+		tp=metadata.ZoneMap
+	}
+	_, err := indice.MakeIndex(info.Name, tp, columns...)
 	if err != nil {
 		panic(err)
 	}
