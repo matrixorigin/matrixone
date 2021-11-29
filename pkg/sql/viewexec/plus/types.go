@@ -30,8 +30,9 @@ const (
 
 const (
 	H8 = iota
-	H16
 	H24
+	H32
+	H40
 	HStr
 )
 
@@ -42,25 +43,39 @@ const (
 )
 
 type Container struct {
-	state   int
-	typ     int
-	rows    uint64
-	vars    []string
-	key     []byte
-	inserts []bool
-	hashs   []uint64
-	values  []*uint64
-	h8      struct {
-		keys []uint64
-	}
-	h16 struct {
-		keys [][2]uint64
+	state    int
+	typ      int
+	rows     uint64
+	vars     []string
+	inserts  []uint8
+	zinserts []uint8
+	hashs    []uint64
+	values   []*uint64
+	h8       struct {
+		keys  []uint64
+		zkeys []uint64
+		ht    *hashtable.Int64HashMap
 	}
 	h24 struct {
-		keys [][3]uint64
+		keys  [][3]uint64
+		zkeys [][3]uint64
+		ht    *hashtable.String24HashMap
+	}
+	h32 struct {
+		keys  [][4]uint64
+		zkeys [][4]uint64
+		ht    *hashtable.String32HashMap
+	}
+	h40 struct {
+		keys  [][5]uint64
+		zkeys [][5]uint64
+		ht    *hashtable.String40HashMap
+	}
+	hstr struct {
+		keys []byte
+		ht   *hashtable.StringHashMap
 	}
 	bat *batch.Batch
-	mp  *hashtable.MockStringHashTable
 }
 
 type Argument struct {

@@ -26,6 +26,7 @@ import (
 	"matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/colexec/restrict"
 	"matrixone/pkg/sql/colexec/top"
+	"matrixone/pkg/sql/viewexec/oplus"
 	"matrixone/pkg/sql/viewexec/plus"
 	"matrixone/pkg/sql/viewexec/times"
 	"matrixone/pkg/sql/viewexec/transform"
@@ -41,6 +42,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Order:       order.String,
 	Times:       times.String,
 	Merge:       merge.String,
+	Oplus:       oplus.String,
 	Output:      output.String,
 	Offset:      offset.String,
 	Restrict:    restrict.String,
@@ -58,6 +60,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Order:       order.Prepare,
 	Times:       times.Prepare,
 	Merge:       merge.Prepare,
+	Oplus:       oplus.Prepare,
 	Output:      output.Prepare,
 	Offset:      offset.Prepare,
 	Restrict:    restrict.Prepare,
@@ -75,6 +78,7 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Order:       order.Call,
 	Times:       times.Call,
 	Merge:       merge.Call,
+	Oplus:       oplus.Call,
 	Output:      output.Call,
 	Offset:      offset.Call,
 	Restrict:    restrict.Call,

@@ -35,8 +35,8 @@ import (
 var (
 	// errors may happen while building constant
 	errConstantOutRange = errors.New(errno.DataException, "constant value out of range")
-	errBinaryOutRange = errors.New(errno.DataException, "binary result out of range")
-	errUnaryOutRange = errors.New(errno.DataException, "unary result out of range")
+	errBinaryOutRange   = errors.New(errno.DataException, "binary result out of range")
+	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
 )
 
 func buildValue(val constant.Value) (extend.Extend, error) {
@@ -604,7 +604,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		if e.Op == tree.UNARY_MINUS {
 			switch n := e.Expr.(type) {
 			case *tree.NumVal:
-				return buildConstantValue(typ, tree.NewNumVal(n.Value, "-" + n.String(), true))
+				return buildConstantValue(typ, tree.NewNumVal(n.Value, "-"+n.String(), true))
 			}
 
 			v, err := buildConstant(typ, e.Expr)
@@ -699,7 +699,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			if tempResult > math.MaxInt64 || tempResult < math.MinInt64 {
 				return nil, errBinaryOutRange
 			}
-			floatResult = lf - tempResult * rf
+			floatResult = lf - tempResult*rf
 		default:
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 		}
@@ -707,18 +707,19 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		switch typ.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			if floatResult > 0 {
-				if floatResult + 0.5 > math.MaxInt64 {
+				if floatResult+0.5 > math.MaxInt64 {
 					return nil, errBinaryOutRange
 				}
 				return int64(floatResult + 0.5), nil
 			} else if floatResult < 0 {
-				if floatResult - 0.5 < math.MinInt64 {
+				if floatResult-0.5 < math.MinInt64 {
 					return nil, errBinaryOutRange
 				}
 				return int64(floatResult - 0.5), nil
 			}
+			return int64(floatResult), nil
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if floatResult < 0 || floatResult + 0.5 > math.MaxInt64{
+			if floatResult < 0 || floatResult+0.5 > math.MaxInt64 {
 				return nil, errBinaryOutRange
 			}
 			return uint64(floatResult + 0.5), nil
@@ -796,12 +797,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			}
 			if len(parts[1]) > 0 && parts[1][0] >= '5' {
 				if num.Negative() {
-					if v - 1 > v {
+					if v-1 > v {
 						return nil, errConstantOutRange
 					}
 					v--
 				} else {
-					if v + 1 < v {
+					if v+1 < v {
 						return nil, errConstantOutRange
 					}
 					v++
@@ -818,7 +819,7 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				return nil, errConstantOutRange
 			}
 			if len(parts[1]) > 0 && parts[1][0] >= '5' {
-				if v + 1 < v {
+				if v+1 < v {
 					return nil, errConstantOutRange
 				}
 				v++

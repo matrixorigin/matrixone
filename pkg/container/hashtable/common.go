@@ -15,10 +15,10 @@
 package hashtable
 
 const (
-	kInitialBucketCntBits = 8
+	kInitialBucketCntBits = 10
 	kInitialBucketCnt     = 1 << kInitialBucketCntBits
 
-	kLoadFactorNumerator   = 3
+	kLoadFactorNumerator   = 5
 	kLoadFactorDenominator = 10
 
 	kTwoLevelBucketBits = 8

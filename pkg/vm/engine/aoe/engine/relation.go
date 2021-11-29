@@ -120,12 +120,12 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 }
 
 func (r *relation) NewReader(num int) []engine.Reader {
-	if len(r.segments) == 0{
+	if len(r.segments) == 0 {
 		return nil
 	}
 	blockNum := 0
 	blocks := make([]aoe.Block, 0)
-	for _, sid := range r.segments{
+	for _, sid := range r.segments {
 		segment := r.Segment(sid)
 		ids := segment.Blocks()
 		blockNum += len(ids)
@@ -133,23 +133,28 @@ func (r *relation) NewReader(num int) []engine.Reader {
 			blocks = append(blocks, segment.Block(id))
 		}
 	}
-	readers := make([]engine.Reader, 0)
+	readers := make([]engine.Reader, num)
 	mod := blockNum / num
 	if mod == 0 {
 		mod = 1
 	}
-	for i := 0; i < num; i++ {
+	var i int
+	for i = 0; i < num; i++ {
 		if i == num-1 || i == blockNum-1 {
-			reader := aoeReader {
+			readers[i] = &aoeReader{
 				blocks: blocks[i*mod:],
 			}
-			readers = append(readers, reader)
 			break
 		}
-		reader := aoeReader {
+		readers[i] = &aoeReader{
 			blocks: blocks[i*mod : (i+1)*mod],
 		}
-		readers = append(readers, reader)
+	}
+	i++
+	if i < num {
+		for j := i; j < num; j++ {
+			readers[j] = &aoeReader{blocks: nil}
+		}
 	}
 	return readers
 }

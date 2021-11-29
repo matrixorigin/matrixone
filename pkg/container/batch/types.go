@@ -40,4 +40,5 @@ type Batch struct {
 	As   []string // alias list
 	Refs []uint64 // reference count
 	Rs   []ring.Ring
+	Ht   interface{}
 }

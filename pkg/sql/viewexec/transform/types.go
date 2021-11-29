@@ -34,41 +34,54 @@ const (
 
 const (
 	H8 = iota
-	H16
 	H24
+	H32
+	H40
 	HStr
 )
 
 type Container struct {
-	n       int
-	typ     int
-	rows    uint64
-	is      []int
-	vars    []string
-	key     []byte
-	inserts []bool
-	hashs   []uint64
-	values  []*uint64
-	h8      struct {
+	n        int
+	typ      int
+	rows     uint64
+	Is       []int
+	vars     []string
+	inserts  []uint8
+	zinserts []uint8
+	hashs    []uint64
+	values   []*uint64
+	h8       struct {
 		keys  []uint64
 		zkeys []uint64
-		sizes []int
-	}
-	h16 struct {
-		keys [][2]uint64
+		ht    *hashtable.Int64HashMap
 	}
 	h24 struct {
-		keys [][3]uint64
+		keys  [][3]uint64
+		zkeys [][3]uint64
+		ht    *hashtable.String24HashMap
+	}
+	h32 struct {
+		keys  [][4]uint64
+		zkeys [][4]uint64
+		ht    *hashtable.String32HashMap
+	}
+	h40 struct {
+		keys  [][5]uint64
+		zkeys [][5]uint64
+		ht    *hashtable.String40HashMap
+	}
+	hstr struct {
+		keys []byte
+		ht   *hashtable.StringHashMap
 	}
 	bat *batch.Batch
-	mp  *hashtable.MockStringHashTable
 }
 
 type Argument struct {
 	Typ        int
 	IsMerge    bool
 	FreeVars   []string // free variables
-	ctr        *Container
+	Ctr        *Container
 	Restrict   *restrict.Argument
 	Projection *projection.Argument
 	BoundVars  []transformer.Transformer // bound variables
