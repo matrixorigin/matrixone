@@ -3929,7 +3929,8 @@ simple_expr:
     }
 
 cast_type:
-    BINARY length_opt
+    decimal_type
+|   BINARY length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -4008,51 +4009,6 @@ cast_type:
 		        TimePrecisionIsSet: false,
 		        Locale: &locale,
 		        Oid: uint32(defines.MYSQL_TYPE_TIME),
-	        },
-        }
-    }
-|   DOUBLE float_length_opt
-    {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
-                FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
-                DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
-	        },
-        }
-    }
-|   FLOAT_TYPE decimal_length_opt
-    {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
-                FamilyString: $1,
-		        Width:  32,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
-                DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
-	        },
-        }
-    }
-|   REAL float_length_opt
-    {
-        locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
-                FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
-                DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
 	        },
         }
     }
@@ -4895,31 +4851,60 @@ decimal_type:
     DOUBLE float_length_opt
     {
         locale := ""
+        if $2.DisplayWith > 255 {
+        	yylex.Error("Display width for double out of range (max = 255)")
+        	return 1
+        }
+        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+                return 1
+        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
+		Family: tree.FloatFamily,
                 FamilyString: $1,
-		        Width:  64,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+		Width:  64,
+		Locale: &locale,
+		Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Precision: $2.Precision,
-	        },
+	    },
         }
     }
 |   FLOAT_TYPE decimal_length_opt
     {
         locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
-		        Family: tree.FloatFamily,
-                FamilyString: $1,
-		        Width:  32,
-		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
-                DisplayWith: $2.DisplayWith,
-                Precision: $2.Precision,
-	        },
+        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+		return 1
+        }
+        if $2.DisplayWith > 53 {
+        	yylex.Error("For float(M), M must between 0 and 53.")
+                return 1
+        } else if $2.DisplayWith >= 24 {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  64,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+		}
+        } else {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  32,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+                }
         }
     }
 // |   DECIMAL decimal_length_opt
@@ -5259,8 +5244,8 @@ float_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 0,
-            Precision:  0,
+            DisplayWith: tree.NotDefineDisplayWidth,
+            Precision:  tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
@@ -5275,15 +5260,15 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: 0,
-            Precision: 0,
+            DisplayWith: tree.NotDefineDisplayWidth,
+            Precision: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: 0,
+            Precision: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
