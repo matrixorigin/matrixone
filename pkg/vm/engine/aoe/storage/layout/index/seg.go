@@ -330,6 +330,7 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 		return errors.New(fmt.Sprintf("index for column %d not found", colIdx))
 	}
 	var err error
+	hasBsi := false
 	for _, idx := range idxes {
 		if holder.self.Indices[idx] == nil {
 			continue
@@ -343,8 +344,14 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 			index.IndexFile().Unref()
 			return err
 		}
+		if index.Type() == base.NumBsi || index.Type() == base.FixStrBsi {
+			hasBsi = true
+		}
 		index.IndexFile().Unref()
 		node.Close()
+	}
+	if ctx.BsiRequired && !hasBsi {
+		return errors.New("bsi not found for this column")
 	}
 	return nil
 }
