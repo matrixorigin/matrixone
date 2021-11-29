@@ -105,7 +105,9 @@ type CubeDriver interface {
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	//DropTablet drops the table in the storage.
 	DropTablet(string, uint64) (uint64, error)
+	//CreateIndex creates an index
 	CreateIndex(tableName string, indexInfo *aoe.IndexInfo, toShard uint64) error
+	//DropIndex drops an index
 	DropIndex(tableName, indexName string, toShard uint64) error
 	// TabletIDs returns the ids of all the tables in the storage.
 	TabletIDs() ([]uint64, error)
