@@ -175,7 +175,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	}
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("[logIndex:%d,%d]dropTable handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
+		logutil.Debugf("[logIndex:%d,%d]append handler cost %d ms", index, offset, time.Since(t0).Milliseconds())
 	}()
 	customReq := &pb.AppendRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
