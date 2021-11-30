@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	aoedb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
@@ -63,7 +62,7 @@ type Storage struct {
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
-		err := s.DB.FlushDatabase(aoedbName.ShardIdToName(shardId))
+		err := s.DB.FlushDatabase(aoedb.IdToNameFactory.Encode(shardId))
 		if err != nil {
 			return err
 		}
@@ -106,7 +105,7 @@ func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId u
 	customReq := &pb.CreateIndexRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 	indiceInfo, err := helper.DecodeIndex(customReq.Indices)
-	indice:=adaptor.IndiceInfoToIndiceSchema(&indiceInfo)
+	indice := adaptor.IndiceInfoToIndiceSchema(&indiceInfo)
 	if err != nil {
 		resp := errDriver.ErrorResp(err)
 		return 0, 0, resp
@@ -116,9 +115,9 @@ func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId u
 			Id:     index,
 			Offset: offset,
 			Size:   batchSize,
-			DB:     aoedbName.ShardIdToName(shardId),
+			DB:     aoedb.IdToNameFactory.Encode(shardId),
 		},
-		Table:  customReq.TableName,
+		Table:   customReq.TableName,
 		Indices: indice,
 	}
 	err = s.DB.CreateIndex(&ctx)
@@ -144,15 +143,15 @@ func (s *Storage) dropIndex(index uint64, offset int, batchsize int, shardId uin
 	}()
 	customReq := &pb.DropIndexRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
-	idxNames:=[]string{customReq.IndexName}
+	idxNames := []string{customReq.IndexName}
 	ctx := aoedb.DropIndexCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
 			Offset: offset,
 			Size:   batchsize,
-			DB:     aoedbName.ShardIdToName(shardId),
+			DB:     aoedb.IdToNameFactory.Encode(shardId),
 		},
-		Table:  customReq.TableName,
+		Table:      customReq.TableName,
 		IndexNames: idxNames,
 	}
 	err := s.DB.DropIndex(&ctx)
@@ -196,7 +195,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 				Id:     index,
 				Offset: offset,
 				Size:   batchSize,
-				DB:     aoedbName.ShardIdToName(shardId),
+				DB:     aoedb.IdToNameFactory.Encode(shardId),
 			},
 			Table: customReq.TabletName,
 		},
@@ -227,7 +226,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 func (s *Storage) getSegmentIds(cmd []byte, shardId uint64) []byte {
 	customReq := &pb.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
-	rsp := s.DB.GetSegmentIds(aoedbName.ShardIdToName(shardId), customReq.Name)
+	rsp := s.DB.GetSegmentIds(aoedb.IdToNameFactory.Encode(shardId), customReq.Name)
 	resp, _ := json.Marshal(rsp)
 	return resp
 }
@@ -275,7 +274,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 			Id:     index,
 			Offset: offset,
 			Size:   batchsize,
-			DB:     aoedbName.ShardIdToName(shardId),
+			DB:     aoedb.IdToNameFactory.Encode(shardId),
 		},
 		Schema: schema,
 		Indice: indexSchema,
@@ -312,7 +311,7 @@ func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64,
 			Id:     index,
 			Offset: offset,
 			Size:   batchsize,
-			DB:     aoedbName.ShardIdToName(shardId),
+			DB:     aoedb.IdToNameFactory.Encode(shardId),
 		},
 		Table: customReq.Name,
 	}
@@ -488,7 +487,7 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 }
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
-	db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(shardID))
+	db, _ := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(shardID))
 	logutil.Infof("GetPersistentLogIndex, shard id is %v, storage is %v", shardID, s)
 	if db == nil {
 		return 0, nil
@@ -504,7 +503,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	// var index uint64
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
-		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedbName.ShardIdToName(metadata.ShardID))
+		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(metadata.ShardID))
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
 			return err
 		}
@@ -514,7 +513,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				Id:     metadata.LogIndex,
 				Offset: 0,
 				Size:   3,
-				DB:     aoedbName.ShardIdToName(metadata.ShardID),
+				DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
 			}
 			db, err = s.DB.CreateDatabase(&ctx)
 			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
@@ -523,7 +522,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			}
 			createDatabase = true
 		}
-		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedbName.ShardIdToName(metadata.ShardID), tableName)
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedb.IdToNameFactory.Encode(metadata.ShardID), tableName)
 		if err != nil && err != aoeMeta.TableNotFoundErr {
 			return err
 		}
@@ -561,7 +560,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedbName.ShardIdToName(metadata.ShardID),
+					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
 				},
 				Schema: schema,
 				Indice: indexSchema,
@@ -610,7 +609,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedbName.ShardIdToName(metadata.ShardID),
+					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
 				},
 				Table: tableName,
 			},
@@ -632,7 +631,7 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 			Id:     shard.ID,
 			Offset: 0,
 			Size:   1,
-			DB:     aoedbName.ShardIdToName(shard.ID),
+			DB:     aoedb.IdToNameFactory.Encode(shard.ID),
 		}
 		_, err = s.DB.DropDatabase(&ctx)
 	}
