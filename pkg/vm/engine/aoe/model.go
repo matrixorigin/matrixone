@@ -16,6 +16,7 @@ package aoe
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type SchemaState byte
@@ -76,11 +77,11 @@ type ColumnInfo struct {
 	Id         uint64               `json:"column_id"`
 	Name       string               `json:"name"`
 	Type       types.Type           `json:"type"`
-	//Default    engine.DefaultExpr `json:"default"`
+	Default    engine.DefaultExpr   `json:"default"`
 	Alg        int                  `json:"alg"`
 	Epoch      uint64               `json:"epoch"`
 	PrimaryKey bool                 `json:"primary_key"` // PrimaryKey is the name of the column of the primary key
-	//NullAbility bool				`json:"nullability"`
+	NullAbility bool				`json:"nullability"`
 }
 
 type IndexInfo struct {
