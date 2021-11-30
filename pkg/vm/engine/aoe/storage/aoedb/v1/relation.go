@@ -114,6 +114,6 @@ func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 	return seg
 }
 
-func (r *Relation) Write(ctx dbi.AppendCtx) error {
+func (r *Relation) Write(ctx *AppendCtx) error {
 	return r.DBImpl.Append(ctx)
 }

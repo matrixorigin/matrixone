@@ -15,15 +15,12 @@
 package aoedb
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"path/filepath"
 )
 
 type Impl = db.DB
@@ -32,11 +29,10 @@ type DB struct {
 	Impl
 }
 
-func (d *DB) Relation(shardId uint64, tableName string) (*Relation, error) {
+func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	dbName := ShardIdToName(shardId)
 	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
 	if err != nil {
 		return nil, err
@@ -48,122 +44,331 @@ func (d *DB) Relation(shardId uint64, tableName string) (*Relation, error) {
 	return NewRelation(d, data, meta), nil
 }
 
-func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
+// FIXME: Log index first. Since the shard is should be defined first, we
+// have to prepare create first to get a shard id and then use the shard id
+// to log wal
+func (d *DB) CreateDatabase(ctx *CreateDBCtx) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	info.Name = ctx.TableName
-	schema, indice := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
-	logutil.Debugf("Create table, schema.Primarykey is %d", schema.PrimaryKey)
-	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
-	defer d.Wal.Checkpoint(index)
-	dbName := ShardIdToName(ctx.ShardId)
-
-	txn := d.StartTxn(index)
-	database, err := d.Store.Catalog.CreateDatabaseInTxn(txn, dbName)
+	database, err := d.Store.Catalog.SimpleCreateDatabase(ctx.DB, nil)
 	if err != nil {
-		d.AbortTxn(txn)
-		return
+		return nil, err
 	}
-	table, err := database.CreateTableInTxn(txn, schema, indice)
-	if err != nil {
-		d.AbortTxn(txn)
-		return
+
+	index := ctx.ToLogIndex(database)
+	if index.Id.Size == 0 {
+		index.Id.Size = 1
 	}
-	if err = d.CommitTxn(txn); err != nil {
-		d.AbortTxn(txn)
-		return
-	}
-	id = table.Id
-	return
+	d.Wal.SyncLog(index)
+	d.Wal.Checkpoint(index)
+
+	return database, err
 }
 
-func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
-	dbName := ShardIdToName(ctx.ShardId)
-	return d.Impl.GetSegmentIds(dbName, ctx.TableName)
-}
-
-func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
-	ctx.DBName = ShardIdToName(ctx.ShardId)
-	return d.Impl.GetSnapshot(ctx)
-}
-
-func (d *DB) TableIDs(shardId uint64) (ids []uint64, err error) {
-	return d.Impl.TableIDs(ShardIdToName(shardId))
-}
-
-func (d *DB) TableNames(shardId uint64) []string {
-	return d.Impl.TableNames(ShardIdToName(shardId))
-}
-
-func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
+func (d *DB) DropDatabase(ctx *DropDBCtx) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
-	logutil.Infof("DropTable %s", index.String())
+	database, err := d.Store.Catalog.GetDatabaseByName(ctx.DB)
+	if err != nil {
+		return nil, err
+	}
+	if database.IsDeleted() {
+		return nil, db.ErrResourceDeleted
+	}
+
+	index := ctx.ToLogIndex(database)
 	if err = d.Wal.SyncLog(index); err != nil {
-		return
+		return database, err
 	}
 	defer d.Wal.Checkpoint(index)
-	ctx.DBName = ShardIdToName(ctx.ShardId)
-	txn := d.StartTxn(index)
-	database, err := d.Store.Catalog.GetDatabaseByNameInTxn(txn, ctx.DBName)
-	if err != nil {
-		d.AbortTxn(txn)
-		return
+	if err = database.SimpleSoftDelete(index); err != nil {
+		return database, err
 	}
-	if err = database.SoftDeleteInTxn(txn); err != nil {
-		d.AbortTxn(txn)
-		return
-	}
-	var table *metadata.Table
-	if table, err = database.DropTableByNameInTxn(txn, ctx.TableName); err != nil {
-		d.AbortTxn(txn)
-		return
-	} else {
-		id = table.Id
-	}
-	if err = d.CommitTxn(txn); err != nil {
-		d.AbortTxn(txn)
-		return
-	}
-	d.ScheduleGCTable(table)
 	d.ScheduleGCDatabase(database)
-	return
+	return database, nil
 }
 
-func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
+func (d *DB) CreateTable(ctx *CreateTableCtx) (*metadata.Table, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	if ctx.OpOffset >= ctx.OpSize {
-		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return nil, err
 	}
-	ctx.DBName = ShardIdToName(ctx.ShardId)
-	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	index := ctx.ToLogIndex(database)
+
+	if err = d.Wal.SyncLog(index); err != nil {
+		return nil, err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if _, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return nil, err
+		}
+	}
+
+	return database.SimpleCreateTable(ctx.Schema, ctx.Indice, index)
+}
+
+func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return nil, err
+	}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return nil, err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return nil, err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return nil, err
+			}
+		}
+	}
+
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return nil, err
+	}
+
+	if err = meta.SimpleSoftDelete(index); err != nil {
+		return nil, err
+	}
+	d.ScheduleGCTable(meta)
+	return meta, err
+}
+
+func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
 	if err != nil {
 		return err
 	}
-	ctx.ShardId = tbl.Database.GetShardId()
-	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return err
+			}
+		}
+	}
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return err
+	}
+
+	if err = meta.SimpleAddIndice(ctx.Indices.Indice, index); err != nil {
+		return err
+	}
+
+	tblData, err := d.GetTableData(meta)
+	if err != nil {
+		return err
+	}
+	for _, info := range ctx.Indices.Indice {
+		cols := info.Columns
+		// currently, only num/str bsi is supported for one column, if
+		// more kinds of indices are loaded for one column at the same
+		// time, need some refactor.
+		for _, segId := range meta.SimpleGetSegmentIds() {
+			seg := tblData.StrongRefSegment(segId)
+			segMeta := seg.GetMeta()
+			segMeta.RLock()
+			if !segMeta.IsSortedLocked() {
+				seg.Unref()
+				segMeta.RUnlock()
+				continue
+			}
+			segMeta.RUnlock()
+			e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+			e.Cols = cols
+			d.Scheduler.Schedule(e)
+			seg.Unref()
+		}
+	}
+	return nil
+}
+
+func (d *DB) DropIndex(ctx *DropIndexCtx) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
+
+	if database.InReplaying(index) {
+		if idx, ok := database.ConsumeIdempotentIndex(index); !ok {
+			err = db.ErrIdempotence
+			return err
+		} else if idx != nil {
+			if idx.IsApplied() {
+				err = db.ErrIdempotence
+				return err
+			}
+		}
+	}
+	meta := database.SimpleGetTableByName(ctx.Table)
+	if meta == nil {
+		err = metadata.TableNotFoundErr
+		return err
+	}
+
+	names := ctx.IndexNames
+	segIds := meta.SimpleGetSegmentIds()
+	tblId := meta.Id
+	tblData, err := d.GetTableData(meta)
+	if err != nil {
+		return err
+	}
+	for _, segId := range segIds {
+		seg := tblData.StrongRefSegment(segId)
+		holder := seg.GetIndexHolder()
+		for _, info := range meta.GetIndexSchema().Indice {
+			if !util.ContainsString(names, info.Name) {
+				continue
+			}
+			cols := info.Columns
+			for _, col := range cols {
+				var currVersion uint64
+				holder.VersionAllocator.RLock()
+				if alloc, ok := holder.VersionAllocator.Allocators[int(col)]; ok {
+					currVersion = alloc.Get()
+				} else {
+					currVersion = uint64(1)
+				}
+				holder.VersionAllocator.RUnlock()
+				bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
+				fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+				holder.DropIndex(fullname)
+			}
+		}
+		seg.Unref()
+	}
+
+	if err = meta.SimpleDropIndice(names, index); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (d *DB) Append(ctx *AppendCtx) (err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
+	index := ctx.ToLogIndex(database)
+	var meta *metadata.Table
+	if database.InReplaying(index) {
+		meta, err = database.GetTableByNameAndLogIndex(ctx.Table, index)
+		if err != nil {
+			return
+		}
+		index, err = d.TableIdempotenceCheckAndIndexRewrite(meta, index)
+		if err == metadata.IdempotenceErr {
+			return
+		}
+		if meta.IsDeleted() {
+			return metadata.TableNotFoundErr
+		}
+	} else {
+		meta = database.SimpleGetTableByName(ctx.Table)
+		if meta == nil {
+			return metadata.TableNotFoundErr
+		}
+	}
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
-	index, err = d.TableIdempotenceCheckAndIndexRewrite(tbl, index)
-	if err == metadata.IdempotenceErr {
-		return nil
+	defer func() {
+		if err != nil {
+			index.Count = index.Capacity - index.Start
+			d.Wal.Checkpoint(index)
+		}
+	}()
+	err = d.DoAppend(meta, ctx.Data, index.AsSlice())
+	return err
+}
+
+func (d *DB) CreateSnapshot(ctx *CreateSnapshotCtx) (uint64, error) {
+	return d.Impl.CreateSnapshot(ctx.DB, ctx.Path, ctx.Sync)
+}
+
+func (d *DB) ApplySnapshot(ctx *ApplySnapshotCtx) error {
+	return d.Impl.ApplySnapshot(ctx.DB, ctx.Path)
+}
+
+func (d *DB) PrepareSplitDatabase(ctx *PrepareSplitCtx) (uint64, uint64, [][]byte, []byte, error) {
+	return d.Impl.SpliteDatabaseCheck(ctx.DB, ctx.Size)
+}
+
+func (d *DB) ExecSplitDatabase(ctx *ExecSplitCtx) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
 	}
-	return d.DoAppend(tbl, ctx.Data, index.AsSlice())
-}
+	// TODO: validate parameters
+	var (
+		err      error
+		database *metadata.Database
+	)
+	database, err = d.Store.Catalog.SimpleGetDatabaseByName(ctx.DB)
+	if err != nil {
+		return err
+	}
 
-func (d *DB) CreateSnapshot(shardId uint64, path string, forcesync bool) (uint64, error) {
-	return d.Impl.CreateSnapshot(ShardIdToName(shardId), path, forcesync)
-}
+	index := ctx.ToLogIndex(database)
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
 
-func (d *DB) ApplySnapshot(shardId uint64, path string) error {
-	return d.Impl.ApplySnapshot(ShardIdToName(shardId), path)
+	splitter := db.NewSplitter(database, ctx.NewNames, ctx.RenameTable, ctx.SplitKeys, ctx.SplitCtx, index, &d.Impl)
+	defer splitter.Close()
+	if err = splitter.Prepare(); err != nil {
+		return err
+	}
+	if err = splitter.Commit(); err != nil {
+		return err
+	}
+	splitter.ScheduleEvents(&d.Impl)
+	d.ScheduleGCDatabase(database)
+	return err
 }

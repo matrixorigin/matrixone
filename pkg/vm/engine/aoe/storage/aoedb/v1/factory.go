@@ -14,16 +14,22 @@
 
 package aoedb
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-)
+import "strconv"
 
-func Open(dirname string, opts *storage.Options) (inst *DB, err error) {
-	impl, err := db.Open(dirname, opts)
-	if err != nil {
-		return nil, err
-	}
-	inst = &DB{Impl: *impl}
-	return
+var IdToNameFactory = new(idToNameFactory)
+
+type DBNameFactory interface {
+	Encode(interface{}) string
+	Decode(string) interface{}
+}
+
+type idToNameFactory struct{}
+
+func (f *idToNameFactory) Encode(v interface{}) string {
+	shardId := v.(uint64)
+	return strconv.FormatUint(shardId, 10)
+}
+
+func (f *idToNameFactory) Decode(name string) (interface{}, error) {
+	return strconv.ParseUint(name, 10, 64)
 }
