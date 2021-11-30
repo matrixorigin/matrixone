@@ -628,7 +628,6 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	case *tree.BinaryExpr:
 		var floatResult float64
 		var argTyp = types.Type{Oid: types.T_float64, Size: 8}
-		_ = floatResult
 		// build values of Part left and Part right.
 		left, err := buildConstant(argTyp, e.Left)
 		if err != nil {
@@ -695,11 +694,11 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			if rf == 0 {
 				return nil, ErrZeroModulus
 			}
-			tempResult := lf / rf
+			tempResult := int(lf / rf)
 			if tempResult > math.MaxInt64 || tempResult < math.MinInt64 {
 				return nil, errBinaryOutRange
 			}
-			floatResult = lf - tempResult*rf
+			floatResult = lf - float64(tempResult)*rf
 		default:
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 		}
@@ -727,7 +726,7 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			if floatResult == 0 {
 				return float32(0), nil
 			}
-			if floatResult > math.MaxFloat32 || floatResult < math.SmallestNonzeroFloat32 {
+			if floatResult > math.MaxFloat32 || floatResult < -math.MaxFloat32 {
 				return nil, errBinaryOutRange
 			}
 			return float32(floatResult), nil
