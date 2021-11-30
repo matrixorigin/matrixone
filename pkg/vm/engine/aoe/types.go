@@ -2,8 +2,8 @@ package aoe
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type Segment interface {

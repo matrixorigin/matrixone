@@ -17,10 +17,10 @@ package batch
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vectorize/shuffle"
-	"matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func New(ro bool, attrs []string) *Batch {

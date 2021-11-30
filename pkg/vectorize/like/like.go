@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"regexp"
 	"strings"
 	"unicode/utf8"

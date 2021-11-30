@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // SegmentSummarizer provides segment-level aggregations with bitmap

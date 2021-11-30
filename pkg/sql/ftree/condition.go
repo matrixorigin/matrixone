@@ -16,9 +16,9 @@ package ftree
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func getConditions(rn string, qry *plan.Query) ([]*plan.JoinCondition, error) {

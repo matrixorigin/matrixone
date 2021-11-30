@@ -17,13 +17,13 @@ package vector
 import (
 	"errors"
 	"io"
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/types"
-	ro "matrixone/pkg/container/vector"
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 )
 

@@ -1,9 +1,23 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
-	"github.com/stretchr/testify/assert"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFilenames(t *testing.T) {
@@ -32,14 +46,9 @@ func TestFilenames(t *testing.T) {
 	tblk1 := MakeTBlockFileName(workDir, "tblk-1", false)
 	assert.Equal(t, "/work/data/tblk-1.tblk", tblk1)
 
-	ckp1 := MakeInfoCkpFileName(workDir, "1", false)
-	assert.Equal(t, "/work/meta/1.ckp", ckp1)
-	tckp1 := MakeTableCkpFileName(workDir, "1", 0, false)
-	assert.Equal(t, "/work/meta/1.tckp", tckp1)
-
-	res, ok := ParseSegmentfileName(seg1)
+	res, ok := ParseSegmentFileName(seg1)
 	assert.True(t, ok)
-	res, ok = ParseSegmentfileName(res)
+	res, ok = ParseSegmentFileName(res)
 	assert.False(t, ok)
 	res, ok = ParseBlockfileName(blk1)
 	assert.True(t, ok)
@@ -48,17 +57,6 @@ func TestFilenames(t *testing.T) {
 	res, ok = ParseTBlockfileName(tblk1)
 	assert.True(t, ok)
 	res, ok = ParseTBlockfileName(res)
-	assert.False(t, ok)
-	_, ok = ParseInfoMetaName(strings.TrimPrefix(ckp1, "/work/meta/"))
-	assert.True(t, ok)
-	_, ok = ParseInfoMetaName("xxx.ckpp")
-	assert.False(t, ok)
-	assert.Panics(t, func() {
-		_, ok = ParseInfoMetaName("xxx.ckp")
-	})
-	_, ok = ParseTableMetaName(strings.TrimPrefix(tckp1, "/work/meta/"))
-	assert.True(t, ok)
-	_, ok = ParseTableMetaName("xxx.tckpp")
 	assert.False(t, ok)
 
 	n := MakeFilename(workDir, FTTransientNode, "node", false)

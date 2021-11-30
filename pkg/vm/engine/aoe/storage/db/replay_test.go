@@ -14,107 +14,19 @@
 package db
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"sort"
 	"sync"
 	"testing"
-	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func TestReplay1(t *testing.T) {
-	initDBTest()
-	// inst := initDB(storage.NORMAL_FT)
-	inst := initDB(storage.MUTABLE_FT)
-	tInfo := adaptor.MockTableInfo(2)
-	name := "mockcon"
-	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
-	assert.Nil(t, err)
-
-	meta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
-	assert.NotNil(t, meta)
-	rel, err := inst.Relation(meta.Schema.Name)
-	assert.Nil(t, err)
-
-	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
-	ibat := mock.MockBatch(meta.Schema.Types(), irows)
-
-	insertFn := func() {
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   common.NextGlobalSeqNum(),
-			OpSize:    1,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn()
-	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*3, uint64(rel.Rows()))
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(40) * time.Millisecond)
-	}
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-
-	rel.Close()
-	inst.Close()
-
-	time.Sleep(time.Duration(20) * time.Millisecond)
-
-	inst = initDB(storage.MUTABLE_FT)
-	// inst = initDB(storage.NORMAL_FT)
-
-	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
-	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
-	assert.Nil(t, err)
-	meta = inst.Opts.Meta.Catalog.SimpleGetTable(tid)
-	assert.Equal(t, common.GetGlobalSeqNum(), segmentedIdx)
-
-	rel, err = inst.Relation(meta.Schema.Name)
-	assert.Nil(t, err)
-	assert.Equal(t, irows*3, uint64(rel.Rows()))
-	t.Log(rel.Rows())
-
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(rel.Rows())
-	t.Log(inst.MutationBufMgr.String())
-
-	err = inst.Flush(meta.Schema.Name)
-	assert.Nil(t, err)
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	t.Log(rel.Rows())
-
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	rel.Close()
-	inst.Close()
-}
 
 func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToSegmentFileName()
@@ -122,6 +34,7 @@ func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
+	t.Log(fname)
 	return fname
 }
 
@@ -135,8 +48,7 @@ func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 }
 
 func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string {
-	name := id.ToTBlockFileName(version)
-	fname := common.MakeTBlockFileName(dir, name, false)
+	fname := dataio.MakeTblockFileName(dir, "xx", uint64(version), id, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -159,8 +71,7 @@ func (o *replayObserver) OnRemove(name string) {
 }
 
 func TestReplay2(t *testing.T) {
-	dir := "/tmp/testreplay2"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
 
 	mu := &sync.RWMutex{}
@@ -171,12 +82,14 @@ func TestReplay2(t *testing.T) {
 		SegmentMaxBlocks: segBlkCount,
 		BlockMaxRows:     blkRowCount,
 	}
-	catalog, err := metadata.OpenCatalog(mu, cfg, nil)
+	catalog, err := metadata.OpenCatalog(mu, cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	schema := metadata.MockSchema(colCnt)
 	totalBlks := segBlkCount
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	opts := new(storage.Options)
 	opts.Meta.Catalog = catalog
 	opts.FillDefaults(dir)
@@ -193,9 +106,9 @@ func TestReplay2(t *testing.T) {
 	}
 
 	catalog.Close()
-	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -209,7 +122,7 @@ func TestReplay2(t *testing.T) {
 	catalog.Close()
 }
 
-func buildOpts(dir string) *storage.Options {
+func buildOpts(dir string, createCatalog bool) *storage.Options {
 	blkRowCount, segBlkCount := uint64(16), uint64(4)
 	cfg := &storage.MetaCfg{
 		BlockMaxRows:     blkRowCount,
@@ -218,19 +131,27 @@ func buildOpts(dir string) *storage.Options {
 	opts := new(storage.Options)
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	if createCatalog {
+		opts.Meta.Catalog, _ = metadata.OpenCatalog(&opts.Mu, &metadata.CatalogCfg{
+			Dir:              dir,
+			BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
+			SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
+		})
+		opts.Meta.Catalog.Start()
+	}
 	return opts
 }
 
 func TestReplay3(t *testing.T) {
-	dir := "/tmp/testreplay3"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -247,9 +168,9 @@ func TestReplay3(t *testing.T) {
 	tblkfiles = append(tblkfiles, name)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -264,14 +185,14 @@ func TestReplay3(t *testing.T) {
 }
 
 func TestReplay4(t *testing.T) {
-	dir := "/tmp/testreplay4"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(opts.Meta.Catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -295,9 +216,9 @@ func TestReplay4(t *testing.T) {
 	})
 
 	opts.Meta.Catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -316,15 +237,15 @@ func TestReplay4(t *testing.T) {
 }
 
 func TestReplay5(t *testing.T) {
-	dir := "/tmp/testreplay5"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -351,9 +272,9 @@ func TestReplay5(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -363,10 +284,10 @@ func TestReplay5(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFull())
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
 	assert.Equal(t, 3, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -376,22 +297,22 @@ func TestReplay5(t *testing.T) {
 
 	blk := tbl2.SimpleGetOrCreateNextBlock(nil)
 	t.Log(blk.PString(metadata.PPL0))
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	assert.Equal(t, tbl2.SegmentSet[0].BlockSet[2], blk)
 
 	catalog.Close()
 }
 
 func TestReplay6(t *testing.T) {
-	dir := "/tmp/testreplay6"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
@@ -424,9 +345,9 @@ func TestReplay6(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -436,10 +357,10 @@ func TestReplay6(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFull())
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -455,15 +376,15 @@ func TestReplay6(t *testing.T) {
 }
 
 func TestReplay7(t *testing.T) {
-	dir := "/tmp/testreplay7"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -495,9 +416,9 @@ func TestReplay7(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -507,10 +428,10 @@ func TestReplay7(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -526,15 +447,15 @@ func TestReplay7(t *testing.T) {
 }
 
 func TestReplay8(t *testing.T) {
-	dir := "/tmp/testreplay8"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -565,12 +486,12 @@ func TestReplay8(t *testing.T) {
 		return toRemove[i] < toRemove[j]
 	})
 	t.Log(toRemove)
-	t.Log(tbl.PString(metadata.PPL1))
+	t.Log(tbl.PString(metadata.PPL1, 0))
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -579,11 +500,11 @@ func TestReplay8(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
-	t.Log(tbl2.PString(metadata.PPL1))
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	t.Log(tbl2.PString(metadata.PPL1, 0))
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -599,15 +520,15 @@ func TestReplay8(t *testing.T) {
 }
 
 func TestReplay9(t *testing.T) {
-	dir := "/tmp/testreplay9"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -653,9 +574,9 @@ func TestReplay9(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -664,10 +585,10 @@ func TestReplay9(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -675,7 +596,7 @@ func TestReplay9(t *testing.T) {
 	})
 	assert.Equal(t, toRemove, observer.removed)
 
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	blk = tbl2.SimpleGetOrCreateNextBlock(nil)
 	t.Log(blk.PString(metadata.PPL0))
 	assert.Equal(t, tbl2.SegmentSet[0].BlockSet[1], blk)
@@ -718,15 +639,15 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
-	dir := "/tmp/testreplay10"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -761,9 +682,9 @@ func TestReplay10(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -772,11 +693,11 @@ func TestReplay10(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFull())
-	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFull())
-	t.Log(tbl2.PString(metadata.PPL1))
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -787,15 +708,15 @@ func TestReplay10(t *testing.T) {
 }
 
 func TestReplay11(t *testing.T) {
-	dir := "/tmp/testreplay11"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet); i++ {
@@ -832,9 +753,9 @@ func TestReplay11(t *testing.T) {
 	// t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -843,11 +764,11 @@ func TestReplay11(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
-	t.Log(tbl2.PString(metadata.PPL1))
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFull())
-	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFull())
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	t.Log(tbl2.PString(metadata.PPL1, 0))
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -855,122 +776,4 @@ func TestReplay11(t *testing.T) {
 	})
 	assert.Equal(t, toRemove, observer.removed)
 	catalog.Close()
-}
-
-func TestReplay12(t *testing.T) {
-	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
-	//inst := initDB(storage.MUTABLE_FT)
-	tInfo := adaptor.MockTableInfo(2)
-	name := "mockcon"
-	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
-	assert.Nil(t, err)
-
-	meta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
-	assert.NotNil(t, meta)
-	rel, err := inst.Relation(meta.Schema.Name)
-	assert.Nil(t, err)
-
-	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
-	ibat := mock.MockBatch(meta.Schema.Types(), irows)
-
-	insertFn := func() {
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   common.NextGlobalSeqNum(),
-			OpSize:    1,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn()
-	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-
-	insertFn()
-	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(name)
-	assert.Nil(t, err)
-
-	ibat2 := mock.MockBatch(meta.Schema.Types(), inst.Store.Catalog.Cfg.BlockMaxRows)
-	insertFn2 := func() {
-		index := common.NextGlobalSeqNum()
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   index,
-			OpOffset:  0,
-			OpSize:    2,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-		})
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   index,
-			OpOffset:  1,
-			OpSize:    2,
-			Data:      ibat2,
-			TableName: meta.Schema.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn2()
-	assert.Equal(t, irows*5, uint64(rel.Rows()))
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(40) * time.Millisecond)
-	}
-
-	rel.Close()
-	inst.Close()
-
-	time.Sleep(time.Duration(20) * time.Millisecond)
-
-	inst = initDB(storage.NORMAL_FT)
-	// inst = initDB(engine.NORMAL_FT)
-
-	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
-	assert.Nil(t, err)
-	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
-
-	rel, err = inst.Relation(meta.Schema.Name)
-	assert.Nil(t, err)
-	assert.Equal(t, irows*4, uint64(rel.Rows()))
-	t.Log(rel.Rows())
-
-	insertFn3 := func() {
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   segmentedIdx + 1,
-			OpOffset:  0,
-			OpSize:    2,
-			Data:      ibat,
-			TableName: meta.Schema.Name,
-		})
-		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   segmentedIdx + 1,
-			OpOffset:  1,
-			OpSize:    2,
-			Data:      ibat2,
-			TableName: meta.Schema.Name,
-		})
-		assert.Nil(t, err)
-	}
-
-	insertFn3()
-	t.Log(rel.Rows())
-	insertFn()
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(rel.Rows())
-	t.Log(inst.MutationBufMgr.String())
-
-	err = inst.Flush(meta.Schema.Name)
-	assert.Nil(t, err)
-	insertFn()
-	t.Log(rel.Rows())
-	insertFn()
-	t.Log(rel.Rows())
-
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	rel.Close()
-	inst.Close()
 }

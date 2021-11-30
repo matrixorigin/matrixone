@@ -17,7 +17,7 @@ package tpEngine
 import (
 	"encoding/gob"
 	"fmt"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func init() {
@@ -102,5 +102,5 @@ type tpMetadata struct {
 	Segs  int64
 	Rows  int64
 	Name  string
-	Attrs []metadata.Attribute
+	Attrs []engine.Attribute
 }

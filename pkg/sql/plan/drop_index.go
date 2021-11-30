@@ -14,7 +14,7 @@
 
 package plan
 
-import "matrixone/pkg/sql/parsers/tree"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func (b *build) BuildDropIndex(stmt *tree.DropIndex, plan *DropIndex) error {
 	_, _, r, err := b.tableName(&stmt.TableName)

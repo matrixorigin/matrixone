@@ -14,7 +14,7 @@
 
 package ftree
 
-import "matrixone/pkg/sql/plan"
+import "github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 // For each relation in Q, its variables lie along the same root-to-leaf path in F
 func buildPath(rn string, qry *plan.Query, conds []*plan.JoinCondition) []*FNode {

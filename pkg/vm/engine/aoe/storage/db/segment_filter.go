@@ -17,8 +17,8 @@ package db
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"

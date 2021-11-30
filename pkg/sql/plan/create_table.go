@@ -16,15 +16,15 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go/constant"
 	"math"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/defines"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/vm/engine"
 )
 
 func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) error {

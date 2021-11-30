@@ -15,9 +15,8 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type upgradeBlkEvent struct {
@@ -37,10 +36,7 @@ func NewUpgradeBlkEvent(ctx *Context, meta *metadata.Block, td iface.ITableData)
 		TableData: td,
 		Meta:      meta,
 	}
-	e.BaseEvent = BaseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.UpgradeBlkTask, ctx.DoneCB, ctx.Waitable),
-		Ctx:       ctx,
-	}
+	e.BaseEvent = *NewBaseEvent(e, UpgradeBlkTask, ctx)
 	return e
 }
 

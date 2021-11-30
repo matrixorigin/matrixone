@@ -10,7 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
@@ -18,286 +17,462 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
-func NewSegment(table *Table, id uint64) *Segment {
-	seg := &Segment{
-		ID:            id,
-		Table:         table,
-		Blocks:        make([]*Block, 0),
-		IdMap:         make(map[uint64]int),
-		TimeStamp:     *NewTimeStamp(),
-		MaxBlockCount: table.Conf.SegmentMaxBlocks,
-	}
-	return seg
+var (
+	UpgradeInfullSegmentErr = errors.New("aoe: upgrade infull segment")
+	UpgradeNotNeededErr     = errors.New("aoe: already upgraded")
+)
+
+type segmentLogEntry struct {
+	*BaseEntry
+	DatabaseId uint64
+	TableId    uint64
+	Catalog    *Catalog `json:"-"`
 }
 
-func (seg *Segment) GetTableID() uint64 {
-	return seg.Table.ID
+func (e *segmentLogEntry) Marshal() ([]byte, error) {
+	return json.Marshal(e)
 }
 
-func (seg *Segment) AsCommonID() *common.ID {
-	return &common.ID{
-		TableID:   seg.Table.ID,
-		SegmentID: seg.ID,
+func (e *segmentLogEntry) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+type Segment struct {
+	*BaseEntry
+	Table    *Table         `json:"-"`
+	IdIndex  map[uint64]int `json:"-"`
+	BlockSet []*Block       `json:"blocks"`
+}
+
+func newSegmentEntry(table *Table, tranId uint64, exIndex *LogIndex) *Segment {
+	e := &Segment{
+		Table:    table,
+		BlockSet: make([]*Block, 0),
+		IdIndex:  make(map[uint64]int),
+		BaseEntry: &BaseEntry{
+			Id: table.Database.Catalog.NextSegmentId(),
+			CommitInfo: &CommitInfo{
+				CommitId: tranId,
+				TranId:   tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
+			},
+		},
+	}
+	return e
+}
+
+func newCommittedSegmentEntry(table *Table, base *BaseEntry) *Segment {
+	e := &Segment{
+		Table:     table,
+		BlockSet:  make([]*Block, 0),
+		IdIndex:   make(map[uint64]int),
+		BaseEntry: base,
+	}
+	return e
+}
+
+func (e *Segment) DebugCheckReplayedState() {
+	if e.Table == nil {
+		panic("table is missing")
+	}
+	if e.IdIndex == nil {
+		panic("id index is missing")
+	}
+	if e.Table.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Table.Database.Catalog.TryUpdateSegmentId(e.Id) {
+		panic("sequence error")
+	}
+	for _, blk := range e.BlockSet {
+		blk.DebugCheckReplayedState()
 	}
 }
 
-func (seg *Segment) GetID() uint64 {
-	return seg.ID
-}
-
-// BlockIDList returns the ID list of blocks lived in args[0], which is a timestamp.
-func (seg *Segment) BlockIDList(args ...interface{}) []uint64 {
-	var ts int64
-	if len(args) == 0 {
-		ts = NowMicro()
-	} else {
-		ts = args[0].(int64)
-	}
-	ids := make([]uint64, 0)
-	seg.RLock()
-	defer seg.RUnlock()
-	for _, blk := range seg.Blocks {
-		if !blk.Select(ts) {
-			continue
-		}
-		ids = append(ids, blk.ID)
-	}
-	return ids
-}
-
-// BlockIDs returns the ID map of blocks lived in args[0], which is a timestamp.
-func (seg *Segment) BlockIDs(args ...int64) map[uint64]uint64 {
-	var ts int64
-	if len(args) == 0 {
-		ts = NowMicro()
-	} else {
-		ts = args[0]
-	}
-	ids := make(map[uint64]uint64)
-	seg.RLock()
-	defer seg.RUnlock()
-	for _, blk := range seg.Blocks {
-		if !blk.Select(ts) {
-			continue
-		}
-		ids[blk.ID] = blk.ID
-	}
-	return ids
-}
-
-func (seg *Segment) HasUncommitted() bool {
-	if seg.DataState >= CLOSED {
-		return false
-	}
-	if seg.DataState < FULL {
+func (e *Segment) LE(o *Segment) bool {
+	if e == nil {
 		return true
 	}
-	for _, blk := range seg.Blocks {
-		if blk.DataState != FULL {
-			logutil.Infof("xxx")
-			return true
-		}
-	}
-	return false
+	return e.Id <= o.Id
 }
 
-func (seg *Segment) GetActiveBlk() *Block {
-	if seg.ActiveBlk >= len(seg.Blocks) {
+func (e *Segment) rebuild(table *Table, replay bool) {
+	e.Table = table
+	e.IdIndex = make(map[uint64]int)
+	for i, blk := range e.BlockSet {
+		if replay {
+			e.Table.Database.Catalog.Sequence.TryUpdateBlockId(blk.Id)
+		}
+		blk.rebuild(e)
+		e.IdIndex[blk.Id] = i
+	}
+}
+
+// Safe
+func (e *Segment) AsCommonID() *common.ID {
+	return &common.ID{
+		TableID:   e.Table.Id,
+		SegmentID: e.Id,
+	}
+}
+
+// Safe
+func (e *Segment) fillView(filter *Filter) *Segment {
+	baseEntry := e.UseCommitted(filter.segmentFilter)
+	if baseEntry == nil {
 		return nil
 	}
-	return seg.Blocks[seg.ActiveBlk]
-}
-
-func (seg *Segment) NextActiveBlk() *Block {
-	var blk *Block
-	if seg.ActiveBlk >= len(seg.Blocks)-1 {
-		seg.ActiveBlk++
-		return blk
+	view := &Segment{
+		BaseEntry: baseEntry,
+		BlockSet:  make([]*Block, 0),
 	}
-	blk = seg.Blocks[seg.ActiveBlk]
-	seg.ActiveBlk++
-	return blk
-}
-
-func (seg *Segment) Marshal() ([]byte, error) {
-	return json.Marshal(seg)
-}
-
-// CreateBlock generates a new block id with its Sequence and
-// returns a new block meta with this id.
-func (seg *Segment) CreateBlock() (blk *Block, err error) {
-	blk = NewBlock(seg.Table.Info.Sequence.GetBlockID(), seg)
-	return blk, err
-}
-
-func (seg *Segment) String() string {
-	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
-	s += "["
-	pos := 0
-	for _, blk := range seg.Blocks {
-		if pos != 0 {
-			s += "<-->"
+	e.RLock()
+	blks := make([]*Block, 0, len(e.BlockSet))
+	for _, blk := range e.BlockSet {
+		blks = append(blks, blk)
+	}
+	e.RUnlock()
+	for _, blk := range blks {
+		blkView := blk.fillView(filter)
+		if blkView == nil {
+			continue
 		}
-		s += blk.String()
-		pos++
+		view.BlockSet = append(view.BlockSet, blkView)
 	}
-	s += "]"
+	if len(view.BlockSet) == 0 {
+		return nil
+	}
+	return view
+}
+
+func (e *Segment) Marshal() ([]byte, error) {
+	return json.Marshal(e)
+}
+
+func (e *Segment) toLogEntry() *segmentLogEntry {
+	return &segmentLogEntry{
+		BaseEntry:  e.BaseEntry,
+		TableId:    e.Table.Id,
+		DatabaseId: e.Table.Database.Id,
+	}
+}
+
+func (e *Segment) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+// Not safe
+func (e *Segment) PString(level PPLevel, depth int) string {
+	if e == nil {
+		return "null segment"
+	}
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
+	e.RLock()
+	defer e.RUnlock()
+	s := fmt.Sprintf("<Segment[%d] %s", e.Id, e.BaseEntry.PString(level))
+	cnt := 0
+	if level > PPL0 {
+		for _, blk := range e.BlockSet {
+			cnt++
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, blk.PString(level))
+		}
+	}
+	if cnt == 0 {
+		s = fmt.Sprintf("%s[Size=%d]>", s, e.GetCoarseSizeLocked())
+	} else {
+		s = fmt.Sprintf("%s\n%s[Size=%d]\n>", s, ident, e.GetCoarseSizeLocked())
+	}
 	return s
 }
 
-func (seg *Segment) cloneBlockNoLock(id uint64, ctx CopyCtx) (blk *Block, err error) {
-	idx, ok := seg.IdMap[id]
-	if !ok {
-		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
-	}
-	blk = seg.Blocks[idx].Copy()
-	if !ctx.Attached {
-		err = blk.Detach()
-	}
-	return blk, err
+// Not safe
+func (e *Segment) String() string {
+	buf, _ := e.Marshal()
+	return string(buf)
 }
 
-// CloneBlock returns the clone of the block if exists, whose block id is id.
-func (seg *Segment) CloneBlock(id uint64, ctx CopyCtx) (blk *Block, err error) {
-	seg.RLock()
-	defer seg.RUnlock()
-	return seg.cloneBlockNoLock(id, ctx)
+// Not safe
+func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
+	switch eType {
+	case ETCreateSegment:
+		break
+	case ETUpgradeSegment:
+		break
+	case ETDropSegment:
+		if !e.IsSoftDeletedLocked() {
+			panic("logic error")
+		}
+		break
+	default:
+		panic("not supported")
+	}
+	entry := e.toLogEntry()
+	buf, _ := entry.Marshal()
+	logEntry := logstore.NewAsyncBaseEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	return logEntry
 }
 
-func (seg *Segment) ReferenceBlock(id uint64) (blk *Block, err error) {
-	seg.RLock()
-	defer seg.RUnlock()
-	idx, ok := seg.IdMap[id]
-	if !ok {
-		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
+// Safe
+func (e *Segment) SimpleCreateBlock() *Block {
+	tranId := e.Table.Database.Catalog.NextUncommitId()
+	ctx := newCreateBlockCtx(e, tranId)
+	if err := e.Table.Database.Catalog.onCommitRequest(ctx, true); err != nil {
+		return nil
 	}
-	return seg.Blocks[idx], nil
+	return ctx.block
 }
 
-// RegisterBlock registers a block via an existing block meta.
-func (seg *Segment) RegisterBlock(blk *Block) error {
-	if blk.Segment.Table.ID != seg.Table.ID {
-		return errors.New(fmt.Sprintf("table id mismatch %d:%d", seg.Table.ID, blk.Segment.Table.ID))
+func (e *Segment) AppendableLocked() bool {
+	if e.HasMaxBlocks() {
+		return !e.BlockSet[len(e.BlockSet)-1].IsFull()
 	}
-	if blk.GetSegmentID() != seg.GetID() {
-		return errors.New(fmt.Sprintf("segment id mismatch %d:%d", seg.GetID(), blk.GetSegmentID()))
-	}
-	seg.Lock()
-	defer seg.Unlock()
+	return true
+}
 
-	err := blk.Attach()
+func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
+	be := newBlockEntry(e, ctx.tranId, ctx.exIndex)
+	logEntry := be.ToLogEntry(ETCreateBlock)
+	e.Lock()
+	e.onNewBlock(be)
+	e.Unlock()
+	e.Table.Database.Catalog.prepareCommitLog(be, logEntry)
+	ctx.block = be
+	return logEntry, nil
+}
+
+func (e *Segment) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	var index *LogIndex
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		index = e.BlockSet[i].LatestLogIndexLocked()
+		if index != nil {
+			break
+		}
+	}
+	return index
+}
+
+func (e *Segment) onNewBlock(entry *Block) {
+	idx := len(e.BlockSet)
+	e.IdIndex[entry.Id] = idx
+	entry.Idx = uint32(idx)
+	e.BlockSet = append(e.BlockSet, entry)
+}
+
+// Safe
+func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
+	stale := e.GetCommit()
+	tranId := e.Table.Database.Catalog.NextUncommitId()
+	ctx := newUpgradeSegmentCtx(e, size, exIndice, tranId)
+	err := e.Table.Database.Catalog.onCommitRequest(ctx, true)
 	if err != nil {
 		return err
 	}
-	if len(seg.Blocks) == int(seg.MaxBlockCount) {
-		return errors.New(fmt.Sprintf("Cannot add block into full segment %d", seg.ID))
+	e.Table.Database.segmentListener.OnSegmentUpgraded(e, stale)
+	return err
+}
+
+// Not safe
+func (e *Segment) FirstInFullBlock() *Block {
+	if len(e.BlockSet) == 0 {
+		return nil
 	}
-	_, ok := seg.IdMap[blk.ID]
-	if ok {
-		return errors.New(fmt.Sprintf("Duplicate block %d found in segment %d", blk.GetID(), seg.ID))
-	}
-	seg.IdMap[blk.GetID()] = len(seg.Blocks)
-	seg.Blocks = append(seg.Blocks, blk)
-	if len(seg.Blocks) == int(seg.MaxBlockCount) {
-		if blk.IsFull() {
-			seg.DataState = CLOSED
+	var found *Block
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		if !e.BlockSet[i].IsFullLocked() {
+			found = e.BlockSet[i]
 		} else {
-			seg.DataState = FULL
-		}
-	} else {
-		seg.DataState = PARTIAL
-	}
-	seg.Table.Lock()
-	seg.Table.UpdateVersion()
-	seg.Table.Unlock()
-	return nil
-}
-
-func (seg *Segment) TryClose() bool {
-	seg.Lock()
-	defer seg.Unlock()
-	if seg.DataState == CLOSED || seg.DataState == SORTED {
-		return true
-	}
-	if seg.DataState == FULL || len(seg.Blocks) == int(seg.MaxBlockCount) {
-		for _, blk := range seg.Blocks {
-			if !blk.IsFull() {
-				return false
-			}
-		}
-		seg.DataState = CLOSED
-		return true
-	}
-	return false
-}
-
-func (seg *Segment) TrySorted() error {
-	seg.Lock()
-	defer seg.Unlock()
-	if seg.DataState != CLOSED {
-		return errors.New("segment not closed yet, can't be sorted")
-	}
-	seg.DataState = SORTED
-	return nil
-}
-
-func (seg *Segment) GetMaxBlkID() uint64 {
-	blkId := uint64(0)
-	for bid := range seg.IdMap {
-		if bid > blkId {
-			blkId = bid
+			break
 		}
 	}
-
-	return blkId
+	return found
 }
 
-func (seg *Segment) ReplayState() {
-	if seg.DataState >= CLOSED {
-		return
-	}
-	if len(seg.Blocks) == 0 {
-		seg.DataState = EMPTY
-		return
-	}
-	fullBlkCnt := 0
-	for _, blk := range seg.Blocks {
-		if blk.DataState == FULL {
-			fullBlkCnt++
-		}
-	}
-	if fullBlkCnt == 0 {
-		seg.DataState = EMPTY
-	} else if fullBlkCnt < int(seg.Table.Conf.SegmentMaxBlocks) {
-		seg.DataState = PARTIAL
-	} else {
-		seg.DataState = CLOSED
-	}
+func (e *Segment) IsUpgradable() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsUpgradableLocked()
 }
 
-func (seg *Segment) Copy(ctx CopyCtx) *Segment {
-	if ctx.Ts == 0 {
-		ctx.Ts = NowMicro()
+func (e *Segment) IsUpgradableLocked() bool {
+	if e.IsSortedLocked() {
+		return false
 	}
-	seg.RLock()
-	defer seg.RUnlock()
-	newSeg := NewSegment(seg.Table, seg.ID)
-	newSeg.TimeStamp = seg.TimeStamp
-	newSeg.MaxBlockCount = seg.MaxBlockCount
-	newSeg.DataState = seg.DataState
-	newSeg.BoundSate = seg.BoundSate
-	for _, v := range seg.Blocks {
-		if !v.Select(ctx.Ts) {
-			continue
+	if len(e.BlockSet) != int(e.Table.Schema.SegmentMaxBlocks) {
+		return false
+	}
+	for _, block := range e.BlockSet {
+		if !block.IsFull() {
+			return false
 		}
-		blk, _ := seg.cloneBlockNoLock(v.ID, ctx)
-		newSeg.IdMap[v.GetID()] = len(newSeg.Blocks)
-		newSeg.Blocks = append(newSeg.Blocks, blk)
 	}
+	return true
+}
 
-	return newSeg
+// Not safe
+func (e *Segment) HasMaxBlocks() bool {
+	return e.IsSortedLocked() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
+}
+
+func (e *Segment) GetCoarseCountLocked() int64 {
+	if e.IsSortedLocked() {
+		return int64(e.Table.Schema.SegmentMaxBlocks * e.Table.Schema.BlockMaxRows)
+	}
+	count := int64(0)
+	for _, block := range e.BlockSet {
+		count += block.GetCoarseCount()
+	}
+	return count
+}
+
+func (e *Segment) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseCountLocked()
+}
+
+func (e *Segment) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseSizeLocked()
+}
+
+func (e *Segment) GetUnsortedSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetUnsortedSizeLocked()
+}
+
+func (e *Segment) GetUnsortedSizeLocked() int64 {
+	size := int64(0)
+	for _, block := range e.BlockSet {
+		size += block.GetCoarseSize()
+	}
+	return size
+}
+
+func (e *Segment) GetCoarseSizeLocked() int64 {
+	if e.IsSortedLocked() {
+		return e.CommitInfo.Size
+	}
+	return e.GetUnsortedSizeLocked()
+}
+
+func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
+	e.RLock()
+	if !e.HasMaxBlocks() {
+		e.RUnlock()
+		return nil, UpgradeInfullSegmentErr
+	}
+	if e.IsSortedLocked() {
+		return nil, UpgradeNotNeededErr
+	}
+	for _, blk := range e.BlockSet {
+		if !blk.IsFullLocked() {
+			return nil, UpgradeInfullSegmentErr
+		}
+	}
+	e.RUnlock()
+	e.Lock()
+	defer e.Unlock()
+	var newOp OpT
+	switch e.CommitInfo.Op {
+	case OpCreate:
+		newOp = OpUpgradeSorted
+	default:
+		return nil, UpgradeNotNeededErr
+	}
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		Op:       newOp,
+		Size:     ctx.size,
+	}
+	if ctx.exIndice != nil {
+		cInfo.LogIndex = ctx.exIndice[0]
+	}
+	if err := e.onCommit(cInfo); err != nil {
+		return nil, err
+	}
+	logEntry := e.Table.Database.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
+	return logEntry, nil
+}
+
+func (e *Segment) DryUpgrade(size int64) {
+	e.CommitInfo.Op = OpUpgradeSorted
+	e.CommitInfo.Size = size
+}
+
+// Not safe
+// One writer, multi-readers
+func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	e.RLock()
+	if len(e.BlockSet) == 0 {
+		e.RUnlock()
+		return e.SimpleCreateBlock()
+	}
+	var ret *Block
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		blk := e.BlockSet[i]
+		if !blk.IsFull() && from.Less(blk) {
+			ret = blk
+		} else {
+			break
+		}
+	}
+	if ret != nil || e.HasMaxBlocks() {
+		e.RUnlock()
+		return ret
+	}
+	e.RUnlock()
+	return e.SimpleCreateBlock()
+}
+
+// Safe
+func (e *Segment) SimpleGetBlock(id uint64) *Block {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetBlock(id, MinUncommitId)
+}
+
+func (e *Segment) GetBlock(id, tranId uint64) *Block {
+	pos, ok := e.IdIndex[id]
+	if !ok {
+		return nil
+	}
+	entry := e.BlockSet[pos]
+	return entry
+}
+
+func (e *Segment) GetRowCount() uint64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetRowCountLocked()
+}
+
+func (e *Segment) GetRowCountLocked() uint64 {
+	if e.CommitInfo.Op >= OpUpgradeClose {
+		return e.Table.Schema.BlockMaxRows * e.Table.Schema.SegmentMaxBlocks
+	}
+	var ret uint64
+	e.RLock()
+	for _, blk := range e.BlockSet {
+		blk.RLock()
+		ret += blk.GetCountLocked()
+		blk.RUnlock()
+	}
+	e.RUnlock()
+	return ret
 }

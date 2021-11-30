@@ -17,14 +17,14 @@ package transformer
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/ring"
-	"matrixone/pkg/container/ring/avg"
-	"matrixone/pkg/container/ring/count"
-	"matrixone/pkg/container/ring/max"
-	"matrixone/pkg/container/ring/min"
-	"matrixone/pkg/container/ring/starcount"
-	"matrixone/pkg/container/ring/sum"
-	"matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/min"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/starcount"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/sum"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func init() {

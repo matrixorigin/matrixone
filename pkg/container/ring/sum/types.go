@@ -14,7 +14,7 @@
 
 package sum
 
-import "matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type IntRing struct {
 	Da  []byte

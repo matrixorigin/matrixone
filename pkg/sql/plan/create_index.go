@@ -15,10 +15,10 @@
 package plan
 
 import (
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) error {

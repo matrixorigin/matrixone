@@ -16,10 +16,10 @@ package logstore
 
 import (
 	"errors"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
 	"time"
 )

@@ -15,16 +15,16 @@
 package storage
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/event"
-	"matrixone/pkg/vm/engine/aoe/storage/gc"
-	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc/gci"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 const (
@@ -50,14 +50,6 @@ type IterOptions struct {
 	SegmentIds []uint64
 }
 
-type FactoryType uint16
-
-const (
-	INVALID_FT FactoryType = iota
-	NORMAL_FT
-	MUTABLE_FT
-)
-
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
 	InsertCapacity uint64 `toml:"insert-cache-size"`
@@ -82,19 +74,17 @@ type MetaCleanerCfg struct {
 type Options struct {
 	EventListener event.EventListener
 
-	FactoryType FactoryType
-
 	Mu sync.RWMutex
 
-	Scheduler    sched.Scheduler
+	Scheduler    iface.DBScheduler
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
-	Wal wal.Wal
+	WalRole wal.Role
+	Wal     wal.ShardAwareWal
 
 	Meta struct {
-		CKFactory *checkpointerFactory
-		Conf      *MetaCfg
-		Catalog   *metadata.Catalog
+		Conf    *MetaCfg
+		Catalog *metadata.Catalog
 	}
 
 	GC struct {
@@ -112,14 +102,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
-
-	if o.Wal == nil {
-		o.Wal = shard.NewManager()
-	}
-
-	if o.FactoryType == INVALID_FT {
-		o.FactoryType = NORMAL_FT
-	}
 
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{
@@ -139,26 +121,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
-	if o.Meta.Catalog == nil {
-		catalogCfg := &metadata.CatalogCfg{
-			Dir: dirname,
+	if o.Meta.Conf == nil {
+		o.Meta.Conf = &MetaCfg{
+			BlockMaxRows:     DefaultBlockMaxRows,
+			SegmentMaxBlocks: DefaultBlocksPerSegment,
 		}
-		if o.Meta.Conf == nil {
-			catalogCfg.BlockMaxRows = DefaultBlockMaxRows
-			catalogCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
-		} else {
-			catalogCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
-			catalogCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
-		}
-		var err error
-		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg, nil); err != nil {
-			panic(err)
-		}
-		o.Meta.Catalog.StartSyncer()
-	}
-
-	if o.Meta.CKFactory == nil {
-		o.Meta.CKFactory = NewCheckpointerFactory(dirname)
 	}
 
 	if o.CacheCfg == nil {
@@ -181,7 +148,17 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.MetaCleanerCfg == nil {
 		o.MetaCleanerCfg = &MetaCleanerCfg{
 			Interval: time.Duration(DefaultCleanInterval) * time.Second,
+			// Interval: time.Duration(200) * time.Millisecond,
 		}
 	}
 	return o
+}
+
+func (o *Options) CreateCatalog(dirname string) (*metadata.Catalog, error) {
+	catalog, err := metadata.OpenCatalog(&o.Mu, &metadata.CatalogCfg{
+		Dir:              dirname,
+		BlockMaxRows:     o.Meta.Conf.BlockMaxRows,
+		SegmentMaxBlocks: o.Meta.Conf.SegmentMaxBlocks,
+	})
+	return catalog, err
 }

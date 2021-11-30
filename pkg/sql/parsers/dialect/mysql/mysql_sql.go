@@ -14,8 +14,8 @@ import (
 	"go/constant"
 	"strings"
 
-	"matrixone/pkg/defines"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const LEX_ERROR = 57346

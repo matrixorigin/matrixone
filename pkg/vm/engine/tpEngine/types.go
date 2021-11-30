@@ -16,10 +16,10 @@ package tpEngine
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/driver"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 
@@ -387,7 +387,7 @@ type tpSegment struct {
 	id   string
 	kv   *driver.CubeDriver
 	proc *process.Process
-	mp   map[string]metadata.Attribute
+	mp   map[string]engine.Attribute
 }
 
 type tpBlock struct {
@@ -396,5 +396,5 @@ type tpBlock struct {
 	id   string
 	kv   *driver.CubeDriver
 	proc *process.Process
-	mp   map[string]metadata.Attribute
+	mp   map[string]engine.Attribute
 }

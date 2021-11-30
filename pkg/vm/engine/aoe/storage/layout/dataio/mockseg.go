@@ -15,10 +15,12 @@
 package dataio
 
 import (
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 type MockSegmentFile struct {
@@ -42,10 +44,10 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	} else {
 		panic("unspported")
 	}
+	msf.FileName = common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	msf.Info = &fileStat{
 		name: id.ToSegmentFilePath(),
 	}
-	msf.FileName = common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	logutil.Debugf("%s:%s | Created", msf.TypeName, msf.FileName)
 	msf.OnZeroCB = msf.close
 	return msf
@@ -69,6 +71,10 @@ func (msf *MockSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta 
 
 func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	logutil.Debugf("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
+}
+
+func (sf *MockSegmentFile) GetBlockSize(_ common.ID) int64 {
+	return 0
 }
 
 func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
@@ -115,6 +121,14 @@ func (msf *MockSegmentFile) Unref() {
 	msf.RefHelper.Unref()
 }
 
+func (msf *MockSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+	return nil
+}
+
+func (msf *MockSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+	return nil, nil
+}
+
 func (msf *MockSegmentFile) RefBlock(id common.ID) {
 	if !id.IsSameSegment(msf.ID) {
 		panic("logic error")
@@ -143,6 +157,18 @@ func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.In
 	return nil
 }
 
+func (sf *MockSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+	return nil
+}
+
 func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, msf, true)
+}
+
+func (msf *MockSegmentFile) CopyTo(dir string) error {
+	return nil
+}
+
+func (msf *MockSegmentFile) LinkTo(dir string) error {
+	return nil
 }

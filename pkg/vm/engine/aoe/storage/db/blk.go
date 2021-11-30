@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Block is a high-level wrapper of the block type in memory. It

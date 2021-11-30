@@ -14,7 +14,7 @@
 
 package rewrite
 
-import "matrixone/pkg/sql/parsers/tree"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func rewriteInsert(stmt *tree.Insert) *tree.Insert {
 	jtbl, ok := stmt.Table.(*tree.JoinTableExpr)

@@ -16,10 +16,10 @@ package index
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type Node struct {

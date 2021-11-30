@@ -15,7 +15,7 @@
 package ftree
 
 import (
-	"matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func New() *build {

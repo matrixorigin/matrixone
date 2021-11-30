@@ -17,18 +17,30 @@ package iface
 import (
 	"bytes"
 	"io"
-	"matrixone/pkg/container/vector"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	svec "matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	svec "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
+
+type MutationHandle interface {
+	io.Closer
+	Append(bat *gbat.Batch, index *shard.SliceIndex) (err error)
+	Flush() error
+	String() string
+	GetMeta() *metadata.Table
+	RefCount() int64
+}
 
 type ITableData interface {
 	common.IRef
@@ -55,13 +67,11 @@ type ITableData interface {
 	// GetSegmentCount to get the segment count of the table
 	GetSegmentCount() uint32
 
-	// GetSegmentedIndex to get the last
-	// segment(written to disk) id of the table
-	GetSegmentedIndex() (uint64, bool)
 	GetIndexHolder() *index.TableHolder
 
 	// init ReplayIndex and rowCount
 	InitReplay()
+	InitAppender()
 
 	// RegisterSegment creates and registers a logical segment
 	RegisterSegment(meta *metadata.Segment) (seg ISegment, err error)
@@ -105,6 +115,8 @@ type ITableData interface {
 	GetRowCount() uint64
 	AddRows(uint64) uint64
 
+	MakeMutationHandle() MutationHandle
+
 	// GetMeta to get the Table's metadate when the Table is created
 	GetMeta() *metadata.Table
 
@@ -113,8 +125,9 @@ type ITableData interface {
 
 	// StrongRefLastBlock Ref to the last Block in TableData
 	StrongRefLastBlock() IBlock
-	GetReplayIndex() *metadata.LogIndex
-	ResetReplayIndex()
+
+	CopyTo(dir string) error
+	LinkTo(dir string) error
 }
 
 type ISegment interface {
@@ -124,9 +137,6 @@ type ISegment interface {
 	// The type of the segment is UNSORTED_SEG and the type of the Blocki
 	// in the blocks is PERSISTENT_BLK to return true
 	CanUpgrade() bool
-
-	// GetReplayIndex gets the replay index of the last block in the segment
-	GetReplayIndex() *metadata.LogIndex
 
 	// GetMeta gets the metadata of the segment
 	GetMeta() *metadata.Segment
@@ -144,7 +154,6 @@ type ISegment interface {
 	// GetSegmentFile gets the segment file,
 	// the newly created segments are all UNSORTED_SEG
 	GetSegmentFile() base.ISegmentFile
-	GetSegmentedIndex() (uint64, bool)
 
 	// GetType gets the segment type, UNSORTED_SEG or SORTED_SEG
 	GetType() base.SegmentType
@@ -200,10 +209,6 @@ type IBlock interface {
 	// GetFsManager to get the FsMgr(file manager) of the DB
 	GetFsManager() base.IManager
 	GetIndexHolder() *index.BlockHolder
-
-	// GetSegmentedIndex returns ID of the applied index,
-	// if the block type is TRANSIENT_BLK, it returns its ID
-	GetSegmentedIndex() (uint64, bool)
 
 	// GetMeta to get the metadata of the Block, the metadate is
 	// created and registered during NewCreateBlkEvent

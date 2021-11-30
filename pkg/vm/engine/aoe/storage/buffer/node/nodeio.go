@@ -17,8 +17,8 @@ package node
 import (
 	"fmt"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 func NewNodeIOWithReader(nh iface.INodeHandle, reader io.Reader) iface.IOHandle {

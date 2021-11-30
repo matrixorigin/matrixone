@@ -16,7 +16,7 @@ package rewrite
 
 import (
 	"go/constant"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var logicalBinaryOps = map[tree.BinaryOp]struct{}{

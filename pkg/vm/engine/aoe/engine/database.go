@@ -15,14 +15,15 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 	log "github.com/sirupsen/logrus"
-	"matrixone/pkg/catalog"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "matrixone/pkg/vm/engine/aoe/storage/db"
-	//"matrixone/pkg/vm/metadata"
+	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
 )
 
@@ -101,8 +102,8 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if len(ids.Ids) == 0 {
 				continue
 			}
-			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
-			if lRelation, err := ldb.Relation(tbl.Name); err == nil {
+			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
+			if lRelation, err := ldb.Relation(aoedbName.ShardIdToName(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
 			r.nodes = append(r.nodes, engine.Node{

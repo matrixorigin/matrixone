@@ -15,12 +15,11 @@
 package sched
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 )
 
 type flushSegEvent struct {
@@ -31,10 +30,7 @@ type flushSegEvent struct {
 
 func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 	e := &flushSegEvent{Segment: seg}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushSegTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, FlushSegTask, ctx)
 	return e
 }
 
@@ -68,6 +64,6 @@ func (e *flushSegEvent) Execute() error {
 	}
 	defer release()
 
-	w := dataio.NewSegmentWriter(batches, meta, meta.Table.Catalog.Cfg.Dir)
+	w := dataio.NewSegmentWriter(batches, meta, meta.Table.Database.Catalog.Cfg.Dir)
 	return w.Execute()
 }

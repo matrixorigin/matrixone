@@ -16,9 +16,9 @@ package vector
 
 import (
 	"fmt"
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/engine/aoe/storage/container"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )

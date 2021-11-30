@@ -17,13 +17,13 @@ package helper
 import (
 	"bytes"
 	"encoding/gob"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	//"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine/aoe/protocol"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 func init() {
@@ -84,7 +84,8 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
 			Typ:   int(idx.Type),
-			ColNames: idx.Names,
+			ColNames: idx.ColumnNames,
+			Name:     idx.Name,
 		})
 	}
 	if tbl.Comment != nil {
@@ -114,12 +115,16 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 			idx := aoe.IndexInfo{
 				SchemaId: sid,
 				TableId:  tid,
-				Id:       id,
+				// Id:       id,
 				Type:     uint64(v.Typ),
+				Name:     v.Name,
 			}
 			for _, name := range v.ColNames {
-				idx.Names = append(idx.Names, name)
-				idx.Columns = append(idx.Columns, mp[name])
+				idx.ColumnNames = append(idx.ColumnNames, name)
+				//TODO
+				if mp != nil {
+					idx.Columns = append(idx.Columns, mp[name])
+				}
 			}
 			idxs = append(idxs, idx)
 			id++
@@ -175,7 +180,8 @@ func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
 			Typ:   int(idx.Type),
-			ColNames: idx.Names,
+			ColNames: idx.ColumnNames,
+			Name:     idx.Name,
 		}
 	}
 	return defs

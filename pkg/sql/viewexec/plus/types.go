@@ -15,8 +15,8 @@
 package plus
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 )
 
 const (

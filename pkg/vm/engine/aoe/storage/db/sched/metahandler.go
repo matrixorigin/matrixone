@@ -14,7 +14,7 @@
 
 package sched
 
-import "matrixone/pkg/vm/engine/aoe/storage/sched"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 type metaHandler struct {
 	sched.EventHandler

@@ -16,16 +16,16 @@ package col
 
 import (
 	"bytes"
-	"matrixone/pkg/container/types"
-	ro "matrixone/pkg/container/vector"
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
 	"sync"
 )
 
@@ -78,6 +78,8 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
+	descId := blk.GetMeta().DescId()
+	descId.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
 	var constructor buf.MemoryNodeConstructor
 	switch blk.GetType() {
@@ -96,7 +98,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		constructor = vector.VectorWrapperConstructor
 	case base.PERSISTENT_SORTED_BLK:
 		bufMgr = host.GetSSTBufMgr()
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descId)
 		constructor = vector.VectorWrapperConstructor
 	default:
 		panic("not support")
@@ -119,6 +121,8 @@ func (part *columnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	cloned := &columnPart{host: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
+	descId := blk.GetMeta().DescId()
+	descId.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
@@ -126,7 +130,7 @@ func (part *columnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	case base.PERSISTENT_BLK:
 		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
 	case base.PERSISTENT_SORTED_BLK:
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descId)
 	default:
 		panic("not supported")
 	}
@@ -198,7 +202,15 @@ func (part *columnPart) Prefetch() error {
 	}
 	id := *part.host.GetMeta().AsCommonID()
 	id.Idx = uint16(part.host.GetColIdx())
-	return part.host.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
+	idx := part.host.GetMeta().DescId()
+	idx.Idx = uint16(part.host.GetColIdx())
+	if part.host.GetType() == base.PERSISTENT_BLK {
+		return part.host.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
+	} else if part.host.GetType() == base.PERSISTENT_SORTED_BLK {
+		return part.host.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), idx)
+	} else {
+		panic("unexpected error")
+	}
 }
 
 func (part *columnPart) Size() uint64 {

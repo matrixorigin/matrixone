@@ -15,43 +15,49 @@
 package table
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"os"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
-var WORK_DIR = "/tmp/layout/data_test"
+var (
+	moduleName = "table"
+)
 
 func TestBase1(t *testing.T) {
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
 	capacity := uint64(200)
-	os.RemoveAll(WORK_DIR)
+	dir := testutils.InitTestEnv(moduleName, t)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{
 		BlockMaxRows:     rowCount,
 		SegmentMaxBlocks: blkCnt,
 	}
 	opts.Meta.Conf = cfg
-	opts.FillDefaults(WORK_DIR)
+	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
-	createIdx := metadata.LogIndex{Id: metadata.SimpleBatchId(common.NextGlobalSeqNum())}
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(shardId))
 
-	fsMgr := ldio.NewManager(WORK_DIR, true)
+	fsMgr := ldio.NewManager(dir, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(2000)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tables := NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tblData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 
@@ -169,7 +175,4 @@ func TestBase1(t *testing.T) {
 	sroot.Unref()
 	attr := schema.ColDefs[0].Name
 	t.Log(tblData.Size(attr))
-	index, ok := tblData.GetSegmentedIndex()
-	assert.True(t, ok)
-	assert.Equal(t, tableMeta.GetFirstCommit().ExternalIndex.Id.Id, index)
 }

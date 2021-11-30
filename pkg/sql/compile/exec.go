@@ -16,13 +16,13 @@ package compile
 
 import (
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/ftree"
-	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/sql/vtree"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/ftree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/vtree"
 )
 
 // Compile compiles ast tree to scope list.
