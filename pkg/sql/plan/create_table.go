@@ -271,7 +271,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 	case float64:
 		switch typ.Oid {
 		case types.T_float32:
-			if v <= math.MaxFloat32 && v >= math.SmallestNonzeroFloat32 {
+			if v <= math.MaxFloat32 && v >= -math.MaxFloat32 {
 				return float32(v), nil
 			}
 		case types.T_float64:
