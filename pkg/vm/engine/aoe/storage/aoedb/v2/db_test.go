@@ -1504,7 +1504,7 @@ func TestFilter(t *testing.T) {
 	res, _ = sparseFilter.Lt("mock_5", uint16(0))
 	assert.Equal(t, decodeBlockIds(res), []string{})
 	res, _ = sparseFilter.Gt("mock_5", uint16(8))
-	assert.Equal(t, decodeBlockIds(res), []string{ "4"})
+	assert.Equal(t, decodeBlockIds(res), []string{"4"})
 	res, _ = sparseFilter.Le("mock_5", uint16(0))
 	assert.Equal(t, decodeBlockIds(res), []string{"1"})
 	res, _ = sparseFilter.Ge("mock_5", uint16(9))
@@ -2539,7 +2539,6 @@ func TestCreateAndDropIndex(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 
-
 	dataPath := filepath.Join(inst.Dir, "data")
 	infos, err := ioutil.ReadDir(dataPath)
 	assert.Nil(t, err)
@@ -2642,11 +2641,9 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	{
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
-			go func() {
-				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
-				wg.Done()
-			}()
+			appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+			inst.Append(appendCtx)
+			wg.Done()
 		}
 	}
 	wg.Wait()
