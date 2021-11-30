@@ -17,10 +17,10 @@ package parsers
 import (
 	"testing"
 
-	"matrixone/pkg/sql/parsers/dialect"
-	"matrixone/pkg/sql/parsers/dialect/mysql"
-	"matrixone/pkg/sql/parsers/dialect/postgresql"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/postgresql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var (

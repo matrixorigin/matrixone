@@ -15,13 +15,13 @@
 package rpcserver
 
 import (
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"testing"
 	"time"
 
-	"matrixone/pkg/logger"
-	"matrixone/pkg/rpcserver/message"
+	"github.com/matrixorigin/matrixone/pkg/logger"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 
 	"github.com/fagongzi/goetty"
 )

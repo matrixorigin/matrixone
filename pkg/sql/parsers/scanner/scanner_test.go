@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"testing"
 
-	"matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 func TestLiteralID(t *testing.T) {

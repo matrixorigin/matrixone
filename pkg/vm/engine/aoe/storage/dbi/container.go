@@ -17,7 +17,7 @@ package dbi
 import (
 	"bytes"
 	"io"
-	ro "matrixone/pkg/container/vector"
+	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type VectorType uint8

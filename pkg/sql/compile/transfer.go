@@ -14,7 +14,7 @@
 
 package compile
 
-import "matrixone/pkg/sql/protocol"
+import "github.com/matrixorigin/matrixone/pkg/sql/protocol"
 
 func Transfer(s *Scope) protocol.Scope {
 	var ps protocol.Scope

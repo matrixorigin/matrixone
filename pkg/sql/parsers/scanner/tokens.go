@@ -15,7 +15,7 @@
 package scanner
 
 import (
-	"matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 var keywords map[string]int

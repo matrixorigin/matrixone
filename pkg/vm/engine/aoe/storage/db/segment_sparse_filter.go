@@ -15,7 +15,7 @@
 package db
 
 import (
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // SegmentSparseFilter provides segment-level & sparse interfaces with bitmap

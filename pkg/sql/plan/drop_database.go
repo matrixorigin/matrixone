@@ -14,7 +14,7 @@
 
 package plan
 
-import "matrixone/pkg/sql/parsers/tree"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func (b *build) BuildDropDatabase(stmt *tree.DropDatabase, plan *DropDatabase) error {
 	plan.Id = string(stmt.Name)

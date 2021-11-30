@@ -14,13 +14,12 @@
 package sched
 
 import (
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 )
 
 // flushMemblockEvent supports flushing not-full block.
@@ -37,10 +36,7 @@ func NewFlushMemBlockEvent(ctx *Context, blk iface.IMutBlock) *flushMemblockEven
 		Block: blk,
 		Meta:  blk.GetMeta(),
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, FlushBlkTask, ctx)
 	return e
 }
 
@@ -63,13 +59,16 @@ func (e *flushMemblockEvent) Execute() error {
 			vecs = append(vecs, ro)
 		}
 
-		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Catalog.Cfg.Dir)
+		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Database.Catalog.Cfg.Dir)
 		bw.SetPreExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
 		})
 		bw.SetPostExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushed", bw.GetFileName())
 		})
-		return bw.Execute()
+		err := bw.Execute()
+		meta.Segment.Table.UpdateFlushTS()
+		meta.SetSize(bw.GetSize())
+		return err
 	})
 }

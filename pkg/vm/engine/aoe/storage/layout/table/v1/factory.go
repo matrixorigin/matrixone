@@ -14,25 +14,26 @@
 package table
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type altBlockFactory struct {
+type blockFactory struct {
 	nodeFactory base.NodeFactory
 }
 
-func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *altBlockFactory {
-	f := &altBlockFactory{
-		nodeFactory: mutFactory.GetNodeFactroy(tabledata),
+func newBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *blockFactory {
+	f := &blockFactory{}
+	if mutFactory != nil {
+		f.nodeFactory = mutFactory.GetNodeFactroy(tabledata)
 	}
 	return f
 }
 
-func (af *altBlockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
-	if meta.CommitInfo.Op < metadata.OpUpgradeFull {
+func (af *blockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
+	if af.nodeFactory != nil && meta.CommitInfo.Op < metadata.OpUpgradeFull {
 		return newTBlock(host, meta, af.nodeFactory, nil)
 	}
 	return newBlock(host, meta)

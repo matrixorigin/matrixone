@@ -15,11 +15,11 @@
 package local
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
 
@@ -65,7 +65,7 @@ func (r *localRoRelation) Segment(segInfo engine.SegmentInfo, proc *process.Proc
 	return r.impl.Segment(id, proc)
 }
 
-func (r *localRoRelation) Attribute() []metadata.Attribute {
+func (r *localRoRelation) Attribute() []engine.Attribute {
 	return r.impl.Attribute()
 }
 

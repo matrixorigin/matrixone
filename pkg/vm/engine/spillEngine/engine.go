@@ -15,11 +15,11 @@
 package spillEngine
 
 import (
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/spillEngine/kv"
-	"matrixone/pkg/vm/engine/spillEngine/meta"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/meta"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"os"
 	"path"
 	"runtime"
@@ -92,7 +92,7 @@ func (e *database) Delete(_ uint64, name string) error {
 }
 
 func (e *database) Create(_ uint64, name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
-	var attrs []metadata.Attribute
+	var attrs []engine.Attribute
 
 	{
 		for _, def := range defs {
@@ -134,7 +134,7 @@ func (e *database) Relation(name string) (engine.Relation, error) {
 	if err := encoding.Decode(data, &md); err != nil {
 		return nil, err
 	}
-	mp := make(map[string]metadata.Attribute)
+	mp := make(map[string]engine.Attribute)
 	{
 		for _, attr := range md.Attrs {
 			mp[attr.Name] = attr

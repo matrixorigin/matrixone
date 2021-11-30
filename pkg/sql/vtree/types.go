@@ -17,15 +17,15 @@ package vtree
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/colexec/dedup"
-	"matrixone/pkg/sql/colexec/limit"
-	"matrixone/pkg/sql/colexec/offset"
-	"matrixone/pkg/sql/colexec/order"
-	"matrixone/pkg/sql/colexec/projection"
-	"matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/colexec/top"
-	"matrixone/pkg/sql/viewexec/transform"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 )
 
 type Variable struct {

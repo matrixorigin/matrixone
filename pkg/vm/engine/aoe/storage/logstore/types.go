@@ -16,7 +16,7 @@ package logstore
 
 import (
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
 )
@@ -76,6 +76,9 @@ func New(dir, name string, cfg *RotationCfg) (*store, error) {
 		if err = os.MkdirAll(dir, os.ModePerm); err != nil {
 			return nil, err
 		}
+	}
+	if cfg == nil {
+		cfg = &RotationCfg{}
 	}
 	w, err := OpenRotational(dir, name, DefaultSuffix, cfg.HistoryFactory, cfg.RotateChecker, cfg.Observer)
 	if err != nil {

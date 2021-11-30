@@ -10,107 +10,273 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
 import (
-	"errors"
 	"fmt"
-	"sync/atomic"
-	"time"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
-func NowMicro() int64 {
-	return time.Now().UnixNano() / 1000
+type PPLevel uint8
+
+const (
+	PPL0 PPLevel = iota
+	PPL1
+	PPL2
+)
+
+type BaseEntry struct {
+	sync.RWMutex
+	Id         uint64      `json:"id"`
+	CommitInfo *CommitInfo `json:"commit"`
 }
 
-// NewTimeStamp generates a new timestamp created on current time.
-func NewTimeStamp() *TimeStamp {
-	ts := &TimeStamp{
-		CreatedOn: NowMicro(),
-	}
-	return ts
+func (e *BaseEntry) GetShardId() uint64 {
+	return e.GetCommit().GetShardId()
 }
 
-// Delete deletes ts and set the deleting time to t.
-func (ts *TimeStamp) Delete(t int64) error {
-	val := atomic.LoadInt64(&(ts.DeletedOn))
-	if val != 0 {
-		return errors.New("already deleted")
+func (e *BaseEntry) LatestLogIndexLocked() *LogIndex {
+	return e.CommitInfo.LogIndex
+}
+
+func (e *BaseEntry) LatestLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	return e.LatestLogIndexLocked()
+}
+
+func (e *BaseEntry) FirstCommit() *CommitInfo {
+	e.RLock()
+	defer e.RUnlock()
+	return e.FirstCommitLocked()
+}
+
+func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
+	var ret *CommitInfo
+	fn := func(info *CommitInfo) bool {
+		ret = info
+		return true
 	}
-	ok := atomic.CompareAndSwapInt64(&(ts.DeletedOn), val, t)
-	if !ok {
-		return errors.New("already deleted")
+	e.ForEachCommitLocked(fn)
+	return ret
+}
+
+func (e *BaseEntry) GetCommit() *CommitInfo {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo
+}
+
+func (e *BaseEntry) IsFull() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.Op == OpUpgradeFull
+}
+func (e *BaseEntry) IsFullLocked() bool {
+	return e.CommitInfo.Op == OpUpgradeFull
+}
+
+func (e *BaseEntry) IsCloseLocked() bool {
+	return e.CommitInfo.Op == OpUpgradeClose
+}
+
+func (e *BaseEntry) IsSortedLocked() bool {
+	return e.CommitInfo.Op == OpUpgradeSorted
+}
+
+func (e *BaseEntry) checkStale1(info *CommitInfo) error {
+	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil || info.LogIndex == nil {
+		return nil
+	}
+	switch info.Op {
+	case OpHardDelete:
+		return nil
+	case OpReplaced:
+		return nil
+	case OpUpgradeFull:
+		return nil
+	}
+	comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
+	if comp > 0 {
+		return CommitStaleErr
+	} else if comp == 0 && !e.CommitInfo.SameTran(info) {
+		logutil.Error(e.PString(PPL1))
+		logutil.Error(info.PString(PPL1))
+		return CommitStaleErr
 	}
 	return nil
 }
 
-// IsDeleted checks if ts was deleted on t.
-func (ts *TimeStamp) IsDeleted(t int64) bool {
-	delon := atomic.LoadInt64(&(ts.DeletedOn))
-	if delon != 0 {
-		if delon <= t {
-			return true
+func (e *BaseEntry) onCommit(info *CommitInfo) error {
+	err := e.checkStale1(info)
+	if err != nil {
+		return err
+	}
+	info.SetNext(e.CommitInfo)
+	e.CommitInfo = info
+	return nil
+}
+
+func (e *BaseEntry) PString(level PPLevel) string {
+	return e.CommitInfo.PString(level)
+}
+
+func (e *BaseEntry) HasCommittedLocked() bool {
+	return e.CommitInfo.HasCommitted()
+}
+
+func (e *BaseEntry) HasCommitted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.HasCommittedLocked()
+}
+
+func (e *BaseEntry) CanUseTxn(tranId uint64) bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CanUseTxnLocked(tranId)
+}
+
+func (e *BaseEntry) CanUseTxnLocked(tranId uint64) bool {
+	return e.CommitInfo.CanUseTxn(tranId)
+}
+
+func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
+	if e.CommitInfo.CommitId > id {
+		return nil
+	}
+	return &BaseEntry{
+		Id:         e.Id,
+		CommitInfo: e.CommitInfo,
+	}
+}
+
+func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
+	e.RLock()
+	defer e.RUnlock()
+	return e.UseCommittedLocked(filter)
+}
+
+func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
+	var curr common.ISSLLNode
+	curr = e.CommitInfo
+	for curr != nil {
+		info := curr.(*CommitInfo)
+		if filter.Eval(info) && !filter.EvalStop(info) {
+			cInfo := info.Clone()
+			return &BaseEntry{
+				Id:         e.Id,
+				CommitInfo: cInfo,
+			}
+		} else if filter.EvalStop(info) {
+			return nil
 		}
+		curr = curr.GetNext()
 	}
-	return false
-}
-
-// IsCreated checks if ts was created on t.
-func (ts *TimeStamp) IsCreated(t int64) bool {
-	return ts.CreatedOn < t
-}
-
-// Select returns true if ts has been created but not deleted on t.
-func (ts *TimeStamp) Select(t int64) bool {
-	if ts.IsDeleted(t) {
-		return false
-	}
-	return ts.IsCreated(t)
-}
-
-func (ts *TimeStamp) String() string {
-	s := fmt.Sprintf("ts(%d,%d,%d)", ts.CreatedOn, ts.UpdatedOn, ts.DeletedOn)
-	return s
-}
-
-func (state *BoundSate) GetBoundState() BoundSate {
-	return *state
-}
-
-func (state *BoundSate) Detach() error {
-	if *state == Detached || *state == Standalone {
-		return errors.New(fmt.Sprintf("detatched or stalone already: %d", *state))
-	}
-	*state = Detached
 	return nil
 }
 
-func (state *BoundSate) Attach() error {
-	if *state == Attached {
-		return errors.New("already attached")
+func (e *BaseEntry) ForEachCommitLocked(fn func(*CommitInfo) bool) {
+	var curr common.ISSLLNode
+	curr = e.CommitInfo
+	for curr != nil {
+		info := curr.(*CommitInfo)
+		if ok := fn(info); !ok {
+			break
+		}
+		curr = curr.GetNext()
 	}
-	*state = Attached
-	return nil
+	return
 }
 
-func (seq *Sequence) GetSegmentID() uint64 {
-	return atomic.AddUint64(&(seq.NextSegmentID), uint64(1))
+func (e *BaseEntry) FindCommitByIndexLocked(index *LogIndex) *CommitInfo {
+	var found *CommitInfo
+	fn := func(info *CommitInfo) bool {
+		comp := info.LogIndex.Compare(index)
+		if comp == 0 {
+			found = info
+			return false
+		}
+		if comp < 0 && info.IsDeleted() {
+			return false
+		}
+		return true
+	}
+	e.ForEachCommitLocked(fn)
+	return found
 }
 
-func (seq *Sequence) GetBlockID() uint64 {
-	return atomic.AddUint64(&(seq.NextBlockID), uint64(1))
+func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
+	if txn == nil {
+		return e.IsDeletedLocked()
+	}
+	if e.CanUseTxnLocked(txn.tranId) {
+		return e.IsDeletedLocked()
+	}
+
+	var isDeleted bool
+	fn := func(info *CommitInfo) bool {
+		if info.CanUseTxn(txn.tranId) {
+			isDeleted = info.IsDeleted()
+			return false
+		}
+		return true
+	}
+	e.ForEachCommitLocked(fn)
+	return isDeleted
 }
 
-func (seq *Sequence) GetTableID() uint64 {
-	return atomic.AddUint64(&(seq.NextTableID), uint64(1))
+// Guarded by e.Lock()
+func (e *BaseEntry) IsSoftDeletedLocked() bool {
+	return e.CommitInfo.IsSoftDeleted()
 }
 
-func (seq *Sequence) GetPartitionID() uint64 {
-	return atomic.AddUint64(&(seq.NextPartitionID), uint64(1))
+func (e *BaseEntry) IsDeletedLocked() bool {
+	return e.CommitInfo.IsDeleted()
 }
 
-func (seq *Sequence) GetIndexID() uint64 {
-	return atomic.AddUint64(&(seq.NextIndexID), uint64(1))
+func (e *BaseEntry) IsReplacedLocked() bool {
+	return e.CommitInfo.IsReplaced()
+}
+
+func (e *BaseEntry) IsReplaced() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsReplacedLocked()
+}
+
+func (e *BaseEntry) IsDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsDeletedLocked()
+}
+
+func (e *BaseEntry) IsSoftDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.IsSoftDeleted()
+}
+
+func (e *BaseEntry) IsHardDeletedLocked() bool {
+	return e.CommitInfo.IsHardDeleted()
+}
+
+func (e *BaseEntry) IsHardDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.IsHardDeleted()
+}
+
+func (e *BaseEntry) CommitLocked(id uint64) {
+	if IsTransientCommitId(id) {
+		panic(fmt.Sprintf("Cannot commit transient id %d", id))
+	}
+	if e.HasCommittedLocked() {
+		panic(fmt.Sprintf("Cannot commit committed entry: %s", e.PString(PPL0)))
+	}
+	e.CommitInfo.CommitId = id
 }

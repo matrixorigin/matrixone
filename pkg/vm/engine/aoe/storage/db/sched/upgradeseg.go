@@ -15,8 +15,7 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 )
 
 type upgradeSegEvent struct {
@@ -34,9 +33,7 @@ func NewUpgradeSegEvent(ctx *Context, old iface.ISegment, td iface.ITableData) *
 		OldSegment: old,
 		TableData:  td,
 	}
-	e.BaseEvent = BaseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.UpgradeSegTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, UpgradeSegTask, ctx)
 	return e
 }
 
@@ -45,7 +42,12 @@ func (e *upgradeSegEvent) Execute() error {
 	sid := e.OldSegment.GetMeta().Id
 	e.Segment, err = e.TableData.UpgradeSegment(sid)
 	if err == nil {
-		e.Segment.GetMeta().SimpleUpgrade(nil)
+		if e.Ctx.Controller.IsOn(UpgradeSegMetaMask) {
+			newSize := e.Segment.GetSegmentFile().Stat().Size()
+			if err = e.Segment.GetMeta().SimpleUpgrade(newSize, nil); err != nil {
+				panic(err)
+			}
+		}
 	}
 	return err
 }

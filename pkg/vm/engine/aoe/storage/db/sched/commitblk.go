@@ -15,8 +15,7 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type commitBlkEvent struct {
@@ -26,16 +25,21 @@ type commitBlkEvent struct {
 
 func NewCommitBlkEvent(ctx *Context, meta *metadata.Block) *commitBlkEvent {
 	e := &commitBlkEvent{Meta: meta}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.CommitBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, CommitBlkTask, ctx)
 	return e
 }
 
 func (e *commitBlkEvent) Execute() error {
 	if e.Meta != nil {
-		e.Meta.SimpleUpgrade(nil)
+		if err := e.Meta.SimpleUpgrade(nil); err != nil {
+			return err
+		}
+		wal := e.Meta.Segment.Table.Database.Catalog.IndexWal
+		if wal != nil {
+			snip := e.Meta.ConsumeSnippet(true)
+			// logutil.Infof("commit snip: %s", snip.String())
+			wal.Checkpoint(snip)
+		}
 	}
 	return nil
 }

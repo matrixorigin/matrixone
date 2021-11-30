@@ -16,8 +16,8 @@ package db
 
 import (
 	"io"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"syscall"
 )

@@ -15,14 +15,14 @@
 package segment
 
 import (
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/spillEngine/block"
-	"matrixone/pkg/vm/engine/spillEngine/kv"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/block"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(id string, db *kv.KV, proc *process.Process, mp map[string]metadata.Attribute) *Segment {
+func New(id string, db *kv.KV, proc *process.Process, mp map[string]engine.Attribute) *Segment {
 	return &Segment{id, db, proc, mp}
 }
 

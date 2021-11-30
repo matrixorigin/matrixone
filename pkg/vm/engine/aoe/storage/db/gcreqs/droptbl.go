@@ -15,13 +15,13 @@
 package gcreqs
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
-	"matrixone/pkg/vm/engine/aoe/storage/gc"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
 
 type dropTblRequest struct {
@@ -29,17 +29,15 @@ type dropTblRequest struct {
 	// Tables' meta
 	Tables *table.Tables
 	// Table id of the dropped table
-	TableId     uint64
-	MemTableMgr mtif.IManager
-	Opts        *storage.Options
-	CB          dbi.OnTableDroppedCB
+	Meta *metadata.Table
+	Opts *storage.Options
+	CB   dbi.OnTableDroppedCB
 }
 
-func NewDropTblRequest(opts *storage.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
+func NewDropTblRequest(opts *storage.Options, meta *metadata.Table, tables *table.Tables, cb dbi.OnTableDroppedCB) *dropTblRequest {
 	req := new(dropTblRequest)
-	req.TableId = id
+	req.Meta = meta
 	req.Tables = tables
-	req.MemTableMgr = mtMgr
 	req.Opts = opts
 	req.CB = cb
 	req.Op = ops.Op{
@@ -50,12 +48,11 @@ func NewDropTblRequest(opts *storage.Options, id uint64, tables *table.Tables, m
 }
 
 func (req *dropTblRequest) Execute() error {
-	ctx := &memdata.Context{
+	ctx := &sched.Context{
 		Opts:     req.Opts,
-		Tables:   req.Tables,
 		Waitable: true,
 	}
-	e := memdata.NewDropTableEvent(ctx, req.TableId)
+	e := sched.NewUninstallTableEvent(ctx, req.Meta.Id, req.Tables)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {
 		return err
@@ -68,15 +65,8 @@ func (req *dropTblRequest) Execute() error {
 	} else {
 		e.Data.Unref()
 	}
-	c, err := req.MemTableMgr.UnregisterCollection(req.TableId)
-	if err != nil {
-		if req.Iteration < 3 {
-			return err
-		}
-		err = nil
-	}
-	if c != nil {
-		c.Unref()
+	if err = req.Meta.Database.SimpleHardDeleteTable(req.Meta.Id); err != nil {
+		panic(err)
 	}
 	if req.CB != nil {
 		req.CB(nil)

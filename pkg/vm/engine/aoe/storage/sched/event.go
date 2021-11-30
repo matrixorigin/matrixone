@@ -15,10 +15,11 @@
 package sched
 
 import (
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 )
 
 var (
@@ -31,27 +32,7 @@ type EventType uint16
 const (
 	EmptyEvent EventType = iota
 	MockEvent
-	IOBoundEvent
-	CpuBoundEvent
-	StatelessEvent
-	MetaUpdateEvent
-	MemdataUpdateEvent
-	MergeSortEvent
-
-	PrepareCommitBlockTask
-	PrecommitBlkMetaTask
-	FlushMemtableTask
-	FlushBlkTask
-	FlushTBlkTask
-	MetaCreateTableTask
-	MetaDropTableTask
-	MetaCreateBlkTask
-	CommitBlkTask
-	FlushTableMetaTask
-	FlushInfoMetaTask
-	UpgradeBlkTask
-	UpgradeSegTask
-	FlushSegTask
+	CustomizedEvent
 )
 
 func GetNextEventId() uint64 {

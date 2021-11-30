@@ -10,463 +10,790 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"matrixone/pkg/logutil"
-	"strconv"
 	"strings"
 	"sync/atomic"
-	"unsafe"
+	"time"
 
-	"github.com/google/btree"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
-var (
-	GlobalSeqNum         uint64 = 0
-	ErrParseTableCkpFile        = errors.New("parse table file name error")
-)
-
-//func MakeTableCkpFile(tid, version uint64) string {
-//	return fmt.Sprintf("%d_v%d", tid, version)
-//}
-
-func ParseTableCkpFile(name string) (tid, version uint64, err error) {
-	strs := strings.Split(name, "_v")
-	if len(strs) != 2 {
-		return tid, version, ErrParseTableCkpFile
-	}
-	if tid, err = strconv.ParseUint(strs[0], 10, 64); err != nil {
-		return tid, version, err
-	}
-	if version, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
-		return tid, version, err
-	}
-	return tid, version, err
+type tableLogEntry struct {
+	Table      *Table
+	DatabaseId uint64
+	*BaseEntry
 }
 
-func NextGlobalSeqNum() uint64 {
-	return atomic.AddUint64(&GlobalSeqNum, uint64(1))
+func (e *tableLogEntry) Marshal() ([]byte, error) {
+	return json.Marshal(e)
 }
 
-func GetGlobalSeqNum() uint64 {
-	return atomic.LoadUint64(&GlobalSeqNum)
+func (e *tableLogEntry) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
 }
 
-type GenericTableWrapper struct {
-	ID uint64
-	TimeStamp
-	LogHistory
+type Table struct {
+	*BaseEntry
+	IdempotentChecker `json:"-"`
+	Schema            *Schema        `json:"schema"`
+	SegmentSet        []*Segment     `json:"segments"`
+	IdIndex           map[uint64]int `json:"-"`
+	Database          *Database      `json:"-"`
+	FlushTS           int64          `json:"-"`
+	rowCount          uint64
 }
 
-func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
-	var id uint64
-	if len(ids) == 0 {
-		id = info.Sequence.GetTableID()
-	} else {
-		id = ids[0]
+func NewTableEntry(db *Database, schema *Schema, indice *IndexSchema, tranId uint64, exIndex *LogIndex) *Table {
+	schema.BlockMaxRows = db.Catalog.Cfg.BlockMaxRows
+	schema.SegmentMaxBlocks = db.Catalog.Cfg.SegmentMaxBlocks
+	if indice == nil {
+		indice = NewIndexSchema()
 	}
-	tbl := &Table{
-		ID:         id,
-		Segments:   make([]*Segment, 0),
-		IdMap:      make(map[uint64]int),
-		TimeStamp:  *NewTimeStamp(),
-		Info:       info,
-		Conf:       info.Conf,
+	e := &Table{
+		BaseEntry: &BaseEntry{
+			Id: db.Catalog.NextTableId(),
+			CommitInfo: &CommitInfo{
+				TranId:   tranId,
+				CommitId: tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
+				Indice:   indice,
+			},
+		},
 		Schema:     schema,
-		Stat:       new(Statistics),
-		LogHistory: LogHistory{CreatedIndex: logIdx},
+		Database:   db,
+		SegmentSet: make([]*Segment, 0),
+		IdIndex:    make(map[uint64]int),
 	}
-	return tbl
+	return e
 }
 
-func (tbl *Table) Marshal() ([]byte, error) {
-	return json.Marshal(tbl)
-}
-
-func (tbl *Table) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, tbl)
-}
-
-func (tbl *Table) ReadFrom(r io.Reader) (int64, error) {
-	decoder := json.NewDecoder(r)
-	err := decoder.Decode(tbl)
-	return decoder.InputOffset(), err
-}
-
-func (tbl *Table) GetID() uint64 {
-	return tbl.ID
-}
-
-func (tbl *Table) GetRows() uint64 {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	return (*Statistics)(ptr).Rows
-}
-
-func (tbl *Table) Less(item btree.Item) bool {
-	return tbl.Schema.Name < (item.(*Table)).Schema.Name
-}
-
-func (tbl *Table) GetReplayIndex() *LogIndex {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
-	if ptr == nil {
-		return nil
+func NewEmptyTableEntry(db *Database) *Table {
+	e := &Table{
+		BaseEntry: &BaseEntry{
+			CommitInfo: &CommitInfo{
+				SSLLNode: *common.NewSSLLNode(),
+			},
+		},
+		SegmentSet: make([]*Segment, 0),
+		IdIndex:    make(map[uint64]int),
+		Database:   db,
 	}
-	return (*LogIndex)(ptr)
+	return e
 }
 
-func (tbl *Table) ResetReplayIndex() {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
-	if ptr == nil {
-		panic("logic error")
+func (e *Table) Repr(short bool) string {
+	s := fmt.Sprintf("TBL-%d:\"%s\"", e.Id, e.Schema.Name)
+	if !short {
+		s = fmt.Sprintf("%s-%s", s, e.Database.Repr())
 	}
-	var netIndex *LogIndex
-	nptr := (*unsafe.Pointer)(unsafe.Pointer(&netIndex))
-	if !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)), ptr, *nptr) {
-		panic("logic error")
-	}
-}
-
-func (tbl *Table) AppendStat(rows, size uint64) *Statistics {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	stat := (*Statistics)(ptr)
-	newStat := new(Statistics)
-	newStat.Rows = stat.Rows + rows
-	newStat.Size = stat.Size + size
-	nptr := (*unsafe.Pointer)(unsafe.Pointer(&newStat))
-	for !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)), ptr, *nptr) {
-		ptr = atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-		stat = (*Statistics)(ptr)
-		newStat.Rows = stat.Rows + rows
-		newStat.Size = stat.Size + size
-	}
-	return newStat
-}
-
-func (tbl *Table) GetSize() uint64 {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	return (*Statistics)(ptr).Size
-}
-
-func (tbl *Table) CloneSegment(segmentId uint64, ctx CopyCtx) (seg *Segment, err error) {
-	tbl.RLock()
-	seg, err = tbl.referenceSegmentNoLock(segmentId)
-	if err != nil {
-		tbl.RUnlock()
-		return nil, err
-	}
-	tbl.RUnlock()
-	segCpy := seg.Copy(ctx)
-	if !ctx.Attached {
-		err = segCpy.Detach()
-	}
-	return segCpy, err
-}
-
-func (tbl *Table) ReferenceBlock(segmentId, blockId uint64) (blk *Block, err error) {
-	tbl.RLock()
-	seg, err := tbl.referenceSegmentNoLock(segmentId)
-	if err != nil {
-		tbl.RUnlock()
-		return nil, err
-	}
-	tbl.RUnlock()
-
-	blk, err = seg.ReferenceBlock(blockId)
-
-	return blk, err
-}
-
-func (tbl *Table) ReferenceSegment(segmentId uint64) (seg *Segment, err error) {
-	tbl.RLock()
-	defer tbl.RUnlock()
-	seg, err = tbl.referenceSegmentNoLock(segmentId)
-	return seg, err
-}
-
-func (tbl *Table) referenceSegmentNoLock(segmentId uint64) (seg *Segment, err error) {
-	idx, ok := tbl.IdMap[segmentId]
-	if !ok {
-		return nil, errors.New(fmt.Sprintf("specified segment %d not found in table %d", segmentId, tbl.ID))
-	}
-	seg = tbl.Segments[idx]
-	return seg, nil
-}
-
-func (tbl *Table) GetSegmentBlockIDs(segmentId uint64, args ...int64) map[uint64]uint64 {
-	tbl.RLock()
-	seg, err := tbl.referenceSegmentNoLock(segmentId)
-	tbl.RUnlock()
-	if err != nil {
-		return make(map[uint64]uint64, 0)
-	}
-	return seg.BlockIDs(args...)
-}
-
-func (tbl *Table) SegmentIDs(args ...int64) map[uint64]uint64 {
-	var ts int64
-	if len(args) == 0 {
-		ts = NowMicro()
-	} else {
-		ts = args[0]
-	}
-	ids := make(map[uint64]uint64)
-	tbl.RLock()
-	defer tbl.RUnlock()
-	for _, seg := range tbl.Segments {
-		if !seg.Select(ts) {
-			continue
-		}
-		ids[seg.ID] = seg.ID
-	}
-	return ids
-}
-
-func (tbl *Table) CreateSegment() (seg *Segment, err error) {
-	seg = NewSegment(tbl, tbl.Info.Sequence.GetSegmentID())
-	return seg, err
-}
-
-func (tbl *Table) NextActiveSegment() *Segment {
-	var seg *Segment
-	if tbl.ActiveSegment >= len(tbl.Segments) {
-		return seg
-	}
-	tbl.ActiveSegment++
-	return tbl.GetActiveSegment()
-}
-
-func (tbl *Table) GetActiveSegment() *Segment {
-	if tbl.ActiveSegment >= len(tbl.Segments) {
-		return nil
-	}
-	seg := tbl.Segments[tbl.ActiveSegment]
-	blk := seg.GetActiveBlk()
-	if blk == nil && uint64(len(seg.Blocks)) == tbl.Info.Conf.SegmentMaxBlocks {
-		return nil
-	}
-	return seg
-}
-
-func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
-	tbl.RLock()
-	defer tbl.RUnlock()
-	for _, seg := range tbl.Segments {
-		if seg.DataState == EMPTY || seg.DataState == PARTIAL {
-			return seg, nil
-		}
-	}
-	return nil, errors.New(fmt.Sprintf("no infull segment found in table %d", tbl.ID))
-}
-
-func (tbl *Table) String() string {
-	s := fmt.Sprintf("Tbl(%d) %d", tbl.ID, tbl.ActiveSegment)
-	s += "["
-	for i, seg := range tbl.Segments {
-		if i != 0 {
-			s += "\n"
-		}
-		s += seg.String()
-	}
-	if len(tbl.Segments) > 0 {
-		s += "\n"
-	}
-	s += "]"
 	return s
 }
 
-func (tbl *Table) RegisterSegment(seg *Segment) error {
-	if tbl.ID != seg.GetTableID() {
-		return errors.New(fmt.Sprintf("table id mismatch %d:%d", tbl.ID, seg.GetTableID()))
+func (e *Table) ReplayRowCount() {
+	for _, seg := range e.SegmentSet {
+		e.rowCount += seg.GetRowCount()
 	}
-	tbl.Lock()
-	defer tbl.Unlock()
+}
 
-	err := seg.Attach()
+func (e *Table) AddRows(count uint64) uint64 {
+	return atomic.AddUint64(&e.rowCount, count)
+}
+
+func (e *Table) GetRowCount() uint64 {
+	return atomic.LoadUint64(&e.rowCount)
+}
+
+func (e *Table) GetIndexSchemaLocked() *IndexSchema {
+	return e.CommitInfo.Indice
+}
+
+func (e *Table) GetIndexSchema() *IndexSchema {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.Indice
+}
+
+func (e *Table) DebugCheckReplayedState() {
+	if e.Database == nil {
+		panic("database is missing")
+	}
+	if e.IdIndex == nil {
+		panic("id index is missing")
+	}
+	if e.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Database.Catalog.TryUpdateTableId(e.Id) {
+		panic("sequence error")
+	}
+	for _, seg := range e.SegmentSet {
+		seg.DebugCheckReplayedState()
+	}
+}
+
+func (e *Table) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	return e.MaxLogIndexLocked()
+}
+
+func (e *Table) MaxLogIndexLocked() *LogIndex {
+	if e.CommitInfo.LogIndex == nil {
+		return nil
+	}
+	if e.IsDeletedLocked() || len(e.SegmentSet) == 0 {
+		return e.LatestLogIndexLocked()
+	}
+	var index *LogIndex
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		segment := e.SegmentSet[i]
+		index = segment.MaxLogIndex()
+		if index != nil {
+			break
+		}
+	}
+	if index == nil {
+		index = e.LatestLogIndexLocked()
+	}
+	return index
+}
+
+func (e *Table) UpdateFlushTS() {
+	now := time.Now().UnixMicro()
+	atomic.StoreInt64(&e.FlushTS, now)
+}
+
+func (e *Table) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	size := int64(0)
+	for _, segment := range e.SegmentSet {
+		size += segment.GetCoarseSize()
+	}
+	return size
+}
+
+func (e *Table) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	count := int64(0)
+	for _, segment := range e.SegmentSet {
+		count += segment.GetCoarseCount()
+	}
+	return count
+}
+
+func (e *Table) GetFlushTS() int64 {
+	return atomic.LoadInt64(&e.FlushTS)
+}
+
+// Threadsafe
+// It is used to take a snapshot of table base on a commit id. It goes through
+// the version chain to find a "safe" commit version and create a view base on
+// that version.
+// v2(commitId=7) -> v1(commitId=4) -> v0(commitId=2)
+//      |                 |                  |
+//      |                 |                   -------- fillView [0,2]
+//      |                  --------------------------- fillView [4,6]
+//       --------------------------------------------- fillView [7,+oo)
+func (e *Table) fillView(filter *Filter) *Table {
+	// TODO: if baseEntry op is drop, should introduce an index to
+	// indicate weather to return nil
+	baseEntry := e.UseCommitted(filter.tableFilter)
+	if baseEntry == nil {
+		return nil
+	}
+	view := &Table{
+		Schema:     e.Schema,
+		BaseEntry:  baseEntry,
+		SegmentSet: make([]*Segment, 0),
+	}
+	e.RLock()
+	segs := make([]*Segment, 0, len(e.SegmentSet))
+	for _, seg := range e.SegmentSet {
+		segs = append(segs, seg)
+	}
+	e.RUnlock()
+	for _, seg := range segs {
+		segView := seg.fillView(filter)
+		if segView == nil {
+			continue
+		}
+		view.SegmentSet = append(view.SegmentSet, segView)
+	}
+	return view
+}
+
+// Not threadsafe, and not needed
+func (e *Table) rebuild(db *Database, replay bool) {
+	e.Database = db
+	e.IdIndex = make(map[uint64]int)
+	for i, seg := range e.SegmentSet {
+		if replay {
+			db.Catalog.Sequence.TryUpdateSegmentId(seg.Id)
+		}
+		seg.rebuild(e, replay)
+		e.IdIndex[seg.Id] = i
+	}
+}
+
+// Threadsafe
+// It should be applied on a table that was previously soft-deleted
+// It is always driven by engine internal scheduler. It means all the
+// table related data resources were deleted. A hard-deleted table will
+// be deleted from catalog later
+func (e *Table) HardDelete() error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := newDeleteTableCtx(e, tranId)
+	err := e.Database.Catalog.onCommitRequest(ctx, true)
 	if err != nil {
 		return err
 	}
-
-	_, ok := tbl.IdMap[seg.ID]
-	if ok {
-		return errors.New(fmt.Sprintf("Duplicate segment %d found in table %d", seg.GetID(), tbl.ID))
-	}
-	tbl.IdMap[seg.GetID()] = len(tbl.Segments)
-	tbl.Segments = append(tbl.Segments, seg)
-	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
-	tbl.UpdateVersion()
-	return nil
-}
-
-func (tbl *Table) GetSegmentCount() uint64 {
-	return atomic.LoadUint64(&tbl.SegmentCnt)
-}
-
-func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
-	blkid := uint64(0)
-	segid := uint64(0)
-	for _, seg := range tbl.Segments {
-		sid := seg.GetID()
-		maxBlkId := seg.GetMaxBlkID()
-		if maxBlkId > blkid {
-			blkid = maxBlkId
-		}
-		if sid > segid {
-			segid = sid
-		}
-	}
-
-	return segid, blkid
-}
-
-func (tbl *Table) UpdateVersion() {
-	atomic.AddUint64(&tbl.CheckPoint, uint64(1))
-}
-
-func (tbl *Table) GetFileName() string {
-	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint)
-}
-
-func (tbl *Table) GetLastFileName() string {
-	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint-1)
-}
-
-func (tbl *Table) Serialize(w io.Writer) error {
-	bytes, err := tbl.Marshal()
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(bytes)
+	e.Database.tableListener.OnTableHardDeleted(e)
 	return err
 }
 
-func (tbl *Table) GetResourceType() ResourceType {
-	return ResTable
-}
-
-func (tbl *Table) GetTableId() uint64 {
-	return tbl.ID
-}
-
-func (tbl *Table) LiteCopy() *Table {
-	newTbl := &Table{
-		ID:         tbl.ID,
-		TimeStamp:  tbl.TimeStamp,
-		LogHistory: tbl.LogHistory,
+func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		CommitId: ctx.tranId,
+		TranId:   ctx.tranId,
+		Op:       OpHardDelete,
+		SSLLNode: *common.NewSSLLNode(),
 	}
-	return newTbl
+	e.Lock()
+	defer e.Unlock()
+	if e.IsHardDeletedLocked() {
+		logutil.Warnf("HardDelete %d but already hard deleted", e.Id)
+		return nil, TableNotFoundErr
+	}
+	if !e.IsSoftDeletedLocked() && !e.IsReplacedLocked() && !e.Database.IsDeleted() {
+		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
+	}
+	cInfo.LogIndex = e.CommitInfo.LogIndex
+	cInfo.Indice = e.CommitInfo.Indice
+	if err := e.onCommit(cInfo); err != nil {
+		return nil, err
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETHardDeleteTable, e)
+	return logEntry, nil
 }
 
-func (tbl *Table) Copy(ctx CopyCtx) *Table {
-	if ctx.Ts == 0 {
-		ctx.Ts = NowMicro()
+// Simple* wrappes simple usage of wrapped operation
+// It is driven by external command. The engine then schedules a GC task to hard delete
+// related resources.
+func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
+	if exIndex != nil && exIndex.ShardId != e.Database.GetShardId() {
+		return InconsistentShardIdErr
 	}
-	newTbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
-	newTbl.TimeStamp = tbl.TimeStamp
-	newTbl.CheckPoint = tbl.CheckPoint
-	newTbl.BoundSate = tbl.BoundSate
-	newTbl.LogHistory = tbl.LogHistory
-	newTbl.Conf = tbl.Conf
-	for _, v := range tbl.Segments {
-		if !v.Select(ctx.Ts) {
-			continue
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(dropTableCtx)
+	ctx.table = e
+	ctx.exIndex = exIndex
+	ctx.tranId = tranId
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpSoftDelete,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	// Here we can see any uncommitted and committed changes. When it detects any write-write conflicts,
+	// it will proactively abort current transaction
+	if e.IsDeletedLocked() {
+		// if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	cInfo.Indice = e.CommitInfo.Indice
+	err := e.onCommit(cInfo)
+	e.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETSoftDeleteTable)
+		return nil, nil
+	}
+	// PXU TODO: ToLogEntry should work on specified tranId node in the chain
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, nil)
+	return logEntry, nil
+}
+
+func (e *Table) SimpleAddIndice(indice []*IndexInfo, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(addIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.indice = indice
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpAddIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Merge(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	for _, index := range ctx.indice {
+		index.Id = e.Database.Catalog.NextIndexId()
+	}
+	if err = indice.Extend(ctx.indice); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETAddIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETAddIndice, nil)
+	return logEntry, nil
+}
+
+func (e *Table) SimpleDropIndice(names []string, index *LogIndex) error {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(dropIndiceCtx)
+	ctx.tranId = tranId
+	ctx.table = e
+	ctx.names = names
+	ctx.exIndex = index
+	return e.Database.Catalog.onCommitRequest(ctx, true)
+}
+
+func (e *Table) prepareDropIndice(ctx *dropIndiceCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
+		LogIndex: ctx.exIndex,
+		Op:       OpDropIndice,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
+		return nil, TableNotFoundErr
+	}
+	lastIndice := e.CommitInfo.Indice
+	indice := NewIndexSchema()
+	err := indice.Merge(lastIndice)
+	if err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	if err = indice.DropByNames(ctx.names); err != nil {
+		e.Unlock()
+		return nil, err
+	}
+	cInfo.Indice = indice
+	err = e.onCommit(cInfo)
+	e.Unlock()
+
+	if err != nil {
+		return nil, err
+	}
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETDropIndice)
+		return nil, nil
+	}
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETDropIndice, nil)
+	return logEntry, nil
+}
+
+// Not safe
+func (e *Table) Marshal() ([]byte, error) {
+	return json.Marshal(e)
+}
+
+// Not safe
+func (e *Table) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+// Not safe
+func (e *Table) String() string {
+	buf, _ := e.Marshal()
+	return string(buf)
+}
+
+// Not safe
+// Usually it is used during creating a table. We need to commit the new table entry
+// to the store.
+func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
+	var buf []byte
+	switch eType {
+	case ETCreateTable:
+		entry := tableLogEntry{
+			Table:      e,
+			DatabaseId: e.Database.Id,
 		}
-		seg, _ := tbl.CloneSegment(v.ID, ctx)
-		newTbl.IdMap[seg.GetID()] = len(newTbl.Segments)
-		newTbl.Segments = append(newTbl.Segments, seg)
+		buf, _ = entry.Marshal()
+	case ETAddIndice, ETDropIndice:
+		entry := tableLogEntry{
+			BaseEntry:  e.BaseEntry,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
+	case ETSoftDeleteTable:
+		if !e.IsSoftDeletedLocked() {
+			panic("logic error")
+		}
+		entry := tableLogEntry{
+			BaseEntry:  e.BaseEntry,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
+	case ETHardDeleteTable:
+		if !e.IsHardDeletedLocked() {
+			panic("logic error")
+		}
+		entry := tableLogEntry{
+			BaseEntry:  e.BaseEntry,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
+	default:
+		panic(fmt.Sprintf("not supported: %d", eType))
 	}
-	newTbl.SegmentCnt = uint64(len(newTbl.Segments))
-
-	return newTbl
+	logEntry := logstore.NewAsyncBaseEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	return logEntry
 }
 
-func (tbl *Table) Replay() {
-	ts := NowMicro()
-	if len(tbl.Schema.Indices) > 0 {
-		if tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID > tbl.Info.Sequence.NextIndexID {
-			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID
+// Safe
+func (e *Table) SimpleGetCurrSegment() *Segment {
+	e.RLock()
+	if len(e.SegmentSet) == 0 {
+		e.RUnlock()
+		return nil
+	}
+	seg := e.SegmentSet[len(e.SegmentSet)-1]
+	e.RUnlock()
+	return seg
+}
+
+func (e *Table) RecurLoopLocked(processor Processor) error {
+	var err error
+	for _, segment := range e.SegmentSet {
+		if err = processor.OnSegment(segment); err != nil {
+			return err
+		}
+		segment.RLock()
+		defer segment.RUnlock()
+		for _, block := range segment.BlockSet {
+			if err = processor.OnBlock(block); err != nil {
+				return err
+			}
 		}
 	}
-	maxTblSegId, maxTblBlkId := tbl.GetMaxSegIDAndBlkID()
-	if tbl.ID > tbl.Info.Sequence.NextTableID {
-		tbl.Info.Sequence.NextTableID = tbl.ID
+	return err
+}
+
+// Not safe. One writer, multi-readers
+func (e *Table) SimpleCreateBlock() (*Block, *Segment) {
+	var prevSeg *Segment
+	currSeg := e.SimpleGetCurrSegment()
+	if currSeg == nil || currSeg.HasMaxBlocks() {
+		prevSeg = currSeg
+		currSeg = e.SimpleCreateSegment()
 	}
-	if maxTblSegId > tbl.Info.Sequence.NextSegmentID {
-		tbl.Info.Sequence.NextSegmentID = maxTblSegId
+	blk := currSeg.SimpleCreateBlock()
+	return blk, prevSeg
+}
+
+func (e *Table) getFirstInfullSegment(from *Segment) (*Segment, *Segment) {
+	if len(e.SegmentSet) == 0 {
+		return nil, nil
 	}
-	if maxTblBlkId > tbl.Info.Sequence.NextBlockID {
-		tbl.Info.Sequence.NextBlockID = maxTblBlkId
+	var curr, next *Segment
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		seg := e.SegmentSet[i]
+		seg.RLock()
+		defer seg.RUnlock()
+		if seg.AppendableLocked() && from.LE(seg) {
+			curr, next = seg, curr
+		} else {
+			break
+		}
 	}
-	if tbl.IsDeleted(ts) {
-		tbl.Info.Tombstone[tbl.ID] = true
+	return curr, next
+}
+
+// Not safe. One writer, multi-readers
+func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	var fromSeg *Segment
+	if from != nil {
+		fromSeg = from.Segment
+	}
+	e.RLock()
+	curr, next := e.getFirstInfullSegment(fromSeg)
+	e.RUnlock()
+	// logutil.Infof("%s, %s", curr.PString(PPL0), fromSeg.PString(PPL1))
+	if curr == nil {
+		curr = e.SimpleCreateSegment()
+	}
+	blk := curr.SimpleGetOrCreateNextBlock(from)
+	if blk != nil {
+		return blk
+	}
+	if next == nil {
+		next = e.SimpleCreateSegment()
+	}
+	return next.SimpleGetOrCreateNextBlock(nil)
+}
+
+func (e *Table) SimpleCreateSegment() *Segment {
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := newCreateSegmentCtx(e, tranId)
+	if err := e.Database.Catalog.onCommitRequest(ctx, true); err != nil {
+		return nil
+	}
+	return ctx.segment
+}
+
+// Safe
+func (e *Table) SimpleGetSegmentIds() []uint64 {
+	e.RLock()
+	defer e.RUnlock()
+	arrLen := len(e.SegmentSet)
+	ret := make([]uint64, arrLen)
+	for i, seg := range e.SegmentSet {
+		ret[i] = seg.Id
+	}
+	return ret
+}
+
+// Safe
+func (e *Table) SimpleGetSegmentCount() int {
+	e.RLock()
+	defer e.RUnlock()
+	return len(e.SegmentSet)
+}
+
+func (e *Table) prepareCreateSegment(ctx *createSegmentCtx) (LogEntry, error) {
+	se := newSegmentEntry(e, ctx.tranId, ctx.exIndex)
+	logEntry := se.ToLogEntry(ETCreateSegment)
+	e.Lock()
+	e.onNewSegment(se)
+	e.Unlock()
+	e.Database.Catalog.prepareCommitLog(se, logEntry)
+	ctx.segment = se
+	return logEntry, nil
+}
+
+func (e *Table) onNewSegment(entry *Segment) {
+	e.IdIndex[entry.Id] = len(e.SegmentSet)
+	e.SegmentSet = append(e.SegmentSet, entry)
+}
+
+// Safe
+func (e *Table) SimpleGetBlock(segId, blkId uint64) (*Block, error) {
+	seg := e.SimpleGetSegment(segId)
+	if seg == nil {
+		return nil, SegmentNotFoundErr
+	}
+	blk := seg.SimpleGetBlock(blkId)
+	if blk == nil {
+		return nil, BlockNotFoundErr
+	}
+	return blk, nil
+}
+
+// Safe
+func (e *Table) SimpleGetSegment(id uint64) *Segment {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetSegment(id, MinUncommitId)
+}
+
+func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpec, renameTable RenameTableFactory, dbs map[uint64]*Database) {
+	splitSpec.InitTrace()
+	specs := splitSpec.Specs
+	tables := make([]*Table, len(specs))
+	for i, spec := range specs {
+		db := dbs[spec.DBSpec.ShardId]
+		info := e.CommitInfo.Clone()
+		info.TranId = tranId
+		info.CommitId = tranId
+		info.LogIndex = db.CommitInfo.LogIndex
+		baseEntry := &BaseEntry{
+			Id:         catalog.NextTableId(),
+			CommitInfo: info,
+		}
+		schema := *e.Schema
+		schema.Name = renameTable(schema.Name, spec.DBSpec.Name)
+		table := &Table{
+			Schema:     &schema,
+			BaseEntry:  baseEntry,
+			SegmentSet: make([]*Segment, 0),
+			Database:   db,
+			IdIndex:    make(map[uint64]int),
+		}
+		db.onNewTable(table)
+		tables[i] = table
+	}
+	idx := 0
+	spec := specs[idx]
+	for i, segment := range e.SegmentSet {
+		minRow := uint64(i) * e.Schema.BlockMaxRows * e.Schema.SegmentMaxBlocks
+		if spec.Range.LT(minRow) {
+			idx++
+			spec = specs[idx]
+		}
+		osid := &common.ID{
+			TableID:   e.Id,
+			SegmentID: segment.Id,
+		}
+		table := tables[idx]
+		segment.Id = catalog.NextSegmentId()
+		segment.CommitInfo.TranId = tranId
+		segment.CommitInfo.CommitId = tranId
+		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		segment.Table = table
+		for _, block := range segment.BlockSet {
+			obid := &common.ID{
+				TableID:   e.Id,
+				SegmentID: osid.SegmentID,
+				BlockID:   block.Id,
+			}
+			block.Id = catalog.NextBlockId()
+			block.CommitInfo.TranId = tranId
+			block.CommitInfo.CommitId = tranId
+			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+			block.Segment = segment
+			nbid := &common.ID{
+				TableID:   table.Id,
+				SegmentID: segment.Id,
+				BlockID:   block.Id,
+			}
+			splitSpec.BlockTrace[*obid] = nbid
+			logutil.Infof("[Trace] %s -> %s", obid.BlockString(), nbid.BlockString())
+		}
+		segment.rebuild(table, false)
+		table.onNewSegment(segment)
+		// table.SegmentSet = append(table.SegmentSet, segment)
+		nsid := &common.ID{
+			TableID:   table.Id,
+			SegmentID: segment.Id,
+		}
+		splitSpec.SegmentTrace[*osid] = nsid
+		logutil.Infof("[Trace] %s -> %s", osid.SegmentString(), nsid.SegmentString())
+	}
+}
+
+func (e *Table) GetSegment(id, tranId uint64) *Segment {
+	pos, ok := e.IdIndex[id]
+	if !ok {
+		return nil
+	}
+	entry := e.SegmentSet[pos]
+	return entry
+}
+
+// Not safe
+func (e *Table) PString(level PPLevel, depth int) string {
+	e.RLock()
+	defer e.RUnlock()
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
+	s := fmt.Sprintf("%s | %s | Cnt=%d ", e.Repr(true), e.BaseEntry.PString(level), len(e.SegmentSet))
+	if level > PPL0 && len(e.SegmentSet) > 0 {
+		s = fmt.Sprintf("%s{", s)
+		for _, seg := range e.SegmentSet {
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, seg.PString(level, depth+1))
+		}
+		s = fmt.Sprintf("%s\n%s}", s, ident)
 	} else {
-		tbl.Info.TableIds[tbl.ID] = true
-		tbl.Info.NameMap[tbl.Schema.Name] = tbl.ID
-		tbl.Info.NameTree.ReplaceOrInsert(tbl)
+		s = fmt.Sprintf("%s {...}", s)
 	}
-	tbl.IdMap = make(map[uint64]int)
-	segFound := false
-	for idx, seg := range tbl.Segments {
-		tbl.IdMap[seg.GetID()] = idx
-		seg.Table = tbl
-		blkFound := false
-		for iblk, blk := range seg.Blocks {
-			if !blkFound {
-				if blk.DataState < FULL {
-					blkFound = true
-					seg.ActiveBlk = iblk
-				} else {
-					seg.ActiveBlk++
-				}
-			}
-			blk.Segment = seg
-		}
-		if !segFound {
-			if seg.DataState < FULL {
-				segFound = true
-				tbl.ActiveSegment = idx
-			} else if seg.DataState == FULL {
-				blk := seg.GetActiveBlk()
-				if blk != nil {
-					tbl.ActiveSegment = idx
-					segFound = true
-				}
-			} else {
-				tbl.ActiveSegment++
-			}
-		}
-	}
+	return s
 }
 
-func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
+func MockDBTable(catalog *Catalog, dbName string, schema *Schema, indice *IndexSchema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
+	var index *LogIndex
+	index = idxGen.Next()
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.SyncLog(index)
+	}
+	db, err := catalog.SimpleCreateDatabase(dbName, index)
+	if err != nil {
+		return nil
+	}
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.Checkpoint(index)
+	}
+	return MockTable(db, schema, indice, blkCnt, idxGen.Next())
+}
+
+func MockTable(db *Database, schema *Schema, indice *IndexSchema, blkCnt uint64, idx *LogIndex) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
-	tbl, _ := info.CreateTable(atomic.AddUint64(&GlobalSeqNum, uint64(1)), schema)
-	if err := info.RegisterTable(tbl); err != nil {
+	if idx == nil {
+		idx = &LogIndex{
+			Id: shard.SimpleIndexId(common.NextGlobalSeqNum()),
+		}
+	}
+	logFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.SyncLog(index)
+		}
+	}
+	ckFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.Checkpoint(index)
+		}
+	}
+	logFn(idx)
+	tbl, err := db.SimpleCreateTable(schema, indice, idx)
+	if err != nil {
 		panic(err)
 	}
+	ckFn(idx)
+
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {
 		if activeSeg == nil {
-			activeSeg, _ = tbl.CreateSegment()
-			if err := tbl.RegisterSegment(activeSeg); err != nil {
-				panic(err)
-			}
+			activeSeg = tbl.SimpleCreateSegment()
 		}
-		blk, _ := activeSeg.CreateBlock()
-		err := activeSeg.RegisterBlock(blk)
-		if err != nil {
-			logutil.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
-			panic(err)
-		}
-		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {
+		activeSeg.SimpleCreateBlock()
+		if len(activeSeg.BlockSet) == int(tbl.Schema.SegmentMaxBlocks) {
 			activeSeg = nil
 		}
 	}

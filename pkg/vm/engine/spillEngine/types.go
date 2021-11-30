@@ -15,10 +15,10 @@
 package spillEngine
 
 import (
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/spillEngine/kv"
-	"matrixone/pkg/vm/engine/spillEngine/meta"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/meta"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type spillEngine struct {
@@ -37,5 +37,5 @@ type relation struct {
 	id string
 	db *kv.KV
 	md meta.Metadata
-	mp map[string]metadata.Attribute
+	mp map[string]engine.Attribute
 }

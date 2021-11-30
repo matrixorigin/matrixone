@@ -15,7 +15,7 @@
 package pipeline
 
 import (
-	"matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.

@@ -15,8 +15,8 @@
 package uint16s
 
 import (
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -111,11 +111,13 @@ func Merge(col []*vector.Vector, src []uint16) {
 }
 
 func Multiplex(col []*vector.Vector, src []uint16) {
-	if col[0].Nsp == nil {
-		multiplexBlocks(col, src)
-	} else {
-		multiplexNullableBlocks(col, src)
+	for i, _ := range col{
+		if nulls.Any(col[i].Nsp) {
+			multiplexNullableBlocks(col, src)
+			return
+		}
 	}
+	multiplexBlocks(col, src)
 }
 
 func multiplexBlocks(col []*vector.Vector, src []uint16) {
@@ -150,6 +152,9 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 
 func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	data := make([][]uint16, len(col))
+	for i, v := range col {
+		data[i] = v.Col.([]uint16)
+	}
 	nElem := len(data[0])
 	nBlk := len(data)
 
@@ -159,6 +164,10 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 
 	for i, v := range col {
 		data[i] = v.Col.([]uint16)
+		if v.Nsp.Np == nil {
+			nextNulls[i] = -1
+			continue
+		}
 		nulls[i] = v.Nsp.Np
 		nullIters[i] = nulls[i].Iterator()
 

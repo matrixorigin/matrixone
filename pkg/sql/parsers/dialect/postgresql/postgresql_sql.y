@@ -16,7 +16,7 @@
 package postgresql
     
 import (
-    "matrixone/pkg/sql/parsers/tree"
+    "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 %}
 

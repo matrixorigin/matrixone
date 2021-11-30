@@ -14,13 +14,13 @@
 package factories
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type mutNodeFactory struct {
@@ -41,7 +41,11 @@ func (f *mutNodeFactory) GetManager() bb.INodeManager {
 }
 
 func (f *mutNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block, mockSize *mb.MockSize) bb.INode {
-	blkfile := dataio.NewTBlockFile(segfile, *meta.AsCommonID())
+	bf, err := segfile.RegisterTBlock(*meta.AsCommonID())
+	if err != nil {
+		panic(err)
+	}
+	blkfile := bf.(*dataio.TransientBlockFile)
 	nodeSize := uint64(0)
 	if mockSize != nil {
 		nodeSize = mockSize.Size()

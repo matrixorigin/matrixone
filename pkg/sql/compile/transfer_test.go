@@ -3,8 +3,8 @@ package compile
 import (
 	"bytes"
 	"github.com/stretchr/testify/require"
-	"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"testing"
 )
 

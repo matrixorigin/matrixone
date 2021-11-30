@@ -15,12 +15,12 @@
 package table
 
 import (
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type sllnode = common.SLLNode
@@ -51,7 +51,7 @@ func newBaseBlock(host iface.ISegment, meta *metadata.Block) *baseBlock {
 
 func (blk *baseBlock) GetMeta() *metadata.Block { return blk.meta }
 func (blk *baseBlock) GetType() base.BlockType  { return blk.typ }
-func (blk *baseBlock) GetRowCount() uint64      { return blk.meta.GetCount() }
+func (blk *baseBlock) GetRowCount() uint64      { return blk.meta.GetCountLocked() }
 func (blk *baseBlock) IsMutable() bool {
 	if blk.typ >= base.PERSISTENT_BLK {
 		return false

@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 )
 
 var (

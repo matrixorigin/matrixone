@@ -14,7 +14,7 @@
 
 package output
 
-import "matrixone/pkg/container/batch"
+import "github.com/matrixorigin/matrixone/pkg/container/batch"
 
 type Argument struct {
 	Attrs []string

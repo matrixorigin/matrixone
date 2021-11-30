@@ -2,11 +2,11 @@ package memEngine
 
 import (
 	"bytes"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (r *reader) NewFilter() engine.Filter {

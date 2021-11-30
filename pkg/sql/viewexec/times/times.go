@@ -16,10 +16,10 @@ package times
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/viewexec/transform"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {

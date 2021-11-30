@@ -15,8 +15,8 @@
 package vtree
 
 import (
-	"matrixone/pkg/sql/ftree"
-	"matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/ftree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildPath(isRoot bool, fns []*ftree.FNode, fvars []string, fvarsMap map[string]uint8) ([]*node, []string) {

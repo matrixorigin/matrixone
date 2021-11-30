@@ -15,7 +15,7 @@
 package logstore
 
 import (
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 )
 

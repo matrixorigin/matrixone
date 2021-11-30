@@ -1,6 +1,6 @@
 package meta
 
-import "matrixone/pkg/vm/engine"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 type Metadata struct {
 	Segs  int64

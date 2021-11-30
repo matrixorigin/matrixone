@@ -23,8 +23,9 @@ import (
 )
 
 var (
-	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
-	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
+	ErrParseBlockFileName   = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName  = errors.New("aoe: parse tblock file name")
+	ErrParseSegmentFileName = errors.New("aoe: parse segment file name")
 )
 
 // ID is the general identifier type shared by different types like
@@ -155,8 +156,8 @@ func (id *ID) ToBlockFileName() string {
 	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
 }
 
-func (id *ID) ToTBlockFileName(version uint32) string {
-	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, version)
+func (id *ID) ToTBlockFileName(name string) string {
+	return fmt.Sprintf("%d_%d_%d_%s", id.TableID, id.SegmentID, id.BlockID, name)
 }
 
 func (id *ID) ToBlockFilePath() string {
@@ -171,36 +172,29 @@ func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
 }
 
-func ParseTBlkNameToID(name string) (ID, error) {
-	var (
-		id  ID
-		err error
-	)
+func ParseTBlkName(name string) (id ID, tag string, err error) {
 	strs := strings.Split(name, "_")
 	if len(strs) != 4 {
-		return id, ErrParseTBlockFileName
+		err = ErrParseTBlockFileName
+		return
 	}
 	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
-		return id, err
+		return id, tag, err
 	} else {
 		id.TableID = tid
 	}
 	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
-		return id, err
+		return id, tag, err
 	} else {
 		id.SegmentID = sid
 	}
 	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
-		return id, err
+		return id, tag, err
 	} else {
 		id.BlockID = bid
 	}
-	if vid, err := strconv.ParseUint(strs[3], 10, 64); err != nil {
-		return id, err
-	} else {
-		id.PartID = uint32(vid)
-	}
-	return id, err
+	tag = strs[3]
+	return
 }
 
 func ParseBlkNameToID(name string) (ID, error) {
@@ -228,14 +222,14 @@ func ParseBlkNameToID(name string) (ID, error) {
 	return id, nil
 }
 
-func ParseSegmentFileName(name string) (ID, error) {
+func ParseSegmentNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error
 	)
 	strs := strings.Split(name, "_")
 	if len(strs) != 2 {
-		return id, ErrParseBlockFileName
+		return id, ErrParseSegmentFileName
 	}
 	tid, err := strconv.ParseUint(strs[0], 10, 64)
 	if err != nil {

@@ -17,16 +17,18 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"matrixone/pkg/compress"
-	gbatch "matrixone/pkg/container/batch"
-	gvector "matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/mergesort"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
+	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/pierrec/lz4"
 )
@@ -49,6 +51,7 @@ type BlockWriter struct {
 	data       []*gvector.Vector
 	idata      batch.IBatch
 	meta       *metadata.Block
+	size       int64
 	dir        string
 	embbed     bool
 	fileHandle *os.File
@@ -137,6 +140,10 @@ func (bw *BlockWriter) SetDataFlusher(f vecsSerializer) {
 	bw.vecsSerializer = f
 }
 
+func (bw *BlockWriter) GetSize() int64 {
+	return bw.size
+}
+
 func (bw *BlockWriter) commitFile(fname string) error {
 	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
@@ -161,7 +168,7 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *metadata.Block) (*os.Fil
 }
 
 func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *metadata.Block) error {
-	err := mergesort.SortBlockColumns(data)
+	err := mergesort.SortBlockColumns(data,meta.Segment.Table.Schema.PrimaryKey)
 	return err
 }
 
@@ -216,6 +223,9 @@ func (bw *BlockWriter) executeIVecs() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
+	stat, _ := os.Stat(filename)
+	logutil.Infof("filename is %v",filename)
+	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }
 
@@ -258,6 +268,8 @@ func (bw *BlockWriter) excuteVecs() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	closeFunc()
+	stat, _ := os.Stat(filename)
+	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }
 
@@ -278,6 +290,12 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
 		return err
 	}
+
+	rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+	if err = binary.Write(&buf, binary.BigEndian, rangeBuf); err != nil {
+		return err
+	}
+
 	var preIdx []byte
 	if meta.CommitInfo.PrevIndex != nil {
 		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()
@@ -292,8 +310,8 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		return err
 	}
 	var idx []byte
-	if meta.CommitInfo.ExternalIndex != nil {
-		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
+	if meta.CommitInfo.LogIndex != nil {
+		idx, err = meta.CommitInfo.LogIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -395,6 +413,12 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
 		return err
 	}
+
+	rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+	if _, err = buf.Write(rangeBuf); err != nil {
+		return err
+	}
+
 	var preIdx []byte
 	if meta.CommitInfo.PrevIndex != nil {
 		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()
@@ -409,8 +433,8 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 		return err
 	}
 	var idx []byte
-	if meta.CommitInfo.ExternalIndex != nil {
-		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
+	if meta.CommitInfo.LogIndex != nil {
+		idx, err = meta.CommitInfo.LogIndex.Marshal()
 		if err != nil {
 			return err
 		}

@@ -2,17 +2,17 @@ package testutil
 
 import (
 	"fmt"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/rpcserver"
-	//"matrixone/pkg/sql/handler"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine"
-	"matrixone/pkg/vm/engine/memEngine/kv"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	//"github.com/matrixorigin/matrixone/pkg/sql/handler"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewTestServer(e engine.Engine, proc *process.Process) (rpcserver.Server, error) {
