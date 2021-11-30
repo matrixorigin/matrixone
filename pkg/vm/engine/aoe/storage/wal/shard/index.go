@@ -103,7 +103,7 @@ func (idx *Index) Repr() string {
 	if idx == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d", idx.ShardId, idx.Id.Id, idx.Id.Offset, idx.Id.Size, idx.Start, idx.Count, idx.Capacity)
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%d", idx.ShardId, idx.Id.Id, idx.Id.Ctx, idx.Id.Offset, idx.Id.Size, idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *Index) ParseRepr(repr string) (err error) {
@@ -121,6 +121,9 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 	}
 	if idx.Id.Id, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
 		return
+	}
+	if idx.Id.Ctx, err = strconv.ParseUint(strs[2], 10, 64); err != nil {
+		return err
 	}
 	var tmp uint64
 	if tmp, err = strconv.ParseUint(strs[2], 10, 32); err != nil {
