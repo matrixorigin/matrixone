@@ -16,6 +16,7 @@ package aoedb
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -86,6 +87,7 @@ type AppendCtx struct {
 }
 
 func (ctx *DBMutationCtx) ToLogIndex(database *metadata.Database) *db.LogIndex {
+	logutil.Debugf("LogIndex<Id:%d-Term:%d>", ctx.Id, ctx.Ctx)
 	return &db.LogIndex{
 		ShardId: database.GetShardId(),
 		Id: db.IndexId{
