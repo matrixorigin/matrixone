@@ -132,9 +132,9 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 		case *explain.Explain:
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Pipeline"})
 		case *showTables.ShowTables:
-			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Table"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Tables"})
 		case *showDatabases.ShowDatabases:
-			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Database"})
+			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Databases"})
 		case *showColumns.ShowColumns:
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Field"})
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Type"})
