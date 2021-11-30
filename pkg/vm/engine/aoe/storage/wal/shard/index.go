@@ -112,7 +112,7 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 		return
 	}
 	strs := strings.Split(repr, ":")
-	if len(strs) != 7 {
+	if len(strs) != 8 {
 		err = ParseReprErr
 		return
 	}
