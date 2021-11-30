@@ -32,7 +32,6 @@ func (node *Insert) Format(ctx *FmtCtx) {
 		node.PartitionNames.Format(ctx)
 		ctx.WriteByte(')')
 	}
-
 	if node.Columns != nil {
 		ctx.WriteString(" (")
 		node.Columns.Format(ctx)
@@ -51,4 +50,9 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 		Rows:           r,
 		PartitionNames: p,
 	}
+}
+
+type Assignment struct {
+	Column	Identifier
+	Expr	Expr
 }

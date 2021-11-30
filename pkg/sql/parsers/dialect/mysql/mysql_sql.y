@@ -148,6 +148,8 @@ import (
     varExpr *tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
+    assignments []*tree.Assignment
+    assignment *tree.Assignment
 }
 
 %token LEX_ERROR
@@ -441,6 +443,8 @@ import (
 %type <updateExprs> load_set_list load_set_spec_opt
 // type <str> mo_keywords
 %type <str> row_opt
+%type <assignments> set_value_list
+%type <assignment> set_value
 
 %start start_command
 
@@ -1867,6 +1871,46 @@ insert_data:
             Rows: tree.NewSelect($4, nil, nil),
         }
     }
+|	SET set_value_list
+	{
+		if $2 == nil {
+			yylex.Error("the set list of insert can not be empty")
+			return 1
+		}
+		var identList tree.IdentifierList
+		var valueList tree.Exprs
+		for _, a := range $2 {
+			identList = append(identList, a.Column)
+			valueList = append(valueList, a.Expr)
+		}
+		vc := tree.NewValuesClause([]tree.Exprs{valueList})
+		$$ = &tree.Insert{
+			Columns: identList,
+			Rows: tree.NewSelect(vc, nil, nil),
+		}
+	}
+
+set_value_list:
+	{
+		$$ = nil
+	}
+|	set_value
+	{
+		$$ = []*tree.Assignment{$1}
+	}
+|	set_value_list ',' set_value
+	{
+		$$ = append($1, $3)
+	}
+
+set_value:
+	insert_column '=' expr_or_default
+	{
+		$$ = &tree.Assignment{
+			Column: tree.Identifier($1),
+			Expr: $3,
+		}
+	}
 
 insert_column_list:
     insert_column
