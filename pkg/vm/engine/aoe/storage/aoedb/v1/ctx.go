@@ -24,6 +24,7 @@ type DBMutationCtx struct {
 	Id     uint64
 	Offset int
 	Size   int
+	Ctx    uint64
 	DB     string
 }
 
@@ -91,6 +92,7 @@ func (ctx *DBMutationCtx) ToLogIndex(database *metadata.Database) *db.LogIndex {
 			Id:     ctx.Id,
 			Offset: uint32(ctx.Offset),
 			Size:   uint32(ctx.Size),
+			Ctx:    ctx.Ctx,
 		},
 	}
 }

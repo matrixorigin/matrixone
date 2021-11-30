@@ -40,9 +40,8 @@ const (
 	colCntSize   = 4
 	startPosSize = 8
 	endPosSize   = 8
-	blkIdSize    = 8
 	blkCountSize = 8
-	blkIdxSize   = 48
+	blkIdxSize   = 48 + 8
 	blkRangeSize = 24
 	colSizeSize  = 8
 	colPosSize   = 8

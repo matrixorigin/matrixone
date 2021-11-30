@@ -30,6 +30,7 @@ var (
 
 type IndexId struct {
 	Id     uint64 `json:"id"`
+	Ctx    uint64 `json:"ctx"`
 	Offset uint32 `json:"offset"`
 	Size   uint32 `json:"size"`
 }
@@ -64,6 +65,11 @@ func (id *IndexId) Compare(o *IndexId) int {
 	if id.Id > o.Id {
 		return 1
 	} else if id.Id < o.Id {
+		return -1
+	}
+	if id.Ctx > o.Ctx {
+		return 1
+	} else if id.Ctx < o.Ctx {
 		return -1
 	}
 	if id.Offset > o.Offset {
@@ -196,6 +202,7 @@ func (idx *Index) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(idx.ShardId))
 	buf.Write(encoding.EncodeUint64(idx.Id.Id))
+	buf.Write(encoding.EncodeUint64(idx.Id.Ctx))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Offset)))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Size)))
 	buf.Write(encoding.EncodeUint64(idx.Count))
@@ -212,6 +219,8 @@ func (idx *Index) UnMarshal(data []byte) error {
 	idx.ShardId = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Id = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
+	idx.Id.Ctx = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Offset = encoding.DecodeUint32(buf[:4])
 	buf = buf[4:]
