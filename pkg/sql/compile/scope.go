@@ -261,7 +261,7 @@ func (s *Scope) DropDatabase(ts uint64) error {
 
 func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	o, _ := s.Operator.(*showTables.ShowTables)
-	bat := batch.New(true, []string{"Table"})
+	bat := batch.New(true, []string{"Tables"})
 	{
 		rs := o.Db.Relations()
 		vs := make([][]byte, len(rs))
@@ -296,7 +296,7 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 
 func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	o, _ := s.Operator.(*showDatabases.ShowDatabases)
-	bat := batch.New(true, []string{"Database"})
+	bat := batch.New(true, []string{"Databases"})
 	{
 		rs := o.E.Databases()
 		vs := make([][]byte, len(rs))
