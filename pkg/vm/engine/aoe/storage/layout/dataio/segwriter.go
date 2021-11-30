@@ -86,7 +86,7 @@ func NewSegmentWriter(data []*batch.Batch, meta *metadata.Segment, dir string) *
 		meta: meta,
 		dir:  dir,
 	}
-	// w.preprocessor = w.defaultPreprocessor
+	w.preprocessor = w.defaultPreprocessor
 	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
 	w.dataFlusher = flushBlocks
 	w.indexFlusher = w.flushIndices
@@ -114,7 +114,7 @@ func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *metada
 }
 
 func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
-	err := mergesort.MergeBlocksToSegment(data)
+	err := mergesort.MergeBlocksToSegment(data, meta.Table.Schema.PrimaryKey)
 	return err
 }
 

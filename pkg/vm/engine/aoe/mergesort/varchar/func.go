@@ -15,10 +15,9 @@
 package varchar
 
 import (
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 func Sort(col *vector.Vector, idx []uint32) {
@@ -169,11 +168,13 @@ func Merge(col []*vector.Vector, src []uint16) {
 }
 
 func Multiplex(col []*vector.Vector, src []uint16) {
-	if col[0].Nsp == nil {
-		multiplexBlocks(col, src)
-	} else {
-		multiplexNullableBlocks(col, src)
+	for i, _ := range col{
+		if col[i].Nsp.Any() {
+			multiplexNullableBlocks(col, src)
+			return
+		}
 	}
+	multiplexBlocks(col, src)
 }
 
 func multiplexBlocks(col []*vector.Vector, src []uint16) {
@@ -203,6 +204,7 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 		newData := make([]byte, offset)
 		newOffsets := make([]uint32, nElem)
 		newLengths := make([]uint32, nElem)
+		offset = 0
 		for j := 0; j < nElem; j++ {
 			newOffsets[j] = offset
 			l := uint32(len(strings[j]))
@@ -225,6 +227,9 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 
 func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	data := make([]*types.Bytes, len(col))
+	for i, v := range col {
+		data[i] = v.Col.(*types.Bytes)
+	}
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
 
@@ -235,8 +240,11 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	for i, v := range col {
 		data[i] = v.Col.(*types.Bytes)
 		nulls[i] = v.Nsp.Np
+		if v.Nsp.Np == nil {
+			nextNulls[i] = -1
+			continue
+		}
 		nullIters[i] = nulls[i].Iterator()
-
 		if nullIters[i].HasNext() {
 			nextNulls[i] = int(nullIters[i].Next())
 		} else {
@@ -268,9 +276,9 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 					nextNulls[s] = -1
 				}
 			} else {
-				d, cur := data[s], cursors[s]
+				d, _ := data[s], cursors[s]
 				strings[j] = d.Get(int64(s))
-				offset += d.Lengths[cur]
+				offset += uint32(len(strings[j]))
 			}
 
 			cursors[s]++
@@ -280,7 +288,7 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 		newData := make([]byte, offset)
 		newOffsets := make([]uint32, nElem)
 		newLengths := make([]uint32, nElem)
-
+		offset = 0
 		for j := 0; j < nElem; j++ {
 			newOffsets[j] = offset
 			l := uint32(len(strings[j]))
@@ -288,7 +296,6 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 			copy(newData[offset:], strings[j])
 			offset += l
 		}
-
 		merged[i] = &types.Bytes{
 			Data:    newData,
 			Offsets: newOffsets,

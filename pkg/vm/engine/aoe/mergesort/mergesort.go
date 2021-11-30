@@ -92,16 +92,16 @@ func SortBlockColumns(cols []*vector.Vector,pk int) error {
 	return nil
 }
 
-func MergeBlocksToSegment(blks []*batch.Batch) error {
-	n := len(blks) * blks[0].Vecs[0].Length()
+func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
+	n := len(blks) * blks[0].Vecs[pk].Length()
 	mergedSrc := make([]uint16, n)
 
 	col := make([]*vector.Vector, len(blks))
 	for i := 0; i < len(blks); i++ {
-		col[i] = blks[i].Vecs[0]
+		col[i] = blks[i].Vecs[pk]
 	}
 
-	switch blks[0].Vecs[0].Typ.Oid {
+	switch blks[0].Vecs[pk].Typ.Oid {
 	case types.T_int8:
 		int8s.Merge(col, mergedSrc)
 	case types.T_int16:
@@ -126,7 +126,10 @@ func MergeBlocksToSegment(blks []*batch.Batch) error {
 		varchar.Merge(col, mergedSrc)
 	}
 
-	for j := 1; j < len(blks); j++ {
+	for j := 0; j < len(blks[0].Vecs); j++ {
+		if j == pk {
+			continue
+		}
 		for i := 0; i < len(blks); i++ {
 			col[i] = blks[i].Vecs[j]
 		}
