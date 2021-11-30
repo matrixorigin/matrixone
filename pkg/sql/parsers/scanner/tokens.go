@@ -24,6 +24,8 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		ROW = MYSQL_ROW
+		ROW = MYSQL_ROW
 		BSI = MYSQL_BSI
 		INT1 = MYSQL_INT1
 		INT2 = MYSQL_INT2
@@ -725,6 +727,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"rollback":                 ROLLBACK,
 		"role":                     ROLE,
 		"routine":                  ROUTINE,
+		"row":						ROW,
 		"row_format":               ROW_FORMAT,
 		"row_count":                ROW_COUNT,
 		"rtree":                    RTREE,
@@ -854,6 +857,7 @@ func initTokens(dialectType dialect.DialectType) {
 
 // mysql
 var (
+	ROW						 int
 	BSI 					 int
 	TERMINATED               int
 	ENCLOSED                 int

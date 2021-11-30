@@ -211,6 +211,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
+%token <str> ROW
 
 // Create Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
@@ -439,6 +440,7 @@ import (
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
 // type <str> mo_keywords
+%type <str> row_opt
 
 %start start_command
 
@@ -1897,10 +1899,14 @@ values_list:
     }
 
 row_value:
-    '(' data_opt ')'
+    row_opt '(' data_opt ')'
     {
-        $$ = $2
+        $$ = $3
     }
+
+row_opt:
+	{}
+|	ROW
 
 data_opt:
     {
@@ -5290,6 +5296,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
+|	ROW
 |   REVERSE
 |   SCHEMA
 |   SELECT
