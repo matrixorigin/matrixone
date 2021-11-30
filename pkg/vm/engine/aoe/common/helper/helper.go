@@ -78,6 +78,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 				Alg: compress.T(col.Alg),
 				Name: col.Name,
 				Type: col.Type,
+				Default: col.Default,
 			},
 		})
 	}
@@ -146,6 +147,7 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 				Name:     v.Attr.Name,
 				Alg: 	  int(v.Attr.Alg),
 				Type:     v.Attr.Type,
+				Default:  v.Attr.Default,
 			})
 			id++
 		}
@@ -194,6 +196,7 @@ func Attribute(tbl aoe.TableInfo) []engine.Attribute {
 			Alg: compress.T(col.Alg),
 			Name: col.Name,
 			Type: col.Type,
+			Default: col.Default,
 		}
 	}
 	return attrs
