@@ -17,17 +17,18 @@ package block
 import (
 	//"errors"
 	//"hash/crc32"
-	//"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	//"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine/spillEngine/kv"
-	//"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	//"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	//"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/kv"
+	//"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(id string, db *kv.KV, proc *process.Process, mp map[string]metadata.Attribute) *Block {
+func New(id string, db *kv.KV, proc *process.Process, mp map[string]engine.Attribute) *Block {
 	return &Block{id, db, proc, mp}
 }
 

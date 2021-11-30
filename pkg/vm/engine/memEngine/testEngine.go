@@ -3,12 +3,12 @@ package memEngine
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 )
 
 func NewTestEngine() engine.Engine {

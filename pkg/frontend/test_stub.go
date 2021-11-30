@@ -22,21 +22,23 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/storage/kv"
+	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
+	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	stdLog "log"
-	mo_config "matrixone/pkg/config"
-	"matrixone/pkg/rpcserver"
-	"matrixone/pkg/sql/testutil"
-	"matrixone/pkg/vm/driver"
-	aoe2 "matrixone/pkg/vm/driver/aoe"
-	"matrixone/pkg/vm/driver/config"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mheap"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
 	"os"
 	"sync"
 	"testing"
@@ -65,15 +67,11 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
 	for i := 0; i < nodeCnt; i++ {
-		metaStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i), &pebble.Options{
+		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), nil, &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
-		if err != nil {
-			return nil, err
-		}
-		pebbleDataStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
-			FS: vfs.NewPebbleFS(vfs.Default),
-		})
+		kvBase := kv.NewBaseStorage(kvs,vfs.Default)
+		pebbleDataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 		var aoeDataStorage *aoe2.Storage
 		if err != nil {
 			return nil, err
@@ -88,9 +86,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			return nil, err
 		}
 		cfg := config.Config{}
-		cfg.ServerConfig = server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
-		}
+		cfg.ServerConfig = server.Cfg{}
 		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 20,
 		}
@@ -130,7 +126,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+			a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 			if err != nil {
 				fmt.Printf("create failed with %v", err)
 			}

@@ -15,7 +15,7 @@
 package plan
 
 import (
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func getColumnName(expr tree.Expr) (string, bool) {

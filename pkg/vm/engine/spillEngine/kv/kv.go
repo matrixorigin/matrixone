@@ -15,8 +15,8 @@
 package kv
 
 import (
-	"matrixone/pkg/prefetch"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/prefetch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"path"
 	"syscall"

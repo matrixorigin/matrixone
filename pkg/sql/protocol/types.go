@@ -15,7 +15,7 @@
 package protocol
 
 import (
-	"matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
 const (

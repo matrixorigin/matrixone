@@ -14,7 +14,7 @@
 
 package plan
 
-import "matrixone/pkg/sql/parsers/tree"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func (b *build) BuildDropTable(stmt *tree.DropTable, plan *DropTable) error {
 	dbs, ids := make([]string, len(stmt.Names)), make([]string, len(stmt.Names))

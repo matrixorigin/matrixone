@@ -17,11 +17,11 @@ package max
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/ring"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func NewStr(typ types.Type) *StrRing {

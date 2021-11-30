@@ -15,8 +15,8 @@
 package ftree
 
 import (
-	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func reorder(rel *Relation, vars []string) {

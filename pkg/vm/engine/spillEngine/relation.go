@@ -17,13 +17,13 @@ package spillEngine
 import (
 	"fmt"
 	"hash/crc32"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/spillEngine/segment"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/segment"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"path"
 
 	"github.com/pierrec/lz4"
@@ -55,7 +55,7 @@ func (r *relation) Index() []*engine.IndexTableDef {
 	return nil
 }
 
-func (r *relation) Attribute() []metadata.Attribute {
+func (r *relation) Attribute() []engine.Attribute {
 	return r.md.Attrs
 }
 

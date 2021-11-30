@@ -3,12 +3,12 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func EncodeRangePartition(def engine.RangePartition, buf *bytes.Buffer) error {

@@ -14,7 +14,7 @@
 
 package starcount
 
-import "matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type CountRing struct {
 	Da  []byte

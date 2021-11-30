@@ -14,7 +14,7 @@
 
 package guest
 
-import "matrixone/pkg/vm/mmu/host"
+import "github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 // Mmu is container for a query execution
 type Mmu struct {

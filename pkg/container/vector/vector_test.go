@@ -17,10 +17,10 @@ package vector
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/mheap"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"testing"
 )
 

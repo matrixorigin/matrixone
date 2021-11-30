@@ -2,9 +2,9 @@ package engine
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (a *aoeReader) NewFilter() engine.Filter {
@@ -33,7 +33,9 @@ func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		}
 	}
 
-	a.blocks[0].Prefetch(attrs)
+	if len(a.blocks) > 1 {
+		a.blocks[1].Prefetch(attrs)
+	}
 
 	bat, err := a.blocks[0].Read(refCount, attrs, a.cds, a.dds)
 	if err != nil {

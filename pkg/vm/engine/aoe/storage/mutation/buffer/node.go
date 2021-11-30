@@ -15,9 +15,9 @@ package buffer
 
 import (
 	"errors"
-	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
 )

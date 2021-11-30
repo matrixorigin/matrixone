@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
@@ -11,8 +25,7 @@ func TestId(t *testing.T) {
 	tid := NewTransientID()
 	assert.Equal(t, TRANSIENT_TABLE_START_ID, tid.TableID)
 	assert.Equal(t, true, tid.IsTransient())
-	assert.Equal(t, fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID), tid.ToTBlockFileName(0))
-	newTid, err := ParseTBlkNameToID(fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID))
+	newTid, _, err := ParseTBlkName(fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID))
 	assert.Nil(t, err)
 	assert.Equal(t, true, tid.IsSameBlock(newTid))
 	assert.Equal(t, tid.PartID, newTid.PartID)
@@ -63,16 +76,16 @@ func TestId(t *testing.T) {
 	assert.Equal(t, "2/0/1/", bid0.ToBlockFilePath())
 	assert.Equal(t, "2_0", bid0.ToSegmentFileName())
 	assert.Equal(t, "2/0/", bid0.ToSegmentFilePath())
-	_, err = ParseTBlkNameToID("0_0_0")
+	_, _, err = ParseTBlkName("0_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlkNameToID("a_0_0_0")
+	_, _, err = ParseTBlkName("a_0_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlkNameToID("0_a_0_0")
+	_, _, err = ParseTBlkName("0_a_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlkNameToID("0_0_a_0")
+	_, _, err = ParseTBlkName("0_0_a_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlkNameToID("0_0_0_a")
-	assert.NotNil(t, err)
+	_, _, err = ParseTBlkName("0_0_0_a")
+	assert.Nil(t, err)
 	_, err = ParseBlkNameToID("0_0")
 	assert.NotNil(t, err)
 	_, err = ParseBlkNameToID("a_0_0")
@@ -83,12 +96,12 @@ func TestId(t *testing.T) {
 	assert.NotNil(t, err)
 	_, err = ParseBlkNameToID("0_0_0")
 	assert.Nil(t, err)
-	_, err = ParseSegmentFileName("0")
+	_, err = ParseSegmentNameToID("0")
 	assert.NotNil(t, err)
-	_, err = ParseSegmentFileName("a_0")
+	_, err = ParseSegmentNameToID("a_0")
 	assert.NotNil(t, err)
-	_, err = ParseSegmentFileName("0_a")
+	_, err = ParseSegmentNameToID("0_a")
 	assert.NotNil(t, err)
-	_, err = ParseSegmentFileName("0_0")
+	_, err = ParseSegmentNameToID("0_0")
 	assert.Nil(t, err)
 }

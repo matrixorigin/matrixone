@@ -16,9 +16,9 @@ package index
 
 import (
 	"fmt"
-	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -88,6 +88,16 @@ func (holder *TableHolder) String() string {
 	s := fmt.Sprintf("<IndexTableHolder[%d]>[Cnt=%d](RefCount=%d)", holder.ID, holder.tree.SegmentCnt, holder.RefCount())
 	for _, seg := range holder.tree.Segments {
 		s = fmt.Sprintf("%s\n\t%s", s, seg.stringNoLock())
+	}
+	return s
+}
+
+func (holder *TableHolder) StringIndicesRefs() string {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	s := ""
+	for _, seg := range holder.tree.Segments {
+		s += seg.StringIndicesRefsNoLock()
 	}
 	return s
 }

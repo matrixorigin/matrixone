@@ -18,12 +18,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend"
-	//"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"testing"
 )
 

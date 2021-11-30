@@ -15,11 +15,11 @@
 package transform
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/hashtable"
-	"matrixone/pkg/sql/colexec/projection"
-	"matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/viewexec/transformer"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 )
 
 const (

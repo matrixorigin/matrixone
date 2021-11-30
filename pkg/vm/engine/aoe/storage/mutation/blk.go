@@ -14,15 +14,16 @@
 package mutation
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type blockFlusher struct{}
@@ -55,7 +56,6 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Stale:     new(atomic.Value),
 	}
 	n.File.InitMeta(meta)
-	n.updateApplied(meta)
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
@@ -102,19 +102,18 @@ func (n *MutableBlockNode) Flush() error {
 	if err := n.Flusher(n, data, meta, n.File); err != nil {
 		return err
 	}
-	n.updateApplied(meta)
+	n.postFlush()
 	return nil
 }
 
-func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
-	applied, ok := meta.CommitInfo.GetAppliedIndex()
-	if ok {
-		n.Meta.SetSegmentedId(applied)
+func (n *MutableBlockNode) postFlush() {
+	n.Meta.Segment.Table.UpdateFlushTS()
+	wal := n.Meta.Segment.Table.Database.Catalog.IndexWal
+	if wal != nil {
+		snippet := n.Meta.ConsumeSnippet(false)
+		// logutil.Infof("Mutblock %d Count %d Snippet %s", n.Meta.Id, n.Meta.GetCoarseCount(), snippet.String())
+		wal.Checkpoint(snippet)
 	}
-}
-
-func (n *MutableBlockNode) GetSegmentedIndex() (uint64, bool) {
-	return n.Meta.GetAppliedIndex(nil)
 }
 
 func (n *MutableBlockNode) load() {
@@ -140,7 +139,7 @@ func (n *MutableBlockNode) unload() {
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
 		}
-		n.updateApplied(meta)
+		n.postFlush()
 	}
 }
 

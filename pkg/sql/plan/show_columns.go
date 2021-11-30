@@ -15,9 +15,9 @@
 package plan
 
 import (
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (b *build) BuildShowColumns(stmt *tree.ShowColumns, plan *ShowColumns) error {

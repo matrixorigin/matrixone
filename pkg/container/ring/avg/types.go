@@ -14,7 +14,7 @@
 
 package avg
 
-import "matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type AvgRing struct {
 	Da  []byte

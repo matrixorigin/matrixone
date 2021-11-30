@@ -15,8 +15,8 @@
 package gci
 
 import (
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"time"
 )
 

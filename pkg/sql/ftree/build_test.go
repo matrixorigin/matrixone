@@ -17,11 +17,11 @@ package ftree
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/sql/parsers"
-	"matrixone/pkg/sql/parsers/dialect"
-	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"testing"
 )
 

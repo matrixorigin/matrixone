@@ -16,14 +16,14 @@ package vtree
 
 import (
 	"bytes"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/sql/colexec/projection"
-	"matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/ftree"
-	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/sql/viewexec/transform"
-	"matrixone/pkg/sql/viewexec/transformer"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/ftree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 )
 
 func isBare(vs []*View) bool {

@@ -15,10 +15,10 @@
 package extend
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Extend interface {

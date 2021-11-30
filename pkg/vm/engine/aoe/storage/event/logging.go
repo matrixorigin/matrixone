@@ -15,26 +15,13 @@
 package event
 
 import (
-	"matrixone/pkg/logutil"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 func NewLoggingEventListener() EventListener {
 	return EventListener{
 		BackgroundErrorCB: func(err error) {
 			logutil.Errorf("BackgroundError %s", err)
-		},
-
-		MemTableFullCB: func(table imem.IMemTable) {
-			logutil.Debugf("MemTable %d is full", table.GetMeta().Id)
-		},
-
-		FlushBlockBeginCB: func(table imem.IMemTable) {
-			logutil.Debugf("MemTable %d begins to flush", table.GetMeta().Id)
-		},
-
-		FlushBlockEndCB: func(table imem.IMemTable) {
-			logutil.Debugf("MemTable %d end flush", table.GetMeta().Id)
 		},
 	}
 }

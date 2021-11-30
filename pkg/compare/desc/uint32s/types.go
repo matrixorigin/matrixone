@@ -15,8 +15,8 @@
 package uint32s
 
 import (
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type compare struct {

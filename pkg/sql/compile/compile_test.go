@@ -17,13 +17,13 @@ package compile
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine"
-	"matrixone/pkg/vm/mheap"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 )
 

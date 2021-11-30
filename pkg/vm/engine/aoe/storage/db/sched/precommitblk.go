@@ -15,9 +15,7 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	// log "github.com/sirupsen/logrus"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type precommitBlockEvent struct {
@@ -30,10 +28,7 @@ func NewPrecommitBlockEvent(ctx *Context, id common.ID) *precommitBlockEvent {
 	e := &precommitBlockEvent{
 		Id: id,
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.PrecommitBlkMetaTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, PrecommitBlkMetaTask, ctx)
 	return e
 }
 

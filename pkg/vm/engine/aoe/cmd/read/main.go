@@ -16,20 +16,20 @@ package main
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/engine/aoe/local"
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/local"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -129,7 +129,7 @@ func makeFiles(impl *db.DB) {
 			panic(err)
 		}
 	}
-	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 20000
+	waitTime := insertCnt * uint64(ivector.Length(bat.Vecs[0])) * uint64(colCnt) / uint64(400000000) * 20000
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 

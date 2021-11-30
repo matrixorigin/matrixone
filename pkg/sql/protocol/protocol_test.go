@@ -17,13 +17,13 @@ package protocol
 import (
 	"bytes"
 	"github.com/stretchr/testify/require"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/ring/avg"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/colexec/top"
-	"matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"testing"
 )
 

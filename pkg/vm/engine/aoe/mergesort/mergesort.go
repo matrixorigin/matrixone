@@ -1,51 +1,68 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package mergesort
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/varchar"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int16s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint16s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/varchar"
 )
 
-func SortBlockColumns(cols []*vector.Vector) error {
-	sortedIdx := make([]uint32, vector.Length(cols[0]))
+func SortBlockColumns(cols []*vector.Vector,pk int) error {
+	sortedIdx := make([]uint32, vector.Length(cols[pk]))
 
-	switch cols[0].Typ.Oid {
+	switch cols[pk].Typ.Oid {
 	case types.T_int8:
-		int8s.Sort(cols[0], sortedIdx)
+		int8s.Sort(cols[pk], sortedIdx)
 	case types.T_int16:
-		int16s.Sort(cols[0], sortedIdx)
+		int16s.Sort(cols[pk], sortedIdx)
 	case types.T_int32:
-		int32s.Sort(cols[0], sortedIdx)
+		int32s.Sort(cols[pk], sortedIdx)
 	case types.T_int64:
-		int64s.Sort(cols[0], sortedIdx)
+		int64s.Sort(cols[pk], sortedIdx)
 	case types.T_uint8:
-		uint8s.Sort(cols[0], sortedIdx)
+		uint8s.Sort(cols[pk], sortedIdx)
 	case types.T_uint16:
-		uint16s.Sort(cols[0], sortedIdx)
+		uint16s.Sort(cols[pk], sortedIdx)
 	case types.T_uint32:
-		uint32s.Sort(cols[0], sortedIdx)
+		uint32s.Sort(cols[pk], sortedIdx)
 	case types.T_uint64:
-		uint64s.Sort(cols[0], sortedIdx)
+		uint64s.Sort(cols[pk], sortedIdx)
 	case types.T_float32:
-		float32s.Sort(cols[0], sortedIdx)
+		float32s.Sort(cols[pk], sortedIdx)
 	case types.T_float64:
-		float64s.Sort(cols[0], sortedIdx)
+		float64s.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
-		varchar.Sort(cols[0], sortedIdx)
+		varchar.Sort(cols[pk], sortedIdx)
 	}
 
-	for i := 1; i < len(cols); i++ {
+	for i := 0; i < len(cols); i++ {
+		if i==pk {
+			continue
+		}
 		switch cols[i].Typ.Oid {
 		case types.T_int8:
 			int8s.Shuffle(cols[i], sortedIdx)
@@ -75,16 +92,16 @@ func SortBlockColumns(cols []*vector.Vector) error {
 	return nil
 }
 
-func MergeBlocksToSegment(blks []*batch.Batch) error {
-	n := len(blks) * vector.Length(blks[0].Vecs[0])
+func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
+	n := len(blks) * vector.Length(blks[0].Vecs[pk])
 	mergedSrc := make([]uint16, n)
 
 	col := make([]*vector.Vector, len(blks))
 	for i := 0; i < len(blks); i++ {
-		col[i] = blks[i].Vecs[0]
+		col[i] = blks[i].Vecs[pk]
 	}
 
-	switch blks[0].Vecs[0].Typ.Oid {
+	switch blks[0].Vecs[pk].Typ.Oid {
 	case types.T_int8:
 		int8s.Merge(col, mergedSrc)
 	case types.T_int16:
@@ -109,7 +126,10 @@ func MergeBlocksToSegment(blks []*batch.Batch) error {
 		varchar.Merge(col, mergedSrc)
 	}
 
-	for j := 1; j < len(blks); j++ {
+	for j := 0; j < len(blks[0].Vecs); j++ {
+		if j == pk {
+			continue
+		}
 		for i := 0; i < len(blks); i++ {
 			col[i] = blks[i].Vecs[j]
 		}

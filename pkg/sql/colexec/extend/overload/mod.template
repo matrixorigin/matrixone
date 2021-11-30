@@ -17,12 +17,12 @@
 package overload
 
 import (
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vectorize/mod"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/mod"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {

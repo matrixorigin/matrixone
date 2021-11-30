@@ -15,10 +15,10 @@
 package manager
 
 import (
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	nif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	// log "github.com/sirupsen/logrus"
 )
 

@@ -17,10 +17,10 @@ package projection
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

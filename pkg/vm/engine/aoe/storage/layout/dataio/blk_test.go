@@ -17,29 +17,43 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"matrixone/pkg/compress"
-	gbatch "matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	gvector "matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	workDir = "/tmp/dataio_test"
+	moduleName = "Meta"
 )
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
 
 func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices []index.Index, blkCnt int) base.ISegmentFile {
 	baseid := id
@@ -70,14 +84,18 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		algo := uint8(0)
 		cols := uint16(0)
 		count := uint64(0)
+		logRange := new(metadata.LogRange)
 		err = binary.Write(w, binary.BigEndian, &algo)
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &cols)
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &count)
 		assert.Nil(t, err)
-		prevIdx := metadata.LogIndex{
-			Id: metadata.SimpleBatchId(uint64(0)),
+		rangeBuf, err := logRange.Marshal()
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &rangeBuf)
+		prevIdx := shard.Index{
+			Id: shard.SimpleIndexId(uint64(0)),
 		}
 		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
@@ -87,8 +105,8 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &buf)
 		assert.Nil(t, err)
-		idx := metadata.LogIndex{
-			Id: metadata.SimpleBatchId(uint64(0)),
+		idx := shard.Index{
+			Id: shard.SimpleIndexId(uint64(0)),
 		}
 		buf, err = idx.Marshal()
 		assert.Nil(t, err)
@@ -111,6 +129,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 }
 
 func TestAll(t *testing.T) {
+	dir := initTestEnv(t)
 	bufMgr := bmgr.MockBufMgr(26 * 4)
 	colCnt := 2
 	indices := index.MockInt32ZmIndices(colCnt)
@@ -120,7 +139,7 @@ func TestAll(t *testing.T) {
 	blkCB := func(v interface{}) {
 		droppedBlocks = append(droppedBlocks, v.(*index.BlockHolder).ID.BlockID)
 	}
-	segFile := mockUnSortedSegmentFile(t, workDir, id, indices, blkCnt)
+	segFile := mockUnSortedSegmentFile(t, dir, id, indices, blkCnt)
 	tblHolder := index.NewTableHolder(bufMgr, id.TableID)
 	segHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, nil)
 	segHolder.Unref()
@@ -162,7 +181,7 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, 1, len(droppedBlocks))
 	assert.Equal(t, droppedBlocks[0], dropblkid)
 
-	fsMgr := NewManager(workDir, false)
+	fsMgr := NewManager(dir, false)
 	segFile = fsMgr.GetUnsortedFile(id)
 	assert.Nil(t, segFile)
 	segFile, err := fsMgr.RegisterUnsortedFiles(id)
@@ -182,21 +201,22 @@ func TestSegmentWriter(t *testing.T) {
 			FlushIndex = false
 		}()
 	}
-	dir := "/tmp/testsegmentwriter"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	rowCount, blkCount := uint64(10), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	defer catalog.Close()
 
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
-	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
-	segment := table.SimpleCreateSegment(nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	table := metadata.MockDBTable(catalog, "db1", schema, nil, segCnt*blkCnt, gen.Shard(shardId))
+	segment := table.SimpleCreateSegment()
 	assert.NotNil(t, segment)
 	batches := make([]*gbatch.Batch, 0)
 	t.Log(schema.Types())
 	for i := 0; i < int(blkCount); i++ {
-		block := segment.SimpleCreateBlock(nil)
+		block := segment.SimpleCreateBlock()
 		assert.NotNil(t, block)
 		block.SimpleUpgrade(nil)
 		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
@@ -222,9 +242,10 @@ func TestSegmentWriter(t *testing.T) {
 	segHolder.Init(segFile)
 	t.Log(tblHolder.String())
 	t.Log(segHolder.CollectMinMax(0))
+	t.Log(segHolder.CollectMinMax(13))
 	t.Log(segHolder.CollectMinMax(1))
 	t.Log(segHolder.GetBlockCount())
-	col0Blk := segment.BlockSet[0].AsCommonID().AsBlockID()
+	col0Blk := segment.BlockSet[0].DescId()
 	col1Blk := col0Blk
 	col1Blk.Idx = uint16(1)
 	col0Vf := segFile.MakeVirtualPartFile(&col0Blk)
@@ -262,29 +283,72 @@ func TestSegmentWriter(t *testing.T) {
 	logutil.Infof(fsMgr.String())
 	col0Vf.Unref()
 	col1Vf.Unref()
+
+	// test ingest sorted segment file with different metadata
+	dataDir := common.MakeDataDir(dir)
+	src := filepath.Join(dataDir, "1_5.seg")
+	dest := filepath.Join(dataDir, "1_6.seg")
+	assert.Nil(t, os.Link(src, dest))
+	segment = table.SimpleCreateSegment()
+	blocks := make([]*metadata.Block, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block := segment.SimpleCreateBlock()
+		//t.Log(block.Id)
+		assert.NotNil(t, block)
+		blocks = append(blocks, block)
+	}
+	//for _, blk := range segment.BlockSet {
+	//	t.Log(blk.Id)
+	//}
+	segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	//segFile.RefBlock()
+
+	idx1 := blocks[0].DescId()
+	idx1.Idx = uint16(0)
+	part := segFile.MakeVirtualPartFile(&idx1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(0), idx1, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	//for k, _ := range segFile.(*SortedSegmentFile).Parts {
+	//	t.Log(k.Col, ": ", k.ID.String())
+	//}
+
+	idx1.Idx = uint16(1)
+	part = segFile.MakeVirtualPartFile(&idx1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(1), idx1, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	idx2 := blocks[1].DescId()
+	idx2.Idx = uint16(2)
+	part = segFile.MakeVirtualPartFile(&idx2)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(2), idx2, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
 }
 
 func TestIVectorNodeWriter(t *testing.T) {
-	dir := "/tmp/blktest"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	vecType := types.Type{types.T_int32, 4, 4, 0}
 	capacity := uint64(40)
 	vec0 := vector.NewStdVector(vecType, 4)
 	defer vec0.Close()
 	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, 4)
 	defer vec1.Close()
-	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
+	err := vec0.Append(4, []int32{int32(3), int32(1), int32(2), int32(0)})
 	assert.Nil(t, err)
-	str0 := "str0"
-	str1 := "str1"
+	str0 := "str1"
+	str1 := "str0"
 	str2 := "str2"
 	str3 := "str3"
 	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
 	err = vec1.Append(len(strs), strs)
 
-	catalog := metadata.MockCatalog(dir, capacity, uint64(10))
+	catalog := metadata.MockCatalog(dir, capacity, uint64(10), nil, nil)
 	schema := metadata.MockSchema(2)
-	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
+	schema.PrimaryKey = 1
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tblMeta := metadata.MockDBTable(catalog, "db1", schema, nil, 1, gen.Shard(shardId))
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
 	meta := segMeta.SimpleGetBlock(uint64(1))
@@ -334,12 +398,45 @@ func TestIVectorNodeWriter(t *testing.T) {
 	assert.Nil(t, err)
 	v1c, err := vec1.CopyToVector()
 	assert.Nil(t, err)
+	logutil.Infof("v0c is %v, v1c is %v\n", v0c, v1c)
 	vecs = append(vecs, v0c)
 	vecs = append(vecs, v1c)
 	bw := NewBlockWriter(vecs, meta, dir)
 	err = bw.Execute()
 	assert.Nil(t, err)
 	logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
+
+	segFile1 := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
+	nb := NewBlockFile(segFile1, id, nil)
+	bufs = make([][]byte, 2)
+	for i, _ := range bufs {
+		sz := nb.PartSize(uint64(i), id, false)
+		osz := nb.PartSize(uint64(i), id, true)
+		buf := make([]byte, sz)
+		nb.ReadPart(uint64(i), id, buf)
+		originSize := uint64(osz)
+		node1 := common.GPool.Alloc(originSize)
+		defer common.GPool.Free(node1)
+		_, err = compress.Decompress(buf, node1.Buf[:originSize], compress.Lz4)
+		data := node1.Buf[:originSize]
+		t1 := encoding.DecodeType(data[:encoding.TypeSize])
+		v := gvector.New(t1)
+		err = v.Read(data)
+		logutil.Infof("nb.v is %v.\n", v)
+		switch i {
+		case 0:
+			assert.Equal(t, int32(1), v.Col.([]int32)[0])
+			assert.Equal(t, int32(3), v.Col.([]int32)[1])
+			assert.Equal(t, int32(2), v.Col.([]int32)[2])
+			assert.Equal(t, int32(0), v.Col.([]int32)[3])
+			break
+		case 1:
+			assert.Equal(t, []byte("str0"), v.Col.(*types.Bytes).Data[0:4])
+			assert.Equal(t, []byte("str1"), v.Col.(*types.Bytes).Data[4:8])
+			assert.Equal(t, []byte("str2"), v.Col.(*types.Bytes).Data[8:12])
+			assert.Equal(t, []byte("str3"), v.Col.(*types.Bytes).Data[12:16])
+		}
+	}
 
 	col0Vf := segFile.MakeVirtualPartFile(&id)
 	assert.NotNil(t, col0Vf)
@@ -353,12 +450,13 @@ func TestIVectorNodeWriter(t *testing.T) {
 }
 
 func TestTransientBlock(t *testing.T) {
-	dir := "/tmp/tblktest"
-	os.RemoveAll(dir)
+	dir := initTestEnv(t)
 	rowCount, blkCount := uint64(10), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, 1, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, 1, gen.Shard(shardId))
 
 	segMeta := tbl.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
@@ -369,7 +467,6 @@ func TestTransientBlock(t *testing.T) {
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
 	defer tblk.Unref()
-	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)
 	// bat1 := mock.MockBatch(schema.Types(), rows)

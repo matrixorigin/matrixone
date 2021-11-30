@@ -15,10 +15,9 @@
 package int32s
 
 import (
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/vector"
-
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func Sort(col *vector.Vector, idx []uint32) {
@@ -38,7 +37,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 }
 
 func Shuffle(col *vector.Vector, idx []uint32) {
-	if !nulls.Any(col.Nsp) { 
+	if !nulls.Any(col.Nsp) {
 		shuffleBlock(col, idx)
 	} else {
 		shuffleNullableBlock(col, idx)
@@ -111,11 +110,13 @@ func Merge(col []*vector.Vector, src []uint16) {
 }
 
 func Multiplex(col []*vector.Vector, src []uint16) {
-	if col[0].Nsp == nil {
-		multiplexBlocks(col, src)
-	} else {
-		multiplexNullableBlocks(col, src)
+	for i, _ := range col{
+		if nulls.Any(col[i].Nsp) {
+			multiplexNullableBlocks(col, src)
+			return
+		}
 	}
+	multiplexBlocks(col, src)
 }
 
 func multiplexBlocks(col []*vector.Vector, src []uint16) {
@@ -150,6 +151,9 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 
 func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	data := make([][]int32, len(col))
+	for i, v := range col {
+		data[i] = v.Col.([]int32)
+	}
 	nElem := len(data[0])
 	nBlk := len(data)
 
@@ -159,16 +163,18 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 
 	for i, v := range col {
 		data[i] = v.Col.([]int32)
+		if v.Nsp.Np == nil {
+			nextNulls[i] = -1
+			continue
+		}
 		nulls[i] = v.Nsp.Np
 		nullIters[i] = nulls[i].Iterator()
-
 		if nullIters[i].HasNext() {
 			nextNulls[i] = int(nullIters[i].Next())
 		} else {
 			nextNulls[i] = -1
 		}
 	}
-
 	cursors := make([]int, nBlk)
 	merged := make([][]int32, nBlk)
 	newNulls := make([]*roaring.Bitmap, nBlk)
@@ -176,7 +182,6 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	for i := 0; i < nBlk; i++ {
 		merged[i] = make([]int32, nElem)
 	}
-
 	k := 0
 	for i := 0; i < nBlk; i++ {
 		newNulls[i] = roaring.New()

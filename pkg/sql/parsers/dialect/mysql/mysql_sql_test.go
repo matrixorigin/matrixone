@@ -17,8 +17,8 @@ package mysql
 import (
 	"testing"
 
-	"matrixone/pkg/sql/parsers/dialect"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var (
