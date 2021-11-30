@@ -105,6 +105,10 @@ type CubeDriver interface {
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	//DropTablet drops the table in the storage.
 	DropTablet(string, uint64) (uint64, error)
+	//CreateIndex creates an index
+	CreateIndex(tableName string, indexInfo *aoe.IndexInfo, toShard uint64) error
+	//DropIndex drops an index
+	DropIndex(tableName, indexName string, toShard uint64) error
 	// TabletIDs returns the ids of all the tables in the storage.
 	TabletIDs() ([]uint64, error)
 	// TabletNames returns the names of all the tables in the storage.
@@ -695,6 +699,40 @@ func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) 
 		return id, err
 	}
 	return codec.Bytes2Uint64(value)
+}
+func (h *driver) CreateIndex(tableName string, indexInfo *aoe.IndexInfo, toShard uint64) error {
+	idx, _ := helper.EncodeIndex(*indexInfo)
+	req := pb.Request{
+		Shard: toShard,
+		Type:  pb.CreateIndex,
+		Group: pb.AOEGroup,
+		CreateIndex: pb.CreateIndexRequest{
+			TableName: tableName,
+			Indices:   idx,
+		},
+	}
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if rsp != nil || len(rsp) != 0 {
+		err = errors.New(string(rsp))
+	}
+	return err
+}
+
+func (h *driver) DropIndex(tableName, indexName string, toShard uint64) error {
+	req := pb.Request{
+		Shard: toShard,
+		Type:  pb.DropIndex,
+		Group: pb.AOEGroup,
+		DropIndex: pb.DropIndexRequest{
+			TableName: tableName,
+			IndexName: indexName,
+		},
+	}
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if rsp != nil || len(rsp) != 0 {
+		err = errors.New(string(rsp))
+	}
+	return err
 }
 
 func (h *driver) TabletIDs() ([]uint64, error) {

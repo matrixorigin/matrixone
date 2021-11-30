@@ -84,11 +84,18 @@ type DistributionBy struct {
 }
 
 type IndexTableDef struct {
-	Typ   int
+	Typ   IndexT
 	ColNames []string
 	Name string
 }
 
+type IndexT int
+
+const (
+	ZoneMap IndexT = iota
+	Invalid
+	BsiIndex
+)
 type AttributeDef struct {
 	Attr metadata.Attribute
 }
