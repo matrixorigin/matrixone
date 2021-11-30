@@ -126,23 +126,23 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 		return err
 	}
 	var tmp uint64
-	if tmp, err = strconv.ParseUint(strs[2], 10, 32); err != nil {
+	if tmp, err = strconv.ParseUint(strs[3], 10, 32); err != nil {
 		return
 	} else {
 		idx.Id.Offset = uint32(tmp)
 	}
-	if tmp, err = strconv.ParseUint(strs[3], 10, 32); err != nil {
+	if tmp, err = strconv.ParseUint(strs[4], 10, 32); err != nil {
 		return
 	} else {
 		idx.Id.Size = uint32(tmp)
 	}
-	if idx.Start, err = strconv.ParseUint(strs[4], 10, 64); err != nil {
+	if idx.Start, err = strconv.ParseUint(strs[5], 10, 64); err != nil {
 		return
 	}
-	if idx.Count, err = strconv.ParseUint(strs[5], 10, 64); err != nil {
+	if idx.Count, err = strconv.ParseUint(strs[6], 10, 64); err != nil {
 		return
 	}
-	if idx.Capacity, err = strconv.ParseUint(strs[6], 10, 64); err != nil {
+	if idx.Capacity, err = strconv.ParseUint(strs[7], 10, 64); err != nil {
 		return
 	}
 	return
