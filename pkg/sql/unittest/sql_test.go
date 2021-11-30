@@ -49,6 +49,7 @@ func TestInsertFunction(t *testing.T) {
 		"create table def1 (i1 int default 888, i2 int default 888, i3 int default 888);",
 		"create table def2 (id int default 1, name varchar(255) unique, age int);",
 		"create table def3 (i int default -1, v varchar(10) default 'abc', c char(10) default '', price double default 0.00);",
+		"create table def4 (d1 int, d2 int, d3 int, d4 int default 1);",
 		"insert into iis values (1, 2, 3, 4), (1+1, 2-2, 3*3, 4/4), (1 div 1, 2+2/3, 3 mod 3, 4 + 0.5), (0, 0, 0, 0);",
 		"insert into uus values (0, 0, 1, 1), (0.5, 3+4, 4-1, 2*7), (3/4, 4 div 5, 5 mod 6, 0);",
 		"insert into ffs values (1.1, 2.2), (1, 2), (1+0.5, 2.5*3.5);",
@@ -56,19 +57,21 @@ func TestInsertFunction(t *testing.T) {
 		"insert into def1 values (default, default, default), (1, default, default), (default, -1, default), (default, default, 0);",
 		"insert into def2 (name, age) values ('Abby', 24);",
 		"insert into def3 () values (), ();",
+		"insert into def4 (d1, d2) values (1, 2);",
 	}
 	works := [][]string{ // First string is relation name, Second string is expected result.
 		{"iis", "i1\n\t[1 2 1 0]-&{<nil>}\ni2\n\t[2 0 3 0]-&{<nil>}\ni3\n\t[3 9 0 0]-&{<nil>}\ni4\n\t[4 1 5 0]-&{<nil>}\n\n"},
-		{"uus", "u1\n\t[0 1 1]-&{<nil>}\nu2\n\t[0 7 0]-&{<nil>}\nu3\n\t[1 3 0]-&{<nil>}\nu4\n\t[1 14 0]-&{<nil>}\n\n"},
+		{"uus", "u1\n\t[0 1 1]-&{<nil>}\nu2\n\t[0 7 0]-&{<nil>}\nu3\n\t[1 3 5]-&{<nil>}\nu4\n\t[1 14 0]-&{<nil>}\n\n"},
 		{"ffs", "f1\n\t[1.1 1 1.5]-&{<nil>}\nf2\n\t[2.2 2 8.75]-&{<nil>}\n\n"},
 		{"ccs", "c1\n\t123\n\nc2\n\t34567\n\n\n"},
 		{"def1", "i1\n\t[888 1 888 888]-&{<nil>}\ni2\n\t[888 888 -1 888]-&{<nil>}\ni3\n\t[888 888 888 0]-&{<nil>}\n\n"},
 		{"def2", "id\n\t1\nname\n\tAbby\n\nage\n\t24\n\n"},
 		{"def3", "i\n\t[-1 -1]-&{<nil>}\nv\n\t[abc abc]-&{<nil>}\nc\n\t[ ]-&{<nil>}\nprice\n\t[0 0]-&{<nil>}\n\n"},
+		{"def4", "d1\n\t1\nd2\n\t2\nd3\n\t[0]-&{{0}}\nd4\n\t1\n\n"},
 	}
 
 	for _, p := range prepares {
-		require.NoError(t, sqlRun(p, e, proc))
+		require.NoError(t, sqlRun(p, e, proc), p)
 	}
 	for _, s := range works {
 		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
