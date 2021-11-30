@@ -15,10 +15,10 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/parsers"
-	"matrixone/pkg/sql/parsers/dialect"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func New(db string, sql string, uid string,

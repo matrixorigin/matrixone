@@ -17,16 +17,17 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine/aoe/mergesort"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/pierrec/lz4"
 )
@@ -42,6 +43,7 @@ const (
 	blkIdSize    = 8
 	blkCountSize = 8
 	blkIdxSize   = 48
+	blkRangeSize = 24
 	colSizeSize  = 8
 	colPosSize   = 8
 )
@@ -57,6 +59,7 @@ type SegmentWriter struct {
 	data         []*batch.Batch
 	meta         *metadata.Segment
 	dir          string
+	size         int64
 	fileHandle   *os.File
 	preprocessor func([]*batch.Batch, *metadata.Segment) error
 
@@ -83,7 +86,7 @@ func NewSegmentWriter(data []*batch.Batch, meta *metadata.Segment, dir string) *
 		meta: meta,
 		dir:  dir,
 	}
-	// w.preprocessor = w.defaultPreprocessor
+	w.preprocessor = w.defaultPreprocessor
 	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
 	w.dataFlusher = flushBlocks
 	w.indexFlusher = w.flushIndices
@@ -111,7 +114,7 @@ func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *metada
 }
 
 func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
-	err := mergesort.MergeBlocksToSegment(data)
+	err := mergesort.MergeBlocksToSegment(data, meta.Table.Schema.PrimaryKey)
 	return err
 }
 
@@ -138,6 +141,7 @@ func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.Fil
 	return w, err
 }
 
+// flushIndices flush zone map index, and BSI if enabled.
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
 	if !FlushIndex {
 		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
@@ -148,6 +152,7 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 		return err
 	}
 	var indices []index.Index
+
 	for idx, colDef := range meta.Table.Schema.ColDefs {
 		switch colDef.Type.Oid {
 		case types.T_int8:
@@ -183,20 +188,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			// build bit-sliced index
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int8)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_int16:
 			var minv, maxv, blkMaxv, blkMinv int16
 			var blkMin, blkMax []interface{}
@@ -229,19 +220,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int16)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_int32:
 			var minv, maxv, blkMaxv, blkMinv int32
 			var blkMin, blkMax []interface{}
@@ -274,19 +252,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_int64:
 			var minv, maxv, blkMaxv, blkMinv int64
 			var blkMin, blkMax []interface{}
@@ -319,19 +284,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]int64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint8:
 			var minv, maxv, blkMaxv, blkMinv uint8
 			var blkMin, blkMax []interface{}
@@ -364,19 +316,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 8, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint8)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint16:
 			var minv, maxv, blkMaxv, blkMinv uint16
 			var blkMin, blkMax []interface{}
@@ -409,19 +348,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 16, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint16)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint32:
 			var minv, maxv, blkMaxv, blkMinv uint32
 			var blkMin, blkMax []interface{}
@@ -454,19 +380,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_uint64:
 			var minv, maxv, blkMaxv, blkMinv uint64
 			var blkMin, blkMax []interface{}
@@ -499,19 +412,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]uint64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_float32:
 			var minv, maxv, blkMaxv, blkMinv float32
 			var blkMin, blkMax []interface{}
@@ -544,19 +444,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]float32)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_float64:
 			var minv, maxv, blkMaxv, blkMinv float64
 			var blkMin, blkMax []interface{}
@@ -589,19 +476,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]float64)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			var minv, maxv, blkMaxv, blkMinv []byte
 			var blkMin, blkMax []interface{}
@@ -669,19 +543,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 64, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]types.Datetime)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		case types.T_date:
 			var minv, maxv, blkMaxv, blkMinv types.Date
 			var blkMin, blkMax []interface{}
@@ -714,19 +575,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
-
-			bsiIdx := index.NewNumericBsiIndex(colDef.Type, 32, int16(idx))
-			row := 0
-			for _, blk := range data {
-				column := blk.Vecs[idx].Col.([]types.Date)
-				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
-						return err
-					}
-					row++
-				}
-			}
-			indices = append(indices, bsiIdx)
 		}
 	}
 	buf, err := index.DefaultRWHelper.WriteIndices(indices)
@@ -773,7 +621,13 @@ func (sw *SegmentWriter) Execute() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
+	stat, _ := os.Stat(filename)
+	sw.size = stat.Size()
 	return sw.fileCommiter(filename)
+}
+
+func (sw *SegmentWriter) GetSize() int64 {
+	return sw.size
 }
 
 // flushBlocks does not read the .blk file, and writes the incoming
@@ -805,12 +659,15 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		return err
 	}
 	for _, blk := range meta.BlockSet {
-		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Id); err != nil {
-			return err
-		}
 		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Count); err != nil {
 			return err
 		}
+
+		rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+		if err = binary.Write(&metaBuf, binary.BigEndian, rangeBuf); err != nil {
+			return err
+		}
+
 		var preIdx []byte
 		if blk.CommitInfo.PrevIndex != nil {
 			preIdx, err = blk.CommitInfo.PrevIndex.Marshal()
@@ -824,8 +681,8 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 			return err
 		}
 		var idx []byte
-		if blk.CommitInfo.ExternalIndex != nil {
-			idx, err = blk.CommitInfo.ExternalIndex.Marshal()
+		if blk.CommitInfo.LogIndex != nil {
+			idx, err = blk.CommitInfo.LogIndex.Marshal()
 			if err != nil {
 				return err
 			}
@@ -872,7 +729,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		colCntSize +
 		startPosSize +
 		endPosSize +
-		len(data)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		len(data)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
 		len(data)*colCnt*(colSizeSize*2) +
 		colCnt*colPosSize
 

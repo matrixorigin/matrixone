@@ -18,15 +18,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"math/rand"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe"
 
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	//"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine/aoe/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"time"
 )
 

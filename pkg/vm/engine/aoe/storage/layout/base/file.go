@@ -16,8 +16,9 @@ package base
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"os"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -128,6 +129,9 @@ type IBaseFile interface {
 	Stat() common.FileInfo
 	MakeVirtualIndexFile(*IndexMeta) common.IVFile
 	GetDir() string
+
+	CopyTo(dir string) error
+	LinkTo(dir string) error
 }
 
 type ISegmentFile interface {
@@ -139,12 +143,19 @@ type ISegmentFile interface {
 	// UnrefBlock releases the reference to the underlying block
 	UnrefBlock(blkId common.ID)
 
+	RegisterTBlock(blkId common.ID) (IBlockFile, error)
+	RefTBlock(blkId common.ID) IBlockFile
+
+	GetBlockSize(blkId common.ID) int64
+
 	// ReadBlockPoint reads a Pointer data to buf,
 	// which called by EmbedBlockIndexFile.
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
 	GetBlockIndicesMeta(id common.ID) *IndicesMeta
 
 	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
+
+	MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *IndexMeta) common.IVFile
 
 	// MakeVirtualPartFile creates a new column part. ColumnPart provides external Read services
 	MakeVirtualPartFile(id *common.ID) common.IVFile

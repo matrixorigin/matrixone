@@ -25,8 +25,8 @@ var (
 )
 
 type Range struct {
-	Left  uint64
-	Right uint64
+	Left  uint64 `json:"l"`
+	Right uint64 `json:"r"`
 }
 
 func (r *Range) String() string {
@@ -46,6 +46,10 @@ func (r *Range) LT(id uint64) bool {
 
 func (r *Range) GT(id uint64) bool {
 	return r.Left > id
+}
+
+func (r *Range) ClosedIn(id uint64) bool {
+	return r.Left <= id && r.Right >= id
 }
 
 func (r *Range) CanCover(o *Range) bool {

@@ -15,11 +15,11 @@
 package tpEngine
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/driver"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewTpRelation(n string, id uint64, cinfo string, m tpMetadata, kv driver.CubeDriver, proc *process.Process) *tpRelation {
@@ -51,7 +51,7 @@ func (tr *tpRelation) Index() []*engine.IndexTableDef {
 	return nil
 }
 
-func (tr *tpRelation) Attribute() []metadata.Attribute {
+func (tr *tpRelation) Attribute() []engine.Attribute {
 	tr.rwlock.RLock()
 	defer tr.rwlock.RUnlock()
 	return tr.md.Attrs

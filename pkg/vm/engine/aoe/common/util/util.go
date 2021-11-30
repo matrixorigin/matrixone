@@ -14,6 +14,8 @@
 
 package util
 
+import "strings"
+
 const (
 	UINT64_MAX = ^uint64(0)
 )
@@ -26,4 +28,13 @@ func MemsetRepeatByte(a []byte, v byte) {
 	for bp := 1; bp < len(a); bp *= 2 {
 		copy(a[bp:], a[:bp])
 	}
+}
+
+func ContainsString(strs []string, str string) bool {
+	for _, e := range strs {
+		if strings.Compare(e, str) == 0 {
+			return true
+		}
+	}
+	return false
 }

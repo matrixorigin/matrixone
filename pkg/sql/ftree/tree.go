@@ -15,9 +15,9 @@
 package ftree
 
 import (
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 // exclude some queries that are not currently supported

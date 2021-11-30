@@ -17,8 +17,8 @@ package ftree
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type Node interface {

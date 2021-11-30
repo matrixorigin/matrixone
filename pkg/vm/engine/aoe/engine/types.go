@@ -16,10 +16,10 @@ package engine
 
 import (
 	"bytes"
-	catalog3 "matrixone/pkg/catalog"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
+	catalog3 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
 )
 
 // aoe engine
@@ -55,5 +55,5 @@ type relation struct {
 	nodes    engine.Nodes
 	segments []SegmentInfo           //segments of the table
 	tablets  []aoe.TabletInfo        //tablets of the table
-	mp       map[string]*db.Relation //a map of each tablet and its relation
+	mp       map[string]*aoedb.Relation //a map of each tablet and its relation
 }

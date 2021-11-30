@@ -16,7 +16,7 @@ package merge
 
 import (
 	"bytes"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {

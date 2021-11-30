@@ -11,7 +11,7 @@ import (
 //line postgresql_sql.y:16
 
 import (
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const USE = 57346

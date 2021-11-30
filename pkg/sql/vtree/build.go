@@ -15,14 +15,14 @@
 package vtree
 
 import (
-	"matrixone/pkg/sql/colexec/dedup"
-	"matrixone/pkg/sql/colexec/limit"
-	"matrixone/pkg/sql/colexec/offset"
-	"matrixone/pkg/sql/colexec/order"
-	"matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/colexec/top"
-	"matrixone/pkg/sql/ftree"
-	"matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/ftree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func New() *build {

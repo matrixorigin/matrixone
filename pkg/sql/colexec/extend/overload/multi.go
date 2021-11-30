@@ -16,9 +16,9 @@ package overload
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func MultiEval(op int, typ types.T, _ []bool, _ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {

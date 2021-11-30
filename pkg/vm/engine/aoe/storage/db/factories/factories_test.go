@@ -14,34 +14,50 @@
 package factories
 
 import (
-	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"os"
+	"strconv"
 	"sync"
 	"testing"
+
+	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	moduleName = "factories"
+)
+
+func shardIdToName(id uint64) string {
+	return strconv.FormatUint(id, 10)
+}
+
 func TestMutBlockNodeFactory(t *testing.T) {
 	rowCount, blkCount := uint64(30), uint64(4)
-	dir := "/tmp/mublknodefactory"
-	os.RemoveAll(dir)
-	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount)
+	dir := testutils.InitTestEnv(moduleName, t)
+	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount, nil)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(opts.Meta.Catalog, schema, 2, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(99)
+	dbName := shardIdToName(shardId)
+	idxGen := gen.Shard(shardId)
+	tablemeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, 2, idxGen)
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
@@ -55,7 +71,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tabledata, err := tables.RegisterTable(tablemeta)
 	assert.Nil(t, err)
 

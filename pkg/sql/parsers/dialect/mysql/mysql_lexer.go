@@ -20,9 +20,9 @@ import (
 	"math"
 	"strconv"
 
-	"matrixone/pkg/sql/parsers/dialect"
-	"matrixone/pkg/sql/parsers/scanner"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/scanner"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func Parse(sql string) ([]tree.Statement, error) {

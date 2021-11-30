@@ -14,37 +14,55 @@
 package mutation
 
 import (
-	"matrixone/pkg/compress"
-	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	moduleName = "mutation"
+)
+
+func getTestPath(t *testing.T) string {
+	return testutils.GetDefaultTestPath(moduleName, t)
+}
+
+func initTestEnv(t *testing.T) string {
+	testutils.RemoveDefaultTestPath(moduleName, t)
+	return testutils.MakeDefaultTestPath(moduleName, t)
+}
+
 func TestMutableBlockNode(t *testing.T) {
-	dir := "/tmp/mutableblk"
+	dir := initTestEnv(t)
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
-	opts.Meta.Catalog.Close()
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	opts.Meta.Catalog = catalog
+	opts.Wal = shard.NewNoopWal()
 	defer catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, nil, 2, gen.Shard(shardId))
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
@@ -59,7 +77,7 @@ func TestMutableBlockNode(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tabledata, err := tables.RegisterTable(tablemeta)
 
 	maxsize := uint64(140)

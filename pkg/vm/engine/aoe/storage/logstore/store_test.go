@@ -17,17 +17,19 @@ package logstore
 import (
 	"encoding/binary"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"os"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 var (
-	mockETDDL = ETCustomizeStart + 1
+	moduleName = "logstore"
+	mockETDDL  = ETCustomizeStart + 1
 )
 
 type mockDDLOp uint8
@@ -73,8 +75,7 @@ func mockETDDLHandler(r io.Reader, meta *EntryMeta) (Entry, int64, error) {
 }
 
 func TestStore(t *testing.T) {
-	dir := "/tmp/teststore"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	name := "sstore"
 	roCfg := &RotationCfg{}
 	store, err := New(dir, name, roCfg)
@@ -174,42 +175,33 @@ func TestStore(t *testing.T) {
 // }
 
 func TestBatchStore(t *testing.T) {
-	dir := "/tmp/testbatchstore"
-	os.RemoveAll(dir)
-	var wg sync.WaitGroup
+	dir := testutils.InitTestEnv(moduleName, t)
 	cfg := &RotationCfg{
 		RotateChecker: &MaxSizeRotationChecker{MaxSize: 100 * int(common.M)},
 	}
-	s, err := NewBatchStore(dir, "bstore", cfg)
+	s, err := NewBatchStore(dir, "basestore", cfg)
 	assert.Nil(t, err)
 	s.Start()
+	defer s.Close()
+	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
 
 	f := func(i int) func() {
 		return func() {
 			defer wg.Done()
-			if i%2 == 0 {
-				entry := NewAsyncBaseEntry()
-				entry.GetMeta().SetType(ETFlush)
-				err := s.AppendEntry(entry)
-				assert.Nil(t, err)
-				err = entry.WaitDone()
-				assert.Nil(t, err)
-				entry.Free()
-			} else {
-				entry := GetEmptyEntry()
-				entry.GetMeta().SetType(ETFlush)
-				err := s.AppendEntry(entry)
-				assert.Nil(t, err)
-			}
+			entry := NewAsyncBaseEntry()
+			entry.GetMeta().SetType(ETFlush)
+			err := s.AppendEntry(entry)
+			assert.Nil(t, err)
+			err = entry.WaitDone()
+			assert.Nil(t, err)
+			entry.Free()
 		}
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 200; i++ {
 		wg.Add(1)
 		pool.Submit(f(i))
 	}
-
 	wg.Wait()
-	s.Close()
 }

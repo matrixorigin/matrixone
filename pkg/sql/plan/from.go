@@ -16,10 +16,10 @@ package plan
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (b *build) buildFrom(tbls tree.TableExprs, qry *Query) error {

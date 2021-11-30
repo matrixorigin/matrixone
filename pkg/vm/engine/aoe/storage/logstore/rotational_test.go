@@ -16,16 +16,16 @@ package logstore
 
 import (
 	"bytes"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"os"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRotation(t *testing.T) {
-	dir := "/tmp/testrotation"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	rot, err := OpenRotational(
 		dir,
 		"store",
@@ -204,8 +204,4 @@ func TestVersionsMeta(t *testing.T) {
 	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(hub.versions))
-}
-
-func TestTruncate(t *testing.T) {
-
 }

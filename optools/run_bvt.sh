@@ -150,7 +150,7 @@ function make_one(){
 		ping -c 5 github.com
 		cd $G_STAGE && git clone $URL_ONE_REPO
 		cd $ONE_REPO && ONE_COMMIT_ID=$(git rev-parse HEAD)
-		logger "INF" "matrixone commit ID: $ONE_COMMIT_ID"
+		logger "INF" "github.com/matrixorigin/matrixone commit ID: $ONE_COMMIT_ID"
 		patch_one
 		logger "INF" "Build matrixone"
 		make clean && make config && make build

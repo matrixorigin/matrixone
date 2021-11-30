@@ -14,10 +14,10 @@
 package base
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.TransientBlockFile) error
@@ -39,7 +39,6 @@ type IMutableBlock interface {
 	base.INode
 	GetData() batch.IBatch
 	GetFile() *dataio.TransientBlockFile
-	GetSegmentedIndex() (uint64, bool)
 	GetMeta() *metadata.Block
 	SetStale()
 	Flush() error

@@ -17,26 +17,25 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"go.uber.org/zap/zapcore"
 	stdLog "log"
-	catalog2 "matrixone/pkg/catalog"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/logutil"
-	aoe3 "matrixone/pkg/vm/driver/aoe"
-	"matrixone/pkg/vm/driver/config"
-	"matrixone/pkg/vm/driver/testutil"
-	"matrixone/pkg/vm/engine/aoe/protocol"
-	//"matrixone/pkg/sql/protocol"
-	vengine "matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	"matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	vengine "github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"sync"
 
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
@@ -79,12 +78,10 @@ var (
 )
 
 func TestAOEEngine(t *testing.T) {
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -107,7 +104,7 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 				cfg.Worker.RaftEventWorkers = uint64(32)
@@ -164,7 +161,7 @@ func TestAOEEngine(t *testing.T) {
 	tbls := db.Relations()
 	require.Equal(t, 0, len(tbls))
 
-	mockTbl := md.MockTableInfo(colCnt)
+	mockTbl := adaptor.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
 	_, _, _, _, defs , _ := helper.UnTransfer(*mockTbl)
 
@@ -258,12 +255,10 @@ func TestAOEEngine(t *testing.T) {
 }
 
 func doRestartEngine(t *testing.T) {
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -285,7 +280,7 @@ func doRestartEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {
@@ -332,7 +327,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.Nil(t, tbs)
 
 	colCnt := 4
-	t1 := md.MockTableInfo(colCnt)
+	t1 := adaptor.MockTableInfo(colCnt)
 	t1.Name = "t1"
 
 	tid, err := c[0].CreateTable(1, dbid, *t1)
@@ -344,7 +339,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.NotNil(t, tb)
 	require.Equal(t, aoe.StatePublic, tb.State)
 
-	t2 := md.MockTableInfo(colCnt)
+	t2 := adaptor.MockTableInfo(colCnt)
 	t2.Name = "t2"
 	_, err = c[0].CreateTable(2, dbid, *t2)
 	require.NoError(t, err)

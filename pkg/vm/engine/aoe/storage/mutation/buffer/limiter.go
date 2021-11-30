@@ -41,7 +41,7 @@ func (l *sizeLimiter) ApplyQuota(size uint64) bool {
 	for !atomic.CompareAndSwapUint64(&l.activesize, pre, post) {
 		pre = atomic.LoadUint64(&l.activesize)
 		post = pre + size
-		if post > l.activesize {
+		if post > l.maxactivesize {
 			return false
 		}
 	}

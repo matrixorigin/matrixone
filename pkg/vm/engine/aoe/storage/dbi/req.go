@@ -15,7 +15,7 @@
 package dbi
 
 import (
-	"matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 type OnTableDroppedCB = func(error)
@@ -23,12 +23,16 @@ type OnTableDroppedCB = func(error)
 type TableOpCtx struct {
 	ShardId   uint64
 	OpIndex   uint64
+	OpOffset  int
+	OpSize    int
 	TableName string
 }
 
 type GetSnapshotCtx struct {
+	ShardId    uint64
 	OpIndex    uint64
 	TableName  string
+	DBName     string
 	SegmentIds []uint64
 	ScanAll    bool
 	Cols       []int
@@ -37,11 +41,15 @@ type GetSnapshotCtx struct {
 type DropTableCtx struct {
 	ShardId    uint64
 	OpIndex    uint64
+	OpOffset   int
+	OpSize     int
+	DBName     string
 	TableName  string
 	OnFinishCB OnTableDroppedCB
 }
 
 type GetSegmentsCtx struct {
+	ShardId   uint64
 	OpIndex   uint64
 	TableName string
 }
@@ -51,6 +59,7 @@ type AppendCtx struct {
 	OpIndex   uint64
 	OpOffset  int
 	OpSize    int
+	DBName    string
 	TableName string
 	Data      *batch.Batch
 }
@@ -66,20 +75,6 @@ const (
 type StringMatcher struct {
 	Type    MatchType
 	Pattern string
-}
-
-type GetSegmentedIdCtx struct {
-	Matchers []*StringMatcher
-}
-
-func NewTabletSegmentedIdCtx(tablet string) *GetSegmentedIdCtx {
-	ctx := &GetSegmentedIdCtx{
-		Matchers: make([]*StringMatcher, 1),
-	}
-	ctx.Matchers[0] = &StringMatcher{
-		Pattern: tablet,
-	}
-	return ctx
 }
 
 type IDS struct {

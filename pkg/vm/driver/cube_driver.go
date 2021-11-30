@@ -15,26 +15,29 @@
 package driver
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
-	"matrixone/pkg/logutil"
-	aoe3 "matrixone/pkg/vm/driver/aoe"
-	"matrixone/pkg/vm/driver/config"
-	"matrixone/pkg/vm/driver/pb"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 
 	"github.com/matrixorigin/matrixcube/aware"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
+	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/rpc"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
@@ -58,11 +61,11 @@ type CubeDriver interface {
 	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
-	AsyncSet([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
-	AsyncSetIfNotExist([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// Set async set key value in specific group.
-	AsyncSetWithGroup([]byte, []byte, pb.Group, func(interface{}, []byte, error), interface{})
+	AsyncSetWithGroup([]byte, []byte, pb.Group, func(server.CustomRequest, []byte, error), interface{})
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
 	// Get returns the value of key.
@@ -88,7 +91,7 @@ type CubeDriver interface {
 	// AllocID allocs id.
 	AllocID([]byte, uint64) (uint64, error)
 	// AsyncAllocID async alloc id.
-	AsyncAllocID([]byte, uint64, func(interface{}, []byte, error), interface{})
+	AsyncAllocID([]byte, uint64, func(server.CustomRequest, []byte, error), interface{})
 	// Append appends the data in the table
 	Append(string, uint64, []byte) error
 	//GetSnapshot gets the snapshot from the table.
@@ -109,15 +112,15 @@ type CubeDriver interface {
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
 	// AsyncExec async exec command
-	AsyncExec(interface{}, func(interface{}, []byte, error), interface{})
+	AsyncExec(interface{}, func(server.CustomRequest, []byte, error), interface{})
 	// ExecWithGroup exec command with group
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
-	AsyncExecWithGroup(interface{}, pb.Group, func(interface{}, []byte, error), interface{})
+	AsyncExecWithGroup(interface{}, pb.Group, func(server.CustomRequest, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
-	AOEStore() *adb.DB
+	AOEStore() *aoedb.DB
 }
 
 type driver struct {
@@ -125,33 +128,36 @@ type driver struct {
 	app   *server.Application
 	store raftstore.Store
 	spool raftstore.ShardsPool
-	aoeDB *adb.DB
-	cmds  map[uint64]raftcmdpb.CMDType
+	aoeDB *aoedb.DB
+	cmds  map[uint64]rpc.CmdType
 }
 
 // NewCubeDriver returns a aoe request handler
 func NewCubeDriver(
-	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
-	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config.Config{})
+	return NewCubeDriverWithOptions(kvDataStorage, aoeDataStorage, &config.Config{})
 }
 
 // NewCubeDriverWithOptions returns an aoe request handler
 func NewCubeDriverWithOptions(
-	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
 	c *config.Config) (CubeDriver, error) {
 
-	return NewCubeDriverWithFactory(metaStorage, kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
+	return NewCubeDriverWithFactory(kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
 		return raftstore.NewStore(cfg), nil
 	})
+}
+func ErrorResp1(err error, infos string) (CubeDriver, []byte) {
+	buf := bytes.Buffer{}
+
+	buf.Write(codec.String2Bytes(err.Error()))
+	return nil, buf.Bytes()
 }
 
 // NewCubeDriverWithFactory creates the cube driver with raftstore factory
 func NewCubeDriverWithFactory(
-	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
 	c *config.Config,
@@ -160,22 +166,21 @@ func NewCubeDriverWithFactory(
 	h := &driver{
 		cfg:   c,
 		aoeDB: aoeDataStorage.(*aoe3.Storage).DB,
-		cmds:  make(map[uint64]raftcmdpb.CMDType),
+		cmds:  make(map[uint64]rpc.CmdType),
 	}
-	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
+	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *meta.Shard, news []meta.Shard) {
 		switch group {
 		case uint64(pb.AOEGroup):
-			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
+			return func(old *meta.Shard, news []meta.Shard) {
 				//TODO: Not impl
 			}
 		default:
-			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
+			return func(old *meta.Shard, news []meta.Shard) {
 
 			}
 		}
 	}
-	c.CubeConfig.Storage.MetaStorage = metaStorage
-	c.CubeConfig.Storage.DataStorageFactory = func(group, shardID uint64) cstorage.DataStorage {
+	c.CubeConfig.Storage.DataStorageFactory = func(group uint64) cstorage.DataStorage {
 		switch group {
 		case uint64(pb.KVGroup):
 			return kvDataStorage
@@ -191,16 +196,16 @@ func NewCubeDriverWithFactory(
 	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
 	c.CubeConfig.ShardGroups = 2
 
-	c.CubeConfig.Customize.CustomInitShardsFactory = func() []bhmetapb.Shard {
-		var initialGroups []bhmetapb.Shard
-		initialGroups = append(initialGroups, bhmetapb.Shard{
+	c.CubeConfig.Customize.CustomInitShardsFactory = func() []meta.Shard {
+		var initialGroups []meta.Shard
+		initialGroups = append(initialGroups, meta.Shard{
 			Group: uint64(pb.KVGroup),
 		})
 		return initialGroups
 	}
 
-	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) bhmetapb.Shard {
-		return bhmetapb.Shard{
+	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) meta.Shard {
+		return meta.Shard{
 			Group:        g,
 			Start:        start,
 			End:          end,
@@ -213,64 +218,20 @@ func NewCubeDriverWithFactory(
 		return h
 	}
 
-	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+		return func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 			defer func() {
 				logutil.Debugf("CompactIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, compactIndex, newCompactIdx)
 			}()
 			if group != uint64(pb.AOEGroup) {
 				newCompactIdx = compactIndex
 			} else {
-				newCompactIdx, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-					Matchers: []*dbi.StringMatcher{
-						{
-							Type:    dbi.MTPrefix,
-							Pattern: codec.Uint642String(shard.ID),
-						},
-					},
-				})
-				if err != nil {
-					if err == adb.ErrNotFound {
-						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
-						newCompactIdx = compactIndex
-					} else {
-						// TODO: Need panic here or not?
-						panic(err)
-					}
+				newCompactIdx = h.aoeDB.GetShardCheckpointId(shard.ID)
+				if newCompactIdx == 0 {
+					newCompactIdx = compactIndex
 				}
 			}
 			return newCompactIdx, nil
-		}
-	}
-
-	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			defer func() {
-				logutil.Debugf("InitAppliedIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, initAppliedIndex, adjustAppliedIndex)
-			}()
-			if group != uint64(pb.AOEGroup) {
-				adjustAppliedIndex = initAppliedIndex
-			} else {
-				var err error
-				adjustAppliedIndex, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-					Matchers: []*dbi.StringMatcher{
-						{
-							Type:    dbi.MTPrefix,
-							Pattern: codec.Uint642String(shard.ID),
-						},
-					},
-				})
-				if err != nil {
-					if err == adb.ErrNotFound {
-						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
-						adjustAppliedIndex = initAppliedIndex
-					} else {
-						panic(err)
-					}
-				}
-			}
-
-			return adjustAppliedIndex
 		}
 	}
 
@@ -281,21 +242,20 @@ func NewCubeDriverWithFactory(
 	h.store = store
 
 	c.ServerConfig.Store = h.store
-	c.ServerConfig.Handler = h
 	pConfig.DefaultSchedulers = nil
 
-	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy raftstore.ShardsProxy) error {
+	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req rpc.Request, cmd server.CustomRequest, proxy raftstore.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.(pb.Request)
+		args := cmd.Args.(pb.Request)
 		if args.Shard == 0 {
 			return proxy.Dispatch(req)
 		}
 		req.ToShard = args.Shard
-		return proxy.DispatchTo(req, args.Shard, c.ServerConfig.Store.GetRouter().LeaderPeerStore(req.ToShard).ClientAddr)
+		return proxy.DispatchTo(req, c.ServerConfig.Store.GetRouter().GetShard(req.ToShard),
+			c.ServerConfig.Store.GetRouter().LeaderReplicaStore(req.ToShard).ClientAddr)
 	})
-	h.init()
 	return h, nil
 }
 
@@ -310,7 +270,7 @@ func (h *driver) Start() error {
 		select {
 		case <-timeoutC:
 			logutil.Error("wait for available shard timeout")
-			return ErrStartupTimeout
+			return errDriver.ErrStartupTimeout
 		default:
 			err := h.initShardPool()
 			if err == nil {
@@ -337,7 +297,7 @@ func (h *driver) Close() {
 }
 
 //AOEStore returns h.aoeDB
-func (h *driver) AOEStore() *adb.DB {
+func (h *driver) AOEStore() *aoedb.DB {
 	return h.aoeDB
 }
 
@@ -366,12 +326,12 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 }
 
 //AsyncSet sets key and value in KVGroup asynchronously.
-func (h *driver) AsyncSet(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
 }
 
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
-func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.Set,
 		Group: group,
@@ -383,7 +343,7 @@ func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(in
 	h.AsyncExecWithGroup(req, group, cb, data)
 }
 
-func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.SetIfNotExist,
 		Group: pb.KVGroup,
@@ -392,7 +352,7 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(interface{}, []by
 			Value: value,
 		},
 	}
-	h.AsyncExecWithGroup(req, pb.KVGroup, func(i interface{}, bytes []byte, err error) {
+	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
 		if bytes != nil || len(bytes) != 0 {
 			err = errors.New(string(bytes))
 		}
@@ -613,7 +573,7 @@ func (h *driver) AllocID(idkey []byte, batch uint64) (uint64, error) {
 	return resp, nil
 }
 
-func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(interface{}, []byte, error), param interface{}) {
+func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(server.CustomRequest, []byte, error), param interface{}) {
 	req := pb.Request{
 		Type:  pb.Incr,
 		Group: pb.KVGroup,
@@ -776,18 +736,24 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 
 func (h *driver) Exec(cmd interface{}) ([]byte, error) {
 	t0 := time.Now()
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.Exec(cmd, defaultRPCTimeout)
+	return h.app.Exec(*cr, defaultRPCTimeout)
 }
 
-func (h *driver) AsyncExec(cmd interface{}, cb func(interface{}, []byte, error), arg interface{}) {
-	h.app.AsyncExecWithTimeout(cmd, cb, defaultRPCTimeout, arg)
+func (h *driver) AsyncExec(cmd interface{}, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
-func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
-	h.app.AsyncExecWithGroupAndTimeout(cmd, uint64(group), cb, defaultRPCTimeout, arg)
+func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
@@ -795,7 +761,9 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) 
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	return h.app.Exec(*cr, defaultRPCTimeout)
 }
 
 func (h *driver) RaftStore() raftstore.Store {

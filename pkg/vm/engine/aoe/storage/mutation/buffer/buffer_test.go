@@ -14,8 +14,8 @@
 package buffer
 
 import (
-	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"testing"
 
 	"github.com/stretchr/testify/assert"

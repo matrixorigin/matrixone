@@ -16,9 +16,9 @@ package partition
 
 import (
 	"bytes"
-	"matrixone/pkg/container/nulls"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vector) []int64 {

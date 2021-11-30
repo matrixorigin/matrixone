@@ -17,11 +17,11 @@ package plan
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/viewexec/transformer"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type Plan interface {

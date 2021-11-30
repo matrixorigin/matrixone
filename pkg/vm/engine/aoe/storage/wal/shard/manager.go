@@ -1,12 +1,29 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package shard
 
 import (
-	"context"
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
-	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 var (
@@ -19,136 +36,148 @@ var (
 	ShardNotFoundErr  = errors.New("aoe: shard not found")
 )
 
+type noopWal struct{}
+
+func NewNoopWal() *noopWal {
+	return new(noopWal)
+}
+func (noop *noopWal) GetRole() wal.Role                 { return wal.HolderRole }
+func (noop *noopWal) GetShardId(uint64) (uint64, error) { return uint64(0), nil }
+func (noop *noopWal) String() string                    { return "<noop>" }
+func (noop *noopWal) Checkpoint(interface{})            {}
+func (noop *noopWal) Close() error                      { return nil }
+func (noop *noopWal) SyncLog(wal.Payload) error         { return nil }
+func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
+	entry := wal.GetEntry(uint64(0))
+	entry.SetDone()
+	return entry, nil
+}
+func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
+func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64           { return 0 }
+func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
+func (noop *noopWal) GetAllPendingEntries() []*shard.ItemsToCheckpointStat { return nil }
+func (noop *noopWal) GetShardPendingCnt(shardId uint64) int                { return 0 }
+
 type manager struct {
-	mu            sync.RWMutex
-	shards        map[uint64]*proxy
-	requestQueue  chan *Entry
-	requestCtx    context.Context
-	requestCancel context.CancelFunc
-	requestWg     sync.WaitGroup
-
-	ckpQueue  chan *snippet
-	ckpCtx    context.Context
-	ckpCancel context.CancelFunc
-	ckpWg     sync.WaitGroup
-
-	wg     sync.WaitGroup
-	closed int32
+	sm.ClosedState
+	sm.StateMachine
+	mu      sync.RWMutex
+	shards  map[uint64]*proxy
+	driver  logstore.AwareStore
+	own     bool
+	safemu  sync.RWMutex
+	safeids map[uint64]uint64
+	role    wal.Role
 }
 
-func NewManager() *manager {
+func NewManager(role wal.Role) *manager {
+	return NewManagerWithDriver(nil, false, role)
+}
+
+func NewManagerWithDriver(driver logstore.AwareStore, own bool, role wal.Role) *manager {
 	mgr := &manager{
-		shards:       make(map[uint64]*proxy),
-		requestQueue: make(chan *Entry, QueueSize),
-		ckpQueue:     make(chan *snippet, QueueSize),
+		own:     own,
+		role:    role,
+		driver:  driver,
+		shards:  make(map[uint64]*proxy),
+		safeids: make(map[uint64]uint64),
 	}
-	mgr.requestCtx, mgr.requestCancel = context.WithCancel(context.Background())
-	mgr.ckpCtx, mgr.ckpCancel = context.WithCancel(context.Background())
-	mgr.wg.Add(2)
-	go mgr.requestLoop()
-	go mgr.checkpointLoop()
+	wg := new(sync.WaitGroup)
+	// rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
+	// ckpQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onSnippets)
+	rQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onReceived)
+	ckpQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onSnippets)
+	mgr.StateMachine = sm.NewStateMachine(wg, mgr, rQueue, ckpQueue)
+	if own && driver != nil {
+		mgr.driver.Start()
+	}
+	mgr.Start()
 	return mgr
 }
 
-func (mgr *manager) checkpointLoop() {
-	defer mgr.wg.Done()
-	entries := make([]*snippet, 0, BatchSize)
-	for {
-		select {
-		case <-mgr.ckpCtx.Done():
-			return
-		case entry := <-mgr.ckpQueue:
-			entries = append(entries, entry)
-		Left:
-			for i := 0; i < BatchSize-1; i++ {
-				select {
-				case entry = <-mgr.ckpQueue:
-					entries = append(entries, entry)
-				default:
-					break Left
-				}
-			}
-			cnt := len(entries)
-			mgr.onSnippets(entries)
-			entries = entries[:0]
-			mgr.ckpWg.Add(-1 * cnt)
+func (mgr *manager) UpdateSafeId(shardId, id uint64) {
+	mgr.safemu.Lock()
+	defer mgr.safemu.Unlock()
+	old, ok := mgr.safeids[shardId]
+	if !ok {
+		mgr.safeids[shardId] = id
+	} else {
+		if old > id {
+			panic(fmt.Sprintf("logic error: %d, %d", old, id))
 		}
+		mgr.safeids[shardId] = id
 	}
 }
 
-func (mgr *manager) requestLoop() {
-	defer mgr.wg.Done()
-	entries := make([]*Entry, 0, BatchSize)
-	for {
-		select {
-		case <-mgr.requestCtx.Done():
-			return
-		case entry := <-mgr.requestQueue:
-			entries = append(entries, entry)
-		Left:
-			for i := 0; i < BatchSize-1; i++ {
-				select {
-				case entry = <-mgr.requestQueue:
-					entries = append(entries, entry)
-				default:
-					break Left
-				}
-			}
-			cnt := len(entries)
-			mgr.onEntries(entries)
-			entries = entries[:0]
-			mgr.requestWg.Add(-1 * cnt)
-		}
+func (mgr *manager) GetRole() wal.Role {
+	return mgr.role
+}
+
+func (mgr *manager) SyncLog(payload wal.Payload) error {
+	if entry, err := mgr.Log(payload); err != nil {
+		return err
+	} else {
+		entry.WaitDone()
+		entry.Free()
+		return nil
 	}
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 	entry := wal.GetEntry(0)
 	entry.Payload = payload
-	if err := mgr.EnqueueEntry(entry); err != nil {
+	{
+		// index := entry.Payload.(*Index)
+		// if index.ShardId == 0 {
+		// 	panic("")
+		// }
+	}
+	if _, err := mgr.EnqueueRecevied(entry); err != nil {
 		entry.Free()
 		return nil, err
 	}
 	return entry, nil
 }
 
-func (mgr *manager) Checkpoint(v interface{}) {
-	switch vv := v.(type) {
-	case *LogIndex:
-		snip := NewSimpleSnippet(vv)
-		mgr.EnqueueSnippet(snip)
-		return
-	case *snippet:
-		mgr.EnqueueSnippet(vv)
+func (mgr *manager) GetShardCurrSeqNum(shardId uint64) (id uint64) {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
 		return
 	}
-	panic("not supported")
+	if s.idAlloctor != nil {
+		return s.idAlloctor.Get()
+	}
+	return
+}
+
+func (mgr *manager) GetShardCheckpointId(shardId uint64) uint64 {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		logutil.Warnf("shard %d not found", shardId)
+		return 0
+	}
+	return s.GetSafeId()
 }
 
 func (mgr *manager) EnqueueEntry(entry *Entry) error {
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		return errors.New("closed")
-	}
-	mgr.requestWg.Add(1)
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		mgr.requestWg.Done()
-		return errors.New("closed")
-	}
-	mgr.requestQueue <- entry
-	return nil
+	_, err := mgr.EnqueueRecevied(entry)
+	return err
 }
 
-func (mgr *manager) EnqueueSnippet(snip *snippet) error {
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		return errors.New("closed")
+func (mgr *manager) Checkpoint(v interface{}) {
+	switch vv := v.(type) {
+	case *Index:
+		bat := NewSimpleBatchIndice(vv)
+		mgr.EnqueueCheckpoint(bat)
+		return
+	case *SliceIndice:
+		if vv == nil {
+			return
+		}
+		mgr.EnqueueCheckpoint(vv)
+		return
 	}
-	mgr.ckpWg.Add(1)
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		mgr.ckpWg.Done()
-		return errors.New("closed")
-	}
-	mgr.ckpQueue <- snip
-	return nil
+	panic("not supported")
 }
 
 func (mgr *manager) GetShard(id uint64) (*proxy, error) {
@@ -184,33 +213,80 @@ func (mgr *manager) getOrAddShard(id uint64) (*proxy, error) {
 	return shard, err
 }
 
-func (mgr *manager) onEntries(entries []*Entry) {
-	for _, entry := range entries {
+func (mgr *manager) onReceived(items ...interface{}) {
+	for _, item := range items {
+		entry := item.(*Entry)
 		mgr.logEntry(entry)
 		entry.SetDone()
 	}
 }
 
+func (mgr *manager) InitShard(shardId, safeId uint64) error {
+	mgr.mu.Lock()
+	s, err := mgr.AddShardLocked(shardId)
+	mgr.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	s.InitSafeId(safeId)
+	return nil
+}
+
+func (mgr *manager) GetSafeIds() SafeIds {
+	ids := SafeIds{
+		Ids: make([]SafeId, 0, 100),
+	}
+	mgr.safemu.RLock()
+	defer mgr.safemu.RUnlock()
+	for shardId, id := range mgr.safeids {
+		ids.Append(shardId, id)
+	}
+	return ids
+}
+
 func (mgr *manager) logEntry(entry *Entry) {
-	index := entry.Payload.(*LogIndex)
+	index := entry.Payload.(*Index)
 	shard, _ := mgr.getOrAddShard(index.ShardId)
 	shard.LogIndex(index)
 }
 
-func (mgr *manager) onSnippets(snips []*snippet) {
+func (mgr *manager) onSnippets(items ...interface{}) {
 	shards := make(map[uint64]*proxy)
-	for _, snip := range snips {
-		shardId := snip.GetShardId()
+	for _, item := range items {
+		bat := item.(*SliceIndice)
+		shardId := bat.GetShardId()
 		shard, err := mgr.GetShard(shardId)
 		if err != nil {
 			panic(fmt.Sprintf("%d: %s", shardId, err))
 		}
-		shard.AppendSnippet(snip)
+		shard.AppendBatchIndice(bat)
 		shards[shardId] = shard
 	}
 	for _, shard := range shards {
 		shard.Checkpoint()
 	}
+}
+
+func (mgr *manager) GetShardPendingCnt(shardId uint64) int {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		return 0
+	}
+	return int(s.GetPendingEntries())
+}
+
+func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {
+	stats := make([]*shard.ItemsToCheckpointStat, 0, 100)
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	for _, s := range mgr.shards {
+		stat := &shard.ItemsToCheckpointStat{
+			ShardId: s.id,
+			Count:   int(s.GetPendingEntries()),
+		}
+		stats = append(stats, stat)
+	}
+	return stats
 }
 
 func (mgr *manager) String() string {
@@ -229,13 +305,12 @@ func (mgr *manager) String() string {
 }
 
 func (mgr *manager) Close() error {
-	if !atomic.CompareAndSwapInt32(&mgr.closed, int32(0), int32(1)) {
-		return nil
+	mgr.Stop()
+	if mgr.own && mgr.driver != nil {
+		mgr.driver.Close()
 	}
-	mgr.requestWg.Wait()
-	mgr.requestCancel()
-	mgr.ckpWg.Wait()
-	mgr.ckpCancel()
-	mgr.wg.Wait()
+	for _, s := range mgr.shards {
+		logutil.Infof("[AOE]: Shard-%d SafeId-%d | Closed", s.id, s.GetSafeId())
+	}
 	return nil
 }

@@ -17,17 +17,21 @@ package table
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/types"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 	"sync/atomic"
-	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
 var (
@@ -40,12 +44,11 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.Id),
 	}
-	if host.MutFactory != nil && host.MutFactory.GetType() == fb.MUTABLE {
-		data.blkFactory = newAltBlockFactory(host.MutFactory, data)
-	}
+	data.blkFactory = newBlockFactory(host.MutFactory, data)
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)
+
 	data.OnZeroCB = data.close
 	data.Ref()
 	return data
@@ -59,13 +62,22 @@ type tableData struct {
 		ids        []uint64
 		helper     map[uint64]int
 		segmentCnt uint32
-		rowCount   uint64
 	}
 	host        *Tables
 	meta        *metadata.Table
 	indexHolder *index.TableHolder
 	blkFactory  iface.IBlockFactory
-	replayIndex *metadata.LogIndex
+	appender    *tableAppender
+}
+
+func (td *tableData) InitAppender() {
+	td.appender = newTableAppender(td.host.Opts, td)
+}
+
+func (td *tableData) MakeMutationHandle() iface.MutationHandle {
+	td.Ref()
+	td.appender.Ref()
+	return td.appender
 }
 
 func (td *tableData) StrongRefLastBlock() iface.IBlock {
@@ -81,6 +93,7 @@ func (td *tableData) StrongRefLastBlock() iface.IBlock {
 
 func (td *tableData) close() {
 	td.indexHolder.Unref()
+	td.appender.Unref()
 	for _, segment := range td.tree.segments {
 		segment.Unref()
 	}
@@ -247,10 +260,6 @@ func (td *tableData) Size(attr string) uint64 {
 	return size
 }
 
-func (td *tableData) GetSegmentedIndex() (id uint64, ok bool) {
-	return td.meta.GetAppliedIndex(nil)
-}
-
 func (td *tableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.segmentCnt))
 	td.tree.RLock()
@@ -261,47 +270,70 @@ func (td *tableData) SegmentIds() []uint64 {
 	return ids
 }
 
+func (td *tableData) LinkTo(dir string) error {
+	segs := make([]iface.ISegment, 0, 8)
+	td.tree.RLock()
+	for _, seg := range td.tree.segments {
+		seg.Ref()
+		segs = append(segs, seg)
+	}
+	td.tree.RUnlock()
+
+	doneFn := func() {
+		for _, seg := range segs {
+			seg.Unref()
+		}
+	}
+	defer doneFn()
+	var err error
+	for _, seg := range segs {
+		file := seg.GetSegmentFile()
+		if err = file.LinkTo(dir); err != nil {
+			if err == dataio.FileNotExistErr {
+				err = nil
+			}
+		}
+	}
+	return err
+}
+
+func (td *tableData) CopyTo(dir string) error {
+	segs := make([]iface.ISegment, 0, 8)
+	td.tree.RLock()
+	for _, seg := range td.tree.segments {
+		seg.Ref()
+		segs = append(segs, seg)
+	}
+	td.tree.RUnlock()
+
+	doneFn := func() {
+		for _, seg := range segs {
+			seg.Unref()
+		}
+	}
+	defer doneFn()
+	var err error
+	for _, seg := range segs {
+		file := seg.GetSegmentFile()
+		if err = file.CopyTo(dir); err != nil {
+			if err == dataio.FileNotExistErr {
+				err = nil
+			}
+		}
+	}
+	return err
+}
+
 func (td *tableData) GetRowCount() uint64 {
-	return atomic.LoadUint64(&td.tree.rowCount)
+	return td.meta.GetRowCount()
 }
 
 func (td *tableData) AddRows(rows uint64) uint64 {
-	return atomic.AddUint64(&td.tree.rowCount, rows)
-}
-
-func (td *tableData) GetReplayIndex() *metadata.LogIndex {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)))
-	if ptr == nil {
-		return nil
-	}
-	return (*metadata.LogIndex)(ptr)
-}
-
-func (td *tableData) ResetReplayIndex() {
-	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)))
-	if ptr == nil {
-		panic("logic error")
-	}
-	var netIndex *metadata.LogIndex
-	nptr := (*unsafe.Pointer)(unsafe.Pointer(&netIndex))
-	if !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&td.replayIndex)), ptr, *nptr) {
-		panic("logic error")
-	}
-}
-
-func (td *tableData) initReplayCtx() {
-	td.replayIndex = td.meta.GetReplayIndex()
+	return td.meta.AddRows(rows)
 }
 
 func (td *tableData) InitReplay() {
-	td.initRowCount()
-	td.initReplayCtx()
-}
-
-func (td *tableData) initRowCount() {
-	for _, seg := range td.tree.segments {
-		td.tree.rowCount += seg.GetRowCount()
-	}
+	td.meta.ReplayRowCount()
 }
 
 func (td *tableData) RegisterBlock(meta *metadata.Block) (blk iface.IBlock, err error) {
@@ -386,21 +418,30 @@ func MockSegments(meta *metadata.Table, tblData iface.ITableData) []uint64 {
 	return segs
 }
 
+type InstallContext interface {
+	HasSegementFile(*common.ID) bool
+	HasBlockFile(*common.ID) bool
+	PresentedBsiFiles(id common.ID) []string
+	//HasBitSlicedIndexFile(*common.ID) bool
+}
+
 type Tables struct {
-	Mu        *sync.RWMutex
+	*sync.RWMutex
 	Data      map[uint64]iface.ITableData
 	ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
 
+	Opts                             *storage.Options
 	FsMgr                            base.IManager
 	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
 
 	MutFactory fb.MutFactory
+	Aware      shard.NodeAware
 }
 
-func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
+func NewTables(opts *storage.Options, mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager, aware shard.NodeAware) *Tables {
 	return &Tables{
-		Mu:          mu,
+		RWMutex:     mu,
 		Data:        make(map[uint64]iface.ITableData),
 		ids:         make(map[uint64]bool),
 		Tombstone:   make(map[uint64]iface.ITableData),
@@ -408,12 +449,14 @@ func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, index
 		SSTBufMgr:   sstBufMgr,
 		IndexBufMgr: indexBufMgr,
 		FsMgr:       fsMgr,
+		Opts:        opts,
+		Aware:       aware,
 	}
 }
 
 func (ts *Tables) String() string {
-	ts.Mu.RLock()
-	defer ts.Mu.RUnlock()
+	ts.RLock()
+	defer ts.RUnlock()
 	s := fmt.Sprintf("<Tables>[Cnt=%d]", len(ts.Data))
 	for _, td := range ts.Data {
 		s = fmt.Sprintf("%s\n%s", s, td.String())
@@ -426,9 +469,9 @@ func (ts *Tables) TableIds() (ids map[uint64]bool) {
 }
 
 func (ts *Tables) DropTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.Lock()
+	ts.Lock()
 	tbl, err = ts.DropTableNoLock(tid)
-	ts.Mu.Unlock()
+	ts.Unlock()
 	return tbl, err
 }
 
@@ -438,9 +481,12 @@ func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) 
 		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
 		return tbl, NotExistErr
 	}
-	// ts.Tombstone[tid] = tbl
 	delete(ts.ids, tid)
 	delete(ts.Data, tid)
+	if ts.Aware != nil {
+		meta := tbl.GetMeta()
+		ts.Aware.ShardNodeDeleted(meta.Database.GetShardId(), meta.Id)
+	}
 	return tbl, nil
 }
 
@@ -453,26 +499,30 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 }
 
 func (ts *Tables) WeakRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.RLock()
+	ts.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
-	ts.Mu.RUnlock()
+	ts.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.RLock()
+	ts.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
 	if tbl != nil {
 		tbl.Ref()
 	}
-	ts.Mu.RUnlock()
+	ts.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) {
 	tbl := newTableData(ts, meta)
-	ts.Mu.Lock()
-	defer ts.Mu.Unlock()
+	tbl.InitAppender()
+	ts.Lock()
+	defer ts.Unlock()
+	if meta.IsCloseLocked() {
+		return nil, metadata.TableNotFoundErr
+	}
 	if err := ts.CreateTableNoLock(tbl); err != nil {
 		tbl.Unref()
 		return nil, err
@@ -480,12 +530,134 @@ func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) 
 	return tbl, nil
 }
 
+func (ts *Tables) MakeTableMutationHandle(id uint64) (handle iface.MutationHandle, err error) {
+	var t iface.ITableData
+	ts.RLock()
+	t, err = ts.GetTableNoLock(id)
+	if err != nil {
+		ts.RUnlock()
+		return
+	}
+	t.Ref()
+	ts.RUnlock()
+	handle = t.MakeMutationHandle()
+	t.Unref()
+	return
+}
+
+func (ts *Tables) ForTables(fn func(iface.ITableData) error) error {
+	ts.RLock()
+	defer ts.RUnlock()
+	return ts.ForTablesLocked(fn)
+}
+
+func (ts *Tables) ForTablesLocked(fn func(iface.ITableData) error) error {
+	var err error
+	for _, t := range ts.Data {
+		if err = fn(t); err != nil {
+			break
+		}
+	}
+	return err
+}
+
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
-		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))
+		return metadata.DuplicateErr
 	}
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl
+	if ts.Aware != nil {
+		meta := tbl.GetMeta()
+		ts.Aware.ShardNodeCreated(meta.Database.GetShardId(), meta.Id)
+	}
 	return nil
+}
+
+func (ts *Tables) InstallTable(table iface.ITableData) error {
+	ts.Lock()
+	defer ts.Unlock()
+	return ts.InstallTableLocked(table)
+}
+
+func (ts *Tables) InstallTableLocked(table iface.ITableData) error {
+	table.InitAppender()
+	return ts.CreateTableNoLock(table)
+}
+
+func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) (iface.ITableData, error) {
+	data := newTableData(ts, meta)
+	for _, segMeta := range meta.SegmentSet {
+		if segMeta.IsSortedLocked() || !segMeta.AppendableLocked() {
+			segData, err := data.RegisterSegment(segMeta)
+			if err != nil {
+				return nil, err
+			}
+			defer segData.Unref()
+
+			for _, blkMeta := range segMeta.BlockSet {
+				blkData, err := data.RegisterBlock(blkMeta)
+				if err != nil {
+					return nil, err
+				}
+				defer blkData.Unref()
+			}
+
+			bsiFiles := ctx.PresentedBsiFiles(*segMeta.AsCommonID())
+			segFile := segData.GetSegmentFile()
+			holder := segData.GetIndexHolder()
+			for _, file := range bsiFiles {
+				holder.LoadIndex(segFile, file)
+			}
+			continue
+		}
+		sid := segMeta.AsCommonID()
+		if !ctx.HasSegementFile(sid) {
+			break
+		}
+		segData, err := data.RegisterSegment(segMeta)
+		if err != nil {
+			return nil, err
+		}
+		defer segData.Unref()
+		for _, blkMeta := range segMeta.BlockSet {
+			id := blkMeta.AsCommonID()
+			if !ctx.HasBlockFile(id) {
+				break
+			}
+			blkData, err := data.RegisterBlock(blkMeta)
+			if err != nil {
+				return nil, err
+			}
+			defer blkData.Unref()
+		}
+	}
+	data.InitReplay()
+	logutil.Info(data.String())
+	logutil.Infof("%s, %d", meta.Repr(false), data.GetRowCount())
+	return data, nil
+}
+
+func (ts *Tables) PrepareInstallTables(meta map[uint64]*metadata.Table, ctx InstallContext) (tables []iface.ITableData, err error) {
+	for _, table := range meta {
+		var data iface.ITableData
+		if data, err = ts.PrepareInstallTable(table, ctx); err != nil {
+			return
+		}
+		tables = append(tables, data)
+	}
+	return
+}
+
+func (ts *Tables) CommitInstallTables(tables []iface.ITableData) error {
+	var err error
+	ts.Lock()
+	defer ts.Unlock()
+	for _, table := range tables {
+		if err = ts.InstallTableLocked(table); err != nil {
+			panic(err)
+		}
+	}
+	return err
 }

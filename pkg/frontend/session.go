@@ -15,9 +15,9 @@
 package frontend
 
 import (
-	"matrixone/pkg/config"
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 type Session struct {

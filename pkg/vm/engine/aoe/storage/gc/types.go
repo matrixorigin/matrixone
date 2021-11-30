@@ -16,12 +16,12 @@ package gc
 
 import (
 	"context"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc/gci"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync"
 	"sync/atomic"
 	"time"

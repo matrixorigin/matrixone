@@ -16,9 +16,9 @@ package plan
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error {

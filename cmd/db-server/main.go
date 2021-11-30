@@ -18,22 +18,24 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/storage/kv"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
 	"math"
-	"matrixone/pkg/catalog"
-	"matrixone/pkg/config"
-	"matrixone/pkg/frontend"
-	"matrixone/pkg/logutil"
-	//"matrixone/pkg/rpcserver"
-	"matrixone/pkg/vm/driver"
-	aoeDriver "matrixone/pkg/vm/driver/aoe"
-	dConfig "matrixone/pkg/vm/driver/config"
-	"matrixone/pkg/vm/driver/pb"
-	"matrixone/pkg/vm/engine"
-	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
-	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
-	//"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
-	//"matrixone/pkg/vm/process"
+	//"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
+	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	//"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	//"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"os/signal"
 	"strconv"
@@ -43,10 +45,9 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 )
 
@@ -131,7 +132,6 @@ func main() {
 	//close cube print info
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	logutil.SetupMOLogger(os.Args[1])
 
@@ -167,18 +167,14 @@ func main() {
 		os.Exit(RecreateDirExit)
 	}
 
-	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
+	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", nil, &pebble.Options{
+		FS:                          vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
-
 	})
-	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
-		MemTableSize:                1024 * 1024 * 128,
-		MemTableStopWritesThreshold: 4,
+	kvBase := kv.NewBaseStorage(kvs, vfs.Default)
+	pebbleDataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 
-	})
 	var aoeDataStorage *aoeDriver.Storage
 
 	opt := aoeStorage.Options{}
@@ -206,9 +202,7 @@ func main() {
 		logutil.Infof("Decode cluster config error:%v\n", err)
 		os.Exit(DecodeClusterConfigExit)
 	}
-	cfg.ServerConfig = server.Cfg{
-		ExternalServer: true,
-	}
+	cfg.ServerConfig = server.Cfg{}
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
 
@@ -216,7 +210,7 @@ func main() {
 		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 	}
 
-	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		logutil.Infof("Create cube driver failed, %v", err)
 		os.Exit(CreateCubeExit)
@@ -280,7 +274,6 @@ func main() {
 	serverShutdown(true)
 	a.Close()
 	aoeDataStorage.Close()
-	metaStorage.Close()
 	pebbleDataStorage.Close()
 
 	cleanup()
@@ -298,21 +291,21 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 			if router != nil {
 				nodeCnt := maxReplicas
 				shardCnt := 0
-				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
-					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
+				router.ForeachShards(uint64(pb.AOEGroup), func(shard meta.Shard) bool {
+					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
 					shardCnt++
-					if len(shard.Peers) < nodeCnt {
-						nodeCnt = len(shard.Peers)
+					if len(shard.Replicas) < nodeCnt {
+						nodeCnt = len(shard.Replicas)
 					}
 					return true
 				})
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
 					kvNodeCnt := maxReplicas
 					kvCnt := 0
-					router.ForeachShards(uint64(pb.KVGroup), func(shard *bhmetapb.Shard) bool {
+					router.ForeachShards(uint64(pb.KVGroup), func(shard meta.Shard) bool {
 						kvCnt++
-						if len(shard.Peers) < kvNodeCnt {
-							kvNodeCnt = len(shard.Peers)
+						if len(shard.Replicas) < kvNodeCnt {
+							kvNodeCnt = len(shard.Replicas)
 						}
 						return true
 					})

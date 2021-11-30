@@ -16,12 +16,12 @@ package index
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"io"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 func SegmentZoneMapIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
@@ -89,6 +89,10 @@ func (i *SegmentZoneMapIndex) FreeMemory() {
 	if i.FreeFunc != nil {
 		i.FreeFunc(i)
 	}
+}
+
+func (i *SegmentZoneMapIndex) IndexFile() common.IVFile {
+	return i.File
 }
 
 func (i *SegmentZoneMapIndex) GetMemorySize() uint64 {

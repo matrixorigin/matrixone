@@ -16,8 +16,8 @@ package sched
 
 import (
 	"github.com/panjf2000/ants/v2"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )

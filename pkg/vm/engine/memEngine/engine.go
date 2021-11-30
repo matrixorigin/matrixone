@@ -2,8 +2,8 @@ package memEngine
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 	"runtime"
 )
 

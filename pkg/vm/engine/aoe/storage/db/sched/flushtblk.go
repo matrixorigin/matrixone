@@ -14,12 +14,11 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	// "matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	// "github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // flushTransientBlockEvent flushes transient block node in memory, and
@@ -39,10 +38,7 @@ func NewFlushTransientBlockEvent(ctx *Context, n base.INode, data batch.IBatch, 
 		Data: data,
 		Meta: meta,
 	}
-	e.BaseEvent = BaseEvent{
-		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushTBlkTask, ctx.DoneCB, ctx.Waitable),
-	}
+	e.BaseEvent = *NewBaseEvent(e, FlushTBlkTask, ctx)
 	return e
 }
 

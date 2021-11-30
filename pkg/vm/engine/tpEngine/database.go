@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/driver"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv driver.CubeDriver, proc *process.Process) *tpDatabase {
@@ -278,7 +278,7 @@ func (td *tpDatabase) Create(_ uint64, rel string, defs []engine.TableDef, _ *en
 
 	//encode the metadata into bytes
 	var md tpMetadata
-	var attrs []metadata.Attribute
+	var attrs []engine.Attribute
 
 	for _, def := range defs {
 		v, ok := def.(*engine.AttributeDef)

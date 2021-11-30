@@ -15,15 +15,17 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	"os"
 	"sync"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -32,8 +34,7 @@ func TestUpgradeBlk(t *testing.T) {
 	row_count := uint64(64)
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
-	dir := "/tmp/testupgradeblk"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{
@@ -42,13 +43,21 @@ func TestUpgradeBlk(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager(dir, true)
 
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, seg_cnt*blk_cnt, nil)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
+
+	dbName := "db1"
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(99)
+	idxGen := gen.Shard(shardId)
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, seg_cnt*blk_cnt, idxGen)
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)
@@ -102,8 +111,7 @@ func TestUpgradeSeg(t *testing.T) {
 	row_count := uint64(64)
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
-	dir := "/tmp/testupgradeblk"
-	os.RemoveAll(dir)
+	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
 	opts := new(storage.Options)
 	cfg := &storage.MetaCfg{
@@ -112,13 +120,21 @@ func TestUpgradeSeg(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
 	fsMgr := ldio.NewManager(dir, true)
 
-	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, seg_cnt*blk_cnt, nil)
+	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr, nil)
+
+	dbName := "db1"
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(0)
+
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, nil, seg_cnt*blk_cnt, gen.Shard(shardId))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

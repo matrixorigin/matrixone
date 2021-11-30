@@ -15,7 +15,7 @@
 package config
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 )
 
 type CacheSizeType uint8
@@ -77,8 +77,10 @@ func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSiz
 	return opts
 }
 
-func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt uint64) *storage.Options {
-	opts := new(storage.Options)
+func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt uint64, opts *storage.Options) *storage.Options {
+	if opts == nil {
+		opts = new(storage.Options)
+	}
 	metaCfg := &storage.MetaCfg{
 		BlockMaxRows:     blockRows,
 		SegmentMaxBlocks: blockCnt,
@@ -86,9 +88,9 @@ func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt
 	opts.Meta.Conf = metaCfg
 	if cst == CST_Customize {
 		cacheCfg := new(storage.CacheCfg)
-		cacheCfg.IndexCapacity = blockRows * blockCnt * 80
-		cacheCfg.InsertCapacity = blockRows * blockCnt * 800
-		cacheCfg.DataCapacity = blockRows * blockCnt * 80
+		cacheCfg.IndexCapacity = blockRows * blockCnt * 2000
+		cacheCfg.InsertCapacity = blockRows * blockCnt * 1000
+		cacheCfg.DataCapacity = blockRows * blockCnt * 2000
 		opts.CacheCfg = cacheCfg
 	}
 	opts.FillDefaults(dir)

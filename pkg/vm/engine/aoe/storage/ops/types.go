@@ -15,8 +15,8 @@
 package ops
 
 import (
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"time"
 	// log "github.com/sirupsen/logrus"
 )

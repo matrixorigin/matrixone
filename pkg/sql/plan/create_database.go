@@ -14,7 +14,7 @@
 
 package plan
 
-import "matrixone/pkg/sql/parsers/tree"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func (b *build) BuildCreateDatabase(stmt *tree.CreateDatabase, plan *CreateDatabase) error {
 	plan.IfNotExistFlag = stmt.IfNotExists

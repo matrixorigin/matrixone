@@ -17,7 +17,7 @@
 package length
 
 import (
-	"matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"golang.org/x/sys/cpu"
 )

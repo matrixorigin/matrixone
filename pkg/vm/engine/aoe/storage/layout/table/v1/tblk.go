@@ -16,18 +16,19 @@ package table
 import (
 	"bytes"
 	"fmt"
-	gvec "matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"runtime"
+
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type tblock struct {
@@ -58,6 +59,10 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 }
 
 func (blk *tblock) close() {
+	if blk.meta.Segment.Table.IsDeleted() || blk.meta.Segment.Table.Database.IsDeleted() {
+		snip := blk.meta.ConsumeSnippet(true)
+		blk.meta.Segment.Table.Database.Catalog.IndexWal.Checkpoint(snip)
+	}
 	blk.baseBlock.release()
 	blk.node.SetStale()
 	blk.node.Close()
@@ -94,10 +99,6 @@ func (blk *tblock) ProcessData(fn func(batch.IBatch) error) error {
 
 func (blk *tblock) Size(attr string) uint64 {
 	return blk.coarseSize[attr]
-}
-
-func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
-	return blk.node.GetSegmentedIndex()
 }
 
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {

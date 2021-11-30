@@ -20,15 +20,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/prefetch"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/prefetch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 // SortedSegmentFile file structure:
@@ -54,20 +55,21 @@ type SortedSegmentFile struct {
 }
 
 func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
+	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		Meta:       NewFileMeta(),
 		BlocksMeta: make(map[common.ID]*FileMeta),
 		Info: &fileStat{
-			name: id.ToSegmentFilePath(),
+			name: name,
 		},
 	}
 
-	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
-	// log.Infof("SegmentFile name %s", name)
-	if _, err := os.Stat(name); os.IsNotExist(err) {
+	if info, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
+	} else {
+		sf.Info.size = info.Size()
 	}
 	r, err := os.OpenFile(name, os.O_RDONLY, 0666)
 	if err != nil {
@@ -86,6 +88,10 @@ func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.I
 
 func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
 	return newEmbedIndexFile(sf, meta)
+}
+
+func (sf *SortedSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+	return newIndexFile(file, id, meta)
 }
 
 func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
@@ -111,6 +117,14 @@ func (sf *SortedSegmentFile) RefBlock(id common.ID) {
 
 func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 	sf.Unref()
+}
+
+func (msf *SortedSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+	panic("not supported")
+}
+
+func (msf *SortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+	panic("not supported")
 }
 
 func (sf *SortedSegmentFile) initPointers() {
@@ -150,7 +164,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	// read metadata-2
 	sz = startPosSize +
 		endPosSize +
-		int(blkCnt)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		int(blkCnt)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
 		int(blkCnt*colCnt)*(colSizeSize*2) +
 		int(colCnt)*colPosSize
 
@@ -160,22 +174,24 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
-	blkIds := make([]uint64, blkCnt)
 	blkCounts := make([]uint64, blkCnt)
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
 	indices := make([]*metadata.LogIndex, blkCnt)
+	rangeBuf := make([]byte, blkRangeSize)
 
 	for i := uint32(0); i < blkCnt; i++ {
-		if err = binary.Read(metaBuf, binary.BigEndian, &blkIds[i]); err != nil {
-			panic(err)
-		}
 		if err = binary.Read(metaBuf, binary.BigEndian, &blkCounts[i]); err != nil {
 			panic(err)
 		}
 		if err = binary.Read(metaBuf, binary.BigEndian, &idxBuf); err != nil {
 			panic(err)
 		}
+
+		if _, err = metaBuf.Read(rangeBuf); err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+
 		if !bytes.Equal(idxBuf, []byte{}) {
 			preIndices[i] = &metadata.LogIndex{}
 			if err = preIndices[i].UnMarshal(idxBuf); err != nil {
@@ -195,9 +211,10 @@ func (sf *SortedSegmentFile) initPointers() {
 
 	for i := uint32(0); i < colCnt; i++ {
 		for j := uint32(0); j < blkCnt; j++ {
-			blkId := blkIds[j]
+			blkIdx := j
 			id := sf.ID.AsBlockID()
-			id.BlockID = blkId
+			// In fact `BlockID` means block idx here
+			id.BlockID = uint64(blkIdx)
 			key := base.Key{
 				Col: uint64(i),
 				ID:  id,
@@ -232,9 +249,9 @@ func (sf *SortedSegmentFile) initPointers() {
 	curOffset := startPos
 	for i := 0; i < int(colCnt); i++ {
 		for j := 0; j < int(blkCnt); j++ {
-			blkId := blkIds[j]
+			blkIdx := j
 			id := sf.ID.AsBlockID()
-			id.BlockID = blkId
+			id.BlockID = uint64(blkIdx)
 			key := base.Key{
 				Col: uint64(i),
 				ID:  id,
@@ -251,11 +268,11 @@ func (sf *SortedSegmentFile) initPointers() {
 	}
 
 	// read index
-	meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
 	if err != nil {
 		panic(err)
 	}
-	sf.Meta.Indices = meta
+	sf.Meta.Indices = idxMeta
 
 	// read footer
 	footer := make([]byte, 64)
@@ -303,6 +320,10 @@ func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 
 func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
 	sf.ReadPoint(ptr, buf)
+}
+
+func (sf *SortedSegmentFile) GetBlockSize(_ common.ID) int64 {
+	panic("not supported")
 }
 
 func (sf *SortedSegmentFile) DataCompressAlgo(id common.ID) int {
@@ -353,4 +374,17 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sz := pointer.Len
 	// integrate vfs later
 	return prefetch.Prefetch(sf.Fd(), uintptr(offset), uintptr(sz))
+}
+
+func (sf *SortedSegmentFile) CopyTo(dir string) error {
+	name := filepath.Base(sf.Name())
+	dest := filepath.Join(dir, name)
+	_, err := CopyFile(sf.Name(), dest)
+	return err
+}
+
+func (sf *SortedSegmentFile) LinkTo(dir string) error {
+	name := filepath.Base(sf.Name())
+	dest := filepath.Join(dir, name)
+	return os.Link(sf.Name(), dest)
 }

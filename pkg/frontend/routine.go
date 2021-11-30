@@ -17,7 +17,7 @@ package frontend
 import (
 	"github.com/fagongzi/goetty"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"net"
 	"time"
 )

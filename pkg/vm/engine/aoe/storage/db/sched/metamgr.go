@@ -17,11 +17,12 @@ package sched
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 var (
@@ -30,8 +31,8 @@ var (
 
 var (
 	metaEvents = map[sched.EventType]bool{
-		sched.MockEvent:       true,
-		sched.MetaUpdateEvent: true,
+		sched.MockEvent: true,
+		MetaUpdateEvent: true,
 	}
 )
 

@@ -16,11 +16,11 @@ package plan
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/parsers/tree"
-	"matrixone/pkg/sql/rewrite"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func New(db string, sql string, e engine.Engine) *build {

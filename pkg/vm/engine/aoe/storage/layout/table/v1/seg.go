@@ -16,15 +16,16 @@ package table
 
 import (
 	"fmt"
-	"matrixone/pkg/logutil"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type segment struct {
@@ -133,61 +134,8 @@ func (seg *segment) CanUpgrade() bool {
 	return true
 }
 
-func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
-	ok = false
-	if seg.typ == base.SORTED_SEG {
-		for i := len(seg.tree.blocks) - 1; i >= 0; i-- {
-			id, ok = seg.tree.blocks[i].GetSegmentedIndex()
-			if ok {
-				return id, ok
-			}
-		}
-		return id, ok
-	}
-	blkCnt := atomic.LoadUint32(&seg.tree.blockcnt)
-	for i := 0; i <= int(blkCnt)-1; i++ {
-		seg.tree.RLock()
-		blk := seg.tree.blocks[i]
-		seg.tree.RUnlock()
-		tmpId, tmpOk := blk.GetSegmentedIndex()
-		if tmpOk {
-			id, ok = tmpId, tmpOk
-		} else if blk.GetType() > base.TRANSIENT_BLK {
-			continue
-		} else {
-			break
-		}
-	}
-	return id, ok
-}
-
-func (seg *segment) GetReplayIndex() *metadata.LogIndex {
-	// if seg.tree.blockcnt == 0 {
-	// 	return nil
-	// }
-	// var ctx *metadata.LogIndex
-	// for blkIdx := int(seg.tree.blockcnt) - 1; blkIdx >= 0; blkIdx-- {
-	// 	blk := seg.tree.blocks[blkIdx]
-	// 	if ctx = blk.GetMeta().GetReplayIndex(); ctx != nil {
-	// 		break
-	// 	}
-	// }
-	// return ctx
-	// TODO
-	return nil
-}
-
 func (seg *segment) GetRowCount() uint64 {
-	if seg.meta.CommitInfo.Op >= metadata.OpUpgradeClose {
-		return seg.meta.Table.Schema.BlockMaxRows * seg.meta.Table.Schema.SegmentMaxBlocks
-	}
-	var ret uint64
-	seg.tree.RLock()
-	for _, blk := range seg.tree.blocks {
-		ret += blk.GetRowCount()
-	}
-	seg.tree.RUnlock()
-	return ret
+	return seg.meta.GetRowCount()
 }
 
 func (seg *segment) Size(attr string) uint64 {
@@ -315,13 +263,8 @@ func (seg *segment) StrongRefLastBlock() iface.IBlock {
 
 func (seg *segment) RegisterBlock(blkMeta *metadata.Block) (blk iface.IBlock, err error) {
 	factory := seg.host.GetBlockFactory()
-	if factory == nil {
-		blk, err = newBlock(seg, blkMeta)
-	} else {
-		blk, err = factory.CreateBlock(seg, blkMeta)
-	}
-	if err != nil {
-		return nil, err
+	if blk, err = factory.CreateBlock(seg, blkMeta); err != nil {
+		return
 	}
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
@@ -388,7 +331,7 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment
 	if indexHolder.Type == base.UNSORTED_SEG {
 		indexHolder.Unref()
 		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.meta.Id, base.SORTED_SEG)
-		seg.indexHolder.Init(segFile)
+		indexHolder.Init(segFile)
 	}
 	cloned.indexHolder = indexHolder
 	cloned.segFile = segFile
