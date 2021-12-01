@@ -51,6 +51,7 @@ func (ht *Int64HashMap) Init() {
 func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted bool, value *uint64) {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
+		ht.elemCnt += 1 - uint64(ht.hasZero)
 		inserted = ht.hasZero == 0
 		ht.hasZero = 1
 		value = &ht.zeroCell.Mapped
@@ -60,7 +61,7 @@ func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted boo
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = crc32Int64HashAsm(key)
+		hash = crc32Int64Hash(key)
 	}
 
 	inserted, _, cell := ht.findBucket(hash, key)
@@ -78,12 +79,13 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 	ht.resizeOnDemand(n)
 
 	if hashes[0] == 0 {
-		crc32Int64BatchHashAsm(keysPtr, &hashes[0], n)
+		crc32Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
 	for i, key := range keys {
 		if key == 0 {
+			ht.elemCnt += 1 - uint64(ht.hasZero)
 			inserted[i] = 1 - ht.hasZero
 			ht.hasZero = 1
 			values[i] = &ht.zeroCell.Mapped
@@ -102,14 +104,14 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64) {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
-		if ht.hasZero == 1 {
+		if ht.hasZero > 0 {
 			value = &ht.zeroCell.Mapped
 		}
 		return
 	}
 
 	if hash == 0 {
-		hash = crc32Int64HashAsm(key)
+		hash = crc32Int64Hash(key)
 	}
 
 	empty, _, cell := ht.findBucket(hash, key)
@@ -120,23 +122,15 @@ func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64)
 	return
 }
 
-func (ht *Int64HashMap) ZeroMapped() (value *uint64) {
-	if ht.hasZero > 0 {
-		value = &ht.zeroCell.Mapped
-	}
-
-	return
-}
-
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []*uint64) {
 	if hashes[0] == 0 {
-		crc32Int64BatchHashAsm(keysPtr, &hashes[0], n)
+		crc32Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
 	for i, key := range keys {
 		if key == 0 {
-			if ht.hasZero == 1 {
+			if ht.hasZero > 0 {
 				values[i] = &ht.zeroCell.Mapped
 			}
 		} else {
@@ -202,7 +196,7 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 	var i uint64
 	for i = 0; i < oldBucketCnt; i += kInitialBucketCnt {
 		cells := oldBucketData[i : i+kInitialBucketCnt]
-		crc32Int64CellBatchHashAsm(unsafe.Pointer(&cells[0]), &hashes[0], kInitialBucketCnt)
+		crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], kInitialBucketCnt)
 		for j := range cells {
 			cell := &cells[j]
 			if cell.Key != 0 {
