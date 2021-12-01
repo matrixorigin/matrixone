@@ -1,0 +1,2 @@
+create_database_statement
+     ::= 'CREATE' 'TABLE' (| 'IF' 'NOT' 'EXISTS') database_name create_option
