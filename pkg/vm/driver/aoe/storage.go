@@ -91,7 +91,7 @@ func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
-func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) createIndex(index uint64, term uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -113,6 +113,7 @@ func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId u
 	ctx := aoedb.CreateIndexCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
+			Ctx:    term,
 			Offset: offset,
 			Size:   batchSize,
 			DB:     aoedb.IdToNameFactory.Encode(shardId),
@@ -130,7 +131,7 @@ func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId u
 	return writtenBytes, changedBytes, nil
 }
 
-func (s *Storage) dropIndex(index uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) dropIndex(index uint64, term uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -147,6 +148,7 @@ func (s *Storage) dropIndex(index uint64, offset int, batchsize int, shardId uin
 	ctx := aoedb.DropIndexCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
+			Ctx:    term,
 			Offset: offset,
 			Size:   batchsize,
 			DB:     aoedb.IdToNameFactory.Encode(shardId),
@@ -165,7 +167,7 @@ func (s *Storage) dropIndex(index uint64, offset int, batchsize int, shardId uin
 }
 
 //Append appends batch in the table
-func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) Append(index uint64, term uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -193,6 +195,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 		TableMutationCtx: aoedb.TableMutationCtx{
 			DBMutationCtx: aoedb.DBMutationCtx{
 				Id:     index,
+				Ctx:    term,
 				Offset: offset,
 				Size:   batchSize,
 				DB:     aoedb.IdToNameFactory.Encode(shardId),
@@ -248,7 +251,7 @@ func (s *Storage) getSegmentedId(cmd []byte) []byte {
 //CreateTable creates a table in the storage.
 //It returns the id of the created table.
 //If the storage is closed, it panics.
-func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) createTable(index uint64, term uint64, offset int, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -272,6 +275,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 	ctx := aoedb.CreateTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
+			Ctx:    term,
 			Offset: offset,
 			Size:   batchsize,
 			DB:     aoedb.IdToNameFactory.Encode(shardId),
@@ -292,7 +296,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
-func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) dropTable(index uint64, term uint64, offset, batchsize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	if err := s.DB.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -309,6 +313,7 @@ func (s *Storage) dropTable(index uint64, offset, batchsize int, shardId uint64,
 	ctx := aoedb.DropTableCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     index,
+			Ctx:    term,
 			Offset: offset,
 			Size:   batchsize,
 			DB:     aoedb.IdToNameFactory.Encode(shardId),
@@ -450,15 +455,15 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 		var changedBytes int64
 		switch CmdType {
 		case uint64(pb.CreateTablet):
-			writtenBytes, changedBytes, rep = s.createTable(batch.Index, idx, batchSize, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.createTable(batch.Index, batch.Term, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.DropTablet):
-			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, idx, batchSize, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, batch.Term, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.Append):
-			writtenBytes, changedBytes, rep = s.Append(batch.Index, idx, batchSize, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.Append(batch.Index, batch.Term, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.CreateIndex):
-			writtenBytes, changedBytes, rep = s.createIndex(batch.Index, idx, batchSize, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.createIndex(batch.Index, batch.Term, idx, batchSize, shard.ID, cmd, key)
 		case uint64(pb.DropIndex):
-			writtenBytes, changedBytes, rep = s.dropIndex(batch.Index, idx, batchSize, shard.ID, cmd, key)
+			writtenBytes, changedBytes, rep = s.dropIndex(batch.Index, batch.Term, idx, batchSize, shard.ID, cmd, key)
 		}
 		ctx.AppendResponse(rep)
 		ctx.SetWrittenBytes(writtenBytes)
@@ -511,6 +516,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		if db == nil {
 			ctx := aoedb.CreateDBCtx{
 				Id:     metadata.LogIndex,
+				Ctx:    metadata.LogTerm,
 				Offset: 0,
 				Size:   3,
 				DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
@@ -558,6 +564,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			ctx := aoedb.CreateTableCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     metadata.LogIndex,
+					Ctx:    metadata.LogTerm,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
@@ -607,6 +614,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     metadata.LogIndex,
+					Ctx:    metadata.LogTerm,
 					Offset: offset,
 					Size:   size,
 					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
