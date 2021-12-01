@@ -17,7 +17,7 @@ Not limited to public clouds, hybrid clouds, on-premise servers, or smart device
 By converging multiple engines, MatrixOne can support hybrid streaming, transactional, and analytical workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
 
 ### High Availability
-MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed active-active.
+MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed deployment.
 
 ### Ease of Use
 An important goal of MatrixOne is to make it easy for users to operate and manage data, making daily work almost effortless.
@@ -26,7 +26,7 @@ An important goal of MatrixOne is to make it easy for users to operate and manag
 - **MySQL-compatible Syntax**: MatrixOne allows you to query data using traditional SQL queries.
 
 ### End-to-End Automated Data Science
-By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science applications.
+By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data for data science applications.
 
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
@@ -40,13 +40,13 @@ By streaming SQL and user-defined functions, MatrixOne provides end-to-end data 
 -   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipelines.
 -   **Cache**: Multi-version cache of data, indexes, and metadata for queries.
 ### Cluster Management Layer
-MatrixCube is a fundamental library for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
+MatrixCube is a fundamental library for building distributed systems, which offers guarantees for reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building. Using MatrixCube, developers only need to worry about their business logic as it is on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to improve friendliness for deployments spanning multiple data centers.
 -   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
--   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
--   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
+-   **Transaction Manager**: MatrixOne supports distributed transaction at snapshot isolation level.
+-   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to achieve strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
 ### Replicated Storage Layer
--   **Row Storage**: Stores serving workload, metadata, and catalog.
--   **Column Storage**: Stores analytical workload and materialized views.
+-   **Row Storage**: Stores serving transactional workload.
+-   **Column Storage**: Stores serving analytical workload and materialized views.
 ### Storage Provision Layer
 MatrixOne stores data in shared storage of S3 / HDFS, or the local disk, on-premise server, hybrid and any cloud, or even smart devices.
 ## Quick Start
