@@ -61,6 +61,8 @@ func init() {
 	gob.Register(Source{})
 	gob.Register(Node{})
 	gob.Register(Scope{})
+
+	gob.Register(types.Date(0))
 }
 
 func EncodeScope(s Scope, buf *bytes.Buffer) error {

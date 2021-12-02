@@ -85,10 +85,13 @@ func TestDataType(t *testing.T) {
 
 	sqls := []string {
 		"create table tdate (a date);",
+		"create table tdefdate (a date default '20211202')",
 		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112);",
+		"insert into tdefdate values ();",
 	}
 	res := [][]string {
 		{"tdate", "a\n\t[2007-02-10 1997-02-10 2001-04-28 2004-11-12]-&{<nil>}\n\n"},
+		{"tdefdate", "a\n\t2021-12-02\n\n"},
 	}
 
 	for _, sql := range sqls {

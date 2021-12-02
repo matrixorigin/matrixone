@@ -448,6 +448,9 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 	case types.T_char, types.T_varchar:
 		res := value.(string)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
+	case types.T_date:
+		res := value.(types.Date).String()
+		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
 }
