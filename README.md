@@ -3,30 +3,65 @@
 [![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
 
 ## What is MatrixOne?
-MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. It provides an end-to-end data processing platform that is highly autonomous and easy to use, to empower users to store, manipulate, and analyze data across devices, edges, and clouds, with minimal operational overheads.
 
-## Features
+MatrixOne is a future-oriented hyperconverged cloud and edge native DBMS that supports transactional, analytical, and streaming workload with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogenous infrastructures.
 
-### Planet Scalability
-MatrixOne cluster can easily expand capacity during SQL processing, computation, and storage, by adding nodes to the cluster on the fly.
+## **Key Features** 
+### **Hyperconverged Engine**
+* **Monolitic Engine**
+  
+     A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.
 
-### Cloud-Edge Native
-Not limited to public clouds, hybrid clouds, on-premise servers, or smart devices, MatrixOne accommodates itself to myriads of infrastructure while still providing top services with low latency and high throughput.
+* **Built-in Streaming Engine**
+  
+     With the built-in streaming engine, MatrixOne supports in-database streaming processing by groundbreaking incremental materialized view maintenance.
 
-### Hybrid Streaming, Transactional and Analytical Processing Engine
-By converging multiple engines, MatrixOne can support hybrid streaming, transactional, and analytical workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
+### **Cloud & Edge Native**
+* **Real Infrastructure Agnostic**
+  
+     MatrixOne supports seemless workload migration and bursting among different locations and infrastructures.
 
-### High Availability
-MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed active-active.
+* **Multi-site Active/Active**
+  
+     MatrixOne provides industry-leading latency control with optimized consistency protocol.
 
-### Ease of Use
-An important goal of MatrixOne is to make it easy for users to operate and manage data, making daily work almost effortless.
-- **No Dependency**: Download, install, or start MatrixOne straightforwardly without depending on external toolings.
-- **Simplify Administration**: Re-balancing, failover, system tuning, and other administrative tasks are fully automatic.
-- **MySQL-compatible Syntax**: MatrixOne allows you to query data using traditional SQL queries.
+### **Extreme Performance**
+* **High Performance**
+  
+     Accelerated queries supported by patented vectorized execution as well as optimal computation push down strategies through factorization techniques.
 
-### End-to-End Automated Data Science
-By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science applications.
+* **Strong Consistency**
+  
+     MatrixOne introduces a global, high-performance distributed transaction protocol across storage engines.
+
+* **High Scalability**
+  
+     Seamless and non-disruptive scaling by disaggregated storage and compute.   
+
+## **User Values**
+* **Simplify Database Management and Maintenance**
+  
+     To solve the problem of high and unpredictable cost of database selection process, management and maintenance due to database overabundance, MatrixOne all-in-one architecture will significantly simplify database management and maintenance, single database can serve multiple data applications.
+
+* **Reduce Data Fragmentation and Inconsistency**
+  
+     Data flow and copy between different databases makes data sync and consistency increasingly difficult. The unified incrementally materialized view of MatrixOne makes the downstream can support real-time upstream update, achieve the end-to-end data processing without redundant ETL process.
+
+* **Decoupling Data Architecture From Infrastructure**
+  
+     Currently the architecture design across different infrastructures is complicated, causes new data silos between cloud and edge, cloud and on-premise. MatrixOne is designed with unified architecture to support simplified data management and operations across different type of infrastructures.
+
+* **Extremely Fast Complex Query Performance**
+  
+     Poor business agility as a result of slow complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne  supports blazing fast experience even for star and snowflake schema queries, improving business agility by real-time analytics.
+     
+* **An Solid OLTP-like OLAP Experience**
+  
+     Current data warehousing solutions have the following problems such as high latency and absence of immediate visibility for data updates. MatrixOne brings OLTP (Online Transactional Processing) level consistency and high availability to CRUD operations in OLAP (Online Analytical Processing).
+
+* **Seamless and Non-disruptive Scaling**
+  
+     It is difficult to balance performance and scalability to achieve optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient scale in/out and up/down without disrupting applications.
 
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png)
