@@ -736,7 +736,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -783,7 +783,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -830,7 +830,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -877,7 +877,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -924,7 +924,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -971,7 +971,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1018,7 +1018,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1065,7 +1065,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1112,7 +1112,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1159,7 +1159,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1206,7 +1206,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1253,7 +1253,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part[len(part) - 1]
 				}
 			}
@@ -1300,7 +1300,7 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part.Get(0)
 				}
-				if i == len(data) {
+				if i == len(data) - 1 {
 					globalMax = part.Get(int64(len(part.Offsets)-1))
 				}
 			}
