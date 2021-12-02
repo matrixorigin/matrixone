@@ -64,7 +64,7 @@ MatrixOne is a future-oriented hyperconverged cloud and edge native DBMS that su
      It is difficult to balance performance and scalability to achieve optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient scale in/out and up/down without disrupting applications.
 
 ## Architecture
-![Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png)
+![Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true)
 
 ### Query Parser Layer
 -   **Parser**: Parses SQL, Streaming Query, or Python language into an abstract syntax tree for further processing.
