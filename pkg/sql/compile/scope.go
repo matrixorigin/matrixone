@@ -39,6 +39,10 @@ import (
 	"strings"
 )
 
+const (
+	nullString = "NULL"
+)
+
 // CreateDatabase do create database work according to create database plan.
 func (s *Scope) CreateDatabase(ts uint64) error {
 	p, _ := s.Plan.(*plan.CreateDatabase)
@@ -240,7 +244,16 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 				typ:  attrDef.Attr.Type,
 			}
 			if attrDef.Attr.HasDefaultExpr() {
-				attrs[count].dft = fmt.Sprintf("%v", attrDef.Attr.Default.Value)
+				if attrDef.Attr.Default.IsNull {
+					attrs[count].dft = nullString
+				} else {
+					switch attrDef.Attr.Type.Oid {
+					case types.T_date:
+						attrs[count].dft = fmt.Sprintf("%s", attrDef.Attr.Default.Value)
+					default:
+						attrs[count].dft = fmt.Sprintf("%v", attrDef.Attr.Default.Value)
+					}
+				}
 			}
 			count++
 		}
