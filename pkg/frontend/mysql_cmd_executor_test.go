@@ -1,16 +1,23 @@
 package frontend
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/defines"
 	"reflect"
 	"testing"
 	"time"
 )
 
-func TestMysqlCmdExecutor(t *testing.T) {
+	func TestMysqlCmdExecutor(t *testing.T) {
 	fs, err := NewFrontendStub()
 	require.NoError(t, err)
 
@@ -221,6 +228,97 @@ func TestChannelProtocol(t *testing.T) {
 
 	//close client
 	cps.cps.CloseRoutine(cpRt.getConnID())
+}
+
+func newTestEngine() (engine.Engine, *process.Process) {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	proc := process.New(mheap.New(gm))
+	e := memEngine.NewTestEngine()
+	return e, proc
+}
+
+// a simple select function Todo: need delete when support select * from relation.
+func TempSelect(e engine.Engine, schema, name string) string {
+	var buff bytes.Buffer
+
+	db, err := e.Database(schema)
+	if err != nil {
+		return err.Error()
+	}
+	r, err := db.Relation(name)
+	if err != nil {
+		return err.Error()
+	}
+	defs := r.TableDefs()
+	attrs := make([]string, 0, len(defs))
+	{
+		for _, def := range defs {
+			if v, ok := def.(*engine.AttributeDef); ok {
+				attrs = append(attrs, v.Attr.Name)
+			}
+		}
+	}
+	cs := make([]uint64, len(attrs))
+	for i := range cs {
+		cs[i] = 1
+	}
+	rd := r.NewReader(1)[0]
+	{
+		bat, err := rd.Read(cs, attrs)
+		if err != nil {
+			return err.Error()
+		}
+		buff.WriteString(fmt.Sprintf("%s\n", bat))
+	}
+	return buff.String()
+}
+
+func TestLoadDate(t *testing.T){
+	fs, err := NewFrontendStub()
+	require.NoError(t, err)
+
+	err = StartFrontendStub(fs)
+	require.NoError(t, err)
+
+	defer func(fs *FrontendStub) {
+		err := CloseFrontendStub(fs)
+		if err != nil {
+			require.NoError(t,err)
+		}
+	}(fs)
+
+	db := open_db(t,6002)
+	time.Sleep(2 * time.Second)
+
+	do_query_resp_states(t, db, false, "use test")
+
+	//create table E
+	tableE := "create table E(a varchar,b date,c int)"
+	do_query_resp_states(t,db,false,tableE)
+
+	loadFormat := "load data " +
+		"infile '%s' " +
+		"ignore " +
+		"INTO TABLE test.%s " +
+		"FIELDS TERMINATED BY '%c' "
+
+	loadfile2 := "test/loadcase3"
+	loadE := fmt.Sprintf(loadFormat,loadfile2,"E",',')
+	fmt.Println(loadE)
+	do_query_resp_states(t,db,false,loadE)
+
+	loadE_cases := [][]string {
+		{"tdate", "a\n\t[abc abc abc abc abc abc abc abc abc abc]-&{<nil>}\nb\n\t[2007-02-10 1997-02-10 2001-04-28 2004-11-12 2007-02-10 1997-02-10 2001-04-28 2004-11-12 2007-02-10 1997-02-10]-&{<nil>}\nc\n\t[1 2 3 4 5 6 7 8 9 10]-&{<nil>}\n\n"},
+	}
+
+	for _, ec := range loadE_cases {
+		//fmt.Println(ec[1])
+		require.Equal(t, ec[1], TempSelect(fs.eng,"test","E"))
+	}
+
+	time.Sleep(100 * time.Millisecond)
+	close_db(t,db)
 }
 
 func NewColumnDef_string(name string, colType uint8) *MysqlColumn {

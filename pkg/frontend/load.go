@@ -337,6 +337,8 @@ func makeBatch(handler *ParseLineHandler) *PoolElement {
 				Data:    nil,
 			}
 			vec.Col = vBytes
+		case types.T_date:
+			vec.Col	= make([]types.Date,batchSize)
 		default:
 			panic("unsupported vector type")
 		}
@@ -802,6 +804,25 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						vBytes.Data = append(vBytes.Data, field...)
 						vBytes.Lengths[rowIdx] = uint32(len(field))
 					}
+				case types.T_date:
+					cols := vec.Col.([]types.Date)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp,uint64(rowIdx))
+					} else {
+						fs := field
+						//fmt.Printf("==== > field string [%s] \n",fs)
+						d, err := types.ParseDate(fs)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = 0
+							//break
+						}
+						cols[rowIdx] = d
+					}
 				default:
 					panic("unsupported oid")
 				}
@@ -1091,6 +1112,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						vBytes.Lengths[i] = uint32(len(field))
 					}
 				}
+			case types.T_date:
+				cols := vec.Col.([]types.Date)
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp,uint64(i))
+					} else {
+						field := line[j]
+						//fmt.Printf("==== > field string [%s] \n",fs)
+						d, err := types.ParseDate(field)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = 0
+							//break
+						}
+						cols[i] = d
+					}
+				}
 			default:
 				panic("unsupported oid")
 			}
@@ -1269,6 +1313,9 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 						}
 
 						//fmt.Printf("saveBatchToStorage after data %s \n",vBytes.String())
+					case types.T_date:
+						cols := vec.Col.([]types.Date)
+						vec.Col = cols[:needLen]
 					}
 				}
 
