@@ -17,7 +17,6 @@ package unittest
 import (
 	"bytes"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -74,6 +74,30 @@ func TestInsertFunction(t *testing.T) {
 		require.NoError(t, sqlRun(p, e, proc), p)
 	}
 	for _, s := range works {
+		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
+	}
+}
+
+// TestDataType will do test for new Types
+// For Example: date, datetime
+func TestDataType(t *testing.T) {
+	e, proc := newTestEngine()
+
+	sqls := []string {
+		"create table tdate (a date);",
+		"create table tdefdate (a date default '20211202')",
+		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112);",
+		"insert into tdefdate values ();",
+	}
+	res := [][]string {
+		{"tdate", "a\n\t[2007-02-10 1997-02-10 2001-04-28 2004-11-12]-&{<nil>}\n\n"},
+		{"tdefdate", "a\n\t2021-12-02\n\n"},
+	}
+
+	for _, sql := range sqls {
+		require.NoError(t, sqlRun(sql, e, proc), sql)
+	}
+	for _, s := range res {
 		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
 	}
 }

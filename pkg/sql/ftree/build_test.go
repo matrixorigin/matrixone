@@ -16,12 +16,12 @@ package ftree
 
 import (
 	"fmt"
-	"log"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"log"
 	"testing"
 )
 
@@ -43,7 +43,7 @@ var querys = []string{
 	"select distinct spID,userID from t1 where score>2 order by spID asc;",
 	"select distinct spID,userID from t1 where spID>2 order by userID desc;",
 	"select distinct sum(spID) from t1 group by userID;",
-	"select distinct sum(spID) as sum from t1 group by userID order by sum asc;",
+"select distinct sum(spID) as sum from t1 group by u						serID order by sum asc;",
 	"select distinct sum(spID) as sum from t1 where score>1 group by userID order by sum asc;",
 	"select userID,MAX(score) from t1 where userID between 2 and 3 group by userID;",
 	"select userID,MAX(score) from t1 where userID not between 2 and 3 group by userID order by userID desc;",

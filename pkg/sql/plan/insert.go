@@ -353,6 +353,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			if err := vector.Append(vec, vs); err != nil {
 				return err
 			}
+		case types.T_date:
+			vs := make([]types.Date, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(types.Date), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(types.Date)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		default:
 			return errors.New(errno.DatatypeMismatch, fmt.Sprintf("insert for type '%v' not implement now", vec.Typ))
 		}
@@ -391,6 +413,8 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 				return err
 			}
 			vec.Col = col
+		case types.T_date:
+			vec.Col = make([]types.Date, len(rows.Rows))
 		default:
 			return errors.New(errno.DatatypeMismatch, fmt.Sprintf("insert for type '%v' not implement now", vec.Typ))
 		}
@@ -423,6 +447,9 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
 	case types.T_char, types.T_varchar:
 		res := value.(string)
+		return tree.NewNumVal(constant.MakeString(res), res, false)
+	case types.T_date:
+		res := value.(types.Date).String()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)

@@ -14,7 +14,13 @@
 
 package types
 
-import "time"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
+	"time"
+)
 
 const (
 	daysPer400Years = 365*400 + 97
@@ -43,8 +49,91 @@ func init() {
 	localTZ = int64(offset)
 }
 
+var (
+	errIncorrectDateValue = errors.New(errno.DataException, "Incorrect date value")
+
+	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+)
+
+const (
+	FullYearMonthDay = len("yyyy-mm-dd")
+	DisputedYearMonthDay = len("yy-mm-dd") // also "yyyymmdd"
+	SimpleYearMonthDay = len("yymmdd")
+
+	MaxDateYear = 9999
+	MinDateYear = 1000
+	MaxMonthInYear = 12
+	MinMonthInYear = 1
+
+	CenturyStr = "20"
+)
+
+// ParseDate will parse string to be a Date.
+// can only solve string Format like :
+// "yyyy-mm-dd"
+// "yy-mm-dd" is same to "20yy-mm-dd"
+// "yyyymmdd"
+// "yymmdd" is same to "20yymmdd"
+// And the supported range is '1000-01-01' to '9999-12-31'
+func ParseDate(s string) (Date, error) {
+	var parts [3]string
+	var year, month, day int64
+	var err error
+
+	switch len(s) {
+	case FullYearMonthDay: // yyyy-mm-dd
+		parts[0], parts[1], parts[2] = s[0:4], s[5:7], s[8:]
+	case DisputedYearMonthDay: // yy-mm-dd, yyyymmdd
+		if s[2] == '-' {
+			parts[0], parts[1], parts[2] = CenturyStr + s[0:2], s[3:5], s[6:]
+		} else {
+			parts[0], parts[1], parts[2] = s[0:4], s[4:6], s[6:]
+		}
+	case SimpleYearMonthDay: // yymmdd
+		parts[0], parts[1], parts[2] = CenturyStr + s[0:2], s[2:4], s[4:]
+	default:
+		return -1, errIncorrectDateValue
+	}
+
+	year, err = strconv.ParseInt(parts[0], 10, 32)
+	if err != nil {
+		return -1, errIncorrectDateValue
+	}
+	month, err = strconv.ParseInt(parts[1], 10, 16)
+	if err != nil {
+		return -1, errIncorrectDateValue
+	}
+	day, err = strconv.ParseInt(parts[2], 10, 16)
+	if err != nil {
+		return -1, errIncorrectDateValue
+	}
+	y, m, d := int32(year), uint8(month), uint8(day)
+	if validDate(y, m, d) {
+		return FromCalendar(y, m, d), nil
+	}
+	return -1, errIncorrectDateValue
+}
+
+func validDate(year int32, month, day uint8) bool {
+	if year >= MinDateYear && year <= MaxDateYear {
+		if MinMonthInYear <= month && month <= MaxMonthInYear {
+			if day > 0 {
+				if isLeap(year) {
+					return day <= leapYearMonthDays[month-1]
+				} else {
+					return day <= flatYearMonthDays[month-1]
+				}
+			}
+		}
+	}
+	return false
+}
+
+
 func (a Date) String() string {
-	return ""
+	y, m, d, _ := a.Calendar(true)
+	return fmt.Sprintf("%d-%02d-%02d", y, m, d)
 }
 
 // Holds number of days since January 1, year 1 in Gregorian calendar

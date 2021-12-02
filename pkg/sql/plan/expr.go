@@ -16,8 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"go/constant"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -28,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
+	"go/constant"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -782,6 +782,11 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				return float64(-v), nil
 			}
 			return float64(v), nil
+		case types.T_date:
+			v, _ := constant.Uint64Val(val)
+			if !num.Negative() {
+				return types.ParseDate(strconv.FormatUint(v, 10))
+			}
 		}
 	case constant.Float:
 		switch typ.Oid {
@@ -842,6 +847,8 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:
 				return constant.StringVal(val), nil
+			case types.T_date:
+				return types.ParseDate(constant.StringVal(val))
 			}
 		}
 	}
