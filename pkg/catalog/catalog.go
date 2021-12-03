@@ -244,7 +244,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 				logutil.Errorf("delete meta for uncreated table, %v, %v, %v", dbId, tbl, serr)
 			}
 		}
-		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, properties is %v, cost %d ms", tbl.Name, tid, tbl.Properties, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {

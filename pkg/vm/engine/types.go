@@ -48,6 +48,16 @@ type PrimaryIndexDef struct {
 	Names []string
 }
 
+type PropertiesDef struct {
+	TableDef
+	Properties []Property
+}
+
+type Property struct {
+	Key   string
+	Value string
+}
+
 type NodeInfo struct {
 	Mcpu int
 }
@@ -98,6 +108,7 @@ func (*CommentDef) tableDef()     {}
 func (*AttributeDef) tableDef()   {}
 func (*IndexTableDef) tableDef()  {}
 func (*PartitionByDef) tableDef() {}
+func (*PropertiesDef) tableDef()  {}
 
 type Relation interface {
 	Statistics
