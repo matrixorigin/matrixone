@@ -30,8 +30,6 @@ type Scanner struct {
 	LastError           error
 	posVarIndex         int
 	dialectType         dialect.DialectType
-	SkipSpecialComments bool
-	AllowComments       bool
 	MysqlSpecialComment *Scanner
 
 	Pos int
