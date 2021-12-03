@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
+	"strconv"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"reflect"
-	"strconv"
-	"unsafe"
 )
 
 func New(typ types.Type) *Vector {
@@ -1099,6 +1100,489 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 	}
 	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
 		nulls.Add(v.Nsp, uint64(Length(v)-1))
+	}
+	return nil
+}
+
+func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) error {
+	if v.Or {
+		return errors.New("UnionOne operation cannot be performed for origin vector")
+	}
+
+	oldLen := Length(v)
+
+	switch v.Typ.Oid {
+	case types.T_int8:
+		col := w.Col.([]int8)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt))
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt8Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]int8)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeInt8Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_int16:
+		col := w.Col.([]int16)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*2)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt16Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]int16)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeInt16Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_int32:
+		col := w.Col.([]int32)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*4)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt32Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]int32)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeInt32Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_int64:
+		col := w.Col.([]int64)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt64Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]int64)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeInt64Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_uint8:
+		col := w.Col.([]uint8)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt))
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint8Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]uint8)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeUint8Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_uint16:
+		col := w.Col.([]uint16)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*2)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint16Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]uint16)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeUint16Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_uint32:
+		col := w.Col.([]uint32)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*4)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint32Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]uint32)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeUint32Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_uint64:
+		col := w.Col.([]uint64)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint64Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]uint64)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeUint64Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_float32:
+		col := w.Col.([]float32)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*4)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeFloat32Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]float32)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeFloat32Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_float64:
+		col := w.Col.([]float64)
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(cnt)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeFloat64Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]float64)
+			n := len(vs)
+			if n+cnt >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeFloat64Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_tuple:
+		v.Ref = w.Ref
+		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
+		for i, flag := range flags {
+			if flag > 0 {
+				vs = append(vs, ws[int(offset)+i])
+			}
+		}
+		v.Col = vs
+
+	case types.T_char, types.T_varchar, types.T_json:
+		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
+		incSize := 0
+		for i, flag := range flags {
+			if flag > 0 {
+				incSize += int(ws.Lengths[int(offset)+i])
+			}
+		}
+
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, int64(incSize))
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			v.Data = data
+			vs.Data = data[:0]
+		} else if n := len(vs.Data); n+incSize >= cap(vs.Data) {
+			data, err := mheap.Grow(m, vs.Data, int64(n+incSize))
+			if err != nil {
+				return err
+			}
+			mheap.Free(m, v.Data)
+			v.Data = data
+			n = len(vs.Offsets)
+			vs.Data = data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
+		}
+
+		for i, flag := range flags {
+			if flag > 0 {
+				from := ws.Get(offset + int64(i))
+				vs.Lengths = append(vs.Lengths, uint32(len(from)))
+				{
+					n := len(vs.Offsets)
+					if n > 0 {
+						vs.Offsets = append(vs.Offsets, vs.Offsets[n-1]+vs.Lengths[n-1])
+					} else {
+						vs.Offsets = append(vs.Offsets, 0)
+					}
+				}
+				vs.Data = append(vs.Data, from...)
+			}
+		}
+		v.Col = vs
+	}
+
+	for i, j := 0, uint64(oldLen); i < len(flags); i++ {
+		if flags[i] > 0 && nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
+			nulls.Add(v.Nsp, j)
+			j++
+		}
 	}
 	return nil
 }
