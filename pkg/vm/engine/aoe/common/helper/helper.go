@@ -17,11 +17,13 @@ package helper
 import (
 	"bytes"
 	"encoding/gob"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+
 	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
@@ -50,6 +52,7 @@ func Transfer(sid, tid, typ uint64, name string,
 		}
 	}
 	tbl.Indices = IndexDefs(sid, tid, mp, defs)
+	tbl.Properties, _ = PropertyDef(defs)
 	data, err := PartitionDef(defs)
 	if err != nil {
 		return tbl, err
@@ -75,16 +78,16 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 	for _, col := range tbl.Columns {
 		defs = append(defs, &engine.AttributeDef{
 			Attr: engine.Attribute{
-				Alg: compress.T(col.Alg),
-				Name: col.Name,
-				Type: col.Type,
+				Alg:     compress.T(col.Alg),
+				Name:    col.Name,
+				Type:    col.Type,
 				Default: col.Default,
 			},
 		})
 	}
 	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
-			Typ:   int(idx.Type),
+			Typ:      int(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		})
@@ -117,8 +120,8 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 				SchemaId: sid,
 				TableId:  tid,
 				// Id:       id,
-				Type:     uint64(v.Typ),
-				Name:     v.Name,
+				Type: uint64(v.Typ),
+				Name: v.Name,
 			}
 			for _, name := range v.ColNames {
 				idx.ColumnNames = append(idx.ColumnNames, name)
@@ -145,7 +148,7 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 				TableID:  tid,
 				Id:       id,
 				Name:     v.Attr.Name,
-				Alg: 	  int(v.Attr.Alg),
+				Alg:      int(v.Attr.Alg),
 				Type:     v.Attr.Type,
 				Default:  v.Attr.Default,
 			})
@@ -157,7 +160,7 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 
 func CommentDefs(defs []engine.TableDef) string {
 	for _, def := range defs {
-		 if c, ok := def.(*engine.CommentDef); ok {
+		if c, ok := def.(*engine.CommentDef); ok {
 			return c.Comment
 		}
 	}
@@ -177,11 +180,28 @@ func PartitionDef(defs []engine.TableDef) ([]byte, error) {
 	return nil, nil
 }
 
+func PropertyDef(defs []engine.TableDef) ([]aoe.Property, error) {
+	for _, def := range defs {
+		if propertiesDef, ok := def.(*engine.PropertiesDef); ok {
+			properties := make([]aoe.Property, len(propertiesDef.Properties))
+			for i, engineProperty := range propertiesDef.Properties {
+				property := aoe.Property{
+					Key:   engineProperty.Key,
+					Value: engineProperty.Value,
+				}
+				properties[i] = property
+			}
+			return properties, nil
+		}
+	}
+	return nil, nil
+}
+
 func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	defs := make([]*engine.IndexTableDef, len(tbl.Indices))
 	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
-			Typ:   int(idx.Type),
+			Typ:      int(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		}
@@ -193,9 +213,9 @@ func Attribute(tbl aoe.TableInfo) []engine.Attribute {
 	attrs := make([]engine.Attribute, len(tbl.Columns))
 	for i, col := range tbl.Columns {
 		attrs[i] = engine.Attribute{
-			Alg: compress.T(col.Alg),
-			Name: col.Name,
-			Type: col.Type,
+			Alg:     compress.T(col.Alg),
+			Name:    col.Name,
+			Type:    col.Type,
 			Default: col.Default,
 		}
 	}
