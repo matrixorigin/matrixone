@@ -149,6 +149,9 @@ import (
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     strs []string
+
+    properties []tree.Property
+    property tree.Property
 }
 
 %token LEX_ERROR
@@ -201,7 +204,7 @@ import (
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8
 
-// CreateTable
+// Create Table
 %token <str> CREATE ALTER DROP RENAME ANALYZE ADD
 %token <str> SCHEMA TABLE INDEX VIEW TO IGNORE IF PRIMARY COLUMN CONSTRAINT SPATIAL FULLTEXT FOREIGN KEY_BLOCK_SIZE
 %token <str> SHOW DESCRIBE EXPLAIN DATE ESCAPE REPAIR OPTIMIZE TRUNCATE
@@ -214,7 +217,10 @@ import (
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
 %token <str> TYPE
 
-// CreateIndex
+// MO table option
+%token <str> PROPERTIES
+
+// Create Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE
 
 // Alter
@@ -442,6 +448,9 @@ import (
 %type <updateExprs> load_set_list load_set_spec_opt
 %type <strs> index_name_and_type_opt
 %type <str> index_name index_type key_or_index_opt key_or_index
+// type <str> mo_keywords
+%type <properties> properties_list
+%type <property> property_elem
 
 %start start_command
 
@@ -3282,7 +3291,27 @@ table_option:
     {
         $$= tree.NewTableOptionUnion($4)
     }
+|	PROPERTIES '(' properties_list ')'
+	{
+		$$ = &tree.TableOptionProperties{Preperties: $3}
+	}
 // |   INSERT_METHOD equal_opt insert_method_options
+
+properties_list:
+	property_elem
+	{
+		$$ = []tree.Property{$1}
+	}
+|	properties_list ',' property_elem
+	{
+		$$ = append($1, $3)
+	}
+
+property_elem:
+	STRING '=' STRING
+	{
+		$$ = tree.Property{Key: $1, Value: $3}
+	}
 
 storage_opt:
     {
@@ -5663,5 +5692,8 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+
+//mo_keywords:
+//	PROPERTIES
 
 %%

@@ -925,6 +925,35 @@ type tableOptionImpl struct {
 	TableOption
 }
 
+type TableOptionProperties struct {
+	tableOptionImpl
+	Preperties []Property
+}
+
+func (node *TableOptionProperties) Format(ctx *FmtCtx){
+	ctx.WriteString("properties")
+	if node.Preperties != nil {
+		prefix := "("
+		for _, p := range node.Preperties {
+			ctx.WriteString(prefix)
+			p.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+}
+
+type Property struct {
+	Key   string
+	Value string
+}
+
+func (node *Property) Format(ctx *FmtCtx) {
+	ctx.WriteString(node.Key)
+	ctx.WriteString(" = ")
+	ctx.WriteString(node.Value)
+}
+
 type TableOptionEngine struct {
 	tableOptionImpl
 	Engine string
