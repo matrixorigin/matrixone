@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		PROPERTIES = MYSQL_PROPERTIES
 		INT1 = MYSQL_INT1
 		INT2 = MYSQL_INT2
 		INT3 = MYSQL_INT3
@@ -692,6 +693,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"processlist":              PROCESSLIST,
 		"procedure":                PROCEDURE,
 		"proxy":                    PROXY,
+		"properties":				PROPERTIES,
 		"privileges":               PRIVILEGES,
 		"query":                    QUERY,
 		"quarter":                  QUARTER,
@@ -852,6 +854,7 @@ func initTokens(dialectType dialect.DialectType) {
 
 // mysql
 var (
+	PROPERTIES				 int
 	TERMINATED               int
 	ENCLOSED                 int
 	OPTIONALLY               int
