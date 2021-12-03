@@ -176,6 +176,15 @@ func (e *Block) Less(o *Block) bool {
 
 func (e *Block) rebuild(segment *Segment) {
 	e.Segment = segment
+	if e.IsFullLocked() {
+		return
+	}
+	indice := e.CreateSnippet()
+	if indice != nil {
+		e.IndiceMemo = new(IndiceMemo)
+		e.IndiceMemo.indice = indice
+		e.IndiceMemo.mu = new(sync.Mutex)
+	}
 }
 
 func (e *Block) DescId() common.ID {

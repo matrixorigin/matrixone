@@ -30,7 +30,6 @@ var (
 
 type IndexId struct {
 	Id     uint64 `json:"id"`
-	Ctx    uint64 `json:"ctx"`
 	Offset uint32 `json:"offset"`
 	Size   uint32 `json:"size"`
 }
@@ -67,11 +66,6 @@ func (id *IndexId) Compare(o *IndexId) int {
 	} else if id.Id < o.Id {
 		return -1
 	}
-	if id.Ctx > o.Ctx {
-		return 1
-	} else if id.Ctx < o.Ctx {
-		return -1
-	}
 	if id.Offset > o.Offset {
 		return 1
 	} else if id.Offset < o.Offset {
@@ -103,7 +97,7 @@ func (idx *Index) Repr() string {
 	if idx == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d:%d", idx.ShardId, idx.Id.Id, idx.Id.Ctx, idx.Id.Offset, idx.Id.Size, idx.Start, idx.Count, idx.Capacity)
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d", idx.ShardId, idx.Id.Id, idx.Id.Offset, idx.Id.Size, idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *Index) ParseRepr(repr string) (err error) {
@@ -112,7 +106,7 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 		return
 	}
 	strs := strings.Split(repr, ":")
-	if len(strs) != 8 {
+	if len(strs) != 7 {
 		err = ParseReprErr
 		return
 	}
@@ -122,27 +116,24 @@ func (idx *Index) ParseRepr(repr string) (err error) {
 	if idx.Id.Id, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
 		return
 	}
-	if idx.Id.Ctx, err = strconv.ParseUint(strs[2], 10, 64); err != nil {
-		return err
-	}
 	var tmp uint64
-	if tmp, err = strconv.ParseUint(strs[3], 10, 32); err != nil {
+	if tmp, err = strconv.ParseUint(strs[2], 10, 32); err != nil {
 		return
 	} else {
 		idx.Id.Offset = uint32(tmp)
 	}
-	if tmp, err = strconv.ParseUint(strs[4], 10, 32); err != nil {
+	if tmp, err = strconv.ParseUint(strs[3], 10, 32); err != nil {
 		return
 	} else {
 		idx.Id.Size = uint32(tmp)
 	}
-	if idx.Start, err = strconv.ParseUint(strs[5], 10, 64); err != nil {
+	if idx.Start, err = strconv.ParseUint(strs[4], 10, 64); err != nil {
 		return
 	}
-	if idx.Count, err = strconv.ParseUint(strs[6], 10, 64); err != nil {
+	if idx.Count, err = strconv.ParseUint(strs[5], 10, 64); err != nil {
 		return
 	}
-	if idx.Capacity, err = strconv.ParseUint(strs[7], 10, 64); err != nil {
+	if idx.Capacity, err = strconv.ParseUint(strs[6], 10, 64); err != nil {
 		return
 	}
 	return
@@ -205,7 +196,6 @@ func (idx *Index) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(idx.ShardId))
 	buf.Write(encoding.EncodeUint64(idx.Id.Id))
-	buf.Write(encoding.EncodeUint64(idx.Id.Ctx))
 	buf.Write(encoding.EncodeUint32(idx.Id.Offset))
 	buf.Write(encoding.EncodeUint32(idx.Id.Size))
 	buf.Write(encoding.EncodeUint64(idx.Count))
@@ -222,8 +212,6 @@ func (idx *Index) UnMarshal(data []byte) error {
 	idx.ShardId = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Id = encoding.DecodeUint64(buf[:8])
-	buf = buf[8:]
-	idx.Id.Ctx = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Offset = encoding.DecodeUint32(buf[:4])
 	buf = buf[4:]

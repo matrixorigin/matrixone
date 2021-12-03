@@ -58,18 +58,15 @@ func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
 	var hash uint64
 	var key128 [2]uint64
 
-	switch key.Len >> 3 {
-	case 0:
+	if key.Len <= 8 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
-
-	case 1:
+		hash = crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
+	} else if key.Len <= 16 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-
-	default:
-		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+	} else {
+		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
 	inserted, _, cell := ht.findBucket(hash, &key128)
@@ -88,18 +85,15 @@ func (ht *StringHashMap) Find(key StringRef) *uint64 {
 	var hash uint64
 	var key128 [2]uint64
 
-	switch key.Len >> 3 {
-	case 0:
+	if key.Len <= 8 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
-
-	case 1:
+		hash = crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
+	} else if key.Len <= 16 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-
-	default:
-		hash = crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+	} else {
+		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
 	_, _, cell := ht.findBucket(hash, &key128)

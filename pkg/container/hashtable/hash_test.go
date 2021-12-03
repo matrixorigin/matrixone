@@ -52,10 +52,10 @@ var golden = []test{
 func TestGoldenCastagnoli(t *testing.T) {
 	for _, g := range golden {
 		ptr, length := unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&g.in)).Data), len(g.in)
-		if crc := crc32BytesHashAsm(ptr, length); crc != g.crc32 {
+		if crc := crc32BytesHash(ptr, length); crc != g.crc32 {
 			t.Errorf("crc32Hash(%s) = 0x%016x want 0x%016x", g.in, crc, g.crc32)
 		}
-		if aes := aesBytesHashAsm(ptr, length); aes != g.aes {
+		if aes := aesBytesHash(ptr, length); aes != g.aes {
 			t.Errorf("aesHash(%s) = 0x%016x%016x want 0x%016x%016x", g.in, aes[0], aes[1], g.aes[0], g.aes[1])
 		}
 	}
