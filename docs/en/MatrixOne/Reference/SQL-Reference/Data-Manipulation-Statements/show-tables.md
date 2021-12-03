@@ -5,11 +5,11 @@ Shows the list of tables in the currently selected database.
 
 ## **Syntax**
 ```
-$ SHOW TABLES  [LIKE 'pattern' | WHERE expr | FROM 'pattern' | IN 'pattern']
+> SHOW TABLES  [LIKE 'pattern' | WHERE expr | FROM 'pattern' | IN 'pattern']
 ```
 ## **Examples**
 ```
-$ SHOW TABLES;
+> SHOW TABLES;
 +---------------+
 | name          |
 +---------------+

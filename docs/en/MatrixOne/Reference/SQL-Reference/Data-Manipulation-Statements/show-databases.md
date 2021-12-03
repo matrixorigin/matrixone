@@ -6,11 +6,11 @@ Shows the list of databases that exist on the instance.
 
 ## **Syntax**
 ```
-$ SHOW DATABASES [LIKE expr | WHERE expr]
+> SHOW DATABASES [LIKE expr | WHERE expr]
 ```
 ## **Examples**
 ```
-$ SHOW DATABASES;
+> SHOW DATABASES;
 +----------+
 | Database |
 +----------+

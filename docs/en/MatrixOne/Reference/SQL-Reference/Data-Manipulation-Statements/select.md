@@ -6,7 +6,7 @@ Retrieves data from a table.
 ## **Syntax**
 
 ```
-$ SELECT
+> SELECT
     [ALL | DISTINCT]
     select_expr [[AS] alias], ...
     [INTO variable [, ...]]
@@ -23,7 +23,7 @@ $ SELECT
 ## **Examples**
 
 ```
-$ SELECT number FROM numbers(3);
+> SELECT number FROM numbers(3);
 +--------+
 | number |
 +--------+
@@ -32,7 +32,7 @@ $ SELECT number FROM numbers(3);
 |      2 |
 +--------+
 
-$ SELECT * FROM t1 WHERE spID>2 AND userID <2 || userID >=2 OR userID < 2 LIMIT 3;
+> SELECT * FROM t1 WHERE spID>2 AND userID <2 || userID >=2 OR userID < 2 LIMIT 3;
 
-$ SELECT userID,MAX(score) max_score FROM t1 WHERE userID <2 || userID > 3 GROUP BY userID ORDER BY max_score;
+> SELECT userID,MAX(score) max_score FROM t1 WHERE userID <2 || userID > 3 GROUP BY userID ORDER BY max_score;
 ```

@@ -17,7 +17,7 @@ Create a database.
 
 #### create_database_statement:
 
-![Create Database Diagram](create_database_statement.png)
+![Create Database Diagram](https://github.com/matrixorigin/artwork/blob/main/docs/reference/create_database_statement.png?raw=true)
 
 ## **Examples**
 ```

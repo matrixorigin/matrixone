@@ -11,7 +11,7 @@ Note: NULL values are not counted.
 ## **Syntax**
 
 ```
-$ COUNT(expr)
+> COUNT(expr)
 ```
 ***
 
@@ -31,21 +31,21 @@ If there are no matching rows, COUNT() returns 0.
 Note: numbers(N) – A table for test with the single number column (UInt64) that contains integers from 0 to N-1.
 
 ```
-$ SELECT count(*) FROM numbers(3);
+> SELECT count(*) FROM numbers(3);
 +----------+
 | count(*) |
 +----------+
 |        3 |
 +----------+
 
-$ SELECT count(number) FROM numbers(3);
+> SELECT count(number) FROM numbers(3);
 +---------------+
 | count(number) |
 +---------------+
 |             3 |
 +---------------+
 
-$ SELECT count(number) AS c FROM numbers(3);
+> SELECT count(number) AS c FROM numbers(3);
 +------+
 | c    |
 +------+
