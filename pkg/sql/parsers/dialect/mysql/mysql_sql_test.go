@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
-		output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
+		input: "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 	}
 )
 
@@ -56,6 +55,21 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create table t (a int, b char, check (1 + 1) enforced)",
+	}, {
+		input: "create table t (a int, b char, foreign key sdf (a, b) references B(a asc, b desc))",
+	}, {
+		input: "create table t (a int, b char, unique key idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, index if not exists idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, fulltext idx (a, b))",
+	}, {
+		input: "create table t (a int, b char, constraint p1 primary key idx using hash (a, b))",
+		output: "create table t (a int, b char, primary key p1 using none (a, b))",
+	}, {
+		input: "create table t (a int, b char, primary key idx (a, b))",
+	}, {
 		input: "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
 		output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
 	}, {
@@ -586,8 +600,6 @@ var (
 		input: "select * from (select a from t) as t1 cross join t2",
 	}, {
 		input: "select * from t1 join t2 using (a, b, c)",
-	}, {
-		input: "select * from t1 straight_join t2 on 1 + 213",
 	}, {
 		input: "select * from t1 straight_join t2 on col",
 	}, {

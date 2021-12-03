@@ -14,6 +14,153 @@
 
 #include "textflag.h"
 
+// func crc32BytesHash(data unsafe.Pointer, length int) uint64
+// Requires: SSE4.2
+TEXT ·crc32BytesHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ length+8(FP), CX
+	MOVQ CX, BX
+	MOVQ $-1, DI
+	ADDQ SI, CX
+	SUBQ $8, CX
+
+loop:
+	CMPQ   SI, CX
+	JGE    done
+	CRC32Q (SI), DI
+	ADDQ   $8, SI
+	JMP    loop
+
+done:
+	CRC32Q (CX), DI
+	MOVL   DI, ret+16(FP)
+	MOVL   BX, ret+20(FP)
+	RET
+
+// func crc32Int64Hash(data uint64) uint64
+// Requires: SSE4.2
+TEXT ·crc32Int64Hash(SB), NOSPLIT, $0-16
+	MOVQ   $-1, SI
+	CRC32Q data+0(FP), SI
+	MOVQ   SI, ret+8(FP)
+	RET
+
+// func crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
+// Requires: SSE4.2
+TEXT ·crc32Int64BatchHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ hashes+8(FP), DI
+	MOVQ length+16(FP), CX
+
+loop:
+	SUBQ $8, CX
+	JL   tail
+
+	MOVQ $-1, R8
+	MOVQ $-1, R9
+	MOVQ $-1, R10
+	MOVQ $-1, R11
+	MOVQ $-1, R12
+	MOVQ $-1, R13
+	MOVQ $-1, R14
+	MOVQ $-1, R15
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R9
+	CRC32Q 16(SI), R10
+	CRC32Q 24(SI), R11
+	CRC32Q 32(SI), R12
+	CRC32Q 40(SI), R13
+	CRC32Q 48(SI), R14
+	CRC32Q 56(SI), R15
+
+	MOVQ R8, (DI)
+	MOVQ R9, 8(DI)
+	MOVQ R10, 16(DI)
+	MOVQ R11, 24(DI)
+	MOVQ R12, 32(DI)
+	MOVQ R13, 40(DI)
+	MOVQ R14, 48(DI)
+	MOVQ R15, 56(DI)
+
+	ADDQ $64, SI
+	ADDQ $64, DI
+	JMP  loop
+
+tail:
+	ADDQ $8, CX
+	JE   done
+
+tailLoop:
+	MOVQ   $-1, R8
+	CRC32Q (SI), R8
+	MOVQ   R8, (DI)
+
+	ADDQ $8, SI
+	ADDQ $8, DI
+	LOOP tailLoop
+
+done:
+	RET
+
+// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
+// Requires: SSE4.2
+TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ hashes+8(FP), DI
+	MOVQ length+16(FP), CX
+
+loop:
+	SUBQ $8, CX
+	JL   tail
+
+	MOVQ $-1, R8
+	MOVQ $-1, R9
+	MOVQ $-1, R10
+	MOVQ $-1, R11
+	MOVQ $-1, R12
+	MOVQ $-1, R13
+	MOVQ $-1, R14
+	MOVQ $-1, R15
+
+	CRC32Q (SI), R8
+	CRC32Q 16(SI), R9
+	CRC32Q 32(SI), R10
+	CRC32Q 48(SI), R11
+	CRC32Q 64(SI), R12
+	CRC32Q 80(SI), R13
+	CRC32Q 96(SI), R14
+	CRC32Q 112(SI), R15
+
+	MOVQ R8, (DI)
+	MOVQ R9, 8(DI)
+	MOVQ R10, 16(DI)
+	MOVQ R11, 24(DI)
+	MOVQ R12, 32(DI)
+	MOVQ R13, 40(DI)
+	MOVQ R14, 48(DI)
+	MOVQ R15, 56(DI)
+
+	ADDQ $128, SI
+	ADDQ $64, DI
+	JMP  loop
+
+tail:
+	ADDQ $8, CX
+	JE   done
+
+tailLoop:
+	MOVQ   $-1, R8
+	CRC32Q (SI), R8
+	MOVQ   R8, (DI)
+
+	ADDQ $16, SI
+	ADDQ $8, DI
+	LOOP tailLoop
+
+done:
+	RET
+
 DATA aesIV<>+0x00(SB)/8, $0x5A8279996ED9EBA1
 DATA aesIV<>+0x08(SB)/8, $0x8F1BBCDCCA62C1D6
 DATA aesIV<>+0x10(SB)/8, $0x5A8279996ED9EBA1
@@ -24,149 +171,12 @@ DATA aesIV<>+0x30(SB)/8, $0x5A8279996ED9EBA1
 DATA aesIV<>+0x38(SB)/8, $0x8F1BBCDCCA62C1D6
 GLOBL aesIV<>(SB), (NOPTR+RODATA), $64
 
-// func crc32BytesHashAsm(data unsafe.Pointer, length int) uint64
-// Requires: SSE4.2
-TEXT ·crc32BytesHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ length+8(FP), CX
-	MOVQ CX, BX
-	MOVQ $-1, DX
-	ADDQ AX, CX
-	SUBQ $8, CX
-
-loop:
-	CMPQ   AX, CX
-	JGE    done
-	CRC32Q (AX), DX
-	ADDQ   $8, AX
-	JMP    loop
-
-done:
-	CRC32Q (CX), DX
-	MOVD   DX, ret+16(FP)
-	MOVD   BX, ret+20(FP)
-	RET
-
-// func crc32Int64HashAsm(data uint64) uint64
-// Requires: SSE4.2
-TEXT ·crc32Int64HashAsm(SB), NOSPLIT, $0-16
-	MOVQ   $-1, AX
-	CRC32Q data+0(FP), AX
-	MOVQ   AX, ret+8(FP)
-	RET
-
-// func crc32Int64BatchHashAsm(data *uint64, hashes *uint64, length int)
-// Requires: SSE4.2
-TEXT ·crc32Int64BatchHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ hashes+8(FP), DX
-	MOVQ length+16(FP), CX
-
-loop:
-	SUBQ   $8, CX
-	JL     tail
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	MOVQ   R8, (DX)
-	MOVQ   $-1, R9
-	CRC32Q 8(AX), R9
-	MOVQ   R9, 8(DX)
-	MOVQ   $-1, R10
-	CRC32Q 16(AX), R10
-	MOVQ   R10, 16(DX)
-	MOVQ   $-1, R11
-	CRC32Q 24(AX), R11
-	MOVQ   R11, 24(DX)
-	MOVQ   $-1, R12
-	CRC32Q 32(AX), R12
-	MOVQ   R12, 32(DX)
-	MOVQ   $-1, R13
-	CRC32Q 40(AX), R13
-	MOVQ   R13, 40(DX)
-	MOVQ   $-1, R14
-	CRC32Q 48(AX), R14
-	MOVQ   R14, 48(DX)
-	MOVQ   $-1, R15
-	CRC32Q 56(AX), R15
-	MOVQ   R15, 56(DX)
-	ADDQ   $64, AX
-	ADDQ   $64, DX
-	JMP    loop
-
-tail:
-	ADDQ $8, CX
-	JE   done
-
-tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	MOVQ   R8, (DX)
-	ADDQ   $8, AX
-	ADDQ   $8, DX
-	LOOP   tailLoop
-
-done:
-	RET
-
-// func crc32Int64CellBatchHashAsm(data *uint64, hashes *uint64, length int)
-// Requires: SSE4.2
-TEXT ·crc32Int64CellBatchHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ hashes+8(FP), DX
-	MOVQ length+16(FP), CX
-
-loop:
-	SUBQ   $8, CX
-	JL     tail
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	MOVQ   R8, (DX)
-	MOVQ   $-1, R9
-	CRC32Q 16(AX), R9
-	MOVQ   R9, 8(DX)
-	MOVQ   $-1, R10
-	CRC32Q 32(AX), R10
-	MOVQ   R10, 16(DX)
-	MOVQ   $-1, R11
-	CRC32Q 48(AX), R11
-	MOVQ   R11, 24(DX)
-	MOVQ   $-1, R12
-	CRC32Q 64(AX), R12
-	MOVQ   R12, 32(DX)
-	MOVQ   $-1, R13
-	CRC32Q 80(AX), R13
-	MOVQ   R13, 40(DX)
-	MOVQ   $-1, R14
-	CRC32Q 96(AX), R14
-	MOVQ   R14, 48(DX)
-	MOVQ   $-1, R15
-	CRC32Q 112(AX), R15
-	MOVQ   R15, 56(DX)
-	ADDQ   $128, AX
-	ADDQ   $64, DX
-	JMP    loop
-
-tail:
-	ADDQ $8, CX
-	JE   done
-
-tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	MOVQ   R8, (DX)
-	ADDQ   $16, AX
-	ADDQ   $8, DX
-	LOOP   tailLoop
-
-done:
-	RET
-
-// func aesBytesHashAsm(data unsafe.Pointer, length int) [2]uint64
+// func aesBytesHash(data unsafe.Pointer, length int) [2]uint64
 // Requires: AES
-TEXT ·aesBytesHashAsm(SB), NOSPLIT, $0-32
-	MOVQ data+0(FP), AX
+TEXT ·aesBytesHash(SB), NOSPLIT, $0-32
+	MOVQ data+0(FP), SI
 	MOVQ length+8(FP), CX
-	ADDQ AX, CX
+	ADDQ SI, CX
 	SUBQ $64, CX
 
 	VMOVDQU aesIV<>+0(SB), X0
@@ -175,46 +185,46 @@ TEXT ·aesBytesHashAsm(SB), NOSPLIT, $0-32
 	VMOVDQU aesIV<>+48(SB), X3
 
 loop:
-	CMPQ AX, CX
+	CMPQ SI, CX
 	JGE  tail0
 
-	VAESENC (AX), X0, X0
-	VAESENC 16(AX), X1, X1
-	VAESENC 32(AX), X2, X2
-	VAESENC 48(AX), X3, X3
+	VAESENC (SI), X0, X0
+	VAESENC 16(SI), X1, X1
+	VAESENC 32(SI), X2, X2
+	VAESENC 48(SI), X3, X3
 
-	ADDQ $64, AX
+	ADDQ $64, SI
 	JMP  loop
 
 tail0:
 	ADDQ $48, CX
 
-	CMPQ AX, CX
+	CMPQ SI, CX
 	JGE  tail1
 
-	VAESENC (AX), X0, X0
-	ADDQ    $16, AX
+	VAESENC (SI), X0, X0
+	ADDQ    $16, SI
 
 tail1:
-	CMPQ AX, CX
+	CMPQ SI, CX
 	JGE  tail2
 
-	VAESENC (AX), X1, X1
-	ADDQ    $16, AX
+	VAESENC (SI), X1, X1
+	ADDQ    $16, SI
 
 tail2:
-	CMPQ AX, CX
+	CMPQ SI, CX
 	JGE  tail3
 
-	VAESENC (AX), X2, X2
-	ADDQ    $16, AX
+	VAESENC (SI), X2, X2
+	ADDQ    $16, SI
 
 tail3:
 	VAESENC (CX), X3, X3
 
 	VAESENC X1, X0, X0
-	VAESENC X3, X2, X1
-	VAESENC X1, X0, X0
+	VAESENC X3, X2, X2
+	VAESENC X2, X0, X0
 
 	VAESENC X0, X0, X0
 	VAESENC X0, X0, X0
@@ -229,278 +239,299 @@ tail3:
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 
-// func crc32Int192HashAsm(data *[3]uint64) uint64
+// func crc32Int192Hash(data *[3]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int192HashAsm(SB), NOSPLIT, $0-16
-	MOVQ data+0(FP), AX
-	MOVQ   $-1, DX
-	CRC32Q (AX), DX
-	CRC32Q 8(AX), DX
-	CRC32Q 16(AX), DX
-	MOVQ   DX, ret+8(FP)
+TEXT ·crc32Int192Hash(SB), NOSPLIT, $0-16
+	MOVQ   data+0(FP), SI
+	MOVQ   $-1, DI
+	CRC32Q (SI), DI
+	CRC32Q 8(SI), DI
+	CRC32Q 16(SI), DI
+	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int256HashAsm(data *[4]uint64) uint64
+// func crc32Int256Hash(data *[4]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int256HashAsm(SB), NOSPLIT, $0-16
-	MOVQ data+0(FP), AX
-	MOVQ   $-1, DX
-	CRC32Q (AX), DX
-	CRC32Q 8(AX), DX
-	CRC32Q 16(AX), DX
-	CRC32Q 24(AX), DX
-	MOVQ   DX, ret+8(FP)
+TEXT ·crc32Int256Hash(SB), NOSPLIT, $0-16
+	MOVQ   ata+0(FP), SI
+	MOVQ   $-1, DI
+	CRC32Q (SI), DI
+	CRC32Q 8(SI), DI
+	CRC32Q 16(SI), DI
+	CRC32Q 24(SI), DI
+	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int320HashAsm(data *[4]uint64) uint64
+// func crc32Int320Hash(data *[4]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int320HashAsm(SB), NOSPLIT, $0-16
-	MOVQ data+0(FP), AX
-	MOVQ   $-1, DX
-	CRC32Q (AX), DX
-	CRC32Q 8(AX), DX
-	CRC32Q 16(AX), DX
-	CRC32Q 24(AX), DX
-	CRC32Q 32(AX), DX
-	MOVQ   DX, ret+8(FP)
+TEXT ·crc32Int320Hash(SB), NOSPLIT, $0-16
+	MOVQ   data+0(FP), SI
+	MOVQ   $-1, DI
+	CRC32Q (SI), DI
+	CRC32Q 8(SI), DI
+	CRC32Q 16(SI), DI
+	CRC32Q 24(SI), DI
+	CRC32Q 32(SI), DI
+	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int192BatchHashAsm(data *[3]uint64, hashes *uint64, length int)
+// func crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int192BatchHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ hashes+8(FP), DX
+TEXT ·crc32Int192BatchHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
 
 loop:
-	SUBQ   $8, CX
-	JL     tail
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	MOVQ   R8, (DX)
-	MOVQ   $-1, R9
-	CRC32Q 24(AX), R9
-	CRC32Q 32(AX), R9
-	CRC32Q 40(AX), R9
-	MOVQ   R9, 8(DX)
-	MOVQ   $-1, R10
-	CRC32Q 48(AX), R10
-	CRC32Q 56(AX), R10
-	CRC32Q 64(AX), R10
-	MOVQ   R10, 16(DX)
-	MOVQ   $-1, R11
-	CRC32Q 72(AX), R11
-	CRC32Q 80(AX), R11
-	CRC32Q 88(AX), R11
-	MOVQ   R11, 24(DX)
-	MOVQ   $-1, R12
-	CRC32Q 96(AX), R12
-	CRC32Q 104(AX), R12
-	CRC32Q 112(AX), R12
-	MOVQ   R12, 32(DX)
-	MOVQ   $-1, R13
-	CRC32Q 120(AX), R13
-	CRC32Q 128(AX), R13
-	CRC32Q 136(AX), R13
-	MOVQ   R13, 40(DX)
-	MOVQ   $-1, R14
-	CRC32Q 144(AX), R14
-	CRC32Q 152(AX), R14
-	CRC32Q 160(AX), R14
-	MOVQ   R14, 48(DX)
-	MOVQ   $-1, R15
-	CRC32Q 168(AX), R15
-	CRC32Q 176(AX), R15
-	CRC32Q 184(AX), R15
-	MOVQ   R15, 56(DX)
-	ADDQ   $192, AX
-	ADDQ   $64, DX
-	JMP    loop
+	SUBQ $8, CX
+	JL   tail
+
+	MOVQ $-1, R8
+	MOVQ $-1, R9
+	MOVQ $-1, R10
+	MOVQ $-1, R11
+	MOVQ $-1, R12
+	MOVQ $-1, R13
+	MOVQ $-1, R14
+	MOVQ $-1, R15
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+	CRC32Q 24(SI), R9
+	CRC32Q 32(SI), R9
+	CRC32Q 40(SI), R9
+	CRC32Q 48(SI), R10
+	CRC32Q 56(SI), R10
+	CRC32Q 64(SI), R10
+	CRC32Q 72(SI), R11
+	CRC32Q 80(SI), R11
+	CRC32Q 88(SI), R11
+	CRC32Q 96(SI), R12
+	CRC32Q 104(SI), R12
+	CRC32Q 112(SI), R12
+	CRC32Q 120(SI), R13
+	CRC32Q 128(SI), R13
+	CRC32Q 136(SI), R13
+	CRC32Q 144(SI), R14
+	CRC32Q 152(SI), R14
+	CRC32Q 160(SI), R14
+	CRC32Q 168(SI), R15
+	CRC32Q 176(SI), R15
+	CRC32Q 184(SI), R15
+
+	MOVQ R8, (DI)
+	MOVQ R9, 8(DI)
+	MOVQ R10, 16(DI)
+	MOVQ R11, 24(DI)
+	MOVQ R12, 32(DI)
+	MOVQ R13, 40(DI)
+	MOVQ R14, 48(DI)
+	MOVQ R15, 56(DI)
+
+	ADDQ $192, SI
+	ADDQ $64, DI
+	JMP  loop
 
 tail:
 	ADDQ $8, CX
 	JE   done
 
 tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	MOVQ   R8, (DX)
-	ADDQ   $24, AX
-	ADDQ   $8, DX
-	LOOP   tailLoop
+	MOVQ $-1, R8
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+
+	MOVQ R8, (DI)
+
+	ADDQ $24, SI
+	ADDQ $8, DI
+	LOOP tailLoop
 
 done:
 	RET
 
-// func crc32Int256BatchHashAsm(data *[4]uint64, hashes *uint64, length int)
+// func crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int256BatchHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ hashes+8(FP), DX
+TEXT ·crc32Int256BatchHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
 
 loop:
-	SUBQ   $8, CX
-	JL     tail
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	CRC32Q 24(AX), R8
-	MOVQ   R8, (DX)
-	MOVQ   $-1, R9
-	CRC32Q 32(AX), R9
-	CRC32Q 40(AX), R9
-	CRC32Q 48(AX), R9
-	CRC32Q 56(AX), R9
-	MOVQ   R9, 8(DX)
-	MOVQ   $-1, R10
-	CRC32Q 64(AX), R10
-	CRC32Q 72(AX), R10
-	CRC32Q 80(AX), R10
-	CRC32Q 88(AX), R10
-	MOVQ   R10, 16(DX)
-	MOVQ   $-1, R11
-	CRC32Q 96(AX), R11
-	CRC32Q 104(AX), R11
-	CRC32Q 112(AX), R11
-	CRC32Q 120(AX), R11
-	MOVQ   R11, 24(DX)
-	MOVQ   $-1, R12
-	CRC32Q 128(AX), R12
-	CRC32Q 136(AX), R12
-	CRC32Q 144(AX), R12
-	CRC32Q 152(AX), R12
-	MOVQ   R12, 32(DX)
-	MOVQ   $-1, R13
-	CRC32Q 160(AX), R13
-	CRC32Q 168(AX), R13
-	CRC32Q 176(AX), R13
-	CRC32Q 184(AX), R13
-	MOVQ   R13, 40(DX)
-	MOVQ   $-1, R14
-	CRC32Q 192(AX), R14
-	CRC32Q 200(AX), R14
-	CRC32Q 208(AX), R14
-	CRC32Q 216(AX), R14
-	MOVQ   R14, 48(DX)
-	MOVQ   $-1, R15
-	CRC32Q 224(AX), R15
-	CRC32Q 232(AX), R15
-	CRC32Q 240(AX), R15
-	CRC32Q 248(AX), R15
-	MOVQ   R15, 56(DX)
-	ADDQ   $256, AX
-	ADDQ   $64, DX
-	JMP    loop
+	SUBQ $8, CX
+	JL   tail
+
+	MOVQ $-1, R8
+	MOVQ $-1, R9
+	MOVQ $-1, R10
+	MOVQ $-1, R11
+	MOVQ $-1, R12
+	MOVQ $-1, R13
+	MOVQ $-1, R14
+	MOVQ $-1, R15
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+	CRC32Q 24(SI), R8
+	CRC32Q 32(SI), R9
+	CRC32Q 40(SI), R9
+	CRC32Q 48(SI), R9
+	CRC32Q 56(SI), R9
+	CRC32Q 64(SI), R10
+	CRC32Q 72(SI), R10
+	CRC32Q 80(SI), R10
+	CRC32Q 88(SI), R10
+	CRC32Q 96(SI), R11
+	CRC32Q 104(SI), R11
+	CRC32Q 112(SI), R11
+	CRC32Q 120(SI), R11
+	CRC32Q 128(SI), R12
+	CRC32Q 136(SI), R12
+	CRC32Q 144(SI), R12
+	CRC32Q 152(SI), R12
+	CRC32Q 160(SI), R13
+	CRC32Q 168(SI), R13
+	CRC32Q 176(SI), R13
+	CRC32Q 184(SI), R13
+	CRC32Q 192(SI), R14
+	CRC32Q 200(SI), R14
+	CRC32Q 208(SI), R14
+	CRC32Q 216(SI), R14
+	CRC32Q 224(SI), R15
+	CRC32Q 232(SI), R15
+	CRC32Q 240(SI), R15
+	CRC32Q 248(SI), R15
+
+	MOVQ R8, (DI)
+	MOVQ R9, 8(DI)
+	MOVQ R10, 16(DI)
+	MOVQ R11, 24(DI)
+	MOVQ R12, 32(DI)
+	MOVQ R13, 40(DI)
+	MOVQ R14, 48(DI)
+	MOVQ R15, 56(DI)
+
+	ADDQ $256, SI
+	ADDQ $64, DI
+	JMP  loop
 
 tail:
 	ADDQ $8, CX
 	JE   done
 
 tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	CRC32Q 24(AX), R8
-	MOVQ   R8, (DX)
-	ADDQ   $32, AX
-	ADDQ   $8, DX
-	LOOP   tailLoop
+	MOVQ $-1, R8
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+	CRC32Q 24(SI), R8
+
+	MOVQ R8, (DI)
+
+	ADDQ $32, SI
+	ADDQ $8, DI
+	LOOP tailLoop
 
 done:
 	RET
 
-// func crc32Int320BatchHashAsm(data *[5]uint64, hashes *uint64, length int)
+// func crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int320BatchHashAsm(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), AX
-	MOVQ hashes+8(FP), DX
+TEXT ·crc32Int320BatchHash(SB), NOSPLIT, $0-24
+	MOVQ data+0(FP), SI
+	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
 
 loop:
-	SUBQ   $8, CX
-	JL     tail
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	CRC32Q 24(AX), R8
-	CRC32Q 32(AX), R8
-	MOVQ   R8, (DX)
-	MOVQ   $-1, R9
-	CRC32Q 40(AX), R9
-	CRC32Q 48(AX), R9
-	CRC32Q 56(AX), R9
-	CRC32Q 64(AX), R9
-	CRC32Q 72(AX), R9
-	MOVQ   R9, 8(DX)
-	MOVQ   $-1, R10
-	CRC32Q 80(AX), R10
-	CRC32Q 88(AX), R10
-	CRC32Q 96(AX), R10
-	CRC32Q 104(AX), R10
-	CRC32Q 112(AX), R10
-	MOVQ   R10, 16(DX)
-	MOVQ   $-1, R11
-	CRC32Q 120(AX), R11
-	CRC32Q 128(AX), R11
-	CRC32Q 136(AX), R11
-	CRC32Q 144(AX), R11
-	CRC32Q 152(AX), R11
-	MOVQ   R11, 24(DX)
-	MOVQ   $-1, R12
-	CRC32Q 160(AX), R12
-	CRC32Q 168(AX), R12
-	CRC32Q 176(AX), R12
-	CRC32Q 184(AX), R12
-	CRC32Q 192(AX), R12
-	MOVQ   R12, 32(DX)
-	MOVQ   $-1, R13
-	CRC32Q 200(AX), R13
-	CRC32Q 208(AX), R13
-	CRC32Q 216(AX), R13
-	CRC32Q 224(AX), R13
-	CRC32Q 232(AX), R13
-	MOVQ   R13, 40(DX)
-	MOVQ   $-1, R14
-	CRC32Q 240(AX), R14
-	CRC32Q 248(AX), R14
-	CRC32Q 256(AX), R14
-	CRC32Q 264(AX), R14
-	CRC32Q 272(AX), R14
-	MOVQ   R14, 48(DX)
-	MOVQ   $-1, R15
-	CRC32Q 280(AX), R15
-	CRC32Q 288(AX), R15
-	CRC32Q 296(AX), R15
-	CRC32Q 304(AX), R15
-	CRC32Q 312(AX), R15
-	MOVQ   R15, 56(DX)
-	ADDQ   $320, AX
-	ADDQ   $64, DX
-	JMP    loop
+	SUBQ $8, CX
+	JL   tail
+
+	MOVQ $-1, R8
+	MOVQ $-1, R9
+	MOVQ $-1, R10
+	MOVQ $-1, R11
+	MOVQ $-1, R12
+	MOVQ $-1, R13
+	MOVQ $-1, R14
+	MOVQ $-1, R15
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+	CRC32Q 24(SI), R8
+	CRC32Q 32(SI), R8
+	CRC32Q 40(SI), R9
+	CRC32Q 48(SI), R9
+	CRC32Q 56(SI), R9
+	CRC32Q 64(SI), R9
+	CRC32Q 72(SI), R9
+	CRC32Q 80(SI), R10
+	CRC32Q 88(SI), R10
+	CRC32Q 96(SI), R10
+	CRC32Q 104(SI), R10
+	CRC32Q 112(SI), R10
+	CRC32Q 120(SI), R11
+	CRC32Q 128(SI), R11
+	CRC32Q 136(SI), R11
+	CRC32Q 144(SI), R11
+	CRC32Q 152(SI), R11
+	CRC32Q 160(SI), R12
+	CRC32Q 168(SI), R12
+	CRC32Q 176(SI), R12
+	CRC32Q 184(SI), R12
+	CRC32Q 192(SI), R12
+	CRC32Q 200(SI), R13
+	CRC32Q 208(SI), R13
+	CRC32Q 216(SI), R13
+	CRC32Q 224(SI), R13
+	CRC32Q 232(SI), R13
+	CRC32Q 240(SI), R14
+	CRC32Q 248(SI), R14
+	CRC32Q 256(SI), R14
+	CRC32Q 264(SI), R14
+	CRC32Q 272(SI), R14
+	CRC32Q 280(SI), R15
+	CRC32Q 288(SI), R15
+	CRC32Q 296(SI), R15
+	CRC32Q 304(SI), R15
+	CRC32Q 312(SI), R15
+
+	MOVQ R8, (DI)
+	MOVQ R9, 8(DI)
+	MOVQ R10, 16(DI)
+	MOVQ R11, 24(DI)
+	MOVQ R12, 32(DI)
+	MOVQ R13, 40(DI)
+	MOVQ R14, 48(DI)
+	MOVQ R15, 56(DI)
+
+	ADDQ $320, SI
+	ADDQ $64, DI
+	JMP  loop
 
 tail:
 	ADDQ $8, CX
 	JE   done
 
 tailLoop:
-	MOVQ   $-1, R8
-	CRC32Q (AX), R8
-	CRC32Q 8(AX), R8
-	CRC32Q 16(AX), R8
-	CRC32Q 24(AX), R8
-	CRC32Q 32(AX), R8
-	MOVQ   R8, (DX)
-	ADDQ   $40, AX
-	ADDQ   $8, DX
-	LOOP   tailLoop
+	MOVQ $-1, R8
+
+	CRC32Q (SI), R8
+	CRC32Q 8(SI), R8
+	CRC32Q 16(SI), R8
+	CRC32Q 24(SI), R8
+	CRC32Q 32(SI), R8
+
+	MOVQ R8, (DI)
+
+	ADDQ $40, SI
+	ADDQ $8, DI
+	LOOP tailLoop
 
 done:
 	RET

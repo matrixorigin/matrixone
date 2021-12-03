@@ -213,7 +213,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> ROW
+%token <str> ROW TYPE
 
 // Create Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
@@ -302,7 +302,7 @@ import (
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <tableDefs> table_elem_list_opt table_elem_list
-%type <tableDef> table_elem
+%type <tableDef> table_elem constaint_def constraint_elem
 %type <tableName> table_name
 %type <tableNames> table_name_list
 %type <columnTableDef> column_def
@@ -346,7 +346,7 @@ import (
 %type <unresolvedObjectName> table_name_unresolved
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
-%type <str> database_name_opt auth_string constrain_keyword_opt
+%type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
 %type <userMiscOption> pwd_or_lck
 %type <userMiscOptions> pwd_or_lck_opt pwd_or_lck_list
 
@@ -385,7 +385,7 @@ import (
 %type <updateExprs> update_list
 %type <completionType> completion_type
 %type <str> id_prefix_at password_opt
-%type <boolVal> grant_option_opt enforce
+%type <boolVal> grant_option_opt enforce enforce_opt
 
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
@@ -441,6 +441,8 @@ import (
 %type <unresolvedName> normal_ident
 %type <updateExpr> load_set_item
 %type <updateExprs> load_set_list load_set_spec_opt
+%type <strs> index_name_and_type_opt
+%type <str> index_name index_type key_or_index_opt key_or_index
 // type <str> mo_keywords
 %type <str> row_opt
 %type <assignments> set_value_list
@@ -3412,6 +3414,131 @@ table_elem:
     {
         $$ = tree.TableDef($1)
     }
+|   constaint_def
+    {
+    	$$ = $1
+    }
+constaint_def:
+	constraint_keyword constraint_elem
+	{
+		if $1 != "" {
+			switch v := $2.(type) {
+            case *tree.PrimaryKeyIndex:
+            	v.Name = $1
+            }
+		}
+		$$ = $2
+	}
+|	constraint_elem
+	{
+		$$ = $1
+	}
+
+constraint_elem:
+	PRIMARY KEY index_name_and_type_opt '(' index_column_list ')' index_option_list
+	{
+ 		$$ = &tree.PrimaryKeyIndex{
+			KeyParts: $5,
+			Name: $3[0],
+			Empty: $3[1] == "",
+			IndexOption: $7,
+		}
+	}
+|	FULLTEXT key_or_index_opt index_name '(' index_column_list ')' index_option_list
+	{
+		$$ = &tree.FullTextIndex{
+			KeyParts: $5,
+			Name: $3,
+			Empty: true,
+			IndexOption: $7,
+		}
+	}
+|	key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+	{
+		$$ = &tree.Index{
+			IfNotExists: $2,
+			KeyParts: $5,
+			Name: $3[0],
+			Empty: $3[1] == "",
+			IndexOption: $7,
+		}
+	}
+|	UNIQUE key_or_index_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
+	{
+		$$ = &tree.UniqueIndex{
+			KeyParts: $5,
+			Name: $3[0],
+            Empty: $3[1] == "",
+            IndexOption: $7,
+		}
+	}
+|	FOREIGN KEY not_exists_opt index_name '(' index_column_list ')' references_def
+	{
+		$$ = &tree.ForeignKey{
+			IfNotExists: $3,
+			KeyParts: $6,
+			Name: $4,
+			Refer: $8,
+			Empty: true,
+		}
+	}
+|	CHECK '(' expression ')' enforce_opt
+	{
+		$$ = &tree.CheckIndex{
+			Expr: $3,
+			Enforced: $5,
+		}
+	}
+
+enforce_opt:
+	{
+		$$ = false
+	}
+|	enforce
+
+key_or_index_opt:
+	{
+		$$ = ""
+	}
+|	key_or_index
+	{
+		$$ = $1
+	}
+
+key_or_index:
+	KEY
+|	INDEX
+
+index_name_and_type_opt:
+	index_name
+	{
+		$$ = make([]string, 2)
+		$$[0] = $1
+		$$[1] = ""
+	}
+|	index_name USING index_type
+	{
+		$$ = make([]string, 2)
+        $$[0] = $1
+        $$[1] = $3
+	}
+|	ident TYPE index_type
+	{
+		$$ = make([]string, 2)
+        $$[0] = $1
+        $$[1] = $3
+	}
+
+index_type:
+	BTREE
+|	HASH
+|	RTREE
+
+index_name:
+	{
+		$$ = ""
+	}
+|	ident
 
 column_def:
     column_name column_type column_attribute_list_opt 
@@ -3516,11 +3643,11 @@ column_attribute_elem:
     {
         $$ = $1
     }
-|   constrain_keyword_opt CHECK '(' expression ')'
+|   constraint_keyword_opt CHECK '(' expression ')'
     {
         $$ = tree.NewAttributeCheck($4, false, $1)
     }
-|   constrain_keyword_opt CHECK '(' expression ')' enforce
+|   constraint_keyword_opt CHECK '(' expression ')' enforce
     {
         $$ = tree.NewAttributeCheck($4, $6, $1)
     }
@@ -3539,15 +3666,21 @@ enforce:
         $$ = false
     }
 
-constrain_keyword_opt:
+constraint_keyword_opt:
     {
         $$ = ""
     }
-|   CONSTRAINT
+ |	constraint_keyword
+ 	{
+ 		$$ = $1
+ 	}
+
+constraint_keyword:
+	CONSTRAINT
     {
         $$ = ""
     }
-|   CONSTRAINT ID
+|   CONSTRAINT ident
     {
         $$ = $2
     }
@@ -4584,9 +4717,12 @@ literal:
     {
         $$ = tree.NewNumVal(constant.MakeUnknown(), "", false)
     }
+|   HEXNUM
+	{
+		ival := getUint64($1)
+        $$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
+	}
 // |   HEX
-// |   BIT_LITERAL
-// |   HEXNUM
 // |   VALUE_ARG
 
 column_type:
@@ -5382,6 +5518,11 @@ reserved_keyword:
 |   INT3
 |   INT4
 |   INT8
+|	CHECK
+|	CONSTRAINT
+|	PRIMARY
+|	FULLTEXT
+|	FOREIGN
 
 non_reserved_keyword:
     AGAINST
@@ -5396,7 +5537,6 @@ non_reserved_keyword:
 |   BOOL
 |   CHARACTER
 |   CHAIN
-|   CHECK
 |   CHECKSUM
 |   COMPRESSION
 |   COMMENT_KEYWORD
@@ -5428,8 +5568,6 @@ non_reserved_keyword:
 |   ERRORS
 |   ENFORCED
 |   FLOAT_TYPE
-|   FOREIGN
-|   FULLTEXT
 |   FULL
 |   FIXED
 |   FIELDS
@@ -5484,7 +5622,6 @@ non_reserved_keyword:
 |   PARTITIONS
 |   POINT
 |   POLYGON
-|   PRIMARY
 |   PROCEDURE
 |   PROXY
 |   QUERY
@@ -5540,6 +5677,7 @@ non_reserved_keyword:
 |   X509
 |   ZEROFILL
 |   YEAR
+|	TYPE
 
 not_keyword:
     ADDDATE

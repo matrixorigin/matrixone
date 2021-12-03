@@ -59,7 +59,7 @@ func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) (inserted bool, v
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = crc32Int256HashAsm(key)
+		hash = crc32Int256Hash(key)
 	}
 
 	inserted, _, cell := ht.findBucket(hash, key)
@@ -78,7 +78,7 @@ func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, insert
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
@@ -95,7 +95,7 @@ func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, insert
 
 func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
 	if hash == 0 {
-		hash = crc32Int256HashAsm(key)
+		hash = crc32Int256Hash(key)
 	}
 
 	empty, _, cell := ht.findBucket(hash, key)
@@ -108,7 +108,7 @@ func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
 
 func (ht *String32HashMap) FindBatch(hashes []uint64, keys [][4]uint64, values []*uint64) {
 	if hashes[0] == 0 {
-		crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
