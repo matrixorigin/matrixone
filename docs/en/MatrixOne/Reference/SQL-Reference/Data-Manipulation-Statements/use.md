@@ -5,10 +5,10 @@ The USE statement tells MatrixOne to use the named database as the default (curr
 
 ## **Syntax**
 ```
-$ USE db_name
+> USE db_name
 ```
 ## **Examples**
 ```
-$ USE db1;
-$ SELECT COUNT(*) FROM mytable; 
+> USE db1;
+> SELECT COUNT(*) FROM mytable; 
 ```

@@ -11,7 +11,7 @@ Note: NULL values are not counted.
 ## **Syntax**
 
 ```
-$ SUM(expr)
+> SUM(expr)
 ```
 
 ## **Arguments**
@@ -29,28 +29,28 @@ f there are no matching rows, SUM() returns NULL.
 Note: numbers(N) – A table for test with the single number column (UInt64) that contains integers from 0 to N-1.
 
 ```
-$ SELECT SUM(*) FROM numbers(3);
+> SELECT SUM(*) FROM numbers(3);
 +--------+
 | sum(*) |
 +--------+
 |      3 |
 +--------+
 
-$ SELECT SUM(number) FROM numbers(3);
+> SELECT SUM(number) FROM numbers(3);
 +-------------+
 | sum(number) |
 +-------------+
 |           3 |
 +-------------+
 
-$ SELECT SUM(number) AS sum FROM numbers(3);
+> SELECT SUM(number) AS sum FROM numbers(3);
 +------+
 | sum  |
 +------+
 |    3 |
 +------+
 
-$ SELECT SUM(number+2) AS sum FROM numbers(3);
+> SELECT SUM(number+2) AS sum FROM numbers(3);
 +------+
 | sum  |
 +------+

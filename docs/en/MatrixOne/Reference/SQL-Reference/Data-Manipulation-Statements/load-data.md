@@ -6,7 +6,7 @@ The LOAD DATA statement reads rows from a text file into a table at a very high 
 ## **Syntax**
 
 ```
-$ LOAD DATA
+> LOAD DATA
     [LOW_PRIORITY | CONCURRENT] [LOCAL]
     INFILE 'file_name'
     [REPLACE | IGNORE]
@@ -34,5 +34,5 @@ $ LOAD DATA
 The SSB Test is an example of LOAD DATA syntax. [Complete a SSB Test with MatrixOne
 ](../../Get-Started/Tutorial/SSB-test-with-matrixone.md)
 ```
-$ LOAD DATA INFILE '/ssb-dbgen-path/lineorder_flat.tbl ' INTO TABLE lineorder_flat;
+> LOAD DATA INFILE '/ssb-dbgen-path/lineorder_flat.tbl ' INTO TABLE lineorder_flat;
 ```
