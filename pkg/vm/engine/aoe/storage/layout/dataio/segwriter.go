@@ -209,6 +209,7 @@ func (sw *SegmentWriter) Execute() error {
 	//	return err
 	//}
 	footer := make([]byte, 64)
+	w.Seek(0, io.SeekEnd)
 	if _, err = w.Write(footer); err != nil {
 		return err
 	}
@@ -351,14 +352,14 @@ func flush(w *os.File, iter iface.BacktrackingBlockIterator, meta *metadata.Segm
 		if err != nil {
 			return err
 		}
+		if err = preprocessColumn(column, &sortedIdx, false); err != nil {
+			return err
+		}
 		zmi, err := index.BuildSegmentZoneMapIndex(column, typs[i], int16(i), false)
 		if err != nil {
 			return err
 		}
 		indices = append(indices, zmi)
-		if err = preprocessColumn(column, &sortedIdx, false); err != nil {
-			return err
-		}
 		colSz, err := processColumn(column, &metaBuf, &outputBuffer)
 		if err != nil {
 			return err
