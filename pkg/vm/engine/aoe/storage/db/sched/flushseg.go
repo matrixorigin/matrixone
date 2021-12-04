@@ -15,9 +15,8 @@
 package sched
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 )
 
@@ -36,33 +35,12 @@ func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 func (e *flushSegEvent) Execute() error {
 	ids := e.Segment.BlockIds()
 	meta := e.Segment.GetMeta()
-	batches := make([]*batch.Batch, len(ids))
-	colCnt := len(meta.Table.Schema.ColDefs)
-	nodes := make([]*common.MemNode, 0)
-	for i := 0; i < len(ids); i++ {
-		blk := e.Segment.WeakRefBlock(ids[i])
-		bat := &batch.Batch{}
-		for colIdx := 0; colIdx < colCnt; colIdx++ {
-			vec, err := blk.GetVectorWrapper(colIdx)
-			if err != nil {
-				panic(err)
-			}
-			bat.Vecs = append(bat.Vecs, &vec.Vector)
-			if vec.Vector.Length() == 0 {
-				panic("")
-			}
-			nodes = append(nodes, vec.MNode)
-		}
-		batches[i] = bat
+	blks := make([]iface.IBlock, 0)
+	for _, id := range ids {
+		blk := e.Segment.WeakRefBlock(id)
+		blks = append(blks, blk)
 	}
-
-	release := func() {
-		for _, node := range nodes {
-			common.GPool.Free(node)
-		}
-	}
-	defer release()
-
-	w := dataio.NewSegmentWriter(batches, meta, meta.Table.Database.Catalog.Cfg.Dir)
+	iter := table.NewBlockIterator(blks, 0)
+	w := dataio.NewSegmentWriter(iter, meta, meta.Table.Database.Catalog.Cfg.Dir)
 	return w.Execute()
 }

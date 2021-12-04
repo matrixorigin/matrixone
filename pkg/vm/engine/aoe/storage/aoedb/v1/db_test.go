@@ -2746,3 +2746,34 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 
 	inst.Close()
 }
+
+func TestMerge(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = 4
+	inst.Store.Catalog.Cfg.BlockMaxRows = 1000
+	schema := metadata.MockSchema(1000)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(20)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+			inst.Append(appendCtx)
+			wg.Done()
+		}
+	}
+	wg.Wait()
+}

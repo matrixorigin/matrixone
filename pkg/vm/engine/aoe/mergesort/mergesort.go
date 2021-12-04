@@ -15,7 +15,6 @@
 package mergesort
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float32s"
@@ -92,73 +91,129 @@ func SortBlockColumns(cols []*vector.Vector,pk int) error {
 	return nil
 }
 
-func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
-	n := len(blks) * blks[0].Vecs[pk].Length()
-	mergedSrc := make([]uint16, n)
-
-	col := make([]*vector.Vector, len(blks))
-	for i := 0; i < len(blks); i++ {
-		col[i] = blks[i].Vecs[pk]
-	}
-
-	switch blks[0].Vecs[pk].Typ.Oid {
+func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint16) error {
+	switch column[0].Typ.Oid {
 	case types.T_int8:
-		int8s.Merge(col, mergedSrc)
+		int8s.Merge(column, sortedIdx)
 	case types.T_int16:
-		int16s.Merge(col, mergedSrc)
+		int16s.Merge(column, sortedIdx)
 	case types.T_int32:
-		int32s.Merge(col, mergedSrc)
+		int32s.Merge(column, sortedIdx)
 	case types.T_int64:
-		int64s.Merge(col, mergedSrc)
+		int64s.Merge(column, sortedIdx)
 	case types.T_uint8:
-		uint8s.Merge(col, mergedSrc)
+		uint8s.Merge(column, sortedIdx)
 	case types.T_uint16:
-		uint16s.Merge(col, mergedSrc)
+		uint16s.Merge(column, sortedIdx)
 	case types.T_uint32:
-		uint32s.Merge(col, mergedSrc)
+		uint32s.Merge(column, sortedIdx)
 	case types.T_uint64:
-		uint64s.Merge(col, mergedSrc)
+		uint64s.Merge(column, sortedIdx)
 	case types.T_float32:
-		float32s.Merge(col, mergedSrc)
+		float32s.Merge(column, sortedIdx)
 	case types.T_float64:
-		float64s.Merge(col, mergedSrc)
+		float64s.Merge(column, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
-		varchar.Merge(col, mergedSrc)
+		varchar.Merge(column, sortedIdx)
 	}
-
-	for j := 0; j < len(blks[0].Vecs); j++ {
-		if j == pk {
-			continue
-		}
-		for i := 0; i < len(blks); i++ {
-			col[i] = blks[i].Vecs[j]
-		}
-
-		switch blks[0].Vecs[j].Typ.Oid {
-		case types.T_int8:
-			int8s.Multiplex(col, mergedSrc)
-		case types.T_int16:
-			int16s.Multiplex(col, mergedSrc)
-		case types.T_int32:
-			int32s.Multiplex(col, mergedSrc)
-		case types.T_int64:
-			int64s.Multiplex(col, mergedSrc)
-		case types.T_uint8:
-			uint8s.Multiplex(col, mergedSrc)
-		case types.T_uint16:
-			uint16s.Multiplex(col, mergedSrc)
-		case types.T_uint32:
-			uint32s.Multiplex(col, mergedSrc)
-		case types.T_uint64:
-			uint64s.Multiplex(col, mergedSrc)
-		case types.T_float32:
-			float32s.Multiplex(col, mergedSrc)
-		case types.T_float64:
-			float64s.Multiplex(col, mergedSrc)
-		case types.T_char, types.T_json, types.T_varchar:
-			varchar.Multiplex(col, mergedSrc)
-		}
-	}
-
 	return nil
 }
+
+func ShuffleColumn(column []*vector.Vector, sortedIdx []uint16) error {
+	switch column[0].Typ.Oid {
+	case types.T_int8:
+		int8s.Multiplex(column, sortedIdx)
+	case types.T_int16:
+		int16s.Multiplex(column, sortedIdx)
+	case types.T_int32:
+		int32s.Multiplex(column, sortedIdx)
+	case types.T_int64:
+		int64s.Multiplex(column, sortedIdx)
+	case types.T_uint8:
+		uint8s.Multiplex(column, sortedIdx)
+	case types.T_uint16:
+		uint16s.Multiplex(column, sortedIdx)
+	case types.T_uint32:
+		uint32s.Multiplex(column, sortedIdx)
+	case types.T_uint64:
+		uint64s.Multiplex(column, sortedIdx)
+	case types.T_float32:
+		float32s.Multiplex(column, sortedIdx)
+	case types.T_float64:
+		float64s.Multiplex(column, sortedIdx)
+	case types.T_char, types.T_json, types.T_varchar:
+		varchar.Multiplex(column, sortedIdx)
+	}
+	return nil
+}
+
+//func MergeBlocksToSegment(blks []*batch.Batch, pk int) error {
+//	n := len(blks) * blks[0].Vecs[pk].Length()
+//	mergedSrc := make([]uint16, n)
+//
+//	col := make([]*vector.Vector, len(blks))
+//	for i := 0; i < len(blks); i++ {
+//		col[i] = blks[i].Vecs[pk]
+//	}
+//
+//	switch blks[0].Vecs[pk].Typ.Oid {
+//	case types.T_int8:
+//		int8s.Merge(col, mergedSrc)
+//	case types.T_int16:
+//		int16s.Merge(col, mergedSrc)
+//	case types.T_int32:
+//		int32s.Merge(col, mergedSrc)
+//	case types.T_int64:
+//		int64s.Merge(col, mergedSrc)
+//	case types.T_uint8:
+//		uint8s.Merge(col, mergedSrc)
+//	case types.T_uint16:
+//		uint16s.Merge(col, mergedSrc)
+//	case types.T_uint32:
+//		uint32s.Merge(col, mergedSrc)
+//	case types.T_uint64:
+//		uint64s.Merge(col, mergedSrc)
+//	case types.T_float32:
+//		float32s.Merge(col, mergedSrc)
+//	case types.T_float64:
+//		float64s.Merge(col, mergedSrc)
+//	case types.T_char, types.T_json, types.T_varchar:
+//		varchar.Merge(col, mergedSrc)
+//	}
+//
+//	for j := 0; j < len(blks[0].Vecs); j++ {
+//		if j == pk {
+//			continue
+//		}
+//		for i := 0; i < len(blks); i++ {
+//			col[i] = blks[i].Vecs[j]
+//		}
+//
+//		switch blks[0].Vecs[j].Typ.Oid {
+//		case types.T_int8:
+//			int8s.Multiplex(col, mergedSrc)
+//		case types.T_int16:
+//			int16s.Multiplex(col, mergedSrc)
+//		case types.T_int32:
+//			int32s.Multiplex(col, mergedSrc)
+//		case types.T_int64:
+//			int64s.Multiplex(col, mergedSrc)
+//		case types.T_uint8:
+//			uint8s.Multiplex(col, mergedSrc)
+//		case types.T_uint16:
+//			uint16s.Multiplex(col, mergedSrc)
+//		case types.T_uint32:
+//			uint32s.Multiplex(col, mergedSrc)
+//		case types.T_uint64:
+//			uint64s.Multiplex(col, mergedSrc)
+//		case types.T_float32:
+//			float32s.Multiplex(col, mergedSrc)
+//		case types.T_float64:
+//			float64s.Multiplex(col, mergedSrc)
+//		case types.T_char, types.T_json, types.T_varchar:
+//			varchar.Multiplex(col, mergedSrc)
+//		}
+//	}
+//
+//	return nil
+//}
