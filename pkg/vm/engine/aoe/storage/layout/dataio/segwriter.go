@@ -78,8 +78,6 @@ type SegmentWriter struct {
 	postExecutor func()
 }
 
-var FlushIndex = false
-
 // NewSegmentWriter make a SegmentWriter, which is
 // used when (block file count) == SegmentMaxBlocks
 func NewSegmentWriter(data iface.BacktrackingBlockIterator, meta *metadata.Segment, dir string) *SegmentWriter {
@@ -145,14 +143,6 @@ func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.Fil
 
 // flushIndices flush embedded index of segment.
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
-	if !FlushIndex {
-		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(buf)
-		return err
-	}
 	var indices []index.Index
 
 	// ZoneMapIndex

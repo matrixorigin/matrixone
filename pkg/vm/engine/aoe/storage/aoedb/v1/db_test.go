@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -746,12 +745,6 @@ func TestDropTable2(t *testing.T) {
 
 // Test bsi file flushed with segment file when metadata contains bsi.
 func TestBuildIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -830,12 +823,6 @@ func TestBuildIndex(t *testing.T) {
 }
 
 func TestRebuildIndices(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -936,12 +923,6 @@ func TestRebuildIndices(t *testing.T) {
 }
 
 func TestManyLoadAndDrop(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -1343,12 +1324,6 @@ func decodeBlockIds(ids []string) []string {
 	return res
 }
 func TestFilter(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -2444,12 +2419,6 @@ func TestFilter(t *testing.T) {
 }
 
 func TestCreateAndDropIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -2607,12 +2576,6 @@ func TestCreateAndDropIndex(t *testing.T) {
 }
 
 func TestRepeatCreateAndDropIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
