@@ -40,7 +40,7 @@ func (e *flushSegEvent) Execute() error {
 		blk := e.Segment.WeakRefBlock(id)
 		blks = append(blks, blk)
 	}
-	iter := table.NewBlockIterator(blks, 0)
+	iter := table.NewBacktrackingBlockIterator(blks, 0)
 	w := dataio.NewSegmentWriter(iter, meta, meta.Table.Database.Catalog.Cfg.Dir)
 	return w.Execute()
 }

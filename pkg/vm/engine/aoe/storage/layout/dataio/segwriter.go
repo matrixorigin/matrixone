@@ -58,7 +58,7 @@ const Version uint64 = 1
 type SegmentWriter struct {
 	// data is the data of the block file,
 	// SegmentWriter does not read from the block file
-	data         iface.BacktrackingBlockIterator
+	data         iface.BlockIterator
 	meta         *metadata.Segment
 	dir          string
 	size         int64
@@ -66,21 +66,21 @@ type SegmentWriter struct {
 	//preprocessor func([]*batch.Batch, *metadata.Segment) error
 
 	// fileGetter is createFile()，use dir&TableID&SegmentID to
-	// create a tmp file for dataFlusher to flush data
+	// create a tmp file for flusher to flush data
 	fileGetter func(string, *metadata.Segment) (*os.File, error)
 
 	// fileCommiter is commitFile()，rename file name after
-	// dataFlusher is completed
+	// flusher is completed
 	fileCommiter func(string) error
-	indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
-	dataFlusher  func(*os.File, iface.BacktrackingBlockIterator, *metadata.Segment) error
-	preExecutor  func()
+	//indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
+	flusher     func(*os.File, iface.BlockIterator, *metadata.Segment) error
+	preExecutor func()
 	postExecutor func()
 }
 
 // NewSegmentWriter make a SegmentWriter, which is
 // used when (block file count) == SegmentMaxBlocks
-func NewSegmentWriter(data iface.BacktrackingBlockIterator, meta *metadata.Segment, dir string) *SegmentWriter {
+func NewSegmentWriter(data iface.BlockIterator, meta *metadata.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
 		meta: meta,
@@ -88,8 +88,8 @@ func NewSegmentWriter(data iface.BacktrackingBlockIterator, meta *metadata.Segme
 	}
 	// w.preprocessor = w.defaultPreprocessor
 	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
-	w.dataFlusher = flush
-	w.indexFlusher = w.flushIndices
+	w.flusher = flush
+	//w.indexFlusher = w.flushIndices
 	return w
 }
 
@@ -105,12 +105,12 @@ func (sw *SegmentWriter) SetFileGetter(f func(string, *metadata.Segment) (*os.Fi
 	sw.fileGetter = f
 }
 
-func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
-	sw.indexFlusher = f
-}
+//func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
+//	sw.indexFlusher = f
+//}
 
-func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, iface.BacktrackingBlockIterator, *metadata.Segment) error) {
-	sw.dataFlusher = f
+func (sw *SegmentWriter) SetFlusher(f func(*os.File, iface.BlockIterator, *metadata.Segment) error) {
+	sw.flusher = f
 }
 
 //func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
@@ -176,11 +176,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 // 4. Compress column data and flush them.
 // 5. Rename .tmp file to .seg file.
 func (sw *SegmentWriter) Execute() error {
-	//if sw.preprocessor != nil {
-	//	if err := sw.preprocessor(sw.data, sw.meta); err != nil {
-	//		return err
-	//	}
-	//}
 	w, err := sw.fileGetter(sw.dir, sw.meta)
 	if err != nil {
 		return err
@@ -189,14 +184,10 @@ func (sw *SegmentWriter) Execute() error {
 	if sw.preExecutor != nil {
 		sw.preExecutor()
 	}
-	if err = sw.dataFlusher(w, sw.data, sw.meta); err != nil {
+	if err = sw.flusher(w, sw.data, sw.meta); err != nil {
 		w.Close()
 		return err
 	}
-	//if err = sw.indexFlusher(w, sw.data, sw.meta); err != nil {
-	//	w.Close()
-	//	return err
-	//}
 	footer := make([]byte, 64)
 	w.Seek(0, io.SeekEnd)
 	if _, err = w.Write(footer); err != nil {
@@ -216,7 +207,9 @@ func (sw *SegmentWriter) GetSize() int64 {
 	return sw.size
 }
 
-func flush(w *os.File, iter iface.BacktrackingBlockIterator, meta *metadata.Segment) error {
+// flush metadata, columns data, indices, and other related infos
+// for the segment.
+func flush(w *os.File, iter iface.BlockIterator, meta *metadata.Segment) error {
 	var metaBuf bytes.Buffer
 	blkCnt := iter.BlockCount()
 	header := make([]byte, 32)
