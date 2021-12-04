@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/iterator/iface"
 	"io"
 	"os"
@@ -418,7 +417,6 @@ func flush(w *os.File, iter iface.BacktrackingBlockIterator, meta *metadata.Segm
 }
 
 func preprocessColumn(column []*vector.Vector, sortedIdx *[]uint16, isPrimary bool) error {
-	logutil.Infof("..... %+v", *sortedIdx)
 	if isPrimary {
 		*sortedIdx = make([]uint16, column[0].Length() * len(column))
 		if err := mergesort.MergeSortedColumn(column, sortedIdx); err != nil {
