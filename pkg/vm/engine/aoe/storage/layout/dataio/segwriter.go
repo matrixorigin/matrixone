@@ -17,7 +17,10 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/iterator/iface"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -55,40 +58,38 @@ const Version uint64 = 1
 type SegmentWriter struct {
 	// data is the data of the block file,
 	// SegmentWriter does not read from the block file
-	data         []*batch.Batch
+	data         iface.BlockIterator
 	meta         *metadata.Segment
 	dir          string
 	size         int64
 	fileHandle   *os.File
-	preprocessor func([]*batch.Batch, *metadata.Segment) error
+	//preprocessor func([]*batch.Batch, *metadata.Segment) error
 
 	// fileGetter is createFile()，use dir&TableID&SegmentID to
-	// create a tmp file for dataFlusher to flush data
+	// create a tmp file for flusher to flush data
 	fileGetter func(string, *metadata.Segment) (*os.File, error)
 
 	// fileCommiter is commitFile()，rename file name after
-	// dataFlusher is completed
+	// flusher is completed
 	fileCommiter func(string) error
-	indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
-	dataFlusher  func(*os.File, []*batch.Batch, *metadata.Segment) error
-	preExecutor  func()
+	//indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
+	flusher     func(*os.File, iface.BlockIterator, *metadata.Segment) error
+	preExecutor func()
 	postExecutor func()
 }
 
-var FlushIndex = false
-
 // NewSegmentWriter make a SegmentWriter, which is
 // used when (block file count) == SegmentMaxBlocks
-func NewSegmentWriter(data []*batch.Batch, meta *metadata.Segment, dir string) *SegmentWriter {
+func NewSegmentWriter(data iface.BlockIterator, meta *metadata.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
 		meta: meta,
 		dir:  dir,
 	}
-	w.preprocessor = w.defaultPreprocessor
+	// w.preprocessor = w.defaultPreprocessor
 	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
-	w.dataFlusher = flushBlocks
-	w.indexFlusher = w.flushIndices
+	w.flusher = flush
+	//w.indexFlusher = w.flushIndices
 	return w
 }
 
@@ -104,18 +105,18 @@ func (sw *SegmentWriter) SetFileGetter(f func(string, *metadata.Segment) (*os.Fi
 	sw.fileGetter = f
 }
 
-func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
-	sw.indexFlusher = f
+//func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
+//	sw.indexFlusher = f
+//}
+
+func (sw *SegmentWriter) SetFlusher(f func(*os.File, iface.BlockIterator, *metadata.Segment) error) {
+	sw.flusher = f
 }
 
-func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
-	sw.dataFlusher = f
-}
-
-func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
-	err := mergesort.MergeBlocksToSegment(data, meta.Table.Schema.PrimaryKey)
-	return err
-}
+//func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
+//	err := mergesort.MergeBlocksToSegment(data, meta.Table.Schema.PrimaryKey)
+//	return err
+//}
 
 func (sw *SegmentWriter) commitFile(fname string) error {
 	name, err := common.FilenameFromTmpfile(fname)
@@ -142,14 +143,6 @@ func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.Fil
 
 // flushIndices flush embedded index of segment.
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
-	if !FlushIndex {
-		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(buf)
-		return err
-	}
 	var indices []index.Index
 
 	// ZoneMapIndex
@@ -183,11 +176,6 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *met
 // 4. Compress column data and flush them.
 // 5. Rename .tmp file to .seg file.
 func (sw *SegmentWriter) Execute() error {
-	if sw.preprocessor != nil {
-		if err := sw.preprocessor(sw.data, sw.meta); err != nil {
-			return err
-		}
-	}
 	w, err := sw.fileGetter(sw.dir, sw.meta)
 	if err != nil {
 		return err
@@ -196,15 +184,12 @@ func (sw *SegmentWriter) Execute() error {
 	if sw.preExecutor != nil {
 		sw.preExecutor()
 	}
-	if err = sw.dataFlusher(w, sw.data, sw.meta); err != nil {
-		w.Close()
-		return err
-	}
-	if err = sw.indexFlusher(w, sw.data, sw.meta); err != nil {
+	if err = sw.flusher(w, sw.data, sw.meta); err != nil {
 		w.Close()
 		return err
 	}
 	footer := make([]byte, 64)
+	w.Seek(0, io.SeekEnd)
 	if _, err = w.Write(footer); err != nil {
 		return err
 	}
@@ -222,10 +207,11 @@ func (sw *SegmentWriter) GetSize() int64 {
 	return sw.size
 }
 
-// flushBlocks does not read the .blk file, and writes the incoming
-// data&meta into the segemnt file.
-func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
+// flush metadata, columns data, indices, and other related infos
+// for the segment.
+func flush(w *os.File, iter iface.BlockIterator, meta *metadata.Segment) error {
 	var metaBuf bytes.Buffer
+	blkCnt := iter.BlockCount()
 	header := make([]byte, 32)
 	copy(header, encoding.EncodeUint64(Version))
 	err := binary.Write(&metaBuf, binary.BigEndian, header)
@@ -241,7 +227,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 	if err != nil {
 		return err
 	}
-	err = binary.Write(&metaBuf, binary.BigEndian, uint32(len(data)))
+	err = binary.Write(&metaBuf, binary.BigEndian, blkCnt)
 	if err != nil {
 		return err
 	}
@@ -285,35 +271,6 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 			return err
 		}
 	}
-
-	var dataBuf bytes.Buffer
-	colSizes := make([]int, colCnt)
-	for i := 0; i < colCnt; i++ {
-		colSz := 0
-		for _, bat := range data {
-			colBuf, err := bat.Vecs[i].Show()
-			if err != nil {
-				return err
-			}
-			colSize := len(colBuf)
-			cbuf := make([]byte, lz4.CompressBlockBound(colSize))
-			if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
-				return err
-			}
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint64(len(cbuf))); err != nil {
-				return err
-			}
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint64(colSize)); err != nil {
-				return err
-			}
-			if err = binary.Write(&dataBuf, binary.BigEndian, cbuf); err != nil {
-				return err
-			}
-			colSz += len(cbuf)
-		}
-		colSizes[i] = colSz
-	}
-
 	metaSize := headerSize +
 		reservedSize +
 		algoSize +
@@ -321,10 +278,95 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		colCntSize +
 		startPosSize +
 		endPosSize +
-		len(data)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
-		len(data)*colCnt*(colSizeSize*2) +
+		int(blkCnt)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
+		int(blkCnt)*colCnt*(colSizeSize*2) +
 		colCnt*colPosSize
 
+	if _, err = w.Seek(int64(metaSize), io.SeekStart); err != nil {
+		return err
+	}
+
+	colSizes := make([]int, colCnt)
+	sortedIdx := make([]uint16, 0)
+	pkIdx := meta.Table.Schema.PrimaryKey
+	var outputBuffer bytes.Buffer
+	var indices []index.Index
+	typs := make([]types.Type, 0)
+	for _, def := range meta.Table.Schema.ColDefs {
+		typs = append(typs, def.Type)
+	}
+
+	// get the shuffle info of the column
+	iter.Reset(uint16(pkIdx))
+	pkColumn, err := iter.FetchColumn()
+	if err != nil {
+		return err
+	}
+	if err = preprocessColumn(pkColumn, &sortedIdx, true); err != nil {
+		return err
+	}
+	// could safely release vectors' mem nodes here
+	iter.Reset(0)
+
+	for i := 0; i < colCnt; i++ {
+		if i == pkIdx {
+			// build zone map
+			zmi, err := index.BuildSegmentZoneMapIndex(pkColumn, typs[i], int16(i), true)
+			if err != nil {
+				return err
+			}
+			indices = append(indices, zmi)
+
+			colSz, err := processColumn(pkColumn, &metaBuf, &outputBuffer)
+			if err != nil {
+				return err
+			}
+			colSizes[i] = colSz
+			if _, err := w.Write(outputBuffer.Bytes()); err != nil {
+				return err
+			}
+			iter.Reset(uint16(i + 1))
+			outputBuffer.Reset()
+			pkColumn = nil
+			continue
+		}
+		column, err := iter.FetchColumn()
+		if err != nil {
+			return err
+		}
+		if err = preprocessColumn(column, &sortedIdx, false); err != nil {
+			return err
+		}
+		zmi, err := index.BuildSegmentZoneMapIndex(column, typs[i], int16(i), false)
+		if err != nil {
+			return err
+		}
+		indices = append(indices, zmi)
+		colSz, err := processColumn(column, &metaBuf, &outputBuffer)
+		if err != nil {
+			return err
+		}
+		colSizes[i] = colSz
+		if _, err := w.Write(outputBuffer.Bytes()); err != nil {
+			return err
+		}
+		iter.Reset(uint16(i + 1))
+		outputBuffer.Reset()
+	}
+
+	// flush embedded indices
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	if err != nil {
+		return err
+	}
+	if _, err = w.Write(buf); err != nil {
+		return err
+	}
+
+	// back to start, flush metadata
+	if _, err = w.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	startPos := int64(metaSize)
 	curPos := startPos
 	colPoses := make([]int64, colCnt)
@@ -349,10 +391,50 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		return err
 	}
 
-	if _, err = w.Write(dataBuf.Bytes()); err != nil {
-		return err
-
-	}
+	//if _, err = w.Write(dataBuf.Bytes()); err != nil {
+	//	return err
+	//
+	//}
 
 	return nil
+}
+
+func preprocessColumn(column []*vector.Vector, sortedIdx *[]uint16, isPrimary bool) error {
+	if isPrimary {
+		*sortedIdx = make([]uint16, column[0].Length() * len(column))
+		if err := mergesort.MergeSortedColumn(column, sortedIdx); err != nil {
+			return err
+		}
+	} else {
+		if err := mergesort.ShuffleColumn(column, *sortedIdx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func processColumn(column []*vector.Vector, metaBuf, dataBuf *bytes.Buffer) (int, error) {
+	colSz := 0
+	for _, vec := range column {
+		colBuf, err := vec.Show()
+		if err != nil {
+			return 0, err
+		}
+		colSize := len(colBuf)
+		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+			return 0, err
+		}
+		if err = binary.Write(metaBuf, binary.BigEndian, uint64(len(cbuf))); err != nil {
+			return 0, err
+		}
+		if err = binary.Write(metaBuf, binary.BigEndian, uint64(colSize)); err != nil {
+			return 0, err
+		}
+		if err = binary.Write(dataBuf, binary.BigEndian, cbuf); err != nil {
+			return 0, err
+		}
+		colSz += len(cbuf)
+	}
+	return colSz, nil
 }
