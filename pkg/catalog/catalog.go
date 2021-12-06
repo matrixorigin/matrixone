@@ -691,7 +691,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 
 //encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return strconv.Itoa(int(groupId)) + strconv.Itoa(int(tableId))
+	return strconv.Itoa(int(tableId))
 }
 
 //genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.
