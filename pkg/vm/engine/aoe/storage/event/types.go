@@ -14,18 +14,33 @@
 
 package event
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-)
+import "fmt"
 
-type EventListener struct {
-	BackgroundErrorCB func(error)
+type SplitEvent struct {
+	DB    string
+	Names map[string][]string
 }
 
-func (l *EventListener) FillDefaults() {
-	if l.BackgroundErrorCB == nil {
-		l.BackgroundErrorCB = func(err error) {
-			logutil.Errorf("BackgroundError %v", err)
+func (e *SplitEvent) String() string {
+	info := fmt.Sprintf("DB<\"%s\"> Splitted | {", e.DB)
+	for db, tables := range e.Names {
+		dbInfo := fmt.Sprintf("[\"%s\"]: ", db)
+		for _, table := range tables {
+			dbInfo = fmt.Sprintf("%s\"%s\" ", dbInfo, table)
 		}
+		dbInfo += "; "
+		info = fmt.Sprintf("%s%s", info, dbInfo)
 	}
+	info += "}"
+	return info
 }
+
+type Listener interface {
+	OnDatabaseSplitted(*SplitEvent) error
+	OnBackgroundError(error) error
+}
+
+type NoopListener struct{}
+
+func (l *NoopListener) OnBackgroundError(_ error) error        { return nil }
+func (l *NoopListener) OnDatabaseSplitted(_ *SplitEvent) error { return nil }

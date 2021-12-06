@@ -18,10 +18,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-func NewLoggingEventListener() EventListener {
-	return EventListener{
-		BackgroundErrorCB: func(err error) {
-			logutil.Errorf("BackgroundError %s", err)
-		},
-	}
+type loggingListener struct{}
+
+func NewLoggingListener() *loggingListener {
+	return new(loggingListener)
+}
+
+func (l *loggingListener) OnDatabaseSplitted(event *SplitEvent) error {
+	logutil.Info(event.String())
+	return nil
+}
+
+func (l *loggingListener) OnBackgroundError(err error) error {
+	logutil.Warn(err.Error())
+	return nil
 }

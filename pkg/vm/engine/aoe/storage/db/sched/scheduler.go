@@ -246,7 +246,7 @@ func (s *scheduler) onFlushBlkDone(e sched.Event) {
 // new flush table event and an upgrade block event.
 func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		s.opts.EventListener.OnBackgroundError(err)
 		return
 	}
 	event := e.(*commitBlkEvent)
@@ -257,7 +257,7 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	mctx := &Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.Id)
 	if err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		s.opts.EventListener.OnBackgroundError(err)
 		return
 	}
 	logutil.Infof(" %s | Block %d | UpgradeBlkEvent | Started", sched.EventPrefix, newMeta.Id)
@@ -271,7 +271,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	event := e.(*upgradeBlkEvent)
 	defer event.TableData.Unref()
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		s.opts.EventListener.OnBackgroundError(err)
 		return
 	}
 	if !event.Ctx.HasDataScope() {
@@ -301,7 +301,6 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 func (s *scheduler) onFlushSegDone(e sched.Event) {
 	event := e.(*flushSegEvent)
 	if err := e.GetError(); err != nil {
-		// s.opts.EventListener.BackgroundErrorCB(err)
 		event.Segment.Unref()
 		return
 	}
@@ -315,7 +314,6 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
-		// s.opts.EventListener.BackgroundErrorCB(err)
 		event.Segment.Unref()
 		return
 	}
@@ -331,7 +329,7 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	defer event.TableData.Unref()
 	defer event.OldSegment.Unref()
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		s.opts.EventListener.OnBackgroundError(err)
 		return
 	}
 	event.Segment.Unref()
