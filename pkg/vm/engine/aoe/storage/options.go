@@ -72,7 +72,7 @@ type MetaCleanerCfg struct {
 }
 
 type Options struct {
-	EventListener event.EventListener
+	EventListener event.Listener
 
 	Mu sync.RWMutex
 
@@ -101,7 +101,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o == nil {
 		o = &Options{}
 	}
-	o.EventListener.FillDefaults()
+	listener := event.NewLoggingListener()
+	if o.EventListener != nil {
+		o.EventListener = event.NewListensers(o.EventListener, listener)
+	} else {
+		o.EventListener = listener
+	}
 
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{
