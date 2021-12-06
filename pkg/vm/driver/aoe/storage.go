@@ -440,7 +440,7 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				LogIndex: logIndex.Col.([]uint64)[0],
 				Metadata: *customReq,
 			})
-			logutil.Infof("GetInitialStates LogIndex is %d, LogTerm is %v, ShardID is %d \n",
+			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d \n",
 				logIndex.Col.([]uint64)[0], shardId.Col.([]uint64)[0])
 
 		}
