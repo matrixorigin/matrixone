@@ -198,7 +198,7 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 		// currently, only num/str bsi is supported for one column, if
 		// more kinds of indices are loaded for one column at the same
 		// time, need some refactor.
-		for _, segId := range meta.SimpleGetSegmentIds() {
+		for _, segId := range tblData.SegmentIds() {
 			seg := tblData.StrongRefSegment(segId)
 			segMeta := seg.GetMeta()
 			segMeta.RLock()
@@ -249,13 +249,12 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	}
 
 	names := ctx.IndexNames
-	segIds := meta.SimpleGetSegmentIds()
 	tblId := meta.Id
 	tblData, err := d.GetTableData(meta)
 	if err != nil {
 		return err
 	}
-	for _, segId := range segIds {
+	for _, segId := range tblData.SegmentIds() {
 		seg := tblData.StrongRefSegment(segId)
 		holder := seg.GetIndexHolder()
 		for _, info := range meta.GetIndexSchema().Indice {
