@@ -140,20 +140,16 @@ func (r *CountRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 
 func (r *CountRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
 	if nulls.Any(vec.Nsp) {
-		for i, o := range os {
-			if o == 1 {
-				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-					r.Ns[*vps[i]] += zs[int64(i)+start]
-				} else {
-					r.Vs[*vps[i]] += zs[int64(i)+start]
-				}
+		for i := range os {
+			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+				r.Ns[*vps[i]] += zs[int64(i)+start]
+			} else {
+				r.Vs[*vps[i]] += zs[int64(i)+start]
 			}
 		}
 	} else {
-		for i, o := range os {
-			if o == 1 {
-				r.Vs[*vps[i]] += zs[int64(i)+start]
-			}
+		for i := range os {
+			r.Vs[*vps[i]] += zs[int64(i)+start]
 		}
 	}
 }
@@ -182,17 +178,17 @@ func (r *CountRing) Add(a interface{}, x, y int64) {
 
 func (r *CountRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
 	ar := a.(*CountRing)
-	for i, o := range os {
-		if o == 1 {
-			r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
-			r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
-		}
+	for i := range os {
+		r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
+		r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
 	}
 }
 
-func (r *CountRing) Mul(x, z int64) {
-	r.Ns[x] *= z
-	r.Vs[x] *= z
+// r[x] += a[y] * z
+func (r *CountRing) Mul(a interface{}, x, y, z int64) {
+	ar := a.(*CountRing)
+	r.Vs[x] += ar.Vs[y] * z
+	r.Ns[x] += ar.Ns[y] * z
 }
 
 func (r *CountRing) Eval(_ []int64) *vector.Vector {

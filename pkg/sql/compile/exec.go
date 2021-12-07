@@ -61,7 +61,7 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		return e.compileVTree(qry.FreeAttrs, vtree.New().Build(ft), qry.VarsMap)
+		return e.compileVTree(vtree.New().Build(ft), qry.VarsMap)
 	case *plan.Insert:
 		// todo: insert into tbl select a, b from tbl2 should deal next time.
 		return &Scope{

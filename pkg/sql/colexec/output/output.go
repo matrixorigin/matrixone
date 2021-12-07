@@ -29,12 +29,20 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	var rbat *batch.Batch
+
 	ap := arg.(*Argument)
 	if bat := proc.Reg.InputBatch; bat != nil && len(bat.Zs) > 0 {
 		if len(ap.Attrs) > 0 {
-			batch.Reorder(bat, ap.Attrs)
+			rbat = batch.New(true, ap.Attrs)
+			for i, attr := range ap.Attrs {
+				rbat.Vecs[i] = batch.GetVector(bat, attr)
+			}
+			rbat.Zs = bat.Zs
+		} else {
+			rbat = bat
 		}
-		if err := ap.Func(ap.Data, bat); err != nil {
+		if err := ap.Func(ap.Data, rbat); err != nil {
 			batch.Clean(bat, proc.Mp)
 			return true, err
 		}

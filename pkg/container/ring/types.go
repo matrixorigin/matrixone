@@ -48,9 +48,8 @@ type Ring interface {
 
 	BatchFill(int64, []uint8, []*uint64, []int64, *vector.Vector)
 
-	Mul(int64, int64)
-
 	Add(interface{}, int64, int64)
+	Mul(interface{}, int64, int64, int64)
 
 	BatchAdd(interface{}, int64, []uint8, []*uint64)
 }

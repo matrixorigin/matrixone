@@ -17,6 +17,9 @@ package compile
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -35,8 +38,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"runtime"
-	"strings"
 )
 
 const (
@@ -547,18 +548,22 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 		}
 		arg.Bats = append(arg.Bats, bat)
 	}
+	if len(arg.Bats) == 0 {
+		return nil
+	}
+	constructViews(arg.Bats, arg.Svars)
 	for i := 0; i < mcpu; i++ {
 		ss[i].Instructions = vm.Instructions{vm.Instruction{
 			Op: vm.Times,
 			Arg: &times.Argument{
 				IsBare:   arg.IsBare,
-				SisBares: arg.SisBares,
 				R:        arg.R,
 				Rvars:    arg.Rvars,
 				Ss:       arg.Ss,
 				Svars:    arg.Svars,
 				VarsMap:  arg.VarsMap,
 				Bats:     arg.Bats,
+				FreeVars: arg.FreeVars,
 				Arg: &transform.Argument{
 					Typ:        arg.Arg.Typ,
 					IsMerge:    arg.Arg.IsMerge,
@@ -576,7 +581,7 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 	}
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op:  vm.UnTransform,
-		Arg: s.Instructions[2].Arg,
+		Arg: s.Instructions[1].Arg,
 	})
 	rs.Instructions = append(rs.Instructions, s.Instructions[2:]...)
 	{
@@ -604,10 +609,6 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 				},
 			})
 		}
-	}
-	{
-		p := pipeline.NewMerge(rs.Instructions)
-		fmt.Printf("p: %v\n", p)
 	}
 	return rs.MergeRun(e)
 }

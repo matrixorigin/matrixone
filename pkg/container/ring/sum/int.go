@@ -150,39 +150,29 @@ func (r *IntRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, 
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)
-		for i, o := range os {
-			if o == 1 {
-				r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
-			}
+		for i := range os {
+			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int16:
 		vs := vec.Col.([]int16)
-		for i, o := range os {
-			if o == 1 {
-				r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
-			}
+		for i := range os {
+			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int32:
 		vs := vec.Col.([]int32)
-		for i, o := range os {
-			if o == 1 {
-				r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
-			}
+		for i := range os {
+			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)
-		for i, o := range os {
-			if o == 1 {
-				r.Vs[*vps[i]] += vs[int64(i)+start] * zs[int64(i)+start]
-			}
+		for i := range os {
+			r.Vs[*vps[i]] += vs[int64(i)+start] * zs[int64(i)+start]
 		}
 	}
 	if nulls.Any(vec.Nsp) {
-		for i, o := range os {
-			if o == 1 {
-				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-					r.Ns[*vps[i]] += zs[int64(i)+start]
-				}
+		for i := range os {
+			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+				r.Ns[*vps[i]] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -241,6 +231,7 @@ func (r *IntRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	}
 }
 
+// r[x] += a[y]
 func (r *IntRing) Add(a interface{}, x, y int64) {
 	ar := a.(*IntRing)
 	r.Vs[x] += ar.Vs[y]
@@ -249,17 +240,17 @@ func (r *IntRing) Add(a interface{}, x, y int64) {
 
 func (r *IntRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
 	ar := a.(*IntRing)
-	for i, o := range os {
-		if o == 1 {
-			r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
-			r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
-		}
+	for i := range os {
+		r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
+		r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
 	}
 }
 
-func (r *IntRing) Mul(x, z int64) {
-	r.Ns[x] *= z
-	r.Vs[x] *= z
+// r[x] += a[y] * z
+func (r *IntRing) Mul(a interface{}, x, y, z int64) {
+	ar := a.(*IntRing)
+	r.Vs[x] += ar.Vs[y] * z
+	r.Ns[x] += ar.Ns[y] * z
 }
 
 func (r *IntRing) Eval(zs []int64) *vector.Vector {
