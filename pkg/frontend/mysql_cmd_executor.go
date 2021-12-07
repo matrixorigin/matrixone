@@ -1188,6 +1188,8 @@ func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	case types.T_date:
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
+	case types.T_datetime:
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

@@ -78,20 +78,25 @@ func TestInsertFunction(t *testing.T) {
 	}
 }
 
-// TestDataType will do test for new Types
-// For Example: date, datetime
-func TestDataType(t *testing.T) {
+// TestDateType will do test for Type date
+func TestDateType(t *testing.T) {
 	e, proc := newTestEngine()
 
 	sqls := []string {
 		"create table tdate (a date);",
 		"create table tdefdate (a date default '20211202')",
-		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112);",
+		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
 		"insert into tdefdate values ();",
 	}
 	res := [][]string {
-		{"tdate", "a\n\t[2007-02-10 1997-02-10 2001-04-28 2004-11-12]-&{<nil>}\n\n"},
+		{"tdate", "a\n\t[2007-02-10 1997-02-10 0001-04-28 2004-11-12 0123-04-03]-&{<nil>}\n\n"},
 		{"tdefdate", "a\n\t2021-12-02\n\n"},
+	}
+	eqls := [][]string {
+		{"create table tble (a date);", ""},
+		{"insert into tble values ('20201310')", "[22000]Incorrect date value"},
+		{"insert into tble values ('20200631')", "[22000]Incorrect date value"},
+		{"insert into tble values ('-3-5-3')", "[22000]Incorrect date value"},
 	}
 
 	for _, sql := range sqls {
@@ -99,6 +104,71 @@ func TestDataType(t *testing.T) {
 	}
 	for _, s := range res {
 		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
+	}
+	for _, eql := range eqls {
+		r := sqlRun(eql[0], e, proc)
+		if len(eql[1]) == 0 {
+			require.NoError(t, r, eql[0])
+		} else {
+			if r == nil { // that should error but found no error
+				require.Equal(t, eql[1], "no error", eql[0])
+			}
+			require.Equal(t, eql[1], r.Error(), eql[0])
+		}
+	}
+}
+
+// TestDatetimeType will do test for Type datetime
+func TestDatetimeType(t *testing.T) {
+	e, proc := newTestEngine()
+
+	// TestCase expected run success
+	sqls := []string{
+		"create table tbl1 (a datetime);", // test datetime format without msec part
+		"insert into tbl1 values ('2018-04-28 10:21:15'), ('17-04-28 03:05:01'), (250716163958), (20211203145633);",
+		"create table tbl2 (a datetime);", // test datetime with msec part
+		"insert into tbl2 values ('2018-04-28 10:21:15.123'), ('17-04-28 03:05:01.456'), (250716163958.567), (20211203145633.890);",
+		"create table tbl3 (a datetime);", // test datetime without hour / minute / second
+		"insert into tbl3 values ('20180428'), ('170428'), (250716), (20211203);",
+
+		"create table tdatetimedef (a datetime default '2015-03-03 12:12:12');",
+		"insert into tdatetimedef values ();",
+	}
+	// TestCase expected run failed
+	eqls := [][]string{
+		{"create table tbl4 (a datetime);", ""},
+		{"insert into tbl4 values ('-1-04-28 10:22:14');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('2010-13-28 10:22:14');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('2010-11-31 10:22:14');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('2010-11-30 24:22:14');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('2010-11-30 23:60:14');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('2010-11-30 23:59:60');", "[22000]Incorrect datetime value"},
+		{"insert into tbl4 values ('1999-02-29 23:59:59');", "[22000]Incorrect datetime value"},
+	}
+
+	res := [][]string{
+		{"tbl1", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"},
+		{"tbl2", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"}, // that is disputed. what does msec do?
+		{"tbl3", "a\n\t[2018-04-28 00:00:00 2017-04-28 00:00:00 2025-07-16 00:00:00 2021-12-03 00:00:00]-&{<nil>}\n\n"},
+		{"tdatetimedef", "a\n\t2015-03-03 12:12:12\n\n"},
+	}
+
+	for _, sql := range sqls {
+		require.NoError(t, sqlRun(sql, e, proc), sql)
+	}
+	for _, r := range res {
+		require.Equal(t, r[1], TempSelect(e, "test", r[0]))
+	}
+	for _, eql := range eqls {
+		r := sqlRun(eql[0], e, proc)
+		if len(eql[1]) == 0 {
+			require.NoError(t, r, eql[0])
+		} else {
+			if r == nil { // that should error but found no error
+				require.Equal(t, eql[1], "no error", eql[0])
+			}
+			require.Equal(t, eql[1], r.Error(), eql[0])
+		}
 	}
 }
 

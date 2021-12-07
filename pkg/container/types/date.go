@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -54,57 +55,96 @@ var (
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+
+	regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
 )
 
 const (
-	FullYearMonthDay = len("yyyy-mm-dd")
-	DisputedYearMonthDay = len("yy-mm-dd") // also "yyyymmdd"
-	SimpleYearMonthDay = len("yymmdd")
+	shortestDateFormat = len("mdd")
+	todayDate          = "today()"
+	todayLength        = len(todayDate)
+
+	formatTwo1 = len("yyyymmdd")
+	formatTwo2 = len("yyymmdd")
+	formatTwo3 = len("yymmdd")
+	formatTwo4 = len("ymmdd")
+	formatTwo5 = len("mmdd")
+	formatTwo6 = len("mdd")
 
 	MaxDateYear = 9999
-	MinDateYear = 1000
+	MinDateYear = 0
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 
-	CenturyStr = "20"
+	thisCenturyStr0 = "2"
+	thisCenturyStr1 = "20"
+	thisCenturyStr2 = "200"
+	thisCenturyStr3 = "2000"
 )
 
 // ParseDate will parse string to be a Date.
 // can only solve string Format like :
-// "yyyy-mm-dd"
-// "yy-mm-dd" is same to "20yy-mm-dd"
-// "yyyymmdd"
-// "yymmdd" is same to "20yymmdd"
-// And the supported range is '1000-01-01' to '9999-12-31'
+// 1. 'year-month-day'
+//	{
+//		at this format, each part (year, month, day) doesn't always need to be filled completely
+//		year can be YYYY or YYY or YY or Y
+//  	month can be X or 0X
+//		day can be X or 0X
+//	}
+// 2. 'YearMonthDay'
+//	{
+//		at this format, each part should follow the rule: len(Day) is 2, len(Month) > 0, len(Month) <= len(Year) and can not be 1 at the same time
+//		in short, format can be:
+//		yyyymmdd, yyymmdd, yymmdd, ymmdd, mmdd, mdd (year will start from 2000 if incomplete)
+//	}
+// And the supported range is '0000-01-01' to '9999-12-31'
 func ParseDate(s string) (Date, error) {
 	var parts [3]string
-	var year, month, day int64
+	var year int64
+	var month, day uint64
 	var err error
 
-	switch len(s) {
-	case FullYearMonthDay: // yyyy-mm-dd
-		parts[0], parts[1], parts[2] = s[0:4], s[5:7], s[8:]
-	case DisputedYearMonthDay: // yy-mm-dd, yyyymmdd
-		if s[2] == '-' {
-			parts[0], parts[1], parts[2] = CenturyStr + s[0:2], s[3:5], s[6:]
-		} else {
-			parts[0], parts[1], parts[2] = s[0:4], s[4:6], s[6:]
-		}
-	case SimpleYearMonthDay: // yymmdd
-		parts[0], parts[1], parts[2] = CenturyStr + s[0:2], s[2:4], s[4:]
-	default:
+	l := len(s)
+	if l < shortestDateFormat {
 		return -1, errIncorrectDateValue
+	}
+	// todo: may it should use function but not a string constant
+	//if l == todayLength && s == todayDate { // special case
+	//	return Today(), nil
+	//}
+
+	match := regDate.FindStringSubmatch(s)
+
+	if len(match) == 4 { // Format `year-month-day`
+		parts[0], parts[1], parts[2] = match[1], match[2], match[3]
+	} else { // Format `yearMonthDay`
+		switch l {
+		case formatTwo1: // yyyymmdd
+			parts[0], parts[1], parts[2] = s[0:4], s[4:6], s[6:]
+		case formatTwo2: // yyymmdd
+			parts[0], parts[1], parts[2] = thisCenturyStr0 + s[0:3], s[3:5], s[5:]
+		case formatTwo3: // yymmdd
+			parts[0], parts[1], parts[2] = thisCenturyStr1 + s[0:2], s[2:4], s[4:]
+		case formatTwo4: // ymmdd
+			parts[0], parts[1], parts[2] = thisCenturyStr2 + s[0:1], s[1:3], s[3:]
+		case formatTwo5: // mmdd
+			parts[0], parts[1], parts[2] = thisCenturyStr3, s[0:2], s[2:]
+		case formatTwo6: // mdd
+			parts[0], parts[1], parts[2] = thisCenturyStr3, s[0:1], s[1:]
+		default:
+			return -1, errIncorrectDateValue
+		}
 	}
 
 	year, err = strconv.ParseInt(parts[0], 10, 32)
 	if err != nil {
 		return -1, errIncorrectDateValue
 	}
-	month, err = strconv.ParseInt(parts[1], 10, 16)
+	month, err = strconv.ParseUint(parts[1], 10, 8)
 	if err != nil {
 		return -1, errIncorrectDateValue
 	}
-	day, err = strconv.ParseInt(parts[2], 10, 16)
+	day, err = strconv.ParseUint(parts[2], 10, 8)
 	if err != nil {
 		return -1, errIncorrectDateValue
 	}
@@ -133,7 +173,7 @@ func validDate(year int32, month, day uint8) bool {
 
 func (a Date) String() string {
 	y, m, d, _ := a.Calendar(true)
-	return fmt.Sprintf("%d-%02d-%02d", y, m, d)
+	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
 }
 
 // Holds number of days since January 1, year 1 in Gregorian calendar

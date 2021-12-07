@@ -1135,7 +1135,13 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(mrs *MysqlResultSet, r uint64)
 			} else {
 				data = mp.appendStringLenEnc(data, types.Date(value).String())
 			}
-		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
+		case defines.MYSQL_TYPE_DATETIME:
+			if value, err2 := mrs.GetInt64(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, types.Datetime(value).String())
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
 			return nil, fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
 			return nil, fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())

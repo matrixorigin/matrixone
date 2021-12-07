@@ -63,6 +63,7 @@ func init() {
 	gob.Register(Scope{})
 
 	gob.Register(types.Date(0))
+	gob.Register(types.Datetime(0))
 }
 
 func EncodeScope(s Scope, buf *bytes.Buffer) error {
@@ -1745,6 +1746,23 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint64(v.Link))
 		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
 		buf.Write(v.Data)
+	case types.T_datetime:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]types.Datetime)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeDatetimeSlice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	default:
 		return fmt.Errorf("unsupport vector type '%s'", v.Typ)
 	}
@@ -2127,6 +2145,34 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeDateSlice(data[:n*4])
 			data = data[n*4:]
+		} else {
+			data = data[4:]
+		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
+		return v, data, nil
+	case types.T_datetime:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeDatetimeSlice(data[:n*8])
+			data = data[n*8:]
 		} else {
 			data = data[4:]
 		}
