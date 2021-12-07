@@ -194,6 +194,8 @@ func main() {
 		os.Exit(DecodeAoeConfigExit)
 	}
 
+	catalogListener := catalog.NewCatalogListener()
+	opt.EventListener = catalogListener
 	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
 	if err != nil {
 		logutil.Infof("Create aoe driver error, %v\n", err)
@@ -230,6 +232,7 @@ func main() {
 	}
 	c = catalog.NewCatalog(a)
 	config.ClusterCatalog = c
+	catalogListener.UpdateCatalog(c)
 	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
