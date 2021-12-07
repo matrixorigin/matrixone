@@ -39,7 +39,7 @@ type Attribute struct {
 
 type DefaultExpr struct {
 	Exist  bool
-	Value  interface{} // int64, float32, float64, string, types.Date
+	Value  interface{} // int64, float32, float64, string, types.Date, types.Datetime
 	IsNull bool
 }
 
