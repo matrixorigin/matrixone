@@ -154,6 +154,11 @@ type ShowColumns struct {
 	Like     []byte
 }
 
+type ShowCreateTable struct {
+	Relation  engine.Relation
+	TableName string
+}
+
 type Insert struct {
 	Id       string
 	Db       string
@@ -529,6 +534,20 @@ func (s ShowColumns) ResultColumns() []*Attribute {
 		&Attribute{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 		&Attribute{Ref: 1, Name: "Default", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 		&Attribute{Ref: 1, Name: "Extra", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+	}
+	return attrs
+}
+
+func (s ShowCreateTable) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("show create table")
+	return buf.String()
+}
+
+func (s ShowCreateTable) ResultColumns() []*Attribute {
+	attrs := []*Attribute{
+		&Attribute{Ref: 1, Name: "Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Create Table", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
 }

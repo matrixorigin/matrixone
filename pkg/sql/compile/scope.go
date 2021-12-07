@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -293,6 +294,73 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	vector.Append(bat.Vecs[5], undefine) // extra todo: not implement
 
 	bat.InitZsOne(count)
+	return fill(u, bat)
+}
+
+func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowCreateTable)
+	results := p.ResultColumns()
+	tn := p.Relation.ID()
+	defs := p.Relation.TableDefs()
+
+	names := make([]string, 0)
+	for _, r := range results {
+		names = append(names, r.Name)
+	}
+
+	bat := batch.New(true, names)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.New(results[i].Type)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("CREATE TABLE `")
+	buf.WriteString(tn)
+	buf.WriteString("` (\n")
+	var attributeDefs []*engine.AttributeDef
+	var indexTableDefs []*engine.IndexTableDef
+	primaryIndexDef := new(engine.PrimaryIndexDef)
+	for _, d := range defs {
+		switch v := d.(type) {
+		case *engine.AttributeDef:
+			attributeDefs = append(attributeDefs, v)
+		case *engine.IndexTableDef:
+			indexTableDefs = append(indexTableDefs, v)
+		case *engine.PrimaryIndexDef:
+			*primaryIndexDef = *v
+		}
+	}
+	prefix := " "
+	if attributeDefs != nil {
+		for _, a := range attributeDefs {
+			buf.WriteString(prefix)
+			a.Format(&buf)
+			prefix = ",\n "
+		}
+	}
+	if len(primaryIndexDef.Names) > 0 {
+		buf.WriteString(prefix)
+		primaryIndexDef.Format(&buf)
+		prefix = ",\n "
+	}
+	if indexTableDefs != nil {
+		for _, i := range indexTableDefs {
+			buf.WriteString(prefix)
+			i.Format(&buf)
+			prefix = ",\n "
+		}
+	}
+	buf.WriteString("\n)")
+
+	tableName := make([][]byte, 1)
+	createTable := make([][]byte, 1)
+	tableName[0] = []byte(tn)
+	createTable[0] = buf.Bytes()
+
+	vector.Append(bat.Vecs[0], tableName)
+	vector.Append(bat.Vecs[1], createTable)
+
+	bat.InitZsOne(1)
 	return fill(u, bat)
 }
 
