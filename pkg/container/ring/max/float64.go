@@ -151,21 +151,17 @@ func (r *Float64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 
 func (r *Float64Ring) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]float64)
-	for i, o := range os {
-		if o == 1 {
-			j := *vps[i]
-			if r.Es[j] || vs[int64(i)+start] > r.Vs[j] {
-				r.Vs[j] = vs[int64(i)+start]
-				r.Es[j] = false
-			}
+	for i := range os {
+		j := *vps[i]
+		if r.Es[j] || vs[int64(i)+start] > r.Vs[j] {
+			r.Vs[j] = vs[int64(i)+start]
+			r.Es[j] = false
 		}
 	}
 	if nulls.Any(vec.Nsp) {
-		for i, o := range os {
-			if o == 1 {
-				if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-					r.Ns[*vps[i]] += zs[int64(i)+start]
-				}
+		for i := range os {
+			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
+				r.Ns[*vps[i]] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -199,20 +195,23 @@ func (r *Float64Ring) Add(a interface{}, x, y int64) {
 
 func (r *Float64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
 	ar := a.(*Float64Ring)
-	for i, o := range os {
-		if o == 1 {
-			j := *vps[i]
-			if r.Es[j] || ar.Vs[int64(i)+start] > r.Vs[j] {
-				r.Es[j] = false
-				r.Vs[j] = ar.Vs[int64(i)+start]
-			}
-			r.Ns[j] += ar.Ns[int64(i)+start]
+	for i := range os {
+		j := *vps[i]
+		if r.Es[j] || ar.Vs[int64(i)+start] > r.Vs[j] {
+			r.Es[j] = false
+			r.Vs[j] = ar.Vs[int64(i)+start]
 		}
+		r.Ns[j] += ar.Ns[int64(i)+start]
 	}
 }
 
-func (r *Float64Ring) Mul(x, z int64) {
-	r.Ns[x] *= z
+func (r *Float64Ring) Mul(a interface{}, x, y, z int64) {
+	ar := a.(*Float64Ring)
+	if r.Es[x] || ar.Vs[y] > r.Vs[x] {
+		r.Es[x] = false
+		r.Vs[x] = ar.Vs[y]
+	}
+	r.Ns[x] += ar.Ns[y] * z
 }
 
 func (r *Float64Ring) Eval(zs []int64) *vector.Vector {

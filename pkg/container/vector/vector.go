@@ -1115,7 +1115,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_int8:
 		col := w.Col.([]int8)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt))
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize))
 			if err != nil {
 				return err
 			}
@@ -1132,15 +1136,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]int8)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
+			if n+cnt > cap(vs) {
 				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeInt8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1156,7 +1158,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_int16:
 		col := w.Col.([]int16)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*2)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*2)
 			if err != nil {
 				return err
 			}
@@ -1173,15 +1179,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]int16)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+cnt)*2)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeInt16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1197,7 +1201,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_int32:
 		col := w.Col.([]int32)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*4)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*4)
 			if err != nil {
 				return err
 			}
@@ -1214,15 +1222,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]int32)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeInt32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1238,7 +1244,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_int64:
 		col := w.Col.([]int64)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*8)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
 			if err != nil {
 				return err
 			}
@@ -1255,15 +1265,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]int64)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeInt64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1279,7 +1287,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_uint8:
 		col := w.Col.([]uint8)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt))
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize))
 			if err != nil {
 				return err
 			}
@@ -1296,15 +1308,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]uint8)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
+			if n+cnt > cap(vs) {
 				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeUint8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1320,7 +1330,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_uint16:
 		col := w.Col.([]uint16)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*2)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*2)
 			if err != nil {
 				return err
 			}
@@ -1337,15 +1351,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]uint16)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+cnt)*2)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeUint16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1361,7 +1373,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_uint32:
 		col := w.Col.([]uint32)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*4)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*4)
 			if err != nil {
 				return err
 			}
@@ -1378,14 +1394,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]uint32)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeUint32Slice(data)
-				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
 			}
@@ -1402,7 +1417,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_uint64:
 		col := w.Col.([]uint64)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*8)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
 			if err != nil {
 				return err
 			}
@@ -1419,15 +1438,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]uint64)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeUint64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1443,7 +1460,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_float32:
 		col := w.Col.([]float32)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*4)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*4)
 			if err != nil {
 				return err
 			}
@@ -1460,15 +1481,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]float32)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeFloat32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1484,7 +1503,11 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	case types.T_float64:
 		col := w.Col.([]float64)
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(cnt)*8)
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
 			if err != nil {
 				return err
 			}
@@ -1501,15 +1524,13 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		} else {
 			vs := v.Col.([]float64)
 			n := len(vs)
-			if n+cnt >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
 				if err != nil {
 					return err
 				}
 				mheap.Free(m, v.Data)
 				vs = encoding.DecodeFloat64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
 				v.Data = data
 			}
 			vs = vs[:n+cnt]
@@ -1542,14 +1563,18 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 		}
 
 		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(incSize))
+			newSize := 8
+			for newSize < incSize {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize))
 			if err != nil {
 				return err
 			}
 			v.Ref = w.Ref
 			v.Data = data
 			vs.Data = data[:0]
-		} else if n := len(vs.Data); n+incSize >= cap(vs.Data) {
+		} else if n := len(vs.Data); n+incSize > cap(vs.Data) {
 			data, err := mheap.Grow(m, vs.Data, int64(n+incSize))
 			if err != nil {
 				return err

@@ -58,7 +58,18 @@ func (b *build) buildOrderBy(orders tree.OrderBy, qry *Query) error {
 					b.stripOrderByQuery(e, qry)
 				}
 			} else {
-				qry.getAttribute2(true, e.(*extend.Attribute).Name)
+				name := e.(*extend.Attribute).Name
+				flg := true
+				for i, e := range qry.ProjectionExtends {
+					if e.Alias == name {
+						qry.ProjectionExtends[i].IncRef()
+						flg = false
+						break
+					}
+				}
+				if flg {
+					qry.getAttribute2(true, e.(*extend.Attribute).Name)
+				}
 			}
 		}
 		qry.Fields = append(qry.Fields, &Field{

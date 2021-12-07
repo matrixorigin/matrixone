@@ -93,6 +93,28 @@ func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, insert
 	}
 }
 
+func (ht *String32HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	if hashes[0] == 0 {
+		Crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+	}
+
+	for i := range keys {
+		if zs[i] == 0 {
+			continue
+		}
+		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if isInserted {
+			ht.elemCnt++
+			inserted[i] = 1
+			cell.Hash = hashes[i]
+			cell.Key = keys[i]
+		}
+		values[i] = &cell.Mapped
+	}
+}
+
 func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
 	if hash == 0 {
 		hash = Crc32Int256HashAsm(key)

@@ -99,8 +99,35 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 	}
 }
 
-func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64) {
-	key := *(*uint64)(keyPtr)
+func (ht *Int64HashMap) InsertBatchWithRing(n int, zs []int64, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []*uint64) {
+	ht.resizeOnDemand(n)
+
+	if hashes[0] == 0 {
+		Crc32Int64BatchHashAsm(keysPtr, &hashes[0], n)
+	}
+
+	keys := unsafe.Slice((*uint64)(keysPtr), n)
+	for i, key := range keys {
+		if zs[i] == 0 {
+			continue
+		}
+		if key == 0 {
+			inserted[i] = 1 - ht.hasZero
+			ht.hasZero = 1
+			values[i] = &ht.zeroCell.Mapped
+		} else {
+			isInserted, _, cell := ht.findBucket(hashes[i], key)
+			if isInserted {
+				ht.elemCnt++
+				inserted[i] = 1
+				cell.Key = key
+			}
+			values[i] = &cell.Mapped
+		}
+	}
+}
+
+func (ht *Int64HashMap) Find(hash uint64, key uint64) (value *uint64) {
 	if key == 0 {
 		if ht.hasZero == 1 {
 			value = &ht.zeroCell.Mapped
@@ -112,11 +139,11 @@ func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64)
 		hash = Crc32Int64HashAsm(key)
 	}
 
+	ht.findBucket(hash, key)
 	empty, _, cell := ht.findBucket(hash, key)
 	if !empty {
 		value = &cell.Mapped
 	}
-
 	return
 }
 

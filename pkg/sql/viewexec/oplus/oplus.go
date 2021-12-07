@@ -78,22 +78,10 @@ func (ctr *Container) processFreeVars(proc *process.Process) (bool, error) {
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 		}
-		return true, nil
+		return false, nil
 	}
 	if len(bat.Zs) == 0 {
 		return false, nil
-	}
-	if len(bat.Attrs) == 0 {
-		if ctr.bat == nil {
-			ctr.bat = bat
-		} else {
-			ctr.bat.Zs[0] += bat.Zs[0]
-			for j, r := range ctr.bat.Rs {
-				r.Add(bat.Rs[j], 0, 0)
-			}
-			batch.Clean(bat, proc.Mp)
-		}
-		proc.Reg.InputBatch = &batch.Batch{}
 	}
 	proc.Reg.InputBatch = &batch.Batch{}
 	return false, ctr.fillBatch(bat, proc)
@@ -182,6 +170,10 @@ func (ctr *Container) fillBatch(bat *batch.Batch, proc *process.Process) error {
 			ctr.h40.ht.Init()
 		default:
 			ctr.typ = HStr
+			ctr.inserts = make([]uint8, UnitLimit)
+			ctr.zinserts = make([]uint8, UnitLimit)
+			ctr.hashs = make([]uint64, UnitLimit)
+			ctr.values = make([]*uint64, UnitLimit)
 			ctr.hstr.keys = make([]byte, 0, 1<<20)
 			ctr.hstr.ht = &hashtable.StringHashMap{}
 			ctr.hstr.ht.Init()
@@ -1182,7 +1174,7 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 			}
 			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &data[0], Len: len(data)})
 			if ok {
-				ctr.inserts[i+int64(k)] = 1
+				ctr.inserts[k] = 1
 				for j, vec := range ctr.bat.Vecs {
 					if err := vector.UnionOne(vec, vecs[j], i+int64(k), proc.Mp); err != nil {
 						return err
