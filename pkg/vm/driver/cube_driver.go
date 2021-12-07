@@ -222,23 +222,6 @@ func NewCubeDriverWithFactory(
 		return h
 	}
 
-	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-		return func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-			defer func() {
-				logutil.Debugf("CompactIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, compactIndex, newCompactIdx)
-			}()
-			if group != uint64(pb.AOEGroup) {
-				newCompactIdx = compactIndex
-			} else {
-				newCompactIdx = h.aoeDB.GetShardCheckpointId(shard.ID)
-				if newCompactIdx == 0 {
-					newCompactIdx = compactIndex
-				}
-			}
-			return newCompactIdx, nil
-		}
-	}
-
 	store, err := raftStoreFactory(&c.CubeConfig)
 	if err != nil {
 		return nil, err

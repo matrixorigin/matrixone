@@ -74,7 +74,7 @@ func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
 	col.Nsp.Np = newNulls
 }
 
-func Merge(col []*vector.Vector, src []uint16) {
+func Merge(col []*vector.Vector, src *[]uint16) {
 	data := make([][]float64, len(col))
 
 	for i, v := range col {
@@ -96,7 +96,7 @@ func Merge(col []*vector.Vector, src []uint16) {
 	for i := 0; i < nBlk; i++ {
 		for j := 0; j < nElem; j++ {
 			top := heapPop(&heap)
-			merged[i][j], src[k] = top.data, top.src
+			merged[i][j], (*src)[k] = top.data, top.src
 			k++
 			if int(top.next) < nElem {
 				heapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
