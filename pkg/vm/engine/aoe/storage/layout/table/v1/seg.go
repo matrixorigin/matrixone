@@ -41,7 +41,7 @@ type segment struct {
 	}
 	host        iface.ITableData
 	meta        *metadata.Segment
-	indexHolder *index.SegmentHolder
+	indexHolder index.SegmentIndexHolder
 	segFile     base.ISegmentFile
 }
 
@@ -227,7 +227,7 @@ func (seg *segment) GetFsManager() base.IManager {
 	return seg.host.GetFsManager()
 }
 
-func (seg *segment) GetIndexHolder() *index.SegmentHolder {
+func (seg *segment) GetIndexHolder() index.SegmentIndexHolder {
 	return seg.indexHolder
 }
 
@@ -318,22 +318,19 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment
 	cloned.tree.helper = make(map[uint64]int)
 	cloned.tree.blockids = make([]uint64, 0)
 
-	indexHolder := td.GetIndexHolder().StrongRefSegment(seg.meta.Id)
-	if indexHolder == nil {
-		panic("logic error")
-	}
+	//indexHolder := td.GetIndexHolder().StrongRefSegment(seg.meta.Id)
+	//if indexHolder == nil {
+	//	panic("logic error")
+	//}
 
 	id := seg.meta.AsCommonID().AsSegmentID()
 	segFile := seg.host.GetFsManager().UpgradeFile(id)
 	if segFile == nil {
 		panic("logic error")
 	}
-	if indexHolder.Type == base.UNSORTED_SEG {
-		indexHolder.Unref()
-		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.meta.Id, base.SORTED_SEG)
-		indexHolder.Init(segFile)
-	}
-	cloned.indexHolder = indexHolder
+	newHolder := td.GetIndexHolder().UpgradeSegment(seg.meta.Id, base.SORTED_SEG)
+	newHolder.Init(segFile)
+	cloned.indexHolder = newHolder
 	cloned.segFile = segFile
 	var prev iface.IBlock
 	for _, blk := range seg.tree.blocks {

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"path/filepath"
 )
@@ -257,6 +258,11 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	for _, segId := range tblData.SegmentIds() {
 		seg := tblData.StrongRefSegment(segId)
 		holder := seg.GetIndexHolder()
+		// TODO(zzl): deal with unclosed segment
+		if holder.HolderType() == base.UNSORTED_SEG {
+			seg.Unref()
+			continue
+		}
 		for _, info := range meta.GetIndexSchema().Indice {
 			if !util.ContainsString(names, info.Name) {
 				continue
@@ -264,13 +270,13 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 			cols := info.Columns
 			for _, col := range cols {
 				var currVersion uint64
-				holder.VersionAllocator.RLock()
-				if alloc, ok := holder.VersionAllocator.Allocators[int(col)]; ok {
+				holder.VersionAllocater().RLock()
+				if alloc, ok := holder.VersionAllocater().Allocators[int(col)]; ok {
 					currVersion = alloc.Get()
 				} else {
 					currVersion = uint64(1)
 				}
-				holder.VersionAllocator.RUnlock()
+				holder.VersionAllocater().RUnlock()
 				bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
 				fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
 				holder.DropIndex(fullname)

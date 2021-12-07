@@ -105,6 +105,10 @@ func (f *IndexFile) Ref() {
 	//logutil.Infof("ref index file %s | ref count: %d", filepath.Base(f.Name()), f.Refs)
 }
 
+func (f *IndexFile) RefCount() int64 {
+	return f.RefHelper.RefCount()
+}
+
 func (f *IndexFile) Stat() common.FileInfo {
 	return f.Info
 }
@@ -135,6 +139,10 @@ func (f *EmbedIndexFile) Unref() {
 	f.SegmentFile.Ref()
 }
 
+func (f *EmbedIndexFile) RefCount() int64 {
+	return f.SegmentFile.RefCount()
+}
+
 func (cpf *EmbedIndexFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
@@ -156,6 +164,10 @@ func (bf *EmbedBlockIndexFile) Ref() {
 
 func (bf *EmbedBlockIndexFile) Unref() {
 	bf.SegmentFile.UnrefBlock(bf.ID)
+}
+
+func (bf *EmbedBlockIndexFile) RefCount() int64 {
+	return bf.SegmentFile.RefCount()
 }
 
 func (bf *EmbedBlockIndexFile) Read(buf []byte) (n int, err error) {

@@ -86,6 +86,10 @@ func (cpf *ColPartFile) Unref() {
 	cpf.SegmentFile.UnrefBlock(cpf.ID.AsBlockID())
 }
 
+func (cpf *ColPartFile) RefCount() int64 {
+	return cpf.SegmentFile.RefCount()
+}
+
 type MockColPartFile struct {
 }
 

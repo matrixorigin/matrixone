@@ -29,13 +29,6 @@ import (
 	"sync/atomic"
 )
 
-type PostCloseCB = func(interface{})
-
-type ColumnsAllocator struct {
-	sync.RWMutex
-	Allocators map[int]*common.IdAlloctor
-}
-
 type SegmentHolder struct {
 	common.RefHelper
 	ID     common.ID
@@ -58,6 +51,18 @@ type SegmentHolder struct {
 	}
 	Type        base.SegmentType
 	PostCloseCB PostCloseCB
+}
+
+func (holder *SegmentHolder) HolderType() base.SegmentType {
+	return base.UNSORTED_SEG
+}
+
+func (holder *SegmentHolder) GetID() common.ID {
+	return holder.ID
+}
+
+func (holder *SegmentHolder) GetCB() PostCloseCB {
+	return holder.PostCloseCB
 }
 
 func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.SegmentType, cb PostCloseCB) *SegmentHolder {
@@ -128,6 +133,10 @@ func (holder *SegmentHolder) AllocateVersion(colIdx int) uint64 {
 	return holder.VersionAllocator.Allocators[colIdx].Alloc()
 }
 
+func (holder *SegmentHolder) VersionAllocater() *ColumnsAllocator {
+	return &holder.VersionAllocator
+}
+
 // IndicesCount returns count of indices separated from segment file
 func (holder *SegmentHolder) IndicesCount() int {
 	holder.self.RLock()
@@ -179,7 +188,7 @@ func (holder *SegmentHolder) DropIndex(filename string) {
 			} else {
 				// start explicit dropping
 				staleName := common.MakeBitSlicedIndexFileName(version, tid, sid, col)
-				//logutil.Infof("%s\n%+v", staleName, holder.self.FileHelper)
+				//logutil.Infof("%s\n%+v", staleName, holder.self.fileHelper)
 				node := holder.self.FileHelper[staleName]
 				for _, idx := range holder.self.ColIndices[int(col)] {
 					if holder.self.Indices[idx] == node {
@@ -621,7 +630,7 @@ func (holder *SegmentHolder) stringNoLock() string {
 }
 
 func (holder *SegmentHolder) StringIndicesRefsNoLock() string {
-	s := fmt.Sprintf("<SEGHOLDER[%s]>[Indices cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
+	s := fmt.Sprintf("<SEGHOLDER[%s]>[indexNodes cnt=%d]\n", holder.ID.SegmentString(), len(holder.self.Indices))
 	for i, idx := range holder.self.Indices {
 		if idx == nil {
 			s += fmt.Sprintf("<Index[%d]><NULL>\n", i)
