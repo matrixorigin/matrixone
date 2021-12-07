@@ -140,10 +140,15 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	var id uint64
 	var cols []aoe.ColumnInfo
-
+	var primaryKeys []string
+	for _, def := range defs {
+		if v, ok := def.(*engine.PrimaryIndexDef); ok {
+			primaryKeys = v.Names
+		}
+	}
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
-			cols = append(cols, aoe.ColumnInfo{
+			col := aoe.ColumnInfo{
 				SchemaId: sid,
 				TableID:  tid,
 				Id:       id,
@@ -151,7 +156,13 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 				Alg:      int(v.Attr.Alg),
 				Type:     v.Attr.Type,
 				Default:  v.Attr.Default,
-			})
+			}
+			for _, primaryKey := range primaryKeys {
+				if col.Name == primaryKey {
+					col.PrimaryKey = true
+				}
+			}
+			cols = append(cols, col)
 			id++
 		}
 	}

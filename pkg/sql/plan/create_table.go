@@ -54,7 +54,9 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 		if _, ok := def.(*engine.PrimaryIndexDef); ok {
 			addPrimaryIndex = false
 		}
-		primaryKeys = pkeys
+		if pkeys != nil {
+			primaryKeys = pkeys
+		}
 		defs = append(defs, def)
 	}
 	for _, option := range stmt.Options {
