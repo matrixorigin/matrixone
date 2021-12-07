@@ -83,10 +83,12 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
+
 	for i, key := range keys {
 		if key == 0 {
-			ht.elemCnt += 1 - uint64(ht.hasZero)
-			inserted[i] = 1 - ht.hasZero
+			inc := 1 - ht.hasZero
+			ht.elemCnt += uint64(inc)
+			inserted[i] = inc
 			ht.hasZero = 1
 			values[i] = &ht.zeroCell.Mapped
 		} else {
@@ -162,13 +164,7 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
-	}
-
+	newBucketCntBits := ht.bucketCntBits + 2
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	for newMaxElemCnt < targetCnt {
