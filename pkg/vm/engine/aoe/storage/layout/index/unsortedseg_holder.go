@@ -4,10 +4,19 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"sync"
 )
 
 type unsortedSegmentHolder struct {
-
+	common.RefHelper
+	ID     common.ID
+	tree struct {
+		sync.RWMutex
+		Blocks   []*BlockHolder
+		IdMap    map[uint64]int
+		BlockCnt int32
+	}
+	PostCloseCB PostCloseCB
 }
 
 func (holder *unsortedSegmentHolder) Init(file base.ISegmentFile) {
@@ -66,26 +75,36 @@ func (holder *unsortedSegmentHolder) stringNoLock() string {
 	panic("implement me")
 }
 
+// AllocateVersion is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) AllocateVersion(colIdx int) uint64 {
-	panic("implement me")
+	panic("unsupported")
 }
 
+// IndicesCount is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) IndicesCount() int {
-	panic("implement me")
+	panic("unsupported")
 }
 
+// DropIndex is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) DropIndex(filename string) {
-	panic("implement me")
+	panic("unsupported")
 }
 
+// LoadIndex is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) LoadIndex(file base.ISegmentFile, filename string) {
-	panic("implement me")
+	panic("unsupported")
 }
 
+// StringIndicesRefsNoLock is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) StringIndicesRefsNoLock() string {
-	panic("implement me")
+	panic("unsupported")
 }
 
 func (holder *unsortedSegmentHolder) close() {
-	panic("implement me")
+	for _, blk := range holder.tree.Blocks {
+		blk.close()
+	}
+	if holder.PostCloseCB != nil {
+		holder.PostCloseCB(holder)
+	}
 }

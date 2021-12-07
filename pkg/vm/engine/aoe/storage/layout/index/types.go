@@ -88,6 +88,7 @@ type Index interface {
 }
 
 type SegmentIndexHolder interface {
+	common.IRef
 	Init(base.ISegmentFile)
 	EvalFilter(int, *FilterCtx) error
 	CollectMinMax(int) ([]interface{}, []interface{}, error)
@@ -96,6 +97,9 @@ type SegmentIndexHolder interface {
 	Min(int, *roaring64.Bitmap) (interface{}, error)
 	Max(int, *roaring64.Bitmap) (interface{}, error)
 	Sum(int, *roaring64.Bitmap) (int64, uint64, error)
+	HolderType() base.SegmentType
+	GetID() common.ID
+	GetCB() PostCloseCB
 
 	StrongRefBlock(uint64) *BlockHolder
 	RegisterBlock(common.ID, base.BlockType, PostCloseCB) *BlockHolder
@@ -105,9 +109,12 @@ type SegmentIndexHolder interface {
 	stringNoLock() string
 
 	AllocateVersion(int) uint64
+	VersionAllocater() *ColumnsAllocator
     IndicesCount() int
 	DropIndex(filename string)
 	LoadIndex(base.ISegmentFile, string)
 	StringIndicesRefsNoLock() string
 	close()
 }
+
+type PostCloseCB = func(interface{})

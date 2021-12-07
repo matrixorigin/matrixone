@@ -30,7 +30,7 @@ type TableHolder struct {
 	BufMgr mgrif.IBufferManager
 	tree   struct {
 		sync.RWMutex
-		Segments   []*SegmentHolder
+		Segments   []SegmentIndexHolder
 		IdMap      map[uint64]int
 		SegmentCnt int64
 	}
@@ -38,7 +38,7 @@ type TableHolder struct {
 
 func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
 	holder := &TableHolder{ID: id, BufMgr: bufMgr}
-	holder.tree.Segments = make([]*SegmentHolder, 0)
+	holder.tree.Segments = make([]SegmentIndexHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.OnZeroCB = holder.close
 	holder.Ref()
@@ -64,7 +64,7 @@ func (holder *TableHolder) addSegment(seg *SegmentHolder) {
 	atomic.AddInt64(&holder.tree.SegmentCnt, int64(1))
 }
 
-func (holder *TableHolder) DropSegment(id uint64) *SegmentHolder {
+func (holder *TableHolder) DropSegment(id uint64) SegmentIndexHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	idx, ok := holder.tree.IdMap[id]
@@ -108,7 +108,7 @@ func (holder *TableHolder) close() {
 	}
 }
 
-func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *SegmentHolder {
+func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) SegmentIndexHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	idx, ok := holder.tree.IdMap[id]
@@ -116,17 +116,20 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 		panic(fmt.Sprintf("specified seg %d not found in %d", id, holder.ID))
 	}
 	stale := holder.tree.Segments[idx]
-	if stale.Type >= segType {
+	if stale.HolderType() >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	newSeg := newSegmentHolder(holder.BufMgr, stale.ID, segType, stale.PostCloseCB)
-	holder.tree.Segments[idx] = newSeg
-	newSeg.Ref()
+	//newSeg := newSegmentHolder(holder.BufMgr, stale.ID, segType, stale.PostCloseCB)
+	//holder.tree.Segments[idx] = newSeg
+	//newSeg.Ref()
+	newHolder := newSortedSegmentHolder(holder.BufMgr, stale.GetID(), stale.GetCB())
+	holder.tree.Segments[idx] = newHolder
+	newHolder.Ref()
 	stale.Unref()
-	return newSeg
+	return newHolder
 }
 
-func (holder *TableHolder) StrongRefSegment(id uint64) (seg *SegmentHolder) {
+func (holder *TableHolder) StrongRefSegment(id uint64) (seg SegmentIndexHolder) {
 	holder.tree.RLock()
 	idx, ok := holder.tree.IdMap[id]
 	if !ok {

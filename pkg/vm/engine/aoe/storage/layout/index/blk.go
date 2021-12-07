@@ -126,6 +126,6 @@ func (holder *BlockHolder) stringNoLock() string {
 	for _, i := range holder.Indices {
 		s = fmt.Sprintf("%s\n\tIndex: [RefCount=%d]", s, i.RefCount())
 	}
-	// s = fmt.Sprintf("%s\n%vs, holder.ColIndices)
+	// s = fmt.Sprintf("%s\n%vs, holder.colIndices)
 	return s
 }

@@ -264,13 +264,13 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 			cols := info.Columns
 			for _, col := range cols {
 				var currVersion uint64
-				holder.VersionAllocator.RLock()
-				if alloc, ok := holder.VersionAllocator.Allocators[int(col)]; ok {
+				holder.VersionAllocater().RLock()
+				if alloc, ok := holder.VersionAllocater().Allocators[int(col)]; ok {
 					currVersion = alloc.Get()
 				} else {
 					currVersion = uint64(1)
 				}
-				holder.VersionAllocator.RUnlock()
+				holder.VersionAllocater().RUnlock()
 				bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
 				fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
 				holder.DropIndex(fullname)

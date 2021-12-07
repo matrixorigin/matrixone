@@ -80,7 +80,7 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, int64(2), tableHolder.GetSegmentCount())
 
 	dropped := tableHolder.DropSegment(seg0Id.SegmentID)
-	assert.Equal(t, seg0Id, dropped.ID)
+	assert.Equal(t, seg0Id, dropped.GetID())
 	assert.Equal(t, int64(1), tableHolder.GetSegmentCount())
 	seg0 = tableHolder.StrongRefSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)
