@@ -2,13 +2,13 @@ package memEngine
 
 import (
 	"fmt"
-	"log"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
+	"log"
 )
 
 func NewTestEngine() engine.Engine {
@@ -37,8 +37,9 @@ func CreateR(db engine.Database) {
 				Alg:  compress.Lz4,
 				Name: "orderId",
 				Type: types.Type{
-					Size: 24,
-					Oid:  types.T(types.T_varchar),
+					Size:  24,
+					Width: 10,
+					Oid:   types.T(types.T_varchar),
 				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
@@ -175,8 +176,9 @@ func CreateS(db engine.Database) {
 				Alg:  compress.Lz4,
 				Name: "orderId",
 				Type: types.Type{
-					Size: 24,
-					Oid:  types.T(types.T_varchar),
+					Size:  24,
+					Width: 10,
+					Oid:   types.T(types.T_varchar),
 				},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
@@ -311,12 +313,7 @@ func CreateT(db engine.Database) {
 		{
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
-				Name: "orderId",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			}})
-			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
-				Alg:  compress.Lz4,
-				Name: "uid",
+				Name: "id",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{

@@ -73,6 +73,7 @@ type Container struct {
 }
 
 type Argument struct {
-	Typ int
-	ctr *Container
+	Typ      int
+	FreeVars []string
+	ctr      *Container
 }

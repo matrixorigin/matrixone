@@ -113,6 +113,16 @@ func GetVector(bat *Batch, name string) *vector.Vector {
 	return nil
 }
 
+func GetVectorIndex(bat *Batch, name string) int {
+	for i, attr := range bat.Attrs {
+		if attr != name {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
 func Clean(bat *Batch, m *mheap.Mheap) {
 	if bat.SelsData != nil {
 		mheap.Free(m, bat.SelsData)

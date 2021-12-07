@@ -307,6 +307,10 @@ func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.
 			ctr.typ = HStr
 			ctr.keyOffs = make([]uint32, UnitLimit)
 			ctr.zKeyOffs = make([]uint32, UnitLimit)
+			ctr.inserted = make([]uint8, UnitLimit)
+			ctr.zInserted = make([]uint8, UnitLimit)
+			ctr.hashes = make([]uint64, UnitLimit)
+			ctr.values = make([]*uint64, UnitLimit)
 			ctr.hstr.ht = &hashtable.StringHashMap{}
 			ctr.hstr.ht.Init()
 		}
@@ -345,28 +349,64 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 		copy(ctr.h8.keys, ctr.h8.zKeys)
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				for k := int64(0); k < n; k++ {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int16, types.T_uint16:
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				for k := int64(0); k < n; k++ {
+					*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int32, types.T_uint32, types.T_float32:
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				for k := int64(0); k < n; k++ {
+					*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int64, types.T_uint64, types.T_float64:
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				for k := int64(0); k < n; k++ {
+					*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				for k := int64(0); k < n; k++ {
+					*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				for k := int64(0); k < n; k++ {
+					*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
@@ -396,7 +436,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted, proc.Mp); err != nil {
+				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
 					return err
 				}
 			}
@@ -424,40 +464,75 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h24.keys, ctr.h24.zKeys)
+		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[0])), cap(ctr.h24.keys)*24)[:len(ctr.h24.keys)*24]
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				for k := int64(0); k < n; k++ {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int16, types.T_uint16:
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				for k := int64(0); k < n; k++ {
+					*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int32, types.T_uint32, types.T_float32:
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				for k := int64(0); k < n; k++ {
+					*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int64, types.T_uint64, types.T_float64:
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				for k := int64(0); k < n; k++ {
+					*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				for k := int64(0); k < n; k++ {
+					*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				for k := int64(0); k < n; k++ {
+					*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
-				vData := vs.Data
-				vOff := vs.Offsets
-				vLen := vs.Lengths
 				for k := int64(0); k < n; k++ {
-					copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[k])), 24)[ctr.keyOffs[k]:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
-					ctr.keyOffs[k] += vLen[i+k]
+					key := vs.Get(i + k)
+					copy(data[k*24+int64(ctr.keyOffs[k]):], key)
+					ctr.keyOffs[k] += uint32(len(key))
 				}
 			}
 		}
@@ -477,7 +552,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted, proc.Mp); err != nil {
+				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
 					return err
 				}
 			}
@@ -505,40 +580,75 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h32.keys, ctr.h32.zKeys)
+		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[0])), cap(ctr.h32.keys)*32)[:len(ctr.h32.keys)*32]
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				for k := int64(0); k < n; k++ {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int16, types.T_uint16:
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				for k := int64(0); k < n; k++ {
+					*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int32, types.T_uint32, types.T_float32:
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				for k := int64(0); k < n; k++ {
+					*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int64, types.T_uint64, types.T_float64:
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				for k := int64(0); k < n; k++ {
+					*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				for k := int64(0); k < n; k++ {
+					*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				for k := int64(0); k < n; k++ {
+					*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
-				vData := vs.Data
-				vOff := vs.Offsets
-				vLen := vs.Lengths
 				for k := int64(0); k < n; k++ {
-					copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[k])), 32)[ctr.keyOffs[k]:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
-					ctr.keyOffs[k] += vLen[i+k]
+					key := vs.Get(i + k)
+					copy(data[k*32+int64(ctr.keyOffs[k]):], key)
+					ctr.keyOffs[k] += uint32(len(key))
 				}
 			}
 		}
@@ -558,7 +668,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted, proc.Mp); err != nil {
+				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
 					return err
 				}
 			}
@@ -586,40 +696,75 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
 		copy(ctr.h40.keys, ctr.h40.zKeys)
+		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				for k := int64(0); k < n; k++ {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int16, types.T_uint16:
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				for k := int64(0); k < n; k++ {
+					*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int32, types.T_uint32, types.T_float32:
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				for k := int64(0); k < n; k++ {
+					*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
-			case types.T_int64, types.T_uint64, types.T_float64:
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				for k := int64(0); k < n; k++ {
+					*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				for k := int64(0); k < n; k++ {
+					*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				for k := int64(0); k < n; k++ {
+					*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+				}
+				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
-				vData := vs.Data
-				vOff := vs.Offsets
-				vLen := vs.Lengths
 				for k := int64(0); k < n; k++ {
-					copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[k])), 40)[ctr.keyOffs[k]:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
-					ctr.keyOffs[k] += vLen[i+k]
+					key := vs.Get(i + k)
+					copy(data[k*40+int64(ctr.keyOffs[k]):], key)
+					ctr.keyOffs[k] += uint32(len(key))
 				}
 			}
 		}
@@ -639,7 +784,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted, proc.Mp); err != nil {
+				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
 					return err
 				}
 			}
@@ -670,37 +815,70 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 		cnt := 0
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
-			case types.T_int8, types.T_uint8:
+			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 				for k := int64(0); k < n; k++ {
 					keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
 				}
-			case types.T_int16, types.T_uint16:
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+				}
+			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 				for k := int64(0); k < n; k++ {
 					keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
 				}
-			case types.T_int32, types.T_uint32, types.T_float32:
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+				}
+			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
-				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*4]
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 				for k := int64(0); k < n; k++ {
 					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
 				}
-			case types.T_int64, types.T_uint64, types.T_float64:
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+				}
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+				}
+			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+				}
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				for k := int64(0); k < n; k++ {
+					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+				}
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 				for k := int64(0); k < n; k++ {
 					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
 				}
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
-				vData := vs.Data
-				vOff := vs.Offsets
-				vLen := vs.Lengths
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]]...)
+					keys[k] = vs.Get(k)
 				}
 			}
 		}
@@ -718,7 +896,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 		}
 		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted, proc.Mp); err != nil {
+			if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
 				return err
 			}
 		}
