@@ -187,6 +187,7 @@ func TestDDLFunction(t *testing.T) {
 		"show databases like 'd_';",
 		"show tables like '%1';",
 		"show columns from ddlt2 like 'pri%';",
+		"show create table ddlt2",
 		"drop table ddlt1, ddlt2;",
 		// support but has problems now
 		//"create table tbl(a int, b varchar(10);",

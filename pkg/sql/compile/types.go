@@ -39,6 +39,7 @@ const (
 	ShowDatabases
 	ShowTables
 	ShowColumns
+	ShowCreateTable
 )
 
 // Source contains information of a relation which will be used in execution,
