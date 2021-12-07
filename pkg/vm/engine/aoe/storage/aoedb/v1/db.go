@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"path/filepath"
 )
@@ -257,6 +258,11 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	for _, segId := range tblData.SegmentIds() {
 		seg := tblData.StrongRefSegment(segId)
 		holder := seg.GetIndexHolder()
+		// TODO(zzl): deal with unclosed segment
+		if holder.HolderType() == base.UNSORTED_SEG {
+			seg.Unref()
+			continue
+		}
 		for _, info := range meta.GetIndexSchema().Indice {
 			if !util.ContainsString(names, info.Name) {
 				continue

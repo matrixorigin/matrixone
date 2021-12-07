@@ -30,10 +30,11 @@ var (
 )
 
 func TestSegment(t *testing.T) {
-	segType := base.UNSORTED_SEG
+	//segType := base.UNSORTED_SEG
 	segID := common.ID{}
 	bufMgr := bmgr.MockBufMgr(1000)
-	segHolder := newSegmentHolder(bufMgr, segID, segType, nil)
+	//segHolder := newSegmentHolder(bufMgr, segID, segType, nil)
+	segHolder := newUnsortedSegmentHolder(bufMgr, segID, nil)
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := segID
@@ -44,11 +45,11 @@ func TestSegment(t *testing.T) {
 
 	blk0 := segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
-	segHolder.addBlock(blk0Holder)
+	segHolder.(*unsortedSegmentHolder).addBlock(blk0Holder)
 	blk0 = segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.NotNil(t, blk0)
 	assert.Equal(t, int32(1), segHolder.GetBlockCount())
-	segHolder.addBlock(blk1Holder)
+	segHolder.(*unsortedSegmentHolder).addBlock(blk1Holder)
 	assert.Equal(t, int32(2), segHolder.GetBlockCount())
 
 	dropped := segHolder.DropBlock(blk0Id.BlockID)
@@ -63,12 +64,14 @@ func TestTable(t *testing.T) {
 	tableHolder := NewTableHolder(bufMgr, uint64(0))
 	assert.Equal(t, int64(0), tableHolder.GetSegmentCount())
 
-	segType := base.UNSORTED_SEG
+	//segType := base.UNSORTED_SEG
 	seg0Id := common.ID{}
-	seg0Holder := newSegmentHolder(bufMgr, seg0Id, segType, nil)
+	//seg0Holder := newSegmentHolder(bufMgr, seg0Id, segType, nil)
+	seg0Holder := newUnsortedSegmentHolder(bufMgr, seg0Id, nil)
 	seg1Id := seg0Id
 	seg1Id.SegmentID++
-	seg1Holder := newSegmentHolder(bufMgr, seg1Id, segType, nil)
+	//seg1Holder := newSegmentHolder(bufMgr, seg1Id, segType, nil)
+	seg1Holder := newUnsortedSegmentHolder(bufMgr, seg1Id, nil)
 
 	seg0 := tableHolder.StrongRefSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)

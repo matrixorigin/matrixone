@@ -45,21 +45,30 @@ func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
 	return holder
 }
 
-func (holder *TableHolder) RegisterSegment(id common.ID, segType base.SegmentType, cb PostCloseCB) *SegmentHolder {
-	segHolder := newSegmentHolder(holder.BufMgr, id, segType, cb)
+func (holder *TableHolder) RegisterSegment(id common.ID, segType base.SegmentType, cb PostCloseCB) SegmentIndexHolder {
+	//segHolder := newSegmentHolder(holder.BufMgr, id, segType, cb)
+	var segHolder SegmentIndexHolder
+	if segType == base.SORTED_SEG {
+		segHolder = newSortedSegmentHolder(holder.BufMgr, id, cb)
+	} else if segType == base.UNSORTED_SEG {
+		segHolder = newUnsortedSegmentHolder(holder.BufMgr, id, cb)
+	} else {
+		panic("logic error")
+	}
 	holder.addSegment(segHolder)
 	segHolder.Ref()
 	return segHolder
 }
 
-func (holder *TableHolder) addSegment(seg *SegmentHolder) {
+func (holder *TableHolder) addSegment(seg SegmentIndexHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	_, ok := holder.tree.IdMap[seg.ID.SegmentID]
+	_, ok := holder.tree.IdMap[seg.GetID().SegmentID]
 	if ok {
-		panic(fmt.Sprintf("Duplicate seg %s", seg.ID.SegmentString()))
+		panic("duplicate segment")
+		//panic(fmt.Sprintf("Duplicate seg %s", seg.GetID().SegmentString()))
 	}
-	holder.tree.IdMap[seg.ID.SegmentID] = len(holder.tree.Segments)
+	holder.tree.IdMap[seg.GetID().SegmentID] = len(holder.tree.Segments)
 	holder.tree.Segments = append(holder.tree.Segments, seg)
 	atomic.AddInt64(&holder.tree.SegmentCnt, int64(1))
 }
@@ -97,6 +106,9 @@ func (holder *TableHolder) StringIndicesRefs() string {
 	defer holder.tree.RUnlock()
 	s := ""
 	for _, seg := range holder.tree.Segments {
+		if seg.HolderType() == base.UNSORTED_SEG {
+			continue
+		}
 		s += seg.StringIndicesRefsNoLock()
 	}
 	return s

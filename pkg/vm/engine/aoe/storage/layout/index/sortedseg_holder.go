@@ -37,7 +37,7 @@ type sortedSegmentHolder struct {
 }
 
 func newSortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCloseCB) SegmentIndexHolder {
-	holder := &sortedSegmentHolder{ID: id, BufMgr: bufMgr}
+	holder := &sortedSegmentHolder{ID: id, BufMgr: bufMgr, PostCloseCB: cb}
 	holder.self.colIndices = make(map[int][]*Node)
 	//holder.self.indexNodes = make([]*Node, 0)
 	holder.self.loadedVersion = make(map[int]uint64)
@@ -48,7 +48,6 @@ func newSortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCl
 		Allocators: make(map[int]*common.IdAlloctor),
 	}
 	holder.OnZeroCB = holder.close
-	holder.PostCloseCB = cb
 	holder.Ref()
 	return holder
 }
@@ -113,6 +112,12 @@ func (holder *sortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
 		index := node.DataNode.(Index)
+		if index.IndexFile().RefCount() == 0 {
+			if err := node.Close(); err != nil {
+				return err
+			}
+			continue
+		}
 		index.IndexFile().Ref()
 		err = index.Eval(ctx)
 		if err != nil {
