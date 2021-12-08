@@ -1,5 +1,5 @@
 # Define workflow name.
-name: Build MatrixOne
+name: Build MatrixOne-
 
 # Controls when the workflow will run.
 on:
