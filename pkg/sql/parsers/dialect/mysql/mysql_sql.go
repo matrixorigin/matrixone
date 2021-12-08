@@ -6250,7 +6250,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:1753
 		{
-			yyLOCAL = &tree.ShowCreate{Name: yyDollar[4].unresolvedObjectNameUnion()}
+			yyLOCAL = &tree.ShowCreateTable{Name: yyDollar[4].unresolvedObjectNameUnion()}
 		}
 		yyVAL.union = yyLOCAL
 	case 256:

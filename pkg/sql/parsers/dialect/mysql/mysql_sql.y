@@ -1751,7 +1751,7 @@ full_opt:
 show_create_stmt:
     SHOW CREATE TABLE table_name_unresolved
     {
-        $$ = &tree.ShowCreate{Name: $4}
+        $$ = &tree.ShowCreateTable{Name: $4}
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
