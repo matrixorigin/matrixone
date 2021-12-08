@@ -53,6 +53,8 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
+	clusterDataPath    = "./test"
+	snapshotPath    = "./test"
 )
 
 var tableInfo *aoe.TableInfo
@@ -63,7 +65,45 @@ func init() {
 	idxInfo = adaptor.MockIndexInfo()
 	tableInfo.Id = 100
 }
+func TestSnapshot(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
+	c.Start()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+
+	stdLog.Printf("driver all started.")
+}
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
@@ -94,7 +134,7 @@ func TestAOEStorage(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			// raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
 	defer func() {
