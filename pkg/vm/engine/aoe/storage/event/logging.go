@@ -24,8 +24,18 @@ func NewLoggingListener() *loggingListener {
 	return new(loggingListener)
 }
 
-func (l *loggingListener) OnDatabaseSplitted(event *SplitEvent) error {
-	logutil.Info(event.String())
+func (l *loggingListener) OnPreSplit(event *SplitEvent) error {
+	return nil
+}
+
+func (l *loggingListener) OnPostSplit(res error, event *SplitEvent) error {
+	var state string
+	if res != nil {
+		state = res.Error()
+	} else {
+		state = "Done"
+	}
+	logutil.Infof("%s | %s", event.String(), state)
 	return nil
 }
 

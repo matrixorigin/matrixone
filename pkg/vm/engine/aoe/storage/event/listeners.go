@@ -12,10 +12,20 @@ func NewListensers(l1, l2 Listener) *listensers {
 	return s
 }
 
-func (s *listensers) OnDatabaseSplitted(event *SplitEvent) error {
+func (s *listensers) OnPreSplit(event *SplitEvent) error {
 	var err error
 	for _, l := range s.ls {
-		if err = l.OnDatabaseSplitted(event); err != nil {
+		if err = l.OnPreSplit(event); err != nil {
+			break
+		}
+	}
+	return err
+}
+
+func (s *listensers) OnPostSplit(res error, event *SplitEvent) error {
+	var err error
+	for _, l := range s.ls {
+		if err = l.OnPostSplit(res, event); err != nil {
 			break
 		}
 	}
