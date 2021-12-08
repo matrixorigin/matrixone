@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package index
 
 import (
@@ -14,11 +28,6 @@ import (
 	"sync"
 )
 
-type ColumnsAllocator struct {
-	sync.RWMutex
-	Allocators map[int]*common.IdAlloctor
-}
-
 type sortedSegmentHolder struct {
 	common.RefHelper
 	ID     common.ID
@@ -27,7 +36,6 @@ type sortedSegmentHolder struct {
 	VersionAllocator ColumnsAllocator
 	self   struct {
 		sync.RWMutex
-		//indexNodes    []*Node
 		colIndices    map[int][]*Node
 		loadedVersion map[int]uint64
 		droppedVersion map[int]uint64
@@ -39,7 +47,6 @@ type sortedSegmentHolder struct {
 func newSortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCloseCB) SegmentIndexHolder {
 	holder := &sortedSegmentHolder{ID: id, BufMgr: bufMgr, PostCloseCB: cb}
 	holder.self.colIndices = make(map[int][]*Node)
-	//holder.self.indexNodes = make([]*Node, 0)
 	holder.self.loadedVersion = make(map[int]uint64)
 	holder.self.fileHelper = make(map[string]*Node)
 	holder.self.droppedVersion = make(map[int]uint64)
@@ -92,9 +99,7 @@ func (holder *sortedSegmentHolder) Init(segFile base.ISegmentFile) {
 			holder.self.colIndices[col] = idxes
 		}
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
-		//holder.self.colIndices[col] = append(holder.self.colIndices[col], len(holder.self.indexNodes))
-		//holder.self.indexNodes = append(holder.self.indexNodes, node)
-		logutil.Infof("Zone map load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
+		logutil.Infof("[SEG] Zone map load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
 	}
 	holder.Inited = true
 }
@@ -405,17 +410,17 @@ func (holder *sortedSegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int6
 }
 
 // StrongRefBlock is not supported in sortedSegmentHolder
-func (holder *sortedSegmentHolder) StrongRefBlock(id uint64) *BlockHolder {
+func (holder *sortedSegmentHolder) StrongRefBlock(id uint64) *BlockIndexHolder {
 	panic("unsupported")
 }
 
 // RegisterBlock is not supported in sortedSegmentHolder
-func (holder *sortedSegmentHolder) RegisterBlock(id common.ID, blockType base.BlockType, cb PostCloseCB) *BlockHolder {
+func (holder *sortedSegmentHolder) RegisterBlock(id common.ID, blockType base.BlockType, cb PostCloseCB) *BlockIndexHolder {
 	panic("unsupported")
 }
 
 // DropBlock is not supported in sortedSegmentHolder
-func (holder *sortedSegmentHolder) DropBlock(id uint64) *BlockHolder {
+func (holder *sortedSegmentHolder) DropBlock(id uint64) *BlockIndexHolder {
 	panic("unsupported")
 }
 
@@ -425,7 +430,7 @@ func (holder *sortedSegmentHolder) GetBlockCount() int32 {
 }
 
 // UpgradeBlock is not supported in sortedSegmentHolder
-func (holder *sortedSegmentHolder) UpgradeBlock(id uint64, blockType base.BlockType) *BlockHolder {
+func (holder *sortedSegmentHolder) UpgradeBlock(id uint64, blockType base.BlockType) *BlockIndexHolder {
 	panic("unsupported")
 }
 
@@ -632,7 +637,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 			holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
 			// holder.self.indexNodes = append(holder.self.indexNodes, node)
 			holder.self.fileHelper[filepath.Base(filename)] = node
-			logutil.Infof("BSI load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
+			logutil.Infof("[SEG] BSI load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
 			return
 		}
 		return

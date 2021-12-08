@@ -240,7 +240,7 @@ func TestNumBsi(t *testing.T) {
 }
 
 func TestZM(t *testing.T) {
-	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
+	int32zm := NewBlockZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
 	ctx := NewFilterCtx(OpEq)
 	ctx.Val = int32(9)
 	ctx.Eval(int32zm)
