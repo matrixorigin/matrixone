@@ -29,7 +29,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 	}
 }
 
-// Prepare Initialization
+
+// Prepare
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
