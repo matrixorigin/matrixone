@@ -28,7 +28,7 @@ func String(ins Instructions, buf *bytes.Buffer) {
 	}
 }
 
-// Prepare 初始化
+// Prepare
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
