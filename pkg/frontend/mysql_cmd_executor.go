@@ -922,7 +922,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		switch stmt.(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreate, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
 			*tree.ShowIndex,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:

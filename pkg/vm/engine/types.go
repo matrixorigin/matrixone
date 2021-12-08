@@ -195,10 +195,10 @@ func MakeDefaultExpr(exist bool, value interface{}, isNull bool) DefaultExpr {
 // EmptyDefaultExpr means there is no definition for default expr
 var EmptyDefaultExpr = DefaultExpr{Exist: false}
 
-func (attr Attribute) HasDefaultExpr() bool {
-	return attr.Default.Exist
+func (node Attribute) HasDefaultExpr() bool {
+	return node.Default.Exist
 }
 
-func (attr Attribute) GetDefaultExpr() (interface{}, bool) {
-	return attr.Default.Value, attr.Default.IsNull
+func (node Attribute) GetDefaultExpr() (interface{}, bool) {
+	return node.Default.Value, node.Default.IsNull
 }
