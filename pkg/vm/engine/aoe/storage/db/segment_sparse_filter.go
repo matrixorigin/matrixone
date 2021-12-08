@@ -55,9 +55,20 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -99,9 +110,20 @@ func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -142,9 +164,20 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -185,9 +218,20 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -228,9 +272,20 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -271,9 +326,20 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
@@ -315,9 +381,20 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 	if ctx.BlockSet != nil {
 		// filtering unclosed segment
 		res := make([]string, 0)
+		excluded := make(map[uint64]bool)
 		for _, blkId := range ctx.BlockSet {
 			strId := string(encoding.EncodeUint64(blkId))
 			res = append(res, strId)
+			excluded[blkId] = true
+		}
+		// transient block
+		for _, blk := range f.segment.Data.GetMeta().BlockSet {
+			if _, ok := excluded[blk.Id]; ok {
+				continue
+			}
+			if !blk.IsFull() {
+				res = append(res, string(encoding.EncodeUint64(blk.Id)))
+			}
 		}
 		return res, nil
 	}
