@@ -119,17 +119,16 @@ func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
+	var (
+		cols uint16
+		algo uint8
+		err  error
+	)
 	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
 	if err != nil {
 		panic(err)
 	}
 	bf.Meta.Indices = idxMeta
-
-	var (
-		cols uint16
-		algo uint8
-		//err  error
-	)
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))

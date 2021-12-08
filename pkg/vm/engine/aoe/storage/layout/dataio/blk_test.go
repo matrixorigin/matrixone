@@ -267,6 +267,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	logutil.Infof("v0c is %v, v1c is %v\n", v0c, v1c)
 	vecs = append(vecs, v0c)
 	vecs = append(vecs, v1c)
+	segMeta.Table.Schema.ColDefs[1].Type.Oid = types.T_varchar
 	bw := NewBlockWriter(vecs, meta, dir)
 	err = bw.Execute()
 	assert.Nil(t, err)

@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
@@ -104,20 +103,6 @@ func NewIBatchWriter(bat batch.IBatch, meta *metadata.Block, dir string) *BlockW
 	}
 	w.fileGetter, w.fileCommiter = w.createIOWriter, w.commitFile
 	w.ivecsSerializer = defaultIVecsSerializer
-	return w
-}
-
-func NewEmbbedBlockWriter(bat *gbatch.Batch, meta *metadata.Block, getter blockFileGetter) *BlockWriter {
-	w := &BlockWriter{
-		data:         bat.Vecs,
-		meta:         meta,
-		fileGetter:   getter,
-		fileCommiter: func(string) error { return nil },
-		embbed:       true,
-	}
-	w.preprocessor = w.defaultPreprocessor
-	w.indexSerializer = w.flushIndices
-	w.vecsSerializer = defaultVecsSerializer
 	return w
 }
 
@@ -230,6 +215,12 @@ func (bw *BlockWriter) executeIVecs() error {
 		}
 		data[i] = ivec.(vector.IVectorNode)
 	}
+
+	// for compatibility
+	var indices []index.Index
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	w.Write(buf)
+
 	if err = bw.ivecsSerializer(w, data, bw.meta); err != nil {
 		w.Close()
 		return err
