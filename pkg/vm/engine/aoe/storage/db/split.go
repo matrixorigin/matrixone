@@ -177,10 +177,12 @@ func (splitter *Splitter) Prepare() error {
 }
 
 func (splitter *Splitter) Commit() error {
-	err := splitter.msplitter.Commit()
-	if err == nil {
-		splitter.dbImpl.Opts.EventListener.OnDatabaseSplitted(splitter.event)
+	err := splitter.dbImpl.Opts.EventListener.OnPreSplit(splitter.event)
+	if err != nil {
+		panic(err)
 	}
+	err = splitter.msplitter.Commit()
+	splitter.dbImpl.Opts.EventListener.OnPostSplit(err, splitter.event)
 	return err
 }
 
