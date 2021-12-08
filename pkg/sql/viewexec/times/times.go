@@ -2329,7 +2329,7 @@ func (ctr *Container) constructVars(arg *Argument) {
 	}
 }
 
-func (ctr *Container) calcuteCount(z int64, vzs [][]int64, vsels [][]int64) {
+func (ctr *Container) calculateCount(z int64, vzs [][]int64, vsels [][]int64) {
 
 	if len(vsels) == 0 {
 		ctr.zs = append(ctr.zs, z)
