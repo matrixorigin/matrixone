@@ -25,7 +25,7 @@ func TestCalcuteCount(t *testing.T) {
 	}
 
 	ctr := Container{}
-	ctr.calcuteCount(z, vzs, vsels)
+	ctr.calculateCount(z, vzs, vsels)
 	require.EqualValues(t, ctr.zs, expected)
 
 }
