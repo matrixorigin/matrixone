@@ -804,6 +804,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *process.Process) error {
 	defer batch.Clean(bat, proc.Mp)
 	vecs := bat.Vecs[:len(fvars)]
+	keys := make([][]byte, UnitLimit)
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit { // batch
 		n := count - i
@@ -811,8 +812,10 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 			n = UnitLimit
 		}
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
-		keys := make([][]byte, UnitLimit)
 		cnt := 0
+		for k := int64(0); k < n; k++ {
+			keys[k] = keys[k][:0]
+		}
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -878,7 +881,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
-					keys[k] = vs.Get(k)
+					keys[k] = append(keys[k], vs.Get(i+k)...)
 				}
 			}
 		}
