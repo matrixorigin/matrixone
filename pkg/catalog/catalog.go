@@ -29,9 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe" 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1" 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"    
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
 )
 
 const (
@@ -81,66 +81,52 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	if err != nil {
 		panic(err)
 	}
-	byteSplitEvent, err := json.Marshal(catalogSplitEvent)
-	if err != nil {
-		panic(err)
-	}
-	key := l.catalog.splitKey(catalogSplitEvent.Old)
-	err = l.catalog.Driver.Set(key, byteSplitEvent)
-	if err != nil {
-		panic(err)
-	}
-	err = l.catalog.OnDatabaseSplitted()
+	err = l.catalog.OnDatabaseSplitted(catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
 	return nil
 }
-
-func (c *Catalog) OnDatabaseSplitted() error {
-	splitEvents, err := c.Driver.PrefixScan(c.splitPrefix(), 0)
+func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
+	routePrefix := c.routePrefix(tid)
+	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
 		return err
 	}
-	for i := 1; i < len(splitEvents); i += 2 {
-		splitEvent := SplitEvent{}
-		err := json.Unmarshal(splitEvents[i], &splitEvent)
+	for _, sidByte := range shardIds {
+		sid, err := Bytes2Uint64(sidByte[len(c.routePrefix(tid)):])
 		if err != nil {
 			return err
 		}
+		if sid == oldSid {
+			oldKey := c.routeKey(tid, sid)
+			newKey := c.routeKey(tid, newSid)
+			err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
+			if err != nil {
+				return err
+			}
+			err = c.Driver.Delete(oldKey)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+func (c *Catalog) OnDatabaseSplitted(splitEvent *SplitEvent) error {
 		for newShard, tbls := range splitEvent.News {
 			for _, tid := range tbls {
-				routePrefix := c.routePrefix(tid)
-				shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
-				if err != nil {
+				err := c.updateRouteInfo(tid,splitEvent.Old,newShard)
+				if err != nil{
 					return err
-				}
-				for _, sidByte := range shardIds {
-					sid, err := Bytes2Uint64(sidByte[len(c.routePrefix(tid)):])
-					if err != nil {
-						return err
-					}
-					if sid == splitEvent.Old {
-						oldKey := c.routeKey(tid, sid)
-						newKey := c.routeKey(tid, newShard)
-						err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
-						if err != nil {
-							return err
-						}
-						err = c.Driver.Delete(oldKey)
-						if err != nil {
-							return err
-						}
-					}
 				}
 			}
 		}
 		splitKey := c.splitKey(splitEvent.Old)
-		err = c.Driver.Delete(splitKey)
+		err := c.Driver.Delete(splitKey)
 		if err != nil {
 			return err
 		}
-	}
 	return nil
 }
 
