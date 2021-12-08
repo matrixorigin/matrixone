@@ -273,10 +273,6 @@ func (c *TestAOECluster) Stop() {
 		d.Close()
 	}
 
-	// for _, s := range c.MetadataStorages {
-	// 	assert.NoError(c.t, s.Close())
-	// }
-
 	for _, s := range c.DataStorages {
 		assert.NoError(c.t, s.Close())
 	}

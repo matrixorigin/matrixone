@@ -103,6 +103,14 @@ func TestSnapshot(t *testing.T) {
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	stdLog.Printf("driver all started.")
+	//start s1,s0
+	//s1.create table1
+	//s1.append batch1
+	//s1.append batch2
+	//s1.create table2
+	//start s2
+	//
+	
 }
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)

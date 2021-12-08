@@ -151,3 +151,11 @@ func TestStorage(t *testing.T) {
 	// err = db1.Split(testMetadatas[0], testSplitMetadatas, ctx)
 	// require.Nil(t, err)
 }
+
+//for test
+// func (s *Storage) ReadAll()(*batch.Batch, error){
+// 	var cds    []*bytes.Buffer
+// 	var dds    []*bytes.Buffer
+// 	var blocks []aoe.Block
+// 	return nil,nil
+// }
