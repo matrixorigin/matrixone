@@ -29,9 +29,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe" //table/column/schemaInfo,state,indexType
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1" //aoe:aoeDBName->shardID
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"    //aoe:nooplistener,splitEvent
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe" 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1" 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"    
 )
 
 const (
