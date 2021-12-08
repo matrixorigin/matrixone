@@ -43,6 +43,7 @@ func newBaseBlock(host iface.ISegment, meta *metadata.Block) *baseBlock {
 		blk.typ = base.TRANSIENT_BLK
 	} else if host.GetType() == base.UNSORTED_SEG {
 		blk.typ = base.PERSISTENT_BLK
+		blk.indexholder = host.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), base.PERSISTENT_BLK, nil)
 	} else {
 		blk.typ = base.PERSISTENT_SORTED_BLK
 	}

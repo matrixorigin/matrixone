@@ -57,17 +57,32 @@ func (holder *unsortedSegmentHolder) GetCB() PostCloseCB {
 }
 
 func (holder *unsortedSegmentHolder) Init(file base.ISegmentFile) {
-	// TODO(zzl)
+	// do nothing
 }
 
 func (holder *unsortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
-	// TODO(zzl)
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	// only zone map considered currently
+	// TODO(zzl): bsi
+	blkSet := make([]uint64, 0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
+		if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+			return err
+		}
+		if subCtx.BoolRes {
+			blkSet = append(blkSet, blkHolder.ID.BlockID)
+			ctx.BoolRes = true
+		}
+	}
+	ctx.BlockSet = blkSet
 	return nil
 }
 
+// CollectMinMax is not needed in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) CollectMinMax(colIdx int) ([]interface{}, []interface{}, error) {
-	// TODO(zzl)
-	return nil, nil, nil
+	panic("unsupported")
 }
 
 func (holder *unsortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
@@ -107,7 +122,7 @@ func (holder *unsortedSegmentHolder) StrongRefBlock(id uint64) *BlockIndexHolder
 }
 
 func (holder *unsortedSegmentHolder) RegisterBlock(id common.ID, blockType base.BlockType, cb PostCloseCB) *BlockIndexHolder {
-	blk := newBlockHolder(holder.BufMgr, id, blockType, cb)
+	blk := newBlockIndexHolder(holder.BufMgr, id, blockType, cb)
 	holder.addBlock(blk)
 	blk.Ref()
 	return blk
@@ -128,24 +143,6 @@ func (holder *unsortedSegmentHolder) DropBlock(id uint64) *BlockIndexHolder {
 func (holder *unsortedSegmentHolder) GetBlockCount() int32 {
 	return atomic.LoadInt32(&holder.tree.BlockCnt)
 }
-
-//func (holder *unsortedSegmentHolder) UpgradeBlock(id uint64, blockType base.BlockType) *BlockHolder {
-//	holder.tree.Lock()
-//	defer holder.tree.Unlock()
-//	idx, ok := holder.tree.IdMap[id]
-//	if !ok {
-//		panic(fmt.Sprintf("specified blk %d not found in %d", id, holder.ID))
-//	}
-//	stale := holder.tree.Blocks[idx]
-//	if stale.Type >= blockType {
-//		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blockType))
-//	}
-//	blk := newBlockHolder(holder.BufMgr, stale.ID, blockType, stale.PostCloseCB)
-//	holder.tree.Blocks[idx] = blk
-//	blk.Ref()
-//	stale.Unref()
-//	return blk
-//}
 
 func (holder *unsortedSegmentHolder) addBlock(blk *BlockIndexHolder) {
 	holder.tree.Lock()

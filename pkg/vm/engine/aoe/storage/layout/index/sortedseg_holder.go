@@ -117,6 +117,12 @@ func (holder *sortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
 		index := node.DataNode.(Index)
+		if index.Type() != base.ZoneMap && !ctx.BsiRequired {
+			if err := node.Close(); err != nil {
+				return err
+			}
+			continue
+		}
 		if index.IndexFile().RefCount() == 0 {
 			if err := node.Close(); err != nil {
 				return err

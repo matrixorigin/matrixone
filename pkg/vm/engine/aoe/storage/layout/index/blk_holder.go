@@ -34,7 +34,7 @@ type BlockIndexHolder struct {
 	PostCloseCB PostCloseCB
 }
 
-func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType, cb PostCloseCB) *BlockIndexHolder {
+func newBlockIndexHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType, cb PostCloseCB) *BlockIndexHolder {
 	holder := &BlockIndexHolder{
 		ID:          id,
 		BufMgr:      bufMgr,
@@ -59,7 +59,7 @@ func (holder *BlockIndexHolder) Init(segFile base.ISegmentFile) {
 	}
 	// init embed segment indices
 	for _, meta := range indicesMeta.Data {
-		vf := segFile.MakeVirtualIndexFile(meta)
+		vf := segFile.MakeVirtualBlkIndexFile(holder.ID.AsBlockID(), meta)
 		col := int(meta.Cols.ToArray()[0])
 		var node *Node
 		switch meta.Type {

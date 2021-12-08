@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
@@ -44,7 +44,6 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpEq,
 		Val:     val,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -52,6 +51,15 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -76,6 +84,26 @@ func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error)
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+	}
+	ctx := index.FilterCtx{
+		Op:      index.OpNe,
+		Val:     val,
+	}
+	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !ctx.BoolRes {
+		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -103,7 +131,6 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpLt,
 		Val:     val,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -111,6 +138,15 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -138,7 +174,6 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpLe,
 		Val:     val,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -146,6 +181,15 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -173,7 +217,6 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpGt,
 		Val:     val,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -181,6 +224,15 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -208,7 +260,6 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpGe,
 		Val:     val,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -216,6 +267,15 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
@@ -244,7 +304,6 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 		Op:      index.OpIn,
 		ValMin: minv,
 		ValMax: maxv,
-		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -252,6 +311,15 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 	}
 	if !ctx.BoolRes {
 		return []string{}, nil
+	}
+	if ctx.BlockSet != nil {
+		// filtering unclosed segment
+		res := make([]string, 0)
+		for _, blkId := range ctx.BlockSet {
+			strId := string(encoding.EncodeUint64(blkId))
+			res = append(res, strId)
+		}
+		return res, nil
 	}
 	blkCnt := len(f.segment.Blocks())
 	var res []string
