@@ -76,13 +76,6 @@ func TestSegment(t *testing.T) {
 	assert.Nil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(999))), nil))
 	assert.Equal(t, int64(0), segs[0].Rows())
 
-	segs[0].Data.GetIndexHolder().Inited = false
-	assert.NotNil(t, segs[0].NewSparseFilter())
-	segs[0].Data.GetIndexHolder().Inited = false
-	assert.NotNil(t, segs[0].NewFilter())
-	segs[0].Data.GetIndexHolder().Inited = false
-	assert.NotNil(t, segs[0].NewSummarizer())
-
 	assert.Equal(t, int64(rowCount*blkCnt*typeSize), segs[0].Size("mock_0"))
 	opts.Meta.Catalog.Close()
 }

@@ -217,7 +217,6 @@ tail2:
 	JGE  tail3
 
 	VAESENC (SI), X2, X2
-	ADDQ    $16, SI
 
 tail3:
 	VAESENC (CX), X3, X3

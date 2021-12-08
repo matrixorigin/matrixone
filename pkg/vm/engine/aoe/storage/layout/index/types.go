@@ -15,6 +15,7 @@
 package index
 
 import (
+	"github.com/RoaringBitmap/roaring/roaring64"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -85,3 +86,35 @@ type Index interface {
 	Eval(ctx *FilterCtx) error
 	IndexFile() common.IVFile
 }
+
+type SegmentIndexHolder interface {
+	common.IRef
+	Init(base.ISegmentFile)
+	EvalFilter(int, *FilterCtx) error
+	CollectMinMax(int) ([]interface{}, []interface{}, error)
+	Count(int, *roaring64.Bitmap) (uint64, error)
+	NullCount(int, *roaring64.Bitmap) (uint64, error)
+	Min(int, *roaring64.Bitmap) (interface{}, error)
+	Max(int, *roaring64.Bitmap) (interface{}, error)
+	Sum(int, *roaring64.Bitmap) (int64, uint64, error)
+	HolderType() base.SegmentType
+	GetID() common.ID
+	GetCB() PostCloseCB
+
+	StrongRefBlock(uint64) *BlockHolder
+	RegisterBlock(common.ID, base.BlockType, PostCloseCB) *BlockHolder
+	DropBlock(uint64) *BlockHolder
+	GetBlockCount() int32
+	UpgradeBlock(uint64, base.BlockType) *BlockHolder
+	stringNoLock() string
+
+	AllocateVersion(int) uint64
+	VersionAllocater() *ColumnsAllocator
+    IndicesCount() int
+	DropIndex(filename string)
+	LoadIndex(base.ISegmentFile, string)
+	StringIndicesRefsNoLock() string
+	close()
+}
+
+type PostCloseCB = func(interface{})

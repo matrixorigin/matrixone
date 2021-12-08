@@ -108,26 +108,38 @@ func (blk *baseBlock) upgrade(host iface.ISegment, meta *metadata.Block) (*baseB
 		sllnode: *common.NewSLLNode(nil),
 	}
 
-	upgraded.indexholder = host.GetIndexHolder().StrongRefBlock(meta.Id)
-	switch blk.typ {
-	case base.TRANSIENT_BLK:
-		upgraded.typ = base.PERSISTENT_BLK
-		if upgraded.indexholder == nil {
-			upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
-		} else if upgraded.indexholder.Type < upgraded.typ {
-			upgraded.indexholder.Unref()
-			upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
+	if host.GetIndexHolder().HolderType() == base.UNSORTED_SEG {
+		upgraded.indexholder = host.GetIndexHolder().StrongRefBlock(meta.Id)
+		switch blk.typ {
+		case base.TRANSIENT_BLK:
+			upgraded.typ = base.PERSISTENT_BLK
+			if upgraded.indexholder == nil {
+				upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
+			} else if upgraded.indexholder.Type < upgraded.typ {
+				upgraded.indexholder.Unref()
+				upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
+			}
+		case base.PERSISTENT_BLK:
+			upgraded.typ = base.PERSISTENT_SORTED_BLK
+			if upgraded.indexholder == nil {
+				upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
+			} else if upgraded.indexholder.Type < upgraded.typ {
+				upgraded.indexholder.Unref()
+				upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
+			}
+		default:
+			panic("logic error")
 		}
-	case base.PERSISTENT_BLK:
-		upgraded.typ = base.PERSISTENT_SORTED_BLK
-		if upgraded.indexholder == nil {
-			upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
-		} else if upgraded.indexholder.Type < upgraded.typ {
-			upgraded.indexholder.Unref()
-			upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
+	} else {
+		switch blk.typ {
+		case base.TRANSIENT_BLK:
+			upgraded.typ = base.PERSISTENT_BLK
+		case base.PERSISTENT_BLK:
+			upgraded.typ = base.PERSISTENT_SORTED_BLK
+		default:
+			panic("logic error")
 		}
-	default:
-		panic("logic error")
 	}
+
 	return upgraded, nil
 }

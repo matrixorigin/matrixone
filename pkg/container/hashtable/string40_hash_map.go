@@ -138,13 +138,7 @@ func (ht *String40HashMap) resizeOnDemand(n uint64) {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
-	}
-
+	newBucketCntBits := ht.bucketCntBits + 2
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	for newMaxElemCnt < targetCnt {
