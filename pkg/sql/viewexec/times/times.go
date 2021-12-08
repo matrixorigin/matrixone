@@ -2328,3 +2328,52 @@ func (ctr *Container) constructVars(arg *Argument) {
 		ctr.varsMap[v] = 0
 	}
 }
+
+func (ctr *Container) calcuteCount(z int64, vzs [][]int64, vsels [][]int64) {
+
+	if len(vsels) == 0 {
+		ctr.zs = append(ctr.zs, z)
+		return
+	}
+
+	rowNum := int64(len(vsels))
+	colNum := int64(len(vsels[0]))
+
+	N := int64(1)
+	a := colNum
+	for i := rowNum; i > 0; i >>= 1 {
+		if i&1 != 0 {
+			N *= a
+		}
+		a *= a
+	}
+
+	placeIndex := N
+
+	if int64(cap(ctr.intermediateBuffer)) < N {
+		ctr.intermediateBuffer = append(ctr.intermediateBuffer, make([]int64, N-int64(cap(ctr.intermediateBuffer)))...)
+	}
+
+	for i := colNum - 1; i >= 0; i-- {
+		ctr.intermediateBuffer[placeIndex-1] = z * vzs[rowNum-1][vsels[rowNum-1][i]]
+		placeIndex--
+	}
+
+	for index := rowNum - 1; index >= 0; index-- {
+		if placeIndex == 0 {
+			break
+		}
+		l := N - placeIndex
+		s := N - l*colNum
+		for j := int64(0); j < colNum; j++ {
+			for i := placeIndex; i < N; i++ {
+				ctr.intermediateBuffer[s] = ctr.intermediateBuffer[i] * vzs[index-1][vsels[index-1][j]]
+				s++
+			}
+		}
+		placeIndex = N - l*colNum
+	}
+	ctr.intermediateBuffer = ctr.intermediateBuffer[:N]
+
+	ctr.zs = append(ctr.zs, ctr.intermediateBuffer...)
+}
