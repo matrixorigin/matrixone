@@ -73,19 +73,28 @@ func NewCatalogListener() *CatalogListener {
 func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 	l.catalog = catalog
 }
-func (l *CatalogListener) OnDatabaseSplitted(event *event.SplitEvent) error {
+func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
+	return nil
+}
+func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error {
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	byteSplitEvent, err := json.Marshal(catalogSplitEvent)
 	if err != nil {
-		return err
+		panic(err)
 	}
 	key := l.catalog.splitKey(catalogSplitEvent.Old)
 	err = l.catalog.Driver.Set(key, byteSplitEvent)
-	go l.catalog.OnDatabaseSplitted()
-	return err
+	if err != nil {
+		panic(err)
+	}
+	err = l.catalog.OnDatabaseSplitted()
+	if err != nil {
+		panic(err)
+	}
+	return nil
 }
 
 func (c *Catalog) OnDatabaseSplitted() error {
