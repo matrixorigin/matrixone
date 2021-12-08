@@ -1,12 +1,12 @@
 # Define workflow name.
-name: Build MatrixOne-1.18
+name: Build MatrixOne
 
 # Controls when the workflow will run.
 on:
   # Triggers the workflow on push or pull request events but only for the main branch.
   pull_request:
     types: [ opened, synchronize, reopened ]
-    branches: generics
+    branches: factor
 
   # Allows dev to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -16,21 +16,30 @@ on:
     # * is a special character in YAML so you have to quote this string
     # - cron:  '00 21 * * *'
 
-    
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
   # This workflow contains a single job called "build".
   build:
     # The type of runner that the job will run on.
-    runs-on: self-hosted-118
-    name: Build on CentOS/x64-1.18
+    runs-on: self-hosted-factor
+    name: Build on CentOS/x64-factor
     
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
         with:
-          ref: 'generics'
+          fetch-depth: '3'
+
+      - name: Detect non-ascii characters
+        run: |
+          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
+          if [[ -n $na_characters ]]; then
+            echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
+            printf '%s\n' "${na_characters[*]}"
+            exit 1
+          fi
 
       - name: Build Configure
         run: |
