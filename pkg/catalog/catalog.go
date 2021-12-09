@@ -18,12 +18,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/server"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixcube/server"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -244,7 +246,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 				logutil.Errorf("delete meta for uncreated table, %v, %v, %v", dbId, tbl, serr)
 			}
 		}
-		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, properties is %v, cost %d ms", tbl.Name, tid, tbl.Properties, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -355,18 +357,54 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	if err != nil {
 		return err
 	}
-	//TODO
-	for _, idx := range idxInfo.ColumnNames {
-		for _, col := range tbl.Columns {
-			if idx == col.Name {
-				idxInfo.Columns = append(idxInfo.Columns, col.Id)
-			}
-		}
-	}
 	for _, indice := range tbl.Indices {
 		if indice.Name == idxInfo.Name {
 			return ErrIndexExist
 		}
+	}
+	if idxInfo.Type == aoe.Invalid {
+		return ErrInvalidIndexType
+	}
+	//TODO
+	for _, idx := range idxInfo.ColumnNames {
+		columnExist := false
+		for _, col := range tbl.Columns {
+			if idx == col.Name {
+				columnExist = true
+				idxInfo.Columns = append(idxInfo.Columns, col.Id)
+				if idxInfo.Type == aoe.Bsi {
+					if col.Type.Oid == types.T_char || col.Type.Oid == types.T_varchar {
+						return ErrInvalidIndexType
+					}
+				}
+			}
+		}
+		if !columnExist {
+			return ErrColumnNotExist
+		}
+	}
+	if idxInfo.Type == aoe.Bsi {
+		idxInfo.Type = aoe.NumBsi
+	}
+	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
+	if err != nil {
+		return err
+	}
+	for _, shardId := range shardIds {
+		sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):])
+		if err != nil {
+			logutil.Errorf("convert shardid failed, %v", err)
+			break
+		}
+		aoeTableName := c.encodeTabletName(sid, tbl.Id)
+		err = c.Driver.CreateIndex(aoeTableName, &idxInfo, sid)
+		if err != nil {
+			logutil.Errorf("call local create index failed %d, %d, %v", sid, tbl.Id, err)
+			break
+		}
+	}
+	if err != nil {
+		return err
 	}
 	tbl.Epoch = epoch
 	tbl.Indices = append(tbl.Indices, idxInfo)
@@ -385,6 +423,26 @@ func (c *Catalog) DropIndex(epoch, tid, dbid uint64, idxName string) error {
 		return err
 	}
 	tbl, err := c.checkTableExists(dbid, tid)
+	if err != nil {
+		return err
+	}
+	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
+	if err != nil {
+		return err
+	}
+	for _, shardId := range shardIds {
+		sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):])
+		if err != nil {
+			logutil.Errorf("convert shardid failed, %v", err)
+			break
+		}
+		aoeTableName := c.encodeTabletName(sid, tbl.Id)
+		err = c.Driver.DropIndex(aoeTableName, idxName, sid)
+		if err != nil {
+			logutil.Errorf("call local drop index failed %d, %d, %v", sid, tbl.Id, err)
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -633,7 +691,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 
 //encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return strconv.Itoa(int(groupId)) + strconv.Itoa(int(tableId))
+	return strconv.Itoa(int(tableId))
 }
 
 //genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.
