@@ -18,13 +18,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
-	"math"
+
 	//"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -33,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+
 	//"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	//"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -123,17 +126,21 @@ func removeEpoch(epoch uint64) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	flag.Parse()
+	args := flag.Args()
+
+	if len(args) < 1 {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
+		flag.PrintDefaults()
 		os.Exit(-1)
 	}
-	flag.Parse()
 
 	//close cube print info
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
 
-	logutil.SetupMOLogger(os.Args[1])
+	configFilePath := args[0]
+	logutil.SetupMOLogger(configFilePath)
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -141,9 +148,17 @@ func main() {
 		os.Exit(InitialValuesExit)
 	}
 
-	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
+	if err := config.LoadvarsConfigFromFile(configFilePath, &config.GlobalSystemVariables); err != nil {
 		logutil.Infof("Load config error:%v\n", err)
 		os.Exit(LoadConfigExit)
+	}
+
+	if *cpuProfilePathFlag != "" {
+		stop := startCPUProfile()
+		defer stop()
+	}
+	if *allocsProfilePathFlag != "" {
+		defer writeAllocsProfile()
 	}
 
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
@@ -178,7 +193,7 @@ func main() {
 	var aoeDataStorage *aoeDriver.Storage
 
 	opt := aoeStorage.Options{}
-	_, err = toml.DecodeFile(os.Args[1], &opt)
+	_, err = toml.DecodeFile(configFilePath, &opt)
 	if err != nil {
 		logutil.Infof("Decode aoe config error:%v\n", err)
 		os.Exit(DecodeAoeConfigExit)
@@ -191,13 +206,13 @@ func main() {
 	}
 
 	cfg := dConfig.Config{}
-	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
+	_, err = toml.DecodeFile(configFilePath, &cfg.CubeConfig)
 	if err != nil {
 		logutil.Infof("Decode cube config error:%v\n", err)
 		os.Exit(DecodeCubeConfigExit)
 	}
 
-	_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
+	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
 	if err != nil {
 		logutil.Infof("Decode cluster config error:%v\n", err)
 		os.Exit(DecodeClusterConfigExit)
@@ -277,7 +292,6 @@ func main() {
 	pebbleDataStorage.Close()
 
 	cleanup()
-	os.Exit(NormalExit)
 }
 
 func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
