@@ -110,7 +110,7 @@ func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
 	col.Nsp.Np = newNulls
 }
 
-func Merge(col []*vector.Vector, src []uint16) {
+func Merge(col []*vector.Vector, src *[]uint16) {
 	data := make([]*types.Bytes, len(col))
 
 	for i, v := range col {
@@ -136,7 +136,7 @@ func Merge(col []*vector.Vector, src []uint16) {
 			top := heapPop(&heap)
 			offset += uint32(len(top.data))
 			strings[j] = top.data
-			src[k] = top.src
+			(*src)[k] = top.src
 			k++
 			if int(top.next) < nElem {
 				heapPush(&heap, heapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})

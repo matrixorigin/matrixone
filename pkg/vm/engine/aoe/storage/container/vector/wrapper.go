@@ -17,8 +17,6 @@ package vector
 import (
 	"bytes"
 	"fmt"
-	"github.com/pierrec/lz4"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	base "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -27,6 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/pierrec/lz4"
+	"io"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -36,6 +36,10 @@ type VectorWrapper struct {
 	FreeFunc    buf.MemoryFreeFunc
 	File        common.IVFile
 	UseCompress bool
+}
+
+func (v *VectorWrapper) Reset() {
+	panic("implement me")
 }
 
 func VectorWrapperConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
@@ -79,11 +83,11 @@ func (v *VectorWrapper) Close() error {
 }
 
 func (v *VectorWrapper) Capacity() int {
-	return v.Vector.Length()
+	return base.Length(&v.Vector)
 }
 
 func (v *VectorWrapper) Length() int {
-	return v.Vector.Length()
+	return base.Length(&v.Vector)
 }
 
 func (v *VectorWrapper) Free(p *process.Process) {

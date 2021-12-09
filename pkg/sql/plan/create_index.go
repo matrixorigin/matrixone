@@ -23,20 +23,33 @@ import (
 
 func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) error {
 	var defs []engine.TableDef
-	var typ tree.IndexType
+	//var typ tree.IndexType
 
 	_, _, r, err := b.tableName(&stmt.Table)
 	if err != nil {
 		return nil
 	}
-	if stmt.IndexOption != nil {
+	var treeIndexType tree.IndexType
+	var engineIndexType engine.IndexT
+	/*if stmt.IndexOption != nil {
 		typ = stmt.IndexOption.IType
 	} else {
 		typ = tree.INDEX_TYPE_BTREE
+	}*/
+	if stmt.IndexOption != nil {
+		treeIndexType = stmt.IndexOption.IType
+		switch treeIndexType{
+		case tree.INDEX_TYPE_BSI:
+			engineIndexType = engine.BsiIndex
+		default:
+			engineIndexType = engine.Invalid
+		}
+	} else {
+		engineIndexType = engine.ZoneMap
 	}
 
 	def := &engine.IndexTableDef{
-		Typ:      int(typ),
+		Typ:      engineIndexType,
 		ColNames: stmt.KeyParts[0].ColName.Parts[:1],
 		Name:     string(stmt.Name),
 	}

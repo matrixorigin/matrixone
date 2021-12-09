@@ -110,6 +110,10 @@ func DecodeTable(data []byte) (aoe.TableInfo, error) {
 	return tbl, err
 }
 
+func EncodeIndex(idx aoe.IndexInfo) ([]byte, error) {
+	return encoding.Encode(idx)
+}
+
 func DecodeIndex(data []byte) (aoe.IndexInfo, error) {
 	var idx aoe.IndexInfo
 

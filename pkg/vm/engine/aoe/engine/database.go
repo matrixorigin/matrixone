@@ -103,7 +103,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
-			if lRelation, err := ldb.Relation(aoedbName.ShardIdToName(tbl.ShardId), tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
 			r.nodes = append(r.nodes, engine.Node{
