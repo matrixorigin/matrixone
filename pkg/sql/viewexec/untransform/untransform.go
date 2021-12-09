@@ -311,6 +311,10 @@ func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.
 			ctr.zInserted = make([]uint8, UnitLimit)
 			ctr.hashes = make([]uint64, UnitLimit)
 			ctr.values = make([]*uint64, UnitLimit)
+			ctr.hstr.realValues = make([]uint64, UnitLimit)
+			for i := 0; i < UnitLimit; i++ {
+				ctr.values[i] = &ctr.hstr.realValues[i]
+			}
 			ctr.hstr.ht = &hashtable.StringHashMap{}
 			ctr.hstr.ht.Init()
 		}
@@ -435,14 +439,16 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 				ai := int64(*ctr.values[k])
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
-					return err
+			if cnt > 0 {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
+						return err
+					}
 				}
-			}
-			for _, r := range ctr.bat.Rs {
-				if err := r.Grows(cnt, proc.Mp); err != nil {
-					return err
+				for _, r := range ctr.bat.Rs {
+					if err := r.Grows(cnt, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for j, r := range ctr.bat.Rs {
@@ -551,14 +557,16 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 				ai := int64(*ctr.values[k])
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
-					return err
+			if cnt > 0 {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
+						return err
+					}
 				}
-			}
-			for _, r := range ctr.bat.Rs {
-				if err := r.Grows(cnt, proc.Mp); err != nil {
-					return err
+				for _, r := range ctr.bat.Rs {
+					if err := r.Grows(cnt, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for j, r := range ctr.bat.Rs {
@@ -667,14 +675,16 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 				ai := int64(*ctr.values[k])
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
-					return err
+			if cnt > 0 {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
+						return err
+					}
 				}
-			}
-			for _, r := range ctr.bat.Rs {
-				if err := r.Grows(cnt, proc.Mp); err != nil {
-					return err
+				for _, r := range ctr.bat.Rs {
+					if err := r.Grows(cnt, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for j, r := range ctr.bat.Rs {
@@ -783,14 +793,16 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 				ai := int64(*ctr.values[k])
 				ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 			}
-			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
-					return err
+			if cnt > 0 {
+				for j, vec := range ctr.bat.Vecs {
+					if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
+						return err
+					}
 				}
-			}
-			for _, r := range ctr.bat.Rs {
-				if err := r.Grows(cnt, proc.Mp); err != nil {
-					return err
+				for _, r := range ctr.bat.Rs {
+					if err := r.Grows(cnt, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for j, r := range ctr.bat.Rs {
@@ -813,9 +825,6 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 		}
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		cnt := 0
-		for k := int64(0); k < n; k++ {
-			keys[k] = keys[k][:0]
-		}
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -887,6 +896,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 		}
 		for k := int64(0); k < n; k++ {
 			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &keys[k][0], Len: len(keys[k])})
+			keys[k] = keys[k][:0]
 			if ok {
 				ctr.inserted[k] = 1
 				*vp = ctr.rows
@@ -895,17 +905,19 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
 			ai := int64(*vp)
-			ctr.values[k] = vp
+			ctr.hstr.realValues[k] = *vp
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 		}
-		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
-				return err
+		if cnt > 0 {
+			for j, vec := range ctr.bat.Vecs {
+				if err := vector.UnionBatch(vec, vecs[j], i, cnt, ctr.inserted[:n], proc.Mp); err != nil {
+					return err
+				}
 			}
-		}
-		for _, r := range ctr.bat.Rs {
-			if err := r.Grows(cnt, proc.Mp); err != nil {
-				return err
+			for _, r := range ctr.bat.Rs {
+				if err := r.Grows(cnt, proc.Mp); err != nil {
+					return err
+				}
 			}
 		}
 		for j, r := range ctr.bat.Rs {

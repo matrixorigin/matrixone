@@ -74,7 +74,8 @@ type Container struct {
 		ht    *hashtable.String40HashMap
 	}
 	hstr struct {
-		ht *hashtable.StringHashMap
+		realValues []uint64
+		ht         *hashtable.StringHashMap
 	}
 	bat *batch.Batch
 }
