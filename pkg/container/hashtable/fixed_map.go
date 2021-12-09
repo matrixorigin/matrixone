@@ -16,89 +16,64 @@ package hashtable
 
 import (
 	"errors"
-	"math/bits"
 	"unsafe"
 )
 
 type FixedMap struct {
 	bucketCnt  uint32
-	rawBitmap  []byte
-	bitmap     []uint64
+	elemCnt    uint32
 	rawData    []byte
 	bucketData []uint64
 }
 
 type FixedMapIterator struct {
-	table      *FixedMap
-	bitmapIdx  uint32
-	bitmapSize uint32
-	bitmapVal  uint64
+	table *FixedMap
+	idx   uint32
 }
 
 func (ht *FixedMap) Init(bucketCnt uint32) {
-	rawBitmap := make([]byte, ((int64(bucketCnt)-1)/64+1)*8)
 	rawData := make([]byte, bucketCnt*8)
 
 	ht.bucketCnt = bucketCnt
-	ht.rawBitmap = rawBitmap
-	ht.bitmap = unsafe.Slice((*uint64)(unsafe.Pointer(&rawBitmap[0])), cap(rawBitmap)/8)[:len(rawBitmap)/8]
 	ht.rawData = rawData
 	ht.bucketData = unsafe.Slice((*uint64)(unsafe.Pointer(&rawData[0])), cap(rawData)/8)[:len(rawData)/8]
 }
 
-func (ht *FixedMap) Insert(key uint32) (inserted bool, value *uint64) {
-	inserted = (ht.bitmap[key/8] | (1 << (key % 8))) == 0
-	ht.bitmap[key/8] |= 1 << (key % 8)
-	value = &ht.bucketData[key]
-	return
-}
-
-func (ht *FixedMap) Merge(other *FixedMap) {
-	for i, v := range other.bitmap {
-		ht.bitmap[i] |= v
+func (ht *FixedMap) Insert(key uint32) uint64 {
+	value := ht.bucketData[key]
+	if value == 0 {
+		ht.elemCnt++
+		value = uint64(ht.elemCnt)
+		ht.bucketData[key] = value
 	}
+	return value
 }
 
 func (ht *FixedMap) BucketData() []uint64 {
 	return ht.bucketData
 }
 
-func (ht *FixedMap) Cardinality() (cnt uint64) {
-	for _, v := range ht.bitmap {
-		cnt += uint64(bits.OnesCount64(v))
-	}
-	return
+func (ht *FixedMap) Cardinality() uint64 {
+	return uint64(ht.elemCnt)
 }
 
 func (it *FixedMapIterator) Init(ht *FixedMap) {
 	it.table = ht
-	it.bitmapIdx = 0
-	it.bitmapSize = uint32(len(ht.bitmap))
-	it.bitmapVal = ht.bitmap[0]
+	it.idx = 0
 }
 
-func (it *FixedMapIterator) Next() (key uint32, value *uint64, err error) {
-	if it.bitmapVal != 0 {
-		tz := bits.TrailingZeros64(it.bitmapVal)
-		key = 64*it.bitmapIdx + uint32(tz)
-		it.bitmapVal ^= 1 << tz
-
-		value = &it.table.bucketData[key]
-		return
+func (it *FixedMapIterator) Next() (key uint32, value uint64, err error) {
+	for it.idx < it.table.bucketCnt && it.table.bucketData[it.idx] == 0 {
+		it.idx++
 	}
 
-	for it.bitmapIdx < it.bitmapSize && it.table.bitmap[it.bitmapIdx] == 0 {
-		it.bitmapIdx++
-	}
-
-	if it.bitmapIdx == it.bitmapSize {
+	if it.idx == it.table.bucketCnt {
 		err = errors.New("out of range")
 		return
 	}
 
-	it.bitmapVal = it.table.bitmap[it.bitmapIdx]
-	key = 64*it.bitmapIdx + uint32(bits.TrailingZeros64(it.bitmapVal))
-	value = &it.table.bucketData[key]
+	key = it.idx
+	value = it.table.bucketData[key]
 
 	return
 }
