@@ -149,7 +149,8 @@ import (
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
     strs []string
-
+	assignments []*tree.Assignment
+	assignment *tree.Assignment
     properties []tree.Property
     property tree.Property
 }
@@ -221,7 +222,7 @@ import (
 %token <str> PROPERTIES
 
 // Create Index
-%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE
+%token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
 
 // Alter
 %token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER
@@ -272,7 +273,9 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
-// MySQL reserved words that are unused by this grammar will map to this token.
+// Insert
+%token <str> ROW
+
 %token <str> UNUSED
 
 %type <statement> stmt
@@ -451,6 +454,9 @@ import (
 // type <str> mo_keywords
 %type <properties> properties_list
 %type <property> property_elem
+%type <assignments> set_value_list
+%type <assignment> set_value
+%type <str> row_opt
 
 %start start_command
 
@@ -1895,6 +1901,46 @@ insert_data:
             Rows: tree.NewSelect($4, nil, nil),
         }
     }
+|	SET set_value_list
+	{
+		if $2 == nil {
+			yylex.Error("the set list of insert can not be empty")
+			return 1
+		}
+		var identList tree.IdentifierList
+		var valueList tree.Exprs
+		for _, a := range $2 {
+			identList = append(identList, a.Column)
+			valueList = append(valueList, a.Expr)
+		}
+		vc := tree.NewValuesClause([]tree.Exprs{valueList})
+		$$ = &tree.Insert{
+			Columns: identList,
+			Rows: tree.NewSelect(vc, nil, nil),
+		}
+	}
+
+set_value_list:
+	{
+		$$ = nil
+	}
+|	set_value
+	{
+		$$ = []*tree.Assignment{$1}
+	}
+|	set_value_list ',' set_value
+	{
+		$$ = append($1, $3)
+	}
+
+set_value:
+	insert_column '=' expr_or_default
+	{
+		$$ = &tree.Assignment{
+			Column: tree.Identifier($1),
+			Expr: $3,
+		}
+	}
 
 insert_column_list:
     insert_column
@@ -1927,10 +1973,14 @@ values_list:
     }
 
 row_value:
-    '(' data_opt ')'
+    row_opt '(' data_opt ')'
     {
-        $$ = $2
+        $$ = $3
     }
+
+row_opt:
+	{}
+|	ROW
 
 data_opt:
     {
@@ -2843,6 +2893,10 @@ using_opt:
 |   USING RTREE
     {
         $$ = tree.INDEX_TYPE_RTREE
+    }
+|	USING BSI
+    {
+    	$$ = tree.INDEX_TYPE_BSI
     }
 
 create_database_stmt:
@@ -4668,9 +4722,13 @@ literal:
     {
         $$ = tree.NewNumVal(constant.MakeUnknown(), "", false)
     }
+|   HEXNUM
+	{
+		ival := getUint64($1)
+		$$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
+	}
 // |   HEX
 // |   BIT_LITERAL
-// |   HEXNUM
 // |   VALUE_ARG
 
 column_type:
@@ -5499,6 +5557,7 @@ reserved_keyword:
 |   PRIMARY
 |   FULLTEXT
 |   FOREIGN
+|	ROW
 
 non_reserved_keyword:
     AGAINST

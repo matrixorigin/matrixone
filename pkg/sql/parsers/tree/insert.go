@@ -52,3 +52,8 @@ func NewInsert(t TableExpr, c IdentifierList, r *Select, p IdentifierList) *Inse
 		PartitionNames: p,
 	}
 }
+
+type Assignment struct {
+	Column Identifier
+	Expr   Expr
+}
