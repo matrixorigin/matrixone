@@ -2,8 +2,8 @@ name: Send submodule updates to parent repo
 
 on:
   push:
-    branches: 
-      - main
+    paths:
+    - 'docs/en/MatrixOne/**'
 
 jobs:
   update:
