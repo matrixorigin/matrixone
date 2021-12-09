@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package index
 
 import (
@@ -16,8 +30,7 @@ type unsortedSegmentHolder struct {
 	BufMgr mgrif.IBufferManager
 	tree struct {
 		sync.RWMutex
-		Blocks   []*BlockHolder
-		IdMap    map[uint64]int
+		blockHolders map[uint64]*BlockIndexHolder
 		BlockCnt int32
 	}
 	PostCloseCB PostCloseCB
@@ -25,8 +38,7 @@ type unsortedSegmentHolder struct {
 
 func newUnsortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCloseCB) SegmentIndexHolder {
 	holder := &unsortedSegmentHolder{BufMgr: bufMgr, ID: id, PostCloseCB: cb}
-	holder.tree.Blocks = make([]*BlockHolder, 0)
-	holder.tree.IdMap = make(map[uint64]int)
+	holder.tree.blockHolders = make(map[uint64]*BlockIndexHolder, 0)
 	holder.OnZeroCB = holder.close
 	holder.Ref()
 	return holder
@@ -45,17 +57,32 @@ func (holder *unsortedSegmentHolder) GetCB() PostCloseCB {
 }
 
 func (holder *unsortedSegmentHolder) Init(file base.ISegmentFile) {
-	// TODO(zzl)
+	// do nothing
 }
 
 func (holder *unsortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
-	// TODO(zzl)
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	// only zone map considered currently
+	// TODO(zzl): bsi
+	blkSet := make([]uint64, 0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
+		if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+			return err
+		}
+		if subCtx.BoolRes {
+			blkSet = append(blkSet, blkHolder.ID.BlockID)
+			ctx.BoolRes = true
+		}
+	}
+	ctx.BlockSet = blkSet
 	return nil
 }
 
+// CollectMinMax is not needed in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) CollectMinMax(colIdx int) ([]interface{}, []interface{}, error) {
-	// TODO(zzl)
-	return nil, nil, nil
+	panic("unsupported")
 }
 
 func (holder *unsortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
@@ -83,78 +110,54 @@ func (holder *unsortedSegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (in
 	return 0, 0, nil
 }
 
-func (holder *unsortedSegmentHolder) StrongRefBlock(id uint64) *BlockHolder {
+func (holder *unsortedSegmentHolder) StrongRefBlock(id uint64) *BlockIndexHolder {
 	holder.tree.RLock()
-	idx, ok := holder.tree.IdMap[id]
+	defer holder.tree.RUnlock()
+	blk, ok := holder.tree.blockHolders[id]
 	if !ok {
-		holder.tree.RUnlock()
 		return nil
 	}
-	blk := holder.tree.Blocks[idx]
 	blk.Ref()
-	holder.tree.RUnlock()
 	return blk
 }
 
-func (holder *unsortedSegmentHolder) RegisterBlock(id common.ID, blockType base.BlockType, cb PostCloseCB) *BlockHolder {
-	blk := newBlockHolder(holder.BufMgr, id, blockType, cb)
+func (holder *unsortedSegmentHolder) RegisterBlock(id common.ID, blockType base.BlockType, cb PostCloseCB) *BlockIndexHolder {
+	blk := newBlockIndexHolder(holder.BufMgr, id, blockType, cb)
 	holder.addBlock(blk)
 	blk.Ref()
 	return blk
 }
 
-func (holder *unsortedSegmentHolder) DropBlock(id uint64) *BlockHolder {
+func (holder *unsortedSegmentHolder) DropBlock(id uint64) *BlockIndexHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	idx, ok := holder.tree.IdMap[id]
+	idx, ok := holder.tree.blockHolders[id]
 	if !ok {
-		panic(fmt.Sprintf("Specified blk %d not found in seg %d", id, holder.ID))
+		panic("block not found")
 	}
-	dropped := holder.tree.Blocks[idx]
-	delete(holder.tree.IdMap, id)
-	holder.tree.Blocks = append(holder.tree.Blocks[:idx], holder.tree.Blocks[idx+1:]...)
+	delete(holder.tree.blockHolders, id)
 	atomic.AddInt32(&holder.tree.BlockCnt, int32(-1))
-	return dropped
+	return idx
 }
 
 func (holder *unsortedSegmentHolder) GetBlockCount() int32 {
 	return atomic.LoadInt32(&holder.tree.BlockCnt)
 }
 
-func (holder *unsortedSegmentHolder) UpgradeBlock(id uint64, blockType base.BlockType) *BlockHolder {
+func (holder *unsortedSegmentHolder) addBlock(blk *BlockIndexHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	idx, ok := holder.tree.IdMap[id]
-	if !ok {
-		panic(fmt.Sprintf("specified blk %d not found in %d", id, holder.ID))
+	if _, ok := holder.tree.blockHolders[blk.ID.BlockID]; ok {
+		panic("duplicate block")
 	}
-	stale := holder.tree.Blocks[idx]
-	if stale.Type >= blockType {
-		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blockType))
-	}
-	blk := newBlockHolder(holder.BufMgr, stale.ID, blockType, stale.PostCloseCB)
-	holder.tree.Blocks[idx] = blk
-	blk.Ref()
-	stale.Unref()
-	return blk
-}
-
-func (holder *unsortedSegmentHolder) addBlock(blk *BlockHolder) {
-	holder.tree.Lock()
-	defer holder.tree.Unlock()
-	_, ok := holder.tree.IdMap[blk.ID.BlockID]
-	if ok {
-		panic(fmt.Sprintf("Duplicate blk %s for seg %s", blk.ID.BlockString(), holder.ID.SegmentString()))
-	}
-	holder.tree.IdMap[blk.ID.BlockID] = len(holder.tree.Blocks)
-	holder.tree.Blocks = append(holder.tree.Blocks, blk)
+	holder.tree.blockHolders[blk.ID.BlockID] = blk
 	atomic.AddInt32(&holder.tree.BlockCnt, int32(1))
 }
 
 func (holder *unsortedSegmentHolder) stringNoLock() string {
 	s := fmt.Sprintf("<IndexSegmentHolder[%s]>[Ty=%v](Cnt=%d)(RefCount=%d)", holder.ID.SegmentString(), base.UNSORTED_SEG,
 		holder.tree.BlockCnt, holder.RefCount())
-	for _, blk := range holder.tree.Blocks {
+	for _, blk := range holder.tree.blockHolders {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.stringNoLock())
 	}
 	return s
@@ -191,7 +194,7 @@ func (holder *unsortedSegmentHolder) StringIndicesRefsNoLock() string {
 }
 
 func (holder *unsortedSegmentHolder) close() {
-	for _, blk := range holder.tree.Blocks {
+	for _, blk := range holder.tree.blockHolders {
 		blk.Unref()
 	}
 	if holder.PostCloseCB != nil {

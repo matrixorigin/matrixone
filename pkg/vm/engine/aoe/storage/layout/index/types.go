@@ -19,11 +19,17 @@ import (
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 )
 
 type OpType uint8
+
+type ColumnsAllocator struct {
+	sync.RWMutex
+	Allocators map[int]*common.IdAlloctor
+}
 
 const (
 	OpInv OpType = iota
@@ -52,6 +58,7 @@ type FilterCtx struct {
 	Err     error
 
 	BsiRequired bool
+	BlockSet []uint64
 }
 
 func NewFilterCtx(t OpType) *FilterCtx {
@@ -89,6 +96,8 @@ type Index interface {
 
 type SegmentIndexHolder interface {
 	common.IRef
+	BlockHoldersManager
+	SegmentIndicesManager
 	Init(base.ISegmentFile)
 	EvalFilter(int, *FilterCtx) error
 	CollectMinMax(int) ([]interface{}, []interface{}, error)
@@ -100,21 +109,25 @@ type SegmentIndexHolder interface {
 	HolderType() base.SegmentType
 	GetID() common.ID
 	GetCB() PostCloseCB
+	close()
+}
 
-	StrongRefBlock(uint64) *BlockHolder
-	RegisterBlock(common.ID, base.BlockType, PostCloseCB) *BlockHolder
-	DropBlock(uint64) *BlockHolder
+type BlockHoldersManager interface {
+	StrongRefBlock(uint64) *BlockIndexHolder
+	RegisterBlock(common.ID, base.BlockType, PostCloseCB) *BlockIndexHolder
+	DropBlock(uint64) *BlockIndexHolder
 	GetBlockCount() int32
-	UpgradeBlock(uint64, base.BlockType) *BlockHolder
+	//UpgradeBlock(uint64, base.BlockType) *BlockIndexHolder
 	stringNoLock() string
+}
 
+type SegmentIndicesManager interface {
 	AllocateVersion(int) uint64
 	VersionAllocater() *ColumnsAllocator
-    IndicesCount() int
+	IndicesCount() int
 	DropIndex(filename string)
 	LoadIndex(base.ISegmentFile, string)
 	StringIndicesRefsNoLock() string
-	close()
 }
 
 type PostCloseCB = func(interface{})

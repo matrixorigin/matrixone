@@ -99,7 +99,7 @@ func newSegment(host iface.ITableData, meta *metadata.Segment) (iface.ISegment, 
 	return seg, nil
 }
 
-func NewSimpleSegment(typ base.SegmentType, meta *metadata.Segment, indexHolder *index.SegmentHolder, segFile base.ISegmentFile) *segment {
+func NewSimpleSegment(typ base.SegmentType, meta *metadata.Segment, indexHolder index.SegmentIndexHolder, segFile base.ISegmentFile) *segment {
 	return &segment{
 		typ:         typ,
 		meta:        meta,

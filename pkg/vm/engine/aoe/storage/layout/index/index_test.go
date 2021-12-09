@@ -38,10 +38,10 @@ func TestSegment(t *testing.T) {
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := segID
-	blk0Holder := newBlockHolder(bufMgr, blk0Id, base.TRANSIENT_BLK, nil)
+	blk0Holder := newBlockIndexHolder(bufMgr, blk0Id, base.TRANSIENT_BLK, nil)
 	blk1Id := blk0Id
 	blk1Id.BlockID++
-	blk1Holder := newBlockHolder(bufMgr, blk1Id, base.TRANSIENT_BLK, nil)
+	blk1Holder := newBlockIndexHolder(bufMgr, blk1Id, base.TRANSIENT_BLK, nil)
 
 	blk0 := segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
@@ -240,7 +240,7 @@ func TestNumBsi(t *testing.T) {
 }
 
 func TestZM(t *testing.T) {
-	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
+	int32zm := NewBlockZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
 	ctx := NewFilterCtx(OpEq)
 	ctx.Val = int32(9)
 	ctx.Eval(int32zm)

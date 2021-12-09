@@ -30,7 +30,7 @@ type baseBlock struct {
 	meta        *metadata.Block
 	host        iface.ISegment
 	typ         base.BlockType
-	indexholder *index.BlockHolder
+	indexholder *index.BlockIndexHolder
 }
 
 func newBaseBlock(host iface.ISegment, meta *metadata.Block) *baseBlock {
@@ -43,6 +43,7 @@ func newBaseBlock(host iface.ISegment, meta *metadata.Block) *baseBlock {
 		blk.typ = base.TRANSIENT_BLK
 	} else if host.GetType() == base.UNSORTED_SEG {
 		blk.typ = base.PERSISTENT_BLK
+		blk.indexholder = host.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), base.PERSISTENT_BLK, nil)
 	} else {
 		blk.typ = base.PERSISTENT_SORTED_BLK
 	}
@@ -65,8 +66,10 @@ func (blk *baseBlock) GetSSTBufMgr() bmgrif.IBufferManager { return blk.host.Get
 func (blk *baseBlock) GetFsManager() base.IManager         { return blk.host.GetFsManager() }
 func (blk *baseBlock) GetSegmentFile() base.ISegmentFile   { return blk.host.GetSegmentFile() }
 
-func (blk *baseBlock) GetIndexHolder() *index.BlockHolder {
-	blk.indexholder.Ref()
+func (blk *baseBlock) GetIndexHolder() *index.BlockIndexHolder {
+	if blk.indexholder != nil {
+		blk.indexholder.Ref()
+	}
 	return blk.indexholder
 }
 
@@ -108,37 +111,16 @@ func (blk *baseBlock) upgrade(host iface.ISegment, meta *metadata.Block) (*baseB
 		sllnode: *common.NewSLLNode(nil),
 	}
 
-	if host.GetIndexHolder().HolderType() == base.UNSORTED_SEG {
-		upgraded.indexholder = host.GetIndexHolder().StrongRefBlock(meta.Id)
-		switch blk.typ {
-		case base.TRANSIENT_BLK:
-			upgraded.typ = base.PERSISTENT_BLK
-			if upgraded.indexholder == nil {
-				upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
-			} else if upgraded.indexholder.Type < upgraded.typ {
-				upgraded.indexholder.Unref()
-				upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
-			}
-		case base.PERSISTENT_BLK:
-			upgraded.typ = base.PERSISTENT_SORTED_BLK
-			if upgraded.indexholder == nil {
-				upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
-			} else if upgraded.indexholder.Type < upgraded.typ {
-				upgraded.indexholder.Unref()
-				upgraded.indexholder = host.GetIndexHolder().UpgradeBlock(meta.Id, upgraded.typ)
-			}
-		default:
-			panic("logic error")
+	switch blk.typ {
+	case base.TRANSIENT_BLK:
+		upgraded.typ = base.PERSISTENT_BLK
+		if host.GetIndexHolder().HolderType() == base.UNSORTED_SEG {
+			upgraded.indexholder = host.GetIndexHolder().RegisterBlock(id, upgraded.typ, nil)
 		}
-	} else {
-		switch blk.typ {
-		case base.TRANSIENT_BLK:
-			upgraded.typ = base.PERSISTENT_BLK
-		case base.PERSISTENT_BLK:
-			upgraded.typ = base.PERSISTENT_SORTED_BLK
-		default:
-			panic("logic error")
-		}
+	case base.PERSISTENT_BLK:
+		upgraded.typ = base.PERSISTENT_SORTED_BLK
+	default:
+		panic("logic error")
 	}
 
 	return upgraded, nil
