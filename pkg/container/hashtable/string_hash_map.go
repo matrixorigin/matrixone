@@ -96,7 +96,10 @@ func (ht *StringHashMap) Find(key StringRef) *uint64 {
 		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
-	_, _, cell := ht.findBucket(hash, &key128)
+	empty, _, cell := ht.findBucket(hash, &key128)
+	if empty {
+		return nil
+	}
 
 	return &cell.Mapped
 }

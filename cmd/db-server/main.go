@@ -262,7 +262,7 @@ func main() {
 		os.Exit(LoadConfigExit)
 	}
 
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, cubePort+100+NodeId), 1<<30, logutil.GetGlobalLogger())
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, cubePort+100), 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
 		logutil.Infof("Create rpcserver failed, %v", err)
 		os.Exit(CreateRPCExit)
