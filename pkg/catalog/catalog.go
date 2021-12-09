@@ -74,6 +74,7 @@ func NewCatalogListener() *CatalogListener {
 func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 	l.catalog = catalog
 }
+
 //OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
@@ -91,6 +92,7 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 	}
 	return nil
 }
+
 //OnPostSplit update route info and delete presplit key.
 func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error {
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
@@ -610,24 +612,80 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) (tablets []aoe.Table
 		if tb.State != aoe.StatePublic {
 			return nil, ErrTableNotExists
 		}
-		shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tb.Id), 0)
+		sids, err := c.getShardidsWithTimeout(tb.Id)
 		if err != nil {
 			return nil, err
 		}
-		for _, shardId := range shardIds {
-			if sid, err := Bytes2Uint64(shardId[len(c.routePrefix(tb.Id)):]); err != nil {
-				logutil.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(tb.Id)))
-				continue
-			} else {
-				tablets = append(tablets, aoe.TabletInfo{
-					Name:    c.encodeTabletName(sid, tb.Id),
-					ShardId: sid,
-					Table:   *tb,
-				})
-			}
+		for _, sid := range sids {
+			tablets = append(tablets, aoe.TabletInfo{
+				Name:    c.encodeTabletName(sid, tb.Id),
+				ShardId: sid,
+				Table:   *tb,
+			})
 		}
 		return tablets, nil
 	}
+}
+func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Infof("[getShardidsWithTimeout] get shard for %d, returns %d, %v, cost %d ms", tid, shardids, err, time.Since(t0).Milliseconds())
+	}()
+	timeoutC := time.After(timeout)
+	for {
+		select {
+		case <-timeoutC:
+			logutil.Error("wait for available shard timeout")
+			return nil, ErrTableCreateTimeout
+		default:
+			shards, err := c.getShardids(tid)
+			if err == nil {
+				return shards, nil
+			}
+			time.Sleep(time.Millisecond * 10)
+		}
+	}
+}
+func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
+	sids := make([]uint64, 0)
+	pendingSids, err := c.GetPendingShards()
+	if err != nil {
+		return nil, err
+	}
+	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tid), 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, shardId := range shardIds {
+		sid, err := Bytes2Uint64(shardId[len(c.routePrefix(tid)):])
+		if err != nil {
+			logutil.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(tid)))
+			continue
+		}
+		for _, pendingSid := range pendingSids {
+			if sid == pendingSid {
+				return nil, ErrShardPending
+			}
+		}
+		sids = append(sids, sid)
+	}
+	return sids, nil
+}
+func (c *Catalog) GetPendingShards() (sids []uint64, err error) {
+	splitEvents, err := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
+	if err != nil {
+		return nil, err
+	}
+	for i := 1; i < len(splitEvents); i += 2 {
+		splitEvent := SplitEvent{}
+		splitEventByte := splitEvents[i]
+		err = json.Unmarshal(splitEventByte, &splitEvent)
+		if err != nil {
+			return nil, err
+		}
+		sids = append(sids, splitEvent.Old)
+	}
+	return
 }
 
 // RemoveDeletedTable trigger gc
