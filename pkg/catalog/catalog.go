@@ -42,6 +42,7 @@ const (
 	cTablePrefix        = "Table"
 	cTableIDPrefix      = "TID"
 	cRoutePrefix        = "Route"
+	cPreSplitPrefix     = "PreSplit"
 	cSplitPrefix        = "Split"
 	cDeletedTablePrefix = "DeletedTableQueue"
 	timeout             = 2000 * time.Millisecond
@@ -73,15 +74,35 @@ func NewCatalogListener() *CatalogListener {
 func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 	l.catalog = catalog
 }
+//OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
+	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
+	if err != nil {
+		panic(err)
+	}
+	key := l.catalog.preSplitKey(catalogSplitEvent.Old)
+	value, err := json.Marshal(catalogSplitEvent)
+	if err != nil {
+		panic(err)
+	}
+	err = l.catalog.Driver.Set(key, value)
+	if err != nil {
+		panic(err)
+	}
 	return nil
 }
+//OnPostSplit update route info and delete presplit key.
 func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error {
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
 	if err != nil {
 		panic(err)
 	}
 	err = l.catalog.OnDatabaseSplitted(catalogSplitEvent)
+	if err != nil {
+		panic(err)
+	}
+	key := l.catalog.preSplitKey(catalogSplitEvent.Old)
+	err = l.catalog.Driver.Delete(key)
 	if err != nil {
 		panic(err)
 	}
@@ -114,19 +135,14 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 	return nil
 }
 func (c *Catalog) OnDatabaseSplitted(splitEvent *SplitEvent) error {
-		for newShard, tbls := range splitEvent.News {
-			for _, tid := range tbls {
-				err := c.updateRouteInfo(tid,splitEvent.Old,newShard)
-				if err != nil{
-					return err
-				}
+	for newShard, tbls := range splitEvent.News {
+		for _, tid := range tbls {
+			err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
+			if err != nil {
+				return err
 			}
 		}
-		splitKey := c.splitKey(splitEvent.Old)
-		err := c.Driver.Delete(splitKey)
-		if err != nil {
-			return err
-		}
+	}
 	return nil
 }
 
@@ -827,6 +843,14 @@ func (c *Catalog) splitPrefix() []byte {
 
 func (c *Catalog) splitKey(db uint64) []byte {
 	return EncodeKey(cPrefix, defaultCatalogId, cSplitPrefix, db)
+}
+
+func (c *Catalog) preSplitPrefix() []byte {
+	return EncodeKey(cPrefix, defaultCatalogId, cPreSplitPrefix)
+}
+
+func (c *Catalog) preSplitKey(db uint64) []byte {
+	return EncodeKey(cPrefix, defaultCatalogId, cPreSplitPrefix, db)
 }
 
 func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent, error) {
