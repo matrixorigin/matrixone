@@ -18,8 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync/atomic"
 )
 
@@ -51,7 +51,7 @@ func (seg *Segment) Blocks() []string {
 }
 
 // Block returns a block with the given block id.
-func (seg *Segment) Block(id string) aoe.Block {
+func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
@@ -69,25 +69,16 @@ func (seg *Segment) Block(id string) aoe.Block {
 
 // NewFilter generates a Filter for segment.
 func (seg *Segment) NewFilter() engine.Filter {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentFilter(seg)
 }
 
 // NewSummarizer generates a Summarizer for segment.
 func (seg *Segment) NewSummarizer() engine.Summarizer {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentSummarizer(seg)
 }
 
 // NewSparseFilter generates a SparseFilter for segment.
 func (seg *Segment) NewSparseFilter() engine.SparseFilter {
-	if !seg.Data.GetIndexHolder().Inited {
-		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
-	}
 	return NewSegmentSparseFilter(seg)
 }
 

@@ -76,7 +76,7 @@ func (h *RWHelper) ReadIndices(f os.File) (indices []Index, err error) {
 		indexType := encoding.DecodeUint16(twoBytes)
 		switch indexType {
 		case base.ZoneMap:
-			idx := new(ZoneMapIndex)
+			idx := new(BlockZoneMapIndex)
 			indices = append(indices, idx)
 		default:
 			panic("unsupported")

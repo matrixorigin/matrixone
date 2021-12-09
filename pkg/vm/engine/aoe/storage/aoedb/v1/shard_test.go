@@ -325,7 +325,7 @@ func TestShard2(t *testing.T) {
 	}
 	assert.Equal(t, 0, total)
 	for _, shard := range shards {
-		testutils.WaitExpect(400, func() bool {
+		testutils.WaitExpect(800, func() bool {
 			return shard.gen.Get() == shard.getSafeId()
 		})
 	}

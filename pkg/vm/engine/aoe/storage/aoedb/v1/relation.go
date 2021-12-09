@@ -15,7 +15,6 @@
 package aoedb
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"sync"
 	"sync/atomic"
 
@@ -24,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -81,9 +80,9 @@ func (r *Relation) Index() []*engine.IndexTableDef {
 	return nil
 }
 
-func (r *Relation) Attribute() []engine.Attribute {
+func (r *Relation) Attribute() []metadata.Attribute {
 	meta := r.Data.GetMeta()
-	attrs := make([]engine.Attribute, len(meta.Schema.ColDefs))
+	attrs := make([]metadata.Attribute, len(meta.Schema.ColDefs))
 	for idx, attr := range attrs {
 		attr.Name = meta.Schema.ColDefs[idx].Name
 		attr.Type = meta.Schema.ColDefs[idx].Type
@@ -92,7 +91,7 @@ func (r *Relation) Attribute() []engine.Attribute {
 	return attrs
 }
 
-func (r *Relation) Segment(id uint64, proc *process.Process) aoe.Segment {
+func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 	r.tree.RLock()
 	seg := r.tree.Segments[id]
 	if seg != nil {
@@ -115,6 +114,6 @@ func (r *Relation) Segment(id uint64, proc *process.Process) aoe.Segment {
 	return seg
 }
 
-func (r *Relation) Write(ctx dbi.AppendCtx) error {
+func (r *Relation) Write(ctx *AppendCtx) error {
 	return r.DBImpl.Append(ctx)
 }

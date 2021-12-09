@@ -16,10 +16,20 @@ package aoedb
 
 import "strconv"
 
-func ShardIdToName(id uint64) string {
-	return strconv.FormatUint(id, 10)
+var IdToNameFactory = new(idToNameFactory)
+
+type DBNameFactory interface {
+	Encode(interface{}) string
+	Decode(string) interface{}
 }
 
-func NameToShardId(name string) (uint64, error) {
+type idToNameFactory struct{}
+
+func (f *idToNameFactory) Encode(v interface{}) string {
+	shardId := v.(uint64)
+	return strconv.FormatUint(shardId, 10)
+}
+
+func (f *idToNameFactory) Decode(name string) (interface{}, error) {
 	return strconv.ParseUint(name, 10, 64)
 }

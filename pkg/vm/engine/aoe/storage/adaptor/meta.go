@@ -16,7 +16,6 @@ package adaptor
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -47,7 +46,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		}
 		indexId++
 		indexInfo := aoe.IndexInfo{
-			Type:    uint64(metadata.ZoneMap),
+			Type:    aoe.IndexT(metadata.ZoneMap),
 			Columns: []uint64{uint64(i)},
 			Name:    fmt.Sprintf("idx-%d", indexId),
 		}
@@ -55,6 +54,14 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
 	return tblInfo
+}
+func MockIndexInfo() *aoe.IndexInfo {
+	idxInfo := aoe.IndexInfo{
+		Type:    aoe.IndexT(metadata.ZoneMap),
+		Columns: []uint64{uint64(0)},
+		Name:    fmt.Sprintf("idx-%d", 0),
+	}
+	return &idxInfo
 }
 
 func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.TableSchema, *db.IndexSchema) {
@@ -80,12 +87,36 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 		for _, col := range indexInfo.Columns {
 			cols = append(cols, int(col))
 		}
-		if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+		tp:=metadata.ZoneMap
+		// if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
+		if _, err = indice.MakeIndex(indexInfo.Name, tp, cols...); err != nil {
 			panic(err)
 		}
 	}
 
 	return schema, indice
+}
+
+func IndiceInfoToIndiceSchema(info *aoe.IndexInfo) *db.IndexSchema {
+	columns := make([]int, len(info.Columns))
+	for _, col := range info.Columns {
+		columns = append(columns, int(col))
+	}
+	indice := metadata.NewIndexSchema()
+	var tp metadata.IndexT
+	switch info.Type{
+	case aoe.NumBsi:
+		tp=metadata.NumBsi
+	case aoe.FixStrBsi:
+		tp=metadata.FixStrBsi
+	case aoe.ZoneMap:
+		tp=metadata.ZoneMap
+	}
+	_, err := indice.MakeIndex(info.Name, tp, columns...)
+	if err != nil {
+		panic(err)
+	}
+	return indice
 }
 
 func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {
@@ -118,6 +149,6 @@ func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *shard.Index {
 			Offset: uint32(ctx.OpOffset),
 			Size:   uint32(ctx.OpSize),
 		},
-		Capacity: uint64(vector.Length(ctx.Data.Vecs[0])),
+		Capacity: uint64(ctx.Data.Vecs[0].Length()),
 	}
 }

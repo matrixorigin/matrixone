@@ -12,18 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package aoedb
+package iface
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/vector"
 
-func Open(dirname string, opts *storage.Options) (inst *DB, err error) {
-	impl, err := db.Open(dirname, opts)
-	if err != nil {
-		return nil, err
-	}
-	inst = &DB{Impl: *impl}
-	return
+type BlockIterator interface {
+	FetchColumn() ([]*vector.Vector, error)
+	BlockCount() uint32
+	Reset(uint16)
+	Clear()
 }

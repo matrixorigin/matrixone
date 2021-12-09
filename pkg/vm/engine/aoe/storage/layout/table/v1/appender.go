@@ -1,7 +1,6 @@
 package table
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -132,12 +131,12 @@ func (c *tableAppender) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offs
 	if err = meta.SetIndexLocked(index); err != nil {
 		return 0, err
 	}
-	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, vector.Length(bat.Vecs[0]), index.String(), mt.Meta.GetCount())
+	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	if _, err = meta.AddCountLocked(n); err != nil {
 		return 0, err
 	}
 	c.data.AddRows(n)
-	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, vector.Length(bat.Vecs[0]), index.String(), mt.Meta.GetCount())
+	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	return n, nil
 }
 
@@ -166,7 +165,7 @@ func (c *tableAppender) Append(bat *batch.Batch, index *shard.SliceIndex) (err e
 			return err
 		}
 		offset += n
-		if offset == uint64(vector.Length(bat.Vecs[0])) {
+		if offset == uint64(bat.Vecs[0].Length()) {
 			break
 		}
 		index.Start += n

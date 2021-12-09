@@ -153,7 +153,7 @@ type ISegmentFile interface {
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
 	GetBlockIndicesMeta(id common.ID) *IndicesMeta
 
-	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
+	MakeVirtualBlkIndexFile(id common.ID, meta *IndexMeta) common.IVFile
 
 	MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *IndexMeta) common.IVFile
 

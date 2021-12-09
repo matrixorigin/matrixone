@@ -38,10 +38,6 @@ type VectorWrapper struct {
 	UseCompress bool
 }
 
-func (v *VectorWrapper) Reset() {
-	panic("implement me")
-}
-
 func VectorWrapperConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return NewVectorWrapperNode(vf, useCompress, freeFunc)
 }
@@ -83,11 +79,11 @@ func (v *VectorWrapper) Close() error {
 }
 
 func (v *VectorWrapper) Capacity() int {
-	return base.Length(&v.Vector)
+	return v.Vector.Length()
 }
 
 func (v *VectorWrapper) Length() int {
-	return base.Length(&v.Vector)
+	return v.Vector.Length()
 }
 
 func (v *VectorWrapper) Free(p *process.Process) {
