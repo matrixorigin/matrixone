@@ -87,7 +87,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 	}
 	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
-			Typ:      int(idx.Type),
+			Typ:      engine.IndexT(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		})
@@ -110,17 +110,33 @@ func DecodeTable(data []byte) (aoe.TableInfo, error) {
 	return tbl, err
 }
 
+func DecodeIndex(data []byte) (aoe.IndexInfo, error) {
+	var idx aoe.IndexInfo
+
+	err := encoding.Decode(data, &idx)
+	return idx, err
+}
+
 func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []aoe.IndexInfo {
 	var id uint64
 	var idxs []aoe.IndexInfo
 
 	for _, def := range defs {
 		if v, ok := def.(*engine.IndexTableDef); ok {
+			var tp aoe.IndexT
+			switch v.Typ {
+			case engine.ZoneMap:
+				tp = aoe.ZoneMap
+			case engine.BsiIndex:
+				tp = aoe.Bsi
+			default:
+				tp = aoe.Invalid
+			}
 			idx := aoe.IndexInfo{
 				SchemaId: sid,
 				TableId:  tid,
 				// Id:       id,
-				Type: uint64(v.Typ),
+				Type: tp,
 				Name: v.Name,
 			}
 			for _, name := range v.ColNames {
@@ -212,7 +228,7 @@ func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	defs := make([]*engine.IndexTableDef, len(tbl.Indices))
 	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
-			Typ:      int(idx.Type),
+			Typ:      engine.IndexT(idx.Type),
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		}

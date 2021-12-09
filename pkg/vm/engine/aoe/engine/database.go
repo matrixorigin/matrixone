@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	log "github.com/sirupsen/logrus"
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
