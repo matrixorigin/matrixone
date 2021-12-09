@@ -99,12 +99,18 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	if err != nil {
 		panic(err)
 	}
-	err = l.catalog.OnDatabaseSplitted(catalogSplitEvent)
+	postKey := l.catalog.splitKey(catalogSplitEvent.Old)
+	value, err := json.Marshal(catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
-	key := l.catalog.preSplitKey(catalogSplitEvent.Old)
-	err = l.catalog.Driver.Delete(key)
+	err = l.catalog.Driver.Set(postKey, value)
+	if err != nil {
+		panic(err)
+	}
+	go l.catalog.OnDatabaseSplitted()
+	preKey := l.catalog.preSplitKey(catalogSplitEvent.Old)
+	err = l.catalog.Driver.Delete(preKey)
 	if err != nil {
 		panic(err)
 	}
@@ -114,11 +120,13 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 	routePrefix := c.routePrefix(tid)
 	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
+		logutil.Errorf("PrefixKeys fails, err:%v", err)
 		return err
 	}
 	for _, sidByte := range shardIds {
 		sid, err := Bytes2Uint64(sidByte[len(c.routePrefix(tid)):])
 		if err != nil {
+			logutil.Errorf("Bytes2Uint64 fails, err:%v", err)
 			return err
 		}
 		if sid == oldSid {
@@ -126,22 +134,37 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 			newKey := c.routeKey(tid, newSid)
 			err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
 			if err != nil {
+				logutil.Errorf("Set fails, err:%v", err)
 				return err
 			}
 			err = c.Driver.Delete(oldKey)
 			if err != nil {
+				logutil.Errorf("Delete fails, err:%v", err)
 				return err
 			}
 		}
 	}
 	return nil
 }
-func (c *Catalog) OnDatabaseSplitted(splitEvent *SplitEvent) error {
-	for newShard, tbls := range splitEvent.News {
-		for _, tid := range tbls {
-			err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
-			if err != nil {
-				return err
+func (c *Catalog) OnDatabaseSplitted() error {
+	splitEvents, err := c.Driver.PrefixScan(c.splitPrefix(), 0)
+	if err != nil {
+		return err
+	}
+	for i := 1; i < len(splitEvents); i += 2 {
+		splitEvent := SplitEvent{}
+		splitEventByte := splitEvents[i]
+		err = json.Unmarshal(splitEventByte, &splitEvent)
+		if err != nil {
+			logutil.Errorf("Unmarshal fails, err:%v", err)
+			return err
+		}
+		for newShard, tbls := range splitEvent.News {
+			for _, tid := range tbls {
+				err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -649,6 +672,7 @@ func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err err
 func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 	sids := make([]uint64, 0)
 	pendingSids, err := c.GetPendingShards()
+	logutil.Infof("pending shards are %v",pendingSids)
 	if err != nil {
 		return nil, err
 	}
@@ -664,6 +688,7 @@ func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 		}
 		for _, pendingSid := range pendingSids {
 			if sid == pendingSid {
+				logutil.Infof("shard %v is pending", sid)
 				return nil, ErrShardPending
 			}
 		}
@@ -674,6 +699,7 @@ func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 func (c *Catalog) GetPendingShards() (sids []uint64, err error) {
 	splitEvents, err := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
 	if err != nil {
+		logutil.Errorf("PrefixScan fails, err: %v", err)
 		return nil, err
 	}
 	for i := 1; i < len(splitEvents); i += 2 {
@@ -681,6 +707,7 @@ func (c *Catalog) GetPendingShards() (sids []uint64, err error) {
 		splitEventByte := splitEvents[i]
 		err = json.Unmarshal(splitEventByte, &splitEvent)
 		if err != nil {
+			logutil.Errorf("Unmarshal fails, err: %v", err)
 			return nil, err
 		}
 		sids = append(sids, splitEvent.Old)
