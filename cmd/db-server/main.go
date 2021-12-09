@@ -78,6 +78,16 @@ var (
 	pci *frontend.PDCallbackImpl
 )
 
+// Variables used to hold the build info.
+var (
+	GoVersion    string = ""
+	BranchName   string = ""
+	LastCommitId string = ""
+	BuildTime    string = ""
+	MoVersion    string = "v0.1.0"
+)
+
+
 func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
@@ -135,6 +145,17 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
 		os.Exit(-1)
+	}
+
+	// if the argument passed in is "--version", return version info and exit
+	if os.Args[1] == "--version" {
+		fmt.Println("MatrixOne build info:")
+		fmt.Printf("\tThe golang version used to build this binary: %s\n", GoVersion)
+		fmt.Printf("\tGit branch name: %s\n", BranchName)
+		fmt.Printf("\tLast git commit ID: %s\n", LastCommitId)
+		fmt.Printf("\tBuildtime: %s\n", BuildTime)
+		fmt.Printf("\tCurrent Matrixone version: %s\n", MoVersion)
+		os.Exit(0)
 	}
 	flag.Parse()
 
