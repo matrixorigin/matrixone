@@ -39,8 +39,14 @@ var (
 	ErrTableCreateTimeout = errors.New("create table timeout")
 	//ErrTableCreateFailed is the error for fail in creating tablet.
 	ErrTabletCreateFailed = errors.New("create tablet failed")
+	//ErrInvalidIndexType is the error for invalid index type.
+	ErrInvalidIndexType = errors.New("index type invalid")
+	//ErrColumnNotExist is the error that the column required by index or primary key doesn't exist in the table.
 	ErrColumnNotExist = errors.New("column not exist")
+	//ErrPrimaryKeyNotExist is the error for primary key not exist.
 	ErrPrimaryKeyNotExist = errors.New("primary key not exist")
+	//ErrIndexExist is the error for duplicated index name.
 	ErrIndexExist = errors.New("index already exist")
+	//ErrIndexNotExist is the error for trying to drop an index that doesn't exit.
 	ErrIndexNotExist = errors.New("index not exist")
 )

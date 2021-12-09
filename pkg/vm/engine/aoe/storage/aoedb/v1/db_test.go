@@ -40,7 +40,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -746,12 +745,6 @@ func TestDropTable2(t *testing.T) {
 
 // Test bsi file flushed with segment file when metadata contains bsi.
 func TestBuildIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -830,12 +823,6 @@ func TestBuildIndex(t *testing.T) {
 }
 
 func TestRebuildIndices(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -936,12 +923,6 @@ func TestRebuildIndices(t *testing.T) {
 }
 
 func TestManyLoadAndDrop(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -1342,13 +1323,74 @@ func decodeBlockIds(ids []string) []string {
 	}
 	return res
 }
-func TestFilter(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
+
+func TestFilterUnclosedSegment(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
+
+	schema := metadata.MockSchemaAll(1)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
 	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+	for i := 0; i < int(blkCnt); i++ {
+		assert.Nil(t, inst.Append(appendCtx))
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segId)
+	t.Logf("%+v", seg.GetIndexHolder())
+	segment := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	sparseFilter := segment.NewSparseFilter()
+
+	// test sparse filter upon unclosed segment
+	res, _ := sparseFilter.Eq("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ne("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(8))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Lt("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Gt("mock_0", int8(5))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Le("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Ge("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Eq("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Lt("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Gt("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Le("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ge("mock_0", int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+
+	inst.Close()
+}
+
+func TestFilter(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -1504,7 +1546,7 @@ func TestFilter(t *testing.T) {
 	res, _ = sparseFilter.Lt("mock_5", uint16(0))
 	assert.Equal(t, decodeBlockIds(res), []string{})
 	res, _ = sparseFilter.Gt("mock_5", uint16(8))
-	assert.Equal(t, decodeBlockIds(res), []string{ "4"})
+	assert.Equal(t, decodeBlockIds(res), []string{"4"})
 	res, _ = sparseFilter.Le("mock_5", uint16(0))
 	assert.Equal(t, decodeBlockIds(res), []string{"1"})
 	res, _ = sparseFilter.Ge("mock_5", uint16(9))
@@ -2444,12 +2486,6 @@ func TestFilter(t *testing.T) {
 }
 
 func TestCreateAndDropIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -2539,7 +2575,6 @@ func TestCreateAndDropIndex(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 
-
 	dataPath := filepath.Join(inst.Dir, "data")
 	infos, err := ioutil.ReadDir(dataPath)
 	assert.Nil(t, err)
@@ -2608,18 +2643,12 @@ func TestCreateAndDropIndex(t *testing.T) {
 }
 
 func TestRepeatCreateAndDropIndex(t *testing.T) {
-	if !dataio.FlushIndex {
-		dataio.FlushIndex = true
-		defer func() {
-			dataio.FlushIndex = false
-		}()
-	}
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
 	}
 	initTestEnv(t)
-	inst, gen, database := initTestDB3(t)
+	inst, gen, database := initTestDB1(t)
 	schema := metadata.MockSchema(4)
 	indice := metadata.NewIndexSchema()
 	indice.MakeIndex("idx-0", metadata.NumBsi, 1)
@@ -2642,11 +2671,9 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	{
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
-			go func() {
-				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
-				wg.Done()
-			}()
+			appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+			inst.Append(appendCtx)
+			wg.Done()
 		}
 	}
 	wg.Wait()
@@ -2689,16 +2716,88 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	assert.Nil(t, err)
 	seg := tblData.StrongRefSegment(uint64(1))
 	holder := seg.GetIndexHolder()
-	t.Log(holder.StringIndicesRefsNoLock())
+	//t.Log(holder.StringIndicesRefsNoLock())
 
 	inst.Close()
 
-	inst, _, _ = initTestDB3(t)
+	inst, _, _ = initTestDB2(t)
 	tblData, err = inst.GetTableData(tblMeta)
 	assert.Nil(t, err)
 	seg = tblData.StrongRefSegment(uint64(1))
 	holder = seg.GetIndexHolder()
 	assert.Equal(t, 5, holder.IndicesCount())
 
+	s := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+
+	indice = metadata.NewIndexSchema()
+	indice.MakeIndex("idx-1", metadata.NumBsi, 0)
+	indice.MakeIndex("idx-2", metadata.NumBsi, 2)
+	indice.MakeIndex("idx-3", metadata.NumBsi, 3)
+	createIdxCtx := &CreateIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		Indices:       indice,
+	}
+	assert.Nil(t, inst.CreateIndex(createIdxCtx))
+	time.Sleep(100 * time.Millisecond)
+
+	for i := 0; i < 4; i++ {
+		column := fmt.Sprintf("mock_%d", i)
+		filter := s.NewFilter()
+		res, err := filter.Eq(column, int32(100))
+		assert.Nil(t, err)
+		assert.Equal(t, res.ToArray()[0], uint64(100))
+		sparse := s.NewSparseFilter()
+		ret, err := sparse.Eq(column, int32(100))
+		assert.Nil(t, err)
+		rets := decodeBlockIds(ret)
+		assert.Equal(t, strconv.Itoa(1), rets[0])
+		summ := s.NewSummarizer()
+		count, err := summ.Count(column, nil)
+		assert.Equal(t, uint64(4000), count)
+	}
+
+	dropIdxCtx := &DropIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		IndexNames:    []string{"idx-3"},
+	}
+	assert.Nil(t, inst.DropIndex(dropIdxCtx))
+	time.Sleep(50 * time.Millisecond)
+
+	filter := s.NewFilter()
+	_, err = filter.Eq("mock_3", int32(1))
+	assert.NotNil(t, err)
+	_, err = filter.Ge("mock_2", int32(2))
+	assert.Nil(t, err)
+
 	inst.Close()
+}
+
+func matchStringArray(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	mapper := make(map[string]int)
+	for _, e := range a {
+		if _, ok := mapper[e]; ok {
+			mapper[e] += 1
+		} else {
+			mapper[e] = 1
+		}
+	}
+	for _, e := range b {
+		if _, ok := mapper[e]; !ok {
+			return false
+		} else {
+			mapper[e] -= 1
+		}
+	}
+	return true
 }

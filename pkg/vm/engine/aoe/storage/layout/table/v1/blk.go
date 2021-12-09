@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"

@@ -17,7 +17,6 @@ package vector
 import (
 	"bytes"
 	"errors"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"io"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -227,7 +227,7 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	if vec.Nsp.Np != nil {
 		for row := startRow; row < startRow+ro.Length(vec); row++ {
 			if nulls.Contains(vec.Nsp, uint64(offset + row - startRow)) {
-				nulls.Contains(v.VMask, uint64(row))
+				nulls.Add(v.VMask, uint64(row))
 			}
 		}
 	}
@@ -259,7 +259,7 @@ func (v *StrVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	if v.VMask.Np != nil {
 		vmask := nulls.Range(v.VMask, uint64(start), uint64(end), &nulls.Nulls{})
 		vec.VMask = vmask
-		if nulls.Any(v.VMask) {
+		if nulls.Any(vmask) {
 			mask = mask | container.HasNullMask
 		}
 	} else {

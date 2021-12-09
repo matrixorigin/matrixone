@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 
@@ -105,6 +105,10 @@ type CubeDriver interface {
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	//DropTablet drops the table in the storage.
 	DropTablet(string, uint64) (uint64, error)
+	//CreateIndex creates an index
+	CreateIndex(tableName string, indexInfo *aoe.IndexInfo, toShard uint64) error
+	//DropIndex drops an index
+	DropIndex(tableName, indexName string, toShard uint64) error
 	// TabletIDs returns the ids of all the tables in the storage.
 	TabletIDs() ([]uint64, error)
 	// TabletNames returns the names of all the tables in the storage.
@@ -216,23 +220,6 @@ func NewCubeDriverWithFactory(
 
 	c.CubeConfig.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 		return h
-	}
-
-	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-		return func(shard meta.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-			defer func() {
-				logutil.Debugf("CompactIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, compactIndex, newCompactIdx)
-			}()
-			if group != uint64(pb.AOEGroup) {
-				newCompactIdx = compactIndex
-			} else {
-				newCompactIdx = h.aoeDB.GetShardCheckpointId(shard.ID)
-				if newCompactIdx == 0 {
-					newCompactIdx = compactIndex
-				}
-			}
-			return newCompactIdx, nil
-		}
 	}
 
 	store, err := raftStoreFactory(&c.CubeConfig)
@@ -695,6 +682,40 @@ func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) 
 		return id, err
 	}
 	return codec.Bytes2Uint64(value)
+}
+func (h *driver) CreateIndex(tableName string, indexInfo *aoe.IndexInfo, toShard uint64) error {
+	idx, _ := helper.EncodeIndex(*indexInfo)
+	req := pb.Request{
+		Shard: toShard,
+		Type:  pb.CreateIndex,
+		Group: pb.AOEGroup,
+		CreateIndex: pb.CreateIndexRequest{
+			TableName: tableName,
+			Indices:   idx,
+		},
+	}
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if rsp != nil || len(rsp) != 0 {
+		err = errors.New(string(rsp))
+	}
+	return err
+}
+
+func (h *driver) DropIndex(tableName, indexName string, toShard uint64) error {
+	req := pb.Request{
+		Shard: toShard,
+		Type:  pb.DropIndex,
+		Group: pb.AOEGroup,
+		DropIndex: pb.DropIndexRequest{
+			TableName: tableName,
+			IndexName: indexName,
+		},
+	}
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if rsp != nil || len(rsp) != 0 {
+		err = errors.New(string(rsp))
+	}
+	return err
 }
 
 func (h *driver) TabletIDs() ([]uint64, error) {

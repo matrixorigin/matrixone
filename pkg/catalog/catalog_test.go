@@ -171,20 +171,23 @@ func TestCatalogWithUtil(t *testing.T) {
 	//Test CreateIndex
 	col := testTables[0].Columns[0]
 	idxTableInfo, _ := catalog.GetTable(dbids[0], testTables[0].Name)
-	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: 1})
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: aoe.ZoneMap})
 	require.NoError(t, err)
 	idxTableInfo, _ = catalog.GetTable(dbids[0], testTables[0].Name)
 	idxs := idxTableInfo.Indices
 	require.Equal(t, 1, len(idxs))
 	idx := idxs[0]
 	require.Equal(t, "mock_idx", idx.Name)
-	require.Equal(t, uint64(1), idx.Type)
+	require.Equal(t, aoe.ZoneMap, idx.Type)
 	require.Equal(t, 1, len(idx.Columns))
 	require.Equal(t, col.Id, idx.Columns[0])
 	require.Equal(t, col.Name, idx.ColumnNames[0])
 
-	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: 1})
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: aoe.ZoneMap})
 	require.Equal(t, ErrIndexExist, err)
+
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx_invalid_type", ColumnNames: []string{col.Name}, Type: aoe.Invalid})
+	require.Equal(t, ErrInvalidIndexType, err)
 
 	//Test DropIndex
 	err = catalog.DropIndex(0, idxTableInfo.Id, idxTableInfo.SchemaId, "mock_idx")

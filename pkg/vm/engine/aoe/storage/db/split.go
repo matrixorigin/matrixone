@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -36,6 +37,7 @@ type Splitter struct {
 	tables      map[uint64]iface.ITableData
 	tempDir     string
 	flushsegs   []*metadata.Segment
+	event       *event.SplitEvent
 }
 
 func NewSplitter(database *metadata.Database, newDBNames []string, rename RenameTableFactory,
@@ -128,6 +130,13 @@ func (splitter *Splitter) prepareData() error {
 		}
 		return nil
 	}
+	splitter.event = new(event.SplitEvent)
+	splitter.event.DB = splitter.database.Name
+	splitter.event.Names = make(map[string][]string)
+	processor.TableFn = func(table *metadata.Table) error {
+		splitter.event.Names[table.Database.Name] = append(splitter.event.Names[table.Database.Name], table.Schema.Name)
+		return nil
+	}
 	if err = splitter.msplitter.Preprocess(processor); err != nil {
 		return err
 	}
@@ -168,7 +177,12 @@ func (splitter *Splitter) Prepare() error {
 }
 
 func (splitter *Splitter) Commit() error {
-	err := splitter.msplitter.Commit()
+	err := splitter.dbImpl.Opts.EventListener.OnPreSplit(splitter.event)
+	if err != nil {
+		panic(err)
+	}
+	err = splitter.msplitter.Commit()
+	splitter.dbImpl.Opts.EventListener.OnPostSplit(err, splitter.event)
 	return err
 }
 

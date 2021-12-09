@@ -97,9 +97,19 @@ type IndexInfo struct {
 	// Id          uint64   `json:"id"`
 	Name        string   `json:"index_names"`
 	ColumnNames []string `json:"column_names"`
-	Type        uint64   `json:"type"`
+	Type        IndexT   `json:"type"`
 	// Epoch       uint64   `json:"epoch"`
 }
+
+type IndexT uint16
+
+const (
+	ZoneMap IndexT = iota
+	Bsi
+	NumBsi
+	FixStrBsi
+	Invalid
+)
 
 type SegmentInfo struct {
 	TableId     uint64 `json:"table_id"`

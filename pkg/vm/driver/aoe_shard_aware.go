@@ -26,6 +26,10 @@ func (h *driver) Created(shard meta.Shard) {
 
 }
 
+func (h *driver) Updated(meta.Shard){
+	
+}
+
 func (h *driver) Splited(shard meta.Shard) {
 
 }

@@ -39,6 +39,7 @@ type IVFile interface {
 	io.Reader
 	Ref()
 	Unref()
+	RefCount() int64
 	Stat() FileInfo
 	GetFileType() FileType
 }
@@ -78,6 +79,7 @@ func NewMemFile(size int64) IVFile {
 
 func (f *baseMemFile) Ref()                             {}
 func (f *baseMemFile) Unref()                           {}
+func (f *baseMemFile) RefCount() int64                  {return 0}
 func (f *baseMemFile) Read(p []byte) (n int, err error) { return n, err }
 func (f *baseMemFile) Stat() FileInfo                   { return &f.stat }
 func (f *baseMemFile) GetFileType() FileType            { return MemFile }
@@ -94,6 +96,10 @@ func (f *mockCompressedFile) Ref() {
 }
 
 func (f *mockCompressedFile) Unref() {
+}
+
+func (f *mockCompressedFile) RefCount() int64 {
+	return 0
 }
 
 func (f *mockCompressedFile) Stat() FileInfo {

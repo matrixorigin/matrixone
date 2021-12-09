@@ -149,7 +149,7 @@ type ISegment interface {
 
 	// GetFsManager to get the FsMgr(file manager) of the DB
 	GetFsManager() base.IManager
-	GetIndexHolder() *index.SegmentHolder
+	GetIndexHolder() index.SegmentIndexHolder
 
 	// GetSegmentFile gets the segment file,
 	// the newly created segments are all UNSORTED_SEG
@@ -208,7 +208,7 @@ type IBlock interface {
 
 	// GetFsManager to get the FsMgr(file manager) of the DB
 	GetFsManager() base.IManager
-	GetIndexHolder() *index.BlockHolder
+	GetIndexHolder() *index.BlockIndexHolder
 
 	// GetMeta to get the metadata of the Block, the metadate is
 	// created and registered during NewCreateBlkEvent

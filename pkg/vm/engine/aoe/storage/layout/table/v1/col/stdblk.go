@@ -70,7 +70,7 @@ func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 			typ:         host.GetType(),
 			colIdx:      blk.colIdx,
 			meta:        host.GetMeta(),
-			indexHolder: host.GetIndexHolder(),
+			//indexHolder: host.GetIndexHolder(),
 			segFile:     host.GetSegmentFile(),
 		},
 	}
