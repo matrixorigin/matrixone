@@ -86,7 +86,7 @@ func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.I
 	return newEmbedIndexFile(sf, meta)
 }
 
-func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
+func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id common.ID, meta *base.IndexMeta) common.IVFile {
 	return newEmbedIndexFile(sf, meta)
 }
 

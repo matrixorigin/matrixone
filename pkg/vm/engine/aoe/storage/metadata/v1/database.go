@@ -870,7 +870,7 @@ func (db *Database) onNewTable(entry *Table) error {
 	if nn != nil {
 		e := nn.GetTable()
 		// Conflict checks all committed and uncommitted entries.
-		if !e.IsDeletedLocked() {
+		if !e.IsDeleted() {
 			return DuplicateErr
 		}
 		db.TableSet[entry.Id] = entry

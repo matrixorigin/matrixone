@@ -47,10 +47,12 @@ func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpEq,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -75,10 +77,12 @@ func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpNe,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
@@ -100,10 +104,12 @@ func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpLt,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -128,10 +134,12 @@ func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpLe,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -156,10 +164,12 @@ func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpGt,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -184,10 +194,12 @@ func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, err
 		Op:    index.OpGe,
 		Val:   val,
 		BMRes: bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -213,10 +225,12 @@ func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*r
 		ValMin: minv,
 		ValMax: maxv,
 		BMRes:  bmRes,
+		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
-		return nil, err
+		// maybe a bsi not found error
+		return roaring64.NewBitmap(), err
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil

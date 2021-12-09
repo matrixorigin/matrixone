@@ -153,7 +153,7 @@ func (msf *MockSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IV
 	return nil
 }
 
-func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
+func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id common.ID, meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 
