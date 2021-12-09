@@ -55,26 +55,25 @@ func (ht *String32HashMap) Init() {
 	ht.bucketData = unsafe.Slice((*String32HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
-func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) (inserted bool, value *uint64) {
+func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) uint64 {
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
 		hash = crc32Int256Hash(key)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, key)
-	if inserted {
+	empty, _, cell := ht.findBucket(hash, key)
+	if empty {
 		ht.elemCnt++
 		cell.Hash = hash
 		cell.Key = *key
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
-
-	return
+	return cell.Mapped
 }
 
-func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64) {
+func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
@@ -82,40 +81,35 @@ func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, insert
 	}
 
 	for i := range keys {
-		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if isInserted {
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
 			ht.elemCnt++
-			inserted[i] = 1
 			cell.Hash = hashes[i]
 			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
 		}
-		values[i] = &cell.Mapped
+		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
+func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) uint64 {
 	if hash == 0 {
 		hash = crc32Int256Hash(key)
 	}
 
-	empty, _, cell := ht.findBucket(hash, key)
-	if !empty {
-		value = &cell.Mapped
-	}
+	_, _, cell := ht.findBucket(hash, key)
 
-	return
+	return cell.Mapped
 }
 
-func (ht *String32HashMap) FindBatch(hashes []uint64, keys [][4]uint64, values []*uint64) {
+func (ht *String32HashMap) FindBatch(hashes []uint64, keys [][4]uint64, values []uint64) {
 	if hashes[0] == 0 {
 		crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
-		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if !empty {
-			values[i] = &cell.Mapped
-		}
+		_, _, cell := ht.findBucket(hashes[i], &keys[i])
+		values[i] = cell.Mapped
 	}
 }
 
