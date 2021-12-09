@@ -19,11 +19,13 @@ import (
 	"errors"
 	"fmt"
 	stdLog "log"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"go.uber.org/zap/zapcore"
 
@@ -54,7 +57,7 @@ const (
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
 	clusterDataPath    = "./test"
-	snapshotPath    = "./test"
+	snapshotPath       = "./test"
 )
 
 var tableInfo *aoe.TableInfo
@@ -64,6 +67,152 @@ func init() {
 	tableInfo = adaptor.MockTableInfo(colCnt)
 	idxInfo = adaptor.MockIndexInfo()
 	tableInfo.Id = 100
+}
+func MockTableInfo(i int) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    "mocktbl" + strconv.Itoa(i),
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+		} else {
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
+		}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+	}
+	return tblInfo
+}
+func MockVector(t types.Type, j int) vector.IVector {
+	var vec vector.IVector
+	switch t.Oid {
+	case types.T_int8:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int8
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int8(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int16:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int16
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int16(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint8:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint8
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint8(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint16:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint16
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint16(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_float32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []float32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, float32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_float64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []float64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, float64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_varchar, types.T_char:
+		vec = vector.NewStrVector(t, blockRows)
+		vals := make([][]byte, 0, blockRows)
+		prefix := "str"
+		for i := uint64(0); i < blockRows; i++ {
+			s := fmt.Sprintf("%s%d", prefix, j)
+			vals = append(vals, []byte(s))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_datetime:
+		vec = vector.NewStdVector(t, blockRows)
+		vals := make([]types.Datetime, 0, blockRows)
+		for i := uint64(1); i <= blockRows; i++ {
+			vals = append(vals, types.FromClock(int32(j*100), 1, 1, 1, 1, 1, 1))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_date:
+		vec = vector.NewStdVector(t, blockRows)
+		vals := make([]types.Date, 0, blockRows)
+		for i := int32(1); i <= int32(blockRows); i++ {
+			vals = append(vals, types.FromCalendar(int32(j), 1, 1))
+		}
+		vec.Append(len(vals), vals)
+	default:
+		panic("not supported")
+	}
+	return vec
+}
+func MockBatch(tableInfo *aoe.TableInfo, i int) *batch.Batch {
+	attrs := helper.Attribute(*tableInfo)
+	var typs []types.Type
+	for _, attr := range attrs {
+		typs = append(typs, attr.Type)
+	}
+	var attrsString []string
+	for idx := range typs {
+		attrsString = append(attrsString, "mock_"+strconv.Itoa(idx))
+	}
+
+	bat := batch.New(true, attrsString)
+	var err error
+	for i, colType := range typs {
+		vec := MockVector(colType, i)
+		bat.Vecs[i], err = vec.CopyToVector()
+		if err != nil {
+			panic(err)
+		}
+		vec.Close()
+	}
+
+	return bat
 }
 func TestSnapshot(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
@@ -104,13 +253,16 @@ func TestSnapshot(t *testing.T) {
 
 	stdLog.Printf("driver all started.")
 	//start s1,s0
-	//s1.create table1
-	//s1.append batch1
-	//s1.append batch2
-	//s1.create table2
+	//for get persistent id>compact id
+	//s1.create tablei//mock table
+	//s1.append batchi//mock batch
+	//s1.append batchi
+	//s1.create batchi
 	//start s2
-	//
-	
+	//wait 10s
+	//s2.show tables
+	//s2.readall
+
 }
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)

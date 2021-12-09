@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/stretchr/testify/require"
 )
@@ -153,9 +154,33 @@ func TestStorage(t *testing.T) {
 }
 
 //for test
-// func (s *Storage) ReadAll()(*batch.Batch, error){
-// 	var cds    []*bytes.Buffer
-// 	var dds    []*bytes.Buffer
-// 	var blocks []aoe.Block
-// 	return nil,nil
-// }
+func (s *Storage) ReadAll(sid uint64) ([]*batch.Batch, error) {
+	batchs:=make([]*batch.Batch,0)
+	tbls := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
+	for _, tbl := range tbls {
+		relation,_:=s.Relation(aoedb.IdToNameFactory.Encode(sid), tbl)
+		attrs := make([]string, 0)
+		for _, ColDef := range relation.Meta.Schema.ColDefs {
+			attrs = append(attrs, ColDef.Name)
+		}
+		relation.Data.GetBlockFactory()
+		for _,segment := range relation.Meta.SegmentSet{
+			seg := relation.Segment(segment.Id, nil)
+			blks := seg.Blocks()
+			for _,blk:=range blks{
+				block := seg.Block(blk, nil)
+				cds := make([]*bytes.Buffer, len(attrs))
+				dds := make([]*bytes.Buffer, len(attrs))
+				for i := range cds {
+					cds[i] = bytes.NewBuffer(make([]byte, 0))
+					dds[i] = bytes.NewBuffer(make([]byte, 0))
+				}
+				refs := make([]uint64, len(attrs))
+				bat, _ := block.Read(refs, attrs, cds, dds)
+				batchs=append(batchs, bat)
+			}
+		}
+
+	}
+	return batchs, nil
+}
