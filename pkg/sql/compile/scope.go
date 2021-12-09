@@ -423,13 +423,79 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 }
 
 func (s *Scope) ParallelRun(e engine.Engine) error {
-	switch s.Instructions[0].Arg.(type) {
+	switch t := s.Instructions[0].Arg.(type) {
 	case *times.Argument:
 		return s.RunCAQ(e)
 	case *transform.Argument:
+		if t.Typ == transform.Bare {
+			return s.RunQ(e)
+		}
 		return s.RunAQ(e)
 	}
 	return nil
+}
+
+func (s *Scope) RunQ(e engine.Engine) error {
+	var rd engine.Reader
+
+	ss := make([]*Scope, 1)
+	{ // get table reader
+		db, err := e.Database(s.DataSource.SchemaName)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(s.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rd = rel.NewReader(1)[0]
+	}
+	arg := s.Instructions[0].Arg.(*transform.Argument)
+	{
+		 ss[0] = &Scope{
+			 Magic: Normal,
+			 DataSource: &Source{
+				 R: rd,
+				 IsMerge: s.DataSource.IsMerge,
+				 SchemaName: s.DataSource.SchemaName,
+				 RelationName: s.DataSource.RelationName,
+				 RefCounts: s.DataSource.RefCounts,
+				 Attributes: s.DataSource.Attributes,
+			 },
+		 }
+		 ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+			 Op: vm.Transform,
+			 Arg: arg,
+		 })
+
+		 ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		 ss[0].Proc.Id = s.Proc.Id
+		 ss[0].Proc.Lim = s.Proc.Lim
+	}
+	s.PreScopes = ss
+	s.Magic = Merge
+	s.Instructions[0] = vm.Instruction{
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 2),
+	}
+
+	ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+		Op: vm.Connector,
+		Arg: &connector.Argument{
+			Mmu: s.Proc.Mp.Gm,
+			Reg: s.Proc.Reg.MergeReceivers[0],
+		},
+	})
+
+	return s.MergeRun(e)
 }
 
 func (s *Scope) RunAQ(e engine.Engine) error {

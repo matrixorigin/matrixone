@@ -47,7 +47,9 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	d := depth(vt.Views)
 	switch {
 	case d == 1 && isB:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
+		if s, err = e.compileQ(vt.Views[len(vt.Views)-1]); err != nil {
+			return nil, err
+		}
 	case d == 1 && !isB:
 		if s, err = e.compileAQ(vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err
@@ -63,6 +65,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
 	switch {
+	case d == 1 && isB: // needn't do un-transform for simple query without group by and aggregation
 	case d == 1:
 		s.Instructions = append(s.Instructions, vm.Instruction{
 			Op: vm.UnTransform,
@@ -269,6 +272,58 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 		})
 	}
 	return rs, nil
+}
+
+func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
+	var ins vm.Instructions
+
+	db, err := e.c.e.Database(v.Rel.Schema)
+	if err != nil {
+		return nil, err
+	}
+	rel, err := db.Relation(v.Rel.Name)
+	if err != nil {
+		return nil, err
+	}
+	defer rel.Close()
+	// init date source
+	src := &Source{
+		IsMerge:      false,
+		RelationName: v.Rel.Name,
+		SchemaName:   v.Rel.Schema,
+		RefCounts:    make([]uint64, len(v.Rel.Vars)),
+		Attributes:   make([]string, len(v.Rel.Vars)),
+	}
+	for i := range v.Rel.Vars {
+		src.RefCounts[i] = uint64(v.Rel.Vars[i].Ref)
+		src.Attributes[i] = v.Rel.Vars[i].Name
+	}
+
+	v.Arg.Typ = transform.Bare
+	ins = append(ins, vm.Instruction{Arg: v.Arg, Op: vm.Transform})
+
+	nodes := rel.Nodes()
+	if len(nodes) == 0 { // unexpected case
+		rs := &Scope{
+			PreScopes: nil,
+			Magic:     Merge,
+		}
+		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+		rs.Proc.Id = e.c.proc.Id
+		rs.Proc.Lim = e.c.proc.Lim
+		return rs, nil
+	}
+
+	ss := &Scope{
+		Magic: Remote,
+		DataSource: src,
+		Instructions: ins,
+		NodeInfo: nodes[0],
+	}
+	ss.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+	ss.Proc.Id = e.c.proc.Id
+	ss.Proc.Lim = e.c.proc.Lim
+	return ss, nil
 }
 
 func (e *Exec) compileAQ(v *vtree.View) (*Scope, error) {
