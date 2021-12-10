@@ -3,13 +3,17 @@
 - Start Date: 2021-05-10
 - Authors: [Xu Peng](https://github.com/XuPeng-SH)
 - Implementation PR:
-- Issue for this RFC:
+- Issue for this RFC: [#1320](https://github.com/matrixorigin/matrixone/pull/1320)
 
 # Summary
-This is a proposal to define the data persistent and in-memory layout.
+This is a proposal to define the data persistent layout.
 
 # Motivation
-**AOE** (Analytic Optimized Engine) is designed for analytical query workloads. In practice, a columnar store is well-suited for OLAP-like worloads.
+**AOE** (Analytic Optimized Engine) is designed for analytical query workloads.
+- In practice, a columnar store is well-suited for OLAP-like worloads.
+- Dynamic index creation and deletion
+- In order to keep down the cost of queries, avoid too many sort runs
+- High compression rate
 
 # Detailed Design
 ## Data Hirachy
@@ -37,3 +41,7 @@ As described [Here](https://github.com/matrixorigin/matrixone/blob/main/docs/rfc
 
 ## Compression
 The compression unit is always a column block. The compression algo, compressed and uncompressed size are all serialized into **MetaInfo** zone.
+
+# Future Work
+1. Per-column compress codec
+2. Data deletion
