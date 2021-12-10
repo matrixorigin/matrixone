@@ -1454,6 +1454,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			lineCount:        0,
 			batchSize:        curBatchSize,
 			result:           result,
+			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
 		},
 		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
