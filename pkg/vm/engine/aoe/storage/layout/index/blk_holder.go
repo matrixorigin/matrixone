@@ -15,6 +15,9 @@
 package index
 
 import (
+	"errors"
+	roaring2 "github.com/RoaringBitmap/roaring"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -307,5 +310,240 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 func (holder *BlockIndexHolder) StringIndicesRefsNoLock() string {
 	// TODO(zzl)
 	return ""
+}
+
+func (holder *BlockIndexHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	idxes, ok := holder.self.colIndices[colIdx]
+	if !ok || len(idxes) == 0 {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := idx.GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			if index.IndexFile().RefCount() == 0 {
+				if err := node.Close(); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			index.IndexFile().Ref()
+			bm := roaring2.NewBitmap()
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
+			}
+			count := index.Count(bm)
+			err := node.Close()
+			if err != nil {
+				index.IndexFile().Unref()
+				return count, err
+			}
+			index.IndexFile().Unref()
+			return count, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *BlockIndexHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	idxes, ok := holder.self.colIndices[colIdx]
+	if !ok || len(idxes) == 0 {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := idx.GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			if index.IndexFile().RefCount() == 0 {
+				if err := node.Close(); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			index.IndexFile().Ref()
+			bm := roaring2.NewBitmap()
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
+			}
+			count := index.NullCount(bm)
+			err := node.Close()
+			if err != nil {
+				index.IndexFile().Unref()
+				return count, err
+			}
+			index.IndexFile().Unref()
+			return count, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *BlockIndexHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	idxes, ok := holder.self.colIndices[colIdx]
+	if !ok || len(idxes) == 0 {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := idx.GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			if index.IndexFile().RefCount() == 0 {
+				if err := node.Close(); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			index.IndexFile().Ref()
+			bm := roaring2.NewBitmap()
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
+			}
+			min, _ := index.Min(bm)
+			err := node.Close()
+			if err != nil {
+				index.IndexFile().Unref()
+				return min, err
+			}
+			index.IndexFile().Unref()
+			return min, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *BlockIndexHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	idxes, ok := holder.self.colIndices[colIdx]
+	if !ok || len(idxes) == 0 {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := idx.GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			if index.IndexFile().RefCount() == 0 {
+				if err := node.Close(); err != nil {
+					return 0, err
+				}
+				continue
+			}
+			index.IndexFile().Ref()
+			bm := roaring2.NewBitmap()
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
+			}
+			max, _ := index.Max(bm)
+			err := node.Close()
+			if err != nil {
+				index.IndexFile().Unref()
+				return max, err
+			}
+			index.IndexFile().Unref()
+			return max, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *BlockIndexHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uint64, error) {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	idxes, ok := holder.self.colIndices[colIdx]
+	if !ok || len(idxes) == 0 {
+		return 0, 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := idx.GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			if index.IndexFile().RefCount() == 0 {
+				if err := node.Close(); err != nil {
+					return 0, 0, err
+				}
+				continue
+			}
+			index.IndexFile().Ref()
+			bm := roaring2.NewBitmap()
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
+			}
+			sum, cnt := index.Sum(bm)
+			res := int64(0)
+			if res, ok = sum.(int64); ok {
+
+			} else if ans, ok := sum.(uint64); ok {
+				res = int64(ans)
+			} else {
+				return 0, 0, errors.New("invalid sum value type")
+			}
+			err := node.Close()
+			if err != nil {
+				index.IndexFile().Unref()
+				return res, cnt, nil
+			}
+			index.IndexFile().Unref()
+			return res, cnt, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return 0, 0, errors.New("bsi not found")
 }
 

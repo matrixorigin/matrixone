@@ -112,6 +112,7 @@ func (h *RWHelper) ReadIndicesMeta(f os.File) (meta *base.IndicesMeta, err error
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	indexCnt := encoding.DecodeInt16(twoBytes)
+	logutil.Infof("%d", indexCnt)
 	if indexCnt > 0 {
 		meta = base.NewIndicesMeta()
 	}

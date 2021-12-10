@@ -88,8 +88,17 @@ func (holder *unsortedSegmentHolder) CollectMinMax(colIdx int) ([]interface{}, [
 }
 
 func (holder *unsortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
-	// TODO(zzl)
-	return 0, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	total := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		cnt, err := blkHolder.Count(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		total += cnt
+	}
+	return total, nil
 }
 
 func (holder *unsortedSegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {

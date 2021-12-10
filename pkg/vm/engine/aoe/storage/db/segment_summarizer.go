@@ -19,6 +19,7 @@ import (
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 // SegmentSummarizer provides segment-level aggregations with bitmap
@@ -41,7 +42,23 @@ func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, 
 	if colIdx == -1 {
 		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
-	return s.segment.Data.GetIndexHolder().Count(colIdx, filter)
+	if s.segment.Data.GetType() == base.SORTED_SEG {
+		return s.segment.Data.GetIndexHolder().Count(colIdx, filter)
+	} else {
+		holder := s.segment.Data.GetIndexHolder()
+		normalPart, err := holder.Count(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		transientPart := uint64(0)
+		for _, blkId := range s.segment.Data.BlockIds() {
+			blk := s.segment.Data.WeakRefBlock(blkId)
+			if blk.GetType() == base.TRANSIENT_BLK {
+				transientPart += blk.GetRowCount()
+			}
+		}
+		return normalPart + transientPart, nil
+	}
 }
 
 func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint64, error) {
