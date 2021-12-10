@@ -4,13 +4,6 @@ BIN_NAME := mo-server
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
 
-# generate files generated from .template and needs to delete when clean
-GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
-GENERATE_OVERLOAD_MATH := ./pkg/sql/colexec/extend/overload/div.go ./pkg/sql/colexec/extend/overload/minus.go ./pkg/sql/colexec/extend/overload/mod.go ./pkg/sql/colexec/extend/overload/plus.go ./pkg/sql/colexec/extend/overload/mult.go 
-GENERATE_OVERLOAD_COMPARE := ./pkg/sql/colexec/extend/overload/eq.go ./pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/ne.go /pkg/sql/colexec/extend/overload/ge.go ./pkg/sql/colexec/extend/overload/gt.go ./pkg/sql/colexec/extend/overload/le.go ./pkg/sql/colexec/extend/overload/lt.go
-GENERATE_OVERLOAD_OTHERS := ./pkg/sql/colexec/extend/overload/like.go ./pkg/sql/colexec/extend/overload/cast.go
-GENERATE_OVERLOAD_UNARYS := ./pkg/sql/colexec/extend/overload/unaryops.go
-
 # Creating build config
 .PHONY: config
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
@@ -24,23 +17,24 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 
 # Building mo-server binary
 .PHONY: build
-build: cmd/db-server/$(wildcard *.go)
+build: cmd/db-server/main.go
 	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary])
-	@go build -o $(BIN_NAME) ./cmd/db-server/
+	@go mod tidy
+	@go build -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
-debug: cmd/db-server/$(wildcard *.go)
+debug: cmd/db-server/main.go
 	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary for debug])
 	go get github.com/matrixorigin/matrixcube
 	go mod tidy
-	go build -tags debug -o $(BIN_NAME) ./cmd/db-server/
+	go build -tags debug -o $(BIN_NAME) cmd/db-server/main.go
 
 # Run Static Code Analysis
 .PHONY: sca
-sca:
+sca:	
 	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Static code analysis])
 	@cd optools && ./run_ut.sh SCA
@@ -73,11 +67,6 @@ clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
 	@go clean -testcache
-	@rm -f $(GENERATE_OVERLOAD_LOGIC)
-	@rm -f $(GENERATE_OVERLOAD_MATH)
-	@rm -f $(GENERATE_OVERLOAD_COMPARE)
-	@rm -f $(GENERATE_OVERLOAD_OTHERS)
-	@rm -f $(GENERATE_OVERLOAD_UNARYS)
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))
 	@rm -f $(BIN_NAME)
@@ -86,3 +75,4 @@ ifneq ($(wildcard $(BUILD_CFG)),)
 	$(info Remove file $(BUILD_CFG))
 	@rm -f $(BUILD_CFG)
 endif
+
