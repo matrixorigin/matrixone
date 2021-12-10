@@ -88,24 +88,28 @@ type probeContainer struct {
 		ht *hashtable.String40HashMap
 	}
 	hstr struct {
-		ht *hashtable.StringHashMap
+		keys       [][]byte
+		realValues []uint64
+		ht         *hashtable.StringHashMap
 	}
 }
 
 type Container struct {
-	isB      bool
-	state    int
-	is       []int
-	inserts  []uint8
-	zinserts []uint8
-	keyOffs  []uint32
-	zKeyOffs []uint32
-	hashs    []uint64
-	views    []*view
-	vars     []string
-	values   []*uint64
-	zvalues  []*uint64
-	h8       struct {
+	isB                bool
+	state              int
+	is                 []int
+	inserts            []uint8
+	zinserts           []uint8
+	keyOffs            []uint32
+	zKeyOffs           []uint32
+	hashs              []uint64
+	zs                 []int64
+	intermediateBuffer []int64
+	views              []*view
+	vars               []string
+	values             []*uint64
+	zvalues            []*uint64
+	h8                 struct {
 		keys  []uint64
 		zKeys []uint64
 	}
