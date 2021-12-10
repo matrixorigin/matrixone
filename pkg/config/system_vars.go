@@ -409,6 +409,18 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	cubeLogLevel    string
+	
+	/**
+	Name:	cubeMaxEntriesBytes
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[314572800]
+	Comment:	default is 300MB. The max entries bytes for the write batch in the cube.
+	UpdateMode:	dynamic
+	*/
+	cubeMaxEntriesBytes    int64
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -779,6 +791,18 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	CubeLogLevel    string  `toml:"cubeLogLevel"`
+	
+	/**
+	Name:	cubeMaxEntriesBytes
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[314572800]
+	Comment:	default is 300MB. The max entries bytes for the write batch in the cube.
+	UpdateMode:	dynamic
+	*/
+	CubeMaxEntriesBytes    int64  `toml:"cubeMaxEntriesBytes"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -868,6 +892,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["loadDataConcurrencyCount"] = "	Name:	loadDataConcurrencyCount	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[16 1 16]	Comment:	default is 16. The count of go routine writing batch into the storage.	UpdateMode:	dynamic	"
 	
 	ap.name2definition["cubeLogLevel"] = "	Name:	cubeLogLevel	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[error info debug warning warn fatal]	Comment:	default is error. The log level for cube.	UpdateMode:	dynamic	"
+	
+	ap.name2definition["cubeMaxEntriesBytes"] = "	Name:	cubeMaxEntriesBytes	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[314572800]	Comment:	default is 300MB. The max entries bytes for the write batch in the cube.	UpdateMode:	dynamic	"
 	
 }
 
@@ -1344,6 +1370,19 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","CubeLogLevel",err)
 		}
 	}
+	
+	cubeMaxEntriesByteschoices :=[]int64 {
+		314572800,
+	}
+	if len(cubeMaxEntriesByteschoices) != 0 {
+		if err = ap.setCubeMaxEntriesBytes(cubeMaxEntriesByteschoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeMaxEntriesBytes",err)
+		}
+	} else { 
+		if err = ap.setCubeMaxEntriesBytes(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeMaxEntriesBytes",err)
+		}
+	}
 	return nil
 }
 
@@ -1644,6 +1683,15 @@ func (ap * SystemVariables ) GetCubeLogLevel() string {
 	return ap.cubeLogLevel
 }
 
+/**
+Get the value of the parameter cubeMaxEntriesBytes
+*/
+func (ap * SystemVariables ) GetCubeMaxEntriesBytes() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.cubeMaxEntriesBytes
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1853,6 +1901,13 @@ Set the value of the parameter cubeLogLevel
 */
 func (ap * SystemVariables ) SetCubeLogLevel(value string)error {
 	return  ap.setCubeLogLevel(value)
+}
+
+/**
+Set the value of the parameter cubeMaxEntriesBytes
+*/
+func (ap * SystemVariables ) SetCubeMaxEntriesBytes(value int64)error {
+	return  ap.setCubeMaxEntriesBytes(value)
 }
 
 /**
@@ -2550,6 +2605,28 @@ func (ap * SystemVariables ) setCubeLogLevel(value string)error {
 	return nil
 }
 
+/**
+Set the value of the parameter cubeMaxEntriesBytes
+*/
+func (ap * SystemVariables ) setCubeMaxEntriesBytes(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			314572800,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setCubeMaxEntriesBytes,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.cubeMaxEntriesBytes = value
+	return nil
+}
+
 
 
 /**
@@ -2599,6 +2676,7 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["batchSizeInLoadData"] = false
 	config.name2updatedFlags["loadDataConcurrencyCount"] = false
 	config.name2updatedFlags["cubeLogLevel"] = false
+	config.name2updatedFlags["cubeMaxEntriesBytes"] = false
 }
 
 /**
@@ -2822,6 +2900,11 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("cubeLogLevel"){
 		if err = ap.setCubeLogLevel(config.CubeLogLevel); err != nil{
 			return fmt.Errorf("update parameter cubeLogLevel failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("cubeMaxEntriesBytes"){
+		if err = ap.setCubeMaxEntriesBytes(config.CubeMaxEntriesBytes); err != nil{
+			return fmt.Errorf("update parameter cubeMaxEntriesBytes failed.error:%v",err)
 		}
 	}
 	return nil

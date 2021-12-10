@@ -107,6 +107,9 @@ func isvarsConfigEqual(c1,c2 *varsConfig) bool {
 	if c1.CubeLogLevel != c2.CubeLogLevel {
 		return false
 	}
+	if c1.CubeMaxEntriesBytes != c2.CubeMaxEntriesBytes {
+		return false
+	}
 
 	return true
 }
@@ -146,6 +149,7 @@ lengthOfQueryPrinted=50
 batchSizeInLoadData=40000
 loadDataConcurrencyCount=16
 cubeLogLevel= "error"
+cubeMaxEntriesBytes=314572800
 		
 `
 	t1_config:=&varsConfig{
@@ -184,6 +188,7 @@ LengthOfQueryPrinted:50,
 BatchSizeInLoadData:40000,
 LoadDataConcurrencyCount:16,
 CubeLogLevel: "error" ,
+CubeMaxEntriesBytes:314572800,
 	
 
 		name2updatedFlags: nil,
