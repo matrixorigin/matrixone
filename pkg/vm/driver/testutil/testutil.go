@@ -190,6 +190,9 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
 		cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 100)
 		cfg.Raft.MaxEntryBytes = 300 * 1024 * 1024
+		cfg.Raft.RaftLog.ForceCompactCount=1
+		cfg.Raft.RaftLog.CompactThreshold=1
+		cfg.Replication.CompactLogCheckDuration.Duration=time.Millisecond*100
 		//cfg.Replication.ShardCapacityBytes = 100
 		//cfg.Replication.ShardSplitCheckBytes = 80
 
