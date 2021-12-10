@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/simdcsv"
+	"unicode/utf8"
 )
 
 type LoadResult struct {
@@ -85,6 +86,7 @@ type SharePart struct {
 
 	//batch
 	batchSize int
+	maxEntryBytesForCube int64
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -216,14 +218,36 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			}
 
 			wait_b := time.Now()
+
+			//bytes for the line
+			bytes := uint64(0)
+			for _, ll := range lineOut.Line {
+				bytes += uint64(utf8.RuneCount([]byte(ll)))
+			}
+
+			//max entries for the cube
+			if bytes > uint64(plh.maxEntryBytesForCube) {
+				return fmt.Errorf("bytes of line %d > maxEntryBytesForCube %d",bytes,plh.maxEntryBytesForCube)
+			}
+
+			if plh.bytes + bytes > uint64(plh.maxEntryBytesForCube){
+				//fmt.Printf("+++++ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
+				err := saveLinesToStorage(plh, true)
+				if err != nil {
+					return err
+				}
+
+				plh.lineIdx = 0
+				plh.maxFieldCnt = 0
+				plh.bytes = 0
+			}
+
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.lineCount++
-			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
-			//for _, ll := range lineOut.Line {
-			//	plh.bytes += uint64(utf8.RuneCount([]byte(ll)))
-			//}
+			plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Line))
+			plh.bytes += bytes
 
 			plh.csvLineArray1 += time.Since(wait_b)
 
@@ -236,7 +260,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 				plh.lineIdx = 0
 				plh.maxFieldCnt = 0
-				//plh.bytes = 0
+				plh.bytes = 0
 			}
 
 		} else if lineOut.Lines != nil {
@@ -453,6 +477,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
+	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
 
 	wHandler.pl = allocBatch(handler)
 	wHandler.simdCsvLineArray = wHandler.pl.lineArray
@@ -543,10 +568,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 
 	countOfLineArray := handler.lineIdx
 	if !forceConvert {
-		if countOfLineArray != handler.batchSize {
-			fmt.Printf("---->countOfLineArray %d batchSize %d \n", countOfLineArray, handler.batchSize)
-			panic("-----write a batch")
-		}
+		//if countOfLineArray != handler.batchSize {
+		//	fmt.Printf("---->countOfLineArray %d batchSize %d \n",countOfLineArray,handler.batchSize)
+		//	panic("-----write a batch")
+		//}
 	}
 
 	batchData := handler.batchData
