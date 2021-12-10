@@ -347,7 +347,12 @@ func (s *Storage) tableNames() (names []string) {
 	dbs := s.DB.DatabaseNames()
 	for _, db := range dbs {
 		tbNames := s.DB.TableNames(db)
-		names = append(names, tbNames...)
+		for _, tbName := range tbNames {
+			if strings.Contains(tbName, sPrefix) {
+				continue
+			}
+			names = append(names, tbName)
+		}
 	}
 	return
 }
@@ -533,7 +538,7 @@ func shardMetadataToBatch(metadata meta.ShardMetadata) (*batch.Batch, error) {
 	return bat, nil
 }
 
-func createMetadataTableInfo(shardId uint64) *aoe.TableInfo{
+func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 	tableName := sPrefix + strconv.Itoa(int(shardId))
 	metaTblInfo := aoe.TableInfo{
 		Name:    tableName,
@@ -585,7 +590,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		}
 		createTable := false
 		if tbl == nil {
-			metaTblInfo:=createMetadataTableInfo(metadata.ShardID)
+			metaTblInfo := createMetadataTableInfo(metadata.ShardID)
 			offset := 0
 			size := 2
 			if createDatabase {
@@ -644,13 +649,13 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 	var err error
-	t0:=time.Now()
+	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("[S-%d|logIndex:%d,%d]createIndex handler cost %d ms", shard.ID, ^uint64(0), 0, time.Since(t0).Milliseconds())
 	}()
-	if removeData { 
+	if removeData {
 		ctx := aoedb.DropDBCtx{
-			Id:     ^uint64(0), 
+			Id:     ^uint64(0),
 			Offset: 0,
 			Size:   1,
 			DB:     aoedb.IdToNameFactory.Encode(shard.ID),
@@ -680,7 +685,7 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	}
 	_, err := s.DB.DropTable(&dropTableCtx)
 	if err != nil {
-		logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
+		logutil.Errorf("Split:S-%d dropTable fail.", old.ShardID)
 		return err
 	}
 	execSplitCtx := aoedb.ExecSplitCtx{
@@ -696,12 +701,12 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	}
 	err = s.DB.ExecSplitDatabase(&execSplitCtx)
 	if err != nil {
-		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.",old.ShardID)
+		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
 	for _, shard := range news {
 		tableName := sPrefix + strconv.Itoa(int(shard.ShardID))
-		bat,_:=shardMetadataToBatch(shard)
+		bat, _ := shardMetadataToBatch(shard)
 
 		offset := 0
 		size := 1
@@ -719,27 +724,31 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		err = s.DB.Append(&ctx)
 		if err != nil {
-			logutil.Errorf("Split:S-%d append fail.",shard.ShardID)
+			logutil.Errorf("Split:S-%d append fail.", shard.ShardID)
 			return err
 		}
 	}
 	return err
 }
+
 //for test
 func (s *Storage) ReadAll(sid uint64) ([]*batch.Batch, error) {
-	batchs:=make([]*batch.Batch,0)
+	batchs := make([]*batch.Batch, 0)
 	tbls := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
 	for _, tbl := range tbls {
-		relation,_:=s.Relation(aoedb.IdToNameFactory.Encode(sid), tbl)
+		if strings.Contains(tbl, sPrefix) {
+			continue
+		}
+		relation, _ := s.Relation(aoedb.IdToNameFactory.Encode(sid), tbl)
 		attrs := make([]string, 0)
 		for _, ColDef := range relation.Meta.Schema.ColDefs {
 			attrs = append(attrs, ColDef.Name)
 		}
 		relation.Data.GetBlockFactory()
-		for _,segment := range relation.Meta.SegmentSet{
+		for _, segment := range relation.Meta.SegmentSet {
 			seg := relation.Segment(segment.Id, nil)
 			blks := seg.Blocks()
-			for _,blk:=range blks{
+			for _, blk := range blks {
 				block := seg.Block(blk, nil)
 				cds := make([]*bytes.Buffer, len(attrs))
 				dds := make([]*bytes.Buffer, len(attrs))
@@ -749,7 +758,7 @@ func (s *Storage) ReadAll(sid uint64) ([]*batch.Batch, error) {
 				}
 				refs := make([]uint64, len(attrs))
 				bat, _ := block.Read(refs, attrs, cds, dds)
-				batchs=append(batchs, bat)
+				batchs = append(batchs, bat)
 			}
 		}
 
