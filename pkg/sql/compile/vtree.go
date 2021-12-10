@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
@@ -46,14 +46,14 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	isB := vt.IsBare()
 	d := depth(vt.Views)
 	switch {
-	case d == 1 && isB:
+	case d == 0 && isB:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
-	case d == 1 && !isB:
+	case d == 0 && !isB:
 		if s, err = e.compileAQ(vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err
 		}
-	case d > 1 && !isB:
-		if d > 2 { // only for test
+	case d > 0 && !isB:
+		if d > 1 { // only for test
 			return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 		}
 		if s, err = e.compileCAQ(vt.FreeVars, vt.Views, varsMap, fvarsMap); err != nil {
@@ -62,17 +62,30 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
+	rs := &Scope{
+		Magic:     Merge,
+		PreScopes: []*Scope{s},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = e.c.proc.Id
+	rs.Proc.Lim = e.c.proc.Lim
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	rs.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 1),
+	}
+	s.Instructions = append(s.Instructions, vm.Instruction{
+		Op: vm.Connector,
+		Arg: &connector.Argument{
+			Mmu: rs.Proc.Mp.Gm,
+			Reg: rs.Proc.Reg.MergeReceivers[0],
+		},
+	})
 	switch {
-	case d == 1:
-		s.Instructions = append(s.Instructions, vm.Instruction{
-			Op: vm.UnTransform,
-			Arg: &untransform.Argument{
-				FreeVars: vt.FreeVars,
-				Type:     untransform.Single,
-			},
-		})
 	case isB:
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.UnTransform,
 			Arg: &untransform.Argument{
 				FreeVars: vt.FreeVars,
@@ -80,7 +93,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 			},
 		})
 	default:
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.UnTransform,
 			Arg: &untransform.Argument{
 				FreeVars: vt.FreeVars,
@@ -89,43 +102,43 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 		})
 	}
 	if vt.Projection != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Projection,
 			Arg: vt.Projection,
 		})
 	}
 	if vt.Restrict != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Restrict,
 			Arg: vt.Restrict,
 		})
 	}
 	if vt.Top != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Top,
 			Arg: vt.Top,
 		})
 	}
 	if vt.Order != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Order,
 			Arg: vt.Order,
 		})
 	}
 	if vt.Offset != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Offset,
 			Arg: vt.Offset,
 		})
 	}
 	if vt.Limit != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Limit,
 			Arg: vt.Limit,
 		})
 	}
 	if vt.Dedup != nil {
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Dedup,
 			Arg: vt.Dedup,
 		})
@@ -134,7 +147,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	for i, col := range e.resultCols {
 		attrs[i] = col.Name
 	}
-	s.Instructions = append(s.Instructions, vm.Instruction{
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
 		Op: vm.Output,
 		Arg: &output.Argument{
 			Attrs: attrs,
@@ -142,17 +155,14 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 			Func:  e.fill,
 		},
 	})
-	return s, nil
+	return rs, nil
 }
 
 func (e *Exec) compileCAQ(freeVars []string, vs []*vtree.View, varsMap, fvarsMap map[string]int) (*Scope, error) {
 	var ss []*Scope
 
-	if d := depth(vs); d == 1 {
+	if d := depth(vs); d == 0 {
 		return e.compileAQ(vs[len(vs)-1])
-	}
-	if len(freeVars) == 0 { // only for test
-		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
 	arg := &times.Argument{
 		VarsMap:  varsMap,
@@ -191,7 +201,6 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 	defer rel.Close()
 	arg.R = v.Rel.Alias
 	src := &Source{
-		IsMerge:      false,
 		RelationName: v.Rel.Name,
 		SchemaName:   v.Rel.Schema,
 		RefCounts:    make([]uint64, len(v.Rel.Vars)),
@@ -234,16 +243,13 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 		ss[i].Proc.Id = e.c.proc.Id
 		ss[i].Proc.Lim = e.c.proc.Lim
 	}
-	if len(ss) == 1 {
-		return ss[0], nil
-	}
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
 	}
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op:  vm.Plus,
-		Arg: &plus.Argument{Typ: v.Arg.Typ},
+		Op:  vm.Oplus,
+		Arg: &oplus.Argument{Typ: v.Arg.Typ},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -255,7 +261,7 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 		for i := 0; i < len(ss); i++ {
 			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 2),
+				Ch:  make(chan *batch.Batch, 1),
 			}
 		}
 	}
@@ -315,16 +321,13 @@ func (e *Exec) compileAQ(v *vtree.View) (*Scope, error) {
 		ss[i].Proc.Id = e.c.proc.Id
 		ss[i].Proc.Lim = e.c.proc.Lim
 	}
-	if len(ss) == 1 {
-		return ss[0], nil
-	}
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
 	}
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op:  vm.Plus,
-		Arg: &plus.Argument{Typ: v.Arg.Typ},
+		Op:  vm.Oplus,
+		Arg: &oplus.Argument{Typ: v.Arg.Typ},
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -336,7 +339,7 @@ func (e *Exec) compileAQ(v *vtree.View) (*Scope, error) {
 		for i := 0; i < len(ss); i++ {
 			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Ctx: ctx,
-				Ch:  make(chan *batch.Batch, 2),
+				Ch:  make(chan *batch.Batch, 1),
 			}
 		}
 	}
@@ -357,12 +360,17 @@ func depth(vs []*vtree.View) int {
 		return 0
 	}
 	d := 0
+	flg := false
 	for _, v := range vs {
 		if len(v.Children) > 0 {
+			flg = true
 			if d0 := depth(v.Children); d0 > d {
 				d = d0
 			}
 		}
 	}
-	return d + 1
+	if flg {
+		return d + 1
+	}
+	return d
 }

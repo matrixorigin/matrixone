@@ -35,11 +35,11 @@ func (hdr *String24HashMapCell) StrKey() StringRef {
 
 type String24HashMap struct {
 	bucketCntBits uint8
-	bucketCnt     uint64
+	BucketCnt     uint64
 	elemCnt       uint64
 	maxElemCnt    uint64
 	rawData       []byte
-	bucketData    []String24HashMapCell
+	BucketData    []String24HashMapCell
 }
 
 func (ht *String24HashMap) Init() {
@@ -48,11 +48,11 @@ func (ht *String24HashMap) Init() {
 	rawData := make([]byte, cellSize*kInitialBucketCnt)
 
 	ht.bucketCntBits = kInitialBucketCntBits
-	ht.bucketCnt = kInitialBucketCnt
+	ht.BucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.BucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
 func (ht *String24HashMap) Insert(hash uint64, key *[3]uint64) (inserted bool, value *uint64) {
@@ -142,9 +142,9 @@ func (ht *String24HashMap) FindBatch(hashes []uint64, keys [][3]uint64, values [
 }
 
 func (ht *String24HashMap) findBucket(hash uint64, key *[3]uint64) (empty bool, idx uint64, cell *String24HashMapCell) {
-	mask := ht.bucketCnt - 1
+	mask := ht.BucketCnt - 1
 	for idx = hash & mask; true; idx = (idx + 1) & mask {
-		cell = &ht.bucketData[idx]
+		cell = &ht.BucketData[idx]
 		empty = cell.Hash == 0
 		if empty || cell.Key == *key {
 			return
@@ -177,23 +177,23 @@ func (ht *String24HashMap) resizeOnDemand(n uint64) {
 
 	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
 
-	oldBucketCnt := ht.bucketCnt
-	oldBucketData := ht.bucketData
+	oldBucketCnt := ht.BucketCnt
+	oldBucketData := ht.BucketData
 
 	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
 	newBucketData := unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
 
 	ht.bucketCntBits = newBucketCntBits
-	ht.bucketCnt = newBucketCnt
+	ht.BucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
 	ht.rawData = newRawData
-	ht.bucketData = newBucketData
+	ht.BucketData = newBucketData
 
 	for i := uint64(0); i < oldBucketCnt; i++ {
 		cell := &oldBucketData[i]
 		if cell.Hash != 0 {
 			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key)
-			ht.bucketData[newIdx] = *cell
+			ht.BucketData[newIdx] = *cell
 		}
 	}
 }
@@ -212,15 +212,15 @@ func (it *String24HashMapIterator) Init(ht *String24HashMap) {
 }
 
 func (it *String24HashMapIterator) Next() (cell *String24HashMapCell, err error) {
-	for it.pos < it.table.bucketCnt {
-		cell = &it.table.bucketData[it.pos]
+	for it.pos < it.table.BucketCnt {
+		cell = &it.table.BucketData[it.pos]
 		if cell.Hash != 0 {
 			break
 		}
 		it.pos++
 	}
 
-	if it.pos >= it.table.bucketCnt {
+	if it.pos >= it.table.BucketCnt {
 		err = errors.New("out of range")
 		return
 	}
