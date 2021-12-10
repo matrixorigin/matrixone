@@ -15,32 +15,27 @@
 package sched
 
 import (
-	"path/filepath"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
+	"path/filepath"
+	"sync"
 )
 
-// flushIndexEvent would generate, flush, and load index for the given segment.
-// Columns are configurable. Notice that no matter how many versions of the same
-// index for the same column of one segment exists, we always generate the newest
-// version and try loading it on that segment. During loading phase there would
-// also be a stale check to ensure never load stale versions.
-type flushIndexEvent struct {
+type flushBlockIndexEvent struct {
 	BaseEvent
-	Segment  iface.ISegment
+	Block  iface.IBlock
 	Cols     []uint16
 	FlushAll bool
 }
 
-func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
-	e := &flushIndexEvent{Segment: host, Cols: make([]uint16, 0)}
+func NewFlushBlockIndexEvent(ctx *Context, host iface.IBlock) *flushBlockIndexEvent {
+	e := &flushBlockIndexEvent{Block: host, Cols: make([]uint16, 0)}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, FlushIndexTask, ctx.DoneCB, ctx.Waitable),
@@ -48,12 +43,13 @@ func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
 	return e
 }
 
-func (e *flushIndexEvent) Execute() error {
-	ids := e.Segment.BlockIds()
-	meta := e.Segment.GetMeta()
-	dir := e.Segment.GetSegmentFile().GetDir()
+func (e *flushBlockIndexEvent) Execute() error {
+	defer e.Block.Unref()
+	meta := e.Block.GetMeta()
+	dir := e.Block.GetSegmentFile().GetDir()
 	bsiEnabled := make([]int, 0)
-	indice := meta.Table.GetIndexSchema()
+	schema := meta.Segment.Table.Schema
+	indice := meta.Segment.Table.GetIndexSchema()
 	for _, idx := range indice.Indice {
 		if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 			for _, col := range idx.Columns {
@@ -70,37 +66,37 @@ func (e *flushIndexEvent) Execute() error {
 		}
 	}
 
+	// TODO(zzl): thread safe?
+	if e.Block.GetType() != base.PERSISTENT_BLK {
+		return nil
+	}
+
 	nodes := make([]*common.MemNode, 0)
 	var wg sync.WaitGroup
 	for _, colIdx := range bsiEnabled {
-		vecs := make([]*vector.Vector, 0)
-		for i := 0; i < len(ids); i++ {
-			blk := e.Segment.WeakRefBlock(ids[i])
-			vec, err := blk.GetVectorWrapper(colIdx)
-			if err != nil {
-				panic(err)
-			}
-			if vec.Vector.Length() == 0 {
-				panic("logic error")
-			}
-			vecs = append(vecs, &vec.Vector)
-			nodes = append(nodes, vec.MNode)
+		vec, err := e.Block.GetVectorWrapper(colIdx)
+		if err != nil {
+			return err
 		}
-		bsi, err := index.BuildNumericBsiIndex(vecs, meta.Table.Schema.ColDefs[colIdx].Type, int16(colIdx))
+		if vec.Vector.Length() == 0 {
+			panic("logic error")
+		}
+		nodes = append(nodes, vec.MNode)
+		startPos := int(schema.BlockMaxRows * uint64(meta.Idx))
+		bsi, err := index.BuildNumericBsiIndex([]*vector.Vector{&vec.Vector}, schema.ColDefs[colIdx].Type, int16(colIdx), startPos)
 		if err != nil {
 			panic(err)
 		}
-		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
-		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
-		filename = filepath.Join(dir, filename)
-		//logutil.Infof("%s", filename)
+		version := e.Block.GetIndexHolder().AllocateVersion(colIdx)
+		filename := common.MakeBlockBitSlicedIndexFileName(version, meta.Segment.Table.Id, meta.Segment.Id, meta.Id, uint16(colIdx))
+		filename = filepath.Join(filepath.Join(dir, "data"), filename)
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
 			panic(err)
 		}
-		logutil.Infof("BSI Flushed | %s", filename)
+		logutil.Infof("[BLK] BSI Flushed | %s", filename)
 		wg.Add(1)
 		go func() {
-			e.Segment.GetIndexHolder().LoadIndex(e.Segment.GetSegmentFile(), filename)
+			e.Block.GetIndexHolder().LoadIndex(e.Block.GetSegmentFile(), filename)
 			wg.Done()
 		}()
 	}

@@ -887,7 +887,7 @@ func TestRebuildIndices(t *testing.T) {
 		//t.Log(f.Eq("mock_0", int32(-1)))
 		//t.Log(sumr.Count("mock_0", nil))
 		t.Log(inst.IndexBufMgr.String())
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		inst.Scheduler.Schedule(e)
 		time.Sleep(10 * time.Millisecond)
 		t.Log(inst.IndexBufMgr.String())
@@ -997,7 +997,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder = seg.GetIndexHolder()
 
 	loader := func(i uint64) {
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
 		inst.Scheduler.Schedule(e)
 		wg.Done()
@@ -1033,7 +1033,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder = seg.GetIndexHolder()
 
 	loader = func(i uint64) {
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
 		inst.Scheduler.Schedule(e)
 		wg.Done()

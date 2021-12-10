@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -109,6 +110,10 @@ func (blk *stdColumnBlock) close() {
 }
 
 func (blk *stdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
+	if blk.part == nil {
+		logutil.Infof("..... %d %d", blk.meta.Id, blk.colIdx)
+		return nil, nil
+	}
 	return blk.part.LoadVectorWrapper()
 }
 

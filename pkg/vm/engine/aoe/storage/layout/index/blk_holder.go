@@ -19,15 +19,21 @@ import (
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"os"
+	"path/filepath"
 	"sync"
 )
 
 type BlockIndexHolder struct {
 	common.RefHelper
 	ID common.ID
+	versionAllocator ColumnsAllocator
 	self struct {
 		sync.RWMutex
-		colIndices map[int][]*Node
+		colIndices    map[int][]*Node
+		loadedVersion map[int]uint64
+		droppedVersion map[int]uint64
+		fileHelper     map[string]*Node
     }
 	BufMgr      mgrif.IBufferManager
 	Inited      bool
@@ -38,10 +44,16 @@ func newBlockIndexHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.Block
 	holder := &BlockIndexHolder{
 		ID:          id,
 		BufMgr:      bufMgr,
-		Inited:      false,
 		PostCloseCB: cb,
 	}
 	holder.self.colIndices = make(map[int][]*Node)
+	holder.self.loadedVersion = make(map[int]uint64)
+	holder.self.fileHelper = make(map[string]*Node)
+	holder.self.droppedVersion = make(map[int]uint64)
+	holder.versionAllocator = ColumnsAllocator{
+		RWMutex:    sync.RWMutex{},
+		Allocators: make(map[int]*common.IdAlloctor),
+	}
 	holder.OnZeroCB = holder.close
 	holder.Ref()
 	return holder
@@ -118,6 +130,181 @@ func (holder *BlockIndexHolder) stringNoLock() string {
 	//	s = fmt.Sprintf("%s\n\tIndex: [RefCount=%d]", s, i.RefCount())
 	//}
 	// s = fmt.Sprintf("%s\n%vs, holder.colIndices)
+	// TODO(zzl)
+	return ""
+}
+
+func (holder *BlockIndexHolder) AllocateVersion(colIdx int) uint64 {
+	holder.versionAllocator.Lock()
+	defer holder.versionAllocator.Unlock()
+	if holder.versionAllocator.Allocators[colIdx] == nil {
+		holder.versionAllocator.Allocators[colIdx] = common.NewIdAlloctor(uint64(1))
+	}
+	return holder.versionAllocator.Allocators[colIdx].Alloc()
+}
+
+func (holder *BlockIndexHolder) fetchCurrentVersion(col uint16) uint64 {
+	var currVersion uint64
+	holder.versionAllocator.RLock()
+	defer holder.versionAllocator.RUnlock()
+	if alloc, ok := holder.versionAllocator.Allocators[int(col)]; ok {
+		currVersion = alloc.Get()
+	} else {
+		currVersion = uint64(1)
+	}
+	return currVersion
+}
+
+func (holder *BlockIndexHolder) IndicesCount() int {
+	holder.self.RLock()
+	defer holder.self.RUnlock()
+	cnt := 0
+	for _, nodes := range holder.self.colIndices {
+		cnt += len(nodes)
+	}
+	return cnt
+}
+
+func (holder *BlockIndexHolder) DropIndex(filename string) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
+	name, _ := common.ParseBlockBitSlicedIndexFileName(filepath.Base(filename))
+	version, tid, sid, bid, col, _ := common.ParseBlockBitSlicedIndexFileNameToInfo(name)
+	if v, ok := holder.self.loadedVersion[int(col)]; ok {
+		if version > v {
+			// speculative dropping
+			if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
+				if dropped >= version {
+					return
+				}
+			}
+			holder.self.droppedVersion[int(col)] = version
+			return
+		} else if version < v {
+			// stale index, has already been dropped
+			return
+		} else {
+			// start explicit dropping
+			staleName := common.MakeBlockBitSlicedIndexFileName(version, tid, sid, bid, col)
+			node := holder.self.fileHelper[staleName]
+			idxes := holder.self.colIndices[int(col)]
+			for i, idx := range idxes {
+				if idx == node {
+					if i == len(idxes) - 1 {
+						idxes = idxes[:len(idxes)-1]
+					} else {
+						idxes = append(idxes[:i], idxes[i+1:]...)
+					}
+					break
+				}
+			}
+			node.VFile.Unref()
+			delete(holder.self.fileHelper, staleName)
+			delete(holder.self.loadedVersion, int(col))
+			holder.self.droppedVersion[int(col)] = version
+			logutil.Infof("[BLK] dropping newest index explicitly | version-%d", version)
+			return
+		}
+	} else {
+		if dv, ok := holder.self.droppedVersion[int(col)]; ok {
+			if dv >= version {
+				// already dropped explicitly
+				return
+			}
+		}
+		// drop "future" index, i.e. when the designated index comes, it
+		// would be cancelled directly.
+		holder.self.droppedVersion[int(col)] = version
+		return
+	}
+}
+
+func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename string) {
+	holder.self.Lock()
+	defer holder.self.Unlock()
+	name, _ := common.ParseBlockBitSlicedIndexFileName(filepath.Base(filename))
+	version, tid, sid, bid, col, _ := common.ParseBlockBitSlicedIndexFileNameToInfo(name)
+
+	isLatest := false
+	if dropped, ok := holder.self.droppedVersion[int(col)]; ok {
+		if dropped >= version {
+			// newer version used to be loaded, but dropped explicitly
+			// or dropped speculatively in the past.
+			isLatest = false
+			if err := os.Remove(filename); err != nil {
+				panic(err)
+			}
+			logutil.Infof("[BLK] detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
+			return
+		}
+	}
+	if v, ok := holder.self.loadedVersion[int(col)]; !ok {
+		holder.self.loadedVersion[int(col)] = version
+		isLatest = true
+	} else {
+		if version > v {
+			holder.self.loadedVersion[int(col)] = version
+			// GC stale version
+			staleName := common.MakeBlockBitSlicedIndexFileName(v, tid, sid, bid, col)
+			node := holder.self.fileHelper[staleName]
+			idxes := holder.self.colIndices[int(col)]
+			for i, idx := range idxes {
+				if idx == node {
+					if i == len(idxes) - 1 {
+						idxes = idxes[:len(idxes) - 1]
+					} else {
+						idxes = append(idxes[:i], idxes[i+1:]...)
+					}
+					break
+				}
+			}
+			node.VFile.Unref()
+			delete(holder.self.fileHelper, staleName)
+			logutil.Infof("[BLK] dropping stale index implicitly | version-%d", v)
+			isLatest = true
+		} else {
+			// stale index, but not allocate resource yet, simply remove physical file
+			isLatest = false
+			if err := os.Remove(filename); err != nil {
+				panic(err)
+			}
+			logutil.Infof("[BLK] loading stale index | %s received, but v-%d already loaded", filename, v)
+		}
+	}
+	if isLatest {
+		file, err := os.Open(filename)
+		if err != nil {
+			panic(err)
+		}
+		idxMeta, err := DefaultRWHelper.ReadIndicesMeta(*file)
+		if err != nil {
+			panic(err)
+		}
+		if idxMeta.Data == nil || len(idxMeta.Data) != 1 {
+			panic("logic error")
+		}
+		col := int(idxMeta.Data[0].Cols.ToArray()[0])
+		id := common.ID{}
+		id.SegmentID = holder.ID.SegmentID
+		id.BlockID = bid
+		id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
+		vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
+		// TODO: str bsi
+		node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+		idxes, ok := holder.self.colIndices[col]
+		if !ok {
+			idxes = make([]*Node, 0)
+			holder.self.colIndices[col] = idxes
+		}
+		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
+		// holder.self.indexNodes = append(holder.self.indexNodes, node)
+		holder.self.fileHelper[filepath.Base(filename)] = node
+		logutil.Infof("[BLK] BSI load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
+		return
+	}
+}
+
+func (holder *BlockIndexHolder) StringIndicesRefsNoLock() string {
 	// TODO(zzl)
 	return ""
 }

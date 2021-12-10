@@ -17,9 +17,11 @@ package index
 import (
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
@@ -168,9 +170,16 @@ func (holder *unsortedSegmentHolder) AllocateVersion(colIdx int) uint64 {
 	panic("unsupported")
 }
 
-// VersionAllocater is not supported in unsortedSegmentHolder
-func (holder *unsortedSegmentHolder) VersionAllocater() *ColumnsAllocator {
-	panic("unsupported")
+func (holder *unsortedSegmentHolder) FetchCurrentVersion(col uint16, blkId uint64) uint64 {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	blk, ok := holder.tree.blockHolders[blkId]
+	if !ok {
+		logutil.Infof("%d\n%+v\n", blkId, holder.tree.blockHolders)
+		panic("logic error")
+		//return uint64(1)
+	}
+	return blk.fetchCurrentVersion(col)
 }
 
 // IndicesCount is not supported in unsortedSegmentHolder
@@ -180,7 +189,24 @@ func (holder *unsortedSegmentHolder) IndicesCount() int {
 
 // DropIndex is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) DropIndex(filename string) {
-	panic("unsupported")
+	if name, ok := common.ParseBlockBitSlicedIndexFileName(filepath.Base(filename)); ok {
+		_, tid, sid, bid, _, ok := common.ParseBlockBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
+			panic("unexpected error")
+		}
+		holder.tree.RLock()
+		blk, ok := holder.tree.blockHolders[bid]
+		if !ok {
+			panic("unexpected error")
+		}
+		blk.DropIndex(filename)
+		holder.tree.RUnlock()
+		return
+	}
+	panic("unexpected error")
 }
 
 // LoadIndex is not supported in unsortedSegmentHolder

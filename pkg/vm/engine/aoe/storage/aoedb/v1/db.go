@@ -204,12 +204,21 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 			segMeta := seg.GetMeta()
 			segMeta.RLock()
 			if !segMeta.IsSortedLocked() {
+				for _, blkId := range seg.BlockIds() {
+					blk := seg.StrongRefBlock(blkId)
+					// TODO(zzl): thread safe?
+					if blk != nil && blk.GetType() == base.PERSISTENT_BLK {
+						e := sched.NewFlushBlockIndexEvent(&sched.Context{}, blk)
+						e.Cols = cols
+						d.Scheduler.Schedule(e)
+					}
+				}
 				seg.Unref()
 				segMeta.RUnlock()
 				continue
 			}
 			segMeta.RUnlock()
-			e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+			e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 			e.Cols = cols
 			d.Scheduler.Schedule(e)
 			seg.Unref()
@@ -258,28 +267,31 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	for _, segId := range tblData.SegmentIds() {
 		seg := tblData.StrongRefSegment(segId)
 		holder := seg.GetIndexHolder()
-		// TODO(zzl): deal with unclosed segment
-		if holder.HolderType() == base.UNSORTED_SEG {
-			seg.Unref()
-			continue
-		}
 		for _, info := range meta.GetIndexSchema().Indice {
 			if !util.ContainsString(names, info.Name) {
 				continue
 			}
 			cols := info.Columns
 			for _, col := range cols {
-				var currVersion uint64
-				holder.VersionAllocater().RLock()
-				if alloc, ok := holder.VersionAllocater().Allocators[int(col)]; ok {
-					currVersion = alloc.Get()
+				if holder.HolderType() == base.SORTED_SEG {
+					currVersion := holder.FetchCurrentVersion(col, 0)
+					bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
+					fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+					holder.DropIndex(fullname)
+				} else if holder.HolderType() == base.UNSORTED_SEG {
+					for _, blkId := range seg.BlockIds() {
+						// TODO(zzl): thread safe?
+						if seg.WeakRefBlock(blkId).GetType() != base.PERSISTENT_BLK {
+							continue
+						}
+						currVersion := holder.FetchCurrentVersion(col, blkId)
+						bn := common.MakeBlockBitSlicedIndexFileName(currVersion, tblId, segId, blkId, col)
+						fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+						holder.DropIndex(fullname)
+					}
 				} else {
-					currVersion = uint64(1)
+					panic("unexpected error")
 				}
-				holder.VersionAllocater().RUnlock()
-				bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
-				fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
-				holder.DropIndex(fullname)
 			}
 		}
 		seg.Unref()

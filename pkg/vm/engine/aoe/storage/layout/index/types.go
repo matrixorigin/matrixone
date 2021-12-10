@@ -97,7 +97,7 @@ type Index interface {
 type SegmentIndexHolder interface {
 	common.IRef
 	BlockHoldersManager
-	SegmentIndicesManager
+	StandaloneIndicesManager
 	Init(base.ISegmentFile)
 	EvalFilter(int, *FilterCtx) error
 	CollectMinMax(int) ([]interface{}, []interface{}, error)
@@ -121,9 +121,9 @@ type BlockHoldersManager interface {
 	stringNoLock() string
 }
 
-type SegmentIndicesManager interface {
+type StandaloneIndicesManager interface {
 	AllocateVersion(int) uint64
-	VersionAllocater() *ColumnsAllocator
+	FetchCurrentVersion(uint16, uint64) uint64
 	IndicesCount() int
 	DropIndex(filename string)
 	LoadIndex(base.ISegmentFile, string)

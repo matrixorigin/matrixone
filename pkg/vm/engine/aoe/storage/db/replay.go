@@ -477,11 +477,29 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 			panic("unexpected error")
 		}
 		flushCtx := &sched.Context{Opts: opts}
-		flushEvent := sched.NewFlushIndexEvent(flushCtx, segment)
+		flushEvent := sched.NewFlushSegIndexEvent(flushCtx, segment)
 		flushEvent.Cols = cols
 		opts.Scheduler.Schedule(flushEvent)
 	}
 	h.indicesMap = make(map[common.ID][]uint16)
+	//for _, tblData := range tables.Data {
+	//	for _, segId := range tblData.SegmentIds() {
+	//		seg := tblData.WeakRefSegment(segId)
+	//		if seg.GetType() != base.UNSORTED_SEG {
+	//			continue
+	//		}
+	//		for _, blkId := range seg.BlockIds() {
+	//			blk := seg.WeakRefBlock(blkId)
+	//			if blk.GetType() != base.PERSISTENT_BLK {
+	//				continue
+	//			}
+	//			flushCtx := &sched.Context{Opts: opts}
+	//			flushEvent := sched.NewFlushBlockIndexEvent(flushCtx, blk)
+	//			flushEvent.FlushAll = true
+	//			opts.Scheduler.Schedule(flushEvent)
+	//		}
+	//	}
+	//}
 	for _, database := range h.compactdbs {
 		gcReq := gcreqs.NewDropDBRequest(opts, database, tables)
 		opts.GC.Acceptor.Accept(gcReq)
