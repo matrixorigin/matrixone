@@ -16,6 +16,8 @@ package table
 import (
 	"bytes"
 	"fmt"
+	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"runtime"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -164,4 +166,171 @@ func (blk *tblock) GetBatch(attrids []int) dbi.IBatchReader {
 		panic(err)
 	}
 	return wrapper.NewBatch2(h, wrapped)
+}
+
+func (blk *tblock) Sum(colIdx int, filter *roaring64.Bitmap) (int64, uint64) {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	cnt := uint64(0)
+	sum := int64(0)
+	rows := filter.ToArray()
+	for _, row := range rows {
+		idx := int(row)
+		if ok, err := vec.IsNull(idx); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		cnt++
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		switch blk.meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+		case types.T_int8:
+			sum += int64(val.(int8))
+		case types.T_int16:
+			sum += int64(val.(int16))
+		case types.T_int32:
+			sum += int64(val.(int32))
+		case types.T_int64:
+			sum += int64(val.(int64))
+		case types.T_uint8:
+			sum += int64(val.(uint8))
+		case types.T_uint16:
+			sum += int64(val.(uint16))
+		case types.T_uint32:
+			sum += int64(val.(uint32))
+		case types.T_uint64:
+			sum += int64(val.(uint64))
+		case types.T_float32:
+			sum += int64(val.(float32))
+		case types.T_float64:
+			sum += int64(val.(float64))
+		case types.T_date:
+			sum += int64(val.(types.Date))
+		case types.T_datetime:
+			sum += int64(val.(types.Datetime))
+		}
+	}
+	return sum, cnt
+}
+
+func (blk *tblock) Max(colIdx int, filter *roaring64.Bitmap) interface{} {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	rows := filter.ToArray()
+	var max interface{}
+	flag := true
+	for _, row := range rows {
+		idx := int(row)
+		if ok, err := vec.IsNull(idx); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if flag {
+			max, err = vec.GetValue(idx)
+			if err != nil {
+				panic(err)
+			}
+			flag = false
+		}
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		if common.CompareInterface(val, max) {
+			max = val
+		}
+	}
+	return max
+}
+
+func (blk *tblock) Min(colIdx int, filter *roaring64.Bitmap) interface{} {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	rows := filter.ToArray()
+	var min interface{}
+	flag := true
+	for _, row := range rows {
+		idx := int(row)
+		if ok, err := vec.IsNull(idx); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if flag {
+			min, err = vec.GetValue(idx)
+			if err != nil {
+				panic(err)
+			}
+			flag = false
+		}
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		if common.CompareInterface(min, val) {
+			min = val
+		}
+	}
+	return min
+}
+
+func (blk *tblock) Count(colIdx int, filter *roaring64.Bitmap) uint64 {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	rows := filter.ToArray()
+	cnt := uint64(0)
+	for _, row := range rows {
+		idx := int(row)
+		if idx >= vec.Length() {
+			break
+		}
+		if ok, err := vec.IsNull(idx); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		cnt++
+	}
+	return cnt
+}
+
+func (blk *tblock) NullCount(colIdx int, filter *roaring64.Bitmap) uint64 {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	rows := filter.ToArray()
+	cnt := uint64(0)
+	for _, row := range rows {
+		idx := int(row)
+		if ok, err := vec.IsNull(idx); err != nil {
+			panic(err)
+		} else {
+			if !ok {
+				continue
+			}
+		}
+		cnt++
+	}
+	return cnt
 }

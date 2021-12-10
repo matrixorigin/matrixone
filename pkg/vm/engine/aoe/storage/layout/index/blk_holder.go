@@ -106,6 +106,10 @@ func (holder *BlockIndexHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	var err error
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
+		if !ctx.BsiRequired && node.DataNode.(Index).Type() != base.ZoneMap {
+			node.Close()
+			continue
+		}
 		err = node.DataNode.(Index).Eval(ctx)
 		if err != nil {
 			node.Close()
@@ -358,7 +362,7 @@ func (holder *BlockIndexHolder) Count(colIdx int, filter *roaring.Bitmap) (uint6
 	return 0, errors.New("bsi not found")
 }
 
-func (holder *BlockIndexHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+func (holder *BlockIndexHolder) NullCount(colIdx int, maxRows uint64, filter *roaring.Bitmap) (uint64, error) {
 	holder.self.RLock()
 	defer holder.self.RUnlock()
 	idxes, ok := holder.self.colIndices[colIdx]
@@ -386,7 +390,8 @@ func (holder *BlockIndexHolder) NullCount(colIdx int, filter *roaring.Bitmap) (u
 			} else {
 				bm = nil
 			}
-			count := index.NullCount(bm)
+			count := index.Count(bm)
+			count = maxRows - count
 			err := node.Close()
 			if err != nil {
 				index.IndexFile().Unref()

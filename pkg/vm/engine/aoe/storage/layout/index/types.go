@@ -102,7 +102,7 @@ type SegmentIndexHolder interface {
 	EvalFilter(int, *FilterCtx) error
 	CollectMinMax(int) ([]interface{}, []interface{}, error)
 	Count(int, *roaring64.Bitmap) (uint64, error)
-	NullCount(int, *roaring64.Bitmap) (uint64, error)
+	NullCount(int, uint64, *roaring64.Bitmap) (uint64, error)
 	Min(int, *roaring64.Bitmap) (interface{}, error)
 	Max(int, *roaring64.Bitmap) (interface{}, error)
 	Sum(int, *roaring64.Bitmap) (int64, uint64, error)

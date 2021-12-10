@@ -101,24 +101,82 @@ func (holder *unsortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (
 	return total, nil
 }
 
-func (holder *unsortedSegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
-	// TODO(zzl)
-	return 0, nil
+func (holder *unsortedSegmentHolder) NullCount(colIdx int, maxRows uint64, filter *roaring.Bitmap) (uint64, error) {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	total := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		cnt, err := blkHolder.NullCount(colIdx, maxRows, filter)
+		if err != nil {
+			return 0, err
+		}
+		total += cnt
+	}
+	return total, nil
 }
 
 func (holder *unsortedSegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
-	// TODO(zzl)
-	return nil, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	var gmin interface{}
+	flag := true
+	for _, blkHolder := range holder.tree.blockHolders {
+		min, err := blkHolder.Min(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		if min == nil {
+			continue
+		}
+		if flag {
+			gmin = min
+			flag = false
+		}
+		if common.CompareInterface(gmin, min) {
+			gmin = min
+		}
+	}
+	return gmin, nil
 }
 
 func (holder *unsortedSegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
-	// TODO(zzl)
-	return nil, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	var gmax interface{}
+	flag := true
+	for _, blkHolder := range holder.tree.blockHolders {
+		max, err := blkHolder.Max(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		if max == nil {
+			continue
+		}
+		if flag {
+			gmax = max
+			flag = false
+		}
+		if common.CompareInterface(max, gmax) {
+			gmax = max
+		}
+	}
+	return gmax, nil
 }
 
 func (holder *unsortedSegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uint64, error) {
-	// TODO(zzl)
-	return 0, 0, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	gsum := int64(0)
+	gcnt := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		sum, cnt, err := blkHolder.Sum(colIdx, filter)
+		if err != nil {
+			return 0, 0, err
+		}
+		gsum += sum
+		gcnt += cnt
+	}
+	return gsum, gcnt, nil
 }
 
 func (holder *unsortedSegmentHolder) StrongRefBlock(id uint64) *BlockIndexHolder {

@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -198,4 +200,148 @@ func (blk *block) GetBatch(attrs []int) dbi.IBatchReader {
 		panic(err)
 	}
 	return bat.(dbi.IBatchReader)
+}
+
+func (blk *block) Sum(colIdx int, filter *roaring64.Bitmap) (int64, uint64) {
+	vec, err := blk.GetVectorWrapper(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	defer common.GPool.Free(vec.MNode)
+	cnt := filter.GetCardinality()
+	sum := int64(0)
+	rows := filter.ToArray()
+	for _, row := range rows {
+		if vec.Nsp.Contains(row) {
+			continue
+		}
+		idx := int(row)
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		switch blk.meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+		case types.T_int8:
+			sum += int64(val.(int8))
+		case types.T_int16:
+			sum += int64(val.(int16))
+		case types.T_int32:
+			sum += int64(val.(int32))
+		case types.T_int64:
+			sum += int64(val.(int64))
+		case types.T_uint8:
+			sum += int64(val.(uint8))
+		case types.T_uint16:
+			sum += int64(val.(uint16))
+		case types.T_uint32:
+			sum += int64(val.(uint32))
+		case types.T_uint64:
+			sum += int64(val.(uint64))
+		case types.T_float32:
+			sum += int64(val.(float32))
+		case types.T_float64:
+			sum += int64(val.(float64))
+		case types.T_date:
+			sum += int64(val.(types.Date))
+		case types.T_datetime:
+			sum += int64(val.(types.Datetime))
+		}
+	}
+	return sum, cnt
+}
+
+func (blk *block) Max(colIdx int, filter *roaring64.Bitmap) interface{} {
+	vec, err := blk.GetVectorWrapper(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	defer common.GPool.Free(vec.MNode)
+	rows := filter.ToArray()
+	var max interface{}
+	flag := true
+	for _, row := range rows {
+		if vec.Nsp.Contains(row) {
+			continue
+		}
+		idx := int(row)
+		if flag {
+			max, err = vec.GetValue(idx)
+			if err != nil {
+				panic(err)
+			}
+			flag = false
+		}
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		if common.CompareInterface(val, max) {
+			max = val
+		}
+	}
+	return max
+}
+
+func (blk *block) Min(colIdx int, filter *roaring64.Bitmap) interface{} {
+	vec, err := blk.GetVectorWrapper(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	defer common.GPool.Free(vec.MNode)
+	rows := filter.ToArray()
+	var min interface{}
+	flag := true
+	for _, row := range rows {
+		if vec.Nsp.Contains(row) {
+			continue
+		}
+		idx := int(row)
+		if flag {
+			min, err = vec.GetValue(idx)
+			if err != nil {
+				panic(err)
+			}
+			flag = false
+		}
+		val, err := vec.GetValue(idx)
+		if err != nil {
+			panic(err)
+		}
+		if common.CompareInterface(min, val) {
+			min = val
+		}
+	}
+	return min
+}
+
+func (blk *block) Count(colIdx int, filter *roaring64.Bitmap) uint64 {
+	vec, err := blk.GetVectorWrapper(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	defer common.GPool.Free(vec.MNode)
+	rows := filter.ToArray()
+	cnt := uint64(0)
+	for _, row := range rows {
+		if !vec.Nsp.Contains(row) {
+			cnt++
+		}
+	}
+	return cnt
+}
+
+func (blk *block) NullCount(colIdx int, filter *roaring64.Bitmap) uint64 {
+	vec, err := blk.GetVectorWrapper(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	defer common.GPool.Free(vec.MNode)
+	cnt := uint64(0)
+	rows := filter.ToArray()
+	for _, row := range rows {
+		if vec.Nsp.Contains(row) {
+			cnt++
+		}
+	}
+	return cnt
 }

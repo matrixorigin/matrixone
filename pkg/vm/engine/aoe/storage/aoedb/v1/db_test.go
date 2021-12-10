@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -1331,9 +1332,12 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
 
 	schema := metadata.MockSchemaAll(1)
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-0", metadata.NumBsi, 0)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -1341,6 +1345,8 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk.Vecs[0].Nsp.Add(3)
+	baseCk.Vecs[0].Nsp.Add(4)
 
 	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
 	for i := 0; i < int(blkCnt); i++ {
@@ -1352,12 +1358,15 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	assert.Nil(t, err)
 	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
 	seg := tblData.WeakRefSegment(segId)
-	t.Logf("%+v", seg.GetIndexHolder())
+	//t.Logf("%+v", seg.GetIndexHolder())
 	segment := &db.Segment{
 		Data: seg,
 		Ids:  new(atomic.Value),
 	}
+
+	//t.Log(seg.GetMeta().PString(2, 1))
 	sparseFilter := segment.NewSparseFilter()
+	summarizer := segment.NewSummarizer()
 
 	// test sparse filter upon unclosed segment
 	res, _ := sparseFilter.Eq("mock_0", int8(-1))
@@ -1386,6 +1395,58 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
 	res, _ = sparseFilter.Ge("mock_0", int8(10))
 	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+
+	// test summarizer upon unclosed segment
+
+	//blk2 := seg.WeakRefBlock(uint64(2))
+	//vec, err := blk2.GetVectorWrapper(0)
+	//assert.Nil(t, err)
+	//t.Log(vec.String())
+
+	mockBM := roaring.NewBitmap()
+	mockBM.AddRange(1, 7)
+	mockBM.AddRange(11, 17)
+	mockBM.AddRange(21, 27)
+	mockBM.AddRange(31, 37)
+	sum, cnt, err := summarizer.Sum("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, sum, int64(14*4))
+	assert.Equal(t, cnt, uint64(4*4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	min, err := summarizer.Min("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, min, int8(5))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	max, err := summarizer.Max("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, max, int8(9))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	nullCnt, err := summarizer.NullCount("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, nullCnt, uint64(2*4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	cnt, err = summarizer.Count("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(5*4))
+	cnt, err = summarizer.Count("mock_0", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(8*4))
 
 	inst.Close()
 }
@@ -2779,6 +2840,7 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 
 func matchStringArray(a, b []string) bool {
 	if len(a) != len(b) {
+		logutil.Infof("mismatch:\n%s\n%s\n", a, b)
 		return false
 	}
 	if len(a) == 0 {
@@ -2794,6 +2856,7 @@ func matchStringArray(a, b []string) bool {
 	}
 	for _, e := range b {
 		if _, ok := mapper[e]; !ok {
+			logutil.Infof("mismatch:\n%s\n%s\n", a, b)
 			return false
 		} else {
 			mapper[e] -= 1

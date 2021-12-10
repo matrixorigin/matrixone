@@ -19,6 +19,7 @@ import (
 	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
@@ -54,7 +55,23 @@ func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, 
 		for _, blkId := range s.segment.Data.BlockIds() {
 			blk := s.segment.Data.WeakRefBlock(blkId)
 			if blk.GetType() == base.TRANSIENT_BLK {
-				transientPart += blk.GetRowCount()
+				var ranger *roaring.Bitmap
+				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+				endPos := startPos + blk.GetRowCount()
+				if filter != nil {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(startPos, endPos)
+					ranger.And(filter)
+					arr := ranger.ToArray()
+					ranger.Clear()
+					for _, e := range arr {
+						ranger.Add(e - startPos)
+					}
+				} else {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(0, endPos - startPos)
+				}
+				transientPart += blk.Count(colIdx, ranger)
 			}
 		}
 		return normalPart + transientPart, nil
@@ -66,7 +83,38 @@ func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint
 	if colIdx == -1 {
 		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
-	return s.segment.Data.GetIndexHolder().NullCount(colIdx, filter)
+	if s.segment.Data.GetType() == base.SORTED_SEG {
+		return s.segment.Data.GetIndexHolder().NullCount(colIdx, 0, filter)
+	} else {
+		transientPart := uint64(0)
+		for _, blkId := range s.segment.Data.BlockIds() {
+			blk := s.segment.Data.WeakRefBlock(blkId)
+			if blk.GetType() == base.TRANSIENT_BLK {
+				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+				endPos := startPos + blk.GetRowCount()
+				ranger := roaring.NewBitmap()
+				ranger.AddRange(startPos, endPos)
+				if filter != nil {
+					ranger.And(filter)
+					arr := ranger.ToArray()
+					ranger.Clear()
+					for _, e := range arr {
+						ranger.Add(e - startPos)
+						filter.Remove(e)
+					}
+				}
+				transientPart += blk.NullCount(colIdx, ranger)
+			}
+		}
+		holder := s.segment.Data.GetIndexHolder()
+		total := filter.GetCardinality()
+		normalCount, err := holder.Count(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		normalPart := total - normalCount
+		return normalPart + transientPart, nil
+	}
 }
 
 func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{}, error) {
@@ -74,7 +122,35 @@ func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{
 	if colIdx == -1 {
 		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
-	return s.segment.Data.GetIndexHolder().Max(colIdx, filter)
+	if s.segment.Data.GetType() == base.SORTED_SEG {
+		return s.segment.Data.GetIndexHolder().Max(colIdx, filter)
+	} else {
+		holder := s.segment.Data.GetIndexHolder()
+		max, err := holder.Max(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		for _, blkId := range s.segment.Data.BlockIds() {
+			blk := s.segment.Data.WeakRefBlock(blkId)
+			if blk.GetType() == base.TRANSIENT_BLK {
+				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+				endPos := startPos + blk.GetRowCount()
+				ranger := roaring.NewBitmap()
+				ranger.AddRange(startPos, endPos)
+				filter.And(ranger)
+				arr := filter.ToArray()
+				ranger.Clear()
+				for _, e := range arr {
+					ranger.Add(e - startPos)
+				}
+				tmax := blk.Max(colIdx, ranger)
+				if common.CompareInterface(tmax, max) {
+					max = tmax
+				}
+			}
+		}
+		return max, nil
+	}
 }
 
 func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{}, error) {
@@ -82,7 +158,35 @@ func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{
 	if colIdx == -1 {
 		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
-	return s.segment.Data.GetIndexHolder().Min(colIdx, filter)
+	if s.segment.Data.GetType() == base.SORTED_SEG {
+		return s.segment.Data.GetIndexHolder().Min(colIdx, filter)
+	} else {
+		holder := s.segment.Data.GetIndexHolder()
+		min, err := holder.Min(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		for _, blkId := range s.segment.Data.BlockIds() {
+			blk := s.segment.Data.WeakRefBlock(blkId)
+			if blk.GetType() == base.TRANSIENT_BLK {
+				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+				endPos := startPos + blk.GetRowCount()
+				ranger := roaring.NewBitmap()
+				ranger.AddRange(startPos, endPos)
+				filter.And(ranger)
+				arr := filter.ToArray()
+				ranger.Clear()
+				for _, e := range arr {
+					ranger.Add(e - startPos)
+				}
+				tmin := blk.Min(colIdx, ranger)
+				if common.CompareInterface(min, tmin) {
+					min = tmin
+				}
+			}
+		}
+		return min, nil
+	}
 }
 
 func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uint64, error) {
@@ -90,7 +194,35 @@ func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uin
 	if colIdx == -1 {
 		return 0, 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
-	return s.segment.Data.GetIndexHolder().Sum(colIdx, filter)
+	if s.segment.Data.GetType() == base.SORTED_SEG {
+		return s.segment.Data.GetIndexHolder().Sum(colIdx, filter)
+	} else {
+		holder := s.segment.Data.GetIndexHolder()
+		sum, cnt, err := holder.Sum(colIdx, filter)
+		if err != nil {
+			return 0, 0, err
+		}
+		//logutil.Infof("...... %d %d", sum, cnt)
+		for _, blkId := range s.segment.Data.BlockIds() {
+			blk := s.segment.Data.WeakRefBlock(blkId)
+			if blk.GetType() == base.TRANSIENT_BLK {
+				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+				endPos := startPos + blk.GetRowCount()
+				ranger := roaring.NewBitmap()
+				ranger.AddRange(startPos, endPos)
+				filter.And(ranger)
+				arr := filter.ToArray()
+				ranger.Clear()
+				for _, e := range arr {
+					ranger.Add(e - startPos)
+				}
+				deltasum, deltacnt := blk.Sum(colIdx, ranger)
+				sum += deltasum
+				cnt += deltacnt
+			}
+		}
+		return sum, cnt, nil
+	}
 }
 
 

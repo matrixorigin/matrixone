@@ -226,7 +226,7 @@ func (holder *sortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (ui
 	return 0, errors.New("bsi not found")
 }
 
-func (holder *sortedSegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+func (holder *sortedSegmentHolder) NullCount(colIdx int, max uint64, filter *roaring.Bitmap) (uint64, error) {
 	holder.self.RLock()
 	defer holder.self.RUnlock()
 	idxes, ok := holder.self.colIndices[colIdx]
