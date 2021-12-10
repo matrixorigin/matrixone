@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	stdLog "log"
+	"math"
 	"strconv"
 	"sync"
 	"testing"
@@ -43,6 +44,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/logdb"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
@@ -262,6 +264,11 @@ func TestSnapshot(t *testing.T) {
 	require.Nil(t, err)
 	err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
 	require.Nil(t, err)
+	var logDb logdb.LogDB
+	logDb=d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
+	require.NotNil(t, logDb)
+	_,_,err=logDb.IterateEntries(nil,0,shard.ShardID,0,2,3, math.MaxUint64)
+	require.NotNil(t,err)
 
 	c.RestartNode(2)
 	stdLog.Printf(" node2 started.")
