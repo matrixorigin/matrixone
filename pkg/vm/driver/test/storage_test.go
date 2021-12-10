@@ -246,42 +246,42 @@ func TestSnapshot(t *testing.T) {
 
 	c.Start()
 	stdLog.Printf("drivers all started.")
-	// defer func() {
-	// 	stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
-	// 	c.Stop()
-	// }()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
 	c.RaftCluster.WaitLeadersByCount(2, time.Second*30)
 	c.StopNode(2)
 	stdLog.Printf("node2 stopped.")
-	// defer func() {
-	// 	stdLog.Printf("start node2")
-	// 	time.Sleep(10*time.Second)
-	// 	c.RaftCluster.StartNode(2)
-	// }()
-	// d0:=c.CubeDrivers[0]
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> node2 start")
+		c.RestartNode(2)
+	}()
+	d0:=c.CubeDrivers[0]
 
-	// shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
-	// require.NoError(t, err)
-	// tbl:=MockTableInfo(1)
-	// err=d0.CreateTablet(tbl.Name,shard.ShardID,tbl)
-	// require.Nil(t,err)
+	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	require.NoError(t, err)
+	tbl:=MockTableInfo(1)
+	err=d0.CreateTablet(tbl.Name,shard.ShardID,tbl)
+	require.Nil(t,err)
 	time.Sleep(10 * time.Second)
-	stdLog.Printf("before node2 started.")
+
 	c.RestartNode(2)
-	stdLog.Printf("after node2 started.")
+	stdLog.Printf(" node2 started.")
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> node2 stop")
+		c.StopNode(2)
+	}()
 
 	time.Sleep(10 * time.Second)
-	//start s1,s0
-	//for get persistent id>compact id
-	//s1.create tablei//mock table
-	//s1.append batchi//mock batch
-	//s1.append batchi
-	//s1.create batchi
-	//start s2
-	//wait 10s
-	//s2.show tables
-	//s2.readall
-
+	d2:=c.CubeDrivers[2]
+	tbls,err:=d2.TabletNames(shard.ShardID)
+	require.Nil(t,err)
+	require.NotEqual(t,0,len(tbls))
+	s2:=c.AOEStorages[2]
+	batchs,err:=s2.ReadAll(shard.ShardID)
+	require.Nil(t,err)
+	require.NotEqual(t,0,len(batchs))
 }
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
