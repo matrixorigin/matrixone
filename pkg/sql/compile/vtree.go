@@ -50,6 +50,52 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 		if s, err = e.compileQ(vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err
 		}
+		// needn't do un-transform for simple query without group by and aggregation
+		{ // build instructions for query
+			if vt.Top != nil {
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Op:  vm.Top,
+					Arg: vt.Top,
+				})
+			}
+			if vt.Order != nil {
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Op:  vm.OrderQ,
+					Arg: vt.Order,
+				})
+			}
+			if vt.Offset != nil {
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Op:  vm.Offset,
+					Arg: vt.Offset,
+				})
+			}
+			if vt.Limit != nil {
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Op:  vm.Limit,
+					Arg: vt.Limit,
+				})
+			}
+			if vt.Dedup != nil {
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Op:  vm.Dedup,
+					Arg: vt.Dedup,
+				})
+			}
+			attrs := make([]string, len(e.resultCols))
+			for i, col := range e.resultCols {
+				attrs[i] = col.Name
+			}
+			s.Instructions = append(s.Instructions, vm.Instruction{
+				Op: vm.Output,
+				Arg: &output.Argument{
+					Attrs: attrs,
+					Data:  e.u,
+					Func:  e.fill,
+				},
+			})
+			return s, nil
+		}
 	case d == 1 && !isB:
 		if s, err = e.compileAQ(vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err

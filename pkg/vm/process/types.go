@@ -64,5 +64,7 @@ type Process struct {
 	Lim Limitation
 	Mp  *mheap.Mheap
 
+	TempBatch *batch.Batch // TempBatch is the batch to store results in process
+
 	Cancel context.CancelFunc
 }

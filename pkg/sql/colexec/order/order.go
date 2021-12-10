@@ -60,6 +60,30 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return n.ctr.process(bat, proc)
 }
 
+// CallQ is order implement for simple query
+func CallQ(proc *process.Process, arg interface{}) ( bool, error) {
+	var err error
+
+	bat := proc.Reg.InputBatch
+	b := proc.TempBatch
+	if bat == nil { // last batch
+		n := arg.(*Argument)
+		proc.Reg.InputBatch = b
+		proc.TempBatch = nil
+		_, err = n.ctr.process(proc.Reg.InputBatch, proc)
+		return true, err
+	}
+	if len(bat.Zs) == 0 { // ignore empty batch
+		return false, nil
+	}
+	proc.TempBatch, err = b.Append(proc.Mp, bat)
+	if err != nil {
+		return false, err
+	}
+	proc.Reg.InputBatch = &batch.Batch{}
+	return false, nil
+}
+
 func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, error) {
 	ovec := batch.GetVector(bat, ctr.attrs[0])
 	n := len(bat.Zs)

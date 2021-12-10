@@ -68,6 +68,8 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Transform:   transform.Prepare,
 	Projection:  projection.Prepare,
 	UnTransform: untransform.Prepare,
+
+	OrderQ: 	 order.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -86,4 +88,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Transform:   transform.Call,
 	Projection:  projection.Call,
 	UnTransform: untransform.Call,
+
+	OrderQ:		 order.CallQ,
 }

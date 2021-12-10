@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -187,6 +189,30 @@ func (bat *Batch) String() string {
 		}
 	}
 	return buf.String()
+}
+
+func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
+	if bat == nil {
+		return b, nil
+	}
+	if len(bat.Vecs) != len(b.Vecs) {
+		return nil, errors.New(errno.InternalError, "unexpected error happens in batch append")
+	}
+	if len(bat.Vecs) == 0 {
+		return bat, nil
+	}
+	flags := make([]uint8, vector.Length(b.Vecs[0]))
+	for i := range flags {
+		flags[i]++
+	}
+	for i := range bat.Vecs {
+		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
+			return nil, err
+		}
+	}
+	bat.Zs = append(bat.Zs, b.Zs...)
+	// todo: do we need to solve Sels and SelsData ?
+	return bat, nil
 }
 
 // InitZsOne init Batch.Zs and values are all 1

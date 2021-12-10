@@ -30,6 +30,13 @@ const (
 	Transform
 	Projection
 	UnTransform
+
+	// operators for simple query without join and aggregate functions (function vm.compileQ())
+	TopQ
+	LimitQ
+	DedupQ
+	OrderQ
+	OffsetQ
 )
 
 // Instruction contains relational algebra
