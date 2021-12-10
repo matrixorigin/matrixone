@@ -337,6 +337,16 @@ values = ["error","info","debug","warning","warn","fatal"]
 comment = "default is error. The log level for cube."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "cubeMaxEntriesBytes"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["314572800"]
+comment = "default is 300MB. The max entries bytes for the write batch in the cube."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
