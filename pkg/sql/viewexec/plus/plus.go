@@ -218,6 +218,11 @@ func (ctr *Container) fillBatch(bat *batch.Batch, proc *process.Process) error {
 			ctr.zinserts = make([]uint8, UnitLimit)
 			ctr.hashs = make([]uint64, UnitLimit)
 			ctr.values = make([]*uint64, UnitLimit)
+			ctr.hstr.keys = make([][]byte, UnitLimit)
+			ctr.hstr.realValues = make([]uint64, UnitLimit)
+			for i := 0; i < UnitLimit; i++ {
+				ctr.values[i] = &ctr.hstr.realValues[i]
+			}
 			ctr.hstr.ht = &hashtable.StringHashMap{}
 			ctr.hstr.ht.Init()
 		}
@@ -751,79 +756,79 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 			n = UnitLimit
 		}
 		copy(ctr.inserts[:n], ctr.zinserts[:n])
-		keys := make([][]byte, UnitLimit)
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
 			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*1:(i+k+1)*1]...)
 				}
 			case types.T_uint8:
 				vs := vecs[j].Col.([]uint8)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*1:(i+k+1)*1]...)
 				}
 			case types.T_int16:
 				vs := vecs[j].Col.([]int16)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*2:(i+k+1)*2]...)
 				}
 			case types.T_uint16:
 				vs := vecs[j].Col.([]uint16)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*2:(i+k+1)*2]...)
 				}
 			case types.T_int32:
 				vs := vecs[j].Col.([]int32)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 				}
 			case types.T_uint32:
 				vs := vecs[j].Col.([]uint32)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 				}
 			case types.T_float32:
 				vs := vecs[j].Col.([]float32)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 				}
 			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 				}
 			case types.T_uint64:
 				vs := vecs[j].Col.([]uint64)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 				}
 			case types.T_float64:
 				vs := vecs[j].Col.([]float64)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 				}
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
-					keys[k] = append(keys[k], vs.Get(i+k)...)
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], vs.Get(i+k)...)
 				}
 			}
 		}
 		cnt := 0
 		for k := int64(0); k < n; k++ {
-			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &keys[k][0], Len: len(keys[k])})
+			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &ctr.hstr.keys[k][0], Len: len(ctr.hstr.keys[k])})
+			ctr.hstr.keys[k] = ctr.hstr.keys[k][:0]
 			if ok {
 				ctr.inserts[k] = 1
 				*vp = ctr.rows
@@ -832,7 +837,7 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
 			ai := int64(*vp)
-			ctr.values[k] = vp
+			ctr.hstr.realValues[k] = *vp
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 		}
 		if cnt > 0 {
