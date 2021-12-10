@@ -1800,7 +1800,6 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 			}
 		}
-		keys := make([][]byte, UnitLimit)
 		{
 			for j, vec := range gvecs {
 				if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
@@ -1811,9 +1810,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:1]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*1:(*vp+1)*1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*1:(*vp+1)*1]...)
 							}
 						}
 					case types.T_uint8:
@@ -1821,9 +1820,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:1]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*1:(*vp+1)*1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*1:(*vp+1)*1]...)
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1832,9 +1831,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:2]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*2:(*vp+1)*2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*2:(*vp+1)*2]...)
 							}
 						}
 					case types.T_uint16:
@@ -1842,9 +1841,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:2]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*2:(*vp+1)*2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*2:(*vp+1)*2]...)
 							}
 						}
 					case types.T_int32:
@@ -1852,9 +1851,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
 							}
 						}
 					case types.T_uint32:
@@ -1862,9 +1861,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
 							}
 						}
 					case types.T_float32:
@@ -1872,9 +1871,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
 							}
 						}
 					case types.T_int64:
@@ -1882,9 +1881,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
 							}
 						}
 					case types.T_uint64:
@@ -1892,9 +1891,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
 							}
 						}
 					case types.T_float64:
@@ -1902,18 +1901,18 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], data[0:8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								keys[k] = append(keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
 							}
 						}
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == nil {
-								keys[k] = append(keys[k], vs.Get(0)...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(0)...)
 							} else {
-								keys[k] = append(keys[k], vs.Get(int64(*vp))...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(int64(*vp))...)
 							}
 						}
 					}
@@ -1923,66 +1922,66 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						vs := vecs[j].Col.([]int8)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*1:(i+k+1)*1]...)
 						}
 					case types.T_uint8:
 						vs := vecs[j].Col.([]uint8)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*1:(i+k+1)*1]...)
 						}
 					case types.T_int16:
 						vs := vecs[j].Col.([]int16)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*2:(i+k+1)*2]...)
 						}
 					case types.T_uint16:
 						vs := vecs[j].Col.([]uint16)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*2:(i+k+1)*2]...)
 						}
 					case types.T_int32:
 						vs := vecs[j].Col.([]int32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 						}
 					case types.T_uint32:
 						vs := vecs[j].Col.([]uint32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 						}
 					case types.T_float32:
 						vs := vecs[j].Col.([]float32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 						}
 					case types.T_int64:
 						vs := vecs[j].Col.([]int64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 						}
 					case types.T_uint64:
 						vs := vecs[j].Col.([]uint64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 						}
 					case types.T_float64:
 						vs := vecs[j].Col.([]float64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 						}
 					case types.T_char, types.T_varchar:
 						vs := vecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							keys[k] = append(keys[k], vs.Get(i+k)...)
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(i+k)...)
 						}
 					}
 				}
@@ -2009,13 +2008,15 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 		{
 			for k := int64(0); k < n; k++ {
 				if ctr.pctr.zs[k] == 0 {
+					ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
 					continue
 				}
-				ok, vp := ctr.pctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &keys[k][0], Len: len(keys[k])})
+				ok, vp := ctr.pctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &ctr.pctr.hstr.keys[k][0], Len: len(ctr.pctr.hstr.keys[k])})
+				ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
 				if ok {
 					ctr.inserts[k] = 1
 				}
-				ctr.values[k] = vp
+				ctr.pctr.hstr.realValues[k] = *vp
 			}
 		}
 		for k, ok := range ctr.inserts[:n] {
@@ -2761,6 +2762,11 @@ func (ctr *Container) constructBatch(rn string, varsMap map[string]int, freeVars
 		ctr.pctr.h40.ht.Init()
 	default:
 		ctr.pctr.typ = HStr
+		ctr.pctr.hstr.keys = make([][]byte, UnitLimit)
+		ctr.pctr.hstr.realValues = make([]uint64, UnitLimit)
+		for i := 0; i < UnitLimit; i++ {
+			ctr.values[i] = &ctr.pctr.hstr.realValues[i]
+		}
 		ctr.pctr.hstr.ht = &hashtable.StringHashMap{}
 		ctr.pctr.hstr.ht.Init()
 	}
@@ -2803,4 +2809,53 @@ func (ctr *Container) constructVars(arg *Argument) {
 	for _, v := range ctr.vars {
 		ctr.varsMap[v] = 0
 	}
+}
+
+func (ctr *Container) calculateCount(z int64, vzs [][]int64, vsels [][]int64) {
+
+	if len(vsels) == 0 {
+		ctr.zs = append(ctr.zs, z)
+		return
+	}
+
+	rowNum := int64(len(vsels))
+	colNum := int64(len(vsels[0]))
+
+	N := int64(1)
+	a := colNum
+	for i := rowNum; i > 0; i >>= 1 {
+		if i&1 != 0 {
+			N *= a
+		}
+		a *= a
+	}
+
+	placeIndex := N
+
+	if int64(cap(ctr.intermediateBuffer)) < N {
+		ctr.intermediateBuffer = append(ctr.intermediateBuffer, make([]int64, N-int64(cap(ctr.intermediateBuffer)))...)
+	}
+
+	for i := colNum - 1; i >= 0; i-- {
+		ctr.intermediateBuffer[placeIndex-1] = z * vzs[rowNum-1][vsels[rowNum-1][i]]
+		placeIndex--
+	}
+
+	for index := rowNum - 1; index >= 0; index-- {
+		if placeIndex == 0 {
+			break
+		}
+		l := N - placeIndex
+		s := N - l*colNum
+		for j := int64(0); j < colNum; j++ {
+			for i := placeIndex; i < N; i++ {
+				ctr.intermediateBuffer[s] = ctr.intermediateBuffer[i] * vzs[index-1][vsels[index-1][j]]
+				s++
+			}
+		}
+		placeIndex = N - l*colNum
+	}
+	ctr.intermediateBuffer = ctr.intermediateBuffer[:N]
+
+	ctr.zs = append(ctr.zs, ctr.intermediateBuffer...)
 }
