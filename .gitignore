@@ -1,4 +1,3 @@
-go.sum
 .idea/
 *.swp
 bin/
@@ -16,6 +15,8 @@ mo-server
 *.toml
 cube*/
 pkg/catalog/test/
+pkg/config/system_vars.go
+pkg/config/system_vars_test.go
 pkg/vm/driver/test/test/
 pkg/vm/engine/aoe/engine/test/
 pkg/sql/colexec/extend/overload/*.go 
