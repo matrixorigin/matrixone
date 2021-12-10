@@ -243,7 +243,7 @@ func TestSnapshot(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
-	
+
 	c.Start()
 	stdLog.Printf("drivers all started.")
 	// defer func() {
@@ -251,7 +251,7 @@ func TestSnapshot(t *testing.T) {
 	// 	c.Stop()
 	// }()
 	c.RaftCluster.WaitLeadersByCount(2, time.Second*30)
-	c.RaftCluster.StopNode(2)
+	c.StopNode(2)
 	stdLog.Printf("node2 stopped.")
 	// defer func() {
 	// 	stdLog.Printf("start node2")
@@ -265,12 +265,12 @@ func TestSnapshot(t *testing.T) {
 	// tbl:=MockTableInfo(1)
 	// err=d0.CreateTablet(tbl.Name,shard.ShardID,tbl)
 	// require.Nil(t,err)
-	time.Sleep(10*time.Second)
+	time.Sleep(10 * time.Second)
 	stdLog.Printf("before node2 started.")
-	c.RaftCluster.StartNode(2)
+	c.RestartNode(2)
 	stdLog.Printf("after node2 started.")
 
-	time.Sleep(10*time.Second)
+	time.Sleep(10 * time.Second)
 	//start s1,s0
 	//for get persistent id>compact id
 	//s1.create tablei//mock table

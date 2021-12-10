@@ -16,8 +16,11 @@ package testutil
 
 import (
 	"fmt"
+	stdLog "log"
+	"testing"
+	"time"
+
 	"github.com/cockroachdb/pebble"
-	config2 "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/vfs"
@@ -25,9 +28,6 @@ import (
 	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
-	stdLog "log"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
@@ -134,19 +134,22 @@ type TestAOECluster struct {
 	t              *testing.T
 	initOpts       []TestAOEClusterOption
 	initCfgCreator func(node int) *config.Config
+	nodes          int
 
 	// reset fields
-	opts        *testAOEClusterOptions
-	RaftCluster raftstore.TestRaftCluster
-	CubeDrivers []driver.CubeDriver
-	AOEStorages []*aoe2.Storage
-	// MetadataStorages []storage.MetadataStorage
+	opts         *testAOEClusterOptions
+	RaftCluster  raftstore.TestRaftCluster
+	CubeDrivers  []driver.CubeDriver
+	AOEStorages  []*aoe2.Storage
 	DataStorages []storage.DataStorage
 }
 
 func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, opts ...TestAOEClusterOption) *TestAOECluster {
 	c := &TestAOECluster{t: t, initOpts: opts, initCfgCreator: cfgCreator}
 	c.reset()
+	c.RaftCluster.EveryStore(func(i int, store raftstore.Store) {
+		c.nodes++
+	})
 	return c
 }
 
@@ -154,28 +157,34 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 	c.RaftCluster = nil
 	c.CubeDrivers = nil
 	c.AOEStorages = nil
-	// c.MetadataStorages = nil
 	c.DataStorages = nil
-	c.opts = newTestAOEClusterOptions()
 
+	c.opts = newTestAOEClusterOptions()
 	for _, opt := range c.initOpts {
 		opt(c.opts)
 	}
 	c.opts.adjust()
+
 	c.opts.raftOptions = append(c.opts.raftOptions, opts...)
-
 	c.opts.raftOptions = append(c.opts.raftOptions, raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
-		// meta, err := c.opts.metaFactoryFunc(fmt.Sprintf("%s/meta", cfg.DataPath))
-		// assert.NoError(c.t, err)
-		// c.MetadataStorages = append(c.MetadataStorages, meta)
-
 		data, err := c.opts.kvDataFactoryFunc(fmt.Sprintf("%s/data", cfg.DataPath))
 		assert.NoError(c.t, err)
-		c.DataStorages = append(c.DataStorages, data)
+		if len(c.DataStorages) > node {
+			c.DataStorages[node] = data
+		} else {
+			c.DataStorages = append(c.DataStorages, data)
+		}
 
 		aoe, err := c.opts.aoeFactoryFunc(fmt.Sprintf("%s/aoe", cfg.DataPath))
 		assert.NoError(c.t, err)
-		c.AOEStorages = append(c.AOEStorages, aoe)
+		if len(c.AOEStorages) > node {
+			c.AOEStorages[node] = aoe
+		} else {
+			c.AOEStorages = append(c.AOEStorages, aoe)
+		}
+
+		// avoid create raftstore kv storage, this filed will reset in cube driver
+		cfg.Storage.DataStorageFactory = func(group uint64) storage.DataStorage { return nil }
 
 		cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
 		cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
@@ -191,48 +200,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		//c.PCIs = append(c.PCIs, pci)
 	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
 		dCfg := c.initCfgCreator(node)
-		dCfg.CubeConfig = cConfig.Config{
-			RaftAddr:           cfg.RaftAddr,
-			ClientAddr:         cfg.ClientAddr,
-			DataPath:           cfg.DataPath,
-			DeployPath:         cfg.DeployPath,
-			Version:            cfg.Version,
-			GitHash:            cfg.GitHash,
-			Labels:             cfg.Labels,
-			Capacity:           cfg.Capacity,
-			UseMemoryAsStorage: cfg.UseMemoryAsStorage,
-			ShardGroups:        cfg.ShardGroups,
-			Replication:        cfg.Replication,
-			Snapshot:           cfg.Snapshot,
-			Raft:               cfg.Raft,
-			Worker:             cfg.Worker,
-			Prophet: config2.Config{
-				Name:                            cfg.Prophet.Name,
-				DataDir:                         cfg.Prophet.DataDir,
-				RPCAddr:                         cfg.Prophet.RPCAddr,
-				RPCTimeout:                      cfg.Prophet.RPCTimeout,
-				StorageNode:                     cfg.Prophet.StorageNode,
-				ExternalEtcd:                    cfg.Prophet.ExternalEtcd,
-				EmbedEtcd:                       cfg.Prophet.EmbedEtcd,
-				LeaderLease:                     cfg.Prophet.LeaderLease,
-				Schedule:                        cfg.Prophet.Schedule,
-				Replication:                     cfg.Prophet.Replication,
-				LabelProperty:                   cfg.Prophet.LabelProperty,
-				Handler:                         cfg.Prophet.Handler,
-				Adapter:                         cfg.Prophet.Adapter,
-				ResourceStateChangedHandler:     cfg.Prophet.ResourceStateChangedHandler,
-				ContainerHeartbeatDataProcessor: cfg.Prophet.ContainerHeartbeatDataProcessor,
-				DisableStrictReconfigCheck:      cfg.Prophet.DisableStrictReconfigCheck,
-				DisableResponse:                 cfg.Prophet.DisableResponse,
-				EnableResponseNotLeader:         cfg.Prophet.EnableResponseNotLeader,
-				TestCtx:                         cfg.Prophet.TestCtx,
-			},
-			Storage:   cfg.Storage,
-			Customize: cfg.Customize,
-			Metric:    cfg.Metric,
-			FS:        cfg.FS,
-			Test:      cfg.Test,
-		}
+		dCfg.CubeConfig = *cfg
 		types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
 		for _, t := range types {
 			if v := cfg.Prophet.GetJobProcessor(t); v != nil {
@@ -244,7 +212,11 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 			return raftstore.NewStore(c), nil
 		})
 		assert.NoError(c.t, err)
-		c.CubeDrivers = append(c.CubeDrivers, d)
+		if len(c.CubeDrivers) > node {
+			c.CubeDrivers[node] = d
+		} else {
+			c.CubeDrivers = append(c.CubeDrivers, d)
+		}
 		return d.RaftStore()
 	}), raftstore.WithTestClusterNodeStartFunc(func(node int, store raftstore.Store) {
 		err := c.CubeDrivers[node].Start()
@@ -265,6 +237,17 @@ func (c *TestAOECluster) Restart() {
 	c.Stop()
 	c.reset(raftstore.WithTestClusterRecreate(false))
 	c.Start()
+}
+
+func (c *TestAOECluster) StopNode(n int) {
+	c.RaftCluster.StopNode(n)
+	c.CubeDrivers[n].Close()
+	c.DataStorages[n].Close()
+	c.AOEStorages[n].Close()
+}
+
+func (c *TestAOECluster) RestartNode(n int) {
+	c.RaftCluster.RestartNode(n)
 }
 
 func (c *TestAOECluster) Stop() {
