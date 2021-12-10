@@ -2,7 +2,7 @@
 - Status: In Progress
 - Start Date: 2021-05-10
 - Authors: [Xu Peng](https://github.com/XuPeng-SH)
-- Implementation PR:
+- Implementation PR: [#1348](https://github.com/matrixorigin/matrixone/pull/1348)
 - Issue for this RFC: [#1320](https://github.com/matrixorigin/matrixone/pull/1320)
 
 # Summary
