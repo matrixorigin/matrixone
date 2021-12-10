@@ -669,32 +669,32 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	renameTable := func(oldName, dbName string) string {
 		return oldName
 	}
-	dropTableCtx := aoedb.DropTableCtx{
-		DBMutationCtx: aoedb.DBMutationCtx{
-			Id:     old.LogIndex,
-			Offset: 0,
-			Size:   2,
-			DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
-		},
-		Table: sPrefix + strconv.Itoa(int(old.ShardID)),
-	}
-	_, err := s.DB.DropTable(&dropTableCtx)
-	if err != nil {
-		logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
-		return err
-	}
+	// dropTableCtx := aoedb.DropTableCtx{
+	// 	DBMutationCtx: aoedb.DBMutationCtx{
+	// 		Id:     old.LogIndex,
+	// 		Offset: 0,
+	// 		Size:   2,
+	// 		DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
+	// 	},
+	// 	Table: sPrefix + strconv.Itoa(int(old.ShardID)),
+	// }
+	// _, err := s.DB.DropTable(&dropTableCtx)
+	// if err != nil {
+	// 	logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
+	// 	return err
+	// }
 	execSplitCtx := aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
-			Offset: 1,
-			Size:   2,
+			Offset: 0,
+			Size:   1,
 			DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
 		},
 		NewNames:    newNames,
 		RenameTable: renameTable,
 		SplitCtx:    ctx,
 	}
-	err = s.DB.ExecSplitDatabase(&execSplitCtx)
+	err := s.DB.ExecSplitDatabase(&execSplitCtx)
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.",old.ShardID)
 		return err
