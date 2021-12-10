@@ -15,6 +15,8 @@
 package untransform
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 )
@@ -25,7 +27,6 @@ const (
 
 const (
 	Bare = iota
-	Single
 	FreeVarsAndBoundVars
 )
 
@@ -43,6 +44,7 @@ const (
 )
 
 type Container struct {
+	sync.Mutex
 	typ       int
 	state     int
 	rows      uint64
@@ -74,8 +76,7 @@ type Container struct {
 		ht    *hashtable.String40HashMap
 	}
 	hstr struct {
-		realValues []uint64
-		ht         *hashtable.StringHashMap
+		ht *hashtable.StringHashMap
 	}
 	bat *batch.Batch
 }

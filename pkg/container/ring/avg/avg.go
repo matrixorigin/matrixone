@@ -318,6 +318,30 @@ func (r *AvgRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				}
 			}
 		}
+	case types.T_float32:
+		vs := vec.Col.([]float32)
+		for j, v := range vs {
+			r.Vs[i] += float64(v) * float64(zs[j])
+		}
+		if nulls.Any(vec.Nsp) {
+			for j := range vs {
+				if nulls.Contains(vec.Nsp, uint64(j)) {
+					r.Ns[i] += zs[j]
+				}
+			}
+		}
+	case types.T_float64:
+		vs := vec.Col.([]float64)
+		for j, v := range vs {
+			r.Vs[i] += float64(v) * float64(zs[j])
+		}
+		if nulls.Any(vec.Nsp) {
+			for j := range vs {
+				if nulls.Contains(vec.Nsp, uint64(j)) {
+					r.Ns[i] += zs[j]
+				}
+			}
+		}
 	}
 }
 
