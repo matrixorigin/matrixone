@@ -48,8 +48,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	switch n.Type {
 	case Bare:
 		return n.ctr.processBare(n.FreeVars, proc)
-	case Single:
-		return n.ctr.processSingle(n.FreeVars, proc)
 	default:
 		if len(n.FreeVars) == 0 {
 			return n.ctr.processBoundVars(proc)
@@ -59,48 +57,35 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 }
 
 func (ctr *Container) processBare(fvars []string, proc *process.Process) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil {
+	if len(proc.Reg.MergeReceivers) == 0 {
 		return true, nil
 	}
-	if len(bat.Zs) == 0 {
+	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+		reg := proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
+		if bat == nil {
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
+			i--
+			continue
+		}
+		if len(bat.Zs) == 0 {
+			i--
+			continue
+		}
+		for i, r := range bat.Rs {
+			bat.Attrs = append(bat.Attrs, bat.As[i])
+			vec := r.Eval(bat.Zs)
+			vec.Ref = bat.Refs[i]
+			bat.Vecs = append(bat.Vecs, vec)
+		}
+		bat.Rs = nil
+		if len(fvars) > 0 {
+			batch.Reduce(bat, fvars, proc.Mp)
+		}
+		proc.Reg.InputBatch = bat
 		return false, nil
 	}
-	for i, r := range bat.Rs {
-		bat.Attrs = append(bat.Attrs, bat.As[i])
-		vec := r.Eval(bat.Zs)
-		vec.Ref = bat.Refs[i]
-		bat.Vecs = append(bat.Vecs, vec)
-	}
-	bat.Rs = nil
-	if len(fvars) > 0 {
-		batch.Reduce(bat, fvars, proc.Mp)
-	}
-	return false, nil
-}
-
-func (ctr *Container) processSingle(fvars []string, proc *process.Process) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil {
-		return true, nil
-	}
-	if len(bat.Zs) == 0 {
-		return false, nil
-	}
-	for i, r := range bat.Rs {
-		bat.Attrs = append(bat.Attrs, bat.As[i])
-		vec := r.Eval(bat.Zs)
-		vec.Ref = bat.Refs[i]
-		bat.Vecs = append(bat.Vecs, vec)
-	}
-	bat.Rs = nil
-	if len(fvars) > 0 {
-		batch.Reduce(bat, fvars, proc.Mp)
-	}
-	for i := range bat.Zs {
-		bat.Zs[i] = 1
-	}
-	return false, nil
+	return true, nil
 }
 
 func (ctr *Container) processBoundVars(proc *process.Process) (bool, error) {
@@ -195,6 +180,19 @@ func (ctr *Container) processFreeVars(fvars []string, proc *process.Process) (bo
 }
 
 func (ctr *Container) fill(fvars []string, proc *process.Process) error {
+	if len(proc.Reg.MergeReceivers) == 1 {
+		for {
+			bat := <-proc.Reg.MergeReceivers[0].Ch
+			if bat == nil {
+				return nil
+			}
+			if len(bat.Zs) == 0 {
+				continue
+			}
+			ctr.bat = bat
+			return nil
+		}
+	}
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		bat := <-proc.Reg.MergeReceivers[i].Ch
 		if bat == nil {
@@ -311,10 +309,6 @@ func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.
 			ctr.zInserted = make([]uint8, UnitLimit)
 			ctr.hashes = make([]uint64, UnitLimit)
 			ctr.values = make([]*uint64, UnitLimit)
-			ctr.hstr.realValues = make([]uint64, UnitLimit)
-			for i := 0; i < UnitLimit; i++ {
-				ctr.values[i] = &ctr.hstr.realValues[i]
-			}
 			ctr.hstr.ht = &hashtable.StringHashMap{}
 			ctr.hstr.ht.Init()
 		}
@@ -816,7 +810,6 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *process.Process) error {
 	defer batch.Clean(bat, proc.Mp)
 	vecs := bat.Vecs[:len(fvars)]
-	keys := make([][]byte, UnitLimit)
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit { // batch
 		n := count - i
@@ -824,7 +817,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 			n = UnitLimit
 		}
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
-		cnt := 0
+		keys := make([][]byte, UnitLimit)
 		for j, vec := range vecs {
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -894,9 +887,9 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 				}
 			}
 		}
+		cnt := 0
 		for k := int64(0); k < n; k++ {
 			ok, vp := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &keys[k][0], Len: len(keys[k])})
-			keys[k] = keys[k][:0]
 			if ok {
 				ctr.inserted[k] = 1
 				*vp = ctr.rows
@@ -905,7 +898,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
 			ai := int64(*vp)
-			ctr.hstr.realValues[k] = *vp
+			ctr.values[k] = vp
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 		}
 		if cnt > 0 {

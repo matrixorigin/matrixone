@@ -40,15 +40,16 @@ const (
 )
 
 type view struct {
-	isB  bool
-	vis  []int
-	ris  []int
-	rows uint64
-	rn   string
-	key  string
-	sels [][]int64
-	typ  types.Type
-	h8   struct {
+	isB   bool
+	isOne bool
+	vis   []int
+	ris   []int
+	rows  uint64
+	rn    string
+	key   string
+	sels  [][]int64
+	typ   types.Type
+	h8    struct {
 		ht *hashtable.Int64HashMap
 	}
 	h24 struct {
@@ -92,21 +93,19 @@ type probeContainer struct {
 }
 
 type Container struct {
-	isB                bool
-	state              int
-	is                 []int
-	inserts            []uint8
-	zinserts           []uint8
-	keyOffs            []uint32
-	zKeyOffs           []uint32
-	hashs              []uint64
-	zs                 []int64
-	intermediateBuffer []int64
-	views              []*view
-	vars               []string
-	values             []*uint64
-	zvalues            []*uint64
-	h8                 struct {
+	isB      bool
+	state    int
+	is       []int
+	inserts  []uint8
+	zinserts []uint8
+	keyOffs  []uint32
+	zKeyOffs []uint32
+	hashs    []uint64
+	views    []*view
+	vars     []string
+	values   []*uint64
+	zvalues  []*uint64
+	h8       struct {
 		keys  []uint64
 		zKeys []uint64
 	}
@@ -122,6 +121,7 @@ type Container struct {
 		keys  [][5]uint64
 		zKeys [][5]uint64
 	}
+	sels     [][]int64
 	bat      *batch.Batch
 	pctr     *probeContainer
 	varsMap  map[string]uint8

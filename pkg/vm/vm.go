@@ -16,7 +16,6 @@ package vm
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -28,7 +27,6 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		stringFunc[in.Op](in.Arg, buf)
 	}
 }
-
 
 // Prepare
 func Prepare(ins Instructions, proc *process.Process) error {
