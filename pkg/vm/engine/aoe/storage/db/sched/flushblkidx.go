@@ -44,6 +44,10 @@ func NewFlushBlockIndexEvent(ctx *Context, host iface.IBlock) *flushBlockIndexEv
 }
 
 func (e *flushBlockIndexEvent) Execute() error {
+	if e.Block.RefCount() == 0 {
+		return nil
+	}
+	e.Block.Ref()
 	defer e.Block.Unref()
 	meta := e.Block.GetMeta()
 	dir := e.Block.GetSegmentFile().GetDir()

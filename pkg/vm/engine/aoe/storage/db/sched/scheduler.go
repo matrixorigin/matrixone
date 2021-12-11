@@ -278,7 +278,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if !event.Ctx.HasDataScope() {
 		return
 	}
-	//defer event.Data.Unref()
+	defer event.Data.Unref()
 	// TODO(zzl): thread safe?
 	if event.Data.GetType() == base.PERSISTENT_BLK {
 		flushIdxEvent := NewFlushBlockIndexEvent(&Context{Opts: s.opts}, event.Data)

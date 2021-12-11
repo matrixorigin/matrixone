@@ -205,7 +205,7 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 			segMeta.RLock()
 			if !segMeta.IsSortedLocked() {
 				for _, blkId := range seg.BlockIds() {
-					blk := seg.StrongRefBlock(blkId)
+					blk := seg.WeakRefBlock(blkId)
 					// TODO(zzl): thread safe?
 					if blk != nil && blk.GetType() == base.PERSISTENT_BLK {
 						e := sched.NewFlushBlockIndexEvent(&sched.Context{}, blk)

@@ -89,6 +89,7 @@ func NewSegmentWriter(data iface.BlockIterator, meta *metadata.Segment, dir stri
 	// w.preprocessor = w.defaultPreprocessor
 	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
 	w.flusher = flush
+	w.SetPostExecutor(post)
 	//w.indexFlusher = w.flushIndices
 	return w
 }

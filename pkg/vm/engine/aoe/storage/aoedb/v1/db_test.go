@@ -1532,14 +1532,6 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	assert.Equal(t, true, mockBM.IsEmpty())
 
 	inst.Close()
-
-	inst, _, _ = initTestDB3(t)
-	tbl, _ := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
-	blk := tbl.WeakRefBlock(1, 3)
-	time.Sleep(100 * time.Millisecond)
-	t.Logf("%+v", blk.GetIndexHolder())
-
-	inst.Close()
 }
 
 func TestFilter(t *testing.T) {
