@@ -16,6 +16,7 @@ package sum
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -146,33 +147,33 @@ func (r *IntRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	}
 }
 
-func (r *IntRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+func (r *IntRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)
 		for i := range os {
-			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
+			r.Vs[vps[i]-1] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int16:
 		vs := vec.Col.([]int16)
 		for i := range os {
-			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
+			r.Vs[vps[i]-1] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int32:
 		vs := vec.Col.([]int32)
 		for i := range os {
-			r.Vs[*vps[i]] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
+			r.Vs[vps[i]-1] += int64(vs[int64(i)+start]) * zs[int64(i)+start]
 		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)
 		for i := range os {
-			r.Vs[*vps[i]] += vs[int64(i)+start] * zs[int64(i)+start]
+			r.Vs[vps[i]-1] += vs[int64(i)+start] * zs[int64(i)+start]
 		}
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
 			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[*vps[i]] += zs[int64(i)+start]
+				r.Ns[vps[i]-1] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -238,11 +239,11 @@ func (r *IntRing) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *IntRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+func (r *IntRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*IntRing)
 	for i := range os {
-		r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
-		r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
+		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
+		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
 

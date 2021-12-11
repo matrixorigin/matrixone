@@ -16,6 +16,7 @@ package max
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -138,10 +139,10 @@ func (r *UInt64Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	}
 }
 
-func (r *UInt64Ring) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+func (r *UInt64Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]uint64)
 	for i := range os {
-		j := *vps[i]
+		j := vps[i] - 1
 		if vs[int64(i)+start] > r.Vs[j] {
 			r.Vs[j] = vs[int64(i)+start]
 		}
@@ -149,7 +150,7 @@ func (r *UInt64Ring) BatchFill(start int64, os []uint8, vps []*uint64, zs []int6
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
 			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[*vps[i]] += zs[int64(i)+start]
+				r.Ns[vps[i]-1] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -179,10 +180,10 @@ func (r *UInt64Ring) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *UInt64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+func (r *UInt64Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*UInt64Ring)
 	for i := range os {
-		j := *vps[i]
+		j := vps[i] - 1
 		if ar.Vs[int64(i)+start] > r.Vs[j] {
 			r.Vs[j] = ar.Vs[int64(i)+start]
 		}

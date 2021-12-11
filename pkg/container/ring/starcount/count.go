@@ -16,6 +16,7 @@ package starcount
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -134,9 +135,9 @@ func (r *CountRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	r.Vs[i] += z
 }
 
-func (r *CountRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+func (r *CountRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	for i := range os {
-		r.Vs[*vps[i]] += zs[int64(i)+start]
+		r.Vs[vps[i]-1] += zs[int64(i)+start]
 	}
 }
 
@@ -152,11 +153,11 @@ func (r *CountRing) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *CountRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+func (r *CountRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*CountRing)
 	for i := range os {
-		r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
-		r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
+		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
+		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
 

@@ -38,106 +38,94 @@ type String32HashMap struct {
 	bucketCnt     uint64
 	elemCnt       uint64
 	maxElemCnt    uint64
-	rawData       []byte
 	bucketData    []String32HashMapCell
 }
 
 func (ht *String32HashMap) Init() {
-	const cellSize = int(unsafe.Sizeof(String32HashMapCell{}))
-
-	rawData := make([]byte, cellSize*kInitialBucketCnt)
-
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*String32HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.bucketData = make([]String32HashMapCell, kInitialBucketCnt)
 }
 
-func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) (inserted bool, value *uint64) {
+func (ht *String32HashMap) Insert(hash uint64, key *[4]uint64) uint64 {
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = Crc32Int256HashAsm(key)
+		hash = Crc32Int256Hash(key)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, key)
-	if inserted {
+	empty, _, cell := ht.findBucket(hash, key)
+	if empty {
 		ht.elemCnt++
 		cell.Hash = hash
 		cell.Key = *key
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
-
-	return
+	return cell.Mapped
 }
 
-func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64) {
+func (ht *String32HashMap) InsertBatch(hashes []uint64, keys [][4]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		Crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
-		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if isInserted {
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
 			ht.elemCnt++
-			inserted[i] = 1
 			cell.Hash = hashes[i]
 			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
 		}
-		values[i] = &cell.Mapped
+		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String32HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][4]uint64, inserted []uint8, values []*uint64) {
+func (ht *String32HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][4]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		Crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
 		if zs[i] == 0 {
 			continue
 		}
-		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if isInserted {
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
 			ht.elemCnt++
-			inserted[i] = 1
 			cell.Hash = hashes[i]
 			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
 		}
-		values[i] = &cell.Mapped
+		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) (value *uint64) {
+func (ht *String32HashMap) Find(hash uint64, key *[4]uint64) uint64 {
 	if hash == 0 {
-		hash = Crc32Int256HashAsm(key)
+		hash = Crc32Int256Hash(key)
 	}
 
-	empty, _, cell := ht.findBucket(hash, key)
-	if !empty {
-		value = &cell.Mapped
-	}
+	_, _, cell := ht.findBucket(hash, key)
 
-	return
+	return cell.Mapped
 }
 
-func (ht *String32HashMap) FindBatch(hashes []uint64, keys [][4]uint64, values []*uint64) {
+func (ht *String32HashMap) FindBatch(hashes []uint64, keys [][4]uint64, values []uint64) {
 	if hashes[0] == 0 {
-		Crc32Int256BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int256BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
-		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if !empty {
-			values[i] = &cell.Mapped
-		}
+		_, _, cell := ht.findBucket(hashes[i], &keys[i])
+		values[i] = cell.Mapped
 	}
 }
 
@@ -160,13 +148,7 @@ func (ht *String32HashMap) resizeOnDemand(n uint64) {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
-	}
-
+	newBucketCntBits := ht.bucketCntBits + 2
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	for newMaxElemCnt < targetCnt {
@@ -175,19 +157,13 @@ func (ht *String32HashMap) resizeOnDemand(n uint64) {
 		newMaxElemCnt = newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
-	const cellSize = int(unsafe.Sizeof(String32HashMapCell{}))
-
 	oldBucketCnt := ht.bucketCnt
 	oldBucketData := ht.bucketData
-
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	newBucketData := unsafe.Slice((*String32HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
 
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.rawData = newRawData
-	ht.bucketData = newBucketData
+	ht.bucketData = make([]String32HashMapCell, newBucketCnt)
 
 	for i := uint64(0); i < oldBucketCnt; i++ {
 		cell := &oldBucketData[i]

@@ -35,79 +35,63 @@ type StringHashMap struct {
 	bucketCnt     uint64
 	elemCnt       uint64
 	maxElemCnt    uint64
-	rawData       []byte
 	bucketData    []StringHashMapCell
 }
 
 func (ht *StringHashMap) Init() {
-	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
-
-	rawData := make([]byte, cellSize*kInitialBucketCnt)
-
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.bucketData = make([]StringHashMapCell, kInitialBucketCnt)
 }
 
-func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
+func (ht *StringHashMap) Insert(key StringRef) uint64 {
 	ht.resizeOnDemand()
 
 	var hash uint64
 	var key128 [2]uint64
 
-	switch key.Len >> 3 {
-	case 0:
+	if key.Len <= 8 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = Crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
-
-	case 1:
+		hash = Crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
+	} else if key.Len <= 16 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = Crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-
-	default:
-		hash = Crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+		hash = Crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+	} else {
+		hash = Crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+		key128 = AesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, &key128)
-	if inserted {
+	empty, _, cell := ht.findBucket(hash, &key128)
+	if empty {
 		ht.elemCnt++
 		cell.Hash = hash
 		cell.Key128 = key128
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
-
-	return
+	return cell.Mapped
 }
 
-func (ht *StringHashMap) Find(key StringRef) *uint64 {
+func (ht *StringHashMap) Find(key StringRef) uint64 {
 	var hash uint64
 	var key128 [2]uint64
 
-	switch key.Len >> 3 {
-	case 0:
+	if key.Len <= 8 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = Crc32Int64HashAsm(key128[0]) | (uint64(key.Len) << 32)
-
-	case 1:
+		hash = Crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
+	} else if key.Len <= 16 {
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = Crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-
-	default:
-		hash = Crc32BytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHashAsm(unsafe.Pointer(key.Ptr), key.Len)
+		hash = Crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+	} else {
+		hash = Crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
+		key128 = AesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, &key128)
-	if inserted {
-		return nil
-	}
+	_, _, cell := ht.findBucket(hash, &key128)
 
-	return &cell.Mapped
+	return cell.Mapped
 }
 
 func (ht *StringHashMap) findBucket(hash uint64, key128 *[2]uint64) (empty bool, idx uint64, cell *StringHashMapCell) {
@@ -128,29 +112,17 @@ func (ht *StringHashMap) resizeOnDemand() {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
-	}
-
+	newBucketCntBits := ht.bucketCntBits + 2
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-
-	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
 
 	oldBucketCnt := ht.bucketCnt
 	oldBucketData := ht.bucketData
 
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	newBucketData := unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
-
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.rawData = newRawData
-	ht.bucketData = newBucketData
+	ht.bucketData = make([]StringHashMapCell, newBucketCnt)
 
 	for i := uint64(0); i < oldBucketCnt; i++ {
 		cell := &oldBucketData[i]

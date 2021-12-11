@@ -33,18 +33,14 @@ func constructViews(bats []*batch.Batch, fvars []string) {
 }
 
 func constructView(bat *batch.Batch, fvar string) {
-	var rows uint64
-
+	ht := &hashtable.Int64HashMap{}
+	ht.Init()
+	hashes := make([]uint64, UnitLimit)
+	values := make([]uint64, UnitLimit)
+	keys := make([]uint64, UnitLimit)
 	vec := batch.GetVector(bat, fvar)
 	switch vec.Typ.Oid {
 	case types.T_int8:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]int8)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -57,28 +53,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_int16:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]int16)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -91,28 +73,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_int32:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]int32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -125,28 +93,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_int64:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]int64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -159,28 +113,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_uint8:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]uint8)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -193,28 +133,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_uint16:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]uint16)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -227,28 +153,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_uint32:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]uint32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -261,28 +173,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_uint64:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]uint64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -295,28 +193,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_float32:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]float32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -329,28 +213,14 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
 	case types.T_float64:
-		ht := &hashtable.Int64HashMap{}
-		ht.Init()
-		inserts := make([]uint8, UnitLimit)
-		zinserts := make([]uint8, UnitLimit)
-		hashs := make([]uint64, UnitLimit)
-		values := make([]*uint64, UnitLimit)
-		keys := make([]uint64, UnitLimit)
 		vs := vec.Col.([]float64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -363,17 +233,10 @@ func constructView(bat *batch.Batch, fvar string) {
 					keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			hashs[0] = 0
-			copy(inserts[:n], zinserts[:n])
-			ht.InsertBatch(n, hashs, unsafe.Pointer(&keys[0]), inserts, values)
-			for k, ok := range inserts[:n] {
-				if ok == 1 {
-					*values[k] = rows
-					rows++
-				}
-			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}
@@ -384,13 +247,9 @@ func constructView(bat *batch.Batch, fvar string) {
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
 			key := vs.Get(i)
-			ok, vp := ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
-			if ok {
-				*vp = rows
-				rows++
-			}
+			ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
 		}
-		if len(bat.Zs) == int(rows) {
+		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
 			return
 		}

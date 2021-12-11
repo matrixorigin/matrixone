@@ -143,23 +143,23 @@ func (r *FloatRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	}
 }
 
-func (r *FloatRing) BatchFill(start int64, os []uint8, vps []*uint64, zs []int64, vec *vector.Vector) {
+func (r *FloatRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_float32:
 		vs := vec.Col.([]float32)
 		for i := range os {
-			r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			r.Vs[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
 		}
 	case types.T_float64:
 		vs := vec.Col.([]float64)
 		for i := range os {
-			r.Vs[*vps[i]] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			r.Vs[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
 		}
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
 			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[*vps[i]] += zs[int64(i)+start]
+				r.Ns[vps[i]-1] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -200,11 +200,11 @@ func (r *FloatRing) Add(a interface{}, x, y int64) {
 	r.Ns[x] += ar.Ns[y]
 }
 
-func (r *FloatRing) BatchAdd(a interface{}, start int64, os []uint8, vps []*uint64) {
+func (r *FloatRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*FloatRing)
 	for i := range os {
-		r.Vs[*vps[i]] += ar.Vs[int64(i)+start]
-		r.Ns[*vps[i]] += ar.Ns[int64(i)+start]
+		r.Vs[vps[i]-1] += ar.Vs[int64(i)+start]
+		r.Ns[vps[i]-1] += ar.Ns[int64(i)+start]
 	}
 }
 
