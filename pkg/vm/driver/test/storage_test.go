@@ -49,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/etcd/raft/v3"
 )
 
 const (
@@ -255,20 +256,44 @@ func TestSnapshot(t *testing.T) {
 
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	tbl := MockTableInfo(1)
-	err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
-	require.Nil(t, err)
-	batch := MockBatch(tbl, 1)
-	var buf bytes.Buffer
-	err = protocol.EncodeBatch(batch, &buf)
-	require.Nil(t, err)
-	err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
-	require.Nil(t, err)
+	stdLog.Printf("shard id is %v",shard.ShardID)
+
 	var logDb logdb.LogDB
-	logDb=d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
-	require.NotNil(t, logDb)
-	_,_,err=logDb.IterateEntries(nil,0,shard.ShardID,0,2,3, math.MaxUint64)
-	require.NotNil(t,err)
+	logDb = d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
+	hasLog := func(index uint64) bool {
+		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, 0, 2, 3, math.MaxUint64)
+		if err == nil {
+			return true
+		}
+		if err == raft.ErrCompacted {
+			return false
+		}
+		panic(err)
+	}
+	for i := 0; i < 10; i++ {
+		if hasLog(2) {
+			//create table into the shard
+			tbl := MockTableInfo(i)
+			err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+			stdLog.Printf(" create table %v",i)
+			require.Nil(t, err)
+			//append 10000 rows into the table
+			batch := MockBatch(tbl, i)
+			var buf bytes.Buffer
+			err = protocol.EncodeBatch(batch, &buf)
+			require.Nil(t, err)
+			err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+			stdLog.Printf(" append %v",i)
+			require.Nil(t, err)
+
+			time.Sleep(1*time.Second)
+		} else {
+			break
+		}
+		// if i == 9 {
+		// 	t.Fatalf("failed to remove log entries from logdb")
+		// }
+	}
 
 	c.RestartNode(2)
 	stdLog.Printf(" node2 started.")
@@ -282,7 +307,7 @@ func TestSnapshot(t *testing.T) {
 	batchs, err := s2.ReadAll(shard.ShardID)
 	require.Nil(t, err)
 	require.NotEqual(t, 0, len(batchs))
-	
+
 	stdLog.Printf("call stop")
 	c.Stop()
 }
