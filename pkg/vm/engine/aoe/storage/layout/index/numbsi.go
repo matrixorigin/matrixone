@@ -77,6 +77,7 @@ func (i *NumericBsiIndex) GetCol() int16 {
 }
 
 func (i *NumericBsiIndex) Eval(ctx *FilterCtx) error {
+	//logutil.Infof("..... %+v", ctx)
 	if ctx.BMRes.IsEmpty() {
 		return nil
 	}

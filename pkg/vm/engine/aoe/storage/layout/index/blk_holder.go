@@ -106,11 +106,19 @@ func (holder *BlockIndexHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	var err error
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if !ctx.BsiRequired && node.DataNode.(Index).Type() != base.ZoneMap {
-			node.Close()
-			continue
+		index := node.DataNode.(Index)
+		if !ctx.BsiRequired {
+			if index.Type() != base.ZoneMap {
+				node.Close()
+				continue
+			}
+		} else {
+			if index.Type() != base.NumBsi {
+				node.Close()
+				continue
+			}
 		}
-		err = node.DataNode.(Index).Eval(ctx)
+		err = index.Eval(ctx)
 		if err != nil {
 			node.Close()
 			return err

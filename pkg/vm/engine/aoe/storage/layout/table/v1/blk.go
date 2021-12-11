@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -275,7 +276,7 @@ func (blk *block) Max(colIdx int, filter *roaring64.Bitmap) interface{} {
 		if err != nil {
 			panic(err)
 		}
-		if common.CompareInterface(val, max) {
+		if common.CompareInterface(val, max) > 0 {
 			max = val
 		}
 	}
@@ -307,7 +308,7 @@ func (blk *block) Min(colIdx int, filter *roaring64.Bitmap) interface{} {
 		if err != nil {
 			panic(err)
 		}
-		if common.CompareInterface(min, val) {
+		if common.CompareInterface(min, val) > 0 {
 			min = val
 		}
 	}
@@ -344,4 +345,32 @@ func (blk *block) NullCount(colIdx int, filter *roaring64.Bitmap) uint64 {
 		}
 	}
 	return cnt
+}
+
+func (blk *block) Eq(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Ne(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Ge(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Le(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Gt(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Lt(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	return nil
+}
+
+func (blk *block) Btw(colIdx int, offset uint64, min, max interface{}) *roaring.Bitmap {
+	return nil
 }

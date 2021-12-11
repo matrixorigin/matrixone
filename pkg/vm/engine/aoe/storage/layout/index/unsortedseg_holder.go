@@ -16,6 +16,7 @@ package index
 
 import (
 	"fmt"
+	roaring2 "github.com/RoaringBitmap/roaring"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -65,20 +66,34 @@ func (holder *unsortedSegmentHolder) Init(file base.ISegmentFile) {
 func (holder *unsortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	holder.tree.RLock()
 	defer holder.tree.RUnlock()
-	// only zone map considered currently
-	// TODO(zzl): bsi
 	blkSet := make([]uint64, 0)
+	res := roaring2.NewBitmap()
 	for _, blkHolder := range holder.tree.blockHolders {
-		subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
-		if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
-			return err
-		}
-		if subCtx.BoolRes {
-			blkSet = append(blkSet, blkHolder.ID.BlockID)
-			ctx.BoolRes = true
+		if ctx.BsiRequired {
+			subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin, BMRes: ctx.BMRes.Clone(), BsiRequired: true}
+			if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+				return err
+			}
+			if !subCtx.BMRes.IsEmpty() {
+				//logutil.Infof("...... %+v", subCtx.BMRes.ToArray())
+				res.Or(subCtx.BMRes)
+			}
+		} else {
+			subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
+			if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+				return err
+			}
+			if subCtx.BoolRes {
+				blkSet = append(blkSet, blkHolder.ID.BlockID)
+				ctx.BoolRes = true
+			}
 		}
 	}
 	ctx.BlockSet = blkSet
+	ctx.BMRes = res
+	if !ctx.BMRes.IsEmpty() {
+		ctx.BoolRes = true
+	}
 	return nil
 }
 
@@ -132,7 +147,7 @@ func (holder *unsortedSegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (in
 			gmin = min
 			flag = false
 		}
-		if common.CompareInterface(gmin, min) {
+		if common.CompareInterface(gmin, min) > 0 {
 			gmin = min
 		}
 	}
@@ -156,7 +171,7 @@ func (holder *unsortedSegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (in
 			gmax = max
 			flag = false
 		}
-		if common.CompareInterface(max, gmax) {
+		if common.CompareInterface(max, gmax) > 0 {
 			gmax = max
 		}
 	}

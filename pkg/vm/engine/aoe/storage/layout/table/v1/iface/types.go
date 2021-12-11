@@ -16,6 +16,7 @@ package iface
 
 import (
 	"bytes"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"io"
 
@@ -241,6 +242,13 @@ type IBlock interface {
 	Min(int, *roaring64.Bitmap) interface{}
 	Count(int, *roaring64.Bitmap) uint64
 	NullCount(int, *roaring64.Bitmap) uint64
+	Eq(int, uint64, interface{}) *roaring.Bitmap
+	Ne(int, uint64, interface{}) *roaring.Bitmap
+	Ge(int, uint64, interface{}) *roaring.Bitmap
+	Le(int, uint64, interface{}) *roaring.Bitmap
+	Gt(int, uint64, interface{}) *roaring.Bitmap
+	Lt(int, uint64, interface{}) *roaring.Bitmap
+	Btw(int, uint64, interface{}, interface{}) *roaring.Bitmap
 
 	// WeakRefSegment does not require UnRef Segment
 	WeakRefSegment() ISegment

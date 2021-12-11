@@ -19,42 +19,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-func CompareInterface(a, b interface{}) bool {
+func CompareInterface(a, b interface{}) int64 {
 	if av, ok := a.(int8); ok {
-		return av > b.(int8)
+		return int64(av - b.(int8))
 	}
 	if av, ok := a.(int16); ok {
-		return av > b.(int16)
+		return int64(av - b.(int16))
 	}
 	if av, ok := a.(int32); ok {
-		return av > b.(int32)
+		return int64(av - b.(int32))
 	}
 	if av, ok := a.(int64); ok {
-		return av > b.(int64)
+		return av - b.(int64)
 	}
 	if av, ok := a.(uint8); ok {
-		return av > b.(uint8)
+		return int64(av - b.(uint8))
 	}
 	if av, ok := a.(uint16); ok {
-		return av > b.(uint16)
+		return int64(av - b.(uint16))
 	}
 	if av, ok := a.(uint32); ok {
-		return av > b.(uint32)
+		return int64(av - b.(uint32))
 	}
 	if av, ok := a.(uint64); ok {
-		return av > b.(uint64)
+		return int64(av - b.(uint64))
 	}
 	if av, ok := a.(float32); ok {
-		return av > b.(float32)
+		return int64(av - b.(float32))
 	}
 	if av, ok := a.(float64); ok {
-		return av > b.(float64)
+		return int64(av - b.(float64))
 	}
 	if av, ok := a.(types.Date); ok {
-		return av > b.(types.Date)
+		return int64(av - b.(types.Date))
 	}
 	if av, ok := a.(types.Datetime); ok {
-		return av > b.(types.Datetime)
+		return int64(av - b.(types.Datetime))
 	}
 	logutil.Infof("%+v\n%+v\n", a, b)
 	panic("invalid type")

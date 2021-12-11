@@ -16,6 +16,7 @@ package table
 import (
 	"bytes"
 	"fmt"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"runtime"
@@ -178,6 +179,9 @@ func (blk *tblock) Sum(colIdx int, filter *roaring64.Bitmap) (int64, uint64) {
 	rows := filter.ToArray()
 	for _, row := range rows {
 		idx := int(row)
+		if idx >= vec.Length() {
+			continue
+		}
 		if ok, err := vec.IsNull(idx); err != nil {
 			panic(err)
 		} else {
@@ -230,6 +234,9 @@ func (blk *tblock) Max(colIdx int, filter *roaring64.Bitmap) interface{} {
 	flag := true
 	for _, row := range rows {
 		idx := int(row)
+		if idx >= vec.Length() {
+			continue
+		}
 		if ok, err := vec.IsNull(idx); err != nil {
 			panic(err)
 		} else {
@@ -248,7 +255,7 @@ func (blk *tblock) Max(colIdx int, filter *roaring64.Bitmap) interface{} {
 		if err != nil {
 			panic(err)
 		}
-		if common.CompareInterface(val, max) {
+		if common.CompareInterface(val, max) > 0 {
 			max = val
 		}
 	}
@@ -265,6 +272,9 @@ func (blk *tblock) Min(colIdx int, filter *roaring64.Bitmap) interface{} {
 	flag := true
 	for _, row := range rows {
 		idx := int(row)
+		if idx >= vec.Length() {
+			continue
+		}
 		if ok, err := vec.IsNull(idx); err != nil {
 			panic(err)
 		} else {
@@ -283,7 +293,7 @@ func (blk *tblock) Min(colIdx int, filter *roaring64.Bitmap) interface{} {
 		if err != nil {
 			panic(err)
 		}
-		if common.CompareInterface(min, val) {
+		if common.CompareInterface(min, val) > 0 {
 			min = val
 		}
 	}
@@ -300,7 +310,7 @@ func (blk *tblock) Count(colIdx int, filter *roaring64.Bitmap) uint64 {
 	for _, row := range rows {
 		idx := int(row)
 		if idx >= vec.Length() {
-			break
+			continue
 		}
 		if ok, err := vec.IsNull(idx); err != nil {
 			panic(err)
@@ -323,6 +333,9 @@ func (blk *tblock) NullCount(colIdx int, filter *roaring64.Bitmap) uint64 {
 	cnt := uint64(0)
 	for _, row := range rows {
 		idx := int(row)
+		if idx >= vec.Length() {
+			continue
+		}
 		if ok, err := vec.IsNull(idx); err != nil {
 			panic(err)
 		} else {
@@ -334,3 +347,166 @@ func (blk *tblock) NullCount(colIdx int, filter *roaring64.Bitmap) uint64 {
 	}
 	return cnt
 }
+
+func (blk *tblock) Eq(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(val, v) == 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Ne(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(val, v) != 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Ge(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(v, val) >= 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Le(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(v, val) <= 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Gt(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(v, val) > 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Lt(colIdx int, offset uint64, val interface{}) *roaring.Bitmap {
+	vec, err := blk.node.GetData().GetVectorByAttr(colIdx)
+	if err != nil {
+		panic(err)
+	}
+	length := vec.Length()
+	res := roaring.NewBitmap()
+	for i := 0; i < length; i++ {
+		v, err := vec.GetValue(i)
+		if err != nil {
+			panic(err)
+		}
+		if ok, err := vec.IsNull(i); err != nil {
+			panic(err)
+		} else {
+			if ok {
+				continue
+			}
+		}
+		if common.CompareInterface(v, val) < 0 {
+			res.Add(uint32(offset + uint64(i)))
+		}
+	}
+	return res
+}
+
+func (blk *tblock) Btw(colIdx int, offset uint64, min, max interface{}) *roaring.Bitmap {
+	res := blk.Ge(colIdx, offset, min)
+	res.And(blk.Le(colIdx, offset, max))
+	return res
+}
+

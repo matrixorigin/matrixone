@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 
 	"github.com/RoaringBitmap/roaring"
@@ -54,6 +55,14 @@ func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, err
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
 	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Eq(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
+	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
@@ -84,6 +93,14 @@ func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, err
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
 	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Ne(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
+	}
 	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
@@ -110,6 +127,14 @@ func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, err
 	if err != nil {
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
+	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Lt(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -141,6 +166,14 @@ func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, err
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
 	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Le(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
+	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
@@ -170,6 +203,14 @@ func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, err
 	if err != nil {
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
+	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Gt(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
@@ -201,6 +242,14 @@ func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, err
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
 	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Ge(colIdx, startPos, ctx.Val)
+			ctx.BMRes.Or(subMap)
+		}
+	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
@@ -231,6 +280,14 @@ func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*r
 	if err != nil {
 		// maybe a bsi not found error
 		return roaring64.NewBitmap(), err
+	}
+	for _, blkId := range f.segment.Data.BlockIds() {
+		blk := f.segment.Data.WeakRefBlock(blkId)
+		if blk.GetType() == base.TRANSIENT_BLK {
+			startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
+			subMap := blk.Btw(colIdx, startPos, ctx.ValMin, ctx.ValMax)
+			ctx.BMRes.Or(subMap)
+		}
 	}
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil

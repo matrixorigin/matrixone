@@ -92,13 +92,18 @@ func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint
 			if blk.GetType() == base.TRANSIENT_BLK {
 				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				endPos := startPos + blk.GetRowCount()
+				maximum := startPos + blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				ranger := roaring.NewBitmap()
-				ranger.AddRange(startPos, endPos)
+				ranger.AddRange(startPos, maximum)
 				if filter != nil {
 					ranger.And(filter)
 					arr := ranger.ToArray()
 					ranger.Clear()
 					for _, e := range arr {
+						if e >= endPos && e < maximum {
+							filter.Remove(e)
+							continue
+						}
 						ranger.Add(e - startPos)
 						filter.Remove(e)
 					}
@@ -144,7 +149,7 @@ func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{
 					ranger.Add(e - startPos)
 				}
 				tmax := blk.Max(colIdx, ranger)
-				if common.CompareInterface(tmax, max) {
+				if common.CompareInterface(tmax, max) > 0 {
 					max = tmax
 				}
 			}
@@ -180,7 +185,7 @@ func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{
 					ranger.Add(e - startPos)
 				}
 				tmin := blk.Min(colIdx, ranger)
-				if common.CompareInterface(min, tmin) {
+				if common.CompareInterface(min, tmin) > 0 {
 					min = tmin
 				}
 			}
