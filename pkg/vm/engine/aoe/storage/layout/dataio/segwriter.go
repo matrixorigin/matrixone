@@ -80,7 +80,7 @@ type SegmentWriter struct {
 
 // NewSegmentWriter make a SegmentWriter, which is
 // used when (block file count) == SegmentMaxBlocks
-func NewSegmentWriter(data iface.BlockIterator, meta *metadata.Segment, dir string) *SegmentWriter {
+func NewSegmentWriter(data iface.BlockIterator, meta *metadata.Segment, dir string, post func()) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
 		meta: meta,
