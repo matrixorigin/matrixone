@@ -66,6 +66,7 @@ func (e *flushBlockIndexEvent) Execute() error {
 		}
 	}
 
+
 	// TODO(zzl): thread safe?
 	if e.Block.GetType() != base.PERSISTENT_BLK {
 		return nil
