@@ -416,8 +416,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				logutil.Infof("continue 1")
 				continue
 			}
-			segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
-			seg := rel.Segment(segment.Id, nil)
+			ids := rel.SegmentIds()
+			seg := rel.Segment(ids.Ids[len(ids.Ids)-1], nil)
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1], nil)
 			cds := make([]*bytes.Buffer, len(attrs))
@@ -638,10 +638,27 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
 		}
+		err=s.DB.FlushTable(aoedb.IdToNameFactory.Encode(metadata.ShardID),tableName)
+		if err != nil {
+			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
+			return err
+		}
+		waitExpect(200, func() bool {
+			return s.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(metadata.ShardID)) >= metadata.LogIndex
+		})
+		if s.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(metadata.ShardID)) < metadata.LogIndex{
+			panic("flush metatbl failed")
+		}
 	}
 	return nil
 }
-
+func waitExpect(timeout int, expect func() bool) {
+	end := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+	interval := time.Duration(timeout) * time.Millisecond / 400
+	for time.Now().Before(end) && !expect() {
+		time.Sleep(interval)
+	}
+}
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 	var err error
 	t0:=time.Now()
