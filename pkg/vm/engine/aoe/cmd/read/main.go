@@ -15,30 +15,25 @@
 package main
 
 import (
-	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/local"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	log "github.com/sirupsen/logrus"
 
@@ -63,10 +58,13 @@ const (
 
 var (
 	opts     = &storage.Options{}
-	table    *aoe.TableInfo
+	schema   *metadata.Schema
 	readPool *ants.Pool
 	proc     *process.Process
 	hm       *host.Mmu
+	gen      *shard.MockIndexAllocator
+	dbName   string
+	shardId  uint64
 )
 
 func init() {
@@ -84,8 +82,12 @@ func init() {
 		Interval: time.Duration(1) * time.Second,
 	}
 	opts.Meta.Conf = mdCfg
-	info := adaptor.MockTableInfo(colCnt)
-	table = info
+	opts.WalRole = wal.HolderRole
+	schema = metadata.MockSchema(colCnt)
+	schema.Name = tableName
+	gen = shard.NewMockIndexAllocator()
+	dbName = "db1"
+	shardId = uint64(100)
 }
 
 func getInsertBatch(meta *metadata.Table) *batch.Batch {
@@ -102,13 +104,25 @@ func stopProfile() {
 	pprof.StopCPUProfile()
 }
 
-func makeDB() *db.DB {
-	impl, _ := db.Open(workDir, opts)
+func makeDB() *aoedb.DB {
+	impl, _ := aoedb.Open(workDir, opts)
 	return impl
 }
 
-func creatTable(impl *db.DB) {
-	_, err := impl.CreateTable(table, dbi.TableOpCtx{TableName: table.Name})
+func creatTable(impl *aoedb.DB) {
+	createDBCtx := new(aoedb.CreateDBCtx)
+	createDBCtx.DB = dbName
+	_, err := impl.CreateDatabase(createDBCtx)
+	if err != nil {
+		panic(err)
+	}
+
+	ctx := new(aoedb.CreateTableCtx)
+	ctx.DB = dbName
+	ctx.Schema = schema
+	ctx.Size = 1
+	ctx.Id = gen.Alloc(shardId)
+	_, err = impl.CreateTable(ctx)
 	if err != nil {
 		panic(err)
 	}
@@ -118,18 +132,24 @@ func doRemove() {
 	os.RemoveAll(workDir)
 }
 
-func makeFiles(impl *db.DB) {
-	meta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
-	if meta == nil {
-		panic(metadata.TableNotFoundErr)
+func makeFiles(impl *aoedb.DB) {
+	meta, err := impl.Opts.Meta.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		panic(err)
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
-		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i), OpSize: 1}); err != nil {
+		ctx := new(aoedb.AppendCtx)
+		ctx.DB = dbName
+		ctx.Table = tableName
+		ctx.Id = gen.Alloc(shardId)
+		ctx.Size = 1
+		ctx.Data = ibat
+		if err := impl.Append(ctx); err != nil {
 			panic(err)
 		}
 	}
-	waitTime := insertCnt * uint64(ivector.Length(bat.Vecs[0])) * uint64(colCnt) / uint64(400000000) * 20000
+	waitTime := insertCnt * uint64(vector.Length(ibat.Vecs[0])) * uint64(colCnt) / uint64(400000000) * 20000
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 
@@ -146,20 +166,23 @@ func mockData() {
 	impl.Close()
 }
 
-func readData() {
+/*func readData() {
 	impl := makeDB()
 	localEngine := local.NewLocalRoEngine(impl)
-	dbase, err := localEngine.Database("")
+	dbase, err := localEngine.Database(dbName)
 	if err != nil {
 		panic(err)
 	}
-	id, _ := impl.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableName))
-	log.Infof("segmented id: %d", id)
+	safeId := impl.GetShardCheckpointId(0)
+	log.Infof("SafeId: %d", safeId)
 	rel, err := dbase.Relation(tableName)
 	if err != nil {
 		panic(err)
 	}
-	tblMeta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
+	tblMeta, err := impl.Opts.Meta.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		panic(err)
+	}
 	var attrs []string
 	cols := make([]int, 0)
 	for i, colDef := range tblMeta.Schema.ColDefs {
@@ -169,7 +192,7 @@ func readData() {
 	refs := make([]uint64, len(attrs))
 	var segIds dbi.IDS
 	{
-		dbrel, _ := impl.Relation(tableName)
+		dbrel, _ := impl.Relation(dbName, tableName)
 		segIds = dbrel.SegmentIds()
 		dbrel.Close()
 	}
@@ -180,7 +203,7 @@ func readData() {
 	var wg sync.WaitGroup
 	for _, segId := range segIds.Ids {
 		idstr := strconv.FormatUint(segId, 10)
-		seg := rel.Segment(engine.SegmentInfo{Id: idstr}, proc)
+		seg := rel.Segment(idstr)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			blk.Prefetch(attrs)
@@ -213,7 +236,7 @@ func readData() {
 	// 	log.Info(common.GPool.String())
 	// 	time.Sleep(time.Duration(100) * time.Second)
 	// }
-}
+}*/
 
 type gcHandle struct{}
 
