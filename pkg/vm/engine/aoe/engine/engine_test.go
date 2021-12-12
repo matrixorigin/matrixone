@@ -223,7 +223,7 @@ func TestAOEEngine(t *testing.T) {
 	for _, def := range tdefs {
 		if i, ok := def.(*vengine.IndexTableDef); ok {
 			index = append(index, vengine.IndexTableDef{
-				Typ:   int(i.Typ),
+				Typ:   i.Typ,
 				ColNames: i.ColNames,
 			})
 		}
@@ -239,7 +239,7 @@ func TestAOEEngine(t *testing.T) {
 		require.NoError(t, err)
 	}
 	num := tb.NewReader(15)
-	require.Equal(t, 10, len(num))
+	require.Equal(t, 15, len(num))
 	tb.Close()
 
 	err = db.Delete(5, mockTbl.Name)
