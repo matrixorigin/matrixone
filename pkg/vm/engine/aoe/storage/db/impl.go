@@ -26,9 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
-// There is a premise here, that is, all mutation requests of a database are
-// single-threaded
 func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
+	now := time.Now()
+	lastId := d.Wal.GetShardCurrSeqNum(meta.GetShardId())
 	tables := make([]*metadata.Table, 0, 8)
 	fn := func(t *metadata.Table) error {
 		if t.IsDeleted() {
@@ -44,11 +44,34 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 			break
 		}
 	}
+	if err != nil {
+		return err
+	}
+	mintick := 100
+	loops := 0
+	for {
+		if d.Wal.GetShardPendingCnt(meta.GetShardId()) == 0 {
+			break
+		}
+		ckp := d.Wal.GetShardCheckpointId(meta.GetShardId())
+		if ckp >= lastId {
+			break
+		}
+		if loops > 1000 {
+			logutil.Infof("Flush database %s takes: %s", meta.Name, time.Since(now))
+			panic("flush error")
+		}
+		tick := (loops/5 + 1) * mintick
+		if tick > 5000 {
+			tick = 5000
+		}
+		time.Sleep(time.Duration(tick) * time.Microsecond)
+		loops++
+	}
+	logutil.Infof("Flush database %s takes: %s", time.Since(now))
 	return err
 }
 
-// There is a premise here, that is, all change requests of a database are
-// single-threaded
 func (d *DB) DoFlushTable(meta *metadata.Table) error {
 	handle, err := d.MakeMutationHandle(meta)
 	if err != nil {
