@@ -75,7 +75,8 @@ type probeContainer struct {
 	freeVars   []string
 	freeIndexs [][2]int
 	values     []uint64
-	h8         struct {
+
+	h8 struct {
 		ht *hashtable.Int64HashMap
 	}
 	h24 struct {
@@ -88,9 +89,8 @@ type probeContainer struct {
 		ht *hashtable.String40HashMap
 	}
 	hstr struct {
-		keys       [][]byte
-		realValues []uint64
-		ht         *hashtable.StringHashMap
+		keys [][]byte
+		ht   *hashtable.StringHashMap
 	}
 }
 
@@ -98,18 +98,16 @@ type Container struct {
 	isB                bool
 	state              int
 	is                 []int
-	inserts            []uint8
-	zinserts           []uint8
 	keyOffs            []uint32
 	zKeyOffs           []uint32
-	hashs              []uint64
+	hashes             []uint64
 	zs                 []int64
 	intermediateBuffer []int64
 	views              []*view
 	vars               []string
-	values             []*uint64
-	zvalues            []*uint64
-	h8                 struct {
+	values             []uint64
+
+	h8 struct {
 		keys  []uint64
 		zKeys []uint64
 	}

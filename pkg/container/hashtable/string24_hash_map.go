@@ -35,116 +35,104 @@ func (hdr *String24HashMapCell) StrKey() StringRef {
 
 type String24HashMap struct {
 	bucketCntBits uint8
-	BucketCnt     uint64
+	bucketCnt     uint64
 	elemCnt       uint64
 	maxElemCnt    uint64
-	rawData       []byte
-	BucketData    []String24HashMapCell
+	bucketData    []String24HashMapCell
 }
 
 func (ht *String24HashMap) Init() {
-	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
-
-	rawData := make([]byte, cellSize*kInitialBucketCnt)
-
 	ht.bucketCntBits = kInitialBucketCntBits
-	ht.BucketCnt = kInitialBucketCnt
+	ht.bucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.rawData = rawData
-	ht.BucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.bucketData = make([]String24HashMapCell, kInitialBucketCnt)
 }
 
-func (ht *String24HashMap) Insert(hash uint64, key *[3]uint64) (inserted bool, value *uint64) {
+func (ht *String24HashMap) Insert(hash uint64, key *[3]uint64) uint64 {
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = Crc32Int192HashAsm(key)
+		hash = Crc32Int192Hash(key)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, key)
-	if inserted {
+	empty, _, cell := ht.findBucket(hash, key)
+	if empty {
 		ht.elemCnt++
 		cell.Hash = hash
 		cell.Key = *key
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
-
-	return
+	return cell.Mapped
 }
 
-func (ht *String24HashMap) InsertBatch(hashes []uint64, keys [][3]uint64, inserted []uint8, values []*uint64) {
+func (ht *String24HashMap) InsertBatch(hashes []uint64, keys [][3]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		Crc32Int192BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
-		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if isInserted {
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
 			ht.elemCnt++
-			inserted[i] = 1
 			cell.Hash = hashes[i]
 			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
 		}
-		values[i] = &cell.Mapped
+		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String24HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][3]uint64, inserted []uint8, values []*uint64) {
+func (ht *String24HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][3]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		Crc32Int192BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
 		if zs[i] == 0 {
 			continue
 		}
-		isInserted, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if isInserted {
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
 			ht.elemCnt++
-			inserted[i] = 1
 			cell.Hash = hashes[i]
 			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
 		}
-		values[i] = &cell.Mapped
+		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String24HashMap) Find(hash uint64, key *[3]uint64) (value *uint64) {
+func (ht *String24HashMap) Find(hash uint64, key *[3]uint64) uint64 {
 	if hash == 0 {
-		hash = Crc32Int192HashAsm(key)
+		hash = Crc32Int192Hash(key)
 	}
 
-	empty, _, cell := ht.findBucket(hash, key)
-	if !empty {
-		value = &cell.Mapped
-	}
+	_, _, cell := ht.findBucket(hash, key)
 
-	return
+	return cell.Mapped
 }
 
-func (ht *String24HashMap) FindBatch(hashes []uint64, keys [][3]uint64, values []*uint64) {
+func (ht *String24HashMap) FindBatch(hashes []uint64, keys [][3]uint64, values []uint64) {
 	if hashes[0] == 0 {
-		Crc32Int192BatchHashAsm(&keys[0], &hashes[0], len(keys))
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
-		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if !empty {
-			values[i] = &cell.Mapped
-		}
+		_, _, cell := ht.findBucket(hashes[i], &keys[i])
+		values[i] = cell.Mapped
 	}
 }
 
 func (ht *String24HashMap) findBucket(hash uint64, key *[3]uint64) (empty bool, idx uint64, cell *String24HashMapCell) {
-	mask := ht.BucketCnt - 1
+	mask := ht.bucketCnt - 1
 	for idx = hash & mask; true; idx = (idx + 1) & mask {
-		cell = &ht.BucketData[idx]
+		cell = &ht.bucketData[idx]
 		empty = cell.Hash == 0
 		if empty || cell.Key == *key {
 			return
@@ -160,13 +148,7 @@ func (ht *String24HashMap) resizeOnDemand(n uint64) {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
-	}
-
+	newBucketCntBits := ht.bucketCntBits + 2
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	for newMaxElemCnt < targetCnt {
@@ -175,25 +157,19 @@ func (ht *String24HashMap) resizeOnDemand(n uint64) {
 		newMaxElemCnt = newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
-	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
-
-	oldBucketCnt := ht.BucketCnt
-	oldBucketData := ht.BucketData
-
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	newBucketData := unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
+	oldBucketCnt := ht.bucketCnt
+	oldBucketData := ht.bucketData
 
 	ht.bucketCntBits = newBucketCntBits
-	ht.BucketCnt = newBucketCnt
+	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.rawData = newRawData
-	ht.BucketData = newBucketData
+	ht.bucketData = make([]String24HashMapCell, newBucketCnt)
 
 	for i := uint64(0); i < oldBucketCnt; i++ {
 		cell := &oldBucketData[i]
 		if cell.Hash != 0 {
 			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key)
-			ht.BucketData[newIdx] = *cell
+			ht.bucketData[newIdx] = *cell
 		}
 	}
 }
@@ -212,15 +188,15 @@ func (it *String24HashMapIterator) Init(ht *String24HashMap) {
 }
 
 func (it *String24HashMapIterator) Next() (cell *String24HashMapCell, err error) {
-	for it.pos < it.table.BucketCnt {
-		cell = &it.table.BucketData[it.pos]
+	for it.pos < it.table.bucketCnt {
+		cell = &it.table.bucketData[it.pos]
 		if cell.Hash != 0 {
 			break
 		}
 		it.pos++
 	}
 
-	if it.pos >= it.table.BucketCnt {
+	if it.pos >= it.table.bucketCnt {
 		err = errors.New("out of range")
 		return
 	}
