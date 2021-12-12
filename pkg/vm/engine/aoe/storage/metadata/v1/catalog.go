@@ -259,11 +259,12 @@ func (catalog *Catalog) GetTableByNameAndLogIndex(dbName, tableName string, inde
 	return database.GetTableByNameAndLogIndex(tableName, index)
 }
 
-func (catalog *Catalog) SimpleReplaceDatabase(view *databaseLogEntry, tranId uint64) error {
+func (catalog *Catalog) SimpleReplaceDatabase(view *databaseLogEntry, replaced *Database, tranId uint64) error {
 	ctx := new(replaceDatabaseCtx)
 	ctx.tranId = tranId
 	ctx.inTran = true
 	ctx.view = view
+	ctx.replaced = replaced
 	return catalog.onCommitRequest(ctx, true)
 }
 
@@ -274,20 +275,23 @@ func (catalog *Catalog) prepareReplaceDatabase(ctx *replaceDatabaseCtx) (LogEntr
 	logIndex := new(LogIndex)
 	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
 	logIndex.ShardId = ctx.view.LogRange.ShardId
-	db := catalog.Databases[ctx.view.Id]
-	rCtx := new(addReplaceCommitCtx)
-	rCtx.tranId = ctx.tranId
-	rCtx.inTran = true
-	rCtx.database = db
-	rCtx.exIndex = logIndex
-	if _, err = db.prepareReplace(rCtx); err != nil {
-		panic(err)
-	}
-	if !rCtx.discard {
-		entry.Replaced = &databaseLogEntry{
-			BaseEntry: db.BaseEntry,
-			Id:        db.Id,
+	if ctx.replaced != nil {
+		db := ctx.replaced
+		rCtx := new(addReplaceCommitCtx)
+		rCtx.tranId = ctx.tranId
+		rCtx.inTran = true
+		rCtx.database = db
+		rCtx.exIndex = logIndex
+		if _, err = db.prepareReplace(rCtx); err != nil {
+			panic(err)
 		}
+		if !rCtx.discard {
+			entry.Replaced = &databaseLogEntry{
+				BaseEntry: db.BaseEntry,
+				Id:        db.Id,
+			}
+		}
+		entry.Index = ctx.replaced.GetCommit().GetIndex()
 	}
 	catalog.RUnlock()
 
@@ -753,12 +757,15 @@ func (catalog *Catalog) onReplayHardDeleteDatabase(entry *databaseLogEntry) erro
 }
 
 func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSplit bool) error {
-	replaced := catalog.Databases[entry.Replaced.Id]
-	err := replaced.onCommit(entry.Replaced.CommitInfo)
-	if err != nil {
-		return err
+	var err error
+	if entry.Replaced != nil {
+		replaced := catalog.Databases[entry.Replaced.Id]
+		err := replaced.onCommit(entry.Replaced.CommitInfo)
+		if err != nil {
+			return err
+		}
 	}
-	idx := entry.Replaced.CommitInfo.GetIndex()
+	idx := entry.Index
 	for _, replacer := range entry.Replacer {
 		catalog.TryUpdateDatabaseId(replacer.Id)
 		if err = catalog.onNewDatabase(replacer); err != nil {
@@ -768,9 +775,7 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSpli
 		if err = replacer.rebuild(false, true); err != nil {
 			break
 		}
-		if !isSplit {
-			replacer.InitWal(idx)
-		}
+		replacer.InitWal(idx)
 	}
 	return err
 }
