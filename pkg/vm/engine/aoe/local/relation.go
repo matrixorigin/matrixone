@@ -17,23 +17,44 @@ package local
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
 
 type localRoRelation struct {
-	impl *db.Relation
+	impl *aoedb.Relation
 }
 
-func NewLocalRoRelation(impl *db.Relation) *localRoRelation {
+func (r *localRoRelation) Nodes() engine.Nodes {
+	panic("implement me")
+}
+
+func (r *localRoRelation) TableDefs() []engine.TableDef {
+	panic("implement me")
+}
+
+func (r *localRoRelation) AddTableDef(u uint64, def engine.TableDef) error {
+	panic("implement me")
+}
+
+func (r *localRoRelation) DelTableDef(u uint64, def engine.TableDef) error {
+	panic("implement me")
+}
+
+func (r *localRoRelation) NewReader(i int) []engine.Reader {
+	panic("implement me")
+}
+
+func NewLocalRoRelation(impl *aoedb.Relation) *localRoRelation {
 	return &localRoRelation{
 		impl: impl,
 	}
 }
 
-func (r *localRoRelation) Segments() []engine.SegmentInfo {
+func (r *localRoRelation) Segments() []aoe.Segment {
 	panic("not supported")
 }
 
@@ -57,12 +78,12 @@ func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }
 
-func (r *localRoRelation) Segment(segInfo engine.SegmentInfo, proc *process.Process) engine.Segment {
-	id, err := strconv.ParseUint(segInfo.Id, 10, 64)
+func (r *localRoRelation) Segment(segInfo aoe.Segment, proc *process.Process) aoe.Segment {
+	id, err := strconv.ParseUint(segInfo.ID(), 10, 64)
 	if err != nil {
 		return nil
 	}
-	return r.impl.Segment(id, proc)
+	return r.impl.Segment(id)
 }
 
 func (r *localRoRelation) Attribute() []engine.Attribute {

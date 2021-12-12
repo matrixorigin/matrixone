@@ -16,14 +16,14 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 )
 
 type localRoEngine struct {
-	dbimpl *db.DB
+	dbimpl *aoedb.DB
 }
 
-func NewLocalRoEngine(dbimpl *db.DB) *localRoEngine {
+func NewLocalRoEngine(dbimpl *aoedb.DB) *localRoEngine {
 	return &localRoEngine{
 		dbimpl: dbimpl,
 	}
