@@ -18,8 +18,8 @@ const (
 	kInitialBucketCntBits = 10
 	kInitialBucketCnt     = 1 << kInitialBucketCntBits
 
-	kLoadFactorNumerator   = 5
-	kLoadFactorDenominator = 10
+	kLoadFactorNumerator   = 1
+	kLoadFactorDenominator = 2
 
 	kTwoLevelBucketBits = 8
 	kTwoLevelBucketNum  = 1 << kTwoLevelBucketBits

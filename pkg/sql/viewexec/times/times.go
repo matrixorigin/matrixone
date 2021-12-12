@@ -40,11 +40,8 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	n.ctr.views = make([]*view, len(n.Ss))
 	n.ctr.keyOffs = make([]uint32, UnitLimit)
 	n.ctr.zKeyOffs = make([]uint32, UnitLimit)
-	n.ctr.inserts = make([]uint8, UnitLimit)
-	n.ctr.zinserts = make([]uint8, UnitLimit)
-	n.ctr.hashs = make([]uint64, UnitLimit)
-	n.ctr.values = make([]*uint64, UnitLimit)
-	n.ctr.zvalues = make([]*uint64, UnitLimit)
+	n.ctr.hashes = make([]uint64, UnitLimit)
+	n.ctr.values = make([]uint64, UnitLimit)
 	n.ctr.h8.keys = make([]uint64, UnitLimit)
 	for i := 0; i < len(n.Ss); i++ {
 		n.ctr.views[i] = &view{
@@ -75,7 +72,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				n.ctr.isB = false
 			}
 		}
-		if n.ctr.isB == false {
+		if !n.ctr.isB {
 			panic("no possible")
 		}
 		n.ctr.state = Probe
@@ -173,10 +170,10 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 			}
 		}
 	}
-	values := make([][]*uint64, len(arg.Rvars))
+	values := make([][]uint64, len(arg.Rvars))
 	{
 		for i := 0; i < len(arg.Rvars); i++ {
-			values[i] = make([]*uint64, UnitLimit)
+			values[i] = make([]uint64, UnitLimit)
 		}
 	}
 	count := int64(len(bat.Zs))
@@ -193,81 +190,71 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
@@ -287,112 +274,112 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 					case types.T_int8:
 						vs := gvecs[j].Col.([]int8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint8:
 						vs := gvecs[j].Col.([]uint8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int16:
 						vs := gvecs[j].Col.([]int16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint16:
 						vs := gvecs[j].Col.([]uint16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int32:
 						vs := gvecs[j].Col.([]int32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint32:
 						vs := gvecs[j].Col.([]uint32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint64:
 						vs := gvecs[j].Col.([]uint64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float64:
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								key := vs.Get(0)
 								copy(data[k*8+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							} else {
-								key := vs.Get(int64(*vp))
+								key := vs.Get(int64(vp) - 1)
 								copy(data[k*8+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							}
@@ -471,36 +458,35 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 				}
 			}
 		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
 				z := bat.Zs[o]
 				for vi, vps := range values {
-					if vps[k] == nil {
+					if vps[k] == 0 {
 						z = 0
 						break
 					}
 					if !ctr.views[vi].isOne {
-						z *= ctr.views[vi].bat.Zs[*vps[k]]
+						z *= ctr.views[vi].bat.Zs[vps[k]-1]
 					}
 				}
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h8.ht.InsertBatchWithRing(int(n), ctr.pctr.zs, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
+		ctr.pctr.h8.ht.InsertBatchWithRing(int(n), ctr.pctr.zs, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
 			}
 			o := i + int64(k)
-			if ok == 1 {
+			if v > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
-						if vp := values[vi][k]; vp != nil {
-							idx = int64(*vp)
+						if vp := values[vi][k]; vp > 0 {
+							idx = int64(vp) - 1
 						} else {
 							idx = 0
 						}
@@ -509,7 +495,6 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 						return err
 					}
 				}
-				*ctr.values[k] = ctr.pctr.rows
 				ctr.pctr.rows++
 				for _, r := range ctr.bat.Rs {
 					if err := r.Grow(proc.Mp); err != nil {
@@ -518,12 +503,12 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(*ctr.values[k])
+			ai := int64(v) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
 			for vi, vps := range values {
-				sel := *vps[k]
+				sel := vps[k] - 1
 				v := ctr.views[vi]
 				{ // ring fill
 					for j, r := range v.bat.Rs {
@@ -554,10 +539,10 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 			}
 		}
 	}
-	values := make([][]*uint64, len(arg.Rvars))
+	values := make([][]uint64, len(arg.Rvars))
 	{
 		for i := 0; i < len(arg.Rvars); i++ {
-			values[i] = make([]*uint64, UnitLimit)
+			values[i] = make([]uint64, UnitLimit)
 		}
 	}
 	count := int64(len(bat.Zs))
@@ -574,81 +559,71 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
@@ -668,112 +643,112 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_int8:
 						vs := gvecs[j].Col.([]int8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint8:
 						vs := gvecs[j].Col.([]uint8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int16:
 						vs := gvecs[j].Col.([]int16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint16:
 						vs := gvecs[j].Col.([]uint16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int32:
 						vs := gvecs[j].Col.([]int32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint32:
 						vs := gvecs[j].Col.([]uint32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint64:
 						vs := gvecs[j].Col.([]uint64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float64:
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								key := vs.Get(0)
 								copy(data[k*24+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							} else {
-								key := vs.Get(int64(*vp))
+								key := vs.Get(int64(vp) - 1)
 								copy(data[k*24+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							}
@@ -852,36 +827,35 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
 				z := bat.Zs[o]
 				for vi, vps := range values {
-					if vps[k] == nil {
+					if vps[k] == 0 {
 						z = 0
 						break
 					}
 					if !ctr.views[vi].isOne {
-						z *= ctr.views[vi].bat.Zs[*vps[k]]
+						z *= ctr.views[vi].bat.Zs[vps[k]-1]
 					}
 				}
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h24.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashs, ctr.h24.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
+		ctr.pctr.h24.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h24.keys[:n], ctr.values)
+		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
 			}
 			o := i + int64(k)
-			if ok == 1 {
+			if v > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
-						if vp := values[vi][k]; vp != nil {
-							idx = int64(*vp)
+						if vp := values[vi][k]; vp > 0 {
+							idx = int64(vp) - 1
 						} else {
 							idx = 0
 						}
@@ -890,7 +864,6 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 						return err
 					}
 				}
-				*ctr.values[k] = ctr.pctr.rows
 				ctr.pctr.rows++
 				for _, r := range ctr.bat.Rs {
 					if err := r.Grow(proc.Mp); err != nil {
@@ -899,12 +872,12 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(*ctr.values[k])
+			ai := int64(v) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
 			for vi, vps := range values {
-				sel := *vps[k]
+				sel := vps[k] - 1
 				v := ctr.views[vi]
 				{ // ring fill
 					for j, r := range v.bat.Rs {
@@ -935,10 +908,10 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 			}
 		}
 	}
-	values := make([][]*uint64, len(arg.Rvars))
+	values := make([][]uint64, len(arg.Rvars))
 	{
 		for i := 0; i < len(arg.Rvars); i++ {
-			values[i] = make([]*uint64, UnitLimit)
+			values[i] = make([]uint64, UnitLimit)
 		}
 	}
 	count := int64(len(bat.Zs))
@@ -955,81 +928,71 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
@@ -1049,112 +1012,112 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_int8:
 						vs := gvecs[j].Col.([]int8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint8:
 						vs := gvecs[j].Col.([]uint8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int16:
 						vs := gvecs[j].Col.([]int16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint16:
 						vs := gvecs[j].Col.([]uint16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int32:
 						vs := gvecs[j].Col.([]int32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint32:
 						vs := gvecs[j].Col.([]uint32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint64:
 						vs := gvecs[j].Col.([]uint64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float64:
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								key := vs.Get(0)
 								copy(data[k*32+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							} else {
-								key := vs.Get(int64(*vp))
+								key := vs.Get(int64(vp) - 1)
 								copy(data[k*32+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							}
@@ -1233,36 +1196,35 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
 				z := bat.Zs[o]
 				for vi, vps := range values {
-					if vps[k] == nil {
+					if vps[k] == 0 {
 						z = 0
 						break
 					}
 					if !ctr.views[vi].isOne {
-						z *= ctr.views[vi].bat.Zs[*vps[k]]
+						z *= ctr.views[vi].bat.Zs[vps[k]-1]
 					}
 				}
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h32.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashs, ctr.h32.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
+		ctr.pctr.h32.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h32.keys[:n], ctr.values)
+		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
 			}
 			o := i + int64(k)
-			if ok == 1 {
+			if v > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
-						if vp := values[vi][k]; vp != nil {
-							idx = int64(*vp)
+						if vp := values[vi][k]; vp > 0 {
+							idx = int64(vp) - 1
 						} else {
 							idx = 0
 						}
@@ -1271,7 +1233,6 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 						return err
 					}
 				}
-				*ctr.values[k] = ctr.pctr.rows
 				ctr.pctr.rows++
 				for _, r := range ctr.bat.Rs {
 					if err := r.Grow(proc.Mp); err != nil {
@@ -1280,12 +1241,12 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(*ctr.values[k])
+			ai := int64(v) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
 			for vi, vps := range values {
-				sel := *vps[k]
+				sel := vps[k] - 1
 				v := ctr.views[vi]
 				{ // ring fill
 					for j, r := range v.bat.Rs {
@@ -1316,10 +1277,10 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 			}
 		}
 	}
-	values := make([][]*uint64, len(arg.Rvars))
+	values := make([][]uint64, len(arg.Rvars))
 	{
 		for i := 0; i < len(arg.Rvars); i++ {
-			values[i] = make([]*uint64, UnitLimit)
+			values[i] = make([]uint64, UnitLimit)
 		}
 	}
 	count := int64(len(bat.Zs))
@@ -1336,81 +1297,71 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
@@ -1430,112 +1381,112 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_int8:
 						vs := gvecs[j].Col.([]int8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint8:
 						vs := gvecs[j].Col.([]uint8)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int16:
 						vs := gvecs[j].Col.([]int16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint16:
 						vs := gvecs[j].Col.([]uint16)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int32:
 						vs := gvecs[j].Col.([]int32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint32:
 						vs := gvecs[j].Col.([]uint32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_uint64:
 						vs := gvecs[j].Col.([]uint64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float64:
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
-								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[*vp]
+								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								key := vs.Get(0)
 								copy(data[k*40+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							} else {
-								key := vs.Get(int64(*vp))
+								key := vs.Get(int64(vp) - 1)
 								copy(data[k*40+int64(ctr.keyOffs[k]):], key)
 								ctr.keyOffs[k] += uint32(len(key))
 							}
@@ -1614,36 +1565,35 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
 				z := bat.Zs[o]
 				for vi, vps := range values {
-					if vps[k] == nil {
+					if vps[k] == 0 {
 						z = 0
 						break
 					}
 					if !ctr.views[vi].isOne {
-						z *= ctr.views[vi].bat.Zs[*vps[k]]
+						z *= ctr.views[vi].bat.Zs[vps[k]-1]
 					}
 				}
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h40.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashs, ctr.h40.keys[:n], ctr.inserts, ctr.values)
-		for k, ok := range ctr.inserts[:n] {
+		ctr.pctr.h40.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h40.keys[:n], ctr.values)
+		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
 			}
 			o := i + int64(k)
-			if ok == 1 {
+			if v > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
-						if vp := values[vi][k]; vp != nil {
-							idx = int64(*vp)
+						if vp := values[vi][k]; vp > 0 {
+							idx = int64(vp) - 1
 						} else {
 							idx = 0
 						}
@@ -1652,7 +1602,6 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 						return err
 					}
 				}
-				*ctr.values[k] = ctr.pctr.rows
 				ctr.pctr.rows++
 				for _, r := range ctr.bat.Rs {
 					if err := r.Grow(proc.Mp); err != nil {
@@ -1661,12 +1610,12 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(*ctr.values[k])
+			ai := int64(v) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
 			for vi, vps := range values {
-				sel := *vps[k]
+				sel := vps[k] - 1
 				v := ctr.views[vi]
 				{ // ring fill
 					for j, r := range v.bat.Rs {
@@ -1697,10 +1646,10 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 			}
 		}
 	}
-	values := make([][]*uint64, len(arg.Rvars))
+	values := make([][]uint64, len(arg.Rvars))
 	{
 		for i := 0; i < len(arg.Rvars); i++ {
-			values[i] = make([]*uint64, UnitLimit)
+			values[i] = make([]uint64, UnitLimit)
 		}
 	}
 	count := int64(len(bat.Zs))
@@ -1717,81 +1666,71 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
-				ctr.hashs[0] = 0
-				copy(values[vi][:n], ctr.zvalues[:n])
-				v.h8.ht.FindBatch(int(n), ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				ctr.hashes[0] = 0
+				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {
@@ -1809,20 +1748,20 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						vs := gvecs[j].Col.([]int8)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:1]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*1:(*vp+1)*1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*1:vp*1]...)
 							}
 						}
 					case types.T_uint8:
 						vs := gvecs[j].Col.([]uint8)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:1]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*1:(*vp+1)*1]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*1:vp*1]...)
 							}
 						}
 						add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1830,89 +1769,89 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						vs := gvecs[j].Col.([]int16)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:2]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*2:(*vp+1)*2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*2:vp*2]...)
 							}
 						}
 					case types.T_uint16:
 						vs := gvecs[j].Col.([]uint16)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:2]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*2:(*vp+1)*2]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*2:vp*2]...)
 							}
 						}
 					case types.T_int32:
 						vs := gvecs[j].Col.([]int32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*4:vp*4]...)
 							}
 						}
 					case types.T_uint32:
 						vs := gvecs[j].Col.([]uint32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*4:vp*4]...)
 							}
 						}
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*4:(*vp+1)*4]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*4:vp*4]...)
 							}
 						}
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*8:vp*8]...)
 							}
 						}
 					case types.T_uint64:
 						vs := gvecs[j].Col.([]uint64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*8:vp*8]...)
 							}
 						}
 					case types.T_float64:
 						vs := gvecs[j].Col.([]float64)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(*vp)*8:(*vp+1)*8]...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*8:vp*8]...)
 							}
 						}
 					case types.T_char, types.T_varchar:
 						vs := gvecs[j].Col.(*types.Bytes)
 						for k := int64(0); k < n; k++ {
-							if vp := vps[k]; vp == nil {
+							if vp := vps[k]; vp == 0 {
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(0)...)
 							} else {
-								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(int64(*vp))...)
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], vs.Get(int64(vp)-1)...)
 							}
 						}
 					}
@@ -1987,49 +1926,38 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 			}
 		}
-		ctr.hashs[0] = 0
-		copy(ctr.inserts[:n], ctr.zinserts[:n])
+		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
 				z := bat.Zs[o]
 				for vi, vps := range values {
-					if vps[k] == nil {
+					if vps[k] == 0 {
 						z = 0
 						break
 					}
 					if !ctr.views[vi].isOne {
-						z *= ctr.views[vi].bat.Zs[*vps[k]]
+						z *= ctr.views[vi].bat.Zs[vps[k]-1]
 					}
 				}
 				ctr.pctr.zs[k] = z
 			}
 		}
-		{
-			for k := int64(0); k < n; k++ {
-				if ctr.pctr.zs[k] == 0 {
-					ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
-					continue
-				}
-				ok, vp := ctr.pctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &ctr.pctr.hstr.keys[k][0], Len: len(ctr.pctr.hstr.keys[k])})
-				ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
-				if ok {
-					ctr.inserts[k] = 1
-				}
-				ctr.pctr.hstr.realValues[k] = *vp
-			}
-		}
-		for k, ok := range ctr.inserts[:n] {
+		for k := int64(0); k < n; k++ {
 			if ctr.pctr.zs[k] == 0 {
+				ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
 				continue
 			}
+			vv := ctr.pctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &ctr.pctr.hstr.keys[k][0], Len: len(ctr.pctr.hstr.keys[k])})
+			ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
+			ctr.pctr.values[k] = vv
 			o := i + int64(k)
-			if ok == 1 {
+			if vv > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
-						if vp := values[vi][k]; vp != nil {
-							idx = int64(*vp)
+						if vp := values[vi][k]; vp > 0 {
+							idx = int64(vp) - 1
 						} else {
 							idx = 0
 						}
@@ -2038,7 +1966,6 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						return err
 					}
 				}
-				*ctr.values[k] = ctr.pctr.rows
 				ctr.pctr.rows++
 				for _, r := range ctr.bat.Rs {
 					if err := r.Grow(proc.Mp); err != nil {
@@ -2047,12 +1974,12 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(*ctr.values[k])
+			ai := int64(vv) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
 			for vi, vps := range values {
-				sel := *vps[k]
+				sel := vps[k] - 1
 				v := ctr.views[vi]
 				{ // ring fill
 					for j, r := range v.bat.Rs {
@@ -2098,16 +2025,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2144,16 +2069,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2190,16 +2113,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2236,16 +2157,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2282,16 +2201,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2328,16 +2245,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2374,16 +2289,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2420,16 +2333,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2466,16 +2377,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2512,16 +2421,14 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					ctr.h8.keys[k] = uint64(vs[int(i)+k])
 				}
 			}
-			ctr.hashs[0] = 0
-			copy(ctr.inserts[:n], ctr.zinserts[:n])
-			v.h8.ht.InsertBatch(n, ctr.hashs, unsafe.Pointer(&ctr.h8.keys[0]), ctr.inserts, ctr.values)
-			for k, ok := range ctr.inserts[:n] {
-				if ok == 1 {
-					*ctr.values[k] = v.rows
+			ctr.hashes[0] = 0
+			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
 					v.rows++
 					v.sels = append(v.sels, make([]int64, 0, 8))
 				}
-				ai := int64(*ctr.values[k])
+				ai := int64(vv) - 1
 				v.sels[ai] = append(v.sels[ai], i+int64(k))
 				if len(v.sels[ai]) > 1 {
 					flg = false
@@ -2550,13 +2457,13 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i++ {
 			key := vs.Get(i)
-			ok, vp := v.hstr.ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
-			if ok {
-				*vp = v.rows
+			vp := v.hstr.ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+			if vp > v.rows {
 				v.rows++
 				v.sels = append(v.sels, make([]int64, 0, 8))
 			}
-			ai := int64(*vp)
+			ctr.values[i] = vp
+			ai := int64(vp) - 1
 			v.sels[ai] = append(v.sels[ai], i)
 			if len(v.sels[ai]) > 1 {
 				flg = false
@@ -2763,10 +2670,6 @@ func (ctr *Container) constructBatch(rn string, varsMap map[string]int, freeVars
 	default:
 		ctr.pctr.typ = HStr
 		ctr.pctr.hstr.keys = make([][]byte, UnitLimit)
-		ctr.pctr.hstr.realValues = make([]uint64, UnitLimit)
-		for i := 0; i < UnitLimit; i++ {
-			ctr.values[i] = &ctr.pctr.hstr.realValues[i]
-		}
 		ctr.pctr.hstr.ht = &hashtable.StringHashMap{}
 		ctr.pctr.hstr.ht.Init()
 	}

@@ -54,8 +54,9 @@ type Container struct {
 	inserted  []uint8
 	zInserted []uint8
 	hashes    []uint64
-	values    []*uint64
-	h8        struct {
+	values    []uint64
+
+	h8 struct {
 		keys  []uint64
 		zKeys []uint64
 		ht    *hashtable.Int64HashMap
@@ -76,9 +77,8 @@ type Container struct {
 		ht    *hashtable.String40HashMap
 	}
 	hstr struct {
-		keys       [][]byte
-		realValues []uint64
-		ht         *hashtable.StringHashMap
+		keys [][]byte
+		ht   *hashtable.StringHashMap
 	}
 	bat *batch.Batch
 }
