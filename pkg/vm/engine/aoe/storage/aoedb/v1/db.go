@@ -15,13 +15,14 @@
 package aoedb
 
 import (
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"path/filepath"
 )
 
 type Impl = db.DB
@@ -360,16 +361,16 @@ func (d *DB) ExecSplitDatabase(ctx *ExecSplitCtx) error {
 	}
 
 	index := ctx.ToLogIndex(database)
-	if err = d.Wal.SyncLog(index); err != nil {
-		return err
-	}
-	defer d.Wal.Checkpoint(index)
 
 	splitter := db.NewSplitter(database, ctx.NewNames, ctx.RenameTable, ctx.SplitKeys, ctx.SplitCtx, index, &d.Impl)
 	defer splitter.Close()
 	if err = splitter.Prepare(); err != nil {
 		return err
 	}
+	if err = d.Wal.SyncLog(index); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(index)
 	if err = splitter.Commit(); err != nil {
 		return err
 	}
