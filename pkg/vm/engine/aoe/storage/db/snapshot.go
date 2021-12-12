@@ -16,7 +16,6 @@ package db
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -53,7 +52,8 @@ type ssWriter struct {
 type ssLoader struct {
 	mloader   metadata.SSLoader
 	src       string
-	database  *metadata.Database
+	catalog   *metadata.Catalog
+	replaced  *metadata.Database
 	tables    *table.Tables
 	index     uint64
 	flushsegs []*metadata.Segment
@@ -100,9 +100,10 @@ func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables
 	return w
 }
 
-func NewDBSSLoader(database *metadata.Database, tables *table.Tables, src string) *ssLoader {
+func NewDBSSLoader(catalog *metadata.Catalog, replaced *metadata.Database, tables *table.Tables, src string) *ssLoader {
 	ss := &ssLoader{
-		database:  database,
+		catalog:   catalog,
+		replaced:  replaced,
 		src:       src,
 		tables:    tables,
 		flushsegs: make([]*metadata.Segment, 0),
@@ -169,9 +170,9 @@ func (ss *ssLoader) validateMetaLoader() error {
 	// if ss.index != ss.mloader.GetIndex() {
 	// 	return errors.New(fmt.Sprintf("index mismatch: %d, %d", ss.index, ss.mloader.GetIndex()))
 	// }
-	if ss.database.GetShardId() != ss.mloader.GetShardId() {
-		return errors.New(fmt.Sprintf("shard id mismatch: %d, %d", ss.database.ShardId, ss.mloader.GetShardId()))
-	}
+	// if ss.database != nil && (ss.database.GetShardId() != ss.mloader.GetShardId()) {
+	// 	return errors.New(fmt.Sprintf("shard id mismatch: %d, %d", ss.database.ShardId, ss.mloader.GetShardId()))
+	// }
 	return nil
 }
 
@@ -188,7 +189,7 @@ func (ss *ssLoader) PrepareLoad() error {
 		return errors.New("invalid meta data to apply")
 	}
 
-	ss.mloader = metadata.NewDBSSLoader(ss.database.Catalog, filepath.Join(ss.src, metas[0]))
+	ss.mloader = metadata.NewDBSSLoader(ss.catalog, ss.replaced, filepath.Join(ss.src, metas[0]))
 	err = ss.mloader.PrepareLoad()
 	if err != nil {
 		return err
@@ -197,7 +198,7 @@ func (ss *ssLoader) PrepareLoad() error {
 		return err
 	}
 
-	destDir := ss.database.Catalog.Cfg.Dir
+	destDir := ss.catalog.Cfg.Dir
 	blkFiles := make(map[common.ID]bool)
 	segFiles := make(map[common.ID]bool)
 	blkMapFn := func(id *common.ID) (*common.ID, error) {
