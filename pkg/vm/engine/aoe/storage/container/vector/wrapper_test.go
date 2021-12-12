@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -90,7 +91,7 @@ func TestWrapper(t *testing.T) {
 		assert.Nil(t, wrapper.Close())
 		cpv, err := wrapper.CopyToVector()
 		assert.Nil(t, err)
-		assert.Equal(t, 10000, cpv.Length())
+		assert.Equal(t, 10000, vector.Length(cpv))
 
 		buf, err := wrapper.Marshal()
 		assert.Nil(t, err)

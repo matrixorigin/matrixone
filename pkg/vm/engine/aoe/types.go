@@ -21,3 +21,13 @@ type Block interface {
 	Prefetch([]string)
 	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
 }
+
+type SparseFilter interface {
+	Eq(string, interface{}) ([]string, error)
+	Ne(string, interface{}) ([]string, error)
+	Lt(string, interface{}) ([]string, error)
+	Le(string, interface{}) ([]string, error)
+	Gt(string, interface{}) ([]string, error)
+	Ge(string, interface{}) ([]string, error)
+	Btw(string, interface{}, interface{}) ([]string, error)
+}
