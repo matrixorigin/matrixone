@@ -17,10 +17,10 @@ package helper
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"log"
 	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
@@ -59,7 +59,7 @@ func NewTableDefs() []engine.TableDef {
 
 	defs = append(defs, &engine.IndexTableDef{
 		Typ:   0,
-		Names: []string{"a", "b"},
+		ColNames: []string{"a", "b"},
 	})
 	defs = append(defs, &engine.AttributeDef{
 		Attr: engine.Attribute{

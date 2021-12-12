@@ -78,7 +78,7 @@ func (seg *Segment) NewSummarizer() engine.Summarizer {
 }
 
 // NewSparseFilter generates a SparseFilter for segment.
-func (seg *Segment) NewSparseFilter() engine.SparseFilter {
+func (seg *Segment) NewSparseFilter() aoe.SparseFilter {
 	return NewSegmentSparseFilter(seg)
 }
 

@@ -72,8 +72,8 @@ func TestSegment(t *testing.T) {
 	assert.Equal(t, uint64(1), encoding.DecodeUint64([]byte(segs[0].ID())))
 	assert.Equal(t, uint64(5), encoding.DecodeUint64([]byte(segs[1].Blocks()[0])))
 	assert.Equal(t, uint64(6), encoding.DecodeUint64([]byte(segs[1].Blocks()[1])))
-	assert.NotNil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(1))), nil))
-	assert.Nil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(999))), nil))
+	assert.NotNil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(1)))))
+	assert.Nil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(999)))))
 	assert.Equal(t, int64(0), segs[0].Rows())
 
 	assert.Equal(t, int64(rowCount*blkCnt*typeSize), segs[0].Size("mock_0"))

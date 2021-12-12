@@ -39,7 +39,7 @@ type VectorWrapper struct {
 }
 
 func (v *VectorWrapper) Reset() {
-	panic("implement me")
+	//panic("implement me")
 }
 
 func VectorWrapperConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
