@@ -27,7 +27,6 @@ import (
 
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/storage"
-	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -35,7 +34,7 @@ var DC *DebugCounter = NewDebugCounter(32)
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	//cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()
