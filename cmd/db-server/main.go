@@ -76,6 +76,14 @@ var (
 	pci *frontend.PDCallbackImpl
 )
 
+var (
+	GoVersion    string = ""
+	BranchName   string = ""
+	LastCommitId string = ""
+	BuildTime    string = ""
+	MoVersion    string = "v0.1.0"
+)
+
 func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
@@ -126,6 +134,17 @@ func removeEpoch(epoch uint64) {
 }
 
 func main() {
+	// if the argument passed in is "--version", return version info and exit
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("MatrixOne build info:")
+		fmt.Printf("The golang version used to build this binary is: %s\n", GoVersion)
+		fmt.Printf("The git branch name is: %s\n", BranchName)
+		fmt.Printf("Last git commit ID: %s\n", LastCommitId)
+		fmt.Printf("The Buildtime is: %s\n", BuildTime)
+		fmt.Printf("Current Matrixone version: %s\n", MoVersion)
+		os.Exit(0)
+	}
+
 	flag.Parse()
 	args := flag.Args()
 
@@ -134,6 +153,7 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
+	
 
 	//close cube print info
 	log.SetLevelByString("info")
