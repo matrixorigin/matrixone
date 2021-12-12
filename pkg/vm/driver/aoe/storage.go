@@ -559,8 +559,9 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo{
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
+		dbName:=aoedb.IdToNameFactory.Encode(metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
-		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(metadata.ShardID))
+		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
 			return err
 		}
@@ -570,7 +571,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				Id:     metadata.LogIndex,
 				Offset: 0,
 				Size:   3,
-				DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+				DB:     dbName,
 			}
 			db, err = s.DB.CreateDatabase(&ctx)
 			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
@@ -579,7 +580,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			}
 			createDatabase = true
 		}
-		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedb.IdToNameFactory.Encode(metadata.ShardID), tableName)
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
 		if err != nil && err != aoeMeta.TableNotFoundErr {
 			return err
 		}
@@ -598,7 +599,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+					DB:     dbName,
 				},
 				Schema: schema,
 				Indice: indexSchema,
@@ -627,7 +628,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+					DB:     dbName,
 				},
 				Table: tableName,
 			},
@@ -638,16 +639,10 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
 		}
-		err=s.DB.FlushTable(aoedb.IdToNameFactory.Encode(metadata.ShardID),tableName)
+		err=s.DB.FlushDatabase(dbName)
 		if err != nil {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
-		}
-		waitExpect(200, func() bool {
-			return s.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(metadata.ShardID)) >= metadata.LogIndex
-		})
-		if s.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(metadata.ShardID)) < metadata.LogIndex{
-			panic("flush metatbl failed")
 		}
 	}
 	return nil
