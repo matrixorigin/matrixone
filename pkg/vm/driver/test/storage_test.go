@@ -313,7 +313,7 @@ func TestSnapshot(t *testing.T) {
 	}
 
 	for i := 0; i < 50; i++ {
-		if hasLog(2) {
+		if hasLog(1) {
 			time.Sleep(1 * time.Second)
 		} else {
 			logutil.Infof("compaction finished")
