@@ -117,3 +117,5 @@ require (
 replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2
 
 replace go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824022435-0203115049c2
+
+replace github.com/matrixorigin/matrixcube => github.com/lni/matrixcube v0.0.0-20211212160422-891eef3fe358
