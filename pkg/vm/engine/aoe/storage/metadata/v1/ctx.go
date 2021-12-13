@@ -110,7 +110,8 @@ type replaceTableCtx struct {
 
 type replaceDatabaseCtx struct {
 	writeCtx
-	view *databaseLogEntry
+	view     *databaseLogEntry
+	replaced *Database
 }
 
 type addReplaceCommitCtx struct {

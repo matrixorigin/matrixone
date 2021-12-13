@@ -131,6 +131,7 @@ type dbSnapshoter struct {
 	index     uint64
 	tranId    uint64
 	db        *Database
+	replaced  *Database
 	catalog   *Catalog
 	addresses *Addresses
 }
@@ -144,10 +145,11 @@ func NewDBSSWriter(db *Database, dir string, index uint64) *dbSnapshoter {
 	return ss
 }
 
-func NewDBSSLoader(catalog *Catalog, name string) *dbSnapshoter {
+func NewDBSSLoader(catalog *Catalog, replaced *Database, name string) *dbSnapshoter {
 	ss := &dbSnapshoter{
-		catalog: catalog,
-		name:    name,
+		catalog:  catalog,
+		name:     name,
+		replaced: replaced,
 	}
 	return ss
 }
@@ -235,7 +237,7 @@ func (ss *dbSnapshoter) GetShardId() uint64 {
 }
 
 func (ss *dbSnapshoter) CommitLoad() error {
-	return ss.catalog.SimpleReplaceDatabase(ss.view, ss.tranId)
+	return ss.catalog.SimpleReplaceDatabase(ss.view, ss.replaced, ss.tranId)
 }
 
 func (ss *dbSnapshoter) View() *databaseLogEntry {
