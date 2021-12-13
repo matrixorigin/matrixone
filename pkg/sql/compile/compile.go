@@ -21,6 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func InitAddress(addr string) {
+	Address = addr
+}
+
 func New(db string, sql string, uid string,
 	e engine.Engine, proc *process.Process) *compile {
 	return &compile{
