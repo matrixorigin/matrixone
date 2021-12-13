@@ -257,11 +257,19 @@ func TestSnapshot(t *testing.T) {
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	stdLog.Printf("shard id is %v",shard.ShardID)
+	var replicaID uint64
+	replicas:=c.RaftCluster.GetShardByID(0,shard.ShardID).Replicas
+	containerID:=c.RaftCluster.GetStore(0).Meta().ID
+	for _,replica:=range replicas{
+		if replica.ContainerID==containerID{
+			replicaID=replica.ID
+		}
+	}
 
 	var logDb logdb.LogDB
 	logDb = d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
 	hasLog := func(index uint64) bool {
-		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, 0, 2, 3, math.MaxUint64)
+		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, replicaID, 2, 3, math.MaxUint64)
 		if err == nil {
 			return true
 		}
