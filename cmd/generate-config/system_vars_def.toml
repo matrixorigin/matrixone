@@ -498,7 +498,7 @@ shard-groups = 0
 
 # Storage Configs
 [meta.conf]
-block-max-rows = 40000
+block-max-rows = 160000
 segment-max-blocks = 40
 
 [scheduler-cfg]
