@@ -197,6 +197,7 @@ func (rh *rowHandler) resetPacket()	{
 }
 func (rh *rowHandler) resetFlushOutBuffer()  {
 	rh.bytesInOutBuffer = 0
+	rh.flushCount = 0
 }
 
 type MysqlProtocolImpl struct {
