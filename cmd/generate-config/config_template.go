@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode"
+
+	"github.com/BurntSushi/toml"
 )
 
 /*
@@ -34,43 +35,43 @@ import (
 */
 var scopeOptions = []string{"session", "global"}
 
-//the access
+// the access
 var accessOptions = []string{"cmd", "file", "env"}
 
-//the data type
+// the data type
 var dataTypeOptions = []string{"string", "int64", "float64", "bool"}
 
 var boolFalseOptions = []string{"false", "off"}
 var boolTrueOptions = []string{"true", "on"}
 
-//the domain
+// the domain
 var domainTyoeOptions = []string{"set", "range"}
 
-//the updateMode
+// the updateMode
 var updateModeOptions = []string{"dynamic", "fix", "hotload"}
 
-//a unit in configuration template for a configuration item
+// a unit in configuration template for a configuration item
 type parameter struct {
-	//the Name
+	// the Name
 	Name string `toml:"name"`
 
-	//also the Name whose initial character is capital
+	// also the Name whose initial character is capital
 	CapitalName string
 
-	//the scope (also visibility)
-	//where can the others see the value
+	// the scope (also visibility)
+	// where the others can see the value
 	Scope []string `toml:"scope"`
 
-	//the access: command line; configure file; environment variable in the shell
-	//where the value can be changed
+	// the access: command line; configure file; environment variable in the shell
+	// where the value can be changed
 	Access []string `toml:"access"`
 
-	//the data type of the value like int, string ,bool,float,...
+	// the data type of the value, like int, string ,bool,float,...
 	DataType string `toml:"type"`
 
-	//the domain of the value for validity: set; range;
-	//set: select one among discrete values.
-	//range: select a point in a real range
+	// the domain of the value for validity check: set; range;
+	// set: select one among discrete values.
+	// range: select a point in a real range
 	DomainType string `toml:"domain-type"`
 
 	/**
@@ -87,36 +88,36 @@ type parameter struct {
 	*/
 	Values []string `toml:"values"`
 
-	//the comment
+	// the comments for this parameter
 	Comment string `toml:"comment"`
 
-	//the update mode in running
-	//dynamic: can be updated in running
-	//fix: can not be updated in running
-	//hotLoad: can be loaded from the config file and updated in running
+	// the update mode in running
+	// dynamic: can be updated in running
+	// fix: can not be updated in running
+	// hotLoad: can be loaded from the config file and updated in running
 	UpdateMode string `toml:"update-mode"`
 }
 
 type parameters struct {
-	//the name of parameter data structure
-	//the parameter structure can be exported.
-	//the first character must be capital.
+	// the name of parameter data structure
+	// the parameter structure can be exported.
+	// the first character must be capital.
 	ParameterStructName string `toml:"parameter-struct-name"`
 
-	//the name of configuration data structure
-	//the configuration structure is an internal structure that will not be exported.
-	//the first character should not be capital.
+	// the name of configuration data structure
+	// the configuration structure is an internal structure that will not be exported.
+	// the first character should not be capital.
 	ConfigurationStructName string `toml:"config-struct-name"`
 
-	//the name of operation file which contains all interface code for operating parameters
-	//without ".go"
+	// the name of operation file which contains all interface code for operating parameters
+	// filename extension ".go" eliminated.
 	OperationFileName string `toml:"operation-file-name"`
 
-	//the name of configuration file which contains all auto generated parameters.
-	//without ".toml"
+	// the name of configuration file which contains all auto generated parameters.
+	// filename extension ".toml" eliminated.
 	ConfigurationFileName string `toml:"config-file-name"`
 
-	//the array of parameters
+	// the array of parameters
 	Parameter []parameter
 }
 
@@ -146,30 +147,30 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		for _, item := range failed {
 			failedItems = append(failedItems, item.String())
 		}
-		//return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
+		// return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
-	//check parameter-struct-name
+	// check parameter-struct-name
 	if !isExportedGoIdentifier(params.ParameterStructName) {
 		return fmt.Errorf("ParameterStructName [%s] is not a valid identifier name within ascii characters", params.ParameterStructName)
 	}
 
-	//check config-struct-name
+	// check config-struct-name
 	if !isGoIdentifier(params.ConfigurationStructName) {
 		return fmt.Errorf("ConfigurationStructName [%s] is not a valid identifier name within ascii characters", params.ConfigurationStructName)
 	}
 
-	//check parameter operation file name
+	// check parameter operation file name
 	if !isGoStructAndInterfaceIdentifier(params.OperationFileName) {
 		return fmt.Errorf("OperationFileName [%s] is not a valid identifier name within ascii characters", params.OperationFileName)
 	}
 
-	//check parameter configuration file name
+	// check parameter configuration file name
 	if !isGoStructAndInterfaceIdentifier(params.ConfigurationFileName) {
 		return fmt.Errorf("ConfigurationFileName [%s] is not a valid identifier name within ascii characters", params.ConfigurationFileName)
 	}
 
-	//check parameter
+	// check parameter
 	for _, p := range params.Parameter {
 		if !isGoIdentifier(p.Name) {
 			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters", p.Name)
@@ -200,7 +201,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		}
 	}
 
-	//parameter name dedup
+	// parameter name dedup
 	var dedup = make(map[string]bool)
 
 	if _, ok := dedup[params.ParameterStructName]; !ok {
@@ -235,7 +236,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 		}
 	}
 
-	//make capital name for the name
+	// make capital name for the name
 	for i := 0; i < len(params.Parameter); i++ {
 		p := params.Parameter[i].Name
 		capName := p
@@ -247,28 +248,28 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 }
 
 /**
-check the x is a valid low case ascii character
+check if x is a valid lowercase ascii character
 */
 func isLowCaseAsciiChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x == '_'
 }
 
 /**
-check the x is a valid low case ascii character
+check if x is a valid uppercase ascii character
 */
 func isUpCaseAsciiChar(x byte) bool {
 	return x >= 'A' && x <= 'Z'
 }
 
 /**
-check the x is a valid ascii character
+check if x is a valid ascii character
 */
 func isAsciiChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x >= 'A' && x <= 'Z' || x == '_'
 }
 
 /**
-check the x is a valid ascii digit
+check if x is a valid ascii digit
 */
 func isAsciiDigit(x byte) bool {
 	return x >= '0' && x <= '9'
@@ -283,15 +284,15 @@ low-case-letter = "a" ... "z" | "_"
 letter     = "a" ... "z" | "A" ... "Z" | "_"
 digit      = "0" ... "9"
 
-here,the letter just has the ascii characters.
-So,it's the subset of the identifier in Golang.
+here,the letters only contain ascii characters.
+So,it's a subset of the identifier in Golang.
 */
 func isGoIdentifier(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
 
-	//the first character is a low case ascii character.
+	//the first character is a lowercase ascii character.
 	if !isLowCaseAsciiChar(s[0]) {
 		return false
 	}
@@ -315,20 +316,20 @@ up-case-letter = "A" ... "Z"
 letter     = "a" ... "z" | "A" ... "Z" | "_"
 digit      = "0" ... "9"
 
-here,the letter just has the ascii characters.
-So,it's the subset of the identifier in Golang.
+here,the letters only contain ascii characters.
+So,it's a subset of the identifier in Golang.
 */
 func isExportedGoIdentifier(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
 
-	//the first character is a low case ascii character.
+	// the first character is a lowercase ascii character.
 	if !isUpCaseAsciiChar(s[0]) {
 		return false
 	}
 
-	//the rest should ascii character | ascii digit | _
+	// the rest should ascii character | ascii digit | _
 	for i := 1; i < len(s); i++ {
 		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
 			return false
@@ -346,20 +347,20 @@ identifier = letter { letter | digit }
 letter     = "a" ... "z" | "A" ... "Z" | "_"
 digit      = "0" ... "9"
 
-here,the letter just has the ascii characters.
-So,it's the subset of the identifier in Golang.
+here,the letters only contain ascii characters.
+So,it's a subset of the identifier in Golang.
 */
 func isGoStructAndInterfaceIdentifier(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
 
-	//the first character is a low case ascii character.
+	// the first character is a lowercase ascii character.
 	if !isAsciiChar(s[0]) {
 		return false
 	}
 
-	//the rest should ascii character | ascii digit | _
+	// the rest should ascii character | ascii digit | _
 	for i := 1; i < len(s); i++ {
 		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
 			return false
@@ -402,7 +403,7 @@ make a float string look like a float64 string.
 */
 func looklikeFloat64String(s string) string {
 	if i := strings.Index(s, "."); i != -1 {
-		if i == len(s)-1 { //. is the last one, append a zero
+		if i == len(s)-1 { // . is the last one, append a zero
 			return s + "0"
 		}
 		return s
@@ -503,7 +504,7 @@ func checkValues(dataType string, domainType string, values []string) bool {
 				return false
 			}
 
-			//for configuration file generation
+			// for configuration file generation
 			for i := 0; i < len(values); i++ {
 				values[i] = looklikeFloat64String(values[i])
 			}
@@ -563,8 +564,8 @@ func isUpdateMode(um string) bool {
 
 /**
 check if A is a valid subset of B.
-if A has something that is not in B,then return false.
-if A has duplicate elements,then return false.
+if A has something that is not in B, then return false.
+if A has duplicate elements, then return false.
 if A has nothing,then return false.
 */
 func isSubset(A []string, B []string) bool {
@@ -574,17 +575,17 @@ func isSubset(A []string, B []string) bool {
 
 	sort.Strings(B)
 
-	//check the element of A is in B or not
+	// check the elements of A is in B or not
 	for _, x := range A {
 		if !isInSlice(x, B) {
 			return false
 		}
 	}
 
-	//check the A has duplicate elements
+	// check if A has duplicate elements
 	dedup := map[string]bool{}
 	for _, x := range A {
-		if _, ok := dedup[x]; ok { //duplicate scope
+		if _, ok := dedup[x]; ok { // duplicate scope
 			return false
 		}
 		dedup[x] = true
@@ -687,7 +688,7 @@ func hasDuplicateValueFloat64(x []float64) bool {
 }
 
 var defaultParameterTempate = `
-// Code generated by tool; DO NOT EDIT.
+// Change this config file according to your usage.
 package config
 
 import (
@@ -696,7 +697,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-//all parameters in the system
+// all parameters in the system
 type {{.ParameterStructName}} struct{
 	//read and write lock
 	rwlock	sync.RWMutex
@@ -730,7 +731,7 @@ type {{.ConfigurationStructName}} struct{
 
 /**
 prepare something before anything else.
-it is unsafe in multi-thread environment.
+This is unsafe in multi-thread environment.
 */
 func (ap *{{.ParameterStructName}}) prepareAnything(){
 	if ap.name2definition == nil {
@@ -1075,7 +1076,7 @@ func Load{{.ConfigurationStructName}}FromFile(filename string,params *{{.Paramet
 }
 `
 
-var defaultConfigurationTemplate = `# Code generated by tool; DO NOT EDIT.
+var defaultConfigurationTemplate = `# Change this config file according to your usage.
 #
 # These values must be different from each other:
 # port
@@ -1093,6 +1094,36 @@ var defaultConfigurationTemplate = `# Code generated by tool; DO NOT EDIT.
 #       client-urls
 #       peer-urls
 #
+#To set up matrixone on a single node, there is no need to change this config file
+#
+#To set up matrixone on a distributed cluster, change this config file according to the following instruction
+#    1. Requirements: at least three nodes
+#
+#    2. set up the prophet genesis node
+#        2.1. make sure the nodeID is unique
+#        2.2. change the addr-raft ip to the machine ip
+#        2.3. change the addr-client ip to the machine ip
+#        2.4. make sure the prophet name is different from the names of other two prophet node
+#        2.5. change the rpc-addr ip to the machine ip
+#        2.6. change the client-urls ip to the machine ip
+#        2.7. change the peer-urls ip to the machine ip
+#        2.8. change the shard-groups value to 2
+#        2.9. make sure the dir-data is different from the other nodes in the cluster
+#
+#    3. set up the other two prophet nodes
+#        3.1. apply the above 9 steps of prophet genesis node setting
+#        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
+#   
+#    4. set up pure storage node
+#        4.1. make sure the nodeID is unique
+#        4.2. change storage-node to false
+#        4.3. change the addr-raft ip to the machine ip
+#        4.4. change the addr-client ip to the machine ip
+#        4.5. In the external-etcd attribute, fill the three empty string with the three peer-urls of the three prophet node
+#        4.6. make sure the dir-data is different from the other nodes in the cluster
+#        4.7. change the shard-groups value to 2
+
+
 
 {{range $index, $param := .Parameter -}}
 {{ if ne .UpdateMode "fix" -}}
@@ -1124,7 +1155,7 @@ var defaultConfigurationTemplate = `# Code generated by tool; DO NOT EDIT.
 `
 
 var defaultOperationTestTemplate = `
-// Code generated by tool; DO NOT EDIT.
+// change this file according to your usage.
 package config
 
 import (
