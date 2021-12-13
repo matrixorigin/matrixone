@@ -182,8 +182,8 @@ name = "countOfRowsPerSendingToClient"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "set"
-values = ["10"]
+domain-type = "range"
+values = ["1000","1","10000"]
 comment = "send the count of rows to the client"
 update-mode = "dynamic"
 
@@ -335,6 +335,26 @@ type = "string"
 domain-type = "set"
 values = ["error","info","debug","warning","warn","fatal"]
 comment = "default is error. The log level for cube."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "enableProfileGetDataFromPipeline"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "defult is false. true for profiling the getDataFromPipeline"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "maxBytesInOutbufToFlush"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["1024","32","3096"]
+comment = "KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed."
 update-mode = "dynamic"
 
 [[parameter]]
