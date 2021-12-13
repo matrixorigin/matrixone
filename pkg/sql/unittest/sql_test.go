@@ -67,7 +67,7 @@ func TestInsertFunction(t *testing.T) {
 		{"def1", "i1\n\t[888 1 888 888]-&{<nil>}\ni2\n\t[888 888 -1 888]-&{<nil>}\ni3\n\t[888 888 888 0]-&{<nil>}\n\n"},
 		{"def2", "id\n\t1\nname\n\tAbby\n\nage\n\t24\n\n"},
 		{"def3", "i\n\t[-1 -1]-&{<nil>}\nv\n\t[abc abc]-&{<nil>}\nc\n\t[ ]-&{<nil>}\nprice\n\t[0 0]-&{<nil>}\n\n"},
-		{"def4", "d1\n\t1\nd2\n\t2\nd3\n\t[0]-&{{0}}\nd4\n\t1\n\n"},
+		{"def4", "d1\n\t1\nd2\n\t2\nd3\n\tnull\nd4\n\t1\n\n"},
 	}
 
 	for _, p := range prepares {

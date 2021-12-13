@@ -2028,7 +2028,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]int8)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2037,7 +2037,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]int16)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2046,7 +2046,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]int32)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2055,7 +2055,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]int64)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2064,7 +2064,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]uint8)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2073,7 +2073,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]uint16)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2082,7 +2082,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]uint32)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2091,7 +2091,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]uint64)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2100,7 +2100,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]types.Decimal)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2109,7 +2109,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]float32)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2118,7 +2118,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]float64)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2127,7 +2127,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]types.Date)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2136,7 +2136,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]types.Datetime)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2145,7 +2145,7 @@ func (v *Vector) String() string {
 		col := v.Col.([]int64)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2154,7 +2154,7 @@ func (v *Vector) String() string {
 		col := v.Col.([][]interface{})
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%v", col[0])
 			}
@@ -2163,7 +2163,7 @@ func (v *Vector) String() string {
 		col := v.Col.(*types.Bytes)
 		if len(col.Offsets) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
-				fmt.Print("null")
+				return "null"
 			} else {
 				return fmt.Sprintf("%s\n", col.Get(0))
 			}
