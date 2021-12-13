@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"go.uber.org/zap/zapcore"
@@ -205,9 +206,9 @@ func MockBatch(tableInfo *aoe.TableInfo, i int) *batch.Batch {
 
 	bat := batch.New(true, attrsString)
 	var err error
-	for i, colType := range typs {
+	for j, colType := range typs {
 		vec := MockVector(colType, i)
-		bat.Vecs[i], err = vec.CopyToVector()
+		bat.Vecs[j], err = vec.CopyToVector()
 		if err != nil {
 			panic(err)
 		}
@@ -275,14 +276,16 @@ func TestSnapshot(t *testing.T) {
 	stdLog.Printf("node%v stopped.", stopNode)
 	d0 = c.CubeDrivers[leaderNode]
 
+	var insertBatches []*batch.Batch
 	for i := 0; i < 10; i++ {
 		//create table into the shard
 		tbl := MockTableInfo(i)
 		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
 		stdLog.Printf(" create table %v", i)
 		require.Nil(t, err)
-		//append 10000 rows into the table
+		//append 1 rows into the table
 		batch := MockBatch(tbl, i)
+		insertBatches = append(insertBatches, batch)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
 		require.Nil(t, err)
@@ -315,7 +318,7 @@ func TestSnapshot(t *testing.T) {
 		panic(err)
 	}
 	for i := 0; i < 50; i++ {
-		if hasLog(1) {
+		if hasLog(2) {
 			time.Sleep(1 * time.Second)
 		} else {
 			logutil.Infof("compaction finished")
@@ -328,16 +331,35 @@ func TestSnapshot(t *testing.T) {
 
 	c.RestartNode(stopNode)
 	stdLog.Printf(" node%v started.", stopNode)
-
 	time.Sleep(10 * time.Second)
+
 	d2 := c.CubeDrivers[stopNode]
+	s0 := c.AOEStorages[leaderNode]
+	s2 := c.AOEStorages[stopNode]
+	s0.Sync([]uint64{shard.ShardID})
+	s2.Sync([]uint64{shard.ShardID})
+	s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	require.Equal(t, s0checkpointID, s2checkpointID)
+
+	//check tables
 	tbls, err := d2.TabletNames(shard.ShardID)
 	require.Nil(t, err)
-	require.NotEqual(t, 0, len(tbls))
-	s2 := c.AOEStorages[stopNode]
-	batchs, err := s2.ReadAll(shard.ShardID)
-	require.Nil(t, err)
-	require.NotEqual(t, 0, len(batchs))
+	require.Equal(t, 10, len(tbls))
+	require.True(t, s0.IsTablesSame(s2, shard.ShardID))
+
+	//checkbatches
+	for _, tbl := range tbls {
+		leaderBatches, _ := s0.ReadAll(shard.ShardID, tbl)
+		batchs, err := s2.ReadAll(shard.ShardID, tbl)
+		require.Nil(t, err)
+		for i, batch := range batchs {
+			require.Equal(t, len(leaderBatches[i].Vecs), len(batch.Vecs))
+			for j, vec := range batch.Vecs {
+				require.Equal(t, vec.Col, leaderBatches[i].Vecs[j].Col, "type is %v and %v", vec.Typ, leaderBatches[i].Vecs[j].Typ)
+			}
+		}
+	}
 
 	stdLog.Printf("call stop")
 	c.Stop()

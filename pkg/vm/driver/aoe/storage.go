@@ -566,7 +566,7 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
-		dbName:=aoedb.IdToNameFactory.Encode(metadata.ShardID)
+		dbName := aoedb.IdToNameFactory.Encode(metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
@@ -646,7 +646,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
 		}
-		err=s.DB.FlushDatabase(dbName)
+		err = s.DB.FlushDatabase(dbName)
 		if err != nil {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
@@ -746,36 +746,55 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 }
 
 //for test
-func (s *Storage) ReadAll(sid uint64) ([]*batch.Batch, error) {
-	batchs := make([]*batch.Batch, 0)
+func (s *Storage) IsTablesSame(s2 *Storage, sid uint64) bool {
+	// batchs := make([]*batch.Batch, 0)
 	tbls := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
+	tbls2 := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
+	if len(tbls) != len(tbls2) {
+		return false
+	}
 	for _, tbl := range tbls {
 		if strings.Contains(tbl, sPrefix) {
 			continue
 		}
-		relation, _ := s.Relation(aoedb.IdToNameFactory.Encode(sid), tbl)
-		attrs := make([]string, 0)
-		for _, ColDef := range relation.Meta.Schema.ColDefs {
-			attrs = append(attrs, ColDef.Name)
-		}
-		relation.Data.GetBlockFactory()
-		for _, segment := range relation.Meta.SegmentSet {
-			seg := relation.Segment(segment.Id, nil)
-			blks := seg.Blocks()
-			for _, blk := range blks {
-				block := seg.Block(blk, nil)
-				cds := make([]*bytes.Buffer, len(attrs))
-				dds := make([]*bytes.Buffer, len(attrs))
-				for i := range cds {
-					cds[i] = bytes.NewBuffer(make([]byte, 0))
-					dds[i] = bytes.NewBuffer(make([]byte, 0))
-				}
-				refs := make([]uint64, len(attrs))
-				bat, _ := block.Read(refs, attrs, cds, dds)
-				batchs = append(batchs, bat)
+		exist := false
+		for _, tbl2 := range tbls2 {
+			if tbl == tbl2 {
+				exist = true
+				break
 			}
 		}
+		if !exist {
+			return false
+		}
+	}
+	return true
+}
 
+//for test
+func (s *Storage) ReadAll(sid uint64, tbl string) ([]*batch.Batch, error) {
+	var batchs []*batch.Batch
+	relation, _ := s.Relation(aoedb.IdToNameFactory.Encode(sid), tbl)
+	attrs := make([]string, 0)
+	for _, ColDef := range relation.Meta.Schema.ColDefs {
+		attrs = append(attrs, ColDef.Name)
+	}
+	relation.Data.GetBlockFactory()
+	for _, segment := range relation.Meta.SegmentSet {
+		seg := relation.Segment(segment.Id, nil)
+		blks := seg.Blocks()
+		for _, blk := range blks {
+			block := seg.Block(blk, nil)
+			cds := make([]*bytes.Buffer, len(attrs))
+			dds := make([]*bytes.Buffer, len(attrs))
+			for i := range cds {
+				cds[i] = bytes.NewBuffer(make([]byte, 0))
+				dds[i] = bytes.NewBuffer(make([]byte, 0))
+			}
+			refs := make([]uint64, len(attrs))
+			bat, _ := block.Read(refs, attrs, cds, dds)
+			batchs = append(batchs, bat)
+		}
 	}
 	return batchs, nil
 }
