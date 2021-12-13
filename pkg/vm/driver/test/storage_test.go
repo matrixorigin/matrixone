@@ -296,11 +296,12 @@ func TestSnapshot(t *testing.T) {
 
 			time.Sleep(1*time.Second)
 		} else {
+			logutil.Infof("compaction finished")
 			break
 		}
-		// if i == 9 {
-		// 	t.Fatalf("failed to remove log entries from logdb")
-		// }
+		if i == 9 {
+			t.Fatalf("failed to remove log entries from logdb")
+		}
 	}
 
 	c.RestartNode(2)
