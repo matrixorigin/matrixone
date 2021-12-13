@@ -273,7 +273,7 @@ func TestSnapshot(t *testing.T) {
 		if err == nil {
 			return true
 		}
-		if err == raft.ErrCompacted {
+		if err == raft.ErrUnavailable {
 			return false
 		}
 		panic(err)
