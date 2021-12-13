@@ -375,8 +375,6 @@ github.com/lightstep/lightstep-tracer-common/golang/gogo v0.0.0-20190605223551-b
 github.com/lightstep/lightstep-tracer-go v0.18.1/go.mod h1:jlF1pusYV4pidLvZ+XD0UBX0ZE6WURAspgAczcDHrL4=
 github.com/lni/goutils v1.3.0 h1:oBhV7Z5DjNWbcy/c3fFj6qo4SnHcpyTY28qfKvLy6UM=
 github.com/lni/goutils v1.3.0/go.mod h1:PUPtBAnZlRPUKWUXCsYkIRWubJbtNHpTAee0sczhlf4=
-github.com/lni/matrixcube v0.0.0-20211212160422-891eef3fe358 h1:b2dM6kcrMq7ARhIKs4ZV9QT2586pbpP6jfpQABKmGzY=
-github.com/lni/matrixcube v0.0.0-20211212160422-891eef3fe358/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
 github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f h1:ykmePP2E9ZuNRhfZL2bqjMdoYitgzYvIdVogbvnlvhs=
 github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f/go.mod h1:Z98QaAJnPYmgpw5VsksNdEPKpHDp4yeHTTvfHbX5JWE=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
@@ -386,6 +384,8 @@ github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czP
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7CQEsRxL8+/sAPW23uIqpwR+M8Aje81AH6w3/ZkxQw=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
+github.com/matrixorigin/matrixcube v0.0.0-20211212135742-0c643ca5419a h1:QMXVv6eSXM71+wj2+Xo1gom+b5PB3h1mUQ+OuCco7os=
+github.com/matrixorigin/matrixcube v0.0.0-20211212135742-0c643ca5419a/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=

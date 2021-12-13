@@ -250,19 +250,35 @@ func TestSnapshot(t *testing.T) {
 	c.Start()
 	stdLog.Printf("drivers all started.")
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
-	c.StopNode(2)
 	stdLog.Printf("node2 stopped.")
 	d0 := c.CubeDrivers[0]
 
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	stdLog.Printf("shard id is %v",shard.ShardID)
+	stdLog.Printf("shard id is %v", shard.ShardID)
+	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
+	leaderStoreContainerID := leaderStore.Meta().ID
+
+	var stopNode int
+	var leaderNode int
+	for i := 0; i < 3; i++ {
+		containerID := c.RaftCluster.GetStore(0).Meta().ID
+		if containerID != leaderStoreContainerID {
+			stopNode = i
+		}
+		if containerID == leaderStoreContainerID {
+			leaderNode = i
+		}
+	}
+
+	c.StopNode(stopNode)
+	d0 = c.CubeDrivers[leaderNode]
+
 	var replicaID uint64
-	replicas:=c.RaftCluster.GetShardByID(0,shard.ShardID).Replicas
-	containerID:=c.RaftCluster.GetStore(0).Meta().ID
-	for _,replica:=range replicas{
-		if replica.ContainerID==containerID{
-			replicaID=replica.ID
+	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
+	for _, replica := range replicas {
+		if replica.ContainerID == leaderStoreContainerID {
+			replicaID = replica.ID
 		}
 	}
 
@@ -274,27 +290,31 @@ func TestSnapshot(t *testing.T) {
 			return true
 		}
 		if err == raft.ErrUnavailable {
+			logutil.Infof("err is %v",err)
 			return false
 		}
 		panic(err)
 	}
+
+	for i := 0; i < 10; i++ {
+		//create table into the shard
+		tbl := MockTableInfo(i)
+		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+		stdLog.Printf(" create table %v", i)
+		require.Nil(t, err)
+		//append 10000 rows into the table
+		batch := MockBatch(tbl, i)
+		var buf bytes.Buffer
+		err = protocol.EncodeBatch(batch, &buf)
+		require.Nil(t, err)
+		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+		stdLog.Printf(" append %v", i)
+		require.Nil(t, err)
+	}
+
 	for i := 0; i < 50; i++ {
 		if hasLog(2) {
-			//create table into the shard
-			tbl := MockTableInfo(i)
-			err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
-			stdLog.Printf(" create table %v",i)
-			require.Nil(t, err)
-			//append 10000 rows into the table
-			batch := MockBatch(tbl, i)
-			var buf bytes.Buffer
-			err = protocol.EncodeBatch(batch, &buf)
-			require.Nil(t, err)
-			err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
-			stdLog.Printf(" append %v",i)
-			require.Nil(t, err)
-
-			time.Sleep(1*time.Second)
+			time.Sleep(1 * time.Second)
 		} else {
 			logutil.Infof("compaction finished")
 			break
@@ -304,15 +324,15 @@ func TestSnapshot(t *testing.T) {
 		}
 	}
 
-	c.RestartNode(2)
+	c.RestartNode(stopNode)
 	stdLog.Printf(" node2 started.")
 
 	time.Sleep(10 * time.Second)
-	d2 := c.CubeDrivers[2]
+	d2 := c.CubeDrivers[stopNode]
 	tbls, err := d2.TabletNames(shard.ShardID)
 	require.Nil(t, err)
 	require.NotEqual(t, 0, len(tbls))
-	s2 := c.AOEStorages[2]
+	s2 := c.AOEStorages[stopNode]
 	batchs, err := s2.ReadAll(shard.ShardID)
 	require.Nil(t, err)
 	require.NotEqual(t, 0, len(batchs))
