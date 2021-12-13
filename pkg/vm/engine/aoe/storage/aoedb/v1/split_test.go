@@ -52,9 +52,9 @@ func TestSplit1(t *testing.T) {
 	err = inst1.FlushDatabase(database.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, 0, database.UncheckpointedCnt())
 	coarseSize := database.GetSize()
 	size := coarseSize * 7 / 8
@@ -151,9 +151,10 @@ func TestSplit2(t *testing.T) {
 	// 5. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 
@@ -295,9 +296,10 @@ func TestSplit3(t *testing.T) {
 	// 6. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 
@@ -441,9 +443,10 @@ func TestSplit4(t *testing.T) {
 	// 6. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 

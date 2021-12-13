@@ -204,9 +204,9 @@ func TestReplay1(t *testing.T) {
 	err = inst.FlushDatabase(db2.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return db2.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return db2.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, 0, db2.UncheckpointedCnt())
 	assert.Equal(t, gen.Get(db2.GetShardId()), db2.GetCheckpointId())
 }
@@ -552,9 +552,9 @@ func TestReplay5(t *testing.T) {
 	err = inst.FlushDatabase(meta.Database.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return meta.Database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return meta.Database.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, appendCtx.Id, meta.Database.GetCheckpointId())
 	assert.Equal(t, 0, meta.Database.UncheckpointedCnt())
 }

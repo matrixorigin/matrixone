@@ -145,7 +145,9 @@ func (mgr *manager) GetShardCurrSeqNum(shardId uint64) (id uint64) {
 		return
 	}
 	if s.idAlloctor != nil {
-		return s.idAlloctor.Get()
+		id = s.idAlloctor.Get()
+	} else {
+		id = s.GetLastId()
 	}
 	return
 }

@@ -416,8 +416,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				logutil.Infof("continue 1")
 				continue
 			}
-			segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
-			seg := rel.Segment(segment.Id)
+			ids := rel.SegmentIds()
+			seg := rel.Segment(ids.Ids[len(ids.Ids)-1])
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1])
 			cds := make([]*bytes.Buffer, len(attrs))
@@ -533,7 +533,7 @@ func shardMetadataToBatch(metadata meta.ShardMetadata) (*batch.Batch, error) {
 	return bat, nil
 }
 
-func createMetadataTableInfo(shardId uint64) *aoe.TableInfo{
+func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 	tableName := sPrefix + strconv.Itoa(int(shardId))
 	metaTblInfo := aoe.TableInfo{
 		Name:    tableName,
@@ -559,8 +559,9 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo{
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
+		dbName := aoedb.IdToNameFactory.Encode(metadata.ShardID)
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
-		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(metadata.ShardID))
+		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
 			return err
 		}
@@ -570,7 +571,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				Id:     metadata.LogIndex,
 				Offset: 0,
 				Size:   3,
-				DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+				DB:     dbName,
 			}
 			db, err = s.DB.CreateDatabase(&ctx)
 			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
@@ -579,13 +580,13 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			}
 			createDatabase = true
 		}
-		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(aoedb.IdToNameFactory.Encode(metadata.ShardID), tableName)
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
 		if err != nil && err != aoeMeta.TableNotFoundErr {
 			return err
 		}
 		createTable := false
 		if tbl == nil {
-			metaTblInfo:=createMetadataTableInfo(metadata.ShardID)
+			metaTblInfo := createMetadataTableInfo(metadata.ShardID)
 			offset := 0
 			size := 2
 			if createDatabase {
@@ -598,7 +599,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+					DB:     dbName,
 				},
 				Schema: schema,
 				Indice: indexSchema,
@@ -627,7 +628,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 					Id:     metadata.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedb.IdToNameFactory.Encode(metadata.ShardID),
+					DB:     dbName,
 				},
 				Table: tableName,
 			},
@@ -638,19 +639,30 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
 		}
+		err = s.DB.FlushDatabase(dbName)
+		if err != nil {
+			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
+			return err
+		}
 	}
 	return nil
 }
-
+func waitExpect(timeout int, expect func() bool) {
+	end := time.Now().Add(time.Duration(timeout) * time.Millisecond)
+	interval := time.Duration(timeout) * time.Millisecond / 400
+	for time.Now().Before(end) && !expect() {
+		time.Sleep(interval)
+	}
+}
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 	var err error
-	t0:=time.Now()
+	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("[S-%d|logIndex:%d,%d]createIndex handler cost %d ms", shard.ID, ^uint64(0), 0, time.Since(t0).Milliseconds())
 	}()
-	if removeData { 
+	if removeData {
 		ctx := aoedb.DropDBCtx{
-			Id:     ^uint64(0), 
+			Id:     ^uint64(0),
 			Offset: 0,
 			Size:   1,
 			DB:     aoedb.IdToNameFactory.Encode(shard.ID),
@@ -669,39 +681,39 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	renameTable := func(oldName, dbName string) string {
 		return oldName
 	}
-	dropTableCtx := aoedb.DropTableCtx{
-		DBMutationCtx: aoedb.DBMutationCtx{
-			Id:     old.LogIndex,
-			Offset: 0,
-			Size:   2,
-			DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
-		},
-		Table: sPrefix + strconv.Itoa(int(old.ShardID)),
-	}
-	_, err := s.DB.DropTable(&dropTableCtx)
-	if err != nil {
-		logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
-		return err
-	}
+	// dropTableCtx := aoedb.DropTableCtx{
+	// 	DBMutationCtx: aoedb.DBMutationCtx{
+	// 		Id:     old.LogIndex,
+	// 		Offset: 0,
+	// 		Size:   2,
+	// 		DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
+	// 	},
+	// 	Table: sPrefix + strconv.Itoa(int(old.ShardID)),
+	// }
+	// _, err := s.DB.DropTable(&dropTableCtx)
+	// if err != nil {
+	// 	logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
+	// 	return err
+	// }
 	execSplitCtx := aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
-			Offset: 1,
-			Size:   2,
+			Offset: 0,
+			Size:   1,
 			DB:     aoedb.IdToNameFactory.Encode(old.ShardID),
 		},
 		NewNames:    newNames,
 		RenameTable: renameTable,
 		SplitCtx:    ctx,
 	}
-	err = s.DB.ExecSplitDatabase(&execSplitCtx)
+	err := s.DB.ExecSplitDatabase(&execSplitCtx)
 	if err != nil {
-		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.",old.ShardID)
+		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
 	for _, shard := range news {
 		tableName := sPrefix + strconv.Itoa(int(shard.ShardID))
-		bat,_:=shardMetadataToBatch(shard)
+		bat, _ := shardMetadataToBatch(shard)
 
 		offset := 0
 		size := 1
@@ -719,7 +731,7 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		err = s.DB.Append(&ctx)
 		if err != nil {
-			logutil.Errorf("Split:S-%d append fail.",shard.ShardID)
+			logutil.Errorf("Split:S-%d append fail.", shard.ShardID)
 			return err
 		}
 	}
