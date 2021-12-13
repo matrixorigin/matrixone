@@ -25,7 +25,6 @@ type Int64HashMapCell struct {
 }
 
 type Int64HashMap struct {
-	hasZero       uint8
 	bucketCntBits uint8
 	bucketCnt     uint64
 	elemCnt       uint64
@@ -48,13 +47,14 @@ func (ht *Int64HashMap) Init() {
 	ht.bucketData = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
-func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted bool, value *uint64) {
+func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted bool, value uint64) {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
-		ht.elemCnt += 1 - uint64(ht.hasZero)
-		inserted = ht.hasZero == 0
-		ht.hasZero = 1
-		value = &ht.zeroCell.Mapped
+		if ht.zeroCell.Mapped == 0 {
+			ht.elemCnt++
+			ht.zeroCell.Mapped = ht.elemCnt
+		}
+		value = ht.zeroCell.Mapped
 		return
 	}
 
@@ -68,14 +68,15 @@ func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted boo
 	if inserted {
 		ht.elemCnt++
 		cell.Key = key
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
+	value = cell.Mapped
 
 	return
 }
 
-func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []*uint64) {
+func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []uint64) {
 	ht.resizeOnDemand(n)
 
 	if hashes[0] == 0 {
@@ -86,45 +87,40 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 
 	for i, key := range keys {
 		if key == 0 {
-			inc := 1 - ht.hasZero
-			ht.elemCnt += uint64(inc)
-			inserted[i] = inc
-			ht.hasZero = 1
-			values[i] = &ht.zeroCell.Mapped
+			if ht.zeroCell.Mapped == 0 {
+				ht.elemCnt++
+				inserted[i] = 1
+				ht.zeroCell.Mapped = ht.elemCnt
+			}
+			values[i] = ht.zeroCell.Mapped
 		} else {
 			isInserted, _, cell := ht.findBucket(hashes[i], key)
 			if isInserted {
 				ht.elemCnt++
 				inserted[i] = 1
 				cell.Key = key
+				cell.Mapped = ht.elemCnt
 			}
-			values[i] = &cell.Mapped
+			values[i] = cell.Mapped
 		}
 	}
 }
 
-func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) (value *uint64) {
+func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) uint64 {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
-		if ht.hasZero > 0 {
-			value = &ht.zeroCell.Mapped
-		}
-		return
+		return ht.zeroCell.Mapped
 	}
 
 	if hash == 0 {
 		hash = crc32Int64Hash(key)
 	}
 
-	empty, _, cell := ht.findBucket(hash, key)
-	if !empty {
-		value = &cell.Mapped
-	}
-
-	return
+	_, _, cell := ht.findBucket(hash, key)
+	return cell.Mapped
 }
 
-func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []*uint64) {
+func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
 		crc32Int64BatchHash(keysPtr, &hashes[0], n)
 	}
@@ -132,14 +128,10 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
 	for i, key := range keys {
 		if key == 0 {
-			if ht.hasZero > 0 {
-				values[i] = &ht.zeroCell.Mapped
-			}
+			values[i] = ht.zeroCell.Mapped
 		} else {
-			empty, _, cell := ht.findBucket(hashes[i], key)
-			if !empty {
-				values[i] = &cell.Mapped
-			}
+			_, _, cell := ht.findBucket(hashes[i], key)
+			values[i] = cell.Mapped
 		}
 	}
 }
@@ -187,12 +179,12 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 	ht.rawData = newRawData
 	ht.bucketData = newBucketData
 
-	var hashes [kInitialBucketCnt]uint64
+	var hashes [256]uint64
 
 	var i uint64
-	for i = 0; i < oldBucketCnt; i += kInitialBucketCnt {
-		cells := oldBucketData[i : i+kInitialBucketCnt]
-		crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], kInitialBucketCnt)
+	for i = 0; i < oldBucketCnt; i += 256 {
+		cells := oldBucketData[i : i+256]
+		crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
 		for j := range cells {
 			cell := &cells[j]
 			if cell.Key != 0 {
@@ -220,7 +212,7 @@ func (it *Int64HashMapIterator) Init(ht *Int64HashMap) {
 func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	if !it.visited {
 		it.visited = true
-		if it.table.hasZero > 0 {
+		if it.table.zeroCell.Mapped > 0 {
 			cell = &it.table.zeroCell
 			return
 		}

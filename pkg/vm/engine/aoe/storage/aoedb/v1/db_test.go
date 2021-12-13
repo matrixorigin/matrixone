@@ -1323,6 +1323,73 @@ func decodeBlockIds(ids []string) []string {
 	}
 	return res
 }
+
+func TestFilterUnclosedSegment(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
+
+	schema := metadata.MockSchemaAll(1)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+	for i := 0; i < int(blkCnt); i++ {
+		assert.Nil(t, inst.Append(appendCtx))
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segId)
+	t.Logf("%+v", seg.GetIndexHolder())
+	segment := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	sparseFilter := segment.NewSparseFilter()
+
+	// test sparse filter upon unclosed segment
+	res, _ := sparseFilter.Eq("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ne("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(8))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Lt("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Gt("mock_0", int8(5))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Le("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Ge("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Eq("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Lt("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Gt("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Le("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ge("mock_0", int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+
+	inst.Close()
+}
+
 func TestFilter(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -2710,3 +2777,27 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	inst.Close()
 }
 
+func matchStringArray(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	mapper := make(map[string]int)
+	for _, e := range a {
+		if _, ok := mapper[e]; ok {
+			mapper[e] += 1
+		} else {
+			mapper[e] = 1
+		}
+	}
+	for _, e := range b {
+		if _, ok := mapper[e]; !ok {
+			return false
+		} else {
+			mapper[e] -= 1
+		}
+	}
+	return true
+}

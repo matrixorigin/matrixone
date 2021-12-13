@@ -46,7 +46,6 @@ func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
 }
 
 func (holder *TableHolder) RegisterSegment(id common.ID, segType base.SegmentType, cb PostCloseCB) SegmentIndexHolder {
-	//segHolder := newSegmentHolder(holder.BufMgr, id, segType, cb)
 	var segHolder SegmentIndexHolder
 	if segType == base.SORTED_SEG {
 		segHolder = newSortedSegmentHolder(holder.BufMgr, id, cb)
@@ -131,9 +130,6 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) S
 	if stale.HolderType() >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	//newSeg := newSegmentHolder(holder.BufMgr, stale.ID, segType, stale.PostCloseCB)
-	//holder.tree.Segments[idx] = newSeg
-	//newSeg.Ref()
 	newHolder := newSortedSegmentHolder(holder.BufMgr, stale.GetID(), stale.GetCB())
 	holder.tree.Segments[idx] = newHolder
 	newHolder.Ref()

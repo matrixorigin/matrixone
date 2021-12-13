@@ -251,11 +251,9 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	if err != nil {
-		return err
-	}
-	loader := NewDBSSLoader(database, d.Store.DataTables, path)
+	var err error
+	database, _ := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	loader := NewDBSSLoader(d.Store.Catalog, database, d.Store.DataTables, path)
 	if err = loader.PrepareLoad(); err != nil {
 		return err
 	}
@@ -263,7 +261,9 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 		return err
 	}
 	loader.ScheduleEvents(d)
-	d.ScheduleGCDatabase(database)
+	if database != nil {
+		d.ScheduleGCDatabase(database)
+	}
 	return err
 }
 

@@ -31,6 +31,7 @@ type databaseLogEntry struct {
 type dbReplaceLogEntry struct {
 	LoopProcessor `json:"-"`
 	commitId      uint64            `json:"-"`
+	Index         uint64            `json:"index"`
 	Replaced      *databaseLogEntry `json:"replaced"`
 	Replacer      []*Database       `json:"replacer"`
 }
@@ -146,9 +147,11 @@ func (e *dbReplaceLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 func (e *dbReplaceLogEntry) CommitLocked(commitId uint64) {
-	e.Replaced.Lock()
-	e.Replaced.CommitLocked(commitId)
-	e.Replaced.Unlock()
+	if e.Replaced != nil {
+		e.Replaced.Lock()
+		e.Replaced.CommitLocked(commitId)
+		e.Replaced.Unlock()
+	}
 	e.commitId = commitId
 	for _, db := range e.Replacer {
 		db.RLock()

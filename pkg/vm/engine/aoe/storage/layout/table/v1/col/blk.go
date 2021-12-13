@@ -37,7 +37,7 @@ type IColumnBlock interface {
 	RegisterPart(part IColumnPart)
 	GetType() base.BlockType
 	GetColType() types.Type
-	GetIndexHolder() *index.BlockHolder
+	GetIndexHolder() *index.BlockIndexHolder
 	GetColIdx() int
 	GetSegmentFile() base.ISegmentFile
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
@@ -56,7 +56,7 @@ type columnBlock struct {
 	colIdx      int
 	meta        *metadata.Block
 	segFile     base.ISegmentFile
-	indexHolder *index.BlockHolder
+	indexHolder *index.BlockIndexHolder
 	typ         base.BlockType
 }
 
@@ -64,7 +64,7 @@ func (blk *columnBlock) GetSegmentFile() base.ISegmentFile {
 	return blk.segFile
 }
 
-func (blk *columnBlock) GetIndexHolder() *index.BlockHolder {
+func (blk *columnBlock) GetIndexHolder() *index.BlockIndexHolder {
 	return blk.indexHolder
 }
 

@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"io"
 	"os"
 	"path/filepath"
@@ -123,6 +124,11 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		algo uint8
 		err  error
 	)
+	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
+	if err != nil {
+		panic(err)
+	}
+	bf.Meta.Indices = idxMeta
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))

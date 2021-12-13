@@ -208,7 +208,7 @@ type IBlock interface {
 
 	// GetFsManager to get the FsMgr(file manager) of the DB
 	GetFsManager() base.IManager
-	GetIndexHolder() *index.BlockHolder
+	GetIndexHolder() *index.BlockIndexHolder
 
 	// GetMeta to get the metadata of the Block, the metadate is
 	// created and registered during NewCreateBlkEvent

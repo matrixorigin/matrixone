@@ -52,7 +52,7 @@ func (ht *StringHashMap) Init() {
 	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
-func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
+func (ht *StringHashMap) Insert(key StringRef) uint64 {
 	ht.resizeOnDemand()
 
 	var hash uint64
@@ -69,19 +69,18 @@ func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
 		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
-	inserted, _, cell := ht.findBucket(hash, &key128)
-	if inserted {
+	empty, _, cell := ht.findBucket(hash, &key128)
+	if empty {
 		ht.elemCnt++
 		cell.Hash = hash
 		cell.Key128 = key128
+		cell.Mapped = ht.elemCnt
 	}
 
-	value = &cell.Mapped
-
-	return
+	return cell.Mapped
 }
 
-func (ht *StringHashMap) Find(key StringRef) *uint64 {
+func (ht *StringHashMap) Find(key StringRef) uint64 {
 	var hash uint64
 	var key128 [2]uint64
 
@@ -96,12 +95,9 @@ func (ht *StringHashMap) Find(key StringRef) *uint64 {
 		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
 	}
 
-	empty, _, cell := ht.findBucket(hash, &key128)
-	if empty {
-		return nil
-	}
+	_, _, cell := ht.findBucket(hash, &key128)
 
-	return &cell.Mapped
+	return cell.Mapped
 }
 
 func (ht *StringHashMap) findBucket(hash uint64, key128 *[2]uint64) (empty bool, idx uint64, cell *StringHashMapCell) {

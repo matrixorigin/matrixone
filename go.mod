@@ -14,13 +14,14 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
 	github.com/huandu/go-clone v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20211210074548-2a60f5ad5f20
+	github.com/matrixorigin/matrixcube v0.1.0
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
+	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.19.1
 	golang.org/x/sys v0.0.0-20211205182925-97ca703d548d
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
@@ -87,7 +88,6 @@ require (
 	go.etcd.io/etcd/client/v2 v2.305.1 // indirect
 	go.etcd.io/etcd/client/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/pkg/v3 v3.5.1 // indirect
-	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/server/v3 v3.5.1 // indirect
 	go.opentelemetry.io/contrib v0.20.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.20.0 // indirect

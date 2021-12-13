@@ -17,11 +17,11 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
@@ -106,20 +106,6 @@ func NewIBatchWriter(bat batch.IBatch, meta *metadata.Block, dir string) *BlockW
 	return w
 }
 
-func NewEmbbedBlockWriter(bat *gbatch.Batch, meta *metadata.Block, getter blockFileGetter) *BlockWriter {
-	w := &BlockWriter{
-		data:         bat.Vecs,
-		meta:         meta,
-		fileGetter:   getter,
-		fileCommiter: func(string) error { return nil },
-		embbed:       true,
-	}
-	w.preprocessor = w.defaultPreprocessor
-	w.indexSerializer = w.flushIndices
-	w.vecsSerializer = defaultVecsSerializer
-	return w
-}
-
 func (bw *BlockWriter) SetPreExecutor(f func()) {
 	bw.preExecutor = f
 }
@@ -173,7 +159,22 @@ func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *metadat
 }
 
 func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
-	return nil
+	var indices []index.Index
+	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
+		typ := colDef.Type
+		isPrimary := idx == meta.Segment.Table.Schema.PrimaryKey
+		zmi, err := index.BuildBlockZoneMapIndex(data[idx], typ, int16(idx), isPrimary)
+		if err != nil {
+			return err
+		}
+		indices = append(indices, zmi)
+	}
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(buf)
+	return err
 }
 
 func (bw *BlockWriter) GetFileName() string {
@@ -185,7 +186,7 @@ func (bw *BlockWriter) GetFileName() string {
 
 func (bw *BlockWriter) Execute() error {
 	if bw.data != nil {
-		return bw.excuteVecs()
+		return bw.executeVecs()
 	} else if bw.idata != nil {
 		return bw.executeIVecs()
 	}
@@ -194,7 +195,7 @@ func (bw *BlockWriter) Execute() error {
 
 // excuteIVecs steps as follows:
 // 1. Create a temp block file.
-// 2. Serialize clolumn data
+// 2. Serialize column data
 // 3. Compress column data and flush them.
 // 4. Rename .tmp file to .blk file.
 func (bw *BlockWriter) executeIVecs() error {
@@ -214,6 +215,12 @@ func (bw *BlockWriter) executeIVecs() error {
 		}
 		data[i] = ivec.(vector.IVectorNode)
 	}
+
+	// for compatibility
+	var indices []index.Index
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	w.Write(buf)
+
 	if err = bw.ivecsSerializer(w, data, bw.meta); err != nil {
 		w.Close()
 		return err
@@ -229,13 +236,13 @@ func (bw *BlockWriter) executeIVecs() error {
 	return bw.fileCommiter(filename)
 }
 
-// excuteVecs steps as follows:
+// executeVecs steps as follows:
 // 1. Sort data in memtable.
 // 2. Create a temp block file.
 // 3. Flush indices.
 // 4. Compress column data and flush them.
 // 5. Rename .tmp file to .blk file.
-func (bw *BlockWriter) excuteVecs() error {
+func (bw *BlockWriter) executeVecs() error {
 	if bw.preprocessor != nil {
 		if err := bw.preprocessor(bw.data, bw.meta); err != nil {
 			return err
