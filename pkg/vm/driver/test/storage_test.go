@@ -44,7 +44,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/logdb"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
@@ -250,7 +249,6 @@ func TestSnapshot(t *testing.T) {
 	c.Start()
 	stdLog.Printf("drivers all started.")
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
-	stdLog.Printf("node2 stopped.")
 	d0 := c.CubeDrivers[0]
 
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
@@ -258,11 +256,12 @@ func TestSnapshot(t *testing.T) {
 	stdLog.Printf("shard id is %v", shard.ShardID)
 	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
 	leaderStoreContainerID := leaderStore.Meta().ID
+	logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
 
 	var stopNode int
 	var leaderNode int
 	for i := 0; i < 3; i++ {
-		containerID := c.RaftCluster.GetStore(0).Meta().ID
+		containerID := c.RaftCluster.GetStore(i).Meta().ID
 		if containerID != leaderStoreContainerID {
 			stopNode = i
 		}
@@ -270,31 +269,11 @@ func TestSnapshot(t *testing.T) {
 			leaderNode = i
 		}
 	}
+	logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
 
 	c.StopNode(stopNode)
+	stdLog.Printf("node%v stopped.", stopNode)
 	d0 = c.CubeDrivers[leaderNode]
-
-	var replicaID uint64
-	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
-	for _, replica := range replicas {
-		if replica.ContainerID == leaderStoreContainerID {
-			replicaID = replica.ID
-		}
-	}
-
-	var logDb logdb.LogDB
-	logDb = d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
-	hasLog := func(index uint64) bool {
-		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
-		if err == nil {
-			return true
-		}
-		if err == raft.ErrUnavailable {
-			logutil.Infof("err is %v",err)
-			return false
-		}
-		panic(err)
-	}
 
 	for i := 0; i < 10; i++ {
 		//create table into the shard
@@ -312,6 +291,29 @@ func TestSnapshot(t *testing.T) {
 		require.Nil(t, err)
 	}
 
+	var replicaID uint64
+	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
+	for _, replica := range replicas {
+		if replica.ContainerID == leaderStoreContainerID {
+			replicaID = replica.ID
+		}
+	}
+
+	logReader := raftstore.NewLogReader(nil, shard.ShardID, replicaID, d0.RaftStore().(raftstore.LogDBGetter).GetLogDB())
+	hasLog := func(index uint64) bool {
+		_, err = logReader.Entries(index, index+1, math.MaxUint64)
+		if err == nil {
+			return true
+		}
+		if err == raft.ErrCompacted {
+			logutil.Infof("err is %v", err)
+			return false
+		}
+		if err == raft.ErrUnavailable {
+			return false
+		}
+		panic(err)
+	}
 	for i := 0; i < 50; i++ {
 		if hasLog(1) {
 			time.Sleep(1 * time.Second)
@@ -325,7 +327,7 @@ func TestSnapshot(t *testing.T) {
 	}
 
 	c.RestartNode(stopNode)
-	stdLog.Printf(" node2 started.")
+	stdLog.Printf(" node%v started.", stopNode)
 
 	time.Sleep(10 * time.Second)
 	d2 := c.CubeDrivers[stopNode]
