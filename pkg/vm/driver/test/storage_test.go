@@ -269,7 +269,7 @@ func TestSnapshot(t *testing.T) {
 	var logDb logdb.LogDB
 	logDb = d0.RaftStore().(raftstore.LogDBGetter).GetLogDB()
 	hasLog := func(index uint64) bool {
-		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, replicaID, 2, 3, math.MaxUint64)
+		_, _, err = logDb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
 		if err == nil {
 			return true
 		}
@@ -278,7 +278,7 @@ func TestSnapshot(t *testing.T) {
 		}
 		panic(err)
 	}
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 50; i++ {
 		if hasLog(2) {
 			//create table into the shard
 			tbl := MockTableInfo(i)
@@ -299,7 +299,7 @@ func TestSnapshot(t *testing.T) {
 			logutil.Infof("compaction finished")
 			break
 		}
-		if i == 9 {
+		if i == 49 {
 			t.Fatalf("failed to remove log entries from logdb")
 		}
 	}
