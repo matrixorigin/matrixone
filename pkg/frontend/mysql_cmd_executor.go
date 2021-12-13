@@ -170,6 +170,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	proto := rt.GetClientProtocol().(MysqlProtocol)
 	protoImpl := proto.(*MysqlProtocolImpl)
 	protoImpl.Reset()
+	protoImpl.resetFlushCount()
 
 	//Create a new temporary resultset per pipeline thread.
 	mrs := &MysqlResultSet{}

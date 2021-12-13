@@ -180,7 +180,7 @@ type rowHandler struct {
 	//when the number of bytes in the outbuffer exceeds the it,
 	//the outbuffer will be flushed.
 	untilBytesInOutbufToFlush int
-	//the of count of the flush
+	//the count of the flush
 	flushCount                int
 	enableLog                 bool
 }
@@ -192,11 +192,24 @@ func (rh *rowHandler) isInPacket() bool {
 	return rh.beginWriteIndex >= 0
 }
 
+/*
+resetPacket reset the beginWriteIndex
+ */
 func (rh *rowHandler) resetPacket()	{
 	rh.beginWriteIndex = -1
 }
+
+/*
+resetFlushOutBuffer clears the bytesInOutBuffer
+ */
 func (rh *rowHandler) resetFlushOutBuffer()  {
 	rh.bytesInOutBuffer = 0
+}
+
+/*
+resetFlushCount reset flushCount
+ */
+func (rh *rowHandler) resetFlushCount()  {
 	rh.flushCount = 0
 }
 
@@ -228,12 +241,6 @@ type MysqlProtocolImpl struct {
 	//the default database for the client
 	database string
 
-	//mysql proto buffer
-	data []byte
-
-	//network sending buffer
-	packet []byte
-
 	//for debug
 	debugStats
 
@@ -246,29 +253,7 @@ type MysqlProtocolImpl struct {
 	rowHandler
 }
 
-func (mp *MysqlProtocolImpl) Quit() {
-	mp.data = nil
-}
-
-func (mp *MysqlProtocolImpl) reset(data []byte)  {
-	mp.data = data
-}
-
-/*
-expandBufferIfNeeded will reset the length of the data buffer
-and expand the data buffer if needed.
- */
-func (mp *MysqlProtocolImpl) expandBufferIfNeeded(want int) []byte  {
-
-	if want > len(mp.data) {
-		mp.data = make([]byte,want)
-	}
-	mp.data = mp.data[:0]
-	//goID := GetRoutineId()
-	//
-	//logutil.Infof("goid in expand buffer %d \n", goID)
-	return mp.data
-}
+func (mp *MysqlProtocolImpl) Quit() {}
 
 //handshake response 41
 type response41 struct {
