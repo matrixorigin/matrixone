@@ -14,8 +14,10 @@
 package mutation
 
 import (
+	"sync"
 	"sync/atomic"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -32,6 +34,43 @@ func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.B
 	return file.Sync(data, meta)
 }
 
+type flushCond struct {
+	*sync.Cond
+	mask *roaring64.Bitmap
+}
+
+func newFlushCond() *flushCond {
+	return &flushCond{
+		Cond: sync.NewCond(new(sync.Mutex)),
+		mask: roaring64.NewBitmap(),
+	}
+}
+
+func (cond *flushCond) Acquire(ver int) bool {
+	cond.L.Lock()
+	defer cond.L.Unlock()
+	owner := !cond.mask.Contains(uint64(ver))
+	if owner {
+		cond.mask.Add(uint64(ver))
+	}
+	return owner
+}
+
+func (cond *flushCond) Release(ver int) {
+	cond.L.Lock()
+	cond.mask.Remove(uint64(ver))
+	cond.Broadcast()
+	cond.L.Unlock()
+}
+
+func (cond *flushCond) WaitDone(ver int) {
+	cond.L.Lock()
+	for !cond.mask.Contains(uint64(ver)) {
+		cond.Wait()
+	}
+	cond.L.Unlock()
+}
+
 type MutableBlockNode struct {
 	buffer.Node
 	TableData iface.ITableData
@@ -40,6 +79,7 @@ type MutableBlockNode struct {
 	Data      batch.IBatch
 	Flusher   mb.BlockFlusher
 	Stale     *atomic.Value
+	flushCond *flushCond
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
@@ -54,6 +94,7 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		TableData: tabledata,
 		Flusher:   flusher,
 		Stale:     new(atomic.Value),
+		flushCond: newFlushCond(),
 	}
 	n.File.InitMeta(meta)
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
@@ -81,6 +122,13 @@ func (n *MutableBlockNode) Flush() error {
 		n.RUnlock()
 		return nil
 	}
+	owner := n.flushCond.Acquire(currSize)
+	if !owner {
+		n.RUnlock()
+		n.flushCond.WaitDone(currSize)
+		return nil
+	}
+	defer n.flushCond.Release(currSize)
 	cols := len(n.Meta.Segment.Table.Schema.ColDefs)
 	attrs := make([]int, cols)
 	vecs := make([]vector.IVector, cols)
@@ -135,6 +183,13 @@ func (n *MutableBlockNode) unload() {
 		return
 	}
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
+		size := n.Data.Length()
+		owner := n.flushCond.Acquire(size)
+		if !owner {
+			n.flushCond.WaitDone(size)
+			return
+		}
+		defer n.flushCond.Release(size)
 		meta := n.Meta.View()
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
