@@ -64,27 +64,32 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
-	rs := &Scope{
-		Magic:     Merge,
-		PreScopes: []*Scope{s},
+	var rs *Scope
+	if d == 0 && isB {
+		rs = s
+	} else {
+		rs = &Scope{
+			Magic:     Merge,
+			PreScopes: []*Scope{s},
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+		rs.Proc.Cancel = cancel
+		rs.Proc.Id = e.c.proc.Id
+		rs.Proc.Lim = e.c.proc.Lim
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+		rs.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+			Ctx: ctx,
+			Ch:  make(chan *batch.Batch, 1),
+		}
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[0],
+			},
+		})
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
-	rs.Proc.Cancel = cancel
-	rs.Proc.Id = e.c.proc.Id
-	rs.Proc.Lim = e.c.proc.Lim
-	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	rs.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 1),
-	}
-	s.Instructions = append(s.Instructions, vm.Instruction{
-		Op: vm.Connector,
-		Arg: &connector.Argument{
-			Mmu: rs.Proc.Mp.Gm,
-			Reg: rs.Proc.Reg.MergeReceivers[0],
-		},
-	})
 	switch {
 	case d == 0 && isB: // needn't do un-transform for simple query without group by and aggregation
 		s.Instructions = append(s.Instructions, vm.Instruction{

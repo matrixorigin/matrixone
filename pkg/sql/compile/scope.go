@@ -476,7 +476,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 	s.Magic = Merge
 	s.Instructions[0] = vm.Instruction{
 		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+		Arg: nil,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Proc.Cancel = cancel
