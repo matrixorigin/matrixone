@@ -51,6 +51,8 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Transform:   transform.String,
 	Projection:  projection.String,
 	UnTransform: untransform.String,
+
+	Splice: splice.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -70,7 +72,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Projection:  projection.Prepare,
 	UnTransform: untransform.Prepare,
 
-	Splice: 	 splice.Prepare,
+	Splice: splice.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -90,5 +92,5 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Projection:  projection.Call,
 	UnTransform: untransform.Call,
 
-	Splice: 	 splice.Call,
+	Splice: splice.Call,
 }

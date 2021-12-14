@@ -15,11 +15,17 @@
 package splice
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Argument struct{
+type Argument struct {
+}
+
+func String(arg interface{}, buf *bytes.Buffer) {
+	buf.WriteString("splice")
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {

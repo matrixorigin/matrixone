@@ -27,8 +27,14 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 	if err != nil {
 		return err
 	}
+	{
+		fmt.Printf("++++e: %v\n", e)
+	}
 	if e, err = b.pruneExtend(e); err != nil {
 		return err
+	}
+	{
+		fmt.Printf("+++after prune: %v\n", e)
 	}
 	if es := extend.AndExtends(e, nil); len(es) > 0 { // push down join condition
 		for i := 0; i < len(es); i++ { // extracting join information
@@ -41,17 +47,19 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 				if err != nil {
 					return err
 				}
-				if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", es[i]))
+				if r != s {
+					if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
+						return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", es[i]))
+					}
+					qry.Conds = append(qry.Conds, &JoinCondition{
+						R:     r,
+						S:     s,
+						Rattr: rattr,
+						Sattr: sattr,
+					})
+					es = append(es[:i], es[i+1:]...)
+					i--
 				}
-				qry.Conds = append(qry.Conds, &JoinCondition{
-					R:     r,
-					S:     s,
-					Rattr: rattr,
-					Sattr: sattr,
-				})
-				es = append(es[:i], es[i+1:]...)
-				i--
 			}
 		}
 		if len(es) == 0 {

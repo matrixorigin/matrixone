@@ -162,6 +162,9 @@ func (e *Exec) GetAffectedRows() uint64 {
 }
 
 func (e *Exec) Run(ts uint64) error {
+	if e.scope == nil {
+		return nil
+	}
 	fmt.Printf("+++++++++\n")
 	Print(nil, []*Scope{e.scope})
 	fmt.Printf("+++++++++\n")
