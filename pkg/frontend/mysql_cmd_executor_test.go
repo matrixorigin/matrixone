@@ -11,12 +11,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"io/ioutil"
-	"reflect"
 	"testing"
 	"time"
 )
 
+/*
 	func TestMysqlCmdExecutor(t *testing.T) {
 	fs, err := NewFrontendStub()
 	require.NoError(t, err)
@@ -134,7 +133,9 @@ import (
 	time.Sleep(100 * time.Millisecond)
 	close_db(t,db)
 }
+*/
 
+/*
 func TestChannelProtocol(t *testing.T) {
 	cps, err := NewChannelProtocolStub()
 	require.NoError(t, err)
@@ -229,6 +230,7 @@ func TestChannelProtocol(t *testing.T) {
 	//close client
 	cps.cps.CloseRoutine(cpRt.getConnID())
 }
+*/
 
 func newTestEngine() (engine.Engine, *process.Process) {
 	hm := host.New(1 << 30)
