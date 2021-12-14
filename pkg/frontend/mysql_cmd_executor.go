@@ -168,9 +168,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	begin := time.Now()
 
 	proto := rt.GetClientProtocol().(MysqlProtocol)
-	protoImpl := proto.(*MysqlProtocolImpl)
-	protoImpl.Reset()
-	protoImpl.resetFlushCount()
+	proto.PrepareBeforeProcessingResultSet()
 
 	//Create a new temporary resultset per pipeline thread.
 	mrs := &MysqlResultSet{}
@@ -394,7 +392,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
 	logutil.Infof("rowCount %v \n" +
-		"flushCount %d \n" +
 		"time of getDataFromPipeline : %s \n" +
 		"processBatchTime %v \n" +
 		"row2colTime %v \n" +
@@ -402,9 +399,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		"outputQueue.flushTime %v \n" +
 		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
 		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n" +
-		"[resultset %s ]\n",
+		"protoStats %s\n",
 		n,
-		protoImpl.flushCount,
 		tTime,
 		procBatchTime,
 		row2colTime,
@@ -412,7 +408,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		oq.flushTime,
 		procBatchTime - row2colTime - allocateOutBufferTime - oq.flushTime,
 		tTime - row2colTime  - allocateOutBufferTime,
-		protoImpl.String())
+		proto.GetStats())
 
 	return nil
 }

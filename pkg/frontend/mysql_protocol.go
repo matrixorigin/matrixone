@@ -140,6 +140,10 @@ type MysqlProtocol interface {
 
 	//the OK or EOF packet thread safe
 	sendEOFOrOkPacket(warnings uint16, status uint16) error
+
+	PrepareBeforeProcessingResultSet()
+
+	GetStats() string
 }
 
 var _ MysqlProtocol = &MysqlProtocolImpl{}
@@ -150,7 +154,7 @@ type debugStats struct {
 	writeBytes uint64
 }
 
-func (ds* debugStats) Reset() {
+func (ds* debugStats) ResetStats() {
 	ds.writeCount = 0
 	ds.writeBytes = 0
 }
@@ -251,6 +255,17 @@ type MysqlProtocolImpl struct {
 	lenEncBuffer []byte
 
 	rowHandler
+}
+
+func (mp *MysqlProtocolImpl) GetStats() string {
+	return fmt.Sprintf("flushCount %d %s",
+		mp.flushCount,
+		mp.String())
+}
+
+func (mp *MysqlProtocolImpl) PrepareBeforeProcessingResultSet() {
+	mp.ResetStats()
+	mp.resetFlushCount()
 }
 
 func (mp *MysqlProtocolImpl) Quit() {}
@@ -1719,6 +1734,12 @@ type ChannelProtocol struct {
 	fromClient chan *ChannelPotocolMessage
 }
 
+func (cp *ChannelProtocol) GetStats() string {
+	return ""
+}
+
+func (cp *ChannelProtocol) PrepareBeforeProcessingResultSet() {}
+
 func (cp *ChannelProtocol) Quit() {
 	close(cp.toClient)
 	close(cp.fromClient)
@@ -1789,7 +1810,7 @@ func (cp *ChannelProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt ui
 }
 
 func (cp *ChannelProtocol) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSet, cnt uint64) error {
-	return nil
+	return cp.SendResultSetTextBatchRow(mrs,cnt)
 }
 
 func (cp *ChannelProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
