@@ -940,7 +940,7 @@ func TestSnapshot10(t *testing.T) {
 		t1 := database.SimpleGetTableByName(schemas[1].Name)
 		data1, _ := inst.GetTableData(t1)
 		defer data1.Unref()
-		assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+		assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
 	}
 
 	// 5. Create snapshot
@@ -994,14 +994,14 @@ func TestSnapshot10(t *testing.T) {
 
 	data0, _ := aoedb2.GetTableData(t0)
 	defer data0.Unref()
-	assert.Equal(t, 2*ck0.Length(), int(data0.GetRowCount()))
+	assert.Equal(t, 2*vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
 
 	t1 := db2.SimpleGetTableByName(schemas[1].Name)
 	assert.Equal(t, 2, t1.SimpleGetSegmentCount())
 
 	data1, _ := aoedb2.GetTableData(t1)
 	defer data1.Unref()
-	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
 	t.Log(t1.PString(metadata.PPL1, 0))
 
 	aoedb2.Close()
