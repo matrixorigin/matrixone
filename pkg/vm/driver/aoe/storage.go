@@ -461,6 +461,8 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 	batch := ctx.Batch()
 	batchSize := len(batch.Requests)
 	shard := ctx.Shard()
+	totalWrittenBytes := uint64(0)
+	totalDiffBytes := int64(0)
 	for idx, r := range batch.Requests {
 		cmd := r.Cmd
 		CmdType := r.CmdType
@@ -481,9 +483,14 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 			writtenBytes, changedBytes, rep = s.dropIndex(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		}
 		ctx.AppendResponse(rep)
-		ctx.SetWrittenBytes(writtenBytes)
-		ctx.SetDiffBytes(changedBytes)
+		totalWrittenBytes+=writtenBytes
+		logutil.Infof("add writtenBytes is %v",writtenBytes)
+		totalDiffBytes+=changedBytes
 	}
+	ctx.SetWrittenBytes(totalWrittenBytes)
+	logutil.Infof("writtenBytes is %v",totalWrittenBytes)
+	ctx.SetDiffBytes(totalDiffBytes)
+	logutil.Infof("diffBytes is %v",totalDiffBytes)
 	return nil
 }
 
