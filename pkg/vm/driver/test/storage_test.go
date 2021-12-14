@@ -323,7 +323,7 @@ func TestSnapshot(t *testing.T) {
 		}
 		if err == raft.ErrUnavailable {
 			logutil.Infof("err is %v", err)
-			return false
+			return true
 		}
 		panic(err)
 	}
