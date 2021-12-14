@@ -30,6 +30,8 @@ const (
 	Transform
 	Projection
 	UnTransform
+
+	Splice // Splice is a temporary vm algorithm to splice multiple batches
 )
 
 // Instruction contains relational algebra

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/splice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
@@ -68,6 +69,8 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Transform:   transform.Prepare,
 	Projection:  projection.Prepare,
 	UnTransform: untransform.Prepare,
+
+	Splice: 	 splice.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -86,4 +89,6 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Transform:   transform.Call,
 	Projection:  projection.Call,
 	UnTransform: untransform.Call,
+
+	Splice: 	 splice.Call,
 }

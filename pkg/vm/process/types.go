@@ -65,4 +65,6 @@ type Process struct {
 	Mp  *mheap.Mheap
 
 	Cancel context.CancelFunc
+
+	TempBatch *batch.Batch
 }
