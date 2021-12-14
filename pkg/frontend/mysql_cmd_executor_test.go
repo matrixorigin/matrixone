@@ -10,9 +10,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 /*
@@ -276,6 +273,7 @@ func TempSelect(e engine.Engine, schema, name string) string {
 	return buff.String()
 }
 
+/*
 func TestLoadDate(t *testing.T){
 	fs, err := NewFrontendStub()
 	require.NoError(t, err)
@@ -322,6 +320,7 @@ func TestLoadDate(t *testing.T){
 	time.Sleep(100 * time.Millisecond)
 	close_db(t,db)
 }
+*/
 
 func NewColumnDef_string(name string, colType uint8) *MysqlColumn {
 	mysqlCol := new(MysqlColumn)
