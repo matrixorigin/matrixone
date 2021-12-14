@@ -46,6 +46,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
@@ -93,7 +94,8 @@ func MockTableInfo(i int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
-func MockVector(t types.Type, j int) vector.IVector {
+func MockVector(t types.Type, j,rows int) vector.IVector {
+	blockRows:=uint64(rows)
 	var vec vector.IVector
 	switch t.Oid {
 	case types.T_int8:
@@ -194,7 +196,7 @@ func MockVector(t types.Type, j int) vector.IVector {
 	}
 	return vec
 }
-func MockBatch(tableInfo *aoe.TableInfo, i int) *batch.Batch {
+func MockBatch(tableInfo *aoe.TableInfo, i,rows int) *batch.Batch {
 	attrs := helper.Attribute(*tableInfo)
 	var typs []types.Type
 	for _, attr := range attrs {
@@ -208,7 +210,7 @@ func MockBatch(tableInfo *aoe.TableInfo, i int) *batch.Batch {
 	bat := batch.New(true, attrsString)
 	var err error
 	for j, colType := range typs {
-		vec := MockVector(colType, i)
+		vec := MockVector(colType, i,rows)
 		bat.Vecs[j], err = vec.CopyToVector()
 		if err != nil {
 			panic(err)
@@ -224,6 +226,9 @@ func TestSnapshot(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
+			c.CubeConfig.Raft.RaftLog.ForceCompactCount = 1
+			c.CubeConfig.Raft.RaftLog.CompactThreshold = 1
+			c.CubeConfig.Replication.CompactLogCheckDuration.Duration = time.Millisecond * 100
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -285,7 +290,7 @@ func TestSnapshot(t *testing.T) {
 		stdLog.Printf(" create table %v", i)
 		require.Nil(t, err)
 		//append 1 rows into the table
-		batch := MockBatch(tbl, i)
+		batch := MockBatch(tbl, i,10000)
 		insertBatches = append(insertBatches, batch)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
@@ -371,7 +376,9 @@ func TestSplit(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			//change split parameter
+			c.CubeConfig.Replication.ShardSplitCheckBytes = typeutil.ByteSize(2)
+			// c.CubeConfig.Replication.ShardCapacityBytes = typeutil.ByteSize(2)
+			c.CubeConfig.Replication.ShardSplitCheckDuration.Duration = time.Second
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -402,6 +409,7 @@ func TestSplit(t *testing.T) {
 
 	d0 := c.CubeDrivers[0]
 	catalog := catalog.NewCatalog(d0)
+	storage:= c.AOEStorages[0]
 
 	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
 	require.NoError(t, err)
@@ -409,16 +417,21 @@ func TestSplit(t *testing.T) {
 	tid, err := catalog.CreateTable(0, dbid, *tbl)
 	require.NoError(t, err)
 	sids, err := catalog.GetShardIDsByTid(tid)
-	i := 0
-	for !checkSplit(c.AOEStorages[0], sids[0]) {
-		batch := MockBatch(tbl, i)
+	for i := 0; i < 100; i++ {
+		batch := MockBatch(tbl, i,1000000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
+		stdLog.Printf(" append %v, size %v Bytes", i,buf.Len())
 		require.Nil(t, err)
 		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
-		stdLog.Printf(" append %v", i)
+		storage.Sync([]uint64{sids[0]})
 		require.Nil(t, err)
-		i++
+		if checkSplit(c.AOEStorages[0], sids[0]) {
+			break
+		}
+		if i == 99 {
+			t.Fatalf("failed to split")
+		}
 	}
 	//check data
 	//check ctlg

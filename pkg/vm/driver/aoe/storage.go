@@ -207,6 +207,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	}
 	writtenBytes := uint64(len(key) + len(customReq.Data))
 	changedBytes := int64(writtenBytes)
+	logutil.Infof("append writtenBytes is %v", writtenBytes)
 	return writtenBytes, changedBytes, nil
 }
 
@@ -360,6 +361,7 @@ func (s *Storage) tableNames() (names []string) {
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
+	logutil.Infof("drivr call check")
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,
@@ -680,6 +682,7 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 }
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
+	logutil.Infof("drivr call split")
 	newNames := make([]string, len(news))
 	for _, shard := range news {
 		name := aoedb.IdToNameFactory.Encode(shard.ShardID)
