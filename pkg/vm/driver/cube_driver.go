@@ -214,7 +214,7 @@ func NewCubeDriverWithFactory(
 			Start:        start,
 			End:          end,
 			Unique:       unique,
-			DisableSplit: true,
+			DisableSplit: false,
 		}
 	}
 
