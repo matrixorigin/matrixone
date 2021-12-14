@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -363,6 +364,72 @@ func TestSnapshot(t *testing.T) {
 
 	stdLog.Printf("call stop")
 	c.Stop()
+}
+func TestSplit(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			//change split parameter
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
+
+	c.Start()
+	stdLog.Printf("drivers all started.")
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+
+	d0 := c.CubeDrivers[0]
+	catalog := catalog.NewCatalog(d0)
+
+	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
+	require.NoError(t, err)
+	tbl := MockTableInfo(0)
+	tid, err := catalog.CreateTable(0, dbid, *tbl)
+	require.NoError(t, err)
+	sids, err := catalog.GetShardIDsByTid(tid)
+	i := 0
+	for !checkSplit(c.AOEStorages[0], sids[0]) {
+		batch := MockBatch(tbl, i)
+		var buf bytes.Buffer
+		err = protocol.EncodeBatch(batch, &buf)
+		require.Nil(t, err)
+		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
+		stdLog.Printf(" append %v", i)
+		require.Nil(t, err)
+		i++
+	}
+	//check data
+	//check ctlg
+}
+func checkSplit(s *aoe3.Storage, old uint64) bool {
+	dbName := aoedb.IdToNameFactory.Encode(old)
+	_, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err == nil {
+		return false
+	}
+	return true
 }
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)

@@ -867,7 +867,14 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return strconv.Itoa(int(tableId))
 }
-
+//for test
+func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string{
+	return c.encodeTabletName(groupId,tableId)
+}
+//for test
+func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64,error){
+	return c.getShardids(tid)
+}
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
 	tid, _ := strconv.Atoi(tbl)
 	return uint64(tid)
