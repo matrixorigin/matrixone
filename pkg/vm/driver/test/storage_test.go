@@ -404,7 +404,7 @@ func TestSplit(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(2)
-				// c.CubeConfig.Replication.ShardCapacityBytes = typeutil.ByteSize(2)
+				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(2)
 				cfg.Replication.ShardSplitCheckDuration.Duration = time.Second
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
