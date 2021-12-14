@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"runtime"
 	"strings"
 
@@ -418,6 +419,18 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 }
 
 func (s *Scope) RemoteRun(e engine.Engine) error {
+	var buf bytes.Buffer
+	ps := Transfer(s)
+	err := protocol.EncodeScope(ps, &buf)
+	if err != nil {
+		return err
+	}
+	ps0, _, err1 := protocol.DecodeScope(buf.Bytes())
+	if err != nil {
+		return err1
+	}
+	Untransfer(s, ps0)
+
 	return s.ParallelRun(e)
 }
 

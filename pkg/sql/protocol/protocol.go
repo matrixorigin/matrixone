@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -36,8 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
@@ -47,6 +50,7 @@ func init() {
 	gob.Register(OffsetArgument{})
 	gob.Register(LimitArgument{})
 	gob.Register(OrderArgument{})
+	gob.Register(OplusArgument{})
 	gob.Register(OutputArgument{})
 	gob.Register(ProjectionArgument{})
 	gob.Register(RestrictArgument{})
@@ -55,6 +59,8 @@ func init() {
 	gob.Register(DedupArgument{})
 
 	gob.Register(PlusArgument{})
+	gob.Register(TransformArgument{})
+	gob.Register(Transformer{})
 	gob.Register(TimesArgument{})
 	gob.Register(UntransformArgument{})
 
@@ -199,6 +205,10 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		return nil
 	case vm.Times:
 		arg := in.Arg.(*times.Argument)
+		var transArg TransformArgument
+		if arg.Arg != nil {
+			transArg = TransferTransformArg(arg.Arg)
+		}
 		data, err := encoding.Encode(TimesArgument{
 			IsBare:  arg.IsBare,
 			R:       arg.R,
@@ -206,12 +216,29 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 			Ss:      arg.Ss,
 			Svars:   arg.Svars,
 			VarsMap: arg.VarsMap,
+			Arg:	 transArg,
 		})
 		if err != nil {
 			return err
 		}
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
+
+		if arg.Arg != nil {
+			if arg.Arg.Restrict != nil {
+				if err = EncodeExtend(arg.Arg.Restrict.E, buf); err != nil {
+					return err
+				}
+			}
+			if arg.Arg.Projection != nil {
+				buf.Write(encoding.EncodeUint32(uint32(len(arg.Arg.Projection.Es))))
+				for _, e := range arg.Arg.Projection.Es {
+					if err = EncodeExtend(e, buf); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		return nil
 	case vm.Merge:
 		// arg := in.Arg.(*merge.Argument)
@@ -247,6 +274,15 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
 		return nil
+	case vm.Oplus:
+		arg := in.Arg.(*oplus.Argument)
+		data, err := encoding.Encode(OplusArgument{Typ: arg.Typ})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
 	case vm.Output:
 		arg := in.Arg.(*output.Argument)
 		data, err := encoding.Encode(OutputArgument{Attrs: arg.Attrs})
@@ -274,6 +310,32 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
 		return EncodeExtend(arg.E, buf)
+	case vm.Connector:
+	case vm.Transform:
+		arg := in.Arg.(*transform.Argument)
+		transArg := TransferTransformArg(arg)
+		data, err := encoding.Encode(transArg)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		if arg != nil {
+			if arg.Restrict != nil {
+				if err = EncodeExtend(arg.Restrict.E, buf); err != nil {
+					return err
+				}
+			}
+			if arg.Projection != nil {
+				buf.Write(encoding.EncodeUint32(uint32(len(arg.Projection.Es))))
+				for _, e := range arg.Projection.Es {
+					if err = EncodeExtend(e, buf); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
 	case vm.Projection:
 		arg := in.Arg.(*projection.Argument)
 		data, err := encoding.Encode(ProjectionArgument{Rs: arg.Rs, As: arg.As})
@@ -358,15 +420,42 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		in.Arg = &times.Argument{
+		timeArg := &times.Argument{
 			IsBare:  arg.IsBare,
 			R:       arg.R,
 			Rvars:   arg.Rvars,
 			Ss:      arg.Ss,
 			Svars:   arg.Svars,
 			VarsMap: arg.VarsMap,
+			Arg:	 UntransferTransformArg(arg.Arg),
 		}
 		data = data[n:]
+
+		if timeArg.Arg != nil {
+			if timeArg.Arg.Restrict != nil {
+				e, d, err := DecodeExtend(data)
+				if err != nil {
+					return in, nil, err
+				}
+				data = d
+				timeArg.Arg.Restrict.E = e
+			}
+			if timeArg.Arg.Projection != nil {
+				n = encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				es := make([]extend.Extend, n)
+				for i := uint32(0); i < n; i++ {
+					e, d, err := DecodeExtend(data)
+					if err != nil {
+						return in, nil, err
+					}
+					es[i] = e
+					data = d
+				}
+				timeArg.Arg.Projection.Es = es
+			}
+		}
+		in.Arg = timeArg
 	case vm.Merge:
 		var arg MergeArgument
 		data = data[4:]
@@ -404,6 +493,18 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 		}
 		in.Arg = &order.Argument{
 			Fs: fs,
+		}
+		data = data[n:]
+	case vm.Oplus:
+		var arg OplusArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &oplus.Argument{
+			Typ: arg.Typ,
 		}
 		data = data[n:]
 	case vm.Output:
@@ -449,6 +550,44 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			E:     e,
 		}
 		data = d
+	case vm.Connector:
+		data = data[4:]
+		in.Arg = &connector.Argument{}
+	case vm.Transform:
+		var arg TransformArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		data = data[n:]
+		transArg := UntransferTransformArg(arg)
+		if transArg != nil {
+			if transArg.Restrict != nil {
+				e, d, err := DecodeExtend(data)
+				if err != nil {
+					return in, nil, err
+				}
+				data = d
+				transArg.Restrict.E = e
+			}
+			if transArg.Projection != nil {
+				n = encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				es := make([]extend.Extend, n)
+				for i := uint32(0); i < n; i++ {
+					e, d, err := DecodeExtend(data)
+					if err != nil {
+						return in, nil, err
+					}
+					es[i] = e
+					data = d
+				}
+				transArg.Projection.Es = es
+			}
+		}
+		in.Arg = transArg
 	case vm.Projection:
 		var arg ProjectionArgument
 		data = data[4:]
