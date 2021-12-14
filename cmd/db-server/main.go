@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math"
 
 	"github.com/matrixorigin/matrixcube/storage/kv"
@@ -257,6 +258,10 @@ func main() {
 		logutil.Infof("Start cube driver failed, %v", err)
 		os.Exit(StartCubeExit)
 	}
+
+	//put the node info to the computation
+	compile.InitAddress(cfg.CubeConfig.ClientAddr)
+
 	c = catalog.NewCatalog(a)
 	config.ClusterCatalog = c
 	catalogListener.UpdateCatalog(c)
