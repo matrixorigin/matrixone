@@ -224,7 +224,7 @@ func (r *AvgRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, v
 func (r *AvgRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_int8:
-		vs := vec.Col.([]uint8)
+		vs := vec.Col.([]int8)
 		for j, v := range vs {
 			r.Vs[i] += float64(v) * float64(zs[j])
 		}
@@ -236,7 +236,7 @@ func (r *AvgRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 			}
 		}
 	case types.T_int16:
-		vs := vec.Col.([]uint16)
+		vs := vec.Col.([]int16)
 		for j, v := range vs {
 			r.Vs[i] += float64(v) * float64(zs[j])
 		}
@@ -248,7 +248,7 @@ func (r *AvgRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 			}
 		}
 	case types.T_int32:
-		vs := vec.Col.([]uint32)
+		vs := vec.Col.([]int32)
 		for j, v := range vs {
 			r.Vs[i] += float64(v) * float64(zs[j])
 		}
@@ -260,7 +260,7 @@ func (r *AvgRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 			}
 		}
 	case types.T_int64:
-		vs := vec.Col.([]uint64)
+		vs := vec.Col.([]int64)
 		for j, v := range vs {
 			r.Vs[i] += float64(v) * float64(zs[j])
 		}

@@ -37,6 +37,9 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	var s *Scope
 	var err error
 
+	if vt == nil {
+		return nil, nil
+	}
 	fvarsMap := make(map[string]int)
 	{
 		for _, fvar := range vt.FreeVars {
@@ -93,7 +96,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	switch {
 	case d == 0 && isB: // needn't do un-transform for simple query without group by and aggregation
 		s.Instructions = append(s.Instructions, vm.Instruction{
-			Op: vm.Splice,
+			Op:  vm.Splice,
 			Arg: &transform.Argument{},
 		})
 	case isB:
@@ -335,10 +338,10 @@ func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
 	}
 
 	ss := &Scope{
-		Magic: Remote,
-		DataSource: src,
+		Magic:        Remote,
+		DataSource:   src,
 		Instructions: ins,
-		NodeInfo: nodes[0],
+		NodeInfo:     nodes[0],
 	}
 	ss.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
 	ss.Proc.Id = e.c.proc.Id
