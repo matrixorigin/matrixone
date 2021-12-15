@@ -433,6 +433,38 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Ref:  v.Ref,
 			Link: v.Link,
 		}, nil
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		data, err := mheap.Alloc(m, int64(len(vs)*4))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeDateSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeDatetimeSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	}
 	return nil, fmt.Errorf("unsupport type %v", v.Typ)
 }
@@ -478,6 +510,12 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	case types.T_char, types.T_varchar, types.T_json:
 		w.Col = v.Col.(*types.Bytes).Window(start, end)
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	case types.T_date:
+		w.Col = v.Col.([]types.Date)[start:end]
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	case types.T_datetime:
+		w.Col = v.Col.([]types.Datetime)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	}
 	return w
@@ -616,6 +654,20 @@ func Shrink(v *Vector, sels []int64) {
 		vs.Offsets = vs.Offsets[:len(sels)]
 		vs.Lengths = vs.Lengths[:len(sels)]
 		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
 	}
 }
 
@@ -753,6 +805,24 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, odata)
 		mheap.Free(m, ndata)
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		data, err := mheap.Alloc(m, int64(len(vs)*4))
+		if err != nil {
+			return err
+		}
+		v.Col = shuffle.DateShuffle(vs, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		mheap.Free(m, data)
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return err
+		}
+		v.Col = shuffle.DatetimeShuffle(vs, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		mheap.Free(m, data)
 	}
 	return nil
 }
@@ -1097,6 +1167,60 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 		}
 		vs.Data = append(vs.Data, from...)
 		v.Col = vs
+	case types.T_date:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 4*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDateSlice(data)
+			vs[0] = w.Col.([]types.Date)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Date)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDateSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]types.Date)[sel])
+			v.Col = vs
+		}
+	case types.T_datetime:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 8*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDatetimeSlice(data)
+			vs[0] = w.Col.([]types.Datetime)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Datetime)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDatetimeSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]types.Datetime)[sel])
+			v.Col = vs
+		}
 	}
 	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
 		nulls.Add(v.Nsp, uint64(Length(v)-1))
@@ -1601,6 +1725,92 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 			}
 		}
 		v.Col = vs
+	case types.T_date:
+		col := w.Col.([]types.Date)
+		if len(v.Data) == 0 {
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*4)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDateSlice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Date)
+			n := len(vs)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDateSlice(data)
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
+	case types.T_datetime:
+		col := w.Col.([]types.Datetime)
+		if len(v.Data) == 0 {
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDatetimeSlice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Datetime)
+			n := len(vs)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDatetimeSlice(data)
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
 	}
 
 	for i, j := 0, uint64(oldLen); i < len(flags); i++ {

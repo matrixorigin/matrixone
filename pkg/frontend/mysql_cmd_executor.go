@@ -358,6 +358,30 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = vs.Get(int64(rowIndex))
 					}
 				}
+			case types.T_date:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Date)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Date)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_datetime:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Datetime)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Datetime)
+						row[i] = vs[rowIndex]
+					}
+				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)

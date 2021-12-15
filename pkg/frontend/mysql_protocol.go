@@ -1239,16 +1239,16 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte,mrs *MysqlResultSe
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err2 := mrs.GetInt64(r, i); err2 != nil {
+			if value, err2 := mrs.GetValue(r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = mp.appendStringLenEnc(data, types.Date(value).String())
+				data = mp.appendStringLenEnc(data, value.(types.Date).String())
 			}
 		case defines.MYSQL_TYPE_DATETIME:
-			if value, err2 := mrs.GetInt64(r, i); err2 != nil {
+			if value, err2 := mrs.GetValue(r, i); err2 != nil {
 				return nil, err2
 			} else {
-				data = mp.appendStringLenEnc(data, types.Datetime(value).String())
+				data = mp.appendStringLenEnc(data, value.(types.Datetime).String())
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
 			return nil, fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
