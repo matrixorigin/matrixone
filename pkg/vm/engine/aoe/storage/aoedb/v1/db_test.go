@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io/ioutil"
 	"math/rand"
@@ -1340,14 +1341,15 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	baseCk.Vecs[0].Nsp.Np.AddRange(3, 5)
-
+	nulls.Add(baseCk.Vecs[0].Nsp, 3)
+	nulls.Add(baseCk.Vecs[0].Nsp, 4)
 	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
 	for i := 0; i < int(blkCnt-1); i++ {
 		assert.Nil(t, inst.Append(appendCtx))
 	}
 	baseCk = mock.MockBatch(tblMeta.Schema.Types(), rows/2+1)
-	baseCk.Vecs[0].Nsp.Np.AddRange(3, 5)
+	nulls.Add(baseCk.Vecs[0].Nsp, 3)
+	nulls.Add(baseCk.Vecs[0].Nsp, 4)
 	appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
 	assert.Nil(t, inst.Append(appendCtx))
 	time.Sleep(100 * time.Millisecond)
