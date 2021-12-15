@@ -358,6 +358,11 @@ func (s *Storage) tableNames() (names []string) {
 	return
 }
 
+type splitCtx struct {
+	Ctx         []byte
+	SplitKeyCnt int
+}
+
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
@@ -367,12 +372,17 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 		Size: size,
 	}
 	currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err = s.DB.PrepareSplitDatabase(&prepareSplitCtx)
-	for i := range splitKeys {
-		splitKeys[i] = []byte(fmt.Sprintf("%v%c", string(shard.Start), i))
-		logutil.Infof("misuxi%v", string(shard.Start))
+	cubeSplitKeys := make([][]byte, 0)
+	for i := 0; i < len(splitKeys)-1; i++ {
+		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(shard.Start), i)))
 	}
-	ctx, _ = json.Marshal(splitKeys)
-	return currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err
+	logutil.Infof("split ctx is %v", ctx)
+	splitctx := splitCtx{
+		Ctx:         ctx,
+		SplitKeyCnt: len(splitKeys),
+	}
+	ctx, _ = json.Marshal(splitctx)
+	return currentApproximateSize, currentApproximateKeys, cubeSplitKeys, ctx, err
 
 }
 
@@ -695,13 +705,14 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 }
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
-	logutil.Infof("new is %v",news)
+	logutil.Infof("new is %v", news)
 	logutil.Infof("drivr call split")
 	newNames := make([]string, len(news))
 	for i, shard := range news {
 		name := aoedb.IdToNameFactory.Encode(shard.ShardID)
 		newNames[i] = name
 	}
+	logutil.Infof("newnames are %v", newNames)
 	renameTable := func(oldName, dbName string) string {
 		return oldName
 	}
@@ -719,16 +730,17 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	// 	logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
 	// 	return err
 	// }
-	splitkey := make([][]byte, 0)
-	err := json.Unmarshal(ctx, &splitkey)
+	splitctx := splitCtx{}
+	err := json.Unmarshal(ctx, &splitctx)
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
-	for i :=range splitkey{
-		splitkey[i]=[]byte("1")
+	splitkey := make([][]byte, splitctx.SplitKeyCnt)
+	for i := 0; i < splitctx.SplitKeyCnt; i++ {
+		splitkey[i] = []byte("1")
 	}
-	logutil.Infof("len(key) is %v, len(news) is %v, len(newNames) is %v",len(splitkey),len(news),len(newNames))
+	logutil.Infof("len(key) is %v, key is %v, len(news) is %v, len(newNames) is %v", len(splitkey), splitkey, len(news), len(newNames))
 	execSplitCtx := &aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
@@ -739,26 +751,63 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		NewNames:    newNames,
 		RenameTable: renameTable,
 		SplitKeys:   splitkey,
-		SplitCtx:    ctx,
+		SplitCtx:    splitctx.Ctx,
 	}
 	err = s.DB.ExecSplitDatabase(execSplitCtx)
 	if err != nil {
-		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
+		logutil.Errorf("Split:S-%d ExecSplitDatabase fail, err is %v.", old.ShardID, err)
 		return err
 	}
 	for _, shard := range news {
 		tableName := sPrefix + strconv.Itoa(int(shard.ShardID))
+		dbName := aoedb.IdToNameFactory.Encode(shard.ShardID)
+		logutil.Infof("dbName is %v", dbName)
+		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
+		logutil.Infof("db is nil? %v, err is %v", db == nil, err)
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+		if err != nil && err != aoeMeta.TableNotFoundErr {
+			logutil.Errorf("Split:S-%d append fail, err is %v, dbname is %v.", shard.ShardID, err, dbName)
+			return err
+		}
+		createTable := false
+		if tbl == nil {
+			metaTblInfo := createMetadataTableInfo(shard.ShardID)
+			offset := 0
+			size := 2
+			schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, metaTblInfo)
+			ctx := aoedb.CreateTableCtx{
+				DBMutationCtx: aoedb.DBMutationCtx{
+					Id:     shard.LogIndex,
+					Offset: offset,
+					Size:   size,
+					DB:     dbName,
+				},
+				Schema: schema,
+				Indice: indexSchema,
+			}
+			_, err = s.DB.CreateTable(&ctx)
+			if err != nil {
+				logutil.Errorf("Split:S-%d append fail, err is %v.", shard.ShardID, err)
+				return err
+			}
+			createTable = true
+		}
+
 		bat, _ := shardMetadataToBatch(shard)
 
 		offset := 0
 		size := 1
+		if createTable {
+			offset = 1
+			size = 2
+		}
 		ctx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     shard.LogIndex,
 					Offset: offset,
 					Size:   size,
-					DB:     aoedb.IdToNameFactory.Encode(shard.ShardID),
+					DB:     dbName,
 				},
 				Table: tableName,
 			},
@@ -766,10 +815,11 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		err = s.DB.Append(&ctx)
 		if err != nil {
-			logutil.Errorf("Split:S-%d append fail.", shard.ShardID)
+			logutil.Errorf("Split:S-%d append fail, err is %v.", shard.ShardID, err)
 			return err
 		}
 	}
+	logutil.Infof("split:S-%d return, err is %v", old.ShardID, err)
 	return err
 }
 

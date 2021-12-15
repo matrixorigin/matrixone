@@ -424,8 +424,9 @@ func TestSplit(t *testing.T) {
 	tid, err := catalog.CreateTable(0, dbid, *tbl)
 	require.NoError(t, err)
 	sids, err := catalog.GetShardIDsByTid(tid)
+	logutil.Infof("sids is %v",sids)
 	for i := 0; i < 100; i++ {
-		batch := MockBatch(tbl, i, 1000000)
+		batch := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
 		stdLog.Printf(" append %v, size %v Bytes", i, buf.Len())
@@ -460,6 +461,7 @@ func TestSplit(t *testing.T) {
 }
 func checkSplit(s *aoe3.Storage, old uint64) bool {
 	dbName := aoedb.IdToNameFactory.Encode(old)
+	logutil.Infof("before checkSplit")
 	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	logutil.Infof("checkSplit, db is %v, err is %v", db, err)
 	if err == nil {

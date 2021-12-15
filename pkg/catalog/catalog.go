@@ -672,7 +672,7 @@ func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err err
 func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 	sids := make([]uint64, 0)
 	pendingSids, err := c.GetPendingShards()
-	logutil.Infof("pending shards are %v",pendingSids)
+	logutil.Infof("pending shards are %v", pendingSids)
 	if err != nil {
 		return nil, err
 	}
@@ -694,6 +694,7 @@ func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 		}
 		sids = append(sids, sid)
 	}
+	logutil.Infof("sid is %v", sids)
 	return sids, nil
 }
 func (c *Catalog) GetPendingShards() (sids []uint64, err error) {
@@ -867,12 +868,14 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return strconv.Itoa(int(tableId))
 }
+
 //for test
-func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string{
-	return c.encodeTabletName(groupId,tableId)
+func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
+	return c.encodeTabletName(groupId, tableId)
 }
+
 //for test
-func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64,error){
+func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
 	return c.getShardids(tid)
 }
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
