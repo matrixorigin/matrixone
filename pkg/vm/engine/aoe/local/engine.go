@@ -45,10 +45,6 @@ func (e *localRoEngine) Databases() []string {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Database(dbName string) (engine.Database, error) {
-	database, err := e.dbimpl.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	if err != nil {
-		return nil, err
-	}
-	return NewLocalRoDatabase(database, e.dbimpl), nil
+func (e *localRoEngine) Database(_ string) (engine.Database, error) {
+	return NewLocalRoDatabase(e.dbimpl), nil
 }

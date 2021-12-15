@@ -17,10 +17,11 @@ package restrict
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -35,69 +36,97 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	if proc.Reg.InputBatch == nil {
-		return false, nil
-	}
-	bat := proc.Reg.InputBatch.(*batch.Batch)
-	if bat == nil || bat.Attrs == nil {
+	bat := proc.Reg.InputBatch
+	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
 	n := arg.(*Argument)
-	if _, ok := n.E.(*extend.Attribute); ok { // mysql treats any attribute as true
-		proc.Reg.InputBatch = bat
-		return false, nil
-	}
-	if es := extend.AndExtends(n.E, []extend.Extend{}); len(es) > 0 {
-		for _, e := range es {
-			vec, _, err := e.Eval(bat, proc)
-			if err != nil {
-				bat.Clean(proc)
-				return false, err
-			}
-			sels := vec.Col.([]int64)
-			if len(sels) == 0 {
-				bat.Clean(proc)
-				bat.Attrs = nil
+	if e, ok := n.E.(*extend.ValueExtend); ok {
+		switch v := e.V; v.Typ.Oid {
+		case types.T_int8:
+			if v.Col.([]int8)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
 				proc.Reg.InputBatch = bat
-				register.Put(proc, vec)
-				return false, nil
 			}
-			for i, vec := range bat.Vecs {
-				if bat.Vecs[i], err = vec.Shuffle(sels, proc); err != nil {
-					return false, err
-				}
+		case types.T_int16:
+			if v.Col.([]int16)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
 			}
-			register.Put(proc, vec)
+		case types.T_int32:
+			if v.Col.([]int32)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_int64:
+			if v.Col.([]int64)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_uint8:
+			if v.Col.([]uint8)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_uint16:
+			if v.Col.([]uint16)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_uint32:
+			if v.Col.([]uint32)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_uint64:
+			if v.Col.([]uint64)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_float32:
+			if v.Col.([]float32)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_float64:
+			if v.Col.([]float64)[0] == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
+		case types.T_char, types.T_varchar:
+			if len(v.Data) == 0 {
+				proc.Reg.InputBatch = &batch.Batch{}
+			} else {
+				proc.Reg.InputBatch = bat
+			}
 		}
-		for _, vec := range bat.Vecs { // reset reference count of vector
-			if vec.Ref == 0 {
-				vec.Ref = 2
-			}
-		}
-		bat.Reduce(n.Attrs, proc)
-		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {
-		bat.Clean(proc)
+		batch.Clean(bat, proc.Mp)
+		proc.Reg.InputBatch = &batch.Batch{}
 		return false, err
 	}
 	sels := vec.Col.([]int64)
 	if len(sels) == 0 {
-		bat.Clean(proc)
-		bat.Attrs = nil
+		bat.Zs = bat.Zs[:0]
 		proc.Reg.InputBatch = bat
-		register.Put(proc, vec)
 		return false, nil
 	}
-	for i, vec := range bat.Vecs {
-		if bat.Vecs[i], err = vec.Shuffle(sels, proc); err != nil {
-			return false, err
-		}
-	}
-	register.Put(proc, vec)
-	bat.Reduce(n.Attrs, proc)
+	batch.Reduce(bat, n.E.Attributes(), proc.Mp)
+	batch.Shrink(bat, sels)
+	process.Put(proc, vec)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }

@@ -8,11 +8,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
-	"github.com/matrixorigin/matrixone/pkg/sql/handler"
+	//"github.com/matrixorigin/matrixone/pkg/sql/handler"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -21,13 +20,13 @@ func NewTestServer(e engine.Engine, proc *process.Process) (rpcserver.Server, er
 	if err != nil {
 		return nil, err
 	}
-	hp := handler.New(e, proc)
-	srv.Register(hp.Process)
+	//hp := handler.New(e, proc)
+	//srv.Register(hp.Process)
 	return srv, nil
 }
 
 func NewTestEngine() (engine.Engine, error) {
-	e := memEngine.New(kv.New(), metadata.Node{Id: "0", Addr: "127.0.0.1:40000"})
+	e := memEngine.New(kv.New(), engine.Node{Id: "0", Addr: "127.0.0.1:40000"})
 	err := e.Create(0, "test", 0)
 	if err != nil {
 		return nil, err
@@ -47,23 +46,26 @@ func CreateR(db engine.Database) error {
 		var attrs []engine.TableDef
 
 		{
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
-				Alg:  compress.Lz4,
-				Name: "orderId",
-				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			}})
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
+			attrs = append(attrs, &engine.AttributeDef{
+				engine.Attribute{
+					Alg:  compress.Lz4,
+					Name: "orderId",
+					Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+				}})
+			attrs = append(attrs, &engine.AttributeDef{
+				engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
 			}})
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
+			attrs = append(attrs, &engine.AttributeDef{
+				engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
 				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
 			}})
 		}
-		if err := db.Create(0, "R", attrs, nil, nil, ""); err != nil {
+		if err := db.Create(0, "R", attrs); err != nil {
 			return err
 		}
 	}
@@ -80,7 +82,7 @@ func CreateR(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i))
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[0] = vec
@@ -91,7 +93,7 @@ func CreateR(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i%4))
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[1] = vec
@@ -102,7 +104,7 @@ func CreateR(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[2] = vec
@@ -120,7 +122,7 @@ func CreateR(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[0] = vec
@@ -131,7 +133,7 @@ func CreateR(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i%4))
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[1] = vec
@@ -142,7 +144,7 @@ func CreateR(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[2] = vec
@@ -159,23 +161,23 @@ func CreateS(db engine.Database) error {
 		var attrs []engine.TableDef
 
 		{
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "orderId",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
 			}})
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
 			}})
-			attrs = append(attrs, &engine.AttributeDef{metadata.Attribute{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
 				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
 			}})
 		}
-		if err := db.Create(0, "S", attrs, nil, nil, ""); err != nil {
+		if err := db.Create(0, "S", attrs); err != nil {
 			return err
 		}
 	}
@@ -192,7 +194,7 @@ func CreateS(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i*2))
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[0] = vec
@@ -203,7 +205,7 @@ func CreateS(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i%2))
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[1] = vec
@@ -214,7 +216,7 @@ func CreateS(db engine.Database) error {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vec.Append(vs); err != nil {
+				if err := vector.Append(vec,vs); err != nil {
 					return err
 				}
 				bat.Vecs[2] = vec
@@ -232,7 +234,7 @@ func CreateS(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[0] = vec
@@ -243,7 +245,7 @@ func CreateS(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i%2))
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[1] = vec
@@ -254,7 +256,7 @@ func CreateS(db engine.Database) error {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vec.Append(vs); err != nil {
+			if err := vector.Append(vec,vs); err != nil {
 				return err
 			}
 			bat.Vecs[2] = vec
@@ -264,22 +266,4 @@ func CreateS(db engine.Database) error {
 		}
 	}
 	return nil
-}
-
-func NewTestSegments(name string, proc *process.Process) ([]engine.Segment, error) {
-	e := memEngine.NewTestEngine()
-	db, err := e.Database("test")
-	if err != nil {
-		return nil, err
-	}
-	r, err := db.Relation(name)
-	if err != nil {
-		return nil, err
-	}
-	ids := r.Segments()
-	segs := make([]engine.Segment, len(ids))
-	for i, id := range ids {
-		segs[i] = r.Segment(id, proc)
-	}
-	return segs, nil
 }

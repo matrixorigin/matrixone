@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/div"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
 func init() {
@@ -38,7 +37,7 @@ func init() {
                     rtl := {.RETURN_TYPE_LEN}
                     switch {
                     case lc && !rc:
-                        if !rv.Nsp.Any() {
+                        if !nulls.Any(rv.Nsp) {
                             for _, v := range rvs {
                                 if v == 0 {
                                     return nil, ErrDivByZero
@@ -49,20 +48,20 @@ func init() {
                                 div.{.RTYP}DivScalar(lvs[0], rvs, rvs)
                                 return rv, nil
                             }
-                            vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                            vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
                             if err != nil {
                                 return nil, err
                             }
                             rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                             rs = rs[:len(rvs)]
-                            vec.Nsp.Set(rv.Nsp)
-                            vec.SetCol(div.{.RETTYP}DivScalar(lvs[0], rvs, rs))
+                            nulls.Set(vec.Nsp, rv.Nsp)
+                            vector.SetCol(vec, div.{.RETTYP}DivScalar(lvs[0], rvs, rs))
                             return vec, nil
                         }
-                        sels := register.GetSels(proc)
-                        defer register.PutSels(sels, proc)
+                        sels := process.GetSels(proc)
+                        defer process.PutSels(sels, proc)
                         for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                            if rv.Nsp.Contains(i) {
+                            if nulls.Contains(rv.Nsp, i) {
                                 continue
                             }
                             if rvs[i] == 0 {
@@ -75,14 +74,14 @@ func init() {
                             div.{.RTYP}DivScalarSels(lvs[0], rvs, rvs, sels)
                             return rv, nil
                         }
-                        vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                        vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
                         if err != nil {
                             return nil, err
                         }
                         rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                         rs = rs[:len(rvs)]
-                        vec.Nsp.Set(rv.Nsp)
-                        vec.SetCol(div.{.RETTYP}DivScalarSels(lvs[0], rvs, rs, sels))
+                        nulls.Set(vec.Nsp, rv.Nsp)
+                        vector.SetCol(vec, div.{.RETTYP}DivScalarSels(lvs[0], rvs, rs, sels))
                         return vec, nil
                     case !lc && rc:
                         if rvs[0] == 0 {
@@ -93,17 +92,17 @@ func init() {
                             div.{.LTYP}DivByScalar(rvs[0], lvs, lvs)
                             return lv, nil
                         }
-                        vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                        vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                         if err != nil {
                             return nil, err
                         }
                         rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                         rs = rs[:len(lvs)]
-                        vec.Nsp.Set(lv.Nsp)
-                        vec.SetCol(div.{.RETTYP}DivByScalar(rvs[0], lvs, rs))
+                        nulls.Set(vec.Nsp, lv.Nsp)
+                        vector.SetCol(vec, div.{.RETTYP}DivByScalar(rvs[0], lvs, rs))
                         return vec, nil
                     case lv.Ref == 1 || lv.Ref == 0:
-                        if !rv.Nsp.Any() {
+                        if !nulls.Any(rv.Nsp) {
                             for _, v := range rvs {
                                 if v == 0 {
                                     return nil, ErrDivByZero
@@ -113,14 +112,14 @@ func init() {
                             div.{.LTYP}Div(lvs, rvs, lvs)
                             lv.Nsp = lv.Nsp.Or(rv.Nsp)
                             if rv.Ref == 0 {
-                                register.Put(proc, rv)
+                                process.Put(proc, rv)
                             }
                             return lv, nil
                         }
-                        sels := register.GetSels(proc)
-                        defer register.PutSels(sels, proc)
+                        sels := process.GetSels(proc)
+                        defer process.PutSels(sels, proc)
                         for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                            if rv.Nsp.Contains(i) {
+                            if nulls.Contains(rv.Nsp, i) {
                                 continue
                             }
                             if rvs[i] == 0 {
@@ -132,11 +131,11 @@ func init() {
                         div.{.LTYP}DivSels(lvs, rvs, lvs, sels)
                         lv.Nsp = lv.Nsp.Or(rv.Nsp)
                         if rv.Ref == 0 {
-                            register.Put(proc, rv)
+                            process.Put(proc, rv)
                         }
                         return lv, nil
                     case rv.Ref == 1 || rv.Ref == 0:
-                        if !rv.Nsp.Any() {
+                        if !nulls.Any(rv.Nsp) {
                             for _, v := range rvs {
                                 if v == 0 {
                                     return nil, ErrDivByZero
@@ -146,14 +145,14 @@ func init() {
                             div.{.RTYP}Div(lvs, rvs, rvs)
                             rv.Nsp = rv.Nsp.Or(lv.Nsp)
                             if lv.Ref == 0 {
-                                register.Put(proc, lv)
+                                process.Put(proc, lv)
                             }
                             return rv, nil
                         }
-                        sels := register.GetSels(proc)
-                        defer register.PutSels(sels, proc)
+                        sels := process.GetSels(proc)
+                        defer process.PutSels(sels, proc)
                         for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                            if rv.Nsp.Contains(i) {
+                            if nulls.Contains(rv.Nsp, i) {
                                 continue
                             }
                             if rvs[i] == 0 {
@@ -165,36 +164,36 @@ func init() {
                         div.{.RTYP}DivSels(lvs, rvs, rvs, sels)
                         rv.Nsp = rv.Nsp.Or(lv.Nsp)
                         if lv.Ref == 0 {
-                            register.Put(proc, lv)
+                            process.Put(proc, lv)
                         }
                         return rv, nil
                     }
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                     rs = rs[:len(rvs)]
                     nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-                    if !rv.Nsp.Any() {
+                    if !nulls.Any(rv.Nsp) {
                         for _, v := range rvs {
                             if v == 0 {
                                 return nil, ErrDivByZero
                             }
                         }
-                        vec.SetCol(div.{.RETTYP}Div(lvs, rvs, rs))
+                        vector.SetCol(vec, div.{.RETTYP}Div(lvs, rvs, rs))
                         if lv.Ref == 0 {
-                            register.Put(proc, lv)
+                            process.Put(proc, lv)
                         }
                         if rv.Ref == 0 {
-                            register.Put(proc, rv)
+                            process.Put(proc, rv)
                         }
                         return vec, nil
                     }
-                    sels := register.GetSels(proc)
-                    defer register.PutSels(sels, proc)
+                    sels := process.GetSels(proc)
+                    defer process.PutSels(sels, proc)
                     for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                        if rv.Nsp.Contains(i) {
+                        if nulls.Contains(rv.Nsp, i) {
                             continue
                         }
                         if rvs[i] == 0 {
@@ -202,12 +201,12 @@ func init() {
                         }
                         sels = append(sels, int64(i))
                     }
-                    vec.SetCol(div.{.RETTYP}DivSels(lvs, rvs, rs, sels))
+                    vector.SetCol(vec, div.{.RETTYP}DivSels(lvs, rvs, rs, sels))
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return vec, nil
                 },
@@ -230,7 +229,7 @@ func init() {
                 if !rc {
                     resultLength = len(rvs)
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(resultLength), types.Type{
+                vec, err := process.Get(proc, int64(rtl) * int64(resultLength), types.Type{
                      Oid:  types.RETURN_TYPE_OID,
                      Size: {.RETURN_TYPE_LEN},
                 })
@@ -242,29 +241,29 @@ func init() {
 
                 defer func() {
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                 }()
 
                 switch {
                 case lc && !rc:
-                    if !rv.Nsp.Any() {
+                    if !nulls.Any(rv.Nsp) {
                         for _, v := range rvs {
                             if v == 0 {
                                 return nil, ErrDivByZero
                             }
                         }
-                        vec.Nsp.Set(rv.Nsp)
-                        vec.SetCol(div.{.LTYP}IntegerDivScalar(lvs[0], rvs, rs))
+                        nulls.Set(vec.Nsp, rv.Nsp)
+                        vector.SetCol(vec, div.{.LTYP}IntegerDivScalar(lvs[0], rvs, rs))
                         return vec, nil
                     }
-                    sels := register.GetSels(proc)
-                    defer register.PutSels(sels, proc)
+                    sels := process.GetSels(proc)
+                    defer process.PutSels(sels, proc)
                     for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                        if rv.Nsp.Contains(i) {
+                        if nulls.Contains(rv.Nsp, i) {
                             continue
                         }
                         if rvs[i] == 0 {
@@ -272,37 +271,37 @@ func init() {
                         }
                         sels = append(sels, int64(i))
                     }
-                    vec.SetCol(div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
-                    vec.Nsp.Set(lv.Nsp.Or(rv.Nsp))
+                    vector.SetCol(vec, div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
+                    nulls.Set(vec.Nsp, lv.Nsp.Or(rv.Nsp))
                     return vec, nil
                 case !lc && rc:
                     if rvs[0] == 0 {
                         return nil, ErrDivByZero
                     }
-                    vec.SetCol(div.{.LTYP}IntegerDivByScalar(rvs[0], lvs, rs))
-                    vec.Nsp.Set(lv.Nsp)
+                    vector.SetCol(vec, div.{.LTYP}IntegerDivByScalar(rvs[0], lvs, rs))
+                    nulls.Set(vec.Nsp, lv.Nsp)
                     return vec, nil
                 }
                 nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-                if !rv.Nsp.Any() {
+                if !nulls.Any(rv.Nsp) {
                     for _, v := range rvs {
                         if v == 0 {
                             return nil, ErrDivByZero
                         }
                     }
-                    vec.SetCol(div.{.LTYP}IntegerDiv(lvs, rvs, rs))
+                    vector.SetCol(vec, div.{.LTYP}IntegerDiv(lvs, rvs, rs))
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return vec, nil
                 }
-                sels := register.GetSels(proc)
-                defer register.PutSels(sels, proc)
+                sels := process.GetSels(proc)
+                defer process.PutSels(sels, proc)
                 for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
-                    if rv.Nsp.Contains(i) {
+                    if nulls.Contains(rv.Nsp, i) {
                         continue
                     }
                     if rvs[i] == 0 {
@@ -310,7 +309,7 @@ func init() {
                     }
                     sels = append(sels, int64(i))
                 }
-                vec.SetCol(div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
+                vector.SetCol(vec, div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
                 return vec, nil
             },
         },

@@ -23,18 +23,18 @@ type showImpl struct {
 }
 
 //SHOW CREATE TABLE statement
-type ShowCreate struct {
+type ShowCreateTable struct {
 	showImpl
 	Name *UnresolvedObjectName
 }
 
-func (node *ShowCreate) Format(ctx *FmtCtx) {
+func (node *ShowCreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create table ")
 	node.Name.Format(ctx)
 }
 
-func NewShowCreate(n *UnresolvedObjectName) *ShowCreate {
-	return &ShowCreate{Name: n}
+func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {
+	return &ShowCreateTable{Name: n}
 }
 
 //SHOW CREATE DATABASE statement

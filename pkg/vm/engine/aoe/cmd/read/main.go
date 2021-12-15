@@ -15,24 +15,18 @@
 package main
 
 import (
-	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/local"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -155,7 +149,7 @@ func makeFiles(impl *aoedb.DB) {
 			panic(err)
 		}
 	}
-	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 20000
+	waitTime := insertCnt * uint64(vector.Length(ibat.Vecs[0])) * uint64(colCnt) / uint64(400000000) * 20000
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 
@@ -172,7 +166,7 @@ func mockData() {
 	impl.Close()
 }
 
-func readData() {
+/*func readData() {
 	impl := makeDB()
 	localEngine := local.NewLocalRoEngine(impl)
 	dbase, err := localEngine.Database(dbName)
@@ -209,7 +203,7 @@ func readData() {
 	var wg sync.WaitGroup
 	for _, segId := range segIds.Ids {
 		idstr := strconv.FormatUint(segId, 10)
-		seg := rel.Segment(engine.SegmentInfo{Id: idstr}, proc)
+		seg := rel.Segment(idstr)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			blk.Prefetch(attrs)
@@ -242,7 +236,7 @@ func readData() {
 	// 	log.Info(common.GPool.String())
 	// 	time.Sleep(time.Duration(100) * time.Second)
 	// }
-}
+}*/
 
 type gcHandle struct{}
 

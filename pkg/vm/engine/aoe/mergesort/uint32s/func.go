@@ -16,6 +16,7 @@ package uint32s
 
 import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -36,7 +37,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 }
 
 func Shuffle(col *vector.Vector, idx []uint32) {
-	if !col.Nsp.Any() {
+	if !nulls.Any(col.Nsp) {
 		shuffleBlock(col, idx)
 	} else {
 		shuffleNullableBlock(col, idx)
@@ -110,7 +111,7 @@ func Merge(col []*vector.Vector, src *[]uint16) {
 
 func Multiplex(col []*vector.Vector, src []uint16) {
 	for i, _ := range col{
-		if col[i].Nsp.Any() {
+		if nulls.Any(col[i].Nsp) {
 			multiplexNullableBlocks(col, src)
 			return
 		}
