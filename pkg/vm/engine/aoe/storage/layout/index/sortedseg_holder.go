@@ -99,7 +99,7 @@ func (holder *sortedSegmentHolder) Init(segFile base.ISegmentFile) {
 			holder.self.colIndices[col] = idxes
 		}
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
-		logutil.Infof("[SEG] Zone map load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
+		logutil.Debugf("[SEG] Zone map load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
 	}
 	holder.Inited = true
 }
