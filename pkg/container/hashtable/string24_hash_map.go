@@ -38,28 +38,22 @@ type String24HashMap struct {
 	bucketCnt     uint64
 	elemCnt       uint64
 	maxElemCnt    uint64
-	rawData       []byte
 	bucketData    []String24HashMapCell
 }
 
 func (ht *String24HashMap) Init() {
-	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
-
-	rawData := make([]byte, cellSize*kInitialBucketCnt)
-
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.bucketData = make([]String24HashMapCell, kInitialBucketCnt)
 }
 
 func (ht *String24HashMap) Insert(hash uint64, key *[3]uint64) uint64 {
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = crc32Int192Hash(key)
+		hash = Crc32Int192Hash(key)
 	}
 
 	empty, _, cell := ht.findBucket(hash, key)
@@ -77,7 +71,7 @@ func (ht *String24HashMap) InsertBatch(hashes []uint64, keys [][3]uint64, values
 	ht.resizeOnDemand(uint64(len(keys)))
 
 	if hashes[0] == 0 {
-		crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
@@ -92,9 +86,31 @@ func (ht *String24HashMap) InsertBatch(hashes []uint64, keys [][3]uint64, values
 	}
 }
 
+func (ht *String24HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][3]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	if hashes[0] == 0 {
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
+	}
+
+	for i := range keys {
+		if zs[i] == 0 {
+			continue
+		}
+		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
+		if empty {
+			ht.elemCnt++
+			cell.Hash = hashes[i]
+			cell.Key = keys[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
 func (ht *String24HashMap) Find(hash uint64, key *[3]uint64) uint64 {
 	if hash == 0 {
-		hash = crc32Int192Hash(key)
+		hash = Crc32Int192Hash(key)
 	}
 
 	_, _, cell := ht.findBucket(hash, key)
@@ -104,7 +120,7 @@ func (ht *String24HashMap) Find(hash uint64, key *[3]uint64) uint64 {
 
 func (ht *String24HashMap) FindBatch(hashes []uint64, keys [][3]uint64, values []uint64) {
 	if hashes[0] == 0 {
-		crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
+		Crc32Int192BatchHash(&keys[0], &hashes[0], len(keys))
 	}
 
 	for i := range keys {
@@ -141,19 +157,13 @@ func (ht *String24HashMap) resizeOnDemand(n uint64) {
 		newMaxElemCnt = newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
-	const cellSize = int(unsafe.Sizeof(String24HashMapCell{}))
-
 	oldBucketCnt := ht.bucketCnt
 	oldBucketData := ht.bucketData
-
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	newBucketData := unsafe.Slice((*String24HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
 
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.rawData = newRawData
-	ht.bucketData = newBucketData
+	ht.bucketData = make([]String24HashMapCell, newBucketCnt)
 
 	for i := uint64(0); i < oldBucketCnt; i++ {
 		cell := &oldBucketData[i]

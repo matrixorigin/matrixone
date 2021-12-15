@@ -18,8 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync/atomic"
 )
 
@@ -51,7 +51,7 @@ func (seg *Segment) Blocks() []string {
 }
 
 // Block returns a block with the given block id.
-func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
+func (seg *Segment) Block(id string) aoe.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
@@ -78,7 +78,7 @@ func (seg *Segment) NewSummarizer() engine.Summarizer {
 }
 
 // NewSparseFilter generates a SparseFilter for segment.
-func (seg *Segment) NewSparseFilter() engine.SparseFilter {
+func (seg *Segment) NewSparseFilter() aoe.SparseFilter {
 	return NewSegmentSparseFilter(seg)
 }
 

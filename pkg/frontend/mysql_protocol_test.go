@@ -43,7 +43,7 @@ type TestRoutineManager struct {
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
 	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID())
+	pro := NewMysqlClientProtocol(IO, nextConnectionID(), 1024)
 	exe := NewMysqlCmdExecutor()
 	ses := NewSessionWithParameterUnit(tRM.pu)
 	routine := NewRoutine(rs, pro, exe, ses)

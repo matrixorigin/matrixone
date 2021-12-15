@@ -1,9 +1,6 @@
 package kv
 
-import (
-	"errors"
-	"sync"
-)
+import "errors"
 
 var (
 	NotExist = errors.New("not exist")
@@ -11,5 +8,4 @@ var (
 
 type KV struct {
 	mp map[string][]byte
-	rwlock sync.RWMutex
 }

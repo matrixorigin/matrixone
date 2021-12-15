@@ -16,7 +16,9 @@ package projection
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -28,7 +30,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(",")
 		}
-		buf.WriteString(e.String())
+		buf.WriteString(fmt.Sprintf("%s -> %s:%v", e, n.As[i], n.Rs[i]))
 	}
 	buf.WriteString(")")
 }
@@ -40,32 +42,44 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
-	if proc.Reg.InputBatch == nil {
+	bat := proc.Reg.InputBatch
+	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-	bat := proc.Reg.InputBatch.(*batch.Batch)
-	if bat == nil || bat.Attrs == nil {
-		return false, nil
-	}
-	bat.Shuffle(proc)
 	n := arg.(*Argument)
-	rbat := batch.New(true, n.Attrs)
-	for i := range n.Attrs {
-		if rbat.Vecs[i], _, err = n.Es[i].Eval(bat, proc); err != nil {
-			rbat.Vecs = rbat.Vecs[:i]
-			bat.Clean(proc)
-			rbat.Clean(proc)
-			return false, err
-		}
-	}
+	rbat := batch.New(true, n.As)
 	for i, e := range n.Es {
-		if _, ok := e.(*extend.Attribute); !ok {
-			bat.Reduce(e.Attributes(), proc)
+		if attr, ok := e.(*extend.Attribute); ok { // vector reuse
+			vec := batch.GetVector(bat, attr.Name)
+			rbat.Vecs[i] = &vector.Vector{
+				Or:   vec.Or,
+				Data: vec.Data,
+				Typ:  vec.Typ,
+				Col:  vec.Col,
+				Nsp:  vec.Nsp,
+			}
+			vec.Link++
+		} else {
+			if rbat.Vecs[i], _, err = e.Eval(bat, proc); err != nil {
+				rbat.Vecs = rbat.Vecs[:i]
+				batch.Clean(bat, proc.Mp)
+				batch.Clean(rbat, proc.Mp)
+				proc.Reg.InputBatch = &batch.Batch{}
+				return false, err
+			}
 		}
-		if name, ok := e.(*extend.Attribute); !ok || name.Name != n.Attrs[i] {
-			rbat.Vecs[i].Ref = n.Refer[n.Attrs[i]]
-		}
+		rbat.Vecs[i].Ref = n.Rs[i]
 	}
-	proc.Reg.InputBatch = rbat
+	if bat.Ro {
+		batch.Cow(bat)
+	}
+	for i := range rbat.Vecs {
+		bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
+		bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
+	}
+	for _, e := range n.Es {
+		batch.Reduce(bat, e.Attributes(), proc.Mp)
+	}
+	proc.Reg.InputBatch = bat
 	return false, nil
 }

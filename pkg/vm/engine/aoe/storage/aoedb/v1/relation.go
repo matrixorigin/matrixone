@@ -15,6 +15,7 @@
 package aoedb
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"sync"
 	"sync/atomic"
 
@@ -23,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Relation is a high-level abstraction provided for
@@ -80,9 +79,9 @@ func (r *Relation) Index() []*engine.IndexTableDef {
 	return nil
 }
 
-func (r *Relation) Attribute() []metadata.Attribute {
+func (r *Relation) Attribute() []engine.Attribute {
 	meta := r.Data.GetMeta()
-	attrs := make([]metadata.Attribute, len(meta.Schema.ColDefs))
+	attrs := make([]engine.Attribute, len(meta.Schema.ColDefs))
 	for idx, attr := range attrs {
 		attr.Name = meta.Schema.ColDefs[idx].Name
 		attr.Type = meta.Schema.ColDefs[idx].Type
@@ -91,7 +90,7 @@ func (r *Relation) Attribute() []metadata.Attribute {
 	return attrs
 }
 
-func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
+func (r *Relation) Segment(id uint64) aoe.Segment {
 	r.tree.RLock()
 	seg := r.tree.Segments[id]
 	if seg != nil {

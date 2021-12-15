@@ -18,40 +18,39 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math"
-	"os"
-	"os/signal"
-	"strconv"
-	"strings"
-	"syscall"
-	"time"
 
+	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/rpcserver"
-	"github.com/matrixorigin/matrixone/pkg/sql/handler"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
+
+	//"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
-	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+
+	//"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	//"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
-
-	//"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/kv"
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 )
@@ -78,7 +77,6 @@ var (
 	pci *frontend.PDCallbackImpl
 )
 
-// Variables used to hold the build info.
 var (
 	GoVersion    string = ""
 	BranchName   string = ""
@@ -86,7 +84,6 @@ var (
 	BuildTime    string = ""
 	MoVersion    string = "v0.1.0"
 )
-
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
@@ -110,10 +107,6 @@ func waitSignal() {
 	sigchan := make(chan os.Signal)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 	<-sigchan
-}
-
-func preShutdown() {
-	logutil.Infof("mo-server is shutting down ...\n")
 }
 
 func cleanup() {
@@ -142,29 +135,33 @@ func removeEpoch(epoch uint64) {
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s configFile\n", os.Args[0])
-		os.Exit(-1)
-	}
-
 	// if the argument passed in is "--version", return version info and exit
-	if os.Args[1] == "--version" {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("MatrixOne build info:")
-		fmt.Printf("\tThe golang version used to build this binary: %s\n", GoVersion)
-		fmt.Printf("\tGit branch name: %s\n", BranchName)
-		fmt.Printf("\tLast git commit ID: %s\n", LastCommitId)
-		fmt.Printf("\tBuildtime: %s\n", BuildTime)
-		fmt.Printf("\tCurrent Matrixone version: %s\n", MoVersion)
+		fmt.Printf("The golang version used to build this binary is: %s\n", GoVersion)
+		fmt.Printf("The git branch name is: %s\n", BranchName)
+		fmt.Printf("Last git commit ID: %s\n", LastCommitId)
+		fmt.Printf("The Buildtime is: %s\n", BuildTime)
+		fmt.Printf("Current Matrixone version: %s\n", MoVersion)
 		os.Exit(0)
 	}
+
 	flag.Parse()
+	args := flag.Args()
+
+	if len(args) < 1 {
+		fmt.Printf("Usage: %s configFile\n", os.Args[0])
+		flag.PrintDefaults()
+		os.Exit(-1)
+	}
+	
 
 	//close cube print info
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	//util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
-	logutil.SetupMOLogger(os.Args[1])
+	configFilePath := args[0]
+	logutil.SetupMOLogger(configFilePath)
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -172,9 +169,17 @@ func main() {
 		os.Exit(InitialValuesExit)
 	}
 
-	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
+	if err := config.LoadvarsConfigFromFile(configFilePath, &config.GlobalSystemVariables); err != nil {
 		logutil.Infof("Load config error:%v\n", err)
 		os.Exit(LoadConfigExit)
+	}
+
+	if *cpuProfilePathFlag != "" {
+		stop := startCPUProfile()
+		defer stop()
+	}
+	if *allocsProfilePathFlag != "" {
+		defer writeAllocsProfile()
 	}
 
 	logutil.Infof("Shutdown The Server With Ctrl+C | Ctrl+\\.")
@@ -183,7 +188,7 @@ func main() {
 
 	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
 
-	Host := config.GlobalSystemVariables.GetHost()
+	//Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 	strNodeId := strconv.FormatInt(NodeId, 10)
 
@@ -209,7 +214,7 @@ func main() {
 	var aoeDataStorage *aoeDriver.Storage
 
 	opt := aoeStorage.Options{}
-	_, err = toml.DecodeFile(os.Args[1], &opt)
+	_, err = toml.DecodeFile(configFilePath, &opt)
 	if err != nil {
 		logutil.Infof("Decode aoe config error:%v\n", err)
 		os.Exit(DecodeAoeConfigExit)
@@ -224,22 +229,24 @@ func main() {
 	}
 
 	cfg := dConfig.Config{}
-	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
+	_, err = toml.DecodeFile(configFilePath, &cfg.CubeConfig)
 	if err != nil {
 		logutil.Infof("Decode cube config error:%v\n", err)
 		os.Exit(DecodeCubeConfigExit)
 	}
 
-	_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
+	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
 	if err != nil {
 		logutil.Infof("Decode cluster config error:%v\n", err)
 		os.Exit(DecodeClusterConfigExit)
 	}
-	cfg.ServerConfig = server.Cfg{
-		//ExternalServer: true,
-	}
+	cfg.ServerConfig = server.Cfg{}
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+
+	if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
+		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
+	}
 
 	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
@@ -251,45 +258,36 @@ func main() {
 		logutil.Infof("Start cube driver failed, %v", err)
 		os.Exit(StartCubeExit)
 	}
+
+	//put the node info to the computation
+	compile.InitAddress(cfg.CubeConfig.ClientAddr)
+
 	c = catalog.NewCatalog(a)
 	config.ClusterCatalog = c
 	catalogListener.UpdateCatalog(c)
 	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
-	hm := config.HostMmu
-	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
-	{
-		proc.Id = "0"
-		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-		proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-		proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
-		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
-		proc.Refer = make(map[string]uint64)
-	}
-	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-		log.SetLevel(logger.WARN)*/
-
-	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
-	if li == -1 {
-		logutil.Infof("There is no port in client addr")
-		os.Exit(LoadConfigExit)
-	}
-
-	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
-	if err != nil {
-		logutil.Infof("Invalid port")
-		os.Exit(LoadConfigExit)
-	}
-
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, cubePort+100), 1<<30, logutil.GetGlobalLogger())
-	if err != nil {
-		logutil.Infof("Create rpcserver failed, %v", err)
-		os.Exit(CreateRPCExit)
-	}
-	hp := handler.New(eng, proc)
-	srv.Register(hp.Process)
+	//hm := config.HostMmu
+	//gm := guest.New(1<<40, hm)
+	//proc := process.New(gm)
+	//{
+	//	proc.Id = "0"
+	//	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
+	//	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
+	//	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+	//	proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
+	//	proc.Refer = make(map[string]uint64)
+	//}
+	///*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+	//	log.SetLevel(logger.WARN)*/
+	//srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
+	//if err != nil {
+	//	logutil.Infof("Create rpcserver failed, %v", err)
+	//	os.Exit(CreateRPCExit)
+	//}
+	//hp := handler.New(eng, proc)
+	//srv.Register(hp.Process)
 
 	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
@@ -298,12 +296,12 @@ func main() {
 		os.Exit(WaitCubeStartExit)
 	}
 
-	go srv.Run()
+	//go srv.Run()
 	//test storage aoe_storage
 	config.StorageEngine = eng
 
 	//test cluster nodes
-	config.ClusterNodes = metadata.Nodes{}
+	config.ClusterNodes = engine.Nodes{}
 
 	createMOServer(pci)
 
@@ -315,15 +313,13 @@ func main() {
 	//registerSignalHandlers()
 
 	waitSignal()
-	preShutdown()
-	srv.Stop()
+	//srv.Stop()
 	serverShutdown(true)
 	a.Close()
 	aoeDataStorage.Close()
 	pebbleDataStorage.Close()
 
 	cleanup()
-	os.Exit(NormalExit)
 }
 
 func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {

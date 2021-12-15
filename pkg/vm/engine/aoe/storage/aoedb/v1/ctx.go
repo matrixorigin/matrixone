@@ -16,6 +16,7 @@ package aoedb
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -97,6 +98,6 @@ func (ctx *DBMutationCtx) ToLogIndex(database *metadata.Database) *db.LogIndex {
 
 func (ctx *AppendCtx) ToLogIndex(database *metadata.Database) *db.LogIndex {
 	index := ctx.DBMutationCtx.ToLogIndex(database)
-	index.Capacity = uint64(ctx.Data.Vecs[0].Length())
+	index.Capacity = uint64(vector.Length(ctx.Data.Vecs[0]))
 	return index
 }

@@ -1,6 +1,7 @@
 package table
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -165,7 +166,7 @@ func (c *tableAppender) Append(bat *batch.Batch, index *shard.SliceIndex) (err e
 			return err
 		}
 		offset += n
-		if offset == uint64(bat.Vecs[0].Length()) {
+		if offset == uint64(vector.Length(bat.Vecs[0])) {
 			break
 		}
 		index.Start += n

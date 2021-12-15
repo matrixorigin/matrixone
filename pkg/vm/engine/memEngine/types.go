@@ -1,27 +1,35 @@
 package memEngine
 
 import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 // standalone memory engine
 type memEngine struct {
 	db *kv.KV
-	n  metadata.Node
+	n  engine.Node
 }
 
 type database struct {
-	id string
 	db *kv.KV
-	n  metadata.Node
+	n  engine.Node
 }
 
 type relation struct {
-	rid string
-	id  string
-	db  *kv.KV
-	n   metadata.Node
-	md  meta.Metadata
+	id string
+	db *kv.KV
+	n  engine.Node
+	md meta.Metadata
+}
+
+type reader struct {
+	zs    []int64
+	db    *kv.KV
+	segs  []string
+	cds   []*bytes.Buffer
+	dds   []*bytes.Buffer
+	attrs map[string]engine.Attribute
 }

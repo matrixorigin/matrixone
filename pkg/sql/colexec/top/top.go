@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -38,32 +39,30 @@ func String(arg interface{}, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
-	ctr := &n.Ctr
+	n.ctr = new(Container)
 	{
-		ctr.attrs = make([]string, len(n.Fs))
+		n.ctr.attrs = make([]string, len(n.Fs))
 		for i, f := range n.Fs {
-			ctr.attrs[i] = f.Attr
+			n.ctr.attrs[i] = f.Attr
 		}
 	}
-	ctr.n = len(n.Fs)
-	ctr.sels = make([]int64, n.Limit)
-	ctr.cmps = make([]compare.Compare, len(n.Fs))
+	n.ctr.n = len(n.Fs)
+	n.ctr.sels = make([]int64, n.Limit)
+	n.ctr.cmps = make([]compare.Compare, len(n.Fs))
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	var err error
-
-	if proc.Reg.InputBatch == nil {
-		return false, nil
-	}
-	bat := proc.Reg.InputBatch.(*batch.Batch)
-	if bat == nil || bat.Attrs == nil {
+	bat := proc.Reg.InputBatch
+	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
 	n := arg.(*Argument)
-	ctr := &n.Ctr
-	bat.Reorder(ctr.attrs)
+	return n.ctr.process(n, bat, proc)
+}
+
+func (ctr *Container) process(n *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
+	batch.Reorder(bat, ctr.attrs)
 	{
 		for i := int64(0); i < n.Limit; i++ {
 			ctr.sels[i] = i
@@ -74,13 +73,27 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 		}
 	}
-	if len(bat.Sels) > 0 {
-		bat.Shuffle(proc)
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, bat.Vecs[i])
+		cmp.Set(1, bat.Vecs[i])
 	}
-	ctr.processBatch(n.Limit, bat)
-	data, err := proc.Alloc(int64(len(ctr.sels) * 8))
+	length := int64(len(bat.Zs))
+	if length < n.Limit {
+		ctr.sels = ctr.sels[:length]
+		heap.Init(ctr)
+	} else {
+		heap.Init(ctr)
+		for i, j := n.Limit, length; i < j; i++ {
+			if ctr.compare(i, ctr.sels[0]) < 0 {
+				ctr.sels[0] = i
+			}
+			heap.Fix(ctr, 0)
+		}
+	}
+	data, err := mheap.Alloc(proc.Mp, int64(len(ctr.sels))*8)
 	if err != nil {
-		bat.Clean(proc)
+		batch.Clean(bat, proc.Mp)
+		proc.Reg.InputBatch = &batch.Batch{}
 		return false, err
 	}
 	sels := encoding.DecodeInt64Slice(data)
@@ -89,27 +102,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	bat.Sels = sels
 	bat.SelsData = data
-	bat.Shuffle(proc)
-	proc.Reg.InputBatch = bat
+	batch.Shuffle(bat, proc.Mp)
 	return false, nil
-}
-
-func (ctr *Container) processBatch(limit int64, bat *batch.Batch) {
-	for i, cmp := range ctr.cmps {
-		cmp.Set(0, bat.Vecs[i])
-		cmp.Set(1, bat.Vecs[i])
-	}
-	length := int64(bat.Vecs[0].Length())
-	if length < limit {
-		ctr.sels = ctr.sels[:length]
-		heap.Init(ctr)
-		return
-	}
-	heap.Init(ctr)
-	for i, j := limit, length; i < j; i++ {
-		if ctr.compare(i, ctr.sels[0]) < 0 {
-			ctr.sels[0] = i
-		}
-		heap.Fix(ctr, 0)
-	}
 }

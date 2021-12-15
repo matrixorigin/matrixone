@@ -23,7 +23,19 @@ import (
 )
 
 func (e *MultiExtend) IsLogical() bool {
-	return overload.IsLogical(e.Op)
+	typ := overload.IsLogical(e.Op)
+	if typ == overload.MustLogical {
+		return true
+	} else if typ == overload.MayLogical {
+		for _, extend := range e.Args {
+			if !extend.IsLogical() {
+				return false
+			}
+		}
+		return true
+	} else {
+		return false
+	}
 }
 
 func (_ *MultiExtend) IsConstant() bool {

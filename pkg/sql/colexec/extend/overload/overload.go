@@ -15,17 +15,23 @@
 //go:generate go run overloadGenerate.go
 package overload
 
+const (
+	NotLogical = iota
+	MayLogical
+	MustLogical
+)
+
 var LogicalOps = map[int]uint8{
-	Or:      0,
-	And:     0,
-	Like:    0,
-	NotLike: 0,
-	EQ:      0,
-	LT:      0,
-	LE:      0,
-	GT:      0,
-	GE:      0,
-	NE:      0,
+	Or:      MayLogical,
+	And:     MayLogical,
+	Like:    MustLogical,
+	NotLike: MustLogical,
+	EQ:      MustLogical,
+	LT:      MustLogical,
+	LE:      MustLogical,
+	GT:      MustLogical,
+	GE:      MustLogical,
+	NE:      MustLogical,
 }
 
 var NegOps = map[int]int{
@@ -36,7 +42,6 @@ var NegOps = map[int]int{
 	LE:   GT,
 	GT:   LE,
 	GE:   LT,
-	NE:	  EQ,
 	Like: NotLike,
 }
 
@@ -48,7 +53,6 @@ var OpTypes = map[int]int{
 	Minus:      Binary,
 	Mult:       Binary,
 	Div:        Binary,
-	IntegerDiv: Binary,
 	Mod:        Binary,
 	Like:       Binary,
 	NotLike:    Binary,
@@ -61,11 +65,11 @@ var OpTypes = map[int]int{
 	NE:         Binary,
 }
 
-func IsLogical(op int) bool {
-	if _, ok := LogicalOps[op]; ok {
-		return true
+func IsLogical(op int) uint8 {
+	if typ, ok := LogicalOps[op]; ok {
+		return typ
 	}
-	return false
+	return NotLogical
 }
 
 func OperatorType(op int) int {
