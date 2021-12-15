@@ -68,7 +68,7 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 		time.Sleep(time.Duration(tick) * time.Microsecond)
 		loops++
 	}
-	logutil.Infof("Flush database %s takes: %s", time.Since(now))
+	logutil.Infof("Flush database %s takes: %s", meta.Name, time.Since(now))
 	return err
 }
 
