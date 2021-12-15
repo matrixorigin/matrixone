@@ -361,7 +361,7 @@ func (s *Storage) tableNames() (names []string) {
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
-	logutil.Infof("drivr call check")
+	logutil.Infof("drivr call check, size is %v", size)
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,

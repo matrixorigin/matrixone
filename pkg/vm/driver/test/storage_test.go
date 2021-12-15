@@ -431,6 +431,16 @@ func TestSplit(t *testing.T) {
 		stdLog.Printf(" append %v, size %v Bytes", i, buf.Len())
 		require.Nil(t, err)
 		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
+
+		db, err := c.AOEStorages[0].DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(sids[0]))
+		if err != nil {
+			stdLog.Printf("err437:%v", err)
+		}
+		if db != nil {
+			cp := db.UncheckpointedCnt()
+			sz := db.GetSize()
+			stdLog.Printf("cp:%v,sz:%v", cp, sz)
+		}
 		// storage.Sync([]uint64{sids[0]})
 		// require.Nil(t, err)
 		if checkSplit(c.AOEStorages[0], sids[0]) {
