@@ -14,9 +14,9 @@
 
 #include "textflag.h"
 
-// func Crc32BytesHash(data unsafe.Pointer, length int) uint64
+// func crc32BytesHash(data unsafe.Pointer, length int) uint64
 // Requires: CRC32
-TEXT ·Crc32BytesHash(SB), NOSPLIT, $0-24
+TEXT ·crc32BytesHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD length+8(FP), R1
 	MOVD R1, R4
@@ -38,18 +38,18 @@ done:
 	MOVW    R4, ret+20(FP)
 	RET
 
-// func Crc32Int64Hash(data uint64) uint64
+// func crc32Int64Hash(data uint64) uint64
 // Requires: CRC32
-TEXT ·Crc32Int64Hash(SB), NOSPLIT, $0-16
+TEXT ·crc32Int64Hash(SB), NOSPLIT, $0-16
 	MOVD    data+0(FP), R0
 	MOVD    $-1, R1
 	CRC32CX R0, R1
 	MOVD    R1, ret+8(FP)
 	RET
 
-// func Crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
+// func crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int64BatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int64BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -104,9 +104,9 @@ tailLoop:
 done:
 	RET
 
-// func Crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
+// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -175,9 +175,9 @@ DATA aesIV<>+0x30(SB)/8, $0x5A8279996ED9EBA1
 DATA aesIV<>+0x38(SB)/8, $0x8F1BBCDCCA62C1D6
 GLOBL aesIV<>(SB), (NOPTR+RODATA), $64
 
-// func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
+// func aesBytesHash(data unsafe.Pointer, length int) [2]uint64
 // Requires: AES
-TEXT ·AesBytesHash(SB), NOSPLIT, $0-32
+TEXT ·aesBytesHash(SB), NOSPLIT, $0-32
 	MOVD data+0(FP), R0
 	MOVD length+8(FP), R1
 	MOVD $ret+16(FP), R2
@@ -268,9 +268,9 @@ tail3:
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 
-// func Crc32Int192Hash(data *[3]uint64)
+// func crc32Int192Hash(data *[3]uint64)
 // Requires: CRC32
-TEXT ·Crc32Int192Hash(SB), NOSPLIT, $0-16
+TEXT ·crc32Int192Hash(SB), NOSPLIT, $0-16
 	MOVD    $data+0(FP), R0
 	MOVD    $-1, R1
 	LDP.P   16(R0), (R2, R3)
@@ -281,9 +281,9 @@ TEXT ·Crc32Int192Hash(SB), NOSPLIT, $0-16
 	MOVD    R1, ret+8(FP)
 	RET
 
-// func Crc32Int256Hash(data *[4]uint64)
+// func crc32Int256Hash(data *[4]uint64)
 // Requires: CRC32
-TEXT ·Crc32Int256Hash(SB), NOSPLIT, $0-16
+TEXT ·crc32Int256Hash(SB), NOSPLIT, $0-16
 	MOVD    $data+0(FP), R0
 	MOVD    $-1, R1
 	LDP.P   16(R0), (R2, R3)
@@ -295,9 +295,9 @@ TEXT ·Crc32Int256Hash(SB), NOSPLIT, $0-16
 	MOVD    R1, ret+8(FP)
 	RET
 
-// func Crc32Int320Hash(data *[4]uint64)
+// func crc32Int320Hash(data *[4]uint64)
 // Requires: CRC32
-TEXT ·Crc32Int320Hash(SB), NOSPLIT, $0-16
+TEXT ·crc32Int320Hash(SB), NOSPLIT, $0-16
 	MOVD    $data+0(FP), R0
 	MOVD    $-1, R1
 	LDP.P   16(R0), (R2, R3)
@@ -311,9 +311,9 @@ TEXT ·Crc32Int320Hash(SB), NOSPLIT, $0-16
 	MOVD    R1, ret+8(FP)
 	RET
 
-// func Crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
+// func crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int192BatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int192BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -389,9 +389,9 @@ tailLoop:
 done:
 	RET
 
-// func Crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
+// func crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int256BatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int256BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -463,9 +463,9 @@ tailLoop:
 done:
 	RET
 
-// func Crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
+// func crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int320BatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int320BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2

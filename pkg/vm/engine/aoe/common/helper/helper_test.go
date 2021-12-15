@@ -17,13 +17,14 @@ package helper
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"log"
-	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"testing"
 )
 
@@ -44,13 +45,13 @@ func TestAoe(t *testing.T) {
 		fmt.Printf("tbl: %v\n", string(data))
 	}
 
-	/*if len(tbl.Partition) > 0 {
+	if len(tbl.Partition) > 0 {
 		pdef, _, err := protocol.DecodePartition(tbl.Partition)
 		if err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("partition: %v\n", pdef)
-	}*/
+	}
 
 }
 
@@ -62,14 +63,14 @@ func NewTableDefs() []engine.TableDef {
 		ColNames: []string{"a", "b"},
 	})
 	defs = append(defs, &engine.AttributeDef{
-		Attr: engine.Attribute{
+		Attr: metadata.Attribute{
 			Alg:  0,
 			Name: "a",
 			Type: types.Type{Oid: types.T_float64, Size: 8},
 		},
 	})
 	defs = append(defs, &engine.AttributeDef{
-		Attr: engine.Attribute{
+		Attr: metadata.Attribute{
 			Alg:  0,
 			Name: "b",
 			Type: types.Type{Oid: types.T_varchar, Size: 8},
@@ -78,8 +79,8 @@ func NewTableDefs() []engine.TableDef {
 	return defs
 }
 
-func NewPartition() *engine.PartitionByDef {
-	def := new(engine.PartitionByDef)
+func NewPartition() *engine.PartitionBy {
+	def := new(engine.PartitionBy)
 	def.Fields = []string{"a", "b"}
 	{
 		def.List = append(def.List, NewListPartition())
@@ -98,13 +99,7 @@ func NewListPartition() engine.ListPartition {
 }
 
 func NewValue(v float64) extend.Extend {
-	vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
-	vs := make([]float64, 10)
-	for i := 0; i < 10; i++ {
-		vs[i] = float64(i)
-	}
-	if err := vector.Append(vec, vs); err != nil {
-		log.Fatal(err)
-	}
+	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
+	vec.Append([]float64{v})
 	return &extend.ValueExtend{V: vec}
 }

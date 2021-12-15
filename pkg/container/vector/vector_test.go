@@ -18,30 +18,32 @@ import (
 	"fmt"
 	"log"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
 )
 
 func TestVector(t *testing.T) {
-	v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
-	w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+    v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+    w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
 	{
 		vs := make([][]byte, 10)
 		for i := 0; i < 10; i++ {
 			vs[i] = []byte(fmt.Sprintf("%v", i*i))
 		}
 		vs[9] = []byte("abcd")
-		if err := Append(v, vs); err != nil {
+		if err := v.Append(vs); err != nil {
 			log.Fatal(err)
 		}
 	}
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
-	mp := mheap.New(gm)
+	proc := process.New(gm)
+	proc.Mp = mempool.New()
 	for i := 0; i < 5; i++ {
-		if err := UnionOne(w, v, int64(i), mp); err != nil {
+		if err := w.UnionOne(v, int64(i), proc); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -50,12 +52,12 @@ func TestVector(t *testing.T) {
 		fmt.Printf("w: %v\n", w)
 	}
 	{
-		if err := Copy(w, v, 1, 9, mp); err != nil {
+		if err := w.Copy(v, 1, 9, proc); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("w[1] = v[9]: %v\n", w)
 	}
 	w.Ref = 1
-	Free(w, mp)
-	fmt.Printf("guest: %v, host: %v\n", gm.Size(), gm.HostSize())
+	w.Free(proc)
+	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }

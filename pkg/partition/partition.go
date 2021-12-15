@@ -16,7 +16,6 @@ package partition
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -30,10 +29,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v int8
 
 		vs := vec.Col.([]int8)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -54,10 +53,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v int16
 
 		vs := vec.Col.([]int16)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -78,10 +77,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v int32
 
 		vs := vec.Col.([]int32)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -102,10 +101,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v int64
 
 		vs := vec.Col.([]int64)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -126,10 +125,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v uint8
 
 		vs := vec.Col.([]uint8)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -150,10 +149,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v uint16
 
 		vs := vec.Col.([]uint16)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -174,10 +173,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v uint32
 
 		vs := vec.Col.([]uint32)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -198,10 +197,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v uint64
 
 		vs := vec.Col.([]uint64)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -222,10 +221,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v float32
 
 		vs := vec.Col.([]float32)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -246,10 +245,10 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		var v float64
 
 		vs := vec.Col.([]float64)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs[sel]
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
@@ -265,15 +264,18 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
-	case types.T_char, types.T_varchar:
+	case types.T_decimal:
+	case types.T_date:
+	case types.T_datetime:
+	case types.T_char, types.T_json, types.T_varchar:
 		var n bool
 		var v []byte
 
 		vs := vec.Col.(*types.Bytes)
-		if nulls.Any(vec.Nsp) {
+		if vec.Nsp.Any() {
 			for i, sel := range sels {
 				w := vs.Get(sel)
-				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				isNull := vec.Nsp.Contains(uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {

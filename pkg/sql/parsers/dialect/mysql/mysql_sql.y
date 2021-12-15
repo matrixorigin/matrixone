@@ -148,11 +148,8 @@ import (
     varExpr *tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
-    strs []string
-	assignments []*tree.Assignment
-	assignment *tree.Assignment
-    properties []tree.Property
-    property tree.Property
+    assignments []*tree.Assignment
+    assignment *tree.Assignment
 }
 
 %token LEX_ERROR
@@ -216,10 +213,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE
-
-// MO table option
-%token <str> PROPERTIES
+%token <str> ROW TYPE
 
 // Create Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
@@ -273,9 +267,7 @@ import (
 %token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
-// Insert
-%token <str> ROW
-
+// MySQL reserved words that are unused by this grammar will map to this token.
 %token <str> UNUSED
 
 %type <statement> stmt
@@ -452,11 +444,9 @@ import (
 %type <strs> index_name_and_type_opt
 %type <str> index_name index_type key_or_index_opt key_or_index
 // type <str> mo_keywords
-%type <properties> properties_list
-%type <property> property_elem
+%type <str> row_opt
 %type <assignments> set_value_list
 %type <assignment> set_value
-%type <str> row_opt
 
 %start start_command
 
@@ -736,15 +726,9 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
-        var b byte
-        if len(str) != 0 {
-        	b = byte(str[0])
-        } else {
-        	b = 0
-        }
         $$ = &tree.Fields{
             Optionally: true,
-            EscapedBy: b,
+            EscapedBy: byte(str[0]),
         }
     }
 |   ENCLOSED BY field_terminator
@@ -754,14 +738,8 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
         $$ = &tree.Fields{
-            EnclosedBy: b,
+            EnclosedBy: byte(str[0]),
         }
     }
 |   ESCAPED BY field_terminator
@@ -771,14 +749,8 @@ field_item:
             yylex.Error("error field terminator")
             return 1
         }
-        var b byte
-        if len(str) != 0 {
-           b = byte(str[0])
-        } else {
-           b = 0
-        }
         $$ = &tree.Fields{
-            EscapedBy: b,
+            EscapedBy: byte(str[0]),
         }
     }
 
@@ -1757,7 +1729,7 @@ full_opt:
 show_create_stmt:
     SHOW CREATE TABLE table_name_unresolved
     {
-        $$ = &tree.ShowCreateTable{Name: $4}
+        $$ = &tree.ShowCreate{Name: $4}
     }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
@@ -2895,9 +2867,9 @@ using_opt:
         $$ = tree.INDEX_TYPE_RTREE
     }
 |	USING BSI
-    {
-    	$$ = tree.INDEX_TYPE_BSI
-    }
+	{
+		$$ = tree.INDEX_TYPE_BSI
+	}
 
 create_database_stmt:
     CREATE database_or_schema not_exists_opt ident create_option_list_opt
@@ -3345,27 +3317,7 @@ table_option:
     {
         $$= tree.NewTableOptionUnion($4)
     }
-|	PROPERTIES '(' properties_list ')'
-	{
-		$$ = &tree.TableOptionProperties{Preperties: $3}
-	}
 // |   INSERT_METHOD equal_opt insert_method_options
-
-properties_list:
-	property_elem
-	{
-		$$ = []tree.Property{$1}
-	}
-|	properties_list ',' property_elem
-	{
-		$$ = append($1, $3)
-	}
-
-property_elem:
-	STRING '=' STRING
-	{
-		$$ = tree.Property{Key: $1, Value: $3}
-	}
 
 storage_opt:
     {
@@ -3466,7 +3418,6 @@ table_elem:
     {
     	$$ = $1
     }
-
 constaint_def:
 	constraint_keyword constraint_elem
 	{
@@ -4012,8 +3963,7 @@ simple_expr:
     }
 
 cast_type:
-    decimal_type
-|   BINARY length_opt
+    BINARY length_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -4092,6 +4042,51 @@ cast_type:
 		        TimePrecisionIsSet: false,
 		        Locale: &locale,
 		        Oid: uint32(defines.MYSQL_TYPE_TIME),
+	        },
+        }
+    }
+|   DOUBLE float_length_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.FloatFamily,
+                FamilyString: $1,
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $2.DisplayWith,
+                Precision: $2.Precision,
+	        },
+        }
+    }
+|   FLOAT_TYPE decimal_length_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.FloatFamily,
+                FamilyString: $1,
+		        Width:  32,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+                DisplayWith: $2.DisplayWith,
+                Precision: $2.Precision,
+	        },
+        }
+    }
+|   REAL float_length_opt
+    {
+        locale := ""
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.FloatFamily,
+                FamilyString: $1,
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+                DisplayWith: $2.DisplayWith,
+                Precision: $2.Precision,
 	        },
         }
     }
@@ -4725,10 +4720,9 @@ literal:
 |   HEXNUM
 	{
 		ival := getUint64($1)
-		$$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
+        $$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
 	}
 // |   HEX
-// |   BIT_LITERAL
 // |   VALUE_ARG
 
 column_type:
@@ -4938,60 +4932,31 @@ decimal_type:
     DOUBLE float_length_opt
     {
         locale := ""
-        if $2.DisplayWith > 255 {
-        	yylex.Error("Display width for double out of range (max = 255)")
-        	return 1
-        }
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-        	yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-                return 1
-        }
         $$ = &tree.T{
             InternalType: tree.InternalType{
-		Family: tree.FloatFamily,
+		        Family: tree.FloatFamily,
                 FamilyString: $1,
-		Width:  64,
-		Locale: &locale,
-		Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
+		        Width:  64,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
                 DisplayWith: $2.DisplayWith,
                 Precision: $2.Precision,
-	    },
+	        },
         }
     }
 |   FLOAT_TYPE decimal_length_opt
     {
         locale := ""
-        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
-		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
-		return 1
-        }
-        if $2.DisplayWith > 53 {
-        	yylex.Error("For float(M), M must between 0 and 53.")
-                return 1
-        } else if $2.DisplayWith >= 24 {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  64,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_DOUBLE),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
-		}
-        } else {
-        	$$ = &tree.T{
-		    InternalType: tree.InternalType{
-			Family: tree.FloatFamily,
-			FamilyString: $1,
-			Width:  32,
-			Locale: &locale,
-			Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
-			DisplayWith: $2.DisplayWith,
-			Precision: $2.Precision,
-		    },
-                }
+        $$ = &tree.T{
+            InternalType: tree.InternalType{
+		        Family: tree.FloatFamily,
+                FamilyString: $1,
+		        Width:  32,
+		        Locale: &locale,
+		        Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+                DisplayWith: $2.DisplayWith,
+                Precision: $2.Precision,
+	        },
         }
     }
 // |   DECIMAL decimal_length_opt
@@ -5331,8 +5296,8 @@ float_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.NotDefineDisplayWidth,
-            Precision:  tree.NotDefineDec,
+            DisplayWith: 0,
+            Precision:  0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
@@ -5347,15 +5312,15 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.NotDefineDisplayWidth,
-            Precision: tree.NotDefineDec,
+            DisplayWith: 0,
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: tree.NotDefineDec,
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
@@ -5511,6 +5476,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
+|	ROW
 |   REVERSE
 |   SCHEMA
 |   SELECT
@@ -5552,12 +5518,11 @@ reserved_keyword:
 |   INT3
 |   INT4
 |   INT8
-|   CHECK
+|	CHECK
 |	CONSTRAINT
-|   PRIMARY
-|   FULLTEXT
-|   FOREIGN
-|	ROW
+|	PRIMARY
+|	FULLTEXT
+|	FOREIGN
 
 non_reserved_keyword:
     AGAINST
@@ -5753,6 +5718,6 @@ not_keyword:
 |   AVG
 
 //mo_keywords:
-//	PROPERTIES
+//	BSI
 
 %%

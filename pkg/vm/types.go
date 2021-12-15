@@ -16,28 +16,46 @@ package vm
 
 const (
 	Top = iota
-	Plus
-	Limit
-	Times
-	Merge
 	Dedup
+	Limit
+	Group
 	Order
-	Oplus
-	Output
 	Offset
+	Transfer //push batch to channel
 	Restrict
-	Connector
-	Transform
+	Summarize
 	Projection
-	UnTransform
-
-	Splice // Splice is a temporary vm algorithm to splice multiple batches
+	SetUnion
+	SetIntersect
+	SetDifference
+	SetDifferenceR
+	SetFullJoin
+	SetLeftJoin
+	SetSemiJoin
+	SetInnerJoin
+	SetRightJoin
+	SetNaturalJoin
+	SetSemiDifference // unsuitable name is anti join
+	BagUnion
+	BagIntersect
+	BagDifference
+	BagDifferenceR
+	BagInnerJoin
+	BagNaturalJoin
+	Output
+	Exchange
+	Merge
+	MergeTop
+	MergeDedup
+	MergeOrder
+	MergeGroup
+	MergeSummarize
 )
 
 // Instruction contains relational algebra
 type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op int
+	// Code specified a specific instruction.
+	Code int
 	// Arg contains the operand of this instruction.
 	Arg interface{}
 }

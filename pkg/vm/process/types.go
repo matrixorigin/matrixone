@@ -15,16 +15,25 @@
 package process
 
 import (
-	"context"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"sync"
 )
+
+/*
+type Process interface {
+	Size() int64
+	HostSize() int64
+
+	Free([]byte)
+	Alloc(int64) ([]byte, error)
+}
+*/
 
 // WaitRegister channel
 type WaitRegister struct {
-	Ctx context.Context
-	Ch  chan *batch.Batch
+	Wg *sync.WaitGroup
+	Ch chan interface{}
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.
@@ -33,10 +42,10 @@ type Register struct {
 	// and it can be reused in the future execution.
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
-	InputBatch *batch.Batch
-	// Vecs, temporarily stores the column data in the execution of operators
+	InputBatch interface{}
+	// Ts, temporarily stores the column data in the execution of operators
 	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
-	Vecs []*vector.Vector
+	Ts []interface{}
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -62,9 +71,10 @@ type Process struct {
 	Id  string
 	Reg Register
 	Lim Limitation
-	Mp  *mheap.Mheap
-
-	Cancel context.CancelFunc
-
-	TempBatch *batch.Batch
+	// Gm, records the resources used in current query.
+	Gm *guest.Mmu
+	// Mp, a pool for fast allocation and deallocation of objects.
+	Mp *mempool.Mempool
+	// Refer, traces the count of the reference of variables.
+	Refer map[string]uint64
 }

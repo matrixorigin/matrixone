@@ -17,7 +17,7 @@ package projection
 import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 type Argument struct {
-	Rs []uint64 // reference count list
-	As []string // alias name list
-	Es []extend.Extend
+	Attrs []string
+	Es    []extend.Extend
+	Refer map[string]uint64
 }

@@ -15,7 +15,6 @@
 package aoedb
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"os"
 	"path/filepath"
 	"testing"
@@ -421,7 +420,7 @@ func TestReplay4(t *testing.T) {
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), uint64(vector.Length(ck.Vecs[0])))
+	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	insertCnt := 4
 	appendCtx := new(AppendCtx)
 	for i := 0; i < insertCnt; i++ {

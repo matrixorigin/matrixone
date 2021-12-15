@@ -1,27 +1,13 @@
-// Copyright 2021 Matrix Origin
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package unittest
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -29,269 +15,760 @@ import (
 	"testing"
 )
 
-func newTestEngine() (engine.Engine, *process.Process) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	proc := process.New(mheap.New(gm))
-	e := memEngine.NewTestEngine()
-	return e, proc
-}
-
-// TestInsertFunction to make sure insert work can run normally
-func TestInsertFunction(t *testing.T) {
-	e, proc := newTestEngine()
-
-	prepares := []string{
-		"create table iis(i1 tinyint, i2 smallint, i3 int, i4 bigint);",
-		"create table uus(u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);",
-		"create table ffs(f1 float, f2 double);",
-		"create table ccs(c1 char(10), c2 varchar(15));",
-		"create table def1 (i1 int default 888, i2 int default 888, i3 int default 888);",
-		"create table def2 (id int default 1, name varchar(255) unique, age int);",
-		"create table def3 (i int default -1, v varchar(10) default 'abc', c char(10) default '', price double default 0.00);",
-		"create table def4 (d1 int, d2 int, d3 int, d4 int default 1);",
-		"insert into iis values (1, 2, 3, 4), (1+1, 2-2, 3*3, 4/4), (1 div 1, 2+2/3, 3 mod 3, 4 + 0.5), (0, 0, 0, 0);",
-		"insert into uus values (0, 0, 1, 1), (0.5, 3+4, 4-1, 2*7), (3/4, 4 div 5, 5 mod 6, 0);",
-		"insert into ffs values (1.1, 2.2), (1, 2), (1+0.5, 2.5*3.5);",
-		"insert into ccs values ('123', '34567');",
-		"insert into def1 values (default, default, default), (1, default, default), (default, -1, default), (default, default, 0);",
-		"insert into def2 (name, age) values ('Abby', 24);",
-		"insert into def3 () values (), ();",
-		"insert into def4 (d1, d2) values (1, 2);",
-	}
-	works := [][]string{ // First string is relation name, Second string is expected result.
-		{"iis", "i1\n\t[1 2 1 0]-&{<nil>}\ni2\n\t[2 0 3 0]-&{<nil>}\ni3\n\t[3 9 0 0]-&{<nil>}\ni4\n\t[4 1 5 0]-&{<nil>}\n\n"},
-		{"uus", "u1\n\t[0 1 1]-&{<nil>}\nu2\n\t[0 7 0]-&{<nil>}\nu3\n\t[1 3 5]-&{<nil>}\nu4\n\t[1 14 0]-&{<nil>}\n\n"},
-		{"ffs", "f1\n\t[1.1 1 1.5]-&{<nil>}\nf2\n\t[2.2 2 8.75]-&{<nil>}\n\n"},
-		{"ccs", "c1\n\t123\n\nc2\n\t34567\n\n\n"},
-		{"def1", "i1\n\t[888 1 888 888]-&{<nil>}\ni2\n\t[888 888 -1 888]-&{<nil>}\ni3\n\t[888 888 888 0]-&{<nil>}\n\n"},
-		{"def2", "id\n\t1\nname\n\tAbby\n\nage\n\t24\n\n"},
-		{"def3", "i\n\t[-1 -1]-&{<nil>}\nv\n\t[abc abc]-&{<nil>}\nc\n\t[ ]-&{<nil>}\nprice\n\t[0 0]-&{<nil>}\n\n"},
-		{"def4", "d1\n\t1\nd2\n\t2\nd3\n\tnull\nd4\n\t1\n\n"},
-	}
-
-	for _, p := range prepares {
-		require.NoError(t, sqlRun(p, e, proc), p)
-	}
-	for _, s := range works {
-		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
-	}
-}
-
-// TestDateType will do test for Type date
-func TestDateType(t *testing.T) {
-	e, proc := newTestEngine()
-
-	sqls := []string {
-		"create table tdate (a date);",
-		"create table tdefdate (a date default '20211202')",
-		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
-		"insert into tdefdate values ();",
-	}
-	res := [][]string {
-		{"tdate", "a\n\t[2007-02-10 1997-02-10 0001-04-28 2004-11-12 0123-04-03]-&{<nil>}\n\n"},
-		{"tdefdate", "a\n\t2021-12-02\n\n"},
-	}
-	eqls := [][]string {
-		{"create table tble (a date);", ""},
-		{"insert into tble values ('20201310')", "[22000]Incorrect date value"},
-		{"insert into tble values ('20200631')", "[22000]Incorrect date value"},
-		{"insert into tble values ('-3-5-3')", "[22000]Incorrect date value"},
-	}
-
-	for _, sql := range sqls {
-		require.NoError(t, sqlRun(sql, e, proc), sql)
-	}
-	for _, s := range res {
-		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
-	}
-	for _, eql := range eqls {
-		r := sqlRun(eql[0], e, proc)
-		if len(eql[1]) == 0 {
-			require.NoError(t, r, eql[0])
-		} else {
-			if r == nil { // that should error but found no error
-				require.Equal(t, eql[1], "no error", eql[0])
-			}
-			require.Equal(t, eql[1], r.Error(), eql[0])
-		}
-	}
-}
-
-// TestDatetimeType will do test for Type datetime
-func TestDatetimeType(t *testing.T) {
-	e, proc := newTestEngine()
-
-	// TestCase expected run success
-	sqls := []string{
-		"create table tbl1 (a datetime);", // test datetime format without msec part
-		"insert into tbl1 values ('2018-04-28 10:21:15'), ('17-04-28 03:05:01'), (250716163958), (20211203145633);",
-		"create table tbl2 (a datetime);", // test datetime with msec part
-		"insert into tbl2 values ('2018-04-28 10:21:15.123'), ('17-04-28 03:05:01.456'), (250716163958.567), (20211203145633.890);",
-		"create table tbl3 (a datetime);", // test datetime without hour / minute / second
-		"insert into tbl3 values ('20180428'), ('170428'), (250716), (20211203);",
-
-		"create table tdatetimedef (a datetime default '2015-03-03 12:12:12');",
-		"insert into tdatetimedef values ();",
-	}
-	// TestCase expected run failed
-	eqls := [][]string{
-		{"create table tbl4 (a datetime);", ""},
-		{"insert into tbl4 values ('-1-04-28 10:22:14');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('2010-13-28 10:22:14');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('2010-11-31 10:22:14');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('2010-11-30 24:22:14');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('2010-11-30 23:60:14');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('2010-11-30 23:59:60');", "[22000]Incorrect datetime value"},
-		{"insert into tbl4 values ('1999-02-29 23:59:59');", "[22000]Incorrect datetime value"},
-	}
-
-	res := [][]string{
-		{"tbl1", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"},
-		{"tbl2", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"}, // that is disputed. what does msec do?
-		{"tbl3", "a\n\t[2018-04-28 00:00:00 2017-04-28 00:00:00 2025-07-16 00:00:00 2021-12-03 00:00:00]-&{<nil>}\n\n"},
-		{"tdatetimedef", "a\n\t2015-03-03 12:12:12\n\n"},
-	}
-
-	for _, sql := range sqls {
-		require.NoError(t, sqlRun(sql, e, proc), sql)
-	}
-	for _, r := range res {
-		require.Equal(t, r[1], TempSelect(e, "test", r[0]))
-	}
-	for _, eql := range eqls {
-		r := sqlRun(eql[0], e, proc)
-		if len(eql[1]) == 0 {
-			require.NoError(t, r, eql[0])
-		} else {
-			if r == nil { // that should error but found no error
-				require.Equal(t, eql[1], "no error", eql[0])
-			}
-			require.Equal(t, eql[1], r.Error(), eql[0])
-		}
-	}
-}
-
-// TestDDLFunction to make sure DDL sql can run normally
-func TestDDLFunction(t *testing.T) {
-	e, proc := newTestEngine()
-
-	ddls := []string{
-		// support
-		"create database d1;",
-		"create table ddlt1 (a int, b int);",
-		"CREATE TABLE ddlt2 (orderId varchar(100), uid INT, price FLOAT);",
-		"show databases;",
-		"show tables;",
-		"show columns from ddlt2;",
-		"show databases like 'd_';",
-		"show tables like '%1';",
-		"show columns from ddlt2 like 'pri%';",
-		"show create table ddlt2",
-		"drop table ddlt1, ddlt2;",
-		// support but has problems now
-		//"create table tbl(a int, b varchar(10);",
-		//"create index index_name on tbl(a);",
-		//"create index index_nameb using btree on tbl(a);",
-		//"create index index_nameh using hash on tbl(a);",
-		//"create index index_namer using rtree on tbl(a);",
-		//"drop index index_name on tbl;",
-	}
-
-	for _, ddl := range ddls {
-		require.NoError(t, sqlRun(ddl, e, proc))
-	}
-}
-
-// TestOperators to make sure operators can be used normally on select
-func TestOperators(t *testing.T) {
-	e, proc := newTestEngine()
-
-	supports := []string{
-		"create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);",
-		"create table ffs (f1 float, f2 double);",
-		"create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);",
-		"insert into iis values (1, 11, 111, 1111);",
-		"insert into ffs values (22.2, 222.222);",
-		"insert into uus values (3, 33, 333, 3333);",
-		"select i1 + i1, i1 - i1, i1 / i1, i1 * i1, i2 + i2, i2 - i2, i2 / i2, i2 * i2 from iis;",
-		"select i3 + i3, i3 - i3, i3 / i3, i3 * i3, i4 + i4, i4 - i4, i4 / i4, i4 * i4 from iis;",
-		"select -i1, -i2, -i3, -i4 from iis;",
-		"select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;",
-		"select CAST(i1 AS FLOAT(1)) ci1f1, CAST(i1 AS DOUBLE) ci1f2, CAST(i1 AS CHAR(2)) ci1c2 from iis;",
-		"select f1 + f1, f1 - f1, f1 * f1, f1 / f1 from ffs;",
-		"select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;",
-		"select -f1, -f2 from ffs;",
-		"select * from ffs where f1 = f1 or f2 = f2;",
-		"select * from ffs where f1 > f1 and f2 <= f2;",
-		"select u1 + u1, u1 - u1, u1 * u1, u1 % u1, u1 / u1 from uus;",
-		"select u2 + u2, u2 - u2, u2 * u2, u2 % u2, u2 / u2 from uus;",
-		"select u3 + u3, u3 - u3, u3 * u3, u3 % u3, u3 / u3 from uus;",
-		"select u4 - u4, u4 + u4, u4 / u4, u4 * u4, u4 % u4 from uus;",
-		"create table ccs (c1 char(10), c2 varchar(20));",
-		"select cast(c2 AS char) cc2c1 from ccs;",
-	}
-	supports = nil // todo: select not support complete now
-
-	for _, sql := range supports {
-		require.NoError(t, sqlRun(sql, e, proc))
-	}
-}
-
-// sqlRun compile and run a sql, return error if happens
-func sqlRun(sql string, e engine.Engine, proc *process.Process) error {
-	c := compile.New("test", sql, "", e, proc)
-	es, err := c.Build()
-	if err != nil {
-		return err
-	}
-	for _, e := range es {
-		err := e.Compile(nil, func(i interface{}, batch *batch.Batch) error {
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		err = e.Run(0)
-		if err != nil {
-			return err
-		}
-	}
+func Print(_ interface{}, bat *batch.Batch) error {
+	fmt.Printf("%s\n", bat)
 	return nil
 }
 
-// a simple select function Todo: need delete when support select * from relation.
-func TempSelect(e engine.Engine, schema, name string) string {
-	var buff bytes.Buffer
+func TestEngine(t *testing.T) {
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+	db, err := e.Database("T")
+	require.NotNil(t, err)
+	err = e.Create(0, "T", 0)
+	require.NoError(t, err)
+	dbs := e.Databases()
+	require.Equal(t, 2, len(dbs))
+	db, err = e.Database("T")
+	require.NoError(t, err)
+	require.Equal(t, 0, len(db.Relations()))
 
-	db, err := e.Database(schema)
-	if err != nil {
-		return err.Error()
-	}
-	r, err := db.Relation(name)
-	if err != nil {
-		return err.Error()
-	}
-	defs := r.TableDefs()
-	attrs := make([]string, 0, len(defs))
+}
+
+func TestDDLSql(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
 	{
-		for _, def := range defs {
-			if v, ok := def.(*engine.AttributeDef); ok {
-				attrs = append(attrs, v.Attr.Name)
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	sql := "CREATE DATABASE T1; CREATE DATABASE T2;"
+	c := compile.New("", sql, "admin", e, proc)
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+	es, err := c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW DATABASES;"
+	c = compile.New("", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "CREATE TABLE R (orderId varchar(100), uid INT, price FLOAT);"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW TABLES;"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW TABLES;"
+	c = compile.New("T2", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW COLUMNS FROM R;"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	sql = "SHOW COLUMNS FROM R LIKE 'pric%';"
+	c = compile.New("T1", sql, "admin", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+}
+func TestCreateDropIndex(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type insertTestCase struct {
+		testSql    string
+		expectErr1 error // compile err expected
+		expectErr2 error // run err expected
+	}
+
+	testCases := []insertTestCase{
+		{"create database testinsert;", nil, nil},
+		{"CREATE TABLE TBL(A INT, B VARCHAR(10));", nil, nil},
+		{"CREATE INDEX index_name ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_nameb using btree ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_nameh using hash ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_namer using rtree ON TBL (A);", nil, nil},
+		{"DROP INDEX index_name ON TBL;", nil, nil},
+		{"drop database testinsert;", nil, nil},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.testSql
+		expected1 := tc.expectErr1
+		expected2 := tc.expectErr2
+
+		c := compile.New("testinsert", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected1 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected1.Error())
+			}
+			if expected1 != nil {
+				break
+			}
+			err = e.Run(1)
+			if expected2 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected2.Error())
 			}
 		}
 	}
-	cs := make([]uint64, len(attrs))
-	for i := range cs {
-		cs[i] = 1
-	}
-	rd := r.NewReader(1)[0]
+}
+func TestInsert(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
 	{
-		bat, err := rd.Read(cs, attrs)
-		if err != nil {
-			return err.Error()
-		}
-		buff.WriteString(fmt.Sprintf("%s\n", bat))
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
 	}
-	return buff.String()
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type insertTestCase struct {
+		testSql    string
+		expectErr1 error // compile err expected
+		expectErr2 error // run err expected
+	}
+
+	testCases := []insertTestCase{
+		{"create database testinsert;", nil, nil},
+		{"CREATE TABLE TBL(A INT DEFAULT NULL, B VARCHAR(10) DEFAULT 'ABC');", nil, nil},
+		{"insert into TBL () values ();", nil, nil},
+		{"insert into TBL values (1, '12345678901');", sqlerror.New(errno.DataException, "Data too long for column 'B' at row 1"), nil},
+		{"insert into TBL values (1, '1234567890');", nil, nil},
+		{"insert into TBL values (2, null);", nil, nil},
+		{"insert into TBL values (default, default);", nil, nil},
+		{"CREATE TABLE CMS(A INT2, B INT4 DEFAULT 1);", nil, nil},
+		{"insert into CMS values (7777777777777777, default);", sqlerror.New(errno.DataException, "Out of range value for column 'A' at row 1"), nil},
+		{"insert into CMS () values (), (1, 2);", sqlerror.New(errno.InvalidColumnReference, "Column count doesn't match value count at row 0"), nil},
+		{"insert into CMS () values (), ();", nil, nil},
+		{"CREATE TABLE TBL3 (A INT NOT NULL DEFAULT NULL);", sqlerror.New(errno.InvalidColumnDefinition, "Invalid default value for 'A'"), nil},
+		{"CREATE TABLE TBL4 (A INT NOT NULL);", nil, nil},
+		{"insert into TBL4 values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL4 values (default);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"CREATE TABLE TBL5 (A INT);", nil, nil},
+		{"insert into TBL5 values (default);", nil, nil},
+		{"CREATE TABLE TBL6 (A INT DEFAULT 1, B INT);", nil, nil},
+		{"insert into TBL6 (B) values (1);", nil, nil},
+		{"insert into TBL6 (A) values (1);", nil, nil},
+		{"CREATE TABLE TBL7 (A INT NOT NULL, B INT DEFAULT 5);", nil, nil},
+		{"insert into TBL7 (B) values (10);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL7 () values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL7 (A) values (1);", nil, nil},
+		// range check
+		{"create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);", nil, nil},
+		{"create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);", nil, nil},
+		{"create table ffs (f1 float, f2 double);", nil, nil},
+			// test upper limit
+		{"insert into iis values (127, 32767, 2147483647, 9223372036854775807);", nil, nil},
+		{"insert into iis values (128, 32767, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (127, 32768, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483648, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483647, 9223372036854775808);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (255, 65535, 4294967295, 18446744073709551615);", nil, nil},
+		{"insert into uus values (256, 65535, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u1' at row 1"), nil},
+		{"insert into uus values (255, 65536, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u2' at row 1"), nil},
+		{"insert into uus values (255, 65535, 4294967296, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u3' at row 1"), nil},
+		// {"insert into uus values (255, 65535, 4294967295, 18446744073709551616);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into iis (i4) values (9223372036854775807.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus (u4) values (18446744073709551615.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+			// test lower limit
+		{"insert into iis values (-128, -32768, -2147483648, -9223372036854775808);", nil, nil},
+		{"insert into iis values (-129, -32768, -2147483648, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (-128, -32769, -2147483648, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483649, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483648, -9223372036854775809);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into iis (i4) values (-9223372036854775808.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, 0, 0);", nil, nil},
+		{"insert into uus values (-1, 0, 0, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, -1, 0, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, -1, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, 0, -1);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+
+		{"drop database testinsert;", nil, nil},
+	}
+
+	type affectRowsCase struct {
+		sql        string
+		err1, err2 error
+		affectRows int64 // -1 means there's no need to check this number
+	}
+	affectRowsCases := []affectRowsCase{
+		{"create database testaffect;", nil, nil, -1},
+		{"create table cms (a int, b int);", nil, nil, -1},
+		{"insert into cms values (1, 2), (3, 4);", nil, nil, 2},
+		{"insert into cms values (null, null);", nil, nil, 1},
+		{"insert into cms values (null, default);", nil, nil, 1},
+		{"insert into cms values (), (), ();", nil, nil, 3},
+		{"drop database testaffect", nil, nil, -1},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.testSql
+		expected1 := tc.expectErr1
+		expected2 := tc.expectErr2
+
+		c := compile.New("testinsert", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected1 == nil {
+				require.NoError(t, err, sql)
+			} else {
+				require.EqualError(t, err, expected1.Error(), sql)
+			}
+			if expected1 != nil {
+				break
+			}
+			err = e.Run(1)
+			if expected2 == nil {
+				require.NoError(t, err, sql)
+			} else {
+				require.EqualError(t, err, expected2.Error(), sql)
+			}
+		}
+	}
+
+	for i, ac := range affectRowsCases {
+		c := compile.New("testaffect", ac.sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(fmt.Sprintf("actest %d", i))
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if ac.err1 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, ac.err1.Error())
+			}
+			if ac.err1 != nil {
+				break
+			}
+			err = e.Run(1)
+			if ac.err2 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, ac.err2.Error())
+			}
+			if ac.affectRows == -1 {
+				continue
+			}
+			if e.GetAffectedRows() != uint64(ac.affectRows) {
+				err = errors.New("affect rows number error")
+				require.NoError(t, err)
+			}
+		}
+	}
+
+}
+
+func TestDefaultExpr(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type defaultTestCase struct {
+		testSql    string
+	}
+
+	testCases := []defaultTestCase{
+		{"create database db1;"},
+		{"create table td (a int default (1+3+4), b int);"},
+		{"create table td2 (c int default (((1+2*3+(123)))), b int);"},
+		{"insert into td (b) values (11);"},
+		{"drop database db1;"},
+	}
+
+	for _, tc := range testCases {
+		sql := tc.testSql
+
+		c := compile.New("db1", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		for _, e := range es {
+			if err := e.Compile(nil, Print); err != nil {
+				require.NoError(t, err)
+			}
+			if err := e.Run(1); err != nil {
+				require.NoError(t, err)
+			}
+		}
+	}
+}
+
+func TestBinaryOperators(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type noErrorCase struct {
+		sql string
+	}
+
+	// noErrors is Test Cases for binary operators whose arguments are same type family.
+	// which sql should keep compile and run success without any error.
+	noErrors := []noErrorCase{
+		{"create database bos;"},
+		{"create table iis(i1 tinyint, i2 smallint, i3 int, i4 bigint);"},
+		{"create table ffs(f1 float, f2 double);"},
+		{"create table uus(u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
+		{"create table ccs(c1 char(10), c2 varchar(20));"},
+		{"insert into iis values (5, 10, 15, 20);"},
+		{"insert into ffs values (11.11, 333.333);"},
+		{"insert into uus values (10, 200, 3000, 40000);"},
+		{"insert into ccs values ('0.0', '0.001');"},
+		// plus operator
+		{"select i1 + i1, i1 + i2, i1 + i3, i1 + i4 from iis;"},
+		{"select i2 + i1, i2 + i2, i2 + i3, i2 + i4 from iis;"},
+		{"select i3 + i1, i3 + i2, i3 + i3, i3 + i4 from iis;"},
+		{"select i4 + i1, i4 + i2, i4 + i3, i4 + i4 from iis;"},
+		{"select f1 + f1, f1 + f2, f2 + f1, f2 + f2 from ffs;"},
+		{"select u1 + u1, u1 + u2, u1 + u3, u1 + u4 from uus;"},
+		{"select u2 + u1, u2 + u2, u2 + u3, u2 + u4 from uus;"},
+		{"select u3 + u1, u3 + u2, u3 + u3, u3 + u4 from uus;"},
+		{"select u4 + u1, u4 + u2, u4 + u3, u4 + u4 from uus;"},
+		// minus operator
+		{"select i1 - i1, i1 - i2, i1 - i3, i1 - i4 from iis;"},
+		{"select i2 - i1, i2 - i2, i2 - i3, i2 - i4 from iis;"},
+		{"select i3 - i1, i3 - i2, i3 - i3, i3 - i4 from iis;"},
+		{"select i4 - i1, i4 - i2, i4 - i3, i4 - i4 from iis;"},
+		{"select f1 - f1, f1 - f2, f2 - f1, f2 - f2 from ffs;"},
+		{"select u1 - u1, u1 - u2, u1 - u3, u1 - u4 from uus;"},
+		{"select u2 - u1, u2 - u2, u2 - u3, u2 - u4 from uus;"},
+		{"select u3 - u1, u3 - u2, u3 - u3, u3 - u4 from uus;"},
+		{"select u4 - u1, u4 - u2, u4 - u3, u4 - u4 from uus;"},
+		// multiplication operator
+		{"select i1 * i1, i1 * i2, i1 * i3, i1 * i4 from iis;"},
+		{"select i2 * i1, i2 * i2, i2 * i3, i2 * i4 from iis;"},
+		{"select i3 * i1, i3 * i2, i3 * i3, i3 * i4 from iis;"},
+		{"select i4 * i1, i4 * i2, i4 * i3, i4 * i4 from iis;"},
+		{"select f1 * f2, f2 * f1 from ffs;"},
+		{"select u1 * u1, u1 * u2, u1 * u3, u1 * u4 from uus;"},
+		{"select u2 * u1, u2 * u2, u2 * u3, u2 * u4 from uus;"},
+		{"select u3 * u1, u3 * u2, u3 * u3, u3 * u4 from uus;"},
+		{"select u4 * u1, u4 * u2, u4 * u3, u4 * u4 from uus;"},
+		// div operator
+		{"select i1 / i1, i1 / i2, i1 / i3, i1 / i4 from iis;"},
+		{"select i2 / i1, i2 / i2, i2 / i3, i2 / i4 from iis;"},
+		{"select i3 / i1, i3 / i2, i3 / i3, i3 / i4 from iis;"},
+		{"select i4 / i1, i4 / i2, i4 / i3, i4 / i4 from iis;"},
+		{"select f1 / f2, f2 / f1 from ffs;"},
+		{"select u1 / u1, u1 / u2, u1 / u3, u1 / u4 from uus;"},
+		{"select u2 / u1, u2 / u2, u2 / u3, u2 / u4 from uus;"},
+		{"select u3 / u1, u3 / u2, u3 / u3, u3 / u4 from uus;"},
+		{"select u4 / u1, u4 / u2, u4 / u3, u4 / u4 from uus;"},
+		// mod operator
+		{"select i1 % i1, i1 % i2, i1 % i3, i1 % i4 from iis;"},
+		{"select i2 % i1, i2 % i2, i2 % i3, i2 % i4 from iis;"},
+		{"select i3 % i1, i3 % i2, i3 % i3, i3 % i4 from iis;"},
+		{"select i4 % i1, i4 % i2, i4 % i3, i4 % i4 from iis;"},
+		{"select f1 % f2, f2 % f1 from ffs;"},
+		{"select u1 % u1, u1 % u2, u1 % u3, u1 % u4 from uus;"},
+		{"select u2 % u1, u2 % u2, u2 % u3, u2 % u4 from uus;"},
+		{"select u3 % u1, u3 % u2, u3 % u3, u3 % u4 from uus;"},
+		{"select u4 % u1, u4 % u2, u4 % u3, u4 % u4 from uus;"},
+		// like operator
+		{"select * from ccs where c1 like c2;"},
+		{"select * from ccs where c1 like '123';"},
+		{"select * from ccs where c2 like '234';"},
+		{"select * from ccs where c2 like c1;"},
+		{"select * from ccs where '123' like c1;"},
+		{"select * from ccs where '123' like c2;"},
+		{"select c1, c2 from ccs where 'abc' like 'bca';"},
+		// not operator
+		{"select not i1, not i2, not i3, not i4 from iis where not i1 and not i2 and not i3 and not i4;"},
+		{"select not f1, not f2 from ffs where not f1 or not f2;"},
+		{"select not u1, not u2, not u3, not u4 from uus where not u1 and not u2 or not u3 and not u4;"},
+		{"select not c1, not c2 from ccs where not c1 and not c2;"},
+		{"select not not not i1, not not i2 from iis;"},
+		{"select * from ccs where not not not c1 and not not c2;"},
+		{"select * from iis where not i1 = 1;"},
+		{"select * from iis where not not (i1 = 1);"},
+
+		{"drop database bos;"},
+	}
+
+	for i, cas := range noErrors {
+		sql := cas.sql
+
+		c := compile.New("bos", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			require.NoError(t, err, fmt.Sprintf("the error sql is %s", sql))
+			err = e.Run(1)
+			require.NoError(t, err, fmt.Sprintf("the error sql is %s", sql))
+		}
+	}
+}
+
+func TestSql(t *testing.T) {
+	sql := "SELECT uid, SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R GROUP BY uid ORDER BY uid;" +
+		"SELECT SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R;" +
+		"SELECT uid, SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R GROUP BY uid;" +
+		"SELECT uid FROM R ORDER BY uid;" +
+		"SELECT uid FROM R GROUP BY uid ORDER BY uid;"
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	c := compile.New("test", sql, "tom", e, proc)
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+	es, err := c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	println(">>>>>>>----------------------------------")
+
+	sql = "SELECT * FROM R; SELECT price FROM R; SELECT uid FROM R; SELECT orderId from R; SELECT uid, orderId from R;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	println(">>>>>>>----------------------------------")
+
+	sql = "select * from R join S on R.uid = S.uid ORDER BY R.uid;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	println(">>>>>>>----------------------------------")
+
+	sql = "SELECT DISTINCT price from R;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	println(">>>>>>>----------------------------------")
+
+	sql = "SELECT unknownCol, price from R where uid = 1;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NotNil(t, err)
+		}
+	}
+
+	sql = "SELECT orderId, price from R where uid = '1';"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+}
+
+func TestCreateTable(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+	{
+		sql := "CREATE TABLE foo (id BIGINT, c1 INT, c2 TINYINT, c3 VARCHAR(100), c4 CHAR, c5 FLOAT) DEFAULT CHARSET=utf8;"
+		c := compile.New("test", sql, "tom", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		for _, e := range es {
+			if err := e.Compile(nil, Print); err != nil {
+				require.NoError(t, err)
+			}
+			if err := e.Run(1); err != nil {
+				require.NoError(t, err)
+			}
+		}
+	}
+
+	{
+		sql := "CREATE TABLE foo (id BIGINT, c1 INT, c2 TINYINT, c3 VARCHAR(100), c4 CHAR, c5 FLOAT) DEFAULT CHARSET=utf8;"
+		c := compile.New("test", sql, "tom", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		for _, e := range es {
+			if err := e.Compile(nil, Print); err != nil {
+				require.NoError(t, err)
+			}
+			if err := e.Run(1); err != nil {
+				require.NotNil(t, err)
+			}
+		}
+
+	}
+}
+
+// TestOperators to test operators (binary operator and unary operator) for each type
+func TestOperators(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type testCase struct {
+		id            int
+		sql           string
+		expectedError error
+	}
+
+	testCases := []testCase{
+		{0, "create database testoperators;", nil},
+		{1, "create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);", nil},
+		{2, "create table ffs (f1 float, f2 double);", nil},
+		{3, "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);", nil},
+		{4, "insert into iis values (1, 11, 111, 1111);", nil},
+		{5, "insert into ffs values (22.2, 222.222);", nil},
+		{6, "insert into uus values (3, 33, 333, 3333);", nil},
+		// operator between same types.
+		// test int
+		{7, "select i1 + i1, i1 - i1, i1 / i1, i1 * i1, i2 + i2, i2 - i2, i2 / i2, i2 * i2 from iis;", nil},
+		{8, "select i3 + i3, i3 - i3, i3 / i3, i3 * i3, i4 + i4, i4 - i4, i4 / i4, i4 * i4 from iis;", nil},
+		{9, "select -i1, -i2, -i3, -i4 from iis;", nil},
+		{10, "select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;", nil},
+		{11, "select CAST(i1 AS FLOAT(1)) ci1f1, CAST(i1 AS DOUBLE) ci1f2, CAST(i1 AS CHAR(2)) ci1c2 from iis;", nil},
+		// test float
+		{12, "select f1 + f1, f1 - f1, f1 * f1, f1 / f1 from ffs;", nil},
+		{13, "select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;", nil},
+		{14, "select -f1, -f2 from ffs;", nil},
+		{15, "select * from ffs where f1 = f1 or f2 = f2;", nil},
+		{16, "select * from ffs where f1 > f1 and f2 <= f2;", nil},
+		// test uint
+		{17, "select u1 + u1, u1 - u1, u1 * u1, u1 % u1, u1 / u1 from uus;", nil},
+		{18, "select u2 + u2, u2 - u2, u2 * u2, u2 % u2, u2 / u2 from uus;", nil},
+		{19, "select u3 + u3, u3 - u3, u3 * u3, u3 % u3, u3 / u3 from uus;", nil},
+		{20, "select u4 - u4, u4 + u4, u4 / u4, u4 * u4, u4 % u4 from uus;", nil},
+		// test char, varchar // TODO: should add limit for char while cast ?
+		{21, "create table ccs (c1 char(10), c2 varchar(20));", nil},
+		{22, "select cast(c2 AS char) cc2c1 from ccs;", nil},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.sql
+		expected := tc.expectedError
+
+		c := compile.New("testoperators", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected.Error())
+				break
+			}
+			err = e.Run(1)
+			if expected == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected.Error())
+				break
+			}
+		}
+	}
 }

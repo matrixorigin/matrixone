@@ -23,14 +23,7 @@ import (
 )
 
 func (e *BinaryExtend) IsLogical() bool {
-	typ := overload.IsLogical(e.Op)
-	if typ == overload.MustLogical {
-		return true
-	} else if typ == overload.MayLogical {
-		return e.Left.IsLogical() && e.Right.IsLogical()
-	} else {
-		return false
-	}
+	return overload.IsLogical(e.Op)
 }
 
 func (_ *BinaryExtend) IsConstant() bool {

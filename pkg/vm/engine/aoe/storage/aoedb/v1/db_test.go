@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -46,6 +44,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -214,7 +215,7 @@ func TestAppend(t *testing.T) {
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, int(rows), vector.Length(ck.Vecs[0]))
+	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	invalidName := "xxx"
 	appendCtx := CreateAppendCtx(database, gen, invalidName, ck)
 	err = inst.Append(appendCtx)
@@ -574,9 +575,9 @@ func TestMultiTables(t *testing.T) {
 					rel, err := inst.Relation(database.Name, tname)
 					assert.Nil(t, err)
 					for _, segId := range rel.SegmentIds().Ids {
-						seg := rel.Segment(segId)
+						seg := rel.Segment(segId, nil)
 						for _, id := range seg.Blocks() {
-							blk := seg.Block(id)
+							blk := seg.Block(id, nil)
 							cds := make([]*bytes.Buffer, len(attrs))
 							dds := make([]*bytes.Buffer, len(attrs))
 							for i := range cds {
@@ -593,8 +594,8 @@ func TestMultiTables(t *testing.T) {
 							//}
 							assert.Nil(t, err)
 							for attri, attr := range attrs {
-								v := batch.GetVector(bat, attr)
-								if attri == 0 && vector.Length(v) > 5000 {
+								v := bat.GetVector(attr)
+								if attri == 0 && v.Length() > 5000 {
 									// edata := baseCk.Vecs[attri].Col.([]int32)
 
 									// odata := v.Col.([]int32)
@@ -608,8 +609,8 @@ func TestMultiTables(t *testing.T) {
 									// t.Logf("data[5000]=%d", data[5000])
 									// t.Logf("data[5001]=%d", data[5001])
 								}
-								assert.True(t, vector.Length(v) <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
-								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, vector.Length(v))
+								assert.True(t, v.Length() <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
+								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, v.Length())
 							}
 						}
 					}
@@ -628,9 +629,9 @@ func TestMultiTables(t *testing.T) {
 			assert.Nil(t, err)
 			sids := rel.SegmentIds().Ids
 			segId := sids[len(sids)-1]
-			seg := rel.Segment(segId)
+			seg := rel.Segment(segId, nil)
 			blks := seg.Blocks()
-			blk := seg.Block(blks[len(blks)-1])
+			blk := seg.Block(blks[len(blks)-1], nil)
 			cds := make([]*bytes.Buffer, len(attrs))
 			dds := make([]*bytes.Buffer, len(attrs))
 			for i := range cds {
@@ -647,10 +648,10 @@ func TestMultiTables(t *testing.T) {
 			//}
 			assert.Nil(t, err)
 			for _, attr := range attrs {
-				v := batch.GetVector(bat, attr)
-				assert.Equal(t, int(rows), vector.Length(v))
-				// t.Log(vector.Length(v))
-				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, vector.Length(v))
+				v := bat.GetVector(attr)
+				assert.Equal(t, int(rows), v.Length())
+				// t.Log(v.Length())
+				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, v.Length())
 			}
 		}
 	}
@@ -1080,6 +1081,9 @@ func TestEngine(t *testing.T) {
 		attrs = append(attrs, colDef.Name)
 		cols = append(cols, i)
 	}
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
 
 	tableCnt := 20
 	var twg sync.WaitGroup
@@ -1114,9 +1118,9 @@ func TestEngine(t *testing.T) {
 			rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 			assert.Nil(t, err)
 			for _, segId := range rel.SegmentIds().Ids {
-				seg := rel.Segment(segId)
+				seg := rel.Segment(segId, proc)
 				for _, id := range seg.Blocks() {
-					blk := seg.Block(id)
+					blk := seg.Block(id, proc)
 					blk.Prefetch(attrs)
 					//assert.Nil(t, err)
 					//for _, attr := range attrs {

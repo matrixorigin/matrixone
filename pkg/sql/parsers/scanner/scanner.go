@@ -31,9 +31,8 @@ type Scanner struct {
 	posVarIndex         int
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
-
-	Pos int
-	buf string
+	Pos 				int
+	buf 				string
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -231,17 +230,12 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	for {
 		switch s.cur() {
 		case delim:
-			if s.peek(1) != delim {
-				s.skip(1)
-				return typ, s.buf[start : s.Pos-1]
-			}
-			fallthrough
-
+			s.skip(1)
+			return typ, s.buf[start : s.Pos-1]
 		case '\\':
 			var buffer strings.Builder
 			buffer.WriteString(s.buf[start:s.Pos])
 			return s.scanStringSlow(&buffer, delim, typ)
-
 		case eofChar:
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
@@ -250,17 +244,12 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	}
 }
 
-// scanString scans a string surrounded by the given `delim` and containing escape
-// sequencse. The given `buffer` contains the contents of the string that have
-// been scanned so far.
-func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
+func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
 	for {
 		ch := s.cur()
 		if ch == eofChar {
-			// Unterminated string.
 			return LEX_ERROR, buffer.String()
 		}
-
 		if ch != delim && ch != '\\' {
 			start := s.Pos
 			for ; s.Pos < len(s.buf); s.Pos++ {
@@ -269,7 +258,6 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 					break
 				}
 			}
-
 			buffer.WriteString(s.buf[start:s.Pos])
 			if s.Pos >= len(s.buf) {
 				s.skip(1)
@@ -277,7 +265,6 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 			}
 		}
 		s.skip(1)
-
 		if ch == '\\' {
 			if s.cur() == eofChar {
 				return LEX_ERROR, buffer.String()
@@ -287,14 +274,12 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 			} else {
 				ch = s.cur()
 			}
-		} else if ch == delim && s.cur() != delim {
+		} else if ch == delim {
 			break
 		}
-
 		buffer.WriteByte(byte(ch))
 		s.skip(1)
 	}
-
 	return typ, buffer.String()
 }
 

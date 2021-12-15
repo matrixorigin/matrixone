@@ -14,7 +14,9 @@
 
 package rewrite
 
-import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
 
 func Rewrite(stmt tree.Statement) tree.Statement {
 	switch stmt := stmt.(type) {

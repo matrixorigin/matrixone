@@ -17,15 +17,18 @@ package local
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type localRoDatabase struct {
-	dbimpl *aoedb.DB
+	database *metadata.Database
+	dbimpl   *aoedb.DB
 }
 
-func NewLocalRoDatabase(dbimpl *aoedb.DB) *localRoDatabase {
+func NewLocalRoDatabase(database *metadata.Database, dbimpl *aoedb.DB) *localRoDatabase {
 	return &localRoDatabase{
-		dbimpl: dbimpl,
+		database: database,
+		dbimpl:   dbimpl,
 	}
 }
 
@@ -33,17 +36,12 @@ func (d *localRoDatabase) Type() int {
 	panic("not supported")
 }
 
-func (d *localRoDatabase) Relations() (names []string){
-	dbs := d.dbimpl.DatabaseNames()
-	for _, db := range dbs {
-		tbNames := d.dbimpl.TableNames(db)
-		names = append(names, tbNames...)
-	}
-	return names
+func (d *localRoDatabase) Relations() []string {
+	return d.database.SimpleGetTableNames()
 }
 
 func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
-	impl, err := d.dbimpl.Relation(aoedb.IdToNameFactory.Encode(1), name)
+	impl, err := d.dbimpl.Relation(d.database.Name, name)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +52,6 @@ func (d *localRoDatabase) Delete(uint64, string) error {
 	panic("not supported")
 }
 
-func (d *localRoDatabase) Create(uint64, string, []engine.TableDef) error {
+func (d *localRoDatabase) Create(uint64, string, []engine.TableDef, *engine.PartitionBy, *engine.DistributionBy, string) error {
 	panic("not supported")
 }

@@ -16,7 +16,6 @@ package aoedb
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -140,12 +139,12 @@ func TestSplit2(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
+	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 5. Flush
@@ -285,12 +284,12 @@ func TestSplit3(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
+	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 6. Flush
@@ -432,12 +431,12 @@ func TestSplit4(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
+	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
+	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 6. Flush

@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
@@ -32,35 +32,7 @@ type SegmentSparseFilter struct {
 	segment *Segment
 }
 
-/*func (s2 SegmentSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Ne(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Lt(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Le(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Gt(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Ge(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-*/
-func NewSegmentSparseFilter(s *Segment) aoe.SparseFilter {
+func NewSegmentSparseFilter(s *Segment) engine.SparseFilter {
 	return &SegmentSparseFilter{segment: s}
 }
 

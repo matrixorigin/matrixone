@@ -23,17 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/or"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
 func init() {
 	BinOps[Or] = []*BinOp{
-		{
+		&BinOp{
 			LeftType:   types.T_sel,
 			RightType:  types.T_sel,
 			ReturnType: types.T_sel,
 			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
 				lvs, rvs := lv.Col.([]int64), rv.Col.([]int64)
-				vec, err := process.Get(proc, int64(len(lvs)+len(rvs))*8, lv.Typ)
+				vec, err := register.Get(proc, int64(len(lvs)+len(rvs))*8, lv.Typ)
 				if err != nil {
 					return nil, err
 				}
@@ -41,10 +42,10 @@ func init() {
 				rs = rs[:or.SelOr(lvs, rvs, rs)]
 				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 				if lv.Ref == 0 {
-					process.Put(proc, lv)
+					register.Put(proc, lv)
 				}
 				if rv.Ref == 0 {
-					process.Put(proc, rv)
+					register.Put(proc, rv)
 				}
 				vec.Col = rs
 				return vec, nil

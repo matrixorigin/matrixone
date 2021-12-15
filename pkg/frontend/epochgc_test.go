@@ -37,6 +37,7 @@ import (
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
+	// cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -46,6 +47,7 @@ var preAllocShardNum = uint64(20)
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
+	// cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()

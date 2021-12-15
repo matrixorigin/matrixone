@@ -16,10 +16,10 @@ package varchar
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"log"
 	"math/rand"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"testing"
 	"time"
 )
@@ -50,7 +50,7 @@ func generate() *vector.Vector {
 		}
 	}
     vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
-	if err := vector.Append(vec, vs); err != nil {
+	if err := vec.Append(vs); err != nil {
 		log.Fatal(err)
 	}
 	return vec

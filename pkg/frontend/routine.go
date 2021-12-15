@@ -124,10 +124,6 @@ func (routine *Routine) Quit() {
 	if routine.executor != nil {
 		routine.executor.Close()
 	}
-
-	if routine.protocol != nil {
-		routine.protocol.Quit()
-	}
 }
 
 // Peer gets the address [Host:Port] of the client

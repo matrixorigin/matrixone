@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// Extend SQL expression: unary operators, binary operators, attributes, constants, parentheses, etc.
 type Extend interface {
 	Eq(Extend) bool
 	String() string
@@ -48,14 +49,6 @@ type MultiExtend struct {
 
 type ParenExtend struct {
 	E Extend
-}
-
-type FuncExtend struct {
-	Name string
-	Args []Extend
-}
-
-type StarExtend struct {
 }
 
 type ValueExtend struct {

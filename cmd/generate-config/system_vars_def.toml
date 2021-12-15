@@ -182,8 +182,8 @@ name = "countOfRowsPerSendingToClient"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "range"
-values = ["1000","1","10000"]
+domain-type = "set"
+values = ["10"]
 comment = "send the count of rows to the client"
 update-mode = "dynamic"
 
@@ -338,26 +338,6 @@ comment = "default is error. The log level for cube."
 update-mode = "dynamic"
 
 [[parameter]]
-name = "enableProfileGetDataFromPipeline"
-scope = ["global"]
-access = ["file"]
-type = "bool"
-domain-type = "set"
-values = []
-comment = "defult is false. true for profiling the getDataFromPipeline"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "maxBytesInOutbufToFlush"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["1024","32","3096"]
-comment = "KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed."
-update-mode = "dynamic"
-
-[[parameter]]
 name = "cubeMaxEntriesBytes"
 scope = ["global"]
 access = ["file"]
@@ -384,8 +364,8 @@ max-backups = 0 # maximum numbers of old log files to retain.
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
 # In a distributed setting, the shard-groups should set to 2.
-addr-raft = "localhost:10000"
-addr-client = "localhost:20000"
+addr-raft = "localhost:20001"
+addr-client = "localhost:20002"
 dir-data = "./cube0/node"
 dir-deploy = ""
 version = ""
@@ -438,7 +418,7 @@ raft-event-worker = 32
 # In a distributed setting, there are three nodes act as prophet, each of which should have different names.
 name = "node0"
 data-dir = ""
-rpc-addr = "localhost:30000"
+rpc-addr = "localhost:10001"
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 rpc-timeout = "10s"
 # In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
@@ -454,9 +434,9 @@ lease = 0
 # For the other two nodes in the prophet group, the join value should set to the genesis node's peer-urls.
 join = ""
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-client-urls = "http://localhost:40000"
+client-urls = "http://localhost:2379"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-peer-urls = "http://localhost:50000"
+peer-urls = "http://localhost:2380"
 advertise-client-urls = ""
 advertise-peer-urls = ""
 initial-cluster = ""
@@ -513,7 +493,7 @@ instance = ""
 
 # Storage Configs
 [meta.conf]
-block-max-rows = 160000
+block-max-rows = 40000
 segment-max-blocks = 40
 
 [scheduler-cfg]

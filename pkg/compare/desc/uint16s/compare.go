@@ -49,10 +49,10 @@ func (c *compare) Compare(veci, vecj int, vi, vj int64) int {
 }
 
 func (c *compare) Copy(vecSrc, vecDst int, src, dst int64, _ *process.Process) error {
-	if nulls.Any(c.ns[vecSrc]) && nulls.Contains(c.ns[vecSrc], (uint64(src))) {
-		nulls.Add(c.ns[vecDst], (uint64(dst)))
+	if c.ns[vecSrc].Any() && c.ns[vecSrc].Contains(uint64(src)) {
+		c.ns[vecDst].Add(uint64(dst))
 	} else {
-		nulls.Del(c.ns[vecDst], (uint64(dst)))
+		c.ns[vecDst].Del(uint64(dst))
 		c.xs[vecDst][dst] = c.xs[vecSrc][src]
 	}
 	return nil

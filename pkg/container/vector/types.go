@@ -53,7 +53,6 @@ type Vector interface {
 type Vector struct {
 	Or   bool   // true: origin
 	Ref  uint64 // reference count
-	Link uint64 // link count
 	Data []byte // raw data
 	Typ  types.Type
 	Col  interface{}  // column data, encoded Data
