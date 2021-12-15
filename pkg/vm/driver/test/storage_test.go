@@ -403,8 +403,8 @@ func TestSplit(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
-				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(2)
-				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(2)
+				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(5000)
+				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(5000)
 				cfg.Replication.ShardSplitCheckDuration.Duration = time.Second
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
@@ -425,7 +425,7 @@ func TestSplit(t *testing.T) {
 	require.NoError(t, err)
 	sids, err := catalog.GetShardIDsByTid(tid)
 	logutil.Infof("sids is %v",sids)
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		batch := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
@@ -442,12 +442,13 @@ func TestSplit(t *testing.T) {
 			sz := db.GetSize()
 			stdLog.Printf("cp:%v,sz:%v", cp, sz)
 		}
+		time.Sleep(1*time.Second)
 		// storage.Sync([]uint64{sids[0]})
 		// require.Nil(t, err)
 		if checkSplit(c.AOEStorages[0], sids[0]) {
 			break
 		}
-		if i == 99 {
+		if i == 9 {
 			t.Fatalf("failed to split")
 		}
 	}

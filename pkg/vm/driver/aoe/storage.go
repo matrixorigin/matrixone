@@ -366,7 +366,8 @@ type splitCtx struct {
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
-	logutil.Infof("drivr call check, size is %v", size)
+	db,err:=s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(shard.ID))
+	logutil.Infof("drivr call check, size is %v, db size is %v", size, db.GetSize())
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,
