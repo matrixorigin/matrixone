@@ -17,41 +17,40 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
-	Merge = iota
-	Normal
+	Normal = iota
+	Merge
 	Remote
-	Parallel
 	Insert
-	CreateDatabase
-	CreateTable
-	CreateIndex
-	DropDatabase
+	Explain
 	DropTable
-	DropIndex
-	ShowDatabases
+	DropDatabase
+	CreateTable
+	CreateDatabase
 	ShowTables
+	ShowDatabases
 	ShowColumns
-	ShowCreateTable
+	CreateIndex
+	DropIndex
 )
-
-var Address string
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
-	IsMerge      bool
-	SchemaName   string
 	RelationName string
-	RefCounts    []uint64
-	Attributes   []string
-	R            engine.Reader
+	DBName       string
+	// RefCount records the reference of the columns in current relation.
+	RefCount map[string]uint64
+	// Segments contains the segment list of input data.
+	Segments []*relation.Segment
 }
 
 // Scope is the output of the compile process.
@@ -62,14 +61,14 @@ type Scope struct {
 	// 1 -  execution unit for processing intermediate results.
 	// 2 -  execution unit that requires remote call.
 	Magic int
-
-	Plan plan.Plan
+	// Operator Algebra operator.
+	Operator op.OP
 	// DataSource stores information about data source.
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
 	// NodeInfo contains the information about the remote node.
-	NodeInfo engine.Node
+	NodeInfo metadata.Node
 	// Instructions contains command list of this scope.
 	Instructions vm.Instructions
 	// Proc contains the execution context.
@@ -87,7 +86,7 @@ type Exec struct {
 	err error
 	//resultCols stores the column information of result.
 	resultCols []*Col
-	scope      *Scope
+	scopes     []*Scope
 	c          *compile
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64

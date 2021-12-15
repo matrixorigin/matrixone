@@ -14,6 +14,8 @@
 
 package hashtable
 
+import "unsafe"
+
 const (
 	kInitialBucketCntBits = 10
 	kInitialBucketCnt     = 1 << kInitialBucketCntBits
@@ -25,3 +27,15 @@ const (
 	kTwoLevelBucketNum  = 1 << kTwoLevelBucketBits
 	kMaxTwoLevelBucket  = kTwoLevelBucketNum - 1
 )
+
+type Aggregator interface {
+	StateSize() uint8
+	ResultSize() uint8
+	NeedsInit() bool
+
+	Init(state unsafe.Pointer)
+	AddBatch(states []unsafe.Pointer, values unsafe.Pointer)
+	MergeBatch(lstates, rstates []unsafe.Pointer)
+
+	Finalize(states, results []unsafe.Pointer)
+}

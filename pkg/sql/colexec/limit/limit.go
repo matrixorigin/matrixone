@@ -32,23 +32,31 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 // returning only the first n tuples from its input
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if proc.Reg.InputBatch == nil {
+		return false, nil
+	}
+	bat := proc.Reg.InputBatch.(*batch.Batch)
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	n := arg.(*Argument)
 	if n.Seen >= n.Limit {
 		proc.Reg.InputBatch = nil
-		batch.Clean(bat, proc.Mp)
+		bat.Clean(proc)
 		return true, nil
 	}
-	length := len(bat.Zs)
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
+	}
+	length := bat.Length()
 	newSeen := n.Seen + uint64(length)
 	if newSeen >= n.Limit { // limit - seen
-		batch.SetLength(bat, int(n.Limit-n.Seen))
+		bat.SetLength(int(n.Limit - n.Seen))
+		proc.Reg.InputBatch = bat
 		n.Seen = newSeen
 		return true, nil
 	}
 	n.Seen = newSeen
+	proc.Reg.InputBatch = bat
 	return false, nil
 }

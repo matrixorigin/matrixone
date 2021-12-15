@@ -80,7 +80,7 @@ func (e *flushIndexEvent) Execute() error {
 			if err != nil {
 				panic(err)
 			}
-			if vector.Length(&vec.Vector) == 0 {
+			if vec.Vector.Length() == 0 {
 				panic("logic error")
 			}
 			vecs = append(vecs, &vec.Vector)

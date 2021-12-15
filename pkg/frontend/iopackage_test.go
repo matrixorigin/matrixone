@@ -249,7 +249,8 @@ func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware
 	echoServer, err := goetty.NewTCPApplication("127.0.0.1:6001", handler,
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(encoder, decoder),
-			goetty.WithLogger(logutil.GetGlobalLogger())),
+			goetty.WithLogger(logutil.GetGlobalLogger()),
+			goetty.WithEnableAsyncWrite(64)),
 		goetty.WithAppSessionAware(aware))
 	if err != nil {
 		panic(err)

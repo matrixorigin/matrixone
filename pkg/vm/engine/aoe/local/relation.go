@@ -15,37 +15,17 @@
 package local
 
 import (
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 type localRoRelation struct {
 	impl *aoedb.Relation
-}
-
-func (r *localRoRelation) Nodes() engine.Nodes {
-	panic("implement me")
-}
-
-func (r *localRoRelation) TableDefs() []engine.TableDef {
-	panic("implement me")
-}
-
-func (r *localRoRelation) AddTableDef(u uint64, def engine.TableDef) error {
-	panic("implement me")
-}
-
-func (r *localRoRelation) DelTableDef(u uint64, def engine.TableDef) error {
-	panic("implement me")
-}
-
-func (r *localRoRelation) NewReader(i int) []engine.Reader {
-	panic("implement me")
 }
 
 func NewLocalRoRelation(impl *aoedb.Relation) *localRoRelation {
@@ -54,7 +34,7 @@ func NewLocalRoRelation(impl *aoedb.Relation) *localRoRelation {
 	}
 }
 
-func (r *localRoRelation) Segments() []aoe.Segment {
+func (r *localRoRelation) Segments() []engine.SegmentInfo {
 	panic("not supported")
 }
 
@@ -78,15 +58,15 @@ func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }
 
-func (r *localRoRelation) Segment(segInfo aoe.Segment, proc *process.Process) aoe.Segment {
-	id, err := strconv.ParseUint(segInfo.ID(), 10, 64)
+func (r *localRoRelation) Segment(segInfo engine.SegmentInfo, proc *process.Process) engine.Segment {
+	id, err := strconv.ParseUint(segInfo.Id, 10, 64)
 	if err != nil {
 		return nil
 	}
-	return r.impl.Segment(id)
+	return r.impl.Segment(id, proc)
 }
 
-func (r *localRoRelation) Attribute() []engine.Attribute {
+func (r *localRoRelation) Attribute() []metadata.Attribute {
 	return r.impl.Attribute()
 }
 
@@ -99,5 +79,12 @@ func (r *localRoRelation) AddAttribute(_ uint64, _ engine.TableDef) error {
 }
 
 func (r *localRoRelation) DelAttribute(_ uint64, _ engine.TableDef) error {
+	panic("not supported")
+}
+
+func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
+	panic("not supported")
+}
+func (r *localRoRelation) DropIndex(epoch uint64, name string) error {
 	panic("not supported")
 }

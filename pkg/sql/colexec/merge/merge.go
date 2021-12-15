@@ -16,35 +16,43 @@ package merge
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
-	buf.WriteString(" + ")
+	buf.WriteString("merge")
 }
 
 func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-func Call(proc *process.Process, arg interface{}) (bool, error) {
+func Call(proc *process.Process, _ interface{}) (bool, error) {
 	if len(proc.Reg.MergeReceivers) == 0 {
 		return true, nil
 	}
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
-		bat := <-reg.Ch
-		if bat == nil {
+		if reg.Ch == nil {
+			continue
+		}
+		v := <-reg.Ch
+		if v == nil {
+			reg.Ch = nil
+			reg.Wg.Done()
 			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 			i--
 			continue
 		}
-		if len(bat.Zs) == 0 {
-			i--
+		bat := v.(*batch.Batch)
+		if bat == nil || bat.Attrs == nil {
+			reg.Wg.Done()
 			continue
 		}
 		proc.Reg.InputBatch = bat
+		reg.Wg.Done()
 		return false, nil
 	}
-	return true, nil
+	return false, nil
 }

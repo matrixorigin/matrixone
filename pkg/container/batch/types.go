@@ -15,7 +15,6 @@
 package batch
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
@@ -35,10 +34,4 @@ type Batch struct {
 	Attrs []string
 	// Vecs col data
 	Vecs []*vector.Vector
-	// ring
-	Zs   []int64
-	As   []string // alias list
-	Refs []uint64 // reference count
-	Rs   []ring.Ring
-	Ht   interface{}
 }

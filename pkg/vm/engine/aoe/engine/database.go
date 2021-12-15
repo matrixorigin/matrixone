@@ -15,16 +15,16 @@
 package engine
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	log "github.com/sirupsen/logrus"
-	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"time"
 )
 
 //Type return the type of the database
@@ -43,12 +43,12 @@ func (db *database) Delete(epoch uint64, name string) error {
 }
 
 //Create creates the table
-func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
-	tbl, err := helper.Transfer(db.id, 0, 0, name, defs)
+	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
 	}
@@ -91,7 +91,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		pid:     db.id,
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
-		mp:      make(map[string]*adb.Relation),
+		mp:      make(map[string]*aoedb.Relation),
 	}
 	r.tablets = tablets
 	ldb := db.catalog.Driver.AOEStore()
@@ -103,20 +103,16 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
-			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(aoedb.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
-			r.nodes = append(r.nodes, engine.Node{
-				Id:   addr,
-				Addr: addr,
-			})
 			for _, id := range ids.Ids {
-				r.segments = append(r.segments, SegmentInfo{
+				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
 					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
 					TabletId: tbl.Name,
-					Node: engine.Node{
+					Node: metadata.Node{
 						Id:   addr,
 						Addr: addr,
 					},

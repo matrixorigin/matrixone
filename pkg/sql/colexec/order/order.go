@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/sort"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -39,35 +38,45 @@ func String(arg interface{}, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
-	n.ctr = new(Container)
+	ctr := &n.Ctr
 	{
-		n.ctr.ds = make([]bool, len(n.Fs))
-		n.ctr.attrs = make([]string, len(n.Fs))
+		ctr.ds = make([]bool, len(n.Fs))
+		ctr.attrs = make([]string, len(n.Fs))
 		for i, f := range n.Fs {
-			n.ctr.attrs[i] = f.Attr
-			n.ctr.ds[i] = f.Type == Descending
+			ctr.attrs[i] = f.Attr
+			ctr.ds[i] = f.Type == Descending
 		}
 	}
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
+	if proc.Reg.InputBatch == nil {
+		return false, nil
+	}
+	bat := proc.Reg.InputBatch.(*batch.Batch)
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	n := arg.(*Argument)
-	return n.ctr.process(bat, proc)
+	ctr := &n.Ctr
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
+	}
+	if err := ctr.processBatch(bat, proc); err != nil {
+		bat.Clean(proc)
+		return false, err
+	}
+	proc.Reg.InputBatch = bat
+	return false, nil
 }
 
-func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, error) {
-	ovec := batch.GetVector(bat, ctr.attrs[0])
-	n := len(bat.Zs)
-	data, err := mheap.Alloc(proc.Mp, int64(n*8))
+func (ctr *Container) processBatch(bat *batch.Batch, proc *process.Process) error {
+	ovec := bat.GetVector(ctr.attrs[0])
+	n := ovec.Length()
+	data, err := proc.Alloc(int64(n * 8))
 	if err != nil {
-		batch.Clean(bat, proc.Mp)
-		proc.Reg.InputBatch = &batch.Batch{}
-		return false, err
+		return err
 	}
 	sels := encoding.DecodeInt64Slice(data)
 	{
@@ -79,15 +88,14 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	if len(ctr.attrs) == 1 {
 		bat.Sels = sels
 		bat.SelsData = data
-		batch.Shuffle(bat, proc.Mp)
-		return false, nil
+		return nil
 	}
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(sels))
 	for i, j := 1, len(ctr.attrs); i < j; i++ {
 		desc := ctr.ds[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := batch.GetVector(bat, ctr.attrs[i])
+		vec := bat.GetVector(ctr.attrs[i])
 		for i, j := 0, len(ps); i < j; i++ {
 			if i == j-1 {
 				sort.Sort(desc, sels[ps[i]:], vec)
@@ -99,6 +107,5 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	}
 	bat.Sels = sels
 	bat.SelsData = data
-	batch.Shuffle(bat, proc.Mp)
-	return false, nil
+	return nil
 }

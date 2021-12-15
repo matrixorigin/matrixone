@@ -24,14 +24,17 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		if i > 0 {
 			buf.WriteString(" -> ")
 		}
-		stringFunc[in.Op](in.Arg, buf)
+		formatFunc[in.Code](in.Arg, buf)
 	}
 }
 
-// Prepare
+func Clean(_ Instructions, _ *process.Process) {
+}
+
+// Prepare initialization
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
-		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
+		if err := prepareFunc[in.Code](proc, in.Arg); err != nil {
 			return err
 		}
 	}
@@ -44,12 +47,12 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 	var err error
 
 	for _, in := range ins {
-		if ok, err = execFunc[in.Op](proc, in.Arg); err != nil {
+		if ok, err = execFunc[in.Code](proc, in.Arg); err != nil {
 			return ok || end, err
 		}
 		if ok {
 			end = true
 		}
 	}
-	return end, err
+	return end, nil
 }

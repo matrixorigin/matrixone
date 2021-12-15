@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"github.com/fagongzi/goetty/buf"
 	"github.com/fagongzi/goetty/codec"
 )
@@ -80,14 +79,9 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 }
 
 func (c *sqlCodec) Encode(data interface{}, out *buf.ByteBuf) error {
-	x := data.([]byte)
-	xlen := len(x)
-	tlen, err := out.Write(data.([]byte))
+	_, err := out.Write(data.([]byte))
 	if err != nil {
 		return err
-	}
-	if tlen != xlen {
-		return fmt.Errorf("len of written != len of the data")
 	}
 	return nil
 }

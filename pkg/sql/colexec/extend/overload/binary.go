@@ -17,10 +17,10 @@ package overload
 import (
 	"errors"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const (
@@ -49,14 +49,14 @@ var (
 
 	// variants only used to init and get items from binOpsReturnType and binOpsTypeCastRules
 	// binOperators does not include comparison operators because their returns are always T_sel.
-	binOperators  = []int{Or, And, Plus, Minus, Mult, Div, IntegerDiv, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
+	binOperators = []int{Or, And, Plus, Minus, Mult, Div, IntegerDiv, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
 	firstBinaryOp = binOperators[0]
 )
 
 type castResult struct {
-	has           bool
-	leftCast      types.Type
-	rightCast     types.Type
+	has      bool
+	leftCast types.Type
+	rightCast types.Type
 	newReturnType types.T
 }
 
@@ -212,7 +212,7 @@ func initCastRulesForBinaryOps() {
 	}
 	// Div cast rule
 	{
-		index := Div - firstBinaryOp
+		index := Div-firstBinaryOp
 
 		// cast to float64 / float64 = float64
 		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_float64
@@ -310,7 +310,7 @@ func initCastRulesForBinaryOps() {
 	}
 	// IntegerDiv cast rule
 	{
-		index := IntegerDiv - firstBinaryOp
+		index := IntegerDiv-firstBinaryOp
 
 		// cast to float64 / float64 = int64
 		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_int64
@@ -509,6 +509,27 @@ func initCastRulesForBinaryOps() {
 			newReturnType: types.T(nret),
 		}
 		binOpsReturnType[index][types.T_float64][types.T_float32] = types.T(nret)
+	}
+	// LIKE cast rule
+	{
+		index := Like - firstBinaryOp
+		// cast to varchar like varchar
+		nl, nr, nret := types.Type{Oid: types.T_varchar, Size: 24}, types.Type{Oid: types.T_varchar, Size: 24}, types.T_sel
+		// like between char and varchar
+		binOpsTypeCastRules[index][types.T_char][types.T_varchar] = castResult{
+			has:           true,
+			leftCast:      nl,
+			rightCast:     nr,
+			newReturnType: types.T(nret),
+		}
+		binOpsReturnType[index][types.T_char][types.T_varchar] = types.T(nret)
+		binOpsTypeCastRules[index][types.T_varchar][types.T_char] = castResult{
+			has:           true,
+			leftCast:      nr,
+			rightCast:     nl,
+			newReturnType: types.T(nret),
+		}
+		binOpsReturnType[index][types.T_varchar][types.T_char] = types.T(nret)
 	}
 
 	// EQ / NE / GE / GT / LE / LT

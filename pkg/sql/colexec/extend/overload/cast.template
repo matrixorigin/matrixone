@@ -17,12 +17,12 @@
 package overload
 
 import (
-    "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/typecast"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
 func init() {
@@ -46,23 +46,23 @@ func init() {
             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
                 defer func() {
                     if lv.Ref == 0 {
-                        process.Put(proc, lv)
+                        register.Put(proc, lv)
                     }
                 }()
                 rtl := {.RETURN_TYPE_LEN}
                 lvs := lv.Col.([]L_GO_TYPE)
-                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(lvs)]
                 if _, err := typecast.{.LTYP}To{.RETTYP}(lvs, rs); err != nil {
-                    process.Put(proc, vec)
+                    register.Put(proc, vec)
                     return nil, err
                 }
-                nulls.Set(vec.Nsp, lv.Nsp)
-                vector.SetCol(vec, rs)
+                vec.Nsp.Set(lv.Nsp)
+                vec.SetCol(rs)
                 return vec, nil
             },
         },
@@ -77,23 +77,23 @@ func init() {
             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
                 defer func() {
                     if lv.Ref == 0 {
-                        process.Put(proc, lv)
+                        register.Put(proc, lv)
                     }
                 }()
                 rtl := {.RETURN_TYPE_LEN}
                 col := lv.Col.(*types.Bytes)
-                vec, err := process.Get(proc, int64(rtl) * int64(len(col.Offsets)), rv.Typ)
+                vec, err := register.Get(proc, int64(rtl) * int64(len(col.Offsets)), rv.Typ)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(col.Offsets)]
                 if _, err := typecast.BytesTo{.RETTYP}(col, rs); err != nil {
-                    process.Put(proc, vec)
+                    register.Put(proc, vec)
                     return nil, err
                 }
-                nulls.Set(vec.Nsp, lv.Nsp)
-                vector.SetCol(vec, rs)
+                vec.Nsp.Set(lv.Nsp)
+                vec.SetCol(rs)
                 return vec, nil
             },
         },
@@ -110,7 +110,7 @@ func init() {
 
                 defer func() {
                     if lv.Ref == 0 {
-                        process.Put(proc, lv)
+                        register.Put(proc, lv)
                     }
                 }()
                 vs := lv.Col.([]L_GO_TYPE)
@@ -122,13 +122,13 @@ func init() {
                 if col, err = typecast.{.LTYP}ToBytes(vs, col); err != nil {
                     return nil, err
                 }
-                if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+                if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
                     return nil, err
                 }
                 vec := vector.New(rv.Typ)
                 vec.Data = col.Data
-                nulls.Set(vec.Nsp, lv.Nsp)
-                vector.SetCol(vec, col)
+                vec.Nsp.Set(lv.Nsp)
+                vec.SetCol(col)
                 return vec, nil
             },
         },

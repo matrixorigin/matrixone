@@ -37,23 +37,23 @@ const (
 	m5 = 0x1d8e4e27c47d124f
 )
 
-func Crc32BytesHash(data unsafe.Pointer, length int) uint64
-func Crc32Int64Hash(data uint64) uint64
-func Crc32Int64SliceHash(data *uint64, length int) uint64
+func crc32BytesHash(data unsafe.Pointer, length int) uint64
+func crc32Int64Hash(data uint64) uint64
+func crc32Int64SliceHash(data *uint64, length int) uint64
 
-func Crc32Int64BatchHash(data unsafe.Pointer, hashes *uint64, length int)
-func Crc32Int64CellBatchHash(data unsafe.Pointer, hashes *uint64, length int)
+func crc32Int64BatchHash(data unsafe.Pointer, hashes *uint64, length int)
+func crc32Int64CellBatchHash(data unsafe.Pointer, hashes *uint64, length int)
 
-func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
+func aesBytesHash(data unsafe.Pointer, length int) [2]uint64
 
-func Crc32Int192Hash(data *[3]uint64) uint64
-func Crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
+func crc32Int192Hash(data *[3]uint64) uint64
+func crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
 
-func Crc32Int256Hash(data *[4]uint64) uint64
-func Crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
+func crc32Int256Hash(data *[4]uint64) uint64
+func crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
 
-func Crc32Int320Hash(data *[5]uint64) uint64
-func Crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
+func crc32Int320Hash(data *[5]uint64) uint64
+func crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
 
 func wyhash(data unsafe.Pointer, seed, s uint64) uint64 {
 	var a, b uint64

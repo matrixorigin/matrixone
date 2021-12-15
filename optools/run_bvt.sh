@@ -54,7 +54,7 @@ ONE_REPO="$G_STAGE/matrixone"
 ONE_COMMIT_ID=""
 
 URL_TESTER_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/mysql-tester.git"
-URL_ONE_REPO="https://${REPO_TOKEN}@matrixone.git"
+URL_ONE_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/matrixone.git"
 
 BIN_NAME="mo-server"
 CONFIG_NAME="system_vars_config.toml"
@@ -150,7 +150,7 @@ function make_one(){
 		ping -c 5 github.com
 		cd $G_STAGE && git clone $URL_ONE_REPO
 		cd $ONE_REPO && ONE_COMMIT_ID=$(git rev-parse HEAD)
-		logger "INF" "github.com/matrixorigin/matrixone commit ID: $ONE_COMMIT_ID"
+		logger "INF" "matrixone commit ID: $ONE_COMMIT_ID"
 		patch_one
 		logger "INF" "Build matrixone"
 		make clean && make config && make build

@@ -74,7 +74,7 @@ func TestBlock(t *testing.T) {
 		segs = append(segs, seg)
 	}
 
-	blk1 := segs[0].Block(string(encoding.EncodeUint64(uint64(1))))
+	blk1 := segs[0].Block(string(encoding.EncodeUint64(uint64(1))), nil)
 	assert.NotNil(t, blk1)
 	assert.Equal(t, string(encoding.EncodeUint64(uint64(1))), blk1.ID())
 

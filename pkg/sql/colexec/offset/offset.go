@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -33,35 +32,43 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
-		return false, nil
-	}
 	n := arg.(*Argument)
-	if n.Seen > n.Offset {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	length := len(bat.Zs)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
+	if bat == nil || bat.Attrs == nil {
+		return false, nil
+	}
+	if n.Seen > n.Offset {
+		proc.Reg.InputBatch = bat
+		return false, nil
+	}
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
+	}
+	length := bat.Length()
 	if n.Seen+uint64(length) > n.Offset {
-		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc.Mp)
+		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {
-			batch.Clean(bat, proc.Mp)
+			bat.Clean(proc)
 			return false, err
 		}
 		n.Seen += uint64(length)
-		batch.Shrink(bat, sels)
-		mheap.Free(proc.Mp, data)
+		bat.Sels = sels
+		bat.SelsData = data
 		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	n.Seen += uint64(length)
-	batch.Clean(bat, proc.Mp)
-	proc.Reg.InputBatch = &batch.Batch{}
+	bat.Clean(proc)
+	bat.Attrs = nil
+	proc.Reg.InputBatch = bat
 	return false, nil
 }
 
-func newSels(start, count int64, mp *mheap.Mheap) ([]byte, []int64, error) {
-	data, err := mheap.Alloc(mp, count*8)
+func newSels(start, count int64, proc *process.Process) ([]byte, []int64, error) {
+	data, err := proc.Alloc(count * 8)
 	if err != nil {
 		return nil, nil, err
 	}

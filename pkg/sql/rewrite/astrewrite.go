@@ -15,32 +15,30 @@
 package rewrite
 
 import (
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
 )
 
-var logicalBinaryOps = map[tree.BinaryOp]struct{}{
-	tree.BIT_OR:  {},
+var logicalBinaryOps = map[tree.BinaryOp] struct{} {
+	tree.BIT_OR: {},
 	tree.BIT_AND: {},
 	tree.BIT_XOR: {},
 }
 
-var logicalComparisonOps = map[tree.ComparisonOp]struct{}{
-	tree.EQUAL:            {},
-	tree.LESS_THAN:        {},
-	tree.LESS_THAN_EQUAL:  {},
-	tree.GREAT_THAN:       {},
+var logicalComparisonOps = map[tree.ComparisonOp] struct{} {
+	tree.EQUAL: {},
+	tree.LESS_THAN: {},
+	tree.LESS_THAN_EQUAL: {},
+	tree.GREAT_THAN: {},
 	tree.GREAT_THAN_EQUAL: {},
-	tree.NOT_EQUAL:        {},
-	tree.IN:               {},
-	tree.NOT_IN:           {},
-	tree.LIKE:             {},
-	tree.NOT_LIKE:         {},
+	tree.NOT_EQUAL: {},
+	tree.IN: {},
+	tree.NOT_IN: {},
+	tree.LIKE: {},
+	tree.NOT_LIKE: {},
 }
 
 // AstRewrite do sql rewrite before plan build.
-// todo: function just for some case we can not deal in compute-engine now. Such as ` filter condition is not a logical expression`.
-// 		we should delete these codes if we can deal it in compute-engine next time.
 // deal with such case:
 // case 1:  rewrite normal expression in where clause to be logical expression.
 // (1) rewrite `select ... where expr` to `select ... where expr != 0`
@@ -88,14 +86,11 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 		return tree.NewParenExpr(rewriteFilterCondition(t.Expr))
 	// rewrite to = 0
 	case *tree.NotExpr:
-		if binaryExpr, ok := t.Expr.(*tree.BinaryExpr); ok && isLogicalBinaryOp(binaryExpr.Op) {
+		if binaryExpr, ok := t.Expr.(*tree.BinaryExpr); ok && isLogicalBinaryOp(binaryExpr.Op){
 			return tree.NewNotExpr(rewriteFilterCondition(binaryExpr))
 		}
-		if comparisonExpr, ok := t.Expr.(*tree.ComparisonExpr); ok && isLogicalComparisonOp(comparisonExpr.Op) {
+		if comparisonExpr, ok := t.Expr.(*tree.ComparisonExpr); ok && isLogicalComparisonOp(comparisonExpr.Op){
 			return tree.NewNotExpr(rewriteFilterCondition(comparisonExpr))
-		}
-		if rangeExpr, ok := t.Expr.(*tree.RangeCond); ok {
-			return tree.NewNotExpr(rewriteFilterCondition(rangeExpr))
 		}
 		if parenExpr, ok := t.Expr.(*tree.ParenExpr); ok {
 			return tree.NewNotExpr(rewriteFilterCondition(parenExpr))

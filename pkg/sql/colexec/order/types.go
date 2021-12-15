@@ -14,7 +14,9 @@
 
 package order
 
-import "fmt"
+import (
+	"fmt"
+)
 
 // Direction for ordering results.
 type Direction int8
@@ -38,7 +40,7 @@ type Field struct {
 
 type Argument struct {
 	Fs  []Field
-	ctr *Container
+	Ctr Container
 }
 
 var directionName = [...]string{

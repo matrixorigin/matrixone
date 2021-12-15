@@ -14,122 +14,82 @@
 
 package protocol
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm"
-)
+import "github.com/matrixorigin/matrixone/pkg/vm"
 
-const (
+const ( // extend type
 	Attr = iota
 	Unary
-	Binary
 	Multi
 	Paren
-	Func
-	Star
 	Value
+	Binary
 )
 
-const (
-	DefaultRing = iota
-	AvgRing
-	CountRing
-	Int8Ring
-	Int32Ring
-	Int16Ring
-	Int64Ring
-	UInt8Ring
-	UInt16Ring
-	UInt32Ring
-	UInt64Ring
-	Float32Ring
-	Float64Ring
-	StrRing
+const ( // table define type
+	Index = iota
+	Attribute
 )
 
-// colexec
+const ( // partition type
+	List = iota
+	Range
+	ListWithSub
+	RangeWithSub
+)
 
 type Field struct {
-	Attr string
 	Type int8
-}
-
-type OffsetArgument struct {
-	Seen   uint64
-	Offset uint64
-}
-
-type LimitArgument struct {
-	Seen   uint64
-	Limit uint64
-}
-
-type OrderArgument struct {
-	Fs []Field
-}
-
-type OutputArgument struct {
-	Attrs []string
-}
-
-type ProjectionArgument struct {
-	Rs []uint64
-	As []string
-}
-
-type RestrictArgument struct {
-	Attrs []string
+	Attr string
 }
 
 type TopArgument struct {
+	Flg   bool
 	Limit int64
 	Fs    []Field
 }
 
-type MergeArgument struct {
+type Extend struct {
+	Op    int
+	Name  string
+	Alias string
 }
 
-type DedupArgument struct {
+type GroupArgument struct {
+	Gs    []string
+	Es    []Extend
+	Refer map[string]uint64
 }
 
-// viewexec
-
-type PlusArgument struct {
-	Typ int
+type JoinArgument struct {
+	R      string
+	S      string
+	Rattrs []string
+	Sattrs []string
 }
 
-type TimesArgument struct {
-	IsBare  bool
-	R	    string
-	Rvars   []string
-	Ss      []string
-	Svars   []string
-	VarsMap map[string]int
+type ProjectionArgument struct {
+	Attrs []string
+	Refer map[string]uint64
 }
 
-type UntransformArgument struct {
-	Type     int
-	FreeVars []string
+type Segment struct {
+	IsRemote bool
+	Version  uint64
+	Id       string
+	GroupId  string
+	TabletId string
 }
-
-// scope
 
 type Source struct {
-	IsMerge      bool
-	SchemaName   string
-	RelationName string
-	RefCounts    []uint64
-	Attributes   []string
-}
-
-type Node struct {
-	Id	  string
-	Addr  string
+	ID    string
+	DB    string
+	Segs  []Segment
+	Refer map[string]uint64
 }
 
 type Scope struct {
-	Magic 	  		int
-	DataSource      Source
-	PreScopes 		[]Scope
-	NodeInfo 		Node
-	Ins		  		vm.Instructions
+	Magic int
+	Data  Source
+	Ss    []Scope
+	Ins   vm.Instructions
 }

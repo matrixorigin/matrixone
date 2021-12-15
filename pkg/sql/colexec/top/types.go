@@ -44,7 +44,7 @@ type Field struct {
 type Argument struct {
 	Limit int64
 	Fs    []Field
-	ctr   *Container
+	Ctr   Container
 }
 
 var directionName = [...]string{

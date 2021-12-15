@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
@@ -33,7 +34,7 @@ var Mempool  *mempool.Mempool = nil
 var StorageEngine engine.Engine
 
 //Cluster Nodes
-var ClusterNodes engine.Nodes
+var ClusterNodes metadata.Nodes
 
 //cube catalog
 var ClusterCatalog *catalog.Catalog
@@ -87,13 +88,13 @@ type ParameterUnit struct {
 	StorageEngine engine.Engine
 
 	//Cluster Nodes
-	ClusterNodes engine.Nodes
+	ClusterNodes metadata.Nodes
 
 	//Cube Catalog
 	ClusterCatalog *catalog.Catalog
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes, catalogRef *catalog.Catalog) *ParameterUnit {
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes metadata.Nodes, catalogRef *catalog.Catalog) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:      hostMmu,

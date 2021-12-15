@@ -30,48 +30,57 @@ type Int64HashMap struct {
 	elemCnt       uint64
 	maxElemCnt    uint64
 	zeroCell      Int64HashMapCell
+	rawData       []byte
 	bucketData    []Int64HashMapCell
 }
 
 func (ht *Int64HashMap) Init() {
+	const cellSize = int(unsafe.Sizeof(Int64HashMapCell{}))
+
+	rawData := make([]byte, cellSize*kInitialBucketCnt)
+
 	ht.bucketCntBits = kInitialBucketCntBits
 	ht.bucketCnt = kInitialBucketCnt
 	ht.elemCnt = 0
 	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.bucketData = make([]Int64HashMapCell, kInitialBucketCnt)
+	ht.rawData = rawData
+	ht.bucketData = unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
 }
 
-func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) uint64 {
+func (ht *Int64HashMap) Insert(hash uint64, keyPtr unsafe.Pointer) (inserted bool, value uint64) {
 	key := *(*uint64)(keyPtr)
 	if key == 0 {
 		if ht.zeroCell.Mapped == 0 {
 			ht.elemCnt++
 			ht.zeroCell.Mapped = ht.elemCnt
 		}
-		return ht.zeroCell.Mapped
+		value = ht.zeroCell.Mapped
+		return
 	}
 
 	ht.resizeOnDemand(1)
 
 	if hash == 0 {
-		hash = Crc32Int64Hash(key)
+		hash = crc32Int64Hash(key)
 	}
 
-	empty, _, cell := ht.findBucket(hash, key)
-	if empty {
+	inserted, _, cell := ht.findBucket(hash, key)
+	if inserted {
 		ht.elemCnt++
 		cell.Key = key
 		cell.Mapped = ht.elemCnt
 	}
 
-	return cell.Mapped
+	value = cell.Mapped
+
+	return
 }
 
-func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
+func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, inserted []uint8, values []uint64) {
 	ht.resizeOnDemand(n)
 
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		crc32Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -80,43 +89,15 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 		if key == 0 {
 			if ht.zeroCell.Mapped == 0 {
 				ht.elemCnt++
+				inserted[i] = 1
 				ht.zeroCell.Mapped = ht.elemCnt
 			}
 			values[i] = ht.zeroCell.Mapped
 		} else {
-			empty, _, cell := ht.findBucket(hashes[i], key)
-			if empty {
+			isInserted, _, cell := ht.findBucket(hashes[i], key)
+			if isInserted {
 				ht.elemCnt++
-				cell.Key = key
-				cell.Mapped = ht.elemCnt
-			}
-			values[i] = cell.Mapped
-		}
-	}
-}
-
-func (ht *Int64HashMap) InsertBatchWithRing(n int, zs []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
-	ht.resizeOnDemand(n)
-
-	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
-	}
-
-	keys := unsafe.Slice((*uint64)(keysPtr), n)
-	for i, key := range keys {
-		if zs[i] == 0 {
-			continue
-		}
-		if key == 0 {
-			if ht.zeroCell.Mapped == 0 {
-				ht.elemCnt++
-				ht.zeroCell.Mapped = ht.elemCnt
-			}
-			values[i] = ht.zeroCell.Mapped
-		} else {
-			empty, _, cell := ht.findBucket(hashes[i], key)
-			if empty {
-				ht.elemCnt++
+				inserted[i] = 1
 				cell.Key = key
 				cell.Mapped = ht.elemCnt
 			}
@@ -132,7 +113,7 @@ func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) uint64 {
 	}
 
 	if hash == 0 {
-		hash = Crc32Int64Hash(key)
+		hash = crc32Int64Hash(key)
 	}
 
 	_, _, cell := ht.findBucket(hash, key)
@@ -141,7 +122,7 @@ func (ht *Int64HashMap) Find(hash uint64, keyPtr unsafe.Pointer) uint64 {
 
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		crc32Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -184,20 +165,26 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 		newMaxElemCnt = newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
+	const cellSize = int(unsafe.Sizeof(Int64HashMapCell{}))
+
 	oldBucketCnt := ht.bucketCnt
 	oldBucketData := ht.bucketData
+
+	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
+	newBucketData := unsafe.Slice((*Int64HashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
 
 	ht.bucketCntBits = newBucketCntBits
 	ht.bucketCnt = newBucketCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.bucketData = make([]Int64HashMapCell, newBucketCnt)
+	ht.rawData = newRawData
+	ht.bucketData = newBucketData
 
 	var hashes [256]uint64
 
 	var i uint64
 	for i = 0; i < oldBucketCnt; i += 256 {
 		cells := oldBucketData[i : i+256]
-		Crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
+		crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
 		for j := range cells {
 			cell := &cells[j]
 			if cell.Key != 0 {
