@@ -120,7 +120,7 @@ func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id common.ID, meta *base.
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
-	return nil
+	return newIndexFile(file, id, meta)
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {

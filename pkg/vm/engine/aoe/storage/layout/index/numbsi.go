@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -230,14 +231,18 @@ func (i *NumericBsiIndex) Marshal() ([]byte, error) {
 	return bw.Bytes(), nil
 }
 
-func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bsi.BitSlicedIndex, error) {
+func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16, startPos int) (bsi.BitSlicedIndex, error) {
 	switch t.Oid {
 	case types.T_int8:
 		bsiIdx := NewNumericBsiIndex(t, 8, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int8)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -247,10 +252,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_int16:
 		bsiIdx := NewNumericBsiIndex(t, 16, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int16)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -260,10 +269,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_int32:
 		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int32)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -273,10 +286,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_int64:
 		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int64)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -286,10 +303,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_uint8:
 		bsiIdx := NewNumericBsiIndex(t, 8, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint8)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -299,10 +320,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_uint16:
 		bsiIdx := NewNumericBsiIndex(t, 16, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint16)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -312,10 +337,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_uint32:
 		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint32)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -325,10 +354,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_uint64:
 		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint64)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -338,10 +371,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_float32:
 		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]float32)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -351,10 +388,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_float64:
 		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]float64)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), val); err != nil {
 					return nil, err
 				}
@@ -364,10 +405,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_datetime:
 		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]types.Datetime)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
 					return nil, err
 				}
@@ -377,10 +422,14 @@ func BuildNumericBsiIndex(data []*vector.Vector, t types.Type, colIdx int16) (bs
 		return bsiIdx, nil
 	case types.T_date:
 		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
-		row := 0
+		row := startPos
 		for _, part := range data {
 			column := part.Col.([]types.Date)
 			for _, val := range column {
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					row++
+					continue
+				}
 				if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
 					return nil, err
 				}

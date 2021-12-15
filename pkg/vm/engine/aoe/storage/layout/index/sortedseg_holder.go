@@ -33,7 +33,7 @@ type sortedSegmentHolder struct {
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
 	Inited bool
-	VersionAllocator ColumnsAllocator
+	versionAllocator ColumnsAllocator
 	self   struct {
 		sync.RWMutex
 		colIndices    map[int][]*Node
@@ -50,7 +50,7 @@ func newSortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCl
 	holder.self.loadedVersion = make(map[int]uint64)
 	holder.self.fileHelper = make(map[string]*Node)
 	holder.self.droppedVersion = make(map[int]uint64)
-	holder.VersionAllocator = ColumnsAllocator{
+	holder.versionAllocator = ColumnsAllocator{
 		RWMutex:    sync.RWMutex{},
 		Allocators: make(map[int]*common.IdAlloctor),
 	}
@@ -226,7 +226,7 @@ func (holder *sortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (ui
 	return 0, errors.New("bsi not found")
 }
 
-func (holder *sortedSegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+func (holder *sortedSegmentHolder) NullCount(colIdx int, max uint64, filter *roaring.Bitmap) (uint64, error) {
 	holder.self.RLock()
 	defer holder.self.RUnlock()
 	idxes, ok := holder.self.colIndices[colIdx]
@@ -435,27 +435,30 @@ func (holder *sortedSegmentHolder) GetBlockCount() int32 {
 	panic("unsupported")
 }
 
-// UpgradeBlock is not supported in sortedSegmentHolder
-func (holder *sortedSegmentHolder) UpgradeBlock(id uint64, blockType base.BlockType) *BlockIndexHolder {
-	panic("unsupported")
-}
-
 // stringNoLock is not supported in sortedSegmentHolder
 func (holder *sortedSegmentHolder) stringNoLock() string {
 	panic("unsupported")
 }
 
 func (holder *sortedSegmentHolder) AllocateVersion(colIdx int) uint64 {
-	holder.VersionAllocator.Lock()
-	defer holder.VersionAllocator.Unlock()
-	if holder.VersionAllocator.Allocators[colIdx] == nil {
-		holder.VersionAllocator.Allocators[colIdx] = common.NewIdAlloctor(uint64(1))
+	holder.versionAllocator.Lock()
+	defer holder.versionAllocator.Unlock()
+	if holder.versionAllocator.Allocators[colIdx] == nil {
+		holder.versionAllocator.Allocators[colIdx] = common.NewIdAlloctor(uint64(1))
 	}
-	return holder.VersionAllocator.Allocators[colIdx].Alloc()
+	return holder.versionAllocator.Allocators[colIdx].Alloc()
 }
 
-func (holder *sortedSegmentHolder) VersionAllocater() *ColumnsAllocator {
-	return &holder.VersionAllocator
+func (holder *sortedSegmentHolder) FetchCurrentVersion(col uint16, blkId uint64) uint64 {
+	var currVersion uint64
+	holder.versionAllocator.RLock()
+	defer holder.versionAllocator.RUnlock()
+	if alloc, ok := holder.versionAllocator.Allocators[int(col)]; ok {
+		currVersion = alloc.Get()
+	} else {
+		currVersion = uint64(1)
+	}
+	return currVersion
 }
 
 func (holder *sortedSegmentHolder) IndicesCount() int {
@@ -529,7 +532,7 @@ func (holder *sortedSegmentHolder) DropIndex(filename string) {
 				delete(holder.self.fileHelper, staleName)
 				delete(holder.self.loadedVersion, int(col))
 				holder.self.droppedVersion[int(col)] = version
-				logutil.Infof("dropping newest index explicitly | version-%d", version)
+				logutil.Infof("[SEG] dropping newest index explicitly | version-%d", version)
 				return
 			}
 		} else {
@@ -579,7 +582,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 				if err := os.Remove(filename); err != nil {
 					panic(err)
 				}
-				logutil.Infof("detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
+				logutil.Infof("[SEG] detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
 				return
 			}
 		}
@@ -605,7 +608,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 				}
 				node.VFile.Unref()
 				delete(holder.self.fileHelper, staleName)
-				logutil.Infof("dropping stale index implicitly | version-%d", v)
+				logutil.Infof("[SEG] dropping stale index implicitly | version-%d", v)
 				isLatest = true
 			} else {
 				// stale index, but not allocate resource yet, simply remove physical file
@@ -613,7 +616,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 				if err := os.Remove(filename); err != nil {
 					panic(err)
 				}
-				logutil.Infof("loading stale index | %s received, but v-%d already loaded", filename, v)
+				logutil.Infof("[SEG] loading stale index | %s received, but v-%d already loaded", filename, v)
 			}
 		}
 		if isLatest {
