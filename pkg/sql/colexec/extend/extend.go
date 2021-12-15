@@ -128,6 +128,9 @@ var BinaryStrings = map[int]func(Extend, Extend) string{
 	overload.Div: func(l Extend, r Extend) string {
 		return fmt.Sprintf("%s / %s", l.String(), r.String())
 	},
+	overload.IntegerDiv: func(l Extend, r Extend) string {
+		return fmt.Sprintf("%s div %s", l.String(), r.String())
+	},
 	overload.Mod: func(l Extend, r Extend) string {
 		return fmt.Sprintf("%s %% %s", l.String(), r.String())
 	},
