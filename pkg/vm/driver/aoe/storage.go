@@ -368,8 +368,10 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 	}
 	currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err = s.DB.PrepareSplitDatabase(&prepareSplitCtx)
 	for i := range splitKeys {
-		splitKeys[i] = []byte(fmt.Sprintf("%v%c",string(shard.Start), i))
+		splitKeys[i] = []byte(fmt.Sprintf("%v%c", string(shard.Start), i))
+		logutil.Infof("misuxi%v", string(shard.Start))
 	}
+	ctx, _ = json.Marshal(splitKeys)
 	return currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err
 
 }
@@ -693,11 +695,12 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 }
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
+	logutil.Infof("new is %v",news)
 	logutil.Infof("drivr call split")
 	newNames := make([]string, len(news))
-	for _, shard := range news {
+	for i, shard := range news {
 		name := aoedb.IdToNameFactory.Encode(shard.ShardID)
-		newNames = append(newNames, name)
+		newNames[i] = name
 	}
 	renameTable := func(oldName, dbName string) string {
 		return oldName
@@ -716,7 +719,17 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	// 	logutil.Errorf("Split:S-%d dropTable fail.",old.ShardID)
 	// 	return err
 	// }
-	execSplitCtx := aoedb.ExecSplitCtx{
+	splitkey := make([][]byte, 0)
+	err := json.Unmarshal(ctx, &splitkey)
+	if err != nil {
+		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
+		return err
+	}
+	for i :=range splitkey{
+		splitkey[i]=[]byte("1")
+	}
+	logutil.Infof("len(key) is %v, len(news) is %v, len(newNames) is %v",len(splitkey),len(news),len(newNames))
+	execSplitCtx := &aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
 			Offset: 0,
@@ -725,9 +738,10 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		},
 		NewNames:    newNames,
 		RenameTable: renameTable,
+		SplitKeys:   splitkey,
 		SplitCtx:    ctx,
 	}
-	err := s.DB.ExecSplitDatabase(&execSplitCtx)
+	err = s.DB.ExecSplitDatabase(execSplitCtx)
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
