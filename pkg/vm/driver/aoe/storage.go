@@ -366,7 +366,11 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,
 	}
-	return s.DB.PrepareSplitDatabase(&prepareSplitCtx)
+	currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err = s.DB.PrepareSplitDatabase(&prepareSplitCtx)
+	for i := range splitKeys {
+		splitKeys[i] = []byte(fmt.Sprintf("%v%c",string(shard.Start), i))
+	}
+	return currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err
 
 }
 
@@ -483,14 +487,14 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 			writtenBytes, changedBytes, rep = s.dropIndex(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		}
 		ctx.AppendResponse(rep)
-		totalWrittenBytes+=writtenBytes
-		logutil.Infof("add writtenBytes is %v",writtenBytes)
-		totalDiffBytes+=changedBytes
+		totalWrittenBytes += writtenBytes
+		logutil.Infof("add writtenBytes is %v", writtenBytes)
+		totalDiffBytes += changedBytes
 	}
 	ctx.SetWrittenBytes(totalWrittenBytes)
-	logutil.Infof("writtenBytes is %v",totalWrittenBytes)
+	logutil.Infof("writtenBytes is %v", totalWrittenBytes)
 	ctx.SetDiffBytes(totalDiffBytes)
-	logutil.Infof("diffBytes is %v",totalDiffBytes)
+	logutil.Infof("diffBytes is %v", totalDiffBytes)
 	return nil
 }
 
