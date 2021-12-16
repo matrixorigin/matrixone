@@ -396,6 +396,13 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
+		for _, property := range tbl.Properties {
+			if err := c.Driver.AddLabelToShard(shardId, property.Key, property.Value); err != nil {
+				logutil.Errorf("ErrAddLabelFailed, %v, %v, %v", shardId, property, err)
+				return tid, ErrTabletCreateFailed
+			}
+
+		}
 		tbl.Name = tableName
 		tbl.State = aoe.StatePublic
 		meta, err := EncodeTable(tbl)

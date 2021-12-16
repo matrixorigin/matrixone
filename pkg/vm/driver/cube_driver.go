@@ -126,6 +126,8 @@ type CubeDriver interface {
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
 	AOEStore() *aoedb.DB
+	//AddLabelToShard add a label to the shard
+	AddLabelToShard(shardID uint64, name, value string)error
 }
 
 type driver struct {
@@ -793,4 +795,8 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) 
 
 func (h *driver) RaftStore() raftstore.Store {
 	return h.store
+}
+
+func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
+	return h.app.AddLabelToShard(uint64(pb.AOEGroup), shardID, name, value, defaultRPCTimeout)
 }

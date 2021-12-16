@@ -26,6 +26,7 @@ import (
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
@@ -83,6 +84,93 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
+func MockTableInfoWithProperties(colCnt int, i int, label string) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    label + strconv.Itoa(i),
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+		} else {
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
+		}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+	}
+	property:=aoe.Property{Key: "key",Value: label}
+	tblInfo.Properties=append(tblInfo.Properties, property)
+	return tblInfo
+}
+func TestProperties(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
+			// c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Worker.RaftEventWorkers = 8
+			}),
+			raftstore.WithTestClusterNodeCount(4),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath("./test")))
+
+	c.Start()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*60)
+	driver := c.CubeDrivers[0]
+
+	catalog := NewCatalog(driver)
+	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
+	tids := make([][]uint64, 3)
+	for k := 0; k < 2; k++ {
+		label := "label" + strconv.Itoa(k)
+		tids[k] = make([]uint64, 8)
+		for i := 0; i < 8; i++ {
+			tbl := MockTableInfoWithProperties(4, i, label)
+			tid, _ := catalog.CreateTable(0, dbid, *tbl)
+			sids,_:=catalog.getShardids(tid)
+			tids[k][i] = sids[0]
+		}
+	}
+	time.Sleep(1*time.Second)
+	shards := make([][]string, 8)
+	for k := 0; k < 8; k++ {
+		shards[k]=c.AOEStorages[k].DB.DatabaseNames()
+		// require.Equal(t,9,len(shards[k]))
+	}
+	logutil.Infof("just print")
+}
 func TestCatalogWithUtil(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
@@ -124,7 +212,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*60)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*60)
 
 	stdLog.Printf("driver all started.")
 
