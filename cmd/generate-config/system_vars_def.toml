@@ -314,8 +314,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["error","info","debug","warning","warn","fatal"]
-comment = "default is error. The log level for cube."
+values = ["debug","info","error","warning","warn","fatal"]
+comment = "default is debug. The log level for cube."
 update-mode = "dynamic"
 
 [[parameter]]
@@ -353,7 +353,7 @@ pre-allocated-group-num = 20
 max-group-num           = 0
 
 # Logger Configs
-level = "info" # debug, info, warn, error, fatal.
+level = "debug" # debug, info, warn, error, fatal.
 format = "console" # json, console.
 
 # log file config
