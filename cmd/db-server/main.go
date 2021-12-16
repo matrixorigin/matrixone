@@ -154,10 +154,6 @@ func main() {
 		os.Exit(-1)
 	}
 
-	//close cube print info
-	log.SetLevelByString("info")
-	log.SetHighlighting(false)
-
 	configFilePath := args[0]
 	logutil.SetupMOLogger(configFilePath)
 
@@ -241,6 +237,7 @@ func main() {
 	cfg.ServerConfig = server.Cfg{}
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+	cfg.CubeConfig.Logger = logutil.GetGlobalLogger()
 
 	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
