@@ -91,6 +91,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		n.ctr.inserted = make([]uint8, UnitLimit)
 		n.ctr.zInserted = make([]uint8, UnitLimit)
 		n.ctr.hashes = make([]uint64, UnitLimit)
+		n.ctr.fakeKeys = make([][2]uint64, UnitLimit)
 		n.ctr.values = make([]uint64, UnitLimit)
 		switch {
 		case size <= 8:
@@ -444,8 +445,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 				}
 			}
 		}
-		ctr.hashes[0] = 0
-		ctr.h32.ht.InsertBatch(ctr.hashes, ctr.h32.keys[:n], ctr.values)
+		ctr.h32.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h32.keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		for k, v := range ctr.values[:n] {
@@ -551,8 +551,7 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 				}
 			}
 		}
-		ctr.hashes[0] = 0
-		ctr.h40.ht.InsertBatch(ctr.hashes, ctr.h40.keys[:n], ctr.values)
+		ctr.h40.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h40.keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		for k, v := range ctr.values[:n] {

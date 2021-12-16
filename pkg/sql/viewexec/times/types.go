@@ -101,6 +101,7 @@ type Container struct {
 	keyOffs            []uint32
 	zKeyOffs           []uint32
 	hashes             []uint64
+	fakeKeys           [][2]uint64
 	zs                 []int64
 	intermediateBuffer []int64
 	views              []*view

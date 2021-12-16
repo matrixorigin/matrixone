@@ -165,109 +165,6 @@ tailLoop:
 done:
 	RET
 
-DATA aesIV<>+0x00(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x08(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x10(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x18(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x20(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x28(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x30(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x38(SB)/8, $0x8F1BBCDCCA62C1D6
-GLOBL aesIV<>(SB), (NOPTR+RODATA), $64
-
-// func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
-// Requires: AES
-TEXT ·AesBytesHash(SB), NOSPLIT, $0-32
-	MOVD data+0(FP), R0
-	MOVD length+8(FP), R1
-	MOVD $ret+16(FP), R2
-	ADD  R0, R1
-	SUB  $64, R1
-
-	MOVD $aesIV<>+0(SB), R3
-	VLD1 (R3), [V0.B16, V1.B16, V2.B16, V3.B16]
-	VEOR V10.B16, V10.B16, V10.B16
-
-loop:
-	CMP R0, R1
-	BLE tail0
-
-	VLD1.P 64(R0), [V4.B16, V5.B16, V6.B16, V7.B16]
-
-	AESE	V10.B16, V0.B16
-	AESMC	V0.B16, V0.B16
-	VEOR	V4.B16, V0.B16, V0.B16
-
-	AESE	V10.B16, V1.B16
-	AESMC	V1.B16, V1.B16
-	VEOR	V5.B16, V1.B16, V1.B16
-
-	AESE	V10.B16, V2.B16
-	AESMC	V2.B16, V2.B16
-	VEOR	V6.B16, V2.B16, V2.B16
-
-	AESE	V10.B16, V3.B16
-	AESMC	V3.B16, V3.B16
-	VEOR	V7.B16, V3.B16, V3.B16
-
-	JMP loop
-
-tail0:
-	ADD $48, R1
-
-	CMP R0, R1
-	BLE tail1
-
-	VLD1.P 16(R0), [V4.B16]
-	AESE   V10.B16, V0.B16
-	AESMC  V0.B16, V0.B16
-	VEOR   V4.B16, V0.B16, V0.B16
-
-tail1:
-	CMP R0, R1
-	BLE tail2
-
-	VLD1.P 16(R0), [V5.B16]
-	AESE   V10.B16, V1.B16
-	AESMC  V1.B16, V1.B16
-	VEOR   V5.B16, V1.B16, V1.B16
-
-tail2:
-	CMP R0, R1
-	BLE tail3
-
-	VLD1.P (R0), [V6.B16]
-	AESE   V10.B16, V2.B16
-	AESMC  V2.B16, V2.B16
-	VEOR   V6.B16, V2.B16, V2.B16
-
-tail3:
-	VLD1  (R1), [V7.B16]
-	AESE  V10.B16, V3.B16
-	AESMC V3.B16, V3.B16
-	VEOR  V7.B16, V3.B16, V3.B16
-
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V1.B16, V0.B16, V0.B16
-
-	AESE  V10.B16, V2.B16
-	AESMC V2.B16, V2.B16
-	VEOR  V3.B16, V2.B16, V2.B16
-
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V2.B16, V0.B16, V0.B16
-
-	VST1 [V0.B16], (R2)
-
-	RET
-
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-
 // func Crc32Int192Hash(data *[3]uint64)
 // Requires: CRC32
 TEXT ·Crc32Int192Hash(SB), NOSPLIT, $0-16
@@ -544,4 +441,110 @@ tailLoop:
 	BNE  tailLoop
 
 done:
+	RET
+
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+
+DATA aesIV<>+0x00(SB)/8, $0x5A8279996ED9EBA1
+DATA aesIV<>+0x08(SB)/8, $0x8F1BBCDCCA62C1D6
+GLOBL aesIV<>(SB), (NOPTR+RODATA), $16
+
+// func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
+// Requires: AES
+TEXT ·AesBytesHash(SB), NOSPLIT, $0-32
+	MOVD data+0(FP), R0
+	MOVD length+8(FP), R1
+	MOVD $ret+16(FP), R2
+	ADD  R0, R1
+	SUB  $64, R1
+
+	MOVD $aesIV<>+0(SB), R3
+	VLD1 (R3), [V0.B16]
+	VMOV V0.B16, V1.B16
+	VMOV V0.B16, V2.B16
+	VMOV V0.B16, V3.B16
+	VEOR V31.B16, V31.B16, V31.B16
+
+loop:
+	CMP R0, R1
+	BLE tail0
+
+	VLD1.P 64(R0), [V4.B16, V5.B16, V6.B16, V7.B16]
+
+	AESE  V31.B16, V0.B16
+	AESMC V0.B16, V0.B16
+	VEOR  V4.B16, V0.B16, V0.B16
+
+	AESE  V31.B16, V1.B16
+	AESMC V1.B16, V1.B16
+	VEOR  V5.B16, V1.B16, V1.B16
+
+	AESE  V31.B16, V2.B16
+	AESMC V2.B16, V2.B16
+	VEOR  V6.B16, V2.B16, V2.B16
+
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
+	VEOR  V7.B16, V3.B16, V3.B16
+
+	JMP loop
+
+tail0:
+	ADD $48, R1
+
+	CMP R0, R1
+	BLE tail1
+
+	VLD1.P 16(R0), [V4.B16]
+	AESE   V31.B16, V0.B16
+	AESMC  V0.B16, V0.B16
+	VEOR   V4.B16, V0.B16, V0.B16
+
+tail1:
+	CMP R0, R1
+	BLE tail2
+
+	VLD1.P 16(R0), [V5.B16]
+	AESE   V31.B16, V1.B16
+	AESMC  V1.B16, V1.B16
+	VEOR   V5.B16, V1.B16, V1.B16
+
+tail2:
+	CMP R0, R1
+	BLE tail3
+
+	VLD1.P (R0), [V6.B16]
+	AESE   V31.B16, V2.B16
+	AESMC  V2.B16, V2.B16
+	VEOR   V6.B16, V2.B16, V2.B16
+
+tail3:
+	VLD1  (R1), [V7.B16]
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
+	VEOR  V7.B16, V3.B16, V3.B16
+
+	AESE  V31.B16, V0.B16
+	AESMC V0.B16, V0.B16
+	VEOR  V1.B16, V0.B16, V0.B16
+
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
+	VEOR  V2.B16, V3.B16, V3.B16
+
+	AESE  V31.B16, V0.B16
+	AESMC V0.B16, V0.B16
+	VEOR  V3.B16, V0.B16, V0.B16
+
+	VST1 [V0.B16], (R2)
+
+	RET
+
+TEXT ·AesInt256BatchHash(SB), NOSPLIT, $0-24
+	RET
+
+TEXT ·AesInt320BatchHash(SB), NOSPLIT, $0-24
 	RET

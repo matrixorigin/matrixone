@@ -15,48 +15,140 @@
 package hashtable
 
 import (
+	"io"
+	"os"
 	"reflect"
 	"testing"
 	"unsafe"
 )
 
 type test struct {
-	Crc32 uint64
+	crc32 uint64
 	aes   [2]uint64
 	in    string
 }
 
 var golden = []test{
-	{0x298d35406e, [2]uint64{0xbcd8ceaa0c3b7132, 0xe17101ad37bd02eb}, "Discard medicine more than two years old."},
-	{0x39f47be063, [2]uint64{0x1ddd521c2799e2b3, 0xfa467adaf17db29e}, "He who has a shady past knows that nice guys finish last."},
-	{0x2a47abad31, [2]uint64{0x46be025751067f57, 0xf8f1e8f83d7dd386}, "I wouldn't marry him with a ten foot pole."},
-	{0x39e798b7a0, [2]uint64{0x1e310bb1509b5132, 0x794bf22cac73e7e3}, "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave"},
-	{0x3a4bf26149, [2]uint64{0x3d9abeaf2ac6cbc0, 0x65e71d1b9131b921}, "The days of the digital watch are numbered.  -Tom Stoppard"},
-	{0x1b92642e0e, [2]uint64{0x7d6d54e5585f8e84, 0x69d33e498d22fedf}, "Nepal premier won't resign."},
-	{0x43d44fe1cd, [2]uint64{0x76f8cc87eef70bcb, 0xbd9b15e809d5d9ad}, "For every action there is an equal and opposite government program."},
-	{0x39fcec9cdd, [2]uint64{0x4300d9b8c8e4e860, 0x9eadecd2fc3d983f}, "His money is twice tainted: 'taint yours and 'taint mine."},
-	{0x586e141608, [2]uint64{0xaaf763b4c1f56b15, 0x9deb028a6625d36c}, "There is no reason for any individual to have a computer in their home. -Ken Olsen, 1977"},
-	{0x4b9b00078e, [2]uint64{0x0f5adc85bfda7fad, 0x8bb65d9fcae50d95}, "It's a tiny change to the code and not completely disgusting. - Bob Manchek"},
-	{0x18a8d48b1d, [2]uint64{0x9f774873d37eae5c, 0x9e89c88a24c356df}, "size:  a.out:  bad magic"},
-	{0x313ea4ade4, [2]uint64{0x403be1fcae823c9a, 0xab0a1bdc3180a439}, "The major problem is with sendmail.  -Mark Horton"},
-	{0x4863bd93af, [2]uint64{0xbc15370a24046627, 0x313d1802cfb299aa}, "Give me a rock, paper and scissors and I will move the world.  CCFestoon"},
-	{0x2e1ae28935, [2]uint64{0x1b41bad2bf58af63, 0x5ad4e4cc501f7caf}, "If the enemy is within range, then so are you."},
-	{0x4661b28c79, [2]uint64{0x5e12de6b8cbec9ec, 0x87b98b8be1803426}, "It's well we cannot hear the screams/That we create in others' dreams."},
-	{0x44c882cd2b, [2]uint64{0x4b20e77a8121282a, 0xa41c7e181b7222af}, "You remind me of a TV show, but that's all right: I watch it anyway."},
-	{0x2021d19a3a, [2]uint64{0x83cea3070bacafa5, 0xc2a2af6b324e2472}, "C is as portable as Stonehedge!!"},
-	{0x58d6857712, [2]uint64{0x12e4a8f6204ec452, 0xa798559ed3069dcc}, "Even if I could be Shakespeare, I think I should still choose to be Faraday. - A. Huxley"},
-	{0x846ef8f53a, [2]uint64{0x509bdf13d006516c, 0xa64c027cec6bf0b2}, "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule"},
-	{0x3823212ad8, [2]uint64{0xfe8b040f96447d67, 0x3efd8d6f714bc480}, "How can you write a big system without C++?  -Paul Glick"},
+	{0x298d35406e, [2]uint64{0x1ecb55293a89b7c2, 0x9630bc6e8c09539c}, "Discard medicine more than two years old."},
+	{0x39f47be063, [2]uint64{0x383f5d01e938e757, 0x6b209f4cb8ede896}, "He who has a shady past knows that nice guys finish last."},
+	{0x2a47abad31, [2]uint64{0x7ba28beb4cde5dfc, 0x09f5979a66adf578}, "I wouldn't marry him with a ten foot pole."},
+	{0x39e798b7a0, [2]uint64{0x68bcfe529d368d86, 0xb8f2cf713d5b6137}, "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave"},
+	{0x3a4bf26149, [2]uint64{0x80c4531b7d1fc943, 0x6918be8d85f7f3a8}, "The days of the digital watch are numbered.  -Tom Stoppard"},
+	{0x1b92642e0e, [2]uint64{0xec64e744126132b5, 0x3f6a8ccfdba7dea9}, "Nepal premier won't resign."},
+	{0x43d44fe1cd, [2]uint64{0xd765c174569c492c, 0x6fa8e7f93ce09d11}, "For every action there is an equal and opposite government program."},
+	{0x39fcec9cdd, [2]uint64{0x0f1d0cd8c2f03939, 0xdfb729d19b937086}, "His money is twice tainted: 'taint yours and 'taint mine."},
+	{0x586e141608, [2]uint64{0x97d04bf77b9af7ca, 0x326097856e019e38}, "There is no reason for any individual to have a computer in their home. -Ken Olsen, 1977"},
+	{0x4b9b00078e, [2]uint64{0x86603fc7d3317440, 0x56ff38ba789eeda8}, "It's a tiny change to the code and not completely disgusting. - Bob Manchek"},
+	{0x18a8d48b1d, [2]uint64{0xe4841df2c09f139f, 0x0c646a0f7e4c73b1}, "size:  a.out:  bad magic"},
+	{0x313ea4ade4, [2]uint64{0xc5552b9ca6485df3, 0xb1ef71ccd24ae45c}, "The major problem is with sendmail.  -Mark Horton"},
+	{0x4863bd93af, [2]uint64{0x79d3e1508cdacf95, 0x956d3bb2d0686467}, "Give me a rock, paper and scissors and I will move the world.  CCFestoon"},
+	{0x2e1ae28935, [2]uint64{0xf8ae93a01d017ac1, 0x04e2ab35f00e0fb1}, "If the enemy is within range, then so are you."},
+	{0x4661b28c79, [2]uint64{0xc103df9771dc8372, 0xe238c1071e0c6556}, "It's well we cannot hear the screams/That we create in others' dreams."},
+	{0x44c882cd2b, [2]uint64{0x49ddced52c42e4c3, 0x6d48d39ab768716b}, "You remind me of a TV show, but that's all right: I watch it anyway."},
+	{0x2021d19a3a, [2]uint64{0x864ed090411e7cbf, 0x81eb33c958b79bd1}, "C is as portable as Stonehedge!!"},
+	{0x58d6857712, [2]uint64{0x0ded8eb050cd5170, 0x45962ddc4730d77a}, "Even if I could be Shakespeare, I think I should still choose to be Faraday. - A. Huxley"},
+	{0x846ef8f53a, [2]uint64{0x521ed92aaa6b6cc4, 0xda73e86630790406}, "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule"},
+	{0x3823212ad8, [2]uint64{0xf8aec007e0d3f234, 0x060cd6a68f902cb2}, "How can you write a big system without C++?  -Paul Glick"},
 }
 
 func TestHashFn(t *testing.T) {
 	for _, g := range golden {
 		ptr, length := unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&g.in)).Data), len(g.in)
-		if crc := Crc32BytesHash(ptr, length); crc != g.Crc32 {
-			t.Errorf("Crc32Hash(%s) = 0x%016x want 0x%016x", g.in, crc, g.Crc32)
+		if crc := Crc32BytesHash(ptr, length); crc != g.crc32 {
+			t.Errorf("crc32Hash(%s) = 0x%016x want 0x%016x", g.in, crc, g.crc32)
 		}
 		if aes := AesBytesHash(ptr, length); aes != g.aes {
 			t.Errorf("aesHash(%s) = 0x%016x%016x want 0x%016x%016x", g.in, aes[0], aes[1], g.aes[0], g.aes[1])
+		}
+	}
+}
+
+func BenchmarkCrc32Int192HashBatch(b *testing.B) {
+	var data [256 * 1000][3]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*3))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			Crc32Int192BatchHash(&data[j*256], &hashes[0], 256)
+		}
+	}
+}
+
+func BenchmarkCrc32Int256HashBatch(b *testing.B) {
+	var data [256 * 1000][4]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*4))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			Crc32Int256BatchHash(&data[j*256], &hashes[0], 256)
+		}
+	}
+}
+
+func BenchmarkCrc32Int320HashBatch(b *testing.B) {
+	var data [256 * 1000][5]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*5))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			Crc32Int320BatchHash(&data[j*256], &hashes[0], 256)
+		}
+	}
+}
+
+func BenchmarkAesInt192HashBatch(b *testing.B) {
+	var data [256 * 1000][3]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*3))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			AesInt192BatchHash(&data[j*256], &hashes[0], 256)
+		}
+	}
+}
+
+func BenchmarkAesInt256HashBatch(b *testing.B) {
+	var data [256 * 1000][4]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*4))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			AesInt256BatchHash(&data[j*256], &hashes[0], 256)
+		}
+	}
+}
+
+func BenchmarkAesInt320HashBatch(b *testing.B) {
+	var data [256 * 1000][5]uint64
+	var hashes [256 * 1000]uint64
+
+	f, _ := os.Open("/dev/random")
+	io.ReadFull(f, unsafe.Slice((*byte)(unsafe.Pointer(&data)), 256*1000*5))
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 1000; j++ {
+			AesInt320BatchHash(&data[j*256], &hashes[0], 256)
 		}
 	}
 }

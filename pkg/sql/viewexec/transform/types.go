@@ -51,6 +51,7 @@ type Container struct {
 	inserted  []uint8
 	zInserted []uint8
 	hashes    []uint64
+	fakeKeys  [][2]uint64
 	values    []uint64
 
 	h8 struct {
