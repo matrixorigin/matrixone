@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,7 +78,9 @@ func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 
 //OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
+	logutil.Infof("ctlg:old is%v, news are %v", event.DB, event.Names)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
+	logutil.Infof("catalogSplitEvent is %v", catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
@@ -87,6 +90,7 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 		panic(err)
 	}
 	err = l.catalog.Driver.Set(key, value)
+	logutil.Infof("set key, key is %v", key)
 	if err != nil {
 		panic(err)
 	}
@@ -95,7 +99,9 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 
 //OnPostSplit update route info and delete presplit key.
 func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error {
+	logutil.Infof("ctlg:news are %v", event.Names)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
+	logutil.Infof("catalogSplitEvent is %v", catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
@@ -105,12 +111,14 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 		panic(err)
 	}
 	err = l.catalog.Driver.Set(postKey, value)
+	logutil.Infof("set key, key is %v", postKey)
 	if err != nil {
 		panic(err)
 	}
 	go l.catalog.OnDatabaseSplitted()
 	preKey := l.catalog.preSplitKey(catalogSplitEvent.Old)
 	err = l.catalog.Driver.Delete(preKey)
+	logutil.Infof("set key, key is %v", preKey)
 	if err != nil {
 		panic(err)
 	}
@@ -166,6 +174,12 @@ func (c *Catalog) OnDatabaseSplitted() error {
 					return err
 				}
 			}
+		}
+		key := c.splitKey(splitEvent.Old)
+		err = c.Driver.Delete(key)
+		if err != nil {
+			logutil.Errorf("Delete fails, err:%v", err)
+			return err
 		}
 	}
 	return nil
@@ -876,6 +890,27 @@ func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
 
 //for test
 func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
+	//wait pending
+	t0 := time.Now()
+	keyExisted := false
+	for {
+		keys, _ := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys pre are%v", keys)
+			keyExisted = true
+		}
+		keys, _ = c.Driver.PrefixScan(c.splitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys are%v", keys)
+			keyExisted = true
+		}
+		if !keyExisted {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		c.OnDatabaseSplitted()
+	}
+	logutil.Infof("pending keys for %vms", time.Since(t0).Milliseconds())
 	return c.getShardids(tid)
 }
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
@@ -967,10 +1002,14 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 		if !ok {
 			return nil, errors.New("invalid new shard id")
 		}
-		news[new] = make([]uint64, len(tbls))
-		for i, tbl := range tbls {
+		news[new] = make([]uint64, 0)
+		for _, tbl := range tbls {
+			if strings.Contains(tbl, "MetaTbl") {
+				continue
+			}
+			logutil.Infof("ctlg, tbl is %v", tbl)
 			tid := c.decodeTabletName(tbl)
-			news[new][i] = tid
+			news[new] = append(news[new], tid)
 		}
 	}
 	catalogSplitEvent := SplitEvent{

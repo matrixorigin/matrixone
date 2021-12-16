@@ -376,6 +376,7 @@ func TestSnapshot(t *testing.T) {
 }
 func TestSplit(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	ctlgListener := catalog.NewCatalogListener()
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
@@ -397,6 +398,7 @@ func TestSplit(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
+			opts.EventListener = ctlgListener
 			return aoe3.NewStorageWithOptions(path, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
@@ -416,6 +418,7 @@ func TestSplit(t *testing.T) {
 
 	d0 := c.CubeDrivers[0]
 	catalog := catalog.NewCatalog(d0)
+	ctlgListener.UpdateCatalog(catalog)
 	// storage:= c.AOEStorages[0]
 
 	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
@@ -424,15 +427,19 @@ func TestSplit(t *testing.T) {
 	tid, err := catalog.CreateTable(0, dbid, *tbl)
 	require.NoError(t, err)
 	sids, err := catalog.GetShardIDsByTid(tid)
-	logutil.Infof("sids is %v",sids)
+	logutil.Infof("sids is %v", sids)
+	batchesBeforeSplit := make([]*batch.Batch, 0)
 	for i := 0; i < 10; i++ {
 		batch := MockBatch(tbl, i, 10000)
+		batch2 := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
 		stdLog.Printf(" append %v, size %v Bytes", i, buf.Len())
 		require.Nil(t, err)
 		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
-
+		if err == nil {
+			batchesBeforeSplit = append(batchesBeforeSplit, batch2)
+		}
 		db, err := c.AOEStorages[0].DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(sids[0]))
 		if err != nil {
 			stdLog.Printf("err437:%v", err)
@@ -442,9 +449,7 @@ func TestSplit(t *testing.T) {
 			sz := db.GetSize()
 			stdLog.Printf("cp:%v,sz:%v", cp, sz)
 		}
-		time.Sleep(1*time.Second)
-		// storage.Sync([]uint64{sids[0]})
-		// require.Nil(t, err)
+		time.Sleep(1 * time.Second)
 		if checkSplit(c.AOEStorages[0], sids[0]) {
 			break
 		}
@@ -452,12 +457,21 @@ func TestSplit(t *testing.T) {
 			t.Fatalf("failed to split")
 		}
 	}
-	//check data
 	//check ctlg
 	newsids, err := catalog.GetShardIDsByTid(tid)
-	require.NotEqual(t, len(sids), len(newsids))
+	logutil.Infof("newsids are %v", newsids)
 	for _, sid := range newsids {
 		require.NotEqual(t, sids[0], sid)
+	}
+	//check data
+	batchesAfterSplit := make([]*batch.Batch, 0)
+	for _, sid := range newsids {
+		batch, err := c.AOEStorages[0].ReadAll(sid, catalog.EncodeTabletName(sid, tid))
+		require.NoError(t, err)
+		batchesAfterSplit = append(batchesAfterSplit, batch...)
+	}
+	for _,batch:=range batchesAfterSplit{
+	logutil.Infof("batchAfterSplit is %v", batch.Vecs[0].Col)
 	}
 }
 func checkSplit(s *aoe3.Storage, old uint64) bool {

@@ -17,6 +17,7 @@ package aoedb
 import (
 	"path/filepath"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
@@ -331,6 +332,7 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 		}
 	}()
 	err = d.DoAppend(meta, ctx.Data, index.AsSlice())
+	logutil.Infof("append, db is %v, data is %v", database.Name, ctx.Data.Vecs[0].Col)
 	return err
 }
 
