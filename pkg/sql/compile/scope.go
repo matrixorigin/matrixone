@@ -18,16 +18,22 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net"
 	"runtime"
 	"strings"
+	"time"
 
+	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
@@ -418,19 +424,59 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 }
 
 func (s *Scope) RemoteRun(e engine.Engine) error {
-	//var buf bytes.Buffer
-	//ps := Transfer(s)
-	//err := protocol.EncodeScope(ps, &buf)
-	//if err != nil {
-	//	return err
-	//}
-	//ps0, _, err1 := protocol.DecodeScope(buf.Bytes())
-	//if err != nil {
-	//	return err1
-	//}
-	//Untransfer(s, ps0)
+	var buf bytes.Buffer
 
-	return s.ParallelRun(e)
+	if Address == s.NodeInfo.Addr {
+		return s.ParallelRun(e)
+	}
+	ps := Transfer(s)
+	err := protocol.EncodeScope(ps, &buf)
+	if err != nil {
+		return err
+	}
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
+	encoder, decoder := rpcserver.NewCodec(1 << 30)
+	conn := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
+	defer conn.Close()
+	addr, _ := net.ResolveTCPAddr("tcp", s.NodeInfo.Addr)
+	if _, err := conn.Connect(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100), time.Second*3); err != nil {
+		return err
+	}
+	if err := conn.WriteAndFlush(&message.Message{Data: buf.Bytes()}); err != nil {
+		return err
+	}
+	for {
+		val, err := conn.Read()
+		if err != nil {
+			return err
+		}
+		msg := val.(*message.Message)
+		if len(msg.Code) > 0 {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
+			return errors.New(errno.SystemError, string(msg.Code))
+		}
+		if msg.Sid == 1 {
+			break
+		}
+		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
+		if err != nil {
+			return err
+		}
+		if arg.Reg.Ch == nil {
+			if bat != nil {
+				batch.Clean(bat, s.Proc.Mp)
+			}
+			continue
+		}
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- bat:
+		}
+	}
+	return nil
 }
 
 func (s *Scope) ParallelRun(e engine.Engine) error {
@@ -464,25 +510,25 @@ func (s *Scope) RunQ(e engine.Engine) error {
 	}
 	arg := s.Instructions[0].Arg.(*transform.Argument)
 	{
-		 ss[0] = &Scope{
-			 Magic: Normal,
-			 DataSource: &Source{
-				 R: rd,
-				 IsMerge: s.DataSource.IsMerge,
-				 SchemaName: s.DataSource.SchemaName,
-				 RelationName: s.DataSource.RelationName,
-				 RefCounts: s.DataSource.RefCounts,
-				 Attributes: s.DataSource.Attributes,
-			 },
-		 }
-		 ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
-			 Op: vm.Transform,
-			 Arg: arg,
-		 })
+		ss[0] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rd,
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+			Op:  vm.Transform,
+			Arg: arg,
+		})
 
-		 ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
-		 ss[0].Proc.Id = s.Proc.Id
-		 ss[0].Proc.Lim = s.Proc.Lim
+		ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[0].Proc.Id = s.Proc.Id
+		ss[0].Proc.Lim = s.Proc.Lim
 	}
 	s.PreScopes = ss
 	s.Magic = Merge

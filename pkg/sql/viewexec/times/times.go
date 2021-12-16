@@ -85,6 +85,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		n.ctr.state = End
+		if n.ctr.pctr == nil {
+			return true, nil
+		}
 		switch n.ctr.pctr.typ {
 		case H8:
 			n.ctr.bat.Ht = n.ctr.pctr.h8.ht
