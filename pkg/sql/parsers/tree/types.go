@@ -137,6 +137,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 
 	switch fs {
 	case "set", "enum":
+	case "char":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
 	default:
 		if node.Precision > 0 {
 			ctx.WriteByte('(')

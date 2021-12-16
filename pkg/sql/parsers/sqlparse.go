@@ -30,7 +30,7 @@ func Parse(dialectType dialect.DialectType, sql string) ([]tree.Statement, error
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(sql)
 	default:
-		return nil, errors.New("Type of dialect error")
+		return nil, errors.New("type of dialect error")
 	}
 }
 
@@ -41,6 +41,6 @@ func ParseOne(dialectType dialect.DialectType, sql string) (tree.Statement, erro
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(sql)
 	default:
-		return nil, errors.New("Type of dialect error")
+		return nil, errors.New("type of dialect error")
 	}
 }

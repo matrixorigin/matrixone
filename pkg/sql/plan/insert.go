@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go/constant"
@@ -43,7 +44,7 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	// case *tree.ParenSelect: // todo: not implement now.
 	// case *tree.SelectClause:
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport clause: '%v'", typ))
+		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport clause: '%s'", tree.String(typ, dialect.MYSQL)))
 	}
 
 	db, id, r, err := b.tableName(stmt.Table.(*tree.TableName))
