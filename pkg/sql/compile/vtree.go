@@ -247,6 +247,7 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 		s.Proc.Id = e.c.proc.Id
 		s.Proc.Lim = e.c.proc.Lim
 		ss[i] = &Scope{
+			NodeInfo:  ns[i],
 			PreScopes: append([]*Scope{s}, children...),
 			Magic:     Remote,
 			Instructions: vm.Instructions{vm.Instruction{
@@ -295,6 +296,9 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
 	var ins vm.Instructions
 
+	if len(v.Rel.Vars) == 0 {
+		return nil, errors.New(errno.FeatureNotSupported, "projection attributes is empty")
+	}
 	db, err := e.c.e.Database(v.Rel.Schema)
 	if err != nil {
 		return nil, err
