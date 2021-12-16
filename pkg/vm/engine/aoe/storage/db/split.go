@@ -163,6 +163,7 @@ func (splitter *Splitter) Prepare() error {
 	if err = spec.Unmarshal(splitter.ctx); err != nil {
 		return err
 	}
+	spec.Index = splitter.index.Id.Id
 	if err = splitter.dbImpl.DoFlushDatabase(splitter.database); err != nil {
 		return err
 	}
