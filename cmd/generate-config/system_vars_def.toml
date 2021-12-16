@@ -268,34 +268,15 @@ comment = "the Node ID of the cube. In a distributed setting, each node in a clu
 update-mode = "dynamic"
 
 [[parameter]]
-name = "cubeDirPrefix"
+name = "storePath"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["./cube"]
-comment = "the root directory prefix of the cube. The actual dir is cubeDirPrefix + nodeID"
+values = ["./store"]
+comment = "the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID"
 update-mode = "dynamic"
 
-[[parameter]]
-name = "prophetEmbedEtcdJoinAddr"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["http://localhost:40000", "http://127.0.0.1:40000"]
-comment = "the join address of prophet of the cube"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "maxReplicas"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["1", "1", "1"]
-comment = "the number of replicas for each resource"
-update-mode = "dynamic"
 
 [[parameter]]
 name = "lengthOfQueryPrinted"
@@ -386,7 +367,6 @@ max-backups = 0 # maximum numbers of old log files to retain.
 # In a distributed setting, the shard-groups should set to 2.
 addr-raft = "localhost:10000"
 addr-client = "localhost:20000"
-dir-data = "./cube0/node"
 dir-deploy = ""
 version = ""
 githash = ""
@@ -506,10 +486,10 @@ enable-placement-rules = true
 isolation-level = "rack"
 
 [metric]
-addr = ""
-interval = 0
-job = ""
-instance = ""
+addr = "localhost:9091"
+interval = 10
+job = "cube"
+instance = "node0"
 
 # Storage Configs
 [meta.conf]

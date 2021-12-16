@@ -42,7 +42,6 @@ import (
 	//"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -154,7 +153,6 @@ func main() {
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
-	
 
 	//close cube print info
 	log.SetLevelByString("info")
@@ -190,14 +188,13 @@ func main() {
 
 	//Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
-	strNodeId := strconv.FormatInt(NodeId, 10)
 
 	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
 
 	pci = frontend.NewPDCallbackImpl(ppu)
 	pci.Id = int(NodeId)
 
-	targetDir := config.GlobalSystemVariables.GetCubeDirPrefix() + strNodeId
+	targetDir := config.GlobalSystemVariables.GetStorePath()
 	if err := recreateDir(targetDir); err != nil {
 		logutil.Infof("Recreate dir error:%v\n", err)
 		os.Exit(RecreateDirExit)
@@ -234,6 +231,7 @@ func main() {
 		logutil.Infof("Decode cube config error:%v\n", err)
 		os.Exit(DecodeCubeConfigExit)
 	}
+	cfg.CubeConfig.DataPath = targetDir + "/cube"
 
 	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
 	if err != nil {
@@ -243,10 +241,6 @@ func main() {
 	cfg.ServerConfig = server.Cfg{}
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
-
-	if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
-		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
-	}
 
 	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {

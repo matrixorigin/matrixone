@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/matrixorigin/matrixcube/metric"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -261,6 +262,9 @@ func (h *driver) Start() error {
 		default:
 			err := h.initShardPool()
 			if err == nil {
+				if h.cfg.CubeConfig.Metric.Interval > 0 {
+					metric.StartPush(h.cfg.CubeConfig.Metric, logutil.GetGlobalLogger())
+				}
 				return err
 			}
 			time.Sleep(time.Millisecond * 100)
