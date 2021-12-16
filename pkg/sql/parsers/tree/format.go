@@ -24,7 +24,6 @@ import (
 type FmtCtx struct {
 	*strings.Builder
 	dialectType   dialect.DialectType
-	bindLocations []bindLocation
 }
 
 func NewFmtCtx(dialectType dialect.DialectType) *FmtCtx {
@@ -32,10 +31,6 @@ func NewFmtCtx(dialectType dialect.DialectType) *FmtCtx {
 		Builder:     new(strings.Builder),
 		dialectType: dialectType,
 	}
-}
-
-type bindLocation struct {
-	offset, length int
 }
 
 // NodeFormatter for formatted output of the node.
@@ -66,17 +61,6 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 			ctx.WriteByte(')')
 		}
 	}
-}
-
-// WriteArg writes a value argument into the buffer along with
-// tracking information for future substitutions.
-func (ctx *FmtCtx) WriteArg(prefix, arg string) {
-	ctx.bindLocations = append(ctx.bindLocations, bindLocation{
-		offset: ctx.Len(),
-		length: len(prefix) + len(arg),
-	})
-	ctx.WriteString(prefix)
-	ctx.WriteString(arg)
 }
 
 //needParens says if we need a parenthesis

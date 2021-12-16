@@ -422,7 +422,7 @@ import (
 %type <intervalType> interval_type
 %type <numVal> int_num_val
 
-%type <lengthOpt> length_opt
+%type <lengthOpt> length_opt length_option_opt length
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt
 %type <zeroFillOpt> zero_fill_opt
@@ -4026,7 +4026,7 @@ cast_type:
 	        },
         }
     }
-|   CHAR length_opt
+|   CHAR length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -5096,7 +5096,7 @@ time_type:
     }
 
 char_type:
-    CHAR length_opt
+    CHAR length_option_opt
     {
         locale := ""
         $$ = &tree.T{
@@ -5109,7 +5109,7 @@ char_type:
 	        },
         }
     }
-|   VARCHAR length_opt
+|   VARCHAR length
     {
         locale := ""
         $$ = &tree.T{
@@ -5322,7 +5322,19 @@ length_opt:
     {
         $$ = 0
     }
-|   '(' INTEGRAL ')'
+|	length
+
+length_option_opt:
+	{
+		$$ = -1
+	}
+|	'(' INTEGRAL ')'
+    {
+        $$ = int32($2.(int64))
+    }
+
+length:
+   '(' INTEGRAL ')'
     {
         $$ = tree.GetDisplayWith(int32($2.(int64)))
     }

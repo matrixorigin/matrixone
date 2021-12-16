@@ -597,18 +597,9 @@ type PositionedErr struct {
 
 func (p PositionedErr) Error() string {
 	if p.Near != "" {
-		return fmt.Sprintf("%s at position %v near '%s'", p.Err, p.Pos, p.Near)
+		return fmt.Sprintf("%s at position %v near '%s';", p.Err, p.Pos, p.Near)
 	}
-	return fmt.Sprintf("%s at position %v", p.Err, p.Pos)
-}
-
-// SkipStatement scans until the EOF, or end of statement is encountered.
-func (s *Scanner) SkipStatement() {
-	ch := s.cur()
-	for ch != ';' && ch != eofChar {
-		s.skip(1)
-		ch = s.cur()
-	}
+	return fmt.Sprintf("%s at position %v;", p.Err, p.Pos)
 }
 
 func (s *Scanner) skipBlank() {
