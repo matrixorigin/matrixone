@@ -1396,11 +1396,6 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 		} else {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_WRITE_BATCH_RESULT, nil, writeHandler)
 		}
-
-		//this is the last one
-		if force {
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END, nil, nil)
-		}
 	}()
 	return nil
 }
@@ -1538,81 +1533,70 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		process_block += time.Since(wait_b)
 	}()
 
-	/*
-		collect statistics from every batch.
-	*/
-	var ne *notifyEvent = nil
-	for {
-		quit := false
-		select {
-		case <-handler.closeRef.stopLoadData:
-			//get obvious cancel
-			quit = true
-			//fmt.Printf("----- get stop in load \n")
-
-		case ne = <-handler.simdCsvNotiyEventChan:
-			switch ne.neType {
-			case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-				collectWriteBatchResult(handler, ne.wbh, nil)
-			case NOTIFY_EVENT_END:
-				err = nil
+	var statsWg sync.WaitGroup
+	statsWg.Add(1)
+	go func() {
+		defer statsWg.Done()
+		/*
+			collect statistics from every batch.
+		*/
+		var ne *notifyEvent = nil
+		for {
+			quit := false
+			select {
+			case <-handler.closeRef.stopLoadData:
+				//get obvious cancel
 				quit = true
-			case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
-				NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
-				NOTIFY_EVENT_WRITE_BATCH_ERROR:
-				if !errorCanBeIgnored(ne.err) {
-					err = ne.err
+				//fmt.Printf("----- get stop in load \n")
+
+			case ne = <-handler.simdCsvNotiyEventChan:
+				switch ne.neType {
+				case NOTIFY_EVENT_WRITE_BATCH_RESULT:
+					collectWriteBatchResult(handler, ne.wbh, nil)
+				case NOTIFY_EVENT_END:
+					err = nil
+					quit = true
+				case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
+					NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
+					NOTIFY_EVENT_WRITE_BATCH_ERROR:
+					if !errorCanBeIgnored(ne.err) {
+						err = ne.err
+						quit = true
+					}
+					collectWriteBatchResult(handler, ne.wbh, ne.err)
+				default:
+					logutil.Errorf("get unsupported notify event %d", ne.neType)
 					quit = true
 				}
-				collectWriteBatchResult(handler, ne.wbh, ne.err)
-			default:
-				logutil.Errorf("get unsupported notify event %d", ne.neType)
-				quit = true
+			}
+
+			if quit {
+				//
+				handler.simdCsvReader.Close()
+				handler.closeOnceGetParsedLinesChan.Do(func() {
+					close(handler.simdCsvGetParsedLinesChan)
+				})
+
+				break
 			}
 		}
+	}()
 
-		if quit {
-			//
-			handler.simdCsvReader.Close()
-			handler.closeOnceGetParsedLinesChan.Do(func() {
-				close(handler.simdCsvGetParsedLinesChan)
-			})
-
-			break
-		}
-	}
-
+	//until now, the last writer has been counted.
+	//There are no more new threads can be spawned.
+	//wait csvReader and rowConverter to quit.
 	wg.Wait()
 
-	/*
-		drain event channel
-	*/
-	quit := false
-	for {
-		select {
-		case ne = <-handler.simdCsvNotiyEventChan:
-		default:
-			quit = true
-		}
-
-		if quit {
-			break
-		}
-
-		switch ne.neType {
-		case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-			collectWriteBatchResult(handler, ne.wbh, nil)
-		case NOTIFY_EVENT_END:
-		case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
-			NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
-			NOTIFY_EVENT_WRITE_BATCH_ERROR:
-			collectWriteBatchResult(handler, ne.wbh, ne.err)
-		default:
-		}
-	}
-
-	//wait write to quit
+	//until now, csvReader and rowConverter has quit.
+	//wait writers to quit
 	handler.simdCsvWaitWriteRoutineToQuit.Wait()
+
+	//until now, all writers has quit.
+	//tell stats to quit. NOTIFY_EVENT_END must be the last event in the queue.
+	handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END, err, nil)
+
+	//wait stats to quit
+	statsWg.Wait()
 
 	//fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 	//	handler.row2col,handler.fillBlank,handler.toStorage)
