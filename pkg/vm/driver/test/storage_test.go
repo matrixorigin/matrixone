@@ -410,7 +410,7 @@ func TestSplit(t *testing.T) {
 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(5000)
 				cfg.Replication.ShardSplitCheckDuration.Duration = 2*time.Second
 			}),
-			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
@@ -464,6 +464,7 @@ func TestSplit(t *testing.T) {
 		}
 	}
 	//check ctlg
+	time.Sleep(3 * time.Second)
 	newsids, err := catalog.GetShardIDsByTid(tid)
 	logutil.Infof("newsids are %v", newsids)
 	for _, sid := range newsids {
@@ -480,14 +481,14 @@ func TestSplit(t *testing.T) {
 		totalRowsAfterSplit += rows
 	}
 
-	batch, _ := c.AOEStorages[0].ReadAll(uint64(121), catalog.EncodeTabletName(uint64(121), tid))
+	/*batch, _ := c.AOEStorages[0].ReadAll(uint64(121), catalog.EncodeTabletName(uint64(121), tid))
 	logutil.Infof("121batches len is %v", len(batch))
 	// require.NoError(t, err)
 	batchesAfterSplit = append(batchesAfterSplit, batch...)
 
 	for _, batch := range batchesAfterSplit {
 		logutil.Infof("batchAfterSplit is %v", batch.Vecs[0].Col)
-	}
+	}*/
 	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit,totalRowsAfterSplit)
 	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
 }

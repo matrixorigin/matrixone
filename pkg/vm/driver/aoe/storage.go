@@ -748,13 +748,24 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		SplitKeys:   splitkey,
 		SplitCtx:    splitctx.Ctx,
 	}
-	logutil.Infof("total rows before split happens")
+	tname := s.tableNames()
+	batch1, _ := s.ReadAll(old.ShardID, tname[0])
+	logutil.Infof("total rows before split happens, %d", len(batch1))
 	err = s.DB.ExecSplitDatabase(execSplitCtx)
 	logutil.Infof("total rows after split happens")
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
+	waitExpect(2500, func() bool {
+		for _, tb := range metaTbls {
+			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
+			if !tb.IsHardDeleted() {
+				return false
+			}
+		}
+		return true
+	})
 	for _, shard := range news {
 		tableName := sPrefix + strconv.Itoa(int(shard.ShardID))
 		dbName := aoedb.IdToNameFactory.Encode(shard.ShardID)
@@ -833,15 +844,6 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		s.DB.DropTable(&dropCtx)
 	}
-	waitExpect(500, func() bool {
-		for _, tb := range metaTbls {
-			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
-			if !tb.IsHardDeleted() {
-				return false
-			}
-		}
-		return true
-	})
 	logutil.Infof("split:S-%d return, err is %v", old.ShardID, err)
 	return err
 }
@@ -899,10 +901,10 @@ func (s *Storage) ReadAll(sid uint64, tbl string) ([]*batch.Batch, error) {
 	}
 	relation.Data.GetBlockFactory()
 	for _, segment := range relation.Meta.SegmentSet {
-		seg := relation.Segment(segment.Id, nil)
+		seg := relation.Segment(segment.Id)
 		blks := seg.Blocks()
 		for _, blk := range blks {
-			block := seg.Block(blk, nil)
+			block := seg.Block(blk)
 			cds := make([]*bytes.Buffer, len(attrs))
 			dds := make([]*bytes.Buffer, len(attrs))
 			for i := range cds {

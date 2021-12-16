@@ -90,7 +90,7 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 		panic(err)
 	}
 	err = l.catalog.Driver.Set(key, value)
-	logutil.Infof("set key, key is %v", key)
+	logutil.Infof("set key0, key is %v", key)
 	if err != nil {
 		panic(err)
 	}
@@ -906,8 +906,8 @@ func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
 func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
 	//wait pending
 	t0 := time.Now()
-	keyExisted := false
 	for {
+		keyExisted := false
 		keys, _ := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
 		if len(keys) != 0 {
 			logutil.Infof("pending keys pre are%v", keys)

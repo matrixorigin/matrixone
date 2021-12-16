@@ -36,10 +36,12 @@ func CopyTBlockFileToDestDir(file, srcDir, destDir string, idMapFn func(*common.
 	name, _ := common.ParseTBlockfileName(file)
 	count, tag, id, err := dataio.ParseTBlockfileName(name)
 	if err != nil {
+		logutil.Infof("ParseTBlockfileName is failed %v", name)
 		return err
 	}
 	nid, err := idMapFn(&id)
 	if err != nil {
+		logutil.Infof("idMapFn is failed %v", name)
 		return err
 	}
 	src := filepath.Join(srcDir, file)
