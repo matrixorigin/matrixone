@@ -15,46 +15,63 @@
 package process
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
-func New(gm *guest.Mmu) *Process {
+func New(m *mheap.Mheap) *Process {
 	return &Process{
-		Gm: gm,
+		Mp: m,
 	}
 }
 
-// Size returns
-func (p *Process) Size() int64 {
-	return p.Gm.Size()
-}
-
-func (p *Process) HostSize() int64 {
-	return p.Gm.HostSize()
-}
-
-func (p *Process) Free(data []byte) {
-	p.Mp.Free(data)
-	p.Gm.Free(int64(cap(data)))
-}
-
-func (p *Process) Alloc(size int64) ([]byte, error) {
-	data := p.Mp.Alloc(int(size))
-	if err := p.Gm.Alloc(int64(cap(data))); err != nil {
-		p.Mp.Free(data)
-		return nil, err
+func GetSels(proc *Process) []int64 {
+	if len(proc.Reg.Ss) == 0 {
+		return make([]int64, 0, 16)
 	}
-	return data[:size], nil
+	sels := proc.Reg.Ss[0]
+	proc.Reg.Ss = proc.Reg.Ss[1:]
+	return sels[:0]
 }
 
-func (p *Process) Grow(old []byte, size int64) ([]byte, error) {
-	data, err := p.Alloc(mempool.Realloc(old, size))
+func PutSels(sels []int64, proc *Process) {
+	proc.Reg.Ss = append(proc.Reg.Ss, sels)
+}
+
+func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error) {
+	for i, vec := range proc.Reg.Vecs {
+		if int64(cap(vec.Data)) >= size {
+			vec.Ref = 0
+			vec.Or = false
+			vec.Typ = typ
+			nulls.Reset(vec.Nsp)
+			vec.Data = vec.Data[:size]
+			proc.Reg.Vecs[i] = proc.Reg.Vecs[len(proc.Reg.Vecs)-1]
+			proc.Reg.Vecs = proc.Reg.Vecs[:len(proc.Reg.Vecs)-1]
+			return vec, nil
+		}
+	}
+	data, err := mheap.Alloc(proc.Mp, size)
 	if err != nil {
 		return nil, err
 	}
-	copy(data, old)
-	return data[:size], nil
+	vec := vector.New(typ)
+	vec.Data = data
+	return vec, nil
+}
+
+func Put(proc *Process, vec *vector.Vector) {
+	proc.Reg.Vecs = append(proc.Reg.Vecs, vec)
+}
+
+func FreeRegisters(proc *Process) {
+	for _, vec := range proc.Reg.Vecs {
+		vec.Ref = 0
+		vector.Free(vec, proc.Mp)
+	}
+	proc.Reg.Vecs = proc.Reg.Vecs[:0]
 }

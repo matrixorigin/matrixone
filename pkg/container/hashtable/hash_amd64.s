@@ -14,9 +14,9 @@
 
 #include "textflag.h"
 
-// func crc32BytesHash(data unsafe.Pointer, length int) uint64
+// func Crc32BytesHash(data unsafe.Pointer, length int) uint64
 // Requires: SSE4.2
-TEXT ·crc32BytesHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32BytesHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ length+8(FP), CX
 	MOVQ CX, BX
@@ -37,17 +37,17 @@ done:
 	MOVL   BX, ret+20(FP)
 	RET
 
-// func crc32Int64Hash(data uint64) uint64
+// func Crc32Int64Hash(data uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int64Hash(SB), NOSPLIT, $0-16
+TEXT ·Crc32Int64Hash(SB), NOSPLIT, $0-16
 	MOVQ   $-1, SI
 	CRC32Q data+0(FP), SI
 	MOVQ   SI, ret+8(FP)
 	RET
 
-// func crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
+// func Crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int64BatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int64BatchHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
@@ -103,9 +103,9 @@ tailLoop:
 done:
 	RET
 
-// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
+// func Crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
@@ -171,9 +171,9 @@ DATA aesIV<>+0x30(SB)/8, $0x5A8279996ED9EBA1
 DATA aesIV<>+0x38(SB)/8, $0x8F1BBCDCCA62C1D6
 GLOBL aesIV<>(SB), (NOPTR+RODATA), $64
 
-// func aesBytesHash(data unsafe.Pointer, length int) [2]uint64
+// func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
 // Requires: AES
-TEXT ·aesBytesHash(SB), NOSPLIT, $0-32
+TEXT ·AesBytesHash(SB), NOSPLIT, $0-32
 	MOVQ data+0(FP), SI
 	MOVQ length+8(FP), CX
 	ADDQ SI, CX
@@ -234,9 +234,9 @@ tail3:
 ////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////
 
-// func crc32Int192Hash(data *[3]uint64) uint64
+// func Crc32Int192Hash(data *[3]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int192Hash(SB), NOSPLIT, $0-16
+TEXT ·Crc32Int192Hash(SB), NOSPLIT, $0-16
 	MOVQ   data+0(FP), SI
 	MOVQ   $-1, DI
 	CRC32Q (SI), DI
@@ -245,9 +245,9 @@ TEXT ·crc32Int192Hash(SB), NOSPLIT, $0-16
 	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int256Hash(data *[4]uint64) uint64
+// func Crc32Int256Hash(data *[4]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int256Hash(SB), NOSPLIT, $0-16
+TEXT ·Crc32Int256Hash(SB), NOSPLIT, $0-16
 	MOVQ   ata+0(FP), SI
 	MOVQ   $-1, DI
 	CRC32Q (SI), DI
@@ -257,9 +257,9 @@ TEXT ·crc32Int256Hash(SB), NOSPLIT, $0-16
 	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int320Hash(data *[4]uint64) uint64
+// func Crc32Int320Hash(data *[4]uint64) uint64
 // Requires: SSE4.2
-TEXT ·crc32Int320Hash(SB), NOSPLIT, $0-16
+TEXT ·Crc32Int320Hash(SB), NOSPLIT, $0-16
 	MOVQ   data+0(FP), SI
 	MOVQ   $-1, DI
 	CRC32Q (SI), DI
@@ -270,9 +270,9 @@ TEXT ·crc32Int320Hash(SB), NOSPLIT, $0-16
 	MOVQ   DI, ret+8(FP)
 	RET
 
-// func crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
+// func Crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int192BatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int192BatchHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
@@ -348,9 +348,9 @@ tailLoop:
 done:
 	RET
 
-// func crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
+// func Crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int256BatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int256BatchHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX
@@ -435,9 +435,9 @@ tailLoop:
 done:
 	RET
 
-// func crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
+// func Crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
 // Requires: SSE4.2
-TEXT ·crc32Int320BatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int320BatchHash(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
 	MOVQ hashes+8(FP), DI
 	MOVQ length+16(FP), CX

@@ -31,7 +31,7 @@ import (
 )
 
 func SortBlockColumns(cols []*vector.Vector,pk int) error {
-	sortedIdx := make([]uint32, cols[pk].Length())
+	sortedIdx := make([]uint32, vector.Length(cols[pk]))
 
 	switch cols[pk].Typ.Oid {
 	case types.T_int8:

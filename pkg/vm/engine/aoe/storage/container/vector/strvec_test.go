@@ -76,8 +76,8 @@ func TestStrVector(t *testing.T) {
 	assert.False(t, ref.HasNull())
 
 	vvec := v.New(schema.ColDefs[13].Type)
-	assert.Nil(t, vvec.Append(make([][]byte, 10010)))
-	vvec.Nsp.Add(2, 3)
+	assert.Nil(t, v.Append(vvec,  make([][]byte, 10010)))
+	nulls.Add(vvec.Nsp, 2, 3)
 	vec1 := vecs[1]
 	_, err = vec1.AppendVector(vvec, 0)
 	assert.Nil(t, err)
@@ -91,8 +91,8 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, view.HasNull())
 
 	vvec = v.New(schema.ColDefs[13].Type)
-	assert.Nil(t, vvec.Append(make([][]byte, 9999)))
-	vvec.Nsp.Add(0)
+	assert.Nil(t, v.Append(vvec,  make([][]byte, 9999)))
+	nulls.Add(vvec.Nsp, 0)
 	vecs[1] = NewStrVector(schema.ColDefs[13].Type, capacity)
 	vec2 := vecs[1]
 	_, err = vec2.AppendVector(vvec, 0)
@@ -119,18 +119,18 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, ref1.HasNull())
 	rov, err := vec2.CopyToVector()
 	assert.Nil(t, err)
-	assert.Equal(t, 10000, rov.Length())
-	assert.True(t, rov.Nsp.Any())
+	assert.Equal(t, 10000, v.Length(rov))
+	assert.True(t, nulls.Any(rov.Nsp))
 	rov2, err := vec2.CopyToVectorWithBuffer(nil, bytes.NewBuffer(make([]byte, 0)))
 	assert.Nil(t, err)
-	assert.Equal(t, 10000, rov2.Length())
-	assert.True(t, rov2.Nsp.Any())
+	assert.Equal(t, 10000, v.Length(rov2))
+	assert.True(t, nulls.Any(rov2.Nsp))
 
 	newCap := uint64(1024 * 1024)
 	vvec = v.New(schema.ColDefs[13].Type)
-	err = vvec.Append([][]byte{[]byte(strconv.Itoa(0)), []byte(strconv.Itoa(1)), []byte(strconv.Itoa(2)), []byte(strconv.Itoa(3)), []byte(strconv.Itoa(4))})
+	err = v.Append(vvec,  [][]byte{[]byte(strconv.Itoa(0)), []byte(strconv.Itoa(1)), []byte(strconv.Itoa(2)), []byte(strconv.Itoa(3)), []byte(strconv.Itoa(4))})
 	assert.Nil(t, err)
-	vvec.Nsp.Add(2, 3)
+	nulls.Add(vvec.Nsp, 2, 3)
 	var lens []int
 	var vals [][]byte
 	var ro []bool
@@ -164,7 +164,7 @@ func TestStrVector(t *testing.T) {
 
 	wg.Wait()
 	searchWg.Wait()
-	assert.Equal(t, vvec.Length()*loopCnt, vec01.Length())
+	assert.Equal(t, v.Length(vvec)*loopCnt, vec01.Length())
 	assert.False(t, vec01.IsReadonly())
 	node := StrVectorConstructor(common.NewMemFile(4*100), false, func(node buf.IMemoryNode) {
 		// do nothing
@@ -195,7 +195,7 @@ func TestStrVector(t *testing.T) {
 		assert.False(t, isn)
 		rov, err := MockVector(colDef.Type, 1000).CopyToVector()
 		assert.Nil(t, err)
-		rov.Nsp.Add(0, 1)
+		nulls.Add(rov.Nsp, 0, 1)
 		_, err = vec.AppendVector(rov, 0)
 		assert.Nil(t, err)
 		isn, err = vec.IsNull(1)

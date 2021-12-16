@@ -31,8 +31,9 @@ type Scanner struct {
 	posVarIndex         int
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
-	Pos 				int
-	buf 				string
+
+	Pos int
+	buf string
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -230,12 +231,17 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	for {
 		switch s.cur() {
 		case delim:
-			s.skip(1)
-			return typ, s.buf[start : s.Pos-1]
+			if s.peek(1) != delim {
+				s.skip(1)
+				return typ, s.buf[start : s.Pos-1]
+			}
+			fallthrough
+
 		case '\\':
 			var buffer strings.Builder
 			buffer.WriteString(s.buf[start:s.Pos])
 			return s.scanStringSlow(&buffer, delim, typ)
+
 		case eofChar:
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
@@ -244,12 +250,17 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	}
 }
 
-func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
+// scanString scans a string surrounded by the given `delim` and containing escape
+// sequencse. The given `buffer` contains the contents of the string that have
+// been scanned so far.
+func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
 	for {
 		ch := s.cur()
 		if ch == eofChar {
+			// Unterminated string.
 			return LEX_ERROR, buffer.String()
 		}
+
 		if ch != delim && ch != '\\' {
 			start := s.Pos
 			for ; s.Pos < len(s.buf); s.Pos++ {
@@ -258,6 +269,7 @@ func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) 
 					break
 				}
 			}
+
 			buffer.WriteString(s.buf[start:s.Pos])
 			if s.Pos >= len(s.buf) {
 				s.skip(1)
@@ -265,6 +277,7 @@ func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) 
 			}
 		}
 		s.skip(1)
+
 		if ch == '\\' {
 			if s.cur() == eofChar {
 				return LEX_ERROR, buffer.String()
@@ -274,12 +287,14 @@ func (s *Scanner)scanStringSlow(buffer *strings.Builder, delim uint16, typ int) 
 			} else {
 				ch = s.cur()
 			}
-		} else if ch == delim {
+		} else if ch == delim && s.cur() != delim {
 			break
 		}
+
 		buffer.WriteByte(byte(ch))
 		s.skip(1)
 	}
+
 	return typ, buffer.String()
 }
 
@@ -582,18 +597,9 @@ type PositionedErr struct {
 
 func (p PositionedErr) Error() string {
 	if p.Near != "" {
-		return fmt.Sprintf("%s at position %v near '%s'", p.Err, p.Pos, p.Near)
+		return fmt.Sprintf("%s at position %v near '%s';", p.Err, p.Pos, p.Near)
 	}
-	return fmt.Sprintf("%s at position %v", p.Err, p.Pos)
-}
-
-// SkipStatement scans until the EOF, or end of statement is encountered.
-func (s *Scanner) SkipStatement() {
-	ch := s.cur()
-	for ch != ';' && ch != eofChar {
-		s.skip(1)
-		ch = s.cur()
-	}
+	return fmt.Sprintf("%s at position %v;", p.Err, p.Pos)
 }
 
 func (s *Scanner) skipBlank() {

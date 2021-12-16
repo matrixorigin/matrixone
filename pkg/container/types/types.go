@@ -61,7 +61,11 @@ type T uint8
 type Type struct {
 	Oid       T
 	Size      int32 // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+
+	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
 	Width     int32
+
+	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
 	Precision int32
 }
 

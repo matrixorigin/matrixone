@@ -17,12 +17,12 @@
 package overload
 
 import (
+    "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ne"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vm/register"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -39,59 +39,59 @@ func init() {
                 rtl := {.RETURN_TYPE_LEN}
                 switch {
                 case lc && !rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), SelsType)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), SelsType)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.DecodeInt64Slice(vec.Data)
                     rs = rs[:len(rvs)]
-                    if rv.Nsp.Any() {
-                        vec.SetCol(ne.{.RTYP}NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+                    if nulls.Any(rv.Nsp) {
+                        vector.SetCol(vec, ne.{.RTYP}NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
                     } else {
-                        vec.SetCol(ne.{.RTYP}NeScalar(lvs[0], rvs, rs))
+                        vector.SetCol(vec, ne.{.RTYP}NeScalar(lvs[0], rvs, rs))
                     }
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return vec, nil
                 case !lc && rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), SelsType)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), SelsType)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.DecodeInt64Slice(vec.Data)
                     rs = rs[:len(lvs)]
-                    if lv.Nsp.Any() {
-                        vec.SetCol(ne.{.LTYP}NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+                    if nulls.Any(lv.Nsp) {
+                        vector.SetCol(vec, ne.{.LTYP}NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
                     } else {
-                        vec.SetCol(ne.{.LTYP}NeScalar(rvs[0], lvs, rs))
+                        vector.SetCol(vec, ne.{.LTYP}NeScalar(rvs[0], lvs, rs))
                     }
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     return vec, nil
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), SelsType)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), SelsType)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.DecodeInt64Slice(vec.Data)
                 rs = rs[:len(lvs)]
                 switch {
-                case lv.Nsp.Any() && rv.Nsp.Any():
-                    vec.SetCol(ne.{.LTYP}NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
-                case !lv.Nsp.Any() && rv.Nsp.Any():
-                    vec.SetCol(ne.{.LTYP}NeNullable(lvs, rvs, rv.Nsp.Np, rs))
-                case lv.Nsp.Any() && !rv.Nsp.Any():
-                    vec.SetCol(ne.{.LTYP}NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+                case nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.{.LTYP}NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+                case !nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.{.LTYP}NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+                case nulls.Any(lv.Nsp) && !nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.{.LTYP}NeNullable(lvs, rvs, lv.Nsp.Np, rs))
                 default:
-                    vec.SetCol(ne.{.LTYP}Ne(lvs, rvs, rs))
+                    vector.SetCol(vec, ne.{.LTYP}Ne(lvs, rvs, rs))
                 }
                 if lv.Ref == 0 {
-                    register.Put(proc, lv)
+                    process.Put(proc, lv)
                 }
                 if rv.Ref == 0 {
-                    register.Put(proc, rv)
+                    process.Put(proc, rv)
                 }
                 return vec, nil
             },
@@ -108,59 +108,59 @@ func init() {
                 rtl := {.RETURN_TYPE_LEN}
                 switch {
                 case lc && !rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs.Lengths)), SelsType)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(rvs.Lengths)), SelsType)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.DecodeInt64Slice(vec.Data)
                     rs = rs[:len(rvs.Lengths)]
-                    if rv.Nsp.Any() {
-                        vec.SetCol(ne.StrNeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+                    if nulls.Any(rv.Nsp) {
+                        vector.SetCol(vec, ne.StrNeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
                     } else {
-                        vec.SetCol(ne.StrNeScalar(lvs.Data, rvs, rs))
+                        vector.SetCol(vec, ne.StrNeScalar(lvs.Data, rvs, rs))
                     }
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return vec, nil
                 case !lc && rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs.Lengths)), SelsType)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs.Lengths)), SelsType)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.DecodeInt64Slice(vec.Data)
                     rs = rs[:len(lvs.Lengths)]
-                    if lv.Nsp.Any() {
-                        vec.SetCol(ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+                    if nulls.Any(lv.Nsp) {
+                        vector.SetCol(vec, ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
                     } else {
-                        vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
+                        vector.SetCol(vec, ne.StrNeScalar(rvs.Data, lvs, rs))
                     }
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     return vec, nil
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs.Lengths)), SelsType)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs.Lengths)), SelsType)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.DecodeInt64Slice(vec.Data)
                 rs = rs[:len(lvs.Lengths)]
                 switch {
-                case lv.Nsp.Any() && rv.Nsp.Any():
-                    vec.SetCol(ne.StrNeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
-                case !lv.Nsp.Any() && rv.Nsp.Any():
-                    vec.SetCol(ne.StrNeNullable(lvs, rvs, rv.Nsp.Np, rs))
-                case lv.Nsp.Any() && !rv.Nsp.Any():
-                    vec.SetCol(ne.StrNeNullable(lvs, rvs, lv.Nsp.Np, rs))
+                case nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.StrNeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+                case !nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.StrNeNullable(lvs, rvs, rv.Nsp.Np, rs))
+                case nulls.Any(lv.Nsp) && !nulls.Any(rv.Nsp):
+                    vector.SetCol(vec, ne.StrNeNullable(lvs, rvs, lv.Nsp.Np, rs))
                 default:
-                    vec.SetCol(ne.StrNe(lvs, rvs, rs))
+                    vector.SetCol(vec, ne.StrNe(lvs, rvs, rs))
                 }
                 if lv.Ref == 0 {
-                    register.Put(proc, lv)
+                    process.Put(proc, lv)
                 }
                 if rv.Ref == 0 {
-                    register.Put(proc, rv)
+                    process.Put(proc, rv)
                 }
                 return vec, nil
             },

@@ -194,16 +194,26 @@ func NewCatalog(store driver.CubeDriver) *Catalog {
 	catalog := Catalog{
 		Driver: store,
 	}
-	tmpId, err := store.AllocID(String2Bytes(cDBIDPrefix), idPoolSize)
-	if err != nil {
-		panic(fmt.Sprintf("init db id pool failed. %v", err))
+	var tmpId uint64
+	var err error
+	for {
+		tmpId, err = store.AllocID(String2Bytes(cDBIDPrefix), idPoolSize)
+		if err == nil {
+			break
+		}
+		logutil.Warnf("init db id pool failed. %v", err)
 	}
+
 	catalog.dbIdEnd = tmpId
 	catalog.dbIdStart = tmpId - idPoolSize + 1
-	tmpId, err = store.AllocID(String2Bytes(cTableIDPrefix), idPoolSize)
-	if err != nil {
-		panic(fmt.Sprintf("init table id pool failed. %v", err))
+	for {
+		tmpId, err = store.AllocID(String2Bytes(cTableIDPrefix), idPoolSize)
+		if err == nil {
+			break
+		}
+		logutil.Warnf("init table id pool failed. %v", err)
 	}
+
 	catalog.tidEnd = tmpId
 	catalog.tidStart = tmpId - idPoolSize + 1
 	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", catalog.dbIdStart, catalog.dbIdEnd, catalog.tidStart, catalog.tidEnd)

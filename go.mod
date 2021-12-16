@@ -14,7 +14,7 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
 	github.com/huandu/go-clone v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20211215085751-341ac61afe35
+	github.com/matrixorigin/matrixcube v0.0.0-20211215062926-0753a9cc3a33
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
@@ -23,7 +23,7 @@ require (
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.19.1
-	golang.org/x/sys v0.0.0-20211205182925-97ca703d548d
+	golang.org/x/sys v0.0.0-20211216021012-1d35b9e2eb4e
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
@@ -101,9 +101,9 @@ require (
 	go.opentelemetry.io/proto/otlp v0.7.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
-	golang.org/x/crypto v0.0.0-20211202192323-5770296d904e // indirect
-	golang.org/x/exp v0.0.0-20211207001050-4f2595aad9e7 // indirect
-	golang.org/x/net v0.0.0-20211206223403-eba003a116a9 // indirect
+	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3 // indirect
+	golang.org/x/exp v0.0.0-20211214223157-bafe2e20209a // indirect
+	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11 // indirect
 	google.golang.org/genproto v0.0.0-20210602131652-f16073e35f0c // indirect

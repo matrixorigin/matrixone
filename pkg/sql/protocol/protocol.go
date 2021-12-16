@@ -19,62 +19,89 @@ import (
 	"encoding/gob"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/min"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/starcount"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/sum"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/bag/inner"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergesum"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/summarize"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func init() {
 	gob.Register(Field{})
-	gob.Register(Extend{})
-	gob.Register(TopArgument{})
-	gob.Register(JoinArgument{})
-	gob.Register(GroupArgument{})
+	gob.Register(OffsetArgument{})
+	gob.Register(LimitArgument{})
+	gob.Register(OrderArgument{})
+	gob.Register(OplusArgument{})
+	gob.Register(OutputArgument{})
 	gob.Register(ProjectionArgument{})
+	gob.Register(RestrictArgument{})
+	gob.Register(TopArgument{})
+	gob.Register(MergeArgument{})
+	gob.Register(DedupArgument{})
+
+	gob.Register(PlusArgument{})
+	gob.Register(TransformArgument{})
+	gob.Register(Transformer{})
+	gob.Register(TimesArgument{})
+	gob.Register(UntransformArgument{})
 
 	gob.Register(Source{})
-	gob.Register(Segment{})
+	gob.Register(Node{})
+	gob.Register(Scope{})
+
+	gob.Register(types.Date(0))
+	gob.Register(types.Datetime(0))
 }
 
 func EncodeScope(s Scope, buf *bytes.Buffer) error {
+	// Magic
 	buf.Write(encoding.EncodeUint32(uint32(s.Magic)))
-	{
-		data, err := encoding.Encode(s.Data)
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-	}
-	if err := EncodeInstructions(s.Ins, buf); err != nil {
+	// DataSource
+	data, err := encoding.Encode(s.DataSource)
+	if err != nil {
 		return err
 	}
-	buf.Write(encoding.EncodeUint32(uint32(len(s.Ss))))
-	for i := range s.Ss {
-		if err := EncodeScope(s.Ss[i], buf); err != nil {
+	buf.Write(encoding.EncodeUint32(uint32(len(data))))
+	buf.Write(data)
+	// PreScopes
+	buf.Write(encoding.EncodeUint32(uint32(len(s.PreScopes))))
+	for i := range s.PreScopes {
+		if err := EncodeScope(s.PreScopes[i], buf); err != nil {
 			return err
 		}
+	}
+	// Node
+	data, err = encoding.Encode(s.NodeInfo)
+	if err != nil {
+		return err
+	}
+	buf.Write(encoding.EncodeUint32(uint32(len(data))))
+	buf.Write(data)
+	// Ins
+	if err := EncodeInstructions(s.Ins, buf); err != nil {
+		return err
 	}
 	return nil
 }
@@ -82,29 +109,35 @@ func EncodeScope(s Scope, buf *bytes.Buffer) error {
 func DecodeScope(data []byte) (Scope, []byte, error) {
 	var s Scope
 	var err error
-
+	// Magic
 	s.Magic = int(encoding.DecodeUint32(data[:4]))
 	data = data[4:]
-	{
-		n := int(encoding.DecodeUint32(data[:4]))
-		data = data[4:]
-		if n > 0 {
-			if err = encoding.Decode(data, &s.Data); err != nil {
-				return s, nil, err
-			}
-			data = data[n:]
-		}
-	}
-	if s.Ins, data, err = DecodeInstructions(data); err != nil {
+	// DataSource
+	n := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if err = encoding.Decode(data[:n], &s.DataSource); err != nil {
 		return s, nil, err
 	}
-	n := int(encoding.DecodeUint32(data[:4]))
+	data = data[n:]
+	// PreScopes
+	n = encoding.DecodeUint32(data[:4])
 	data = data[4:]
-	s.Ss = make([]Scope, n)
-	for i := 0; i < n; i++ {
-		if s.Ss[i], data, err = DecodeScope(data); err != nil {
+	s.PreScopes = make([]Scope, n)
+	for i := uint32(0); i < n; i++ {
+		if s.PreScopes[i], data, err = DecodeScope(data); err != nil {
 			return s, nil, err
 		}
+	}
+	// Node
+	n = encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if err = encoding.Decode(data[:n], &s.NodeInfo); err != nil {
+		return s, nil, err
+	}
+	data = data[n:]
+	// Ins
+	if s.Ins, data, err = DecodeInstructions(data); err != nil {
+		return s, nil, err
 	}
 	return s, data, nil
 }
@@ -126,19 +159,19 @@ func DecodeInstructions(data []byte) (vm.Instructions, []byte, error) {
 	data = data[4:]
 	ins = make(vm.Instructions, n)
 	for i := uint32(0); i < n; i++ {
-		in, rdata, err := DecodeInstruction(data)
+		in, d, err := DecodeInstruction(data)
 		if err != nil {
 			return ins, nil, err
 		}
 		ins[i] = in
-		data = rdata
+		data = d
 	}
 	return ins, data, nil
 }
 
 func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
-	buf.Write(encoding.EncodeUint32(uint32(in.Code)))
-	switch in.Code {
+	buf.Write(encoding.EncodeUint32(uint32(in.Op)))
+	switch in.Op {
 	case vm.Top:
 		arg := in.Arg.(*top.Argument)
 		fs := make([]Field, len(arg.Fs))
@@ -155,9 +188,9 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
 		return nil
-	case vm.Dedup:
-		arg := in.Arg.(*dedup.Argument)
-		data, err := encoding.Encode(arg.Attrs)
+	case vm.Plus:
+		arg := in.Arg.(*plus.Argument)
+		data, err := encoding.Encode(PlusArgument{Typ: arg.Typ})
 		if err != nil {
 			return err
 		}
@@ -166,19 +199,63 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		return nil
 	case vm.Limit:
 		arg := in.Arg.(*limit.Argument)
-		buf.Write(encoding.EncodeUint64(arg.Limit))
+		data, err := encoding.Encode(LimitArgument{Seen: arg.Seen, Limit: arg.Limit})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
 		return nil
-	case vm.Group:
-		arg := in.Arg.(*group.Argument)
-		es := make([]Extend, len(arg.Es))
-		for i, e := range arg.Es {
-			es[i] = Extend{
-				Op:    e.Op,
-				Name:  e.Name,
-				Alias: e.Alias,
+	case vm.Times:
+		arg := in.Arg.(*times.Argument)
+		var transArg TransformArgument
+		if arg.Arg != nil {
+			transArg = TransferTransformArg(arg.Arg)
+		}
+		data, err := encoding.Encode(TimesArgument{
+			IsBare:   arg.IsBare,
+			R:        arg.R,
+			Rvars:    arg.Rvars,
+			Ss:       arg.Ss,
+			Svars:    arg.Svars,
+			FreeVars: arg.FreeVars,
+			VarsMap:  arg.VarsMap,
+			Arg:	  transArg,
+		})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+
+		if arg.Arg != nil {
+			if arg.Arg.Restrict != nil {
+				if err = EncodeExtend(arg.Arg.Restrict.E, buf); err != nil {
+					return err
+				}
+			}
+			if arg.Arg.Projection != nil {
+				buf.Write(encoding.EncodeUint32(uint32(len(arg.Arg.Projection.Es))))
+				for _, e := range arg.Arg.Projection.Es {
+					if err = EncodeExtend(e, buf); err != nil {
+						return err
+					}
+				}
 			}
 		}
-		data, err := encoding.Encode(GroupArgument{Gs: arg.Gs, Es: es, Refer: arg.Refer})
+		return nil
+	case vm.Merge:
+		// arg := in.Arg.(*merge.Argument)
+		data, err := encoding.Encode(MergeArgument{})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Dedup:
+		// arg := in.Arg.(*dedup.Argument)
+		data, err := encoding.Encode(DedupArgument{})
 		if err != nil {
 			return err
 		}
@@ -194,7 +271,25 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 				fs[i].Type = int8(f.Type)
 			}
 		}
-		data, err := encoding.Encode(fs)
+		data, err := encoding.Encode(OrderArgument{Fs: fs})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Oplus:
+		arg := in.Arg.(*oplus.Argument)
+		data, err := encoding.Encode(OplusArgument{Typ: arg.Typ})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Output:
+		arg := in.Arg.(*output.Argument)
+		data, err := encoding.Encode(OutputArgument{Attrs: arg.Attrs})
 		if err != nil {
 			return err
 		}
@@ -203,33 +298,51 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		return nil
 	case vm.Offset:
 		arg := in.Arg.(*offset.Argument)
-		buf.Write(encoding.EncodeUint64(arg.Offset))
-		return nil
-	case vm.Transfer:
-		return nil
-	case vm.Restrict:
-		arg := in.Arg.(*restrict.Argument)
-		return EncodeExtend(arg.E, buf)
-	case vm.Summarize:
-		arg := in.Arg.(*summarize.Argument)
-		es := make([]Extend, len(arg.Es))
-		for i, e := range arg.Es {
-			es[i] = Extend{
-				Op:    e.Op,
-				Name:  e.Name,
-				Alias: e.Alias,
-			}
-		}
-		data, err := encoding.Encode(GroupArgument{Es: es, Refer: arg.Refer})
+		data, err := encoding.Encode(OffsetArgument{Seen: arg.Seen, Offset: arg.Offset})
 		if err != nil {
 			return err
 		}
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
 		return nil
+	case vm.Restrict:
+		arg := in.Arg.(*restrict.Argument)
+		data, err := encoding.Encode(RestrictArgument{Attrs: arg.Attrs})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return EncodeExtend(arg.E, buf)
+	case vm.Connector:
+	case vm.Transform:
+		arg := in.Arg.(*transform.Argument)
+		transArg := TransferTransformArg(arg)
+		data, err := encoding.Encode(transArg)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		if arg != nil {
+			if arg.Restrict != nil {
+				if err = EncodeExtend(arg.Restrict.E, buf); err != nil {
+					return err
+				}
+			}
+			if arg.Projection != nil {
+				buf.Write(encoding.EncodeUint32(uint32(len(arg.Projection.Es))))
+				for _, e := range arg.Projection.Es {
+					if err = EncodeExtend(e, buf); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
 	case vm.Projection:
 		arg := in.Arg.(*projection.Argument)
-		data, err := encoding.Encode(ProjectionArgument{Attrs: arg.Attrs, Refer: arg.Refer})
+		data, err := encoding.Encode(ProjectionArgument{Rs: arg.Rs, As: arg.As})
 		if err != nil {
 			return err
 		}
@@ -242,91 +355,9 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 			}
 		}
 		return nil
-	case vm.BagInnerJoin:
-		arg := in.Arg.(*inner.Argument)
-		data, err := encoding.Encode(JoinArgument{
-			R:      arg.R,
-			S:      arg.S,
-			Rattrs: arg.Rattrs,
-			Sattrs: arg.Sattrs,
-		})
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-		return nil
-	case vm.Merge:
-		return nil
-	case vm.MergeTop:
-		arg := in.Arg.(*mergetop.Argument)
-		fs := make([]Field, len(arg.Fs))
-		{
-			for i, f := range arg.Fs {
-				fs[i].Attr = f.Attr
-				fs[i].Type = int8(f.Type)
-			}
-		}
-		data, err := encoding.Encode(TopArgument{Limit: arg.Limit, Fs: fs})
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-		return nil
-	case vm.MergeDedup:
-		arg := in.Arg.(*mergededup.Argument)
-		data, err := encoding.Encode(arg.Attrs)
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-		return nil
-	case vm.MergeOrder:
-		arg := in.Arg.(*mergeorder.Argument)
-		fs := make([]Field, len(arg.Fs))
-		{
-			for i, f := range arg.Fs {
-				fs[i].Attr = f.Attr
-				fs[i].Type = int8(f.Type)
-			}
-		}
-		data, err := encoding.Encode(fs)
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-		return nil
-	case vm.MergeGroup:
-		arg := in.Arg.(*mergegroup.Argument)
-		es := make([]Extend, len(arg.Es))
-		for i, e := range arg.Es {
-			es[i] = Extend{
-				Op:    e.Op,
-				Name:  e.Name,
-				Alias: e.Alias,
-			}
-		}
-		data, err := encoding.Encode(GroupArgument{Gs: arg.Gs, Es: es, Refer: arg.Refer})
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(data))))
-		buf.Write(data)
-		return nil
-	case vm.MergeSummarize:
-		arg := in.Arg.(*mergesum.Argument)
-		es := make([]Extend, len(arg.Es))
-		for i, e := range arg.Es {
-			es[i] = Extend{
-				Op:    e.Op,
-				Name:  e.Name,
-				Alias: e.Alias,
-			}
-		}
-		data, err := encoding.Encode(GroupArgument{Es: es, Refer: arg.Refer})
+	case vm.UnTransform:
+		arg := in.Arg.(*untransform.Argument)
+		data, err := encoding.Encode(UntransformArgument{Type: arg.Type, FreeVars: arg.FreeVars})
 		if err != nil {
 			return err
 		}
@@ -339,11 +370,9 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 
 func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 	var in vm.Instruction
-
-	switch in.Code = int(encoding.DecodeUint32(data[:4])); in.Code {
+	switch in.Op = int(encoding.DecodeUint32(data[:4])); in.Op {
 	case vm.Top:
 		var arg TopArgument
-
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
@@ -362,57 +391,107 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			Limit: arg.Limit,
 		}
 		data = data[n:]
-	case vm.Dedup:
-		var attrs []string
-
+	case vm.Plus:
+		var arg PlusArgument
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
-		if err := encoding.Decode(data[:n], &attrs); err != nil {
+		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		in.Arg = &dedup.Argument{Attrs: attrs}
+		in.Arg = &plus.Argument{
+			Typ: arg.Typ,
+		}
 		data = data[n:]
 	case vm.Limit:
-		data = data[4:]
-		n := encoding.DecodeUint64(data[:8])
-		in.Arg = &limit.Argument{Limit: n}
-		data = data[8:]
-	case vm.Group:
-		var arg GroupArgument
-
+		var arg LimitArgument
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		es := make([]aggregation.Extend, len(arg.Es))
-		{
-			for i, e := range arg.Es {
-				es[i].Op = e.Op
-				es[i].Name = e.Name
-				es[i].Alias = e.Alias
-			}
-		}
-		in.Arg = &group.Argument{
-			Es:    es,
-			Gs:    arg.Gs,
-			Refer: arg.Refer,
+		in.Arg = &limit.Argument{
+			Seen:  arg.Seen,
+			Limit: arg.Limit,
 		}
 		data = data[n:]
-	case vm.Order:
-		var arg []Field
-
+	case vm.Times:
+		var arg TimesArgument
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		fs := make([]order.Field, len(arg))
+		timeArg := &times.Argument{
+			IsBare:   arg.IsBare,
+			R:        arg.R,
+			Rvars:    arg.Rvars,
+			Ss:       arg.Ss,
+			Svars:    arg.Svars,
+			FreeVars: arg.FreeVars,
+			VarsMap:  arg.VarsMap,
+			Arg:	  UntransferTransformArg(arg.Arg),
+		}
+		data = data[n:]
+
+		if timeArg.Arg != nil {
+			if timeArg.Arg.Restrict != nil {
+				e, d, err := DecodeExtend(data)
+				if err != nil {
+					return in, nil, err
+				}
+				data = d
+				timeArg.Arg.Restrict.E = e
+			}
+			if timeArg.Arg.Projection != nil {
+				n = encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				es := make([]extend.Extend, n)
+				for i := uint32(0); i < n; i++ {
+					e, d, err := DecodeExtend(data)
+					if err != nil {
+						return in, nil, err
+					}
+					es[i] = e
+					data = d
+				}
+				timeArg.Arg.Projection.Es = es
+			}
+		}
+		in.Arg = timeArg
+	case vm.Merge:
+		var arg MergeArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &merge.Argument{}
+		data = data[n:]
+	case vm.Dedup:
+		var arg DedupArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &dedup.Argument{}
+		data = data[n:]
+	case vm.Order:
+		var arg OrderArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		fs := make([]order.Field, len(arg.Fs))
 		{
-			for i, f := range arg {
+			for i, f := range arg.Fs {
 				fs[i].Attr = f.Attr
 				fs[i].Type = order.Direction(f.Type)
 			}
@@ -421,49 +500,101 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			Fs: fs,
 		}
 		data = data[n:]
-	case vm.Offset:
-		data = data[4:]
-		n := encoding.DecodeUint64(data[:8])
-		in.Arg = &offset.Argument{Offset: n}
-		data = data[8:]
-	case vm.Transfer:
-		data = data[4:]
-		in.Arg = &transfer.Argument{}
-	case vm.Restrict:
-		data = data[4:]
-		{
-			e, rdata, err := DecodeExtend(data)
-			if err != nil {
-				return in, nil, err
-			}
-			in.Arg = &restrict.Argument{E: e}
-			data = rdata
-		}
-	case vm.Summarize:
-		var arg GroupArgument
-
+	case vm.Oplus:
+		var arg OplusArgument
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		es := make([]aggregation.Extend, len(arg.Es))
-		{
-			for i, e := range arg.Es {
-				es[i].Op = e.Op
-				es[i].Name = e.Name
-				es[i].Alias = e.Alias
-			}
-		}
-		in.Arg = &summarize.Argument{
-			Es:    es,
-			Refer: arg.Refer,
+		in.Arg = &oplus.Argument{
+			Typ: arg.Typ,
 		}
 		data = data[n:]
+	case vm.Output:
+		var arg OutputArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &output.Argument{
+			Attrs: arg.Attrs,
+		}
+		data = data[n:]
+	case vm.Offset:
+		var arg OffsetArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &offset.Argument{
+			Seen:   arg.Seen,
+			Offset: arg.Offset,
+		}
+		data = data[n:]
+	case vm.Restrict:
+		var arg RestrictArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		data = data[n:]
+		e, d, err := DecodeExtend(data)
+		if err != nil {
+			return in, nil, err
+		}
+		in.Arg = &restrict.Argument{
+			Attrs: arg.Attrs,
+			E:     e,
+		}
+		data = d
+	case vm.Connector:
+		data = data[4:]
+		in.Arg = &connector.Argument{}
+	case vm.Transform:
+		var arg TransformArgument
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		data = data[n:]
+		transArg := UntransferTransformArg(arg)
+		if transArg != nil {
+			if transArg.Restrict != nil {
+				e, d, err := DecodeExtend(data)
+				if err != nil {
+					return in, nil, err
+				}
+				data = d
+				transArg.Restrict.E = e
+			}
+			if transArg.Projection != nil {
+				n = encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				es := make([]extend.Extend, n)
+				for i := uint32(0); i < n; i++ {
+					e, d, err := DecodeExtend(data)
+					if err != nil {
+						return in, nil, err
+					}
+					es[i] = e
+					data = d
+				}
+				transArg.Projection.Es = es
+			}
+		}
+		in.Arg = transArg
 	case vm.Projection:
 		var arg ProjectionArgument
-
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
@@ -475,366 +606,41 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 		data = data[4:]
 		es := make([]extend.Extend, n)
 		for i := uint32(0); i < n; i++ {
-			e, rdata, err := DecodeExtend(data)
+			e, d, err := DecodeExtend(data)
 			if err != nil {
 				return in, nil, err
 			}
 			es[i] = e
-			data = rdata
+			data = d
 		}
 		in.Arg = &projection.Argument{
-			Es:    es,
-			Attrs: arg.Attrs,
-			Refer: arg.Refer,
+			Es: es,
+			As: arg.As,
+			Rs: arg.Rs,
 		}
-	case vm.BagInnerJoin:
-		var arg JoinArgument
-
+	case vm.UnTransform:
+		var arg UntransformArgument
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		in.Arg = &inner.Argument{
-			R:      arg.R,
-			S:      arg.S,
-			Rattrs: arg.Rattrs,
-			Sattrs: arg.Sattrs,
-		}
-		data = data[n:]
-	case vm.Merge:
-		data = data[4:]
-		in.Arg = &merge.Argument{}
-	case vm.MergeTop:
-		var arg TopArgument
-
-		data = data[4:]
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &arg); err != nil {
-			return in, nil, err
-		}
-		fs := make([]mergetop.Field, len(arg.Fs))
-		{
-			for i, f := range arg.Fs {
-				fs[i].Attr = f.Attr
-				fs[i].Type = mergetop.Direction(f.Type)
-			}
-		}
-		in.Arg = &mergetop.Argument{
-			Fs:    fs,
-			Flg:   true,
-			Limit: arg.Limit,
-		}
-		data = data[n:]
-	case vm.MergeDedup:
-		var attrs []string
-
-		data = data[4:]
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &attrs); err != nil {
-			return in, nil, err
-		}
-		in.Arg = &mergededup.Argument{Flg: true, Attrs: attrs}
-		data = data[n:]
-	case vm.MergeOrder:
-		var arg []Field
-
-		data = data[4:]
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &arg); err != nil {
-			return in, nil, err
-		}
-		fs := make([]mergeorder.Field, len(arg))
-		{
-			for i, f := range arg {
-				fs[i].Attr = f.Attr
-				fs[i].Type = mergeorder.Direction(f.Type)
-			}
-		}
-		in.Arg = &mergeorder.Argument{
-			Fs:  fs,
-			Flg: true,
-		}
-		data = data[n:]
-	case vm.MergeGroup:
-		var arg GroupArgument
-
-		data = data[4:]
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &arg); err != nil {
-			return in, nil, err
-		}
-		es := make([]aggregation.Extend, len(arg.Es))
-		{
-			for i, e := range arg.Es {
-				es[i].Op = e.Op
-				es[i].Name = e.Name
-				es[i].Alias = e.Alias
-			}
-		}
-		in.Arg = &mergegroup.Argument{
-			Es:    es,
-			Flg:   true,
-			Gs:    arg.Gs,
-			Refer: arg.Refer,
-		}
-		data = data[n:]
-	case vm.MergeSummarize:
-		var arg GroupArgument
-
-		data = data[4:]
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &arg); err != nil {
-			return in, nil, err
-		}
-		es := make([]aggregation.Extend, len(arg.Es))
-		{
-			for i, e := range arg.Es {
-				es[i].Op = e.Op
-				es[i].Name = e.Name
-				es[i].Alias = e.Alias
-			}
-		}
-		in.Arg = &mergesum.Argument{
-			Es:    es,
-			Refer: arg.Refer,
+		in.Arg = &untransform.Argument{
+			Type:     arg.Type,
+			FreeVars: arg.FreeVars,
 		}
 		data = data[n:]
 	}
 	return in, data, nil
 }
 
-func EncodePartition(def *engine.PartitionBy, buf *bytes.Buffer) error {
-	data, err := encoding.Encode(def.Fields)
-	if err != nil {
-		return err
-	}
-	buf.Write(encoding.EncodeUint32(uint32(len(data))))
-	buf.Write(data)
-	if n := len(def.List); n > 0 {
-		buf.Write(encoding.EncodeUint32(uint32(n)))
-		for i := 0; i < n; i++ {
-			if err := EncodeListPartition(def.List[i], buf); err != nil {
-				return err
-			}
-		}
-	} else {
-		buf.Write(encoding.EncodeUint32(0))
-	}
-	if n := len(def.Range); n > 0 {
-		buf.Write(encoding.EncodeUint32(uint32(n)))
-		for i := 0; i < n; i++ {
-			if err := EncodeRangePartition(def.Range[i], buf); err != nil {
-				return err
-			}
-		}
-	} else {
-		buf.Write(encoding.EncodeUint32(0))
-	}
-	return nil
-}
-
-func DecodePartition(data []byte) (*engine.PartitionBy, []byte, error) {
-	def := new(engine.PartitionBy)
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &def.Fields); err != nil {
-			return nil, nil, err
-		}
-		data = data[n:]
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			ldef, remaing, err := DecodeListPartition(data)
-			if err != nil {
-				return nil, nil, err
-			}
-			def.List = append(def.List, ldef)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			rdef, remaing, err := DecodeRangePartition(data)
-			if err != nil {
-				return nil, nil, err
-			}
-			def.Range = append(def.Range, rdef)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	return def, data, nil
-}
-
-func EncodeListPartition(def engine.ListPartition, buf *bytes.Buffer) error {
-	if def.Subpartition != nil {
-		buf.WriteByte(ListWithSub)
-	} else {
-		buf.WriteByte(List)
-	}
-	buf.Write(encoding.EncodeUint32(uint32(len(def.Name))))
-	buf.WriteString(def.Name)
-	if n := len(def.Extends); n > 0 {
-		buf.Write(encoding.EncodeUint32(uint32(n)))
-		for _, e := range def.Extends {
-			if err := EncodeExtend(e, buf); err != nil {
-				return err
-			}
-		}
-	}
-	if def.Subpartition != nil {
-		return EncodePartition(def.Subpartition, buf)
-	}
-	return nil
-}
-
-func DecodeListPartition(data []byte) (engine.ListPartition, []byte, error) {
-	var def engine.ListPartition
-
-	typ := data[0]
-	data = data[1:]
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		def.Name = string(data[:n])
-		data = data[n:]
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
-			if err != nil {
-				return def, nil, err
-			}
-			def.Extends = append(def.Extends, e)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
-		if err != nil {
-			return def, nil, err
-		}
-		data = remaing
-		def.Subpartition = sub
-	}
-	return def, data, nil
-}
-
-func EncodeRangePartition(def engine.RangePartition, buf *bytes.Buffer) error {
-	if def.Subpartition != nil {
-		buf.WriteByte(RangeWithSub)
-	} else {
-		buf.WriteByte(Range)
-	}
-	buf.Write(encoding.EncodeUint32(uint32(len(def.Name))))
-	buf.WriteString(def.Name)
-	if n := len(def.From); n > 0 {
-		buf.Write(encoding.EncodeUint32(uint32(n)))
-		for _, e := range def.From {
-			if err := EncodeExtend(e, buf); err != nil {
-				return err
-			}
-		}
-	}
-	if n := len(def.To); n > 0 {
-		buf.Write(encoding.EncodeUint32(uint32(n)))
-		for _, e := range def.To {
-			if err := EncodeExtend(e, buf); err != nil {
-				return err
-			}
-		}
-	}
-	if def.Subpartition != nil {
-		return EncodePartition(def.Subpartition, buf)
-	}
-	return nil
-}
-
-func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
-	var def engine.RangePartition
-
-	typ := data[0]
-	data = data[1:]
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		def.Name = string(data[:n])
-		data = data[n:]
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
-			if err != nil {
-				return def, nil, err
-			}
-			def.From = append(def.From, e)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data[:4]); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
-			if err != nil {
-				return def, nil, err
-			}
-			def.To = append(def.To, e)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
-		if err != nil {
-			return def, nil, err
-		}
-		data = remaing
-		def.Subpartition = sub
-	}
-	return def, data, nil
-}
-
 func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 	switch v := e.(type) {
-	case *extend.Attribute:
-		buf.WriteByte(Attr)
-		buf.Write(encoding.EncodeUint16(uint16(v.Type)))
-		buf.Write(encoding.EncodeUint32(uint32(len(v.Name))))
-		buf.WriteString(v.Name)
-		return nil
 	case *extend.UnaryExtend:
 		buf.WriteByte(Unary)
 		buf.Write(encoding.EncodeUint32(uint32(v.Op)))
 		return EncodeExtend(v.E, buf)
-	case *extend.ParenExtend:
-		buf.WriteByte(Paren)
-		return EncodeExtend(v.E, buf)
-	case *extend.ValueExtend:
-		buf.WriteByte(Value)
-		return EncodeVector(v.V, buf)
 	case *extend.BinaryExtend:
 		buf.WriteByte(Binary)
 		buf.Write(encoding.EncodeUint32(uint32(v.Op)))
@@ -842,25 +648,46 @@ func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 			return err
 		}
 		return EncodeExtend(v.Right, buf)
+	case *extend.MultiExtend:
+		buf.WriteByte(Multi)
+		buf.Write(encoding.EncodeUint32(uint32(v.Op)))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Args))))
+		for _, arg := range v.Args {
+			if err := EncodeExtend(arg, buf); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *extend.ParenExtend:
+		buf.WriteByte(Paren)
+		return EncodeExtend(v.E, buf)
+	case *extend.FuncExtend:
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Name))))
+		buf.WriteString(v.Name)
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Args))))
+		for _, arg := range v.Args {
+			if err := EncodeExtend(arg, buf); err != nil {
+				return err
+			}
+		}
+		return nil
+	case *extend.StarExtend:
+		return nil
+	case *extend.ValueExtend:
+		buf.WriteByte(Value)
+		return EncodeVector(v.V, buf)
+	case *extend.Attribute:
+		buf.WriteByte(Attr)
+		buf.Write(encoding.EncodeUint16(uint16(v.Type)))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Name))))
+		buf.WriteString(v.Name)
+		return nil
 	}
-	return fmt.Errorf("'%s' not yet support", e)
+	return fmt.Errorf("'%v' not yet support", e)
 }
 
 func DecodeExtend(data []byte) (extend.Extend, []byte, error) {
 	switch data[0] {
-	case Attr:
-		e := new(extend.Attribute)
-		data = data[1:]
-		e.Type = types.T(encoding.DecodeUint16(data[:2]))
-		data = data[2:]
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			e.Name = string(data[:n])
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		return e, data, nil
 	case Unary:
 		e := new(extend.UnaryExtend)
 		data = data[1:]
@@ -871,24 +698,6 @@ func DecodeExtend(data []byte) (extend.Extend, []byte, error) {
 			return nil, nil, err
 		}
 		e.E = ext
-		return e, data, nil
-	case Paren:
-		e := new(extend.ParenExtend)
-		data = data[1:]
-		ext, data, err := DecodeExtend(data)
-		if err != nil {
-			return nil, nil, err
-		}
-		e.E = ext
-		return e, data, nil
-	case Value:
-		e := new(extend.ValueExtend)
-		data = data[1:]
-		v, data, err := DecodeVector(data)
-		if err != nil {
-			return nil, nil, err
-		}
-		e.V = v
 		return e, data, nil
 	case Binary:
 		e := new(extend.BinaryExtend)
@@ -905,26 +714,139 @@ func DecodeExtend(data []byte) (extend.Extend, []byte, error) {
 		}
 		e.Left, e.Right = le, re
 		return e, data, nil
+	case Multi:
+		e := new(extend.MultiExtend)
+		data = data[1:]
+		e.Op = int(encoding.DecodeUint32(data[:4]))
+		data = data[4:]
+		if n := encoding.DecodeUint32(data); n > 0 {
+			data = data[4:]
+			for i := uint32(0); i < n; i++ {
+				ext, d, err := DecodeExtend(data)
+				if err != nil {
+					return nil, nil, err
+				}
+				e.Args = append(e.Args, ext)
+				data = d
+			}
+		} else {
+			data = data[4:]
+		}
+		return e, data, nil
+	case Paren:
+		e := new(extend.ParenExtend)
+		data = data[1:]
+		ext, data, err := DecodeExtend(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.E = ext
+		return e, data, nil
+	case Func:
+		e := new(extend.FuncExtend)
+		data = data[1:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			e.Name = string(data[:n])
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data); n > 0 {
+			data = data[4:]
+			for i := uint32(0); i < n; i++ {
+				ext, d, err := DecodeExtend(data)
+				if err != nil {
+					return nil, nil, err
+				}
+				e.Args = append(e.Args, ext)
+				data = d
+			}
+		} else {
+			data = data[4:]
+		}
+		return e, data, nil
+	case Star:
+		e := new(extend.StarExtend)
+		return e, data, nil
+	case Value:
+		e := new(extend.ValueExtend)
+		data = data[1:]
+		v, data, err := DecodeVector(data)
+		if err != nil {
+			return nil, nil, err
+		}
+		e.V = v
+		return e, data, nil
+	case Attr:
+		e := new(extend.Attribute)
+		data = data[1:]
+		e.Type = types.T(encoding.DecodeUint16(data[:2]))
+		data = data[2:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			e.Name = string(data[:n])
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		return e, data, nil
 	}
 	return nil, nil, fmt.Errorf("'%v' extend not yet support", data[0])
 }
 
 func EncodeBatch(bat *batch.Batch, buf *bytes.Buffer) error {
+	// SelsData
+	buf.Write(encoding.EncodeUint32(uint32(len(bat.SelsData))))
+	buf.Write(bat.SelsData)
+	// Sels
 	sn := len(bat.Sels)
 	buf.Write(encoding.EncodeUint32(uint32(sn)))
 	if sn > 0 {
 		buf.Write(encoding.EncodeInt64Slice(bat.Sels))
 	}
+	// Attrs
 	data, err := encoding.Encode(bat.Attrs)
 	if err != nil {
 		return err
 	}
 	buf.Write(encoding.EncodeUint32(uint32(len(data))))
 	buf.Write(data)
+	// Vecs
 	buf.Write(encoding.EncodeUint32(uint32(len(bat.Vecs))))
 	for _, vec := range bat.Vecs {
 		if err := EncodeVector(vec, buf); err != nil {
 			return err
+		}
+	}
+	// Zs
+	zn := len(bat.Zs)
+	buf.Write(encoding.EncodeUint32(uint32(zn)))
+	if zn > 0 {
+		buf.Write(encoding.EncodeInt64Slice(bat.Zs))
+	}
+	// As
+	data, err = encoding.Encode(bat.As)
+	if err != nil {
+		return err
+	}
+	buf.Write(encoding.EncodeUint32(uint32(len(data))))
+	buf.Write(data)
+	// Refs
+	rn := len(bat.Refs)
+	buf.Write(encoding.EncodeUint32(uint32(rn)))
+	if rn > 0 {
+		buf.Write(encoding.EncodeUint64Slice(bat.Refs))
+	}
+	// Rs
+	n := len(bat.Rs)
+	buf.Write(encoding.EncodeUint32(uint32(n)))
+	if n > 0 {
+		for i := 0; i < n; i++ {
+			err := EncodeRing(bat.Rs[i], buf)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -932,12 +854,19 @@ func EncodeBatch(bat *batch.Batch, buf *bytes.Buffer) error {
 
 func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	bat := batch.New(true, []string{})
+	// SelsData
+	n := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	bat.SelsData = data[:n]
+	data = data[n:]
+	// Sels
 	sn := encoding.DecodeUint32(data[:4])
 	data = data[4:]
 	if sn > 0 {
 		bat.Sels = encoding.DecodeInt64Slice(data[:sn*8])
 		data = data[sn*8:]
 	}
+	// Attrs
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &bat.Attrs); err != nil {
@@ -947,6 +876,7 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	} else {
 		data = data[4:]
 	}
+	// Vecs
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
@@ -960,7 +890,1592 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	} else {
 		data = data[4:]
 	}
+	// Zs
+	zn := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if zn > 0 {
+		bat.Zs = encoding.DecodeInt64Slice(data[:zn*8])
+		data = data[zn*8:]
+	}
+	// As
+	if n := encoding.DecodeUint32(data); n > 0 {
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &bat.As); err != nil {
+			return nil, nil, err
+		}
+		data = data[n:]
+	} else {
+		data = data[4:]
+	}
+	// Refs
+	rn := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if rn > 0 {
+		bat.Refs = encoding.DecodeUint64Slice(data[:rn*8])
+		data = data[rn*8:]
+	}
+	// Rs
+	n = encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if n > 0 {
+		for i := uint32(0); i < n; i++ {
+			r, d, err := DecodeRing(data)
+			if err != nil {
+				return nil, nil, err
+			}
+			data = d
+			bat.Rs = append(bat.Rs, r)
+		}
+	}
 	return bat, data, nil
+}
+
+func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
+	switch v := r.(type) {
+	case *avg.AvgRing:
+		buf.WriteByte(AvgRing)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *count.CountRing:
+		buf.WriteByte(CountRing)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *starcount.CountRing:
+		buf.WriteByte(StarCountRing)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Int8Ring:
+		buf.WriteByte(MaxInt8Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt8Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Int16Ring:
+		buf.WriteByte(MaxInt16Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt16Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Int32Ring:
+		buf.WriteByte(MaxInt32Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Int64Ring:
+		buf.WriteByte(MaxInt64Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.UInt8Ring:
+		buf.WriteByte(MaxUInt8Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint8Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.UInt16Ring:
+		buf.WriteByte(MaxUInt16Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint16Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.UInt32Ring:
+		buf.WriteByte(MaxUInt32Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.UInt64Ring:
+		buf.WriteByte(MaxUInt64Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Float32Ring:
+		buf.WriteByte(MaxFloat32Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.Float64Ring:
+		buf.WriteByte(MaxFloat64Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *max.StrRing:
+		buf.WriteByte(MaxFloat64Ring)
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			for i := 0; i < n; i++ {
+				m := len(v.Vs[i])
+				buf.Write(encoding.EncodeUint32(uint32(m)))
+				if m > 0 {
+					buf.Write(v.Vs[i])
+				}
+			}
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Int8Ring:
+		buf.WriteByte(MinInt8Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt8Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Int16Ring:
+		buf.WriteByte(MinInt16Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt16Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Int32Ring:
+		buf.WriteByte(MinInt32Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Int64Ring:
+		buf.WriteByte(MinInt64Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.UInt8Ring:
+		buf.WriteByte(MinUInt8Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint8Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.UInt16Ring:
+		buf.WriteByte(MinUInt16Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint16Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.UInt32Ring:
+		buf.WriteByte(MinUInt32Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.UInt64Ring:
+		buf.WriteByte(MinUInt64Ring)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Float32Ring:
+		buf.WriteByte(MinFloat32Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat32Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.Float64Ring:
+		buf.WriteByte(MinFloat64Ring)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *min.StrRing:
+		buf.WriteByte(MinFloat64Ring)
+		// Ns
+		n := len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			for i := 0; i < n; i++ {
+				m := len(v.Vs[i])
+				buf.Write(encoding.EncodeUint32(uint32(m)))
+				if m > 0 {
+					buf.Write(v.Vs[i])
+				}
+			}
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *sum.IntRing:
+		buf.WriteByte(SumIntRing)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *sum.UIntRing:
+		buf.WriteByte(SumUIntRing)
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeUint64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *sum.FloatRing:
+		buf.WriteByte(SumFloatRing)
+		// IsE
+		/*
+			var isE uint8
+			if v.IsE {
+				isE = 1
+			}
+			buf.Write(encoding.EncodeUint8(isE))
+		*/
+		// Da
+		n := len(v.Da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(v.Da)
+		}
+		// Ns
+		n = len(v.Ns)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.Ns))
+		}
+		// Vs
+		n = len(v.Vs)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.Vs))
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	}
+	return fmt.Errorf("'%v' ring not yet support", r)
+}
+
+func DecodeRing(data []byte) (ring.Ring, []byte, error) {
+	switch data[0] {
+	case AvgRing:
+		r := new(avg.AvgRing)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case CountRing:
+		r := new(count.CountRing)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case StarCountRing:
+		r := new(starcount.CountRing)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxInt8Ring:
+		r := new(max.Int8Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt8Slice(data[:n*1])
+			data = data[n*1:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxInt16Ring:
+		r := new(max.Int16Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxInt32Ring:
+		r := new(max.Int32Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxInt64Ring:
+		r := new(max.Int64Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxUInt8Ring:
+		r := new(max.UInt8Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint8Slice(data[:n*1])
+			data = data[n*1:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxUInt16Ring:
+		r := new(max.UInt16Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxUInt32Ring:
+		r := new(max.UInt32Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxUInt64Ring:
+		r := new(max.UInt64Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxFloat32Ring:
+		r := new(max.Float32Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxFloat64Ring:
+		r := new(max.Float64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MaxStrRing:
+		r := new(max.StrRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = make([][]byte, n)
+			for i := uint32(0); i < n; i++ {
+				m := encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				if m > 0 {
+					r.Vs[i] = data[:n]
+					data = data[n:]
+				}
+			}
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinInt8Ring:
+		r := new(min.Int8Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt8Slice(data[:n*1])
+			data = data[n*1:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinInt16Ring:
+		r := new(min.Int16Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinInt32Ring:
+		r := new(min.Int32Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinInt64Ring:
+		r := new(min.Int64Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinUInt8Ring:
+		r := new(min.UInt8Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint8Slice(data[:n*1])
+			data = data[n*1:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinUInt16Ring:
+		r := new(min.UInt16Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinUInt32Ring:
+		r := new(min.UInt32Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinUInt64Ring:
+		r := new(min.UInt64Ring)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinFloat32Ring:
+		r := new(min.Float32Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinFloat64Ring:
+		r := new(min.Float64Ring)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case MinStrRing:
+		r := new(min.StrRing)
+		data = data[1:]
+		// Ns
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = make([][]byte, n)
+			for i := uint32(0); i < n; i++ {
+				m := encoding.DecodeUint32(data[:4])
+				data = data[4:]
+				if m > 0 {
+					r.Vs[i] = data[:n]
+					data = data[n:]
+				}
+			}
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumIntRing:
+		r := new(sum.IntRing)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumUIntRing:
+		r := new(sum.UIntRing)
+		data = data[1:]
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeUint64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	case SumFloatRing:
+		r := new(sum.FloatRing)
+		data = data[1:]
+		// IsE
+		/*
+			isE := encoding.DecodeUint8(data[:1])
+			if isE > 0 {
+				r.IsE = true
+			}
+			data = data[1:]
+		*/
+		// Da
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Da = data[:n]
+			data = data[n:]
+		}
+		// Ns
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Ns = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Vs
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Vs = encoding.DecodeFloat64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
+	}
+	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])
 }
 
 func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
@@ -979,6 +2494,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]int8)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeInt8Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_int16:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -993,6 +2511,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]int16)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeInt16Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_int32:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1007,6 +2528,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]int32)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeInt32Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_int64, types.T_sel:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1021,6 +2545,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]int64)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeInt64Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_uint8:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1035,6 +2562,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]uint8)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeUint8Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_uint16:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1049,6 +2579,8 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]uint16)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeUint16Slice(vs))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_uint32:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1063,6 +2595,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]uint32)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeUint32Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_uint64:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1077,6 +2612,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]uint64)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeUint64Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_float32:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1091,6 +2629,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]float32)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeFloat32Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_float64:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1105,6 +2646,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]float64)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeFloat64Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_char, types.T_varchar:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1132,6 +2676,9 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 				}
 			}
 		}
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	case types.T_tuple:
 		buf.Write(encoding.EncodeType(v.Typ))
 		buf.Write(encoding.EncodeUint64(v.Ref))
@@ -1151,6 +2698,43 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		if len(data) > 0 {
 			buf.Write(data)
 		}
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
+	case types.T_date:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]types.Date)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeDateSlice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
+	case types.T_datetime:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]types.Datetime)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeDatetimeSlice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
+		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
+		buf.Write(v.Data)
 	default:
 		return fmt.Errorf("unsupport vector type '%s'", v.Typ)
 	}
@@ -1182,6 +2766,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_int16:
 		v := vector.New(typ)
@@ -1204,6 +2794,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_int32:
 		v := vector.New(typ)
@@ -1226,6 +2822,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_int64, types.T_sel:
 		v := vector.New(typ)
@@ -1248,6 +2850,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_uint8:
 		v := vector.New(typ)
@@ -1270,6 +2878,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_uint16:
 		v := vector.New(typ)
@@ -1292,6 +2906,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_uint32:
 		v := vector.New(typ)
@@ -1314,6 +2934,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_uint64:
 		v := vector.New(typ)
@@ -1336,6 +2962,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_float32:
 		v := vector.New(typ)
@@ -1358,6 +2990,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_float64:
 		v := vector.New(typ)
@@ -1380,6 +3018,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_char, types.T_varchar:
 		v := vector.New(typ)
@@ -1416,6 +3060,12 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	case types.T_tuple:
 		v := vector.New(typ)
@@ -1442,6 +3092,68 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		} else {
 			data = data[4:]
 		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
+		return v, data, nil
+	case types.T_date:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeDateSlice(data[:n*4])
+			data = data[n*4:]
+		} else {
+			data = data[4:]
+		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
+		return v, data, nil
+	case types.T_datetime:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeDatetimeSlice(data[:n*8])
+			data = data[n*8:]
+		} else {
+			data = data[4:]
+		}
+		v.Link = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		v.Data = data[:n]
+		data = data[n:]
 		return v, data, nil
 	}
 	return nil, nil, fmt.Errorf("unsupport vector type '%s'", typ)

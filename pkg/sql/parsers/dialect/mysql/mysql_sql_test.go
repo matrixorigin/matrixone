@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+		input: "create index idx1 using bsi on A (a) ",
 	}
 )
 
@@ -55,6 +55,28 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create index idx1 using bsi on A (a) ",
+	}, {
+		input: "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
+		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
+	}, {
+		input: "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
+		output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
+	}, {
+		input: "INSERT INTO t1 SET f1 = -1;",
+		output: "insert into t1 (f1) values (-1)",
+	}, {
+		input: "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
+	}, {
+		input: "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
+		output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",
+	}, {
+		input: "create table t (a int) properties('a' = 'b')",
+		output: "create table t (a int) properties(a = b)",
+	}, {
+		input: "load data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "load data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 escaped by \\ lines",
+	}, {
 		input: "create table t (a int, b char, check (1 + 1) enforced)",
 	}, {
 		input: "create table t (a int, b char, foreign key sdf (a, b) references B(a asc, b desc))",
@@ -69,27 +91,6 @@ var (
 		output: "create table t (a int, b char, primary key p1 using none (a, b))",
 	}, {
 		input: "create table t (a int, b char, primary key idx (a, b))",
-	}, {
-		input: "INSERT INTO t1 SET f1 = -1.0e+30, f2 = 'exore', f3 = 123",
-		output: "insert into t1 (f1, f2, f3) values (-1.0e+30, exore, 123)",
-	}, {
-		input: "INSERT INTO t1 SET f1 = -1;",
-		output: "insert into t1 (f1) values (-1)",
-	}, {
-		input: "INSERT INTO pet VALUES row('Sunsweet05','Dsant05','otter','f',30.11,2), row('Sunsweet06','Dsant06','otter','m',30.11,3);",
-		output: "insert into pet values (Sunsweet05, Dsant05, otter, f, 30.11, 2), (Sunsweet06, Dsant06, otter, m, 30.11, 3)",
-	}, {
-		input: "create index idx1 using bsi on A (a) ",
-	}, {
-		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
-	}, {
-		input: `revoke super(a, b, c) 
-				on procedure db.func 
-				from 'h1'@'h3'`,
-		output: "revoke super(a, b, c) on procedure db.func from h1@h3",
-	}, {
-		input: "select * from t where a like '\\\\%'",
-		output: "select * from t where a like \\%",
 	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set NAMES = utf8mb4 utf8mb4_general_ci",
@@ -600,6 +601,8 @@ var (
 		input: "select * from (select a from t) as t1 cross join t2",
 	}, {
 		input: "select * from t1 join t2 using (a, b, c)",
+	}, {
+		input: "select * from t1 straight_join t2 on 1 + 213",
 	}, {
 		input: "select * from t1 straight_join t2 on col",
 	}, {

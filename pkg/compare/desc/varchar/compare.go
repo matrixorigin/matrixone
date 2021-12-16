@@ -16,6 +16,7 @@ package varchar
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -36,12 +37,12 @@ func (c *compare) Set(idx int, v *vector.Vector) {
 }
 
 func (c *compare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process) error {
-	if c.vs[vecSrc].Nsp.Any() && c.vs[vecSrc].Nsp.Contains(uint64(src)) {
-		c.vs[vecDst].Nsp.Add(uint64(dst))
+	if nulls.Any(c.vs[vecSrc].Nsp) && nulls.Contains(c.vs[vecSrc].Nsp, uint64(src)) {
+		nulls.Add(c.vs[vecDst].Nsp, uint64(dst))
 		return nil
 	}
-	c.vs[vecDst].Nsp.Del(uint64(dst))
-	return c.vs[vecDst].Copy(c.vs[vecSrc], dst, src, proc)
+	nulls.Del(c.vs[vecDst].Nsp, uint64(dst))
+	return vector.Copy(c.vs[vecDst], c.vs[vecSrc], dst, src, proc.Mp)
 }
 
 func (c *compare) Compare(veci, vecj int, vi, vj int64) int {

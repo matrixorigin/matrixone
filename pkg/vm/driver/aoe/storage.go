@@ -28,12 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
@@ -186,7 +186,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
 	}
-	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
+	atomic.AddUint64(&s.stats.WrittenKeys, uint64(vector.Length(bat.Vecs[0])))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
 	ctx := aoedb.AppendCtx{
 		TableMutationCtx: aoedb.TableMutationCtx{
@@ -355,7 +355,7 @@ func (s *Storage) tableNames() (names []string) {
 			names = append(names, tbName)
 		}
 	}
-	return
+	return names
 }
 
 type splitCtx struct {
@@ -443,9 +443,9 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				continue
 			}
 			ids := rel.SegmentIds()
-			seg := rel.Segment(ids.Ids[len(ids.Ids)-1], nil)
+			seg := rel.Segment(ids.Ids[len(ids.Ids)-1])
 			blks := seg.Blocks()
-			blk := seg.Block(blks[len(blks)-1], nil)
+			blk := seg.Block(blks[len(blks)-1])
 			cds := make([]*bytes.Buffer, len(attrs))
 			dds := make([]*bytes.Buffer, len(attrs))
 			for i := range cds {
@@ -454,9 +454,9 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			}
 			refs := make([]uint64, len(attrs))
 			bat, _ := blk.Read(refs, attrs, cds, dds)
-			shardId := bat.GetVector(sShardId)
-			logIndex := bat.GetVector(sLogIndex)
-			metadate := bat.GetVector(sMetadata)
+			shardId := batch.GetVector(bat, sShardId)
+			logIndex := batch.GetVector(bat, sLogIndex)
+			metadate := batch.GetVector(bat, sMetadata)
 			logutil.Infof("GetInitialStates Metadata is %v\n",
 				metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
 			customReq := &meta.ShardLocalState{}
@@ -752,7 +752,7 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	err = s.DB.ExecSplitDatabase(execSplitCtx)
 	logutil.Infof("total rows after split happens")
 	if err != nil {
-		logutil.Errorf("Split:S-%d ExecSplitDatabase fail, err is %v.", old.ShardID, err)
+		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
 	for _, shard := range news {

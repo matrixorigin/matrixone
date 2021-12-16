@@ -18,12 +18,14 @@ import (
 	"bytes"
 	"encoding/gob"
 
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 func init() {
@@ -33,15 +35,15 @@ func init() {
 	gob.Register(aoe.ColumnInfo{})
 }
 
-func Transfer(sid, tid, typ uint64, name, comment string,
-	defs []engine.TableDef, pdef *engine.PartitionBy) (aoe.TableInfo, error) {
+func Transfer(sid, tid, typ uint64, name string,
+	defs []engine.TableDef) (aoe.TableInfo, error) {
 	var tbl aoe.TableInfo
 
 	tbl.SchemaId = sid
 	tbl.Id = tid
 	tbl.Name = name
 	tbl.Type = typ
-	tbl.Comment = []byte(comment)
+	tbl.Comment = []byte(CommentDefs(defs))
 	tbl.Columns = ColumnDefs(sid, tid, defs)
 	mp := make(map[string]uint64)
 	{
@@ -50,32 +52,36 @@ func Transfer(sid, tid, typ uint64, name, comment string,
 		}
 	}
 	tbl.Indices = IndexDefs(sid, tid, mp, defs)
-	if pdef != nil {
-		data, err := PartitionDef(pdef)
-		if err != nil {
-			return tbl, err
-		}
+	tbl.Properties, _ = PropertyDef(defs)
+	data, err := PartitionDef(defs)
+	if err != nil {
+		return tbl, err
+	}
+	if data != nil {
 		tbl.Partition = data
 	}
 	return tbl, nil
 }
 
-func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, string, []engine.TableDef, *engine.PartitionBy, error) {
+func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.TableDef, error) {
 	var err error
 	var defs []engine.TableDef
-	var pdef *engine.PartitionBy
+	var pdef *engine.PartitionByDef
+	var comment *engine.CommentDef
 
 	if len(tbl.Partition) > 0 {
 		if pdef, _, err = protocol.DecodePartition(tbl.Partition); err != nil {
-			return 0, 0, 0, "", "", nil, nil, err
+			return 0, 0, 0, "", nil, err
 		}
+		defs = append(defs, pdef)
 	}
 	for _, col := range tbl.Columns {
 		defs = append(defs, &engine.AttributeDef{
-			Attr: metadata.Attribute{
-				Alg:  col.Alg,
-				Name: col.Name,
-				Type: col.Type,
+			Attr: engine.Attribute{
+				Alg:     compress.T(col.Alg),
+				Name:    col.Name,
+				Type:    col.Type,
+				Default: col.Default,
 			},
 		})
 	}
@@ -86,7 +92,11 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, string, []en
 			Name:     idx.Name,
 		})
 	}
-	return tbl.SchemaId, tbl.Id, tbl.Type, tbl.Name, string(tbl.Comment), defs, pdef, nil
+	if tbl.Comment != nil {
+		comment.Comment = string(tbl.Comment)
+		defs = append(defs, comment)
+	}
+	return tbl.SchemaId, tbl.Id, tbl.Type, tbl.Name, defs, nil
 }
 
 func EncodeTable(tbl aoe.TableInfo) ([]byte, error) {
@@ -99,6 +109,7 @@ func DecodeTable(data []byte) (aoe.TableInfo, error) {
 	err := encoding.Decode(data, &tbl)
 	return tbl, err
 }
+
 func EncodeIndex(idx aoe.IndexInfo) ([]byte, error) {
 	return encoding.Encode(idx)
 }
@@ -149,32 +160,72 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	var id uint64
 	var cols []aoe.ColumnInfo
-
+	var primaryKeys []string
+	for _, def := range defs {
+		if v, ok := def.(*engine.PrimaryIndexDef); ok {
+			primaryKeys = v.Names
+		}
+	}
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
-			cols = append(cols, aoe.ColumnInfo{
-				SchemaId:    sid,
-				TableID:     tid,
-				Id:          id,
-				Name:        v.Attr.Name,
-				Alg:         v.Attr.Alg,
-				Type:        v.Attr.Type,
-				Default:     v.Attr.Default,
-				PrimaryKey:  v.Attr.PrimaryKey,
-				NullAbility: v.Attr.Nullability,
-			})
+			col := aoe.ColumnInfo{
+				SchemaId: sid,
+				TableID:  tid,
+				Id:       id,
+				Name:     v.Attr.Name,
+				Alg:      int(v.Attr.Alg),
+				Type:     v.Attr.Type,
+				Default:  v.Attr.Default,
+			}
+			for _, primaryKey := range primaryKeys {
+				if col.Name == primaryKey {
+					col.PrimaryKey = true
+				}
+			}
+			cols = append(cols, col)
 			id++
 		}
 	}
 	return cols
 }
 
-func PartitionDef(def *engine.PartitionBy) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := protocol.EncodePartition(def, &buf); err != nil {
-		return nil, err
+func CommentDefs(defs []engine.TableDef) string {
+	for _, def := range defs {
+		if c, ok := def.(*engine.CommentDef); ok {
+			return c.Comment
+		}
 	}
-	return buf.Bytes(), nil
+	return ""
+}
+
+func PartitionDef(defs []engine.TableDef) ([]byte, error) {
+	for _, def := range defs {
+		if p, ok := def.(*engine.PartitionByDef); ok {
+			var buf bytes.Buffer
+			if err := protocol.EncodePartition(p, &buf); err != nil {
+				return nil, err
+			}
+			return buf.Bytes(), nil
+		}
+	}
+	return nil, nil
+}
+
+func PropertyDef(defs []engine.TableDef) ([]aoe.Property, error) {
+	for _, def := range defs {
+		if propertiesDef, ok := def.(*engine.PropertiesDef); ok {
+			properties := make([]aoe.Property, len(propertiesDef.Properties))
+			for i, engineProperty := range propertiesDef.Properties {
+				property := aoe.Property{
+					Key:   engineProperty.Key,
+					Value: engineProperty.Value,
+				}
+				properties[i] = property
+			}
+			return properties, nil
+		}
+	}
+	return nil, nil
 }
 
 func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
@@ -189,16 +240,14 @@ func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
 	return defs
 }
 
-func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
-	attrs := make([]metadata.Attribute, len(tbl.Columns))
+func Attribute(tbl aoe.TableInfo) []engine.Attribute {
+	attrs := make([]engine.Attribute, len(tbl.Columns))
 	for i, col := range tbl.Columns {
-		attrs[i] = metadata.Attribute{
-			Alg:         col.Alg,
-			Name:        col.Name,
-			Type:        col.Type,
-			Default:     col.Default,
-			PrimaryKey:  col.PrimaryKey,
-			Nullability: col.NullAbility,
+		attrs[i] = engine.Attribute{
+			Alg:     compress.T(col.Alg),
+			Name:    col.Name,
+			Type:    col.Type,
+			Default: col.Default,
 		}
 	}
 	return attrs

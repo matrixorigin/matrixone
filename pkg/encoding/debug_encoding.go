@@ -20,8 +20,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 	"reflect"
 	"unsafe"
 )

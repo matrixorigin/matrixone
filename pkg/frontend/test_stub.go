@@ -34,7 +34,7 @@ import (
 	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -86,9 +86,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			return nil, err
 		}
 		cfg := config.Config{}
-		cfg.ServerConfig = server.Cfg{
-			//Addr: fmt.Sprintf("127.0.0.1:809%d", i),
-		}
+		cfg.ServerConfig = server.Cfg{}
 		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 20,
 		}
@@ -171,10 +169,11 @@ type FrontendStub struct{
 	wg sync.WaitGroup
 	cf *CloseFlag
 	pci *PDCallbackImpl
+	proc *process.Process
 }
 
 func NewFrontendStub() (*FrontendStub,error) {
-	e,srv,err := getMemEngineAndComputationEngine()
+	e, srv, err, proc := getMemEngineAndComputationEngine()
 	if err != nil {
 		return nil,err
 	}
@@ -199,6 +198,7 @@ func NewFrontendStub() (*FrontendStub,error) {
 		kvForEpochgc: storage.NewTestStorage(),
 		cf:&CloseFlag{},
 		pci:pci,
+		proc:proc,
 	},nil
 }
 
@@ -219,29 +219,28 @@ func CloseFrontendStub(fs *FrontendStub) error {
 var testPorts = []int{6002, 6003, 6004}
 var testConfigFile = "./test/system_vars_config.toml"
 
-func getMemEngineAndComputationEngine()(engine.Engine,rpcserver.Server,error) {
+func getMemEngineAndComputationEngine() (engine.Engine, rpcserver.Server, error, *process.Process) {
 	e, err := testutil.NewTestEngine()
 	if err != nil {
-		return nil,nil, err
+		return nil, nil, err, nil
 	}
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
+	proc := process.New(mheap.New(gm))
 	{
 		proc.Id = "0"
 		proc.Lim.Size = 10 << 32
 		proc.Lim.BatchRows = 10 << 32
 		proc.Lim.PartitionRows = 10 << 32
-		proc.Refer = make(map[string]uint64)
 	}
 
 	srv, err := testutil.NewTestServer(e, proc)
 	if err != nil {
-		return nil,nil, err
+		return nil, nil, err, nil
 	}
 
 	go srv.Run()
-	return e,srv,err
+	return e, srv, err, proc
 }
 
 func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
@@ -279,7 +278,7 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, metadata.Nodes{}, nil)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
 
 	return pu,nil
 }
@@ -294,7 +293,7 @@ type ChannelProtocolStub struct {
 }
 
 func NewChannelProtocolStub () (*ChannelProtocolStub,error) {
-	e,srv,err := getMemEngineAndComputationEngine()
+	e, srv, err, _ := getMemEngineAndComputationEngine()
 	if err != nil {
 		return nil,err
 	}

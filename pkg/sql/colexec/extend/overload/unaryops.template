@@ -17,13 +17,13 @@
 package overload
 
 import (
+    "github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/neg"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/not"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
 func init() {
@@ -41,15 +41,15 @@ func init() {
                     return v, nil
                 }
                 vs := v.Col.([]L_GO_TYPE)
-                vec, err := register.Get(proc, int64(rtl) * int64(len(vs)), v.Typ)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(vs)), v.Typ)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(vs)]
                 vec.Col = rs
-                vec.Nsp.Set(v.Nsp)
-                vec.SetCol(neg.{.RETTYP}Neg(vs, rs))
+                nulls.Set(vec.Nsp, v.Nsp)
+                vector.SetCol(vec, neg.{.RETTYP}Neg(vs, rs))
                 return vec, nil
             },
         },
@@ -71,7 +71,7 @@ func init() {
                      return v, nil
                  }
                  vs := v.Col.([]L_GO_TYPE)
-                 vec, err := register.Get(proc, int64(rtl) * int64(len(vs)), types.Type{
+                 vec, err := process.Get(proc, int64(rtl) * int64(len(vs)), types.Type{
                          Oid:    types.RETURN_TYPE_OID,
                          Size:   {.RETURN_TYPE_LEN},
                  })
@@ -80,8 +80,8 @@ func init() {
                  }
                  rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                  rs = rs[:len(vs)]
-                 vec.SetCol(not.{.LTYP}Not(vs, rs))
-                 vec.Nsp.Set(v.Nsp)
+                 vector.SetCol(vec, not.{.LTYP}Not(vs, rs))
+                 nulls.Set(vec.Nsp, v.Nsp)
                  return vec, nil
              },
          },

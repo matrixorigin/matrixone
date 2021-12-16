@@ -40,7 +40,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 		}
 	}()
 	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID())
+	pro := NewMysqlClientProtocol(IO, nextConnectionID(),int(rm.pu.SV.GetMaxBytesInOutbufToFlush()))
 	exe := NewMysqlCmdExecutor()
 	ses := NewSessionWithParameterUnit(rm.pu)
 	routine := NewRoutine(rs, pro, exe, ses)

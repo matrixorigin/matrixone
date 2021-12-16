@@ -37,8 +37,8 @@ func (a *Attribute) ReturnType() types.T {
 	return a.Type
 }
 
-func (a *Attribute) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vector, types.T, error) {
-	return bat.GetVector(a.Name), a.Type, nil
+func (a *Attribute) Eval(bat *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
+	return batch.GetVector(bat, a.Name), a.Type, nil
 }
 
 func (a *Attribute) Eq(e Extend) bool {

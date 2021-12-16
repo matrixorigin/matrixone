@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"math/rand"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"math/rand"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"time"
 )
 
@@ -42,16 +43,16 @@ func (r *relation) ID() string {
 }
 
 //Segment returns the segment according to the segmentInfo.
-func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
+func (r *relation) Segment(si SegmentInfo) aoe.Segment {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0))
 	}()
-	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)), proc)
+	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)))
 }
 
 //Segments returns all the SegmentIfo in the relation.
-func (r *relation) Segments() []engine.SegmentInfo {
+func (r *relation) Segments() []SegmentInfo {
 	return r.segments
 }
 
@@ -61,7 +62,7 @@ func (r *relation) Index() []*engine.IndexTableDef {
 }
 
 //Attribute returns all the attributes of the table.
-func (r *relation) Attribute() []metadata.Attribute {
+func (r *relation) Attribute() []engine.Attribute {
 	return helper.Attribute(*r.tbl)
 }
 
@@ -84,14 +85,7 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	}
 	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
-func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
-	idxInfo:= helper.IndexDefs(r.pid,r.tbl.Id,nil,defs)
-	//TODO
-	return r.catalog.CreateIndex(epoch,idxInfo[0])
-}
-func (r *relation) DropIndex(epoch uint64, name string) error{
-	return r.catalog.DropIndex(epoch,r.tbl.Id,r.tbl.SchemaId,name)
-}
+
 func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
@@ -106,4 +100,64 @@ func (r *relation) Rows() int64 {
 
 func (r *relation) Size(_ string) int64 {
 	return 0
+}
+
+func (r *relation) Nodes() engine.Nodes {
+	return r.nodes
+}
+
+func (r *relation) TableDefs() []engine.TableDef {
+	_, _, _, _, defs, _ := helper.UnTransfer(*r.tbl)
+	return defs
+}
+
+func (r *relation) AddTableDef(u uint64, def engine.TableDef) error {
+	return nil
+}
+
+func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
+	return nil
+}
+
+func (r *relation) NewReader(num int) []engine.Reader {
+	readers := make([]engine.Reader, num)
+	var i int
+	if len(r.segments) == 0 {
+		for i = 0; i < num; i++ {
+			readers[i] = &aoeReader{blocks: nil}
+		}
+		return readers
+	}
+	blockNum := 0
+	blocks := make([]aoe.Block, 0)
+	for _, sid := range r.segments {
+		segment := r.Segment(sid)
+		ids := segment.Blocks()
+		blockNum += len(ids)
+		for _, id := range ids {
+			blocks = append(blocks, segment.Block(id))
+		}
+	}
+	mod := blockNum / num
+	if mod == 0 {
+		mod = 1
+	}
+	for i = 0; i < num; i++ {
+		if i == num-1 || i == blockNum-1 {
+			readers[i] = &aoeReader{
+				blocks: blocks[i*mod:],
+			}
+			break
+		}
+		readers[i] = &aoeReader{
+			blocks: blocks[i*mod : (i+1)*mod],
+		}
+	}
+	i++
+	if i < num {
+		for j := i; j < num; j++ {
+			readers[j] = &aoeReader{blocks: nil}
+		}
+	}
+	return readers
 }

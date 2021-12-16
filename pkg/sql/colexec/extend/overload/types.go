@@ -55,16 +55,16 @@ const (
 
 var OpName = map[int]string{
 	UnaryMinus: "-",
-	Not: "!",
+	Not: "not",
 
-	Or:    		"or",
-	And:   		"and",
-	Plus:  		"+",
-	Minus: 		"-",
-	Mult:  		"*",
-	Div:   		"/",
-	IntegerDiv:	"div",
-	Mod:   		"%",
+	Or:    "or",
+	And:   "and",
+	Plus:  "+",
+	Minus: "-",
+	Mult:  "*",
+	Div:   "/",
+	IntegerDiv: "div",
+	Mod:   "%",
 
 	Like:    "like",
 	NotLike: "notLike",
