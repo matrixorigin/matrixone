@@ -366,8 +366,8 @@ type splitCtx struct {
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
-	db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(shard.ID))
-	logutil.Infof("drivr call check, size is %v, db size is %v,err is %v", size, db.GetSize(), err)
+	// db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(shard.ID))
+	// logutil.Infof("drivr call check, size is %v, db size is %v,err is %v", size, db.GetSize(), err)
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,
@@ -706,6 +706,7 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 }
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
+	oldtableName := sPrefix + strconv.Itoa(int(old.ShardID))
 	logutil.Infof("new is %v", news)
 	logutil.Infof("drivr call split")
 	newNames := make([]string, len(news))
@@ -727,6 +728,13 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	for i := 0; i < splitctx.SplitKeyCnt; i++ {
 		splitkey[i] = []byte("1")
 	}
+	db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(old.ShardID))
+	tbnames := s.tableNames()
+	metaTbls := make([]*aoeMeta.Table, 0)
+	for _, tb := range tbnames {
+		metaTbl := db.SimpleGetTableByName(tb)
+		metaTbls = append(metaTbls, metaTbl)
+	}
 	logutil.Infof("len(key) is %v, key is %v, len(news) is %v, len(newNames) is %v", len(splitkey), splitkey, len(news), len(newNames))
 	execSplitCtx := &aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
@@ -740,7 +748,9 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		SplitKeys:   splitkey,
 		SplitCtx:    splitctx.Ctx,
 	}
+	logutil.Infof("total rows before split happens")
 	err = s.DB.ExecSplitDatabase(execSplitCtx)
+	logutil.Infof("total rows after split happens")
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail, err is %v.", old.ShardID, err)
 		return err
@@ -783,12 +793,12 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		bat, _ := shardMetadataToBatch(shard)
 
 		offset := 0
-		size := 1
+		size := 2
 		if createTable {
 			offset = 1
-			size = 2
+			size = 3
 		}
-		ctx := aoedb.AppendCtx{
+		appendCtx := aoedb.AppendCtx{
 			TableMutationCtx: aoedb.TableMutationCtx{
 				DBMutationCtx: aoedb.DBMutationCtx{
 					Id:     shard.LogIndex,
@@ -800,13 +810,38 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 			},
 			Data: bat,
 		}
-		err = s.DB.Append(&ctx)
+		err = s.DB.Append(&appendCtx)
 		if err != nil {
 			logutil.Errorf("Split:S-%d append fail, err is %v.", shard.ShardID, err)
 			return err
 		}
 		logutil.Infof("split finished, new shard is %v", dbName)
+		offset = 1
+		size = 2
+		if createTable {
+			offset = 2
+			size = 3
+		}
+		dropCtx := aoedb.DropTableCtx{
+			DBMutationCtx: aoedb.DBMutationCtx{
+				Id:     shard.LogIndex,
+				Offset: offset,
+				Size:   size,
+				DB:     dbName,
+			},
+			Table: oldtableName,
+		}
+		s.DB.DropTable(&dropCtx)
 	}
+	waitExpect(500, func() bool {
+		for _, tb := range metaTbls {
+			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
+			if !tb.IsHardDeleted() {
+				return false
+			}
+		}
+		return true
+	})
 	logutil.Infof("split:S-%d return, err is %v", old.ShardID, err)
 	return err
 }
@@ -880,4 +915,22 @@ func (s *Storage) ReadAll(sid uint64, tbl string) ([]*batch.Batch, error) {
 		}
 	}
 	return batchs, nil
+}
+
+//for test
+func (s *Storage) TotalRows(sid uint64) (rows uint64, err error) {
+	db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(sid))
+	for _, tb := range db.TableSet {
+		if strings.Contains(tb.Schema.Name, sPrefix) {
+			continue
+		}
+		tb.RLock()
+		defer tb.RUnlock()
+		td, _ := s.DB.Store.DataTables.WeakRefTable(tb.Id)
+		row := td.GetRowCount()
+		logutil.Infof("tbl is %v, row is %v", tb.Schema.Name, row)
+		rows += row
+	}
+	logutil.Infof("total rows is %v", rows)
+	return
 }

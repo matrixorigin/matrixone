@@ -118,13 +118,14 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	go l.catalog.OnDatabaseSplitted()
 	preKey := l.catalog.preSplitKey(catalogSplitEvent.Old)
 	err = l.catalog.Driver.Delete(preKey)
-	logutil.Infof("set key, key is %v", preKey)
+	logutil.Infof("ctlg,del prekey, key is %v", preKey)
 	if err != nil {
 		panic(err)
 	}
 	return nil
 }
-func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
+func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
+	logutil.Infof("ctlg,input tid%v,oldsid%v,newsid%v", tid, oldSid, newSids)
 	routePrefix := c.routePrefix(tid)
 	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
@@ -138,17 +139,20 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 			return err
 		}
 		if sid == oldSid {
-			oldKey := c.routeKey(tid, sid)
-			newKey := c.routeKey(tid, newSid)
-			err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
-			if err != nil {
-				logutil.Errorf("Set fails, err:%v", err)
-				return err
-			}
-			err = c.Driver.Delete(oldKey)
-			if err != nil {
-				logutil.Errorf("Delete fails, err:%v", err)
-				return err
+			for _, newSid := range newSids {
+				oldKey := c.routeKey(tid, sid)
+				newKey := c.routeKey(tid, newSid)
+				logutil.Infof("ctlg,change key tid%v,oldsid%v,newsid%v", tid, oldSid, newSids)
+				err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
+				if err != nil {
+					logutil.Errorf("Set fails, err:%v", err)
+					return err
+				}
+				err = c.Driver.Delete(oldKey)
+				if err != nil {
+					logutil.Errorf("Delete fails, err:%v", err)
+					return err
+				}
 			}
 		}
 	}
@@ -167,16 +171,16 @@ func (c *Catalog) OnDatabaseSplitted() error {
 			logutil.Errorf("Unmarshal fails, err:%v", err)
 			return err
 		}
-		for newShard, tbls := range splitEvent.News {
-			for _, tid := range tbls {
-				err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
-				if err != nil {
-					return err
-				}
+		//tbl-shards
+		for tid, newshards := range splitEvent.News {
+			err := c.updateRouteInfo(tid, splitEvent.Old, newshards)
+			if err != nil {
+				return err
 			}
 		}
 		key := c.splitKey(splitEvent.Old)
 		err = c.Driver.Delete(key)
+		logutil.Infof("ctlg, delete postKey%v, key is %v", splitEvent.Old, key)
 		if err != nil {
 			logutil.Errorf("Delete fails, err:%v", err)
 			return err
@@ -1002,14 +1006,16 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 		if !ok {
 			return nil, errors.New("invalid new shard id")
 		}
-		news[new] = make([]uint64, 0)
 		for _, tbl := range tbls {
 			if strings.Contains(tbl, "MetaTbl") {
 				continue
 			}
 			logutil.Infof("ctlg, tbl is %v", tbl)
 			tid := c.decodeTabletName(tbl)
-			news[new] = append(news[new], tid)
+			if news[tid] == nil {
+				news[tid] = make([]uint64, 0)
+			}
+			news[tid] = append(news[tid], new)
 		}
 	}
 	catalogSplitEvent := SplitEvent{
