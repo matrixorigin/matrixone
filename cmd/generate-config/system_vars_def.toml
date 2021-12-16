@@ -486,10 +486,10 @@ enable-placement-rules = true
 isolation-level = "rack"
 
 [metric]
-addr = "localhost:9091"
-interval = 10
-job = "cube"
-instance = "node0"
+addr = ""
+interval = 0
+job = ""
+instance = ""
 
 # Storage Configs
 [meta.conf]
