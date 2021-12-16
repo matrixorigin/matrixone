@@ -380,6 +380,7 @@ shard-groups = 1
 max-peer-down-time = "30m"
 shard-split-check-duration = "30s"
 shard-state-check-duration = "1m"
+compact-log-check-duration = "60s"
 disable-shard-split = false
 allow-remove-leader = false
 shard-capacity-bytes = "96MB"
