@@ -354,7 +354,7 @@ max-group-num           = 0
 
 # Logger Configs
 level = "debug" # debug, info, warn, error, fatal.
-format = "console" # json, console.
+format = "json" # json, console.
 
 # log file config
 filename = "" # log file.
