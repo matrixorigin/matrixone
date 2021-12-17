@@ -72,6 +72,13 @@ func (split *TableSplitSpec) AddSpec(spec *TableRangeSpec) {
 	split.Specs = append(split.Specs, spec)
 }
 
+func (split *TableSplitSpec) LastSpec() *TableRangeSpec {
+	if len(split.Specs) == 0 {
+		return nil
+	}
+	return split.Specs[len(split.Specs)-1]
+}
+
 func (split *TableSplitSpec) String() string {
 	s := fmt.Sprintf("TableSpec<%s>{", split.Index.String())
 	for _, spec := range split.Specs {
