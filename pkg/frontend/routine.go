@@ -15,11 +15,10 @@
 package frontend
 
 import (
-	"fmt"
-	"github.com/fagongzi/goetty"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"net"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"sync"
 	"time"
 )
@@ -34,23 +33,9 @@ type Routine struct {
 	//execution layer
 	executor CmdExecutor
 
-	//io data
-	io goetty.IOSession
-
-	//the related session
-	ses *Session
-
-	// whether the handshake succeeded
-	established bool
-
-	// current username
-	user string
-
-	// current db name
-	db string
-
-	//epoch gc handler
-	pdHook *PDCallbackImpl
+	//for computation
+	guestMmu *guest.Mmu
+	mempool  *mempool.Mempool
 
 	//channel of request
 	requestChan chan *Request
@@ -69,14 +54,6 @@ func (routine *Routine) GetClientProtocol() Protocol {
 
 func (routine *Routine) GetCmdExecutor() CmdExecutor {
 	return routine.executor
-}
-
-func (routine *Routine) GetSession() *Session {
-	return routine.ses
-}
-
-func (routine *Routine) GetPDCallback() pConfig.ContainerHeartbeatDataProcessor {
-	return routine.pdHook
 }
 
 func (routine *Routine) getConnID() uint32 {
@@ -102,7 +79,7 @@ func (routine *Routine) Loop() {
 		quit := false
 		select {
 		case <- routine.notifyChan:
-			fmt.Println("-----routine quit")
+			logutil.Infof("-----routine quit")
 			quit = true
 		case req = <- routine.requestChan:
 		}
@@ -112,6 +89,13 @@ func (routine *Routine) Loop() {
 		}
 
 		reqBegin := time.Now()
+
+		mgr := routine.GetRoutineMgr()
+
+		ses := NewSession(routine.protocol,mgr.getEpochgc(),routine.guestMmu,routine.mempool,mgr.getParameterUnit())
+
+		routine.executor.PrepareSessionBeforeExecRequest(ses)
+
 		if resp, err = routine.executor.ExecRequest(req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
@@ -122,7 +106,7 @@ func (routine *Routine) Loop() {
 			}
 		}
 
-		if routine.ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+		if mgr.getParameterUnit().SV.GetRecordTimeElapsedOfSqlRequest() {
 			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 	}
@@ -135,51 +119,13 @@ func (routine *Routine) Quit() {
 	routine.notifyClose()
 
 	routine.onceCloseNotifyChan.Do(func() {
-		//fmt.Println("---------notify close")
+		//logutil.Infof("---------notify close")
 		close(routine.notifyChan)
 	})
-
-	if routine.io != nil {
-		_ = routine.io.Close()
-		routine.io = nil
-	}
 
 	if routine.protocol != nil {
 		routine.protocol.Quit()
 	}
-}
-
-// Peer gets the address [Host:Port] of the client
-func (routine *Routine) Peer() (string, string) {
-	addr := routine.io.RemoteAddr()
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		logutil.Errorf("get peer host:port failed. error:%v ", err)
-		return "failed", "0"
-	}
-	return host, port
-}
-
-func (routine *Routine) ChangeDB(db string) error {
-	//TODO: check meta data
-	if _, err := routine.ses.Pu.StorageEngine.Database(db); err != nil {
-		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, db)
-	}
-	oldDB := routine.db
-	routine.db = db
-
-	logutil.Infof("User %s change database from [%s] to [%s]\n", routine.user, oldDB, routine.db)
-
-	return nil
-}
-
-func (routine *Routine) Establish(proto MysqlProtocol) {
-	pro := proto.(*MysqlProtocolImpl)
-	routine.user = pro.username
-	routine.db = pro.database
-	logutil.Infof("SWITCH ESTABLISHED to true")
-	routine.established = true
 }
 
 /*
@@ -191,23 +137,14 @@ func (routine *Routine) notifyClose() {
 	}
 }
 
-func NewRoutine(rs goetty.IOSession, protocol MysqlProtocol, executor CmdExecutor, session *Session) *Routine {
+func NewRoutine(protocol MysqlProtocol, executor CmdExecutor,pu *config.ParameterUnit) *Routine {
 	ri := &Routine{
 		protocol:    protocol,
 		executor:    executor,
-		ses:         session,
-		io:          rs,
-		established: false,
 		requestChan: make(chan *Request,1),
-		notifyChan: make(chan interface{}),
-	}
-
-	if protocol != nil {
-		protocol.SetRoutine(ri)
-	}
-
-	if executor != nil {
-		executor.SetRoutine(ri)
+		notifyChan:  make(chan interface{}),
+		guestMmu:    guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
+		mempool:     pu.Mempool,
 	}
 
 	//async process request
