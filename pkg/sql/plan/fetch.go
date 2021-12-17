@@ -29,7 +29,7 @@ func (b *build) buildFetch(fetch *tree.Limit, qry *Query) error {
 		if err != nil {
 			return err
 		}
-		if e, err = b.pruneExtend(e); err != nil {
+		if e, err = b.pruneExtend(e, false); err != nil {
 			return err
 		}
 		v, ok := e.(*extend.ValueExtend)
@@ -46,7 +46,7 @@ func (b *build) buildFetch(fetch *tree.Limit, qry *Query) error {
 		if err != nil {
 			return err
 		}
-		if e, err = b.pruneExtend(e); err != nil {
+		if e, err = b.pruneExtend(e, false); err != nil {
 			return err
 		}
 		v, ok := e.(*extend.ValueExtend)

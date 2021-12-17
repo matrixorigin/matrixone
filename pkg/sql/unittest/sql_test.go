@@ -230,11 +230,20 @@ func TestOperators(t *testing.T) {
 		"select u4 - u4, u4 + u4, u4 / u4, u4 * u4, u4 % u4 from uus;",
 		"create table ccs (c1 char(10), c2 varchar(20));",
 		"select cast(c2 AS char) cc2c1 from ccs;",
+		"create table tk1 (a int, b int);",
+		"insert into tk1 values (1, 2);",
+		"select a div b from tk1;",
+		"create table tk2 (a varchar(10));",
+		"insert into tk2 values ('a'),('abc'),('abcd'),('hello'),('test');",
+		"select * from tk2 where a like 'abc%';",
+		"CREATE TABLE tk3 (spID int,userID int,score smallint);",
+		"insert into tk3 values (1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 4);",
+		"select * from tk3 where userID < 6 or not userID;",
+		"select * from tk3 where not userID between 2 and 3;",
 	}
-	supports = nil // todo: select not support complete now
 
 	for _, sql := range supports {
-		require.NoError(t, sqlRun(sql, e, proc))
+		require.NoError(t, sqlRun(sql, e, proc), sql)
 	}
 }
 
