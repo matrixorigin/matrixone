@@ -85,9 +85,9 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
-func MockTableInfoWithProperties(colCnt int, i int, label string) *aoe.TableInfo {
+func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 	tblInfo := &aoe.TableInfo{
-		Name:    label + strconv.Itoa(i),
+		Name:    "test_table" + strconv.Itoa(i),
 		Columns: make([]aoe.ColumnInfo, 0),
 		Indices: make([]aoe.IndexInfo, 0),
 	}
@@ -104,14 +104,14 @@ func MockTableInfoWithProperties(colCnt int, i int, label string) *aoe.TableInfo
 		}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
 	}
-	property := aoe.Property{Key: "key", Value: label}
+	property := aoe.Property{Key: "bucket", Value: strconv.Itoa(bucket)}
 	tblInfo.Properties = append(tblInfo.Properties, property)
 	return tblInfo
 }
 func TestProperties(t *testing.T) {
 	nodeCount := 3
-	tableCount := 4
-	labelTypeCount := 2
+	bucketCount := 2
+	tableCount := 2
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
@@ -155,34 +155,33 @@ func TestProperties(t *testing.T) {
 
 	catalog := NewCatalog(driver)
 	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
-	label_shard := make([][]uint64, labelTypeCount)
-	for k := 0; k < labelTypeCount; k++ {
-		label := "label" + strconv.Itoa(k)
-		label_shard[k] = make([]uint64, 8)
-		for i := 0; i < tableCount; i++ {
-			tbl := MockTableInfoWithProperties(4, i, label)
-			tid, _ := catalog.CreateTable(0, dbid, *tbl)
-			sids, _ := catalog.getShardids(tid)
-			label_shard[k][i] = sids[0]
-			time.Sleep(time.Second)
-			c.RaftCluster.WaitShardByLabel(sids[0], "key", "label"+strconv.Itoa(k), time.Minute)
-		}
+	tid_sid := make(map[uint64][]uint64)
+	for i := 0; i < tableCount; i++ {
+		tbl := MockTableInfoWithProperties(4, i, bucketCount)
+		tid, err := catalog.CreateTable(0, dbid, *tbl)
+		require.Nil(t, err)
+		sids, err := catalog.getShardids(tid)
+		require.Nil(t, err)
+		require.Equal(t, bucketCount, len(sids))
+		tid_sid[tid] = sids
 	}
+
 	for k := 0; k < nodeCount; k++ {
 		shardsFromStorage := c.AOEStorages[k].DB.DatabaseNames()
-		for i, sidsPerLabel := range label_shard {
-			labelInStorageCount := 0
+		for tid, tableSids := range tid_sid {
+			shardInStorageCount := 0
 			for _, storageSidStr := range shardsFromStorage {
 				storageSid, _ := aoedb.IdToNameFactory.Decode(storageSidStr)
-				for _, labelSid := range sidsPerLabel {
-					if labelSid == storageSid {
-						labelInStorageCount++
+				for _, tableSid := range tableSids {
+					if tableSid == storageSid {
+						shardInStorageCount++
 					}
 				}
 			}
-			logutil.Infof("node %v(%v), label %v, replica count %v", k, len(shardsFromStorage), i, labelInStorageCount)
+			logutil.Infof("node %v(total replitca count %v), table id %v, replica count %v", k, len(shardsFromStorage), tid, shardInStorageCount)
 		}
 	}
+
 	catalog.DropDatabase(0, "test_label")
 }
 func TestCatalogWithUtil(t *testing.T) {
