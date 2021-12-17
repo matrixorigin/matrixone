@@ -543,8 +543,32 @@ tail3:
 
 	RET
 
+// func AesInt192BatchHash(data *[3]uint64, hashes *uint64, length int)
+// Requires: AES
+TEXT ·AesInt192BatchHash(SB), NOSPLIT, $0-24
+	RET
+
+// func AesInt192BatchGenKeys(data *[3]uint64, hashes *[2]uint64, length int)
+// Requires: AES
+TEXT ·AesInt192BatchGenKey(SB), NOSPLIT, $0-24
+	RET
+
+// func AesInt256BatchHash(data *[4]uint64, hashes *uint64, length int)
+// Requires: AES
 TEXT ·AesInt256BatchHash(SB), NOSPLIT, $0-24
 	RET
 
+// func AesInt256BatchGenKeys(data *[4]uint64, hashes *[2]uint64, length int)
+// Requires: AES
+TEXT ·AesInt256BatchGenKey(SB), NOSPLIT, $0-24
+	RET
+
+// func AesInt320BatchHash(data *[5]uint64, hashes *uint64, length int)
+// Requires: AES
 TEXT ·AesInt320BatchHash(SB), NOSPLIT, $0-24
+	RET
+
+// func AesInt320BatchGenKeys(data *[5]uint64, hashes *[2]uint64, length int)
+// Requires: AES
+TEXT ·AesInt320BatchGenKey(SB), NOSPLIT, $0-24
 	RET
