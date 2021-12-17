@@ -41,6 +41,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	n.ctr.keyOffs = make([]uint32, UnitLimit)
 	n.ctr.zKeyOffs = make([]uint32, UnitLimit)
 	n.ctr.hashes = make([]uint64, UnitLimit)
+	n.ctr.fakeKeys = make([][2]uint64, UnitLimit)
 	n.ctr.values = make([]uint64, UnitLimit)
 	n.ctr.h8.keys = make([]uint64, UnitLimit)
 	for i := 0; i < len(n.Ss); i++ {
@@ -85,6 +86,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.InputBatch
 	if bat == nil {
 		n.ctr.state = End
+		if n.ctr.pctr == nil {
+			return true, nil
+		}
 		switch n.ctr.pctr.typ {
 		case H8:
 			n.ctr.bat.Ht = n.ctr.pctr.h8.ht
@@ -1196,7 +1200,6 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
@@ -1213,7 +1216,7 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h32.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h32.keys[:n], ctr.values)
+		ctr.pctr.h32.ht.InsertRawBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.fakeKeys, ctr.h32.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -1565,7 +1568,6 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
@@ -1582,7 +1584,7 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h40.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h40.keys[:n], ctr.values)
+		ctr.pctr.h40.ht.InsertRawBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.fakeKeys, ctr.h40.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -1926,7 +1928,6 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 			}
 		}
-		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)

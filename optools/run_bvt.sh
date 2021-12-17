@@ -58,7 +58,7 @@ URL_ONE_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/matrixone.git"
 
 BIN_NAME="mo-server"
 CONFIG_NAME="system_vars_config.toml"
-CUBE="cube0"
+CUBE="store"
 LOG="$G_TS-$CASE_TYPE.log"
 SRV_LOG="$G_WKSP/$G_TS-$CASE_TYPE-SRV.log"
 SRS_LOG="$G_WKSP/$G_TS-$CASE_TYPE-SRS.log"
