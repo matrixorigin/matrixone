@@ -249,6 +249,7 @@ func TestOperators(t *testing.T) {
 
 // sqlRun compile and run a sql, return error if happens
 func sqlRun(sql string, e engine.Engine, proc *process.Process) error {
+	compile.InitAddress("127.0.0.1")
 	c := compile.New("test", sql, "", e, proc)
 	es, err := c.Build()
 	if err != nil {
