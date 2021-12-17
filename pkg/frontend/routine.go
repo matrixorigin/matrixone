@@ -15,10 +15,12 @@
 package frontend
 
 import (
+	"fmt"
 	"github.com/fagongzi/goetty"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -55,6 +57,10 @@ type Routine struct {
 
 	//channel of notify
 	notifyChan chan interface{}
+
+	onceCloseNotifyChan    sync.Once
+
+	routineMgr *RoutineManager
 }
 
 func (routine *Routine) GetClientProtocol() Protocol {
@@ -77,6 +83,13 @@ func (routine *Routine) getConnID() uint32 {
 	return routine.protocol.ConnectionID()
 }
 
+func (routine *Routine) SetRoutineMgr(rtMgr *RoutineManager) {
+	routine.routineMgr = rtMgr
+}
+
+func (routine *Routine) GetRoutineMgr() *RoutineManager {
+	return routine.routineMgr
+}
 /*
 After the handshake with the client is done, the routine goes into processing loop.
  */
@@ -84,10 +97,12 @@ func (routine *Routine) Loop() {
 	var req *Request = nil
 	var err error
 	var resp *Response
+	defer routine.Quit()
 	for{
 		quit := false
 		select {
 		case <- routine.notifyChan:
+			fmt.Println("-----routine quit")
 			quit = true
 		case req = <- routine.requestChan:
 		}
@@ -117,12 +132,16 @@ func (routine *Routine) Loop() {
 When the io is closed, the Quit will be called.
  */
 func (routine *Routine) Quit() {
+	routine.notifyClose()
+
+	routine.onceCloseNotifyChan.Do(func() {
+		//fmt.Println("---------notify close")
+		close(routine.notifyChan)
+	})
+
 	if routine.io != nil {
 		_ = routine.io.Close()
-	}
-	close(routine.notifyChan)
-	if routine.executor != nil {
-		routine.executor.Close()
+		routine.io = nil
 	}
 
 	if routine.protocol != nil {
@@ -161,6 +180,15 @@ func (routine *Routine) Establish(proto MysqlProtocol) {
 	routine.db = pro.database
 	logutil.Infof("SWITCH ESTABLISHED to true")
 	routine.established = true
+}
+
+/*
+notify routine to quit
+ */
+func (routine *Routine) notifyClose() {
+	if routine.executor != nil {
+		routine.executor.Close()
+	}
 }
 
 func NewRoutine(rs goetty.IOSession, protocol MysqlProtocol, executor CmdExecutor, session *Session) *Routine {

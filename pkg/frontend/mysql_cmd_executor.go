@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"os"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -402,7 +403,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		}
 	}
 
-	//fmt.Printf("row group -+> %v \n", oq.getData())
+	//logutil.Infof("row group -+> %v ", oq.getData())
 
 	err := oq.flush()
 	if err != nil {
@@ -851,7 +852,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				}
 				ses.Mrs.AddColumn(col)
 
-				//fmt.Printf("doComQuery col name %v type %v \n",col.Name(),col.ColumnType())
+				//logutil.Infof("doComQuery col name %v type %v ",col.Name(),col.ColumnType())
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/
@@ -953,12 +954,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
 		if !pdHook.CanAcceptSomething() {
-			resp = NewResponse(
-				ErrorResponse,
-				0,
-				req.GetCmd(),
-				fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()),
-			)
+			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()), )
 			return resp, nil
 		}
 	}
@@ -976,23 +972,41 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		seps := strings.Split(query," ")
+		if len(seps) <= 0 {
+			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"), )
+			return resp, nil
+		}
+
+		if strings.ToLower(seps[0]) == "kill" {
+			//last one is processID
+			procIdStr := seps[len(seps) - 1]
+			procID, err := strconv.ParseUint(procIdStr,10,64)
+			if err != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+				return resp, nil
+			}
+			err = mce.routine.GetRoutineMgr().killStatement(procID)
+			if err != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+				return resp, err
+			}
+			resp = NewGeneralOkResponse(COM_QUERY)
+			return resp,nil
+		}
+
 		err := mce.doComQuery(query)
 		if err != nil {
-			resp = NewResponse(
-				ErrorResponse,
-				0,
-				int(COM_QUERY),
-				err,
-			)
+			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
 		return resp, nil
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
 		err := mce.routine.ChangeDB(dbname)
 		if err != nil {
-			resp = NewResponse(ErrorResponse, 0, int(COM_INIT_DB), err)
+			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		} else {
-			resp = NewResponse(OkResponse, 0, int(COM_INIT_DB), nil)
+			resp = NewGeneralOkResponse(COM_INIT_DB)
 		}
 
 		return resp, nil
@@ -1005,48 +1019,31 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 
 			tableName = payload[:nullIdx]
 			//wildcard := payload[nullIdx+1:]
-			//fmt.Printf("table name %s wildcard [%s] \n",tableName,wildcard)
+			//logutil.Infof("table name %s wildcard [%s] ",tableName,wildcard)
 			err := mce.handleCmdFieldList(tableName)
 			if err != nil {
-				resp = NewResponse(
-					ErrorResponse,
-					0,
-					int(COM_FIELD_LIST),
-					err,
-				)
+				resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 			}
 		} else {
-			resp = NewResponse(ErrorResponse,
-				0,
-				int(COM_FIELD_LIST),
-				fmt.Errorf("wrong format for COM_FIELD_LIST"))
+			resp = NewGeneralErrorResponse(COM_FIELD_LIST, fmt.Errorf("wrong format for COM_FIELD_LIST"))
 		}
 
 		return resp, nil
 	case COM_PING:
-		resp = NewResponse(
-			OkResponse,
-			0,
-			int(COM_PING),
-			nil,
-		)
+		resp = NewGeneralOkResponse(COM_PING)
+
 		return resp, nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
-		resp = NewResponse(
-			ErrorResponse,
-			0,
-			req.GetCmd(),
-			err,
-		)
+		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	//fmt.Printf("close executor\n")
+	//logutil.Infof("close executor")
 	if mce.loadDataClose != nil {
-		//fmt.Printf("close process load data\n")
+		//logutil.Infof("close process load data")
 		mce.loadDataClose.Close()
 	}
 }

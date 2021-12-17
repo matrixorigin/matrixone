@@ -26,6 +26,7 @@ import (
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
@@ -128,7 +129,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			defer wg.Done()
 			a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 			if err != nil {
-				fmt.Printf("create failed with %v", err)
+				logutil.Errorf("create failed with %v", err)
 			}
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
@@ -264,12 +265,12 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	//before anything using the configuration
 	if err := sv.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
+		logutil.Errorf("error:%v", err)
 		return nil, err
 	}
 
 	if err := mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
-		fmt.Printf("error:%v\n", err)
+		logutil.Errorf("error:%v", err)
 		return nil, err
 	}
 
