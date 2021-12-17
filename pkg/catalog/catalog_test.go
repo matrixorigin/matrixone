@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 
@@ -103,17 +104,19 @@ func MockTableInfoWithProperties(colCnt int, i int, label string) *aoe.TableInfo
 		}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
 	}
-	property:=aoe.Property{Key: "key",Value: label}
-	tblInfo.Properties=append(tblInfo.Properties, property)
+	property := aoe.Property{Key: "key", Value: label}
+	tblInfo.Properties = append(tblInfo.Properties, property)
 	return tblInfo
 }
 func TestProperties(t *testing.T) {
+	nodeCount := 3
+	tableCount := 4
+	labelTypeCount := 2
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
-			// c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -138,7 +141,7 @@ func TestProperties(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterNodeCount(4),
+			raftstore.WithTestClusterNodeCount(nodeCount),
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
@@ -152,24 +155,35 @@ func TestProperties(t *testing.T) {
 
 	catalog := NewCatalog(driver)
 	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
-	tids := make([][]uint64, 3)
-	for k := 0; k < 2; k++ {
+	label_shard := make([][]uint64, labelTypeCount)
+	for k := 0; k < labelTypeCount; k++ {
 		label := "label" + strconv.Itoa(k)
-		tids[k] = make([]uint64, 8)
-		for i := 0; i < 8; i++ {
+		label_shard[k] = make([]uint64, 8)
+		for i := 0; i < tableCount; i++ {
 			tbl := MockTableInfoWithProperties(4, i, label)
 			tid, _ := catalog.CreateTable(0, dbid, *tbl)
-			sids,_:=catalog.getShardids(tid)
-			tids[k][i] = sids[0]
+			sids, _ := catalog.getShardids(tid)
+			label_shard[k][i] = sids[0]
+			time.Sleep(time.Second)
+			c.RaftCluster.WaitShardByLabel(sids[0], "key", "label"+strconv.Itoa(k), time.Minute)
 		}
 	}
-	time.Sleep(1*time.Second)
-	shards := make([][]string, 8)
-	for k := 0; k < 8; k++ {
-		shards[k]=c.AOEStorages[k].DB.DatabaseNames()
-		// require.Equal(t,9,len(shards[k]))
+	for k := 0; k < nodeCount; k++ {
+		shardsFromStorage := c.AOEStorages[k].DB.DatabaseNames()
+		for i, sidsPerLabel := range label_shard {
+			labelInStorageCount := 0
+			for _, storageSidStr := range shardsFromStorage {
+				storageSid, _ := aoedb.IdToNameFactory.Decode(storageSidStr)
+				for _, labelSid := range sidsPerLabel {
+					if labelSid == storageSid {
+						labelInStorageCount++
+					}
+				}
+			}
+			logutil.Infof("node %v(%v), label %v, replica count %v", k, len(shardsFromStorage), i, labelInStorageCount)
+		}
 	}
-	logutil.Infof("just print")
+	catalog.DropDatabase(0, "test_label")
 }
 func TestCatalogWithUtil(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
