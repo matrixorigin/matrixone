@@ -18,8 +18,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math"
+	"strconv"
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/handler"
 
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -27,8 +31,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
-	//"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
@@ -37,13 +43,13 @@ import (
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 
-	//"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	//"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
@@ -182,7 +188,7 @@ func main() {
 
 	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
 
-	//Host := config.GlobalSystemVariables.GetHost()
+	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 
 	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
@@ -259,26 +265,27 @@ func main() {
 	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
-	//hm := config.HostMmu
-	//gm := guest.New(1<<40, hm)
-	//proc := process.New(gm)
-	//{
-	//	proc.Id = "0"
-	//	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-	//	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-	//	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
-	//	proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
-	//	proc.Refer = make(map[string]uint64)
-	//}
-	///*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-	//	log.SetLevel(logger.WARN)*/
-	//srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
-	//if err != nil {
-	//	logutil.Infof("Create rpcserver failed, %v", err)
-	//	os.Exit(CreateRPCExit)
-	//}
-	//hp := handler.New(eng, proc)
-	//srv.Register(hp.Process)
+	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
+	if li == -1 {
+		logutil.Infof("There is no port in client addr")
+		os.Exit(LoadConfigExit)
+	}
+	cubePort, err := strconv.ParseInt(string(cfg.CubeConfig.ClientAddr[li+1:]), 10, 32)
+	if err != nil {
+		logutil.Infof("Invalid port")
+		os.Exit(LoadConfigExit)
+	}
+
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, cubePort+100), 1<<30, logutil.GetGlobalLogger())
+	if err != nil {
+		logutil.Infof("Create rpcserver failed, %v", err)
+		os.Exit(CreateRPCExit)
+	}
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(mheap.New(gm))
+	hp := handler.New(eng, proc)
+	srv.Register(hp.Process)
 
 	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
@@ -287,7 +294,7 @@ func main() {
 		os.Exit(WaitCubeStartExit)
 	}
 
-	//go srv.Run()
+	go srv.Run()
 	//test storage aoe_storage
 	config.StorageEngine = eng
 

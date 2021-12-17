@@ -16,7 +16,6 @@ package compile
 
 import (
 	"fmt"
-	"log"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"log"
 	"testing"
 )
 
@@ -48,6 +48,7 @@ var querys = []string{
 }
 
 func TestCompile(t *testing.T) {
+	InitAddress("127.0.0.1")
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
