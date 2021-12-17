@@ -822,11 +822,11 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 //and other things
 func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 	//to do something else
-	//fmt.Printf("capabilities 0x%x\n", resp41.capabilities)
-	//fmt.Printf("maxPacketSize %d\n", resp41.maxPacketSize)
-	//fmt.Printf("collationID %d\n", resp41.collationID)
-	//fmt.Printf("username %s\n", resp41.username)
-	//fmt.Printf("authResponse: \n")
+	//logutil.Infof("capabilities 0x%x\n", resp41.capabilities)
+	//logutil.Infof("maxPacketSize %d\n", resp41.maxPacketSize)
+	//logutil.Infof("collationID %d\n", resp41.collationID)
+	//logutil.Infof("username %s\n", resp41.username)
+	//logutil.Infof("authResponse: \n")
 	//update the capabilities with client's capabilities
 	mp.capability = DefaultCapability & resp41.capabilities
 
@@ -843,9 +843,9 @@ func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 	mp.username = resp41.username
 	mp.database = resp41.database
 
-	//fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//fmt.Printf("database %s \n", resp41.database)
-	//fmt.Printf("clientPluginName %s \n", resp41.clientPluginName)
+	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
+	//logutil.Infof("database %s \n", resp41.database)
+	//logutil.Infof("clientPluginName %s \n", resp41.clientPluginName)
 	return nil
 }
 
@@ -902,10 +902,10 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 //and other things
 func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error {
 	//to do something else
-	//fmt.Printf("capabilities 0x%x\n", resp320.capabilities)
-	//fmt.Printf("maxPacketSize %d\n", resp320.maxPacketSize)
-	//fmt.Printf("username %s\n", resp320.username)
-	//fmt.Printf("authResponse: \n")
+	//logutil.Infof("capabilities 0x%x\n", resp320.capabilities)
+	//logutil.Infof("maxPacketSize %d\n", resp320.maxPacketSize)
+	//logutil.Infof("username %s\n", resp320.username)
+	//logutil.Infof("authResponse: \n")
 
 	//update the capabilities with client's capabilities
 	mp.capability = DefaultCapability & resp320.capabilities
@@ -921,8 +921,8 @@ func (mp *MysqlProtocolImpl) handleClientResponse320(resp320 response320) error 
 	mp.username = resp320.username
 	mp.database = resp320.database
 
-	//fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	//fmt.Printf("database %s \n", resp320.database)
+	//logutil.Infof("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
+	//logutil.Infof("database %s \n", resp320.database)
 	return nil
 }
 
@@ -1375,7 +1375,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 	mp.bytesInOutBuffer += n
 	err := outbuf.SetWriterIndex(writeIdx)
 	if mp.enableLog {
-		fmt.Printf("openPacket curWriteIdx %d\n",outbuf.GetWriteIndex())
+		logutil.Infof("openPacket curWriteIdx %d\n",outbuf.GetWriteIndex())
 	}
 	return err
 }
@@ -1383,7 +1383,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 //fill the packet with data
 func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	if mp.enableLog{
-		fmt.Printf("fillPacket len %d\n",len(elems))
+		logutil.Infof("fillPacket len %d\n",len(elems))
 	}
 	outbuf := mp.routine.io.OutBuf()
 	n := len(elems)
@@ -1418,7 +1418,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 			return err
 		}
 		if mp.enableLog{
-			fmt.Printf("fillPacket curWriteIdx %d\n",outbuf.GetWriteIndex())
+			logutil.Infof("fillPacket curWriteIdx %d\n",outbuf.GetWriteIndex())
 		}
 
 		//> 16MB, split it
@@ -1450,7 +1450,7 @@ func (mp *MysqlProtocolImpl) closePacket() error {
 	outbuf := mp.routine.io.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
 	if mp.enableLog {
-		fmt.Printf("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
+		logutil.Infof("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
 	}
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
 		return fmt.Errorf("invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"errors"
-	"fmt"
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,6 +44,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	ses := NewSessionWithParameterUnit(rm.pu)
 	routine := NewRoutine(rs, pro, exe, ses)
 	routine.pdHook = rm.pdHook
+	routine.SetRoutineMgr(rm)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -79,6 +79,28 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rt.Quit()
 }
 
+
+/*
+KILL statement
+ */
+func (rm *RoutineManager) killStatement(id uint64) error {
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
+	var rt *Routine = nil
+	for _, value := range rm.clients {
+		if uint64(value.getConnID()) == id {
+			rt = value
+			break
+		}
+	}
+
+	if rt != nil {
+		logutil.Infof("will close the statement %d",id)
+		rt.notifyClose()
+	}
+	return nil
+}
+
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
 	defer func() {
 		if err := recover(); err != nil {
@@ -87,7 +109,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		if !rm.pdHook.CanAcceptSomething() {
-			fmt.Printf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.\n")
+			logutil.Errorf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")
 			return errors.New("The Heartbeat From PDLeader Is Timeout. The Server Reject Connection.\n")
 		}
 	}
