@@ -35,18 +35,19 @@ import (
 )
 
 const (
-	defaultCatalogId    = uint64(1)
-	cPrefix             = "meta"
-	cDBPrefix           = "DBINFO"
-	cDBIDPrefix         = "DBID"
-	cTablePrefix        = "Table"
-	cTableIDPrefix      = "TID"
-	cRoutePrefix        = "Route"
-	cPreSplitPrefix     = "PreSplit"
-	cSplitPrefix        = "Split"
-	cDeletedTablePrefix = "DeletedTableQueue"
-	timeout             = 2000 * time.Millisecond
-	idPoolSize          = 20
+	defaultCatalogId      = uint64(1)
+	cPrefix               = "meta"
+	cDBPrefix             = "DBINFO"
+	cDBIDPrefix           = "DBID"
+	cCatalogShardIDPrefix = "ShardID"
+	cTablePrefix          = "Table"
+	cTableIDPrefix        = "TID"
+	cRoutePrefix          = "Route"
+	cPreSplitPrefix       = "PreSplit"
+	cSplitPrefix          = "Split"
+	cDeletedTablePrefix   = "DeletedTableQueue"
+	timeout               = 2000 * time.Millisecond
+	idPoolSize            = 20
 )
 
 // Catalog is for handling meta information in a query.
@@ -56,6 +57,8 @@ type Catalog struct {
 	dbIdEnd   uint64
 	tidStart  uint64
 	tidEnd    uint64
+	sidStart  uint64
+	sidEnd    uint64
 	pLock     int32
 }
 type CatalogListener struct {
@@ -388,7 +391,29 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	wg := sync.WaitGroup{}
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
-	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
+	bucket := uint64(0)
+	for _, property := range tbl.Properties {
+		if property.Key == "bucket" {
+			bucket, err = strconv.ParseUint(property.Value, 10, 64)
+			if err != nil {
+				return 0, err
+			}
+
+		}
+	}
+	if bucket < uint64(1) {
+		bucket = uint64(1)
+	}
+	for i := uint64(0); i < bucket; i++ {
+		catalogSid, err := c.allocId(cCatalogShardIDPrefix)
+		if err != nil {
+			return tid, err
+		}
+		shardId, err := c.getAvailableShard(catalogSid)
+		if err != nil {
+			return tid, ErrNoAvailableShard
+		}
+
 		rkey := c.routeKey(tbl.Id, shardId)
 		tableName := tbl.Name
 		aoeTableName := c.encodeTabletName(shardId, tbl.Id)
@@ -396,14 +421,11 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
-		for _, property := range tbl.Properties {
-			if err := c.Driver.AddLabelToShard(shardId, property.Key, property.Value); err != nil {
-				logutil.Errorf("ErrAddLabelFailed, %v, %v, %v", shardId, property, err)
-				return tid, ErrTabletCreateFailed
-			}
-
-		}
 		tbl.Name = tableName
+		if err := c.Driver.AddLabelToShard(shardId, "table", strconv.Itoa(int(tid))); err != nil {
+			logutil.Errorf("ErrAddLabelFailed, %v, %v, %v", shardId, tid, err)
+			return tid, ErrTabletCreateFailed
+		}
 		tbl.State = aoe.StatePublic
 		meta, err := EncodeTable(tbl)
 		if err != nil {
@@ -427,10 +449,8 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			}
 		}, nil)
 		wg.Wait()
-
-		return tbl.Id, err
 	}
-	return tid, ErrNoAvailableShard
+	return tbl.Id, err
 }
 
 // DropTable drops table in database.
@@ -1075,6 +1095,28 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 				}
 			}
 		}()
+	case cCatalogShardIDPrefix:
+		func() {
+			for {
+				select {
+				case <-timeoutC:
+					logutil.Errorf("wait for available sid timeout, current cache range is [%d, %d)", c.sidStart, c.sidEnd)
+					err = ErrShardidTimeout
+					return
+				default:
+					if atomic.LoadInt32(&c.pLock) == 0 {
+						id = atomic.AddUint64(&c.sidStart, 1) - 1
+						if id <= atomic.LoadUint64(&c.sidEnd) {
+							logutil.Debugf("alloc shard id finished, id is %d, endId is %d", id, c.sidEnd)
+							return
+						} else {
+							c.refreshShardIDCache()
+						}
+					}
+					time.Sleep(time.Millisecond * 10)
+				}
+			}
+		}()
 	default:
 		return id, errors.New("unsupported id category")
 	}
@@ -1149,6 +1191,42 @@ func (c *Catalog) refreshDBIDCache() {
 
 		atomic.SwapUint64(&c.dbIdEnd, id)
 		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize+1)
+	}, nil)
+	wg.Wait()
+}
+
+//refreshShardIDCache alloc catalog shard ids and refresh sidStart and sidEnd.
+func (c *Catalog) refreshShardIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh shard id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.sidStart, c.sidEnd)
+	}()
+	if c.sidStart <= c.sidEnd {
+		logutil.Debugf("enter refreshDBIDCache, no need, return, [%d, %d)", c.sidStart, c.sidEnd)
+		return
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	c.Driver.AsyncAllocID(String2Bytes(cCatalogShardIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			logutil.Errorf("refresh shard id failed, checkpoint is %d, %d", c.sidStart, c.sidEnd)
+			return
+		}
+		id, err := Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+
+		atomic.SwapUint64(&c.sidEnd, id)
+		atomic.SwapUint64(&c.sidStart, id-idPoolSize+1)
 	}, nil)
 	wg.Wait()
 }
