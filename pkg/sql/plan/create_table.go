@@ -178,11 +178,11 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 		case defines.MYSQL_TYPE_DOUBLE:
 			return &types.Type{Oid: types.T_float64, Size: 8, Width: n.InternalType.Width}, nil
 		case defines.MYSQL_TYPE_STRING:
+			return &types.Type{Oid: types.T_char, Size: 24, Width: n.InternalType.DisplayWith}, nil
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			if n.InternalType.DisplayWith == -1 { // type char
 				return &types.Type{Oid: types.T_char, Size: 24, Width: 1}, nil
 			}
-			return &types.Type{Oid: types.T_char, Size: 24, Width: n.InternalType.DisplayWith}, nil
-		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			return &types.Type{Oid: types.T_varchar, Size: 24, Width: n.InternalType.DisplayWith}, nil
 		case defines.MYSQL_TYPE_DATE:
 			return &types.Type{Oid: types.T_date, Size: 4}, nil
