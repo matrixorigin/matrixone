@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	stdLog "log"
-	"math"
+	// "math"
 	"strconv"
 	"sync"
 	"testing"
@@ -53,7 +53,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.etcd.io/etcd/raft/v3"
+	// "go.etcd.io/etcd/raft/v3"
 )
 
 const (
@@ -222,159 +222,159 @@ func MockBatch(tableInfo *aoe.TableInfo, i, rows int) *batch.Batch {
 
 	return bat
 }
-func TestSnapshot(t *testing.T) {
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
-			c.ClusterConfig.PreAllocatedGroupNum = 20
-			return c
-		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
-			opts := &storage.Options{}
-			mdCfg := &storage.MetaCfg{
-				SegmentMaxBlocks: blockCntPerSegment,
-				BlockMaxRows:     blockRows,
-			}
-			opts.CacheCfg = &storage.CacheCfg{
-				IndexCapacity:  blockRows * blockCntPerSegment * 80,
-				InsertCapacity: blockRows * uint64(colCnt) * 2000,
-				DataCapacity:   blockRows * uint64(colCnt) * 2000,
-			}
-			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
-				Interval: time.Duration(1) * time.Second,
-			}
-			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
-		}),
-		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
-				cfg.Raft.RaftLog.ForceCompactCount = 1
-				cfg.Raft.RaftLog.CompactThreshold = 1
-				cfg.Replication.CompactLogCheckDuration.Duration = time.Millisecond * 100
-			}),
-			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
-			raftstore.WithTestClusterDataPath(clusterDataPath)))
+// func TestSnapshot(t *testing.T) {
+// 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+// 	c := testutil.NewTestAOECluster(t,
+// 		func(node int) *config.Config {
+// 			c := &config.Config{}
+// 			c.ClusterConfig.PreAllocatedGroupNum = 20
+// 			return c
+// 		},
+// 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+// 			opts := &storage.Options{}
+// 			mdCfg := &storage.MetaCfg{
+// 				SegmentMaxBlocks: blockCntPerSegment,
+// 				BlockMaxRows:     blockRows,
+// 			}
+// 			opts.CacheCfg = &storage.CacheCfg{
+// 				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+// 				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+// 				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+// 			}
+// 			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+// 				Interval: time.Duration(1) * time.Second,
+// 			}
+// 			opts.Meta.Conf = mdCfg
+// 			return aoe3.NewStorageWithOptions(path, opts)
+// 		}),
+// 		testutil.WithTestAOEClusterUsePebble(),
+// 		testutil.WithTestAOEClusterRaftClusterOptions(
+// 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+// 				cfg.Raft.RaftLog.ForceCompactCount = 1
+// 				cfg.Raft.RaftLog.CompactThreshold = 1
+// 				cfg.Replication.CompactLogCheckDuration.Duration = time.Millisecond * 100
+// 			}),
+// 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+// 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
-	c.Start()
-	stdLog.Printf("drivers all started.")
-	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
-	d0 := c.CubeDrivers[0]
+// 	c.Start()
+// 	stdLog.Printf("drivers all started.")
+// 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+// 	d0 := c.CubeDrivers[0]
 
-	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
-	require.NoError(t, err)
-	stdLog.Printf("shard id is %v", shard.ShardID)
-	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
-	leaderStoreContainerID := leaderStore.Meta().ID
-	logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
+// 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+// 	require.NoError(t, err)
+// 	stdLog.Printf("shard id is %v", shard.ShardID)
+// 	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
+// 	leaderStoreContainerID := leaderStore.Meta().ID
+// 	logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
 
-	var stopNode int
-	var leaderNode int
-	for i := 0; i < 3; i++ {
-		containerID := c.RaftCluster.GetStore(i).Meta().ID
-		if containerID != leaderStoreContainerID {
-			stopNode = i
-		}
-		if containerID == leaderStoreContainerID {
-			leaderNode = i
-		}
-	}
-	logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
+// 	var stopNode int
+// 	var leaderNode int
+// 	for i := 0; i < 3; i++ {
+// 		containerID := c.RaftCluster.GetStore(i).Meta().ID
+// 		if containerID != leaderStoreContainerID {
+// 			stopNode = i
+// 		}
+// 		if containerID == leaderStoreContainerID {
+// 			leaderNode = i
+// 		}
+// 	}
+// 	logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
 
-	c.StopNode(stopNode)
-	stdLog.Printf("node%v stopped.", stopNode)
-	d0 = c.CubeDrivers[leaderNode]
+// 	c.StopNode(stopNode)
+// 	stdLog.Printf("node%v stopped.", stopNode)
+// 	d0 = c.CubeDrivers[leaderNode]
 
-	var insertBatches []*batch.Batch
-	for i := 0; i < 10; i++ {
-		//create table into the shard
-		tbl := MockTableInfo(i)
-		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
-		stdLog.Printf(" create table %v", i)
-		require.Nil(t, err)
-		//append 1 rows into the table
-		batch := MockBatch(tbl, i, 10000)
-		insertBatches = append(insertBatches, batch)
-		var buf bytes.Buffer
-		err = protocol.EncodeBatch(batch, &buf)
-		require.Nil(t, err)
-		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
-		stdLog.Printf(" append %v", i)
-		require.Nil(t, err)
-	}
+// 	var insertBatches []*batch.Batch
+// 	for i := 0; i < 10; i++ {
+// 		//create table into the shard
+// 		tbl := MockTableInfo(i)
+// 		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+// 		stdLog.Printf(" create table %v", i)
+// 		require.Nil(t, err)
+// 		//append 1 rows into the table
+// 		batch := MockBatch(tbl, i, 10000)
+// 		insertBatches = append(insertBatches, batch)
+// 		var buf bytes.Buffer
+// 		err = protocol.EncodeBatch(batch, &buf)
+// 		require.Nil(t, err)
+// 		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+// 		stdLog.Printf(" append %v", i)
+// 		require.Nil(t, err)
+// 	}
 
-	var replicaID uint64
-	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
-	for _, replica := range replicas {
-		if replica.ContainerID == leaderStoreContainerID {
-			replicaID = replica.ID
-		}
-	}
+// 	var replicaID uint64
+// 	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
+// 	for _, replica := range replicas {
+// 		if replica.ContainerID == leaderStoreContainerID {
+// 			replicaID = replica.ID
+// 		}
+// 	}
 
-	logReader := raftstore.NewLogReader(nil, shard.ShardID, replicaID, d0.RaftStore().(raftstore.LogDBGetter).GetLogDB())
-	hasLog := func(index uint64) bool {
-		_, err = logReader.Entries(index, index+1, math.MaxUint64)
-		if err == nil {
-			return true
-		}
-		if err == raft.ErrCompacted {
-			logutil.Infof("err is %v", err)
-			return false
-		}
-		if err == raft.ErrUnavailable {
-			logutil.Infof("err is %v", err)
-			return true
-		}
-		panic(err)
-	}
-	for i := 0; i < 50; i++ {
-		if hasLog(3) {
-			time.Sleep(1 * time.Second)
-		} else {
-			logutil.Infof("compaction finished")
-			break
-		}
-		if i == 49 {
-			t.Fatalf("failed to remove log entries from logdb")
-		}
-	}
+// 	logReader := raftstore.NewLogReader(nil, shard.ShardID, replicaID, d0.RaftStore().(raftstore.LogDBGetter).GetLogDB())
+// 	hasLog := func(index uint64) bool {
+// 		_, err = logReader.Entries(index, index+1, math.MaxUint64)
+// 		if err == nil {
+// 			return true
+// 		}
+// 		if err == raft.ErrCompacted {
+// 			logutil.Infof("err is %v", err)
+// 			return false
+// 		}
+// 		if err == raft.ErrUnavailable {
+// 			logutil.Infof("err is %v", err)
+// 			return true
+// 		}
+// 		panic(err)
+// 	}
+// 	for i := 0; i < 50; i++ {
+// 		if hasLog(3) {
+// 			time.Sleep(1 * time.Second)
+// 		} else {
+// 			logutil.Infof("compaction finished")
+// 			break
+// 		}
+// 		if i == 49 {
+// 			t.Fatalf("failed to remove log entries from logdb")
+// 		}
+// 	}
 
-	c.RestartNode(stopNode)
-	stdLog.Printf(" node%v started.", stopNode)
-	time.Sleep(10 * time.Second)
+// 	c.RestartNode(stopNode)
+// 	stdLog.Printf(" node%v started.", stopNode)
+// 	time.Sleep(10 * time.Second)
 
-	d2 := c.CubeDrivers[stopNode]
-	s0 := c.AOEStorages[leaderNode]
-	s2 := c.AOEStorages[stopNode]
-	s0.Sync([]uint64{shard.ShardID})
-	s2.Sync([]uint64{shard.ShardID})
-	s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
-	s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
-	require.Equal(t, s0checkpointID, s2checkpointID)
+// 	d2 := c.CubeDrivers[stopNode]
+// 	s0 := c.AOEStorages[leaderNode]
+// 	s2 := c.AOEStorages[stopNode]
+// 	s0.Sync([]uint64{shard.ShardID})
+// 	s2.Sync([]uint64{shard.ShardID})
+// 	s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+// 	s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+// 	require.Equal(t, s0checkpointID, s2checkpointID)
 
-	//check tables
-	tbls, err := d2.TabletNames(shard.ShardID)
-	require.Nil(t, err)
-	require.Equal(t, 10, len(tbls))
-	require.True(t, s0.IsTablesSame(s2, shard.ShardID))
+// 	//check tables
+// 	tbls, err := d2.TabletNames(shard.ShardID)
+// 	require.Nil(t, err)
+// 	require.Equal(t, 10, len(tbls))
+// 	require.True(t, s0.IsTablesSame(s2, shard.ShardID))
 
-	//checkbatches
-	for _, tbl := range tbls {
-		leaderBatches, _ := s0.ReadAll(shard.ShardID, tbl)
-		batchs, err := s2.ReadAll(shard.ShardID, tbl)
-		require.Nil(t, err)
-		for i, batch := range batchs {
-			require.Equal(t, len(leaderBatches[i].Vecs), len(batch.Vecs))
-			for j, vec := range batch.Vecs {
-				require.Equal(t, vec.Col, leaderBatches[i].Vecs[j].Col, "type is %v and %v", vec.Typ, leaderBatches[i].Vecs[j].Typ)
-			}
-		}
-	}
+// 	//checkbatches
+// 	for _, tbl := range tbls {
+// 		leaderBatches, _ := s0.ReadAll(shard.ShardID, tbl)
+// 		batchs, err := s2.ReadAll(shard.ShardID, tbl)
+// 		require.Nil(t, err)
+// 		for i, batch := range batchs {
+// 			require.Equal(t, len(leaderBatches[i].Vecs), len(batch.Vecs))
+// 			for j, vec := range batch.Vecs {
+// 				require.Equal(t, vec.Col, leaderBatches[i].Vecs[j].Col, "type is %v and %v", vec.Typ, leaderBatches[i].Vecs[j].Typ)
+// 			}
+// 		}
+// 	}
 
-	stdLog.Printf("call stop")
-	c.Stop()
-}
+// 	stdLog.Printf("call stop")
+// 	c.Stop()
+// }
 func TestSplit(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	ctlgListener := catalog.NewCatalogListener()
