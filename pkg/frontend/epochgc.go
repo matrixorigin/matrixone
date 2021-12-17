@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixcube/components/prophet/storage"
 	cubeconfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"log"
 	"math"
 	"sort"
@@ -261,8 +262,8 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
 	if pci.enableLog {
-		fmt.Printf("-------PDC Start enter\n")
-		defer fmt.Printf("-------PDC Start exit\n")
+		logutil.Infof("-------PDC Start enter\n")
+		defer logutil.Infof("-------PDC Start exit\n")
 	}
 	//TODO:When the cluster runs initially, there is not keys any more.
 	//load cluster_epoch
@@ -296,13 +297,13 @@ kv : the persistent storage
  */
 func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	if pci.enableLog {
-		fmt.Printf("-------PDC Stop enter\n")
-		defer fmt.Printf("-------PDC Stop exit\n")
+		logutil.Infof("-------PDC Stop enter\n")
+		defer logutil.Infof("-------PDC Stop exit\n")
 	}
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
 	if pci.enableLog{
-		fmt.Printf("-------PDC Stop Get Lock\n")
+		logutil.Infof("-------PDC Stop Get Lock\n")
 	}
 
 	//stop timer
@@ -313,7 +314,7 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	Do not close chan twice.
 	 */
 	if pci.enableLog {
-		fmt.Printf("-------PDC Stop close channel\n")
+		logutil.Infof("-------PDC Stop close channel\n")
 	}
 	closeChan := func() {
 		close(pci.msgChan)
@@ -321,7 +322,7 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	}
 	pci.closeOnce.Do(closeChan)
 	if pci.enableLog {
-		fmt.Printf("-------PDC Stop close channel done\n")
+		logutil.Infof("-------PDC Stop close channel done\n")
 	}
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
@@ -337,15 +338,15 @@ kv : the persistent storage
  */
 func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error) {
 	if pci.enableLog {
-		fmt.Printf("-------PDC HandleHeartbeatReq enter\n")
-		defer fmt.Printf("-------PDC HandleHeartbeatReq exit\n")
+		logutil.Infof("-------PDC HandleHeartbeatReq enter\n")
+		defer logutil.Infof("-------PDC HandleHeartbeatReq exit\n")
 	}
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-	//fmt.Printf("%d leader receive heartbeat from %d \n",pci.Id,id)
+	//logutil.Infof("%d leader receive heartbeat from %d \n",pci.Id,id)
 	//step 1: set [server,maximumRemovableEpoch]
 	if pci.enableLog {
-		fmt.Printf("-------PDC HandleHeartbeatReq Get Lock\n")
+		logutil.Infof("-------PDC HandleHeartbeatReq Get Lock\n")
 	}
 	maxre := binary.BigEndian.Uint64(data)
 	pci.serverInfo[id] = maxre
@@ -386,7 +387,7 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 			b2 = append(b2,v_buf)
 		}
 		if pci.enableLog {
-			fmt.Printf("-------PDC HandleHeartbeatReq server_info to channel\n")
+			logutil.Infof("-------PDC HandleHeartbeatReq server_info to channel\n")
 		}
 		//step 3: put these values into the worker
 		pci.msgChan <- &ChanMessage{
@@ -396,7 +397,7 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 			body3: b2,
 		}
 		if pci.enableLog {
-			fmt.Printf("-------PDC HandleHeartbeatReq enter server_info to channel done\n")
+			logutil.Infof("-------PDC HandleHeartbeatReq enter server_info to channel done\n")
 		}
 	}else{
 		for _, v := range pci.serverInfo {
@@ -406,20 +407,20 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 
 	pci.cluster_minimumRemovableEpoch = minRE
 
-	//fmt.Printf("node %d maxre %d minRe %d \n",id,maxre,minRE)
+	//logutil.Infof("node %d maxre %d minRe %d \n",id,maxre,minRE)
 
 	if pci.persistTimeout[2].isTimeout() {
 		buf := make([]byte,8)
 		binary.BigEndian.PutUint64(buf,pci.cluster_minimumRemovableEpoch)
 		if pci.enableLog {
-			fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel\n")
+			logutil.Infof("-------PDC HandleHeartbeatReq epoch to channel\n")
 		}
 		pci.msgChan <- &ChanMessage{
 			tp:   MSG_TYPE_MINI_REM_EPOCH,
 			body: buf,
 		}
 		if pci.enableLog {
-			fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel done\n")
+			logutil.Infof("-------PDC HandleHeartbeatReq epoch to channel done\n")
 		}
 	}
 
@@ -446,7 +447,7 @@ func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
 			buf := make([]byte,8)
 			binary.BigEndian.PutUint64(buf,ce)
 			if pci.enableLog {
-				fmt.Printf("------- gen epoch %d\n",ce)
+				logutil.Infof("------- gen epoch %d\n",ce)
 			}
 			//step 2: put these values into the worker
 			pci.msgChan <- &ChanMessage{
@@ -471,7 +472,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 		switch msg.tp {
 		case MSG_TYPE_CLUSTER_EPOCH:
 			if pci.enableLog {
-				fmt.Printf("-------cluster epoch %v \n", msg.body)
+				logutil.Infof("-------cluster epoch %v \n", msg.body)
 			}
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
 			if err != nil {
@@ -481,7 +482,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 
 		case MSG_TYPE_SERVER_INFO:
 			if pci.enableLog {
-				fmt.Printf("-------server info %v \n", msg.body2)
+				logutil.Infof("-------server info %v \n", msg.body2)
 			}
 			//save kv<server,maximumRemovableEpoch>
 			err := kv.BatchPutCustomData(msg.body2,msg.body3)
@@ -491,7 +492,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
 			if pci.enableLog {
-				fmt.Printf("-------minimum removable epoch %v \n",msg.body)
+				logutil.Infof("-------minimum removable epoch %v \n",msg.body)
 			}
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
@@ -514,7 +515,7 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 			epoch := pci.GetClusterMinimumRemovableEpoch()
 			if epoch > 0 {
 				if pci.enableLog {
-					fmt.Printf("id %d delete ddl at epoch %d \n", pci.Id, epoch)
+					logutil.Infof("id %d delete ddl at epoch %d \n", pci.Id, epoch)
 				}
 				pci.removeEpoch(epoch)
 			}
@@ -530,13 +531,13 @@ data : the response from the leader
  */
 func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	if sci.enableLog {
-		fmt.Printf("-------PDC HandleHeartbeatRsp enter\n")
-		defer fmt.Printf("-------PDC HandleHeartbeatRsp exit\n")
+		logutil.Infof("-------PDC HandleHeartbeatRsp enter\n")
+		defer logutil.Infof("-------PDC HandleHeartbeatRsp exit\n")
 	}
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	sci.heartbeatTimeout.UpdateTime(time.Now())
-	//fmt.Printf("time Gap %s \n",time.Since(sci.heartbeatTimeout.lastTime))
+	//logutil.Infof("time Gap %s \n",time.Since(sci.heartbeatTimeout.lastTime))
 
 	cluster_epoch := binary.BigEndian.Uint64(data)
 	pd_mre := binary.BigEndian.Uint64(data[8:])
@@ -559,7 +560,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 			}
 
 			//if sci.epoch_info[k] > 0 {
-			//	fmt.Printf("node %d epoch %d query_cnt %d\n",sci.Id,k,sci.epoch_info[k])
+			//	logutil.Infof("node %d epoch %d query_cnt %d\n",sci.Id,k,sci.epoch_info[k])
 			//}
 		}
 
@@ -589,7 +590,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	//if there is no business, then it updates the minimumRemovableEpoch
 	sci.server_minimumRemovableEpoch = MinUint64(pd_mre, sci.server_maximumRemovableEpoch)
 
-	//fmt.Printf("id %d cluster_epoch %d minRE %d \n",sci.Id,cluster_epoch,pd_mre)
+	//logutil.Infof("id %d cluster_epoch %d minRE %d \n",sci.Id,cluster_epoch,pd_mre)
 
 	//cluster_epoch goes from 1.
 	//epoch 0 is invalid.
@@ -649,7 +650,7 @@ func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
 	if sci.removeEpoch != nil && max_ep > 0 {
 		if sci.enableLog {
-			fmt.Printf("async delete ddl epoch %d \n",max_ep)
+			logutil.Infof("async delete ddl epoch %d \n",max_ep)
 		}
 		sci.removeEpoch(max_ep)
 	}
@@ -662,7 +663,7 @@ func (sci *PDCallbackImpl) CollectData() []byte {
 	//TODO: atmoic read
 	var buf []byte = make([]byte,8)
 	binary.BigEndian.PutUint64(buf,sci.server_maximumRemovableEpoch)
-	//fmt.Printf("%d send heartbeat\n",sci.Id)
+	//logutil.Infof("%d send heartbeat\n",sci.Id)
 	return buf
 }
 

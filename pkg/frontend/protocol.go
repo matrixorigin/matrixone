@@ -80,6 +80,14 @@ func NewResponse(category,status,cmd int,d interface{})*Response {
 	}
 }
 
+func NewGeneralErrorResponse(cmd uint8,err error)*Response{
+	return NewResponse(ErrorResponse, 0, int(cmd),err)
+}
+
+func NewGeneralOkResponse(cmd uint8)*Response{
+	return NewResponse(OkResponse, 0, int(cmd), nil, )
+}
+
 func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16,status,cmd int,d interface{})*Response {
 	resp := &Response{
 		category: OkResponse,

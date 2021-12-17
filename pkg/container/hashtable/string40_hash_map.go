@@ -16,130 +16,133 @@ package hashtable
 
 import (
 	"errors"
-	"math/bits"
-	"unsafe"
 )
 
 type String40HashMapCell struct {
 	Hash   uint64
-	Key    [5]uint64
+	AesKey [2]uint64
 	Mapped uint64
 }
 
-func (hdr *String40HashMapCell) StrKey() StringRef {
-	return StringRef{
-		Ptr: (*byte)(unsafe.Pointer(&hdr.Key[0])),
-		Len: 40 - (bits.LeadingZeros64(hdr.Key[4]) >> 3),
-	}
-}
-
 type String40HashMap struct {
-	bucketCntBits uint8
-	bucketCnt     uint64
-	elemCnt       uint64
-	maxElemCnt    uint64
-	bucketData    []String40HashMapCell
+	cellCntBits uint8
+	cellCnt     uint64
+	elemCnt     uint64
+	maxElemCnt  uint64
+	cells       []String40HashMapCell
+	//confCnt     uint64
 }
 
 func (ht *String40HashMap) Init() {
-	ht.bucketCntBits = kInitialBucketCntBits
-	ht.bucketCnt = kInitialBucketCnt
+	ht.cellCntBits = kInitialCellCntBits
+	ht.cellCnt = kInitialCellCnt
 	ht.elemCnt = 0
-	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.bucketData = make([]String40HashMapCell, kInitialBucketCnt)
+	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	ht.cells = make([]String40HashMapCell, kInitialCellCnt)
 }
 
-func (ht *String40HashMap) Insert(hash uint64, key *[5]uint64) uint64 {
-	ht.resizeOnDemand(1)
-
-	if hash == 0 {
-		hash = Crc32Int320Hash(key)
-	}
-
-	empty, _, cell := ht.findBucket(hash, key)
-	if empty {
-		ht.elemCnt++
-		cell.Hash = hash
-		cell.Key = *key
-		cell.Mapped = ht.elemCnt
-	}
-
-	return cell.Mapped
-}
-
-func (ht *String40HashMap) InsertBatch(hashes []uint64, keys [][5]uint64, values []uint64) {
+func (ht *String40HashMap) InsertRawBatch(hashes []uint64, aesKeys [][2]uint64, keys [][5]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
-	if hashes[0] == 0 {
-		Crc32Int320BatchHash(&keys[0], &hashes[0], len(keys))
-	}
+	AesInt320BatchHash(&keys[0], &hashes[0], len(keys))
+	AesInt320BatchGenKey(&keys[0], &aesKeys[0], len(keys))
 
 	for i := range keys {
-		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if empty {
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		if cell.Mapped == 0 {
 			ht.elemCnt++
 			cell.Hash = hashes[i]
-			cell.Key = keys[i]
+			cell.AesKey = aesKeys[i]
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String40HashMap) InsertBatchWithRing(zs []int64, hashes []uint64, keys [][5]uint64, values []uint64) {
+func (ht *String40HashMap) InsertHashedBatch(hashes []uint64, aesKeys [][2]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(aesKeys)))
+
+	for i := range aesKeys {
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.Hash = hashes[i]
+			cell.AesKey = aesKeys[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *String40HashMap) InsertRawBatchWithRing(zValues []int64, hashes []uint64, aesKeys [][2]uint64, keys [][5]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
-	if hashes[0] == 0 {
-		Crc32Int320BatchHash(&keys[0], &hashes[0], len(keys))
-	}
+	AesInt320BatchHash(&keys[0], &hashes[0], len(keys))
+	AesInt320BatchGenKey(&keys[0], &aesKeys[0], len(keys))
 
 	for i := range keys {
-		if zs[i] == 0 {
+		if zValues[i] == 0 {
 			continue
 		}
-		empty, _, cell := ht.findBucket(hashes[i], &keys[i])
-		if empty {
+
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		if cell.Mapped == 0 {
 			ht.elemCnt++
 			cell.Hash = hashes[i]
-			cell.Key = keys[i]
+			cell.AesKey = aesKeys[i]
 			cell.Mapped = ht.elemCnt
 		}
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String40HashMap) Find(hash uint64, key *[5]uint64) uint64 {
-	if hash == 0 {
-		hash = Crc32Int320Hash(key)
-	}
+func (ht *String40HashMap) InsertHashedBatchWithRing(zValues []int64, hashes []uint64, aesKeys [][2]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(aesKeys)))
 
-	_, _, cell := ht.findBucket(hash, key)
+	for i := range aesKeys {
+		if zValues[i] == 0 {
+			continue
+		}
 
-	return cell.Mapped
-}
-
-func (ht *String40HashMap) FindBatch(hashes []uint64, keys [][5]uint64, values []uint64) {
-	if hashes[0] == 0 {
-		Crc32Int320BatchHash(&keys[0], &hashes[0], len(keys))
-	}
-
-	for i := range keys {
-		_, _, cell := ht.findBucket(hashes[i], &keys[i])
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.Hash = hashes[i]
+			cell.AesKey = aesKeys[i]
+			cell.Mapped = ht.elemCnt
+		}
 		values[i] = cell.Mapped
 	}
 }
 
-func (ht *String40HashMap) findBucket(hash uint64, key *[5]uint64) (empty bool, idx uint64, cell *String40HashMapCell) {
-	mask := ht.bucketCnt - 1
-	for idx = hash & mask; true; idx = (idx + 1) & mask {
-		cell = &ht.bucketData[idx]
-		empty = cell.Hash == 0
-		if empty || cell.Key == *key {
-			return
+func (ht *String40HashMap) FindRawBatch(hashes []uint64, aesKeys [][2]uint64, keys [][5]uint64, values []uint64) {
+	AesInt320BatchHash(&keys[0], &hashes[0], len(keys))
+	AesInt320BatchGenKey(&keys[0], &aesKeys[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *String40HashMap) FindHashedBatch(hashes []uint64, aesKeys [][2]uint64, values []uint64) {
+	for i := range aesKeys {
+		cell := ht.findCell(hashes[i], &aesKeys[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *String40HashMap) findCell(hash uint64, aesKey *[2]uint64) *String40HashMapCell {
+	mask := ht.cellCnt - 1
+	for idx := hash & mask; true; idx = (idx + 1) & mask {
+		cell := &ht.cells[idx]
+		if cell.Mapped == 0 || (cell.Hash == hash && cell.AesKey == *aesKey) {
+			return cell
 		}
+		//ht.confCnt++
 	}
 
-	return
+	return nil
 }
 
 func (ht *String40HashMap) resizeOnDemand(n uint64) {
@@ -148,28 +151,28 @@ func (ht *String40HashMap) resizeOnDemand(n uint64) {
 		return
 	}
 
-	newBucketCntBits := ht.bucketCntBits + 2
-	newBucketCnt := uint64(1) << newBucketCntBits
-	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	newCellCntBits := ht.cellCntBits + 2
+	newCellCnt := uint64(1) << newCellCntBits
+	newMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	for newMaxElemCnt < targetCnt {
-		newBucketCntBits++
-		newBucketCnt <<= 1
-		newMaxElemCnt = newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
+		newCellCntBits++
+		newCellCnt <<= 1
+		newMaxElemCnt = newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
-	oldBucketCnt := ht.bucketCnt
-	oldBucketData := ht.bucketData
+	oldCellCnt := ht.cellCnt
+	oldCells := ht.cells
 
-	ht.bucketCntBits = newBucketCntBits
-	ht.bucketCnt = newBucketCnt
+	ht.cellCntBits = newCellCntBits
+	ht.cellCnt = newCellCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.bucketData = make([]String40HashMapCell, newBucketCnt)
+	ht.cells = make([]String40HashMapCell, newCellCnt)
 
-	for i := uint64(0); i < oldBucketCnt; i++ {
-		cell := &oldBucketData[i]
-		if cell.Hash != 0 {
-			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key)
-			ht.bucketData[newIdx] = *cell
+	for i := uint64(0); i < oldCellCnt; i++ {
+		cell := &oldCells[i]
+		if cell.Mapped != 0 {
+			newCell := ht.findCell(cell.Hash, &cell.AesKey)
+			*newCell = *cell
 		}
 	}
 }
@@ -188,15 +191,15 @@ func (it *String40HashMapIterator) Init(ht *String40HashMap) {
 }
 
 func (it *String40HashMapIterator) Next() (cell *String40HashMapCell, err error) {
-	for it.pos < it.table.bucketCnt {
-		cell = &it.table.bucketData[it.pos]
-		if cell.Hash != 0 {
+	for it.pos < it.table.cellCnt {
+		cell = &it.table.cells[it.pos]
+		if cell.Mapped != 0 {
 			break
 		}
 		it.pos++
 	}
 
-	if it.pos >= it.table.bucketCnt {
+	if it.pos >= it.table.cellCnt {
 		err = errors.New("out of range")
 		return
 	}
