@@ -17,10 +17,10 @@ package overload
 import (
 	"errors"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const (
@@ -648,6 +648,30 @@ func initCastRulesForBinaryOps() {
 				newReturnType: types.T(nret),
 			}
 			binOpsReturnType[index][types.T_float64][types.T_float32] = types.T(nret)
+			// cast betweem varchar and date
+			binOpsTypeCastRules[index][types.T_varchar][types.T_date] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_date, Size: 4},
+				rightCast:     types.Type{Oid: types.T_date, Size: 4},
+				newReturnType: types.T_sel,
+			}
+			binOpsReturnType[index][types.T_varchar][types.T_date] = types.T_sel
+			binOpsTypeCastRules[index][types.T_date][types.T_varchar] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_date, Size: 4},
+				rightCast:     types.Type{Oid: types.T_date, Size: 4},
+				newReturnType: types.T_sel,
+			}
+			binOpsReturnType[index][types.T_date][types.T_varchar] = types.T_sel
+			// date to date
+			binOpsReturnType[index][types.T_date][types.T_date] = types.T_sel
+			binOpsTypeCastRules[index][types.T_date][types.T_date] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_date, Size: 4},
+				rightCast:     types.Type{Oid: types.T_date, Size: 4},
+				newReturnType: types.T_sel,
+			}
+			binOpsReturnType[index][types.T_date][types.T_date] = types.T_sel
 		}
 	}
 }
