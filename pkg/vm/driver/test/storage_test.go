@@ -423,7 +423,6 @@ func TestSplit(t *testing.T) {
 
 	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
 	require.NoError(t, err)
-
 	tbl := MockTableInfo(0)
 	tid, err := catalog.CreateTable(0, dbid, *tbl)
 	require.NoError(t, err)
@@ -432,6 +431,7 @@ func TestSplit(t *testing.T) {
 	logutil.Infof("sids is %v", sids)
 	
 	totalRowsBeforeSplit := uint64(0)
+	logutil.Infof("split: start insert")
 	for i := 0; i < 10; i++ {
 		batch := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
@@ -456,6 +456,7 @@ func TestSplit(t *testing.T) {
 	for _, sid := range newsids {
 		require.NotEqual(t, sids[0], sid)
 	}
+	logutil.Infof("split: check ctlg finished")
 	//check data
 	batchesAfterSplit := make([]*batch.Batch, 0)
 	totalRowsAfterSplit := uint64(0)
@@ -466,6 +467,7 @@ func TestSplit(t *testing.T) {
 		rows, _ := c.AOEStorages[0].TotalRows(sid)
 		totalRowsAfterSplit += rows
 	}
+	logutil.Infof("split: check data finished")
 
 	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit,totalRowsAfterSplit)
 	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
