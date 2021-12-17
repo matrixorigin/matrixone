@@ -766,7 +766,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if mce.routine.db == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
-			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
+			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar:
 			default:

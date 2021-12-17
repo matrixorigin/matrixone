@@ -20,6 +20,7 @@ import (
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+    "github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
     "github.com/matrixorigin/matrixone/pkg/defines"
 )
 %}
@@ -4683,7 +4684,7 @@ keys:
 int_num_val:
     INTEGRAL
     {
-        ival, errStr := getInt64($1)
+        ival, errStr := util.GetInt64($1)
         if errStr != "" {
             yylex.Error(errStr)
             return 1
@@ -4702,7 +4703,7 @@ literal:
     }
 |   INTEGRAL
     {
-        ival := getUint64($1)
+        ival := util.GetUint64($1)
         $$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
     }
 |   FLOAT
@@ -4724,7 +4725,7 @@ literal:
     }
 |   HEXNUM
 	{
-		ival := getUint64($1)
+		ival := util.GetUint64($1)
 		$$ = tree.NewNumVal(constant.MakeUint64(ival), yylex.(*Lexer).scanner.LastToken, false)
 	}
 // |   HEX

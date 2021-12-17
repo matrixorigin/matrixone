@@ -132,6 +132,12 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 			Plan:  pn,
 			Proc:  e.c.proc,
 		}, nil
+	case *plan.ShowCreateDatabase:
+		return &Scope{
+			Magic: ShowCreateDatabase,
+			Plan: pn,
+			Proc: e.c.proc,
+		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
 }
@@ -204,6 +210,8 @@ func (e *Exec) Run(ts uint64) error {
 		return e.scope.ShowColumns(e.u, e.fill)
 	case ShowCreateTable:
 		return e.scope.ShowCreateTable(e.u, e.fill)
+	case ShowCreateDatabase:
+		return e.scope.ShowCreateDatabase(e.u, e.fill)
 	}
 	return nil
 }
