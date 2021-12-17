@@ -257,6 +257,7 @@ func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.
 		ctr.inserted = make([]uint8, UnitLimit)
 		ctr.zInserted = make([]uint8, UnitLimit)
 		ctr.hashes = make([]uint64, UnitLimit)
+		ctr.fakeKeys = make([][2]uint64, UnitLimit)
 		ctr.values = make([]uint64, UnitLimit)
 		switch {
 		case size <= 8:
@@ -631,8 +632,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 				}
 			}
 		}
-		ctr.hashes[0] = 0
-		ctr.h32.ht.InsertBatch(ctr.hashes, ctr.h32.keys[:n], ctr.values)
+		ctr.h32.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h32.keys[:n], ctr.values)
 		{ // batch
 			cnt := 0
 			copy(ctr.inserted[:n], ctr.zInserted[:n])
@@ -749,8 +749,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 				}
 			}
 		}
-		ctr.hashes[0] = 0
-		ctr.h40.ht.InsertBatch(ctr.hashes, ctr.h40.keys[:n], ctr.values)
+		ctr.h40.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h40.keys[:n], ctr.values)
 		{ // batch
 			cnt := 0
 			copy(ctr.inserted[:n], ctr.zInserted[:n])
