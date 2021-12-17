@@ -32,18 +32,25 @@ type RoutineManager struct {
 	pu *config.ParameterUnit
 }
 
+func (rm *RoutineManager) getEpochgc() *PDCallbackImpl {
+	return rm.pdHook
+}
+
+func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
+	return rm.pu
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	defer func() {
 		if err := recover(); err != nil {
 			logutil.Errorf("create routine manager failed. err:%v",err)
 		}
 	}()
-	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID(),int(rm.pu.SV.GetMaxBytesInOutbufToFlush()))
+	pro := NewMysqlClientProtocol(nextConnectionID(),rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()),rm.pu.SV)
 	exe := NewMysqlCmdExecutor()
-	ses := NewSessionWithParameterUnit(rm.pu)
-	routine := NewRoutine(rs, pro, exe, ses)
-	routine.pdHook = rm.pdHook
+	exe.SetRoutineManager(rm)
+
+	routine := NewRoutine(pro, exe, rm.pu)
 	routine.SetRoutineMgr(rm)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
@@ -133,7 +140,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = routine.io.Read()
+		msg, err = protocol.tcpConn.Read()
 		if err != nil {
 			return errors.New("read msg error")
 		}
@@ -149,7 +156,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	// finish handshake process
-	if !routine.established {
+	if !protocol.IsEstablished() {
 		logutil.Infof("HANDLE HANDSHAKE")
 
 		/*
@@ -161,7 +168,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		if err != nil {
 			return err
 		}
-		routine.Establish(protocol)
+		protocol.SetEstablished()
 		return nil
 	}
 

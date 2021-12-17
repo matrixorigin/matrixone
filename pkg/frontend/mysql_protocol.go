@@ -19,6 +19,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
+	"github.com/fagongzi/goetty"
 	"github.com/huandu/go-clone"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -149,6 +150,10 @@ type MysqlProtocol interface {
 var _ MysqlProtocol = &MysqlProtocolImpl{}
 var _ MysqlProtocol = &ChannelProtocol{}
 
+func (ses *Session) GetMysqlProtocol() MysqlProtocol  {
+	return ses.protocol.(MysqlProtocol)
+}
+
 type debugStats struct {
 	writeCount uint64
 	writeBytes uint64
@@ -255,6 +260,24 @@ type MysqlProtocolImpl struct {
 	lenEncBuffer []byte
 
 	rowHandler
+
+	SV *config.SystemVariables
+}
+
+func (mp *MysqlProtocolImpl) GetDatabaseName() string {
+	return mp.database
+}
+
+func (mp *MysqlProtocolImpl) SetDatabaseName(s string) {
+	mp.database = s
+}
+
+func (mp *MysqlProtocolImpl) GetUserName() string {
+	return mp.username
+}
+
+func (mp *MysqlProtocolImpl) SetUserName(s string) {
+	mp.username = s
 }
 
 func (mp *MysqlProtocolImpl) GetStats() string {
@@ -268,7 +291,9 @@ func (mp *MysqlProtocolImpl) PrepareBeforeProcessingResultSet() {
 	mp.resetFlushCount()
 }
 
-func (mp *MysqlProtocolImpl) Quit() {}
+func (mp *MysqlProtocolImpl) Quit() {
+	mp.ProtocolImpl.Quit()
+}
 
 //handshake response 41
 type response41 struct {
@@ -568,11 +593,10 @@ func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
 //the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
-	ses := mp.routine.GetSession()
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == ses.Pu.SV.GetDumpuser() { //the user dump for test
-		psw = []byte(ses.Pu.SV.GetDumppassword())
+	if mp.username == mp.SV.GetDumpuser() { //the user dump for test
+		psw = []byte(mp.SV.GetDumppassword())
 	}
 
 	//TO Check password
@@ -948,7 +972,7 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 		return nil, err
 	}
 
-	read, err := mp.routine.io.Read()
+	read, err := mp.tcpConn.Read()
 
 	data := read.(*Packet).Payload
 	mp.sequenceId++
@@ -1351,7 +1375,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
 		mp.flushCount++
 		mp.writeBytes += uint64(mp.bytesInOutBuffer)
-		err := mp.routine.io.Flush()
+		err := mp.tcpConn.Flush()
 		if err != nil {
 			return err
 		}
@@ -1366,7 +1390,7 @@ func (mp *MysqlProtocolImpl) openPacket() error {
 		fmt.Println("openPacket")
 	}
 
-	outbuf := mp.routine.io.OutBuf()
+	outbuf := mp.tcpConn.OutBuf()
 	n := 4
 	outbuf.Expansion(n)
 	writeIdx := outbuf.GetWriteIndex()
@@ -1385,7 +1409,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 	if mp.enableLog{
 		logutil.Infof("fillPacket len %d\n",len(elems))
 	}
-	outbuf := mp.routine.io.OutBuf()
+	outbuf := mp.tcpConn.OutBuf()
 	n := len(elems)
 	i := 0
 	curLen := 0
@@ -1435,7 +1459,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 			}
 		}
 	}
-	
+
 	return  nil
 }
 
@@ -1447,7 +1471,7 @@ func (mp *MysqlProtocolImpl) closePacket() error {
 	if !mp.isInPacket() {
 		return nil
 	}
-	outbuf := mp.routine.io.OutBuf()
+	outbuf := mp.tcpConn.OutBuf()
 	payLoadLen := outbuf.GetWriteIndex() - mp.beginWriteIndex - 4
 	if mp.enableLog {
 		logutil.Infof("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
@@ -1487,7 +1511,7 @@ func (mp *MysqlProtocolImpl) append(_ []byte,elems ...byte) []byte{
 	if err != nil {
 		panic(err)
 	}
-	return mp.routine.io.OutBuf().RawBuf()
+	return mp.tcpConn.OutBuf().RawBuf()
 }
 
 //the server send every row of the result set as an independent packet
@@ -1596,7 +1620,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 		//send packet
 		var packet = append(header[:],payload[i : i + curLen]...)
 
-		err := mp.routine.io.WriteAndFlush(packet)
+		err := mp.tcpConn.WriteAndFlush(packet)
 		if err != nil {
 			return err
 		}
@@ -1610,7 +1634,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 			header[3] = mp.sequenceId
 
 			//send header / zero-sized packet
-			err := mp.routine.io.WriteAndFlush(header[:])
+			err := mp.tcpConn.WriteAndFlush(header[:])
 			if err != nil {
 				return err
 			}
@@ -1674,16 +1698,18 @@ func (mp *MysqlProtocolImpl) recvPayload() ([]byte, error) {
 	return payload, nil
 }
 
-func NewMysqlClientProtocol(IO IOPackage, connectionID uint32, maxBytesToFlush int) *MysqlProtocolImpl {
+func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.SystemVariables) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
 	salt := make([]byte, 20)
 	rand.Read(salt)
 
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{
-			io:           IO,
+			io:           NewIOPackage(true),
+			tcpConn: tcp,
 			salt:         salt,
 			connectionID: connectionID,
+			established: false,
 		},
 		sequenceId: 0,
 		charset:    "utf8mb4",
@@ -1696,6 +1722,7 @@ func NewMysqlClientProtocol(IO IOPackage, connectionID uint32, maxBytesToFlush i
 			untilBytesInOutbufToFlush: maxBytesToFlush * 1024,
 			enableLog:                 false,
 		},
+		SV:SV,
 	}
 
 	mysql.resetPacket()
@@ -1730,8 +1757,30 @@ func NewChannelProtocolMessage (tp ChannelProtocolType, data interface{}) *Chann
 type ChannelProtocol struct {
 	ProtocolImpl
 
+	//the user of the client
+	username string
+
+	//the default database for the client
+	database string
+
 	toClient chan *ChannelPotocolMessage
 	fromClient chan *ChannelPotocolMessage
+}
+
+func (cp *ChannelProtocol) GetDatabaseName() string {
+	return cp.database
+}
+
+func (cp *ChannelProtocol) SetDatabaseName(s string) {
+	cp.database = s
+}
+
+func (cp *ChannelProtocol) GetUserName() string {
+	return cp.username
+}
+
+func (cp *ChannelProtocol) SetUserName(s string) {
+	cp.username = s
 }
 
 func (cp *ChannelProtocol) GetStats() string {
@@ -1741,6 +1790,7 @@ func (cp *ChannelProtocol) GetStats() string {
 func (cp *ChannelProtocol) PrepareBeforeProcessingResultSet() {}
 
 func (cp *ChannelProtocol) Quit() {
+	cp.ProtocolImpl.Quit()
 	close(cp.toClient)
 	close(cp.fromClient)
 }
@@ -1872,9 +1922,8 @@ type ChannelProtocolServer struct {
 func (cps *ChannelProtocolServer) CreateRoutine() *Routine {
 	pro := NewChannelProtocol(nextConnectionID())
 	exe := NewMysqlCmdExecutor()
-	ses := NewSessionWithParameterUnit(cps.pu)
-	routine := NewRoutine(nil, pro, exe, ses)
-	routine.pdHook = cps.pdHook
+
+	routine := NewRoutine(pro, exe, cps.pu)
 
 	cps.rwlock.Lock()
 	defer cps.rwlock.Unlock()
