@@ -1532,6 +1532,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	var statsWg sync.WaitGroup
 	statsWg.Add(1)
+
+	var retErr error = nil
 	go func() {
 		defer statsWg.Done()
 		/*
@@ -1543,7 +1545,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			select {
 			case <-handler.closeRef.stopLoadData:
 				//get obvious cancel
-				err = NewMysqlError(ER_QUERY_INTERRUPTED)
+				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
 				quit = true
 				//logutil.Infof("----- get stop in load ")
 
@@ -1552,13 +1554,13 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				case NOTIFY_EVENT_WRITE_BATCH_RESULT:
 					collectWriteBatchResult(handler, ne.wbh, nil)
 				case NOTIFY_EVENT_END:
-					err = nil
+					retErr = nil
 					quit = true
 				case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
 					NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
 					NOTIFY_EVENT_WRITE_BATCH_ERROR:
 					if !errorCanBeIgnored(ne.err) {
-						err = ne.err
+						retErr = ne.err
 						quit = true
 					}
 					collectWriteBatchResult(handler, ne.wbh, ne.err)
@@ -1591,7 +1593,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//until now, all writers has quit.
 	//tell stats to quit. NOTIFY_EVENT_END must be the last event in the queue.
-	handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END, err, nil)
+	handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END, nil, nil)
 
 	//wait stats to quit
 	statsWg.Wait()
@@ -1635,5 +1637,5 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//
 	//	logutil.Infof("-----process time %s ",time.Since(processTime))
 
-	return result, err
+	return result, retErr
 }
