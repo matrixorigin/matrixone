@@ -58,6 +58,10 @@ func TestInsertFunction(t *testing.T) {
 		"insert into def2 (name, age) values ('Abby', 24);",
 		"insert into def3 () values (), ();",
 		"insert into def4 (d1, d2) values (1, 2);",
+		"create table cha1 (a char(0));",
+		"create table cha2 (a char);",
+		"insert into cha2 values ('1');",
+		"insert into cha1 values ('');",
 	}
 	works := [][]string{ // First string is relation name, Second string is expected result.
 		{"iis", "i1\n\t[1 2 1 0]-&{<nil>}\ni2\n\t[2 0 3 0]-&{<nil>}\ni3\n\t[3 9 0 0]-&{<nil>}\ni4\n\t[4 1 5 0]-&{<nil>}\n\n"},
@@ -69,12 +73,27 @@ func TestInsertFunction(t *testing.T) {
 		{"def3", "i\n\t[-1 -1]-&{<nil>}\nv\n\t[abc abc]-&{<nil>}\nc\n\t[ ]-&{<nil>}\nprice\n\t[0 0]-&{<nil>}\n\n"},
 		{"def4", "d1\n\t1\nd2\n\t2\nd3\n\tnull\nd4\n\t1\n\n"},
 	}
+	eqls := [][]string{ // case should return error
+		{"insert into cha1 values ('1');", "[22000]Data too long for column 'a' at row 1"},
+		{"insert into cha2 values ('21');", "[22000]Data too long for column 'a' at row 1"},
+	}
 
 	for _, p := range prepares {
 		require.NoError(t, sqlRun(p, e, proc), p)
 	}
 	for _, s := range works {
 		require.Equal(t, s[1], TempSelect(e, "test", s[0]))
+	}
+	for _, eql := range eqls {
+		r := sqlRun(eql[0], e, proc)
+		if len(eql[1]) == 0 {
+			require.NoError(t, r, eql[0])
+		} else {
+			if r == nil { // that should error but found no error
+				require.Equal(t, eql[1], "no error", eql[0])
+			}
+			require.Equal(t, eql[1], r.Error(), eql[0])
+		}
 	}
 }
 
