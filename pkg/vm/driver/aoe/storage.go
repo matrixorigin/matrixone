@@ -404,6 +404,7 @@ func (s *Storage) ApplySnapshot(shardID uint64, path string) error {
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
 	}
+	logutil.Infof("ApplySnapshot")
 	err := s.DB.ApplySnapshot(&ctx)
 	return err
 }
