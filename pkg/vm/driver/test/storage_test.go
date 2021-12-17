@@ -420,40 +420,26 @@ func TestSplit(t *testing.T) {
 	d0 := c.CubeDrivers[0]
 	catalog := catalog.NewCatalog(d0)
 	ctlgListener.UpdateCatalog(catalog)
-	// storage:= c.AOEStorages[0]
 
 	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
 	require.NoError(t, err)
+
 	tbl := MockTableInfo(0)
 	tid, err := catalog.CreateTable(0, dbid, *tbl)
 	require.NoError(t, err)
+
 	sids, err := catalog.GetShardIDsByTid(tid)
 	logutil.Infof("sids is %v", sids)
-	batchesBeforeSplit := make([]*batch.Batch, 0)
+	
 	totalRowsBeforeSplit := uint64(0)
 	for i := 0; i < 10; i++ {
 		batch := MockBatch(tbl, i, 10000)
-		batch2 := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
-		stdLog.Printf(" append %v, size %v Bytes", i, buf.Len())
 		require.Nil(t, err)
 		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
 		if err == nil {
 			totalRowsBeforeSplit += 10000
-			batchesBeforeSplit = append(batchesBeforeSplit, batch2)
-		}
-		db, err := c.AOEStorages[0].DB.Store.Catalog.SimpleGetDatabaseByName(aoedb.IdToNameFactory.Encode(sids[0]))
-		c.AOEStorages[0].TotalRows(sids[0])
-		c.AOEStorages[0].Sync(sids)
-		assert.Equal(t, db.UncheckpointedCnt(), 0)
-		if err != nil {
-			stdLog.Printf("err437:%v", err)
-		}
-		if db != nil {
-			cp := db.UncheckpointedCnt()
-			sz := db.GetSize()
-			stdLog.Printf("cp:%v,sz:%v", cp, sz)
 		}
 		time.Sleep(1 * time.Second)
 		if checkSplit(c.AOEStorages[0], sids[0]) {
@@ -481,17 +467,10 @@ func TestSplit(t *testing.T) {
 		totalRowsAfterSplit += rows
 	}
 
-	/*batch, _ := c.AOEStorages[0].ReadAll(uint64(121), catalog.EncodeTabletName(uint64(121), tid))
-	logutil.Infof("121batches len is %v", len(batch))
-	// require.NoError(t, err)
-	batchesAfterSplit = append(batchesAfterSplit, batch...)
-
-	for _, batch := range batchesAfterSplit {
-		logutil.Infof("batchAfterSplit is %v", batch.Vecs[0].Col)
-	}*/
 	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit,totalRowsAfterSplit)
 	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
 }
+
 func checkSplit(s *aoe3.Storage, old uint64) bool {
 	dbName := aoedb.IdToNameFactory.Encode(old)
 	logutil.Infof("before checkSplit")

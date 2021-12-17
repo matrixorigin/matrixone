@@ -78,9 +78,8 @@ func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 
 //OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
-	logutil.Infof("ctlg:old is%v, news are %v", event.DB, event.Names)
+	logutil.Debugf("get event from aoe, event is %v", event)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
-	logutil.Infof("catalogSplitEvent is %v", catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
@@ -90,7 +89,6 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 		panic(err)
 	}
 	err = l.catalog.Driver.Set(key, value)
-	logutil.Infof("set key0, key is %v", key)
 	if err != nil {
 		panic(err)
 	}
@@ -99,9 +97,7 @@ func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
 
 //OnPostSplit update route info and delete presplit key.
 func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error {
-	logutil.Infof("ctlg:news are %v", event.Names)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
-	logutil.Infof("catalogSplitEvent is %v", catalogSplitEvent)
 	if err != nil {
 		panic(err)
 	}
@@ -111,21 +107,18 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 		panic(err)
 	}
 	err = l.catalog.Driver.Set(postKey, value)
-	logutil.Infof("set key, key is %v", postKey)
 	if err != nil {
 		panic(err)
 	}
 	go l.catalog.OnDatabaseSplitted()
 	preKey := l.catalog.preSplitKey(catalogSplitEvent.Old)
 	err = l.catalog.Driver.Delete(preKey)
-	logutil.Infof("ctlg,del prekey, key is %v", preKey)
 	if err != nil {
 		panic(err)
 	}
 	return nil
 }
 func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
-	logutil.Infof("ctlg,input tid%v,oldsid%v,newsid%v", tid, oldSid, newSids)
 	routePrefix := c.routePrefix(tid)
 	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
@@ -142,7 +135,6 @@ func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
 			for _, newSid := range newSids {
 				oldKey := c.routeKey(tid, sid)
 				newKey := c.routeKey(tid, newSid)
-				logutil.Infof("ctlg,change key tid%v,oldsid%v,newsid%v", tid, oldSid, newSids)
 				err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
 				if err != nil {
 					logutil.Errorf("Set fails, err:%v", err)
@@ -153,6 +145,7 @@ func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
 					logutil.Errorf("Delete fails, err:%v", err)
 					return err
 				}
+				logutil.Debugf("update route info, t-%v|from %v to %v", tid, oldSid, newSids)
 			}
 		}
 	}
@@ -171,7 +164,6 @@ func (c *Catalog) OnDatabaseSplitted() error {
 			logutil.Errorf("Unmarshal fails, err:%v", err)
 			return err
 		}
-		//tbl-shards
 		for tid, newshards := range splitEvent.News {
 			err := c.updateRouteInfo(tid, splitEvent.Old, newshards)
 			if err != nil {
@@ -180,7 +172,6 @@ func (c *Catalog) OnDatabaseSplitted() error {
 		}
 		key := c.splitKey(splitEvent.Old)
 		err = c.Driver.Delete(key)
-		logutil.Infof("ctlg, delete postKey%v, key is %v", splitEvent.Old, key)
 		if err != nil {
 			logutil.Errorf("Delete fails, err:%v", err)
 			return err
@@ -697,10 +688,10 @@ func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err err
 		}
 	}
 }
+
 func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 	sids := make([]uint64, 0)
 	pendingSids, err := c.GetPendingShards()
-	logutil.Infof("pending shards are %v", pendingSids)
 	if err != nil {
 		return nil, err
 	}
@@ -722,7 +713,6 @@ func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 		}
 		sids = append(sids, sid)
 	}
-	logutil.Infof("sid is %v", sids)
 	return sids, nil
 }
 func (c *Catalog) GetPendingShards() (sids []uint64, err error) {
@@ -904,7 +894,6 @@ func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
 
 //for test
 func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
-	//wait pending
 	t0 := time.Now()
 	for {
 		keyExisted := false
@@ -924,7 +913,7 @@ func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
 		time.Sleep(1 * time.Second)
 		c.OnDatabaseSplitted()
 	}
-	logutil.Infof("pending keys for %vms", time.Since(t0).Milliseconds())
+	logutil.Infof("wait pending keys for %vms", time.Since(t0).Milliseconds())
 	return c.getShardids(tid)
 }
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
@@ -1020,7 +1009,6 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 			if strings.Contains(tbl, "MetaTbl") {
 				continue
 			}
-			logutil.Infof("ctlg, tbl is %v", tbl)
 			tid := c.decodeTabletName(tbl)
 			if news[tid] == nil {
 				news[tid] = make([]uint64, 0)

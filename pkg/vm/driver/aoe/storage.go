@@ -207,7 +207,6 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	}
 	writtenBytes := uint64(len(key) + len(customReq.Data))
 	changedBytes := int64(writtenBytes)
-	logutil.Infof("append writtenBytes is %v", writtenBytes)
 	return writtenBytes, changedBytes, nil
 }
 
@@ -366,23 +365,24 @@ type splitCtx struct {
 //SplitCheck checks before the split
 func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
-	// db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(shard.ID))
-	// logutil.Infof("drivr call check, size is %v, db size is %v,err is %v", size, db.GetSize(), err)
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
 		Size: size,
 	}
 	currentApproximateSize, currentApproximateKeys, splitKeys, ctx, err = s.DB.PrepareSplitDatabase(&prepareSplitCtx)
+	logutil.Debugf("split check, len split key is %v", len(splitKeys))
+
 	cubeSplitKeys := make([][]byte, 0)
 	for i := 0; i < len(splitKeys)-1; i++ {
 		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(shard.Start), i)))
 	}
-	logutil.Infof("len split key is %v", len(splitKeys))
+
 	splitctx := splitCtx{
 		Ctx:         ctx,
 		SplitKeyCnt: len(splitKeys),
 	}
 	ctx, _ = json.Marshal(splitctx)
+
 	return currentApproximateSize, currentApproximateKeys, cubeSplitKeys, ctx, err
 
 }
@@ -394,7 +394,6 @@ func (s *Storage) CreateSnapshot(shardID uint64, path string) error {
 		Path: path,
 		Sync: false,
 	}
-	logutil.Infof("CreateSnapshot")
 	_, err := s.DB.CreateSnapshot(&ctx)
 	return err
 }
@@ -405,7 +404,6 @@ func (s *Storage) ApplySnapshot(shardID uint64, path string) error {
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
 	}
-	logutil.Infof("ApplySnapshot")
 	err := s.DB.ApplySnapshot(&ctx)
 	return err
 }
@@ -501,13 +499,10 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 		}
 		ctx.AppendResponse(rep)
 		totalWrittenBytes += writtenBytes
-		logutil.Infof("add writtenBytes is %v", writtenBytes)
 		totalDiffBytes += changedBytes
 	}
 	ctx.SetWrittenBytes(totalWrittenBytes)
-	logutil.Infof("writtenBytes is %v", totalWrittenBytes)
 	ctx.SetDiffBytes(totalDiffBytes)
-	logutil.Infof("diffBytes is %v", totalDiffBytes)
 	return nil
 }
 
@@ -680,6 +675,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	}
 	return nil
 }
+
 func waitExpect(timeout int, expect func() bool) {
 	end := time.Now().Add(time.Duration(timeout) * time.Millisecond)
 	interval := time.Duration(timeout) * time.Millisecond / 400
@@ -687,6 +683,7 @@ func waitExpect(timeout int, expect func() bool) {
 		time.Sleep(interval)
 	}
 }
+
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 	var err error
 	t0 := time.Now()
@@ -707,17 +704,17 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
 	oldtableName := sPrefix + strconv.Itoa(int(old.ShardID))
-	logutil.Infof("new is %v", news)
-	logutil.Infof("drivr call split")
 	newNames := make([]string, len(news))
 	for i, shard := range news {
 		name := aoedb.IdToNameFactory.Encode(shard.ShardID)
 		newNames[i] = name
 	}
-	logutil.Infof("newnames are %v", newNames)
+	logutil.Infof("split, from %v to %v",old.ShardID, newNames)
+
 	renameTable := func(oldName, dbName string) string {
 		return oldName
 	}
+	
 	splitctx := splitCtx{}
 	err := json.Unmarshal(ctx, &splitctx)
 	if err != nil {
@@ -728,14 +725,15 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 	for i := 0; i < splitctx.SplitKeyCnt; i++ {
 		splitkey[i] = []byte("1")
 	}
-	db, err := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(old.ShardID))
+
+	db, _ := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(old.ShardID))
 	tbnames := s.tableNames()
 	metaTbls := make([]*aoeMeta.Table, 0)
 	for _, tb := range tbnames {
 		metaTbl := db.SimpleGetTableByName(tb)
 		metaTbls = append(metaTbls, metaTbl)
 	}
-	logutil.Infof("len(key) is %v, key is %v, len(news) is %v, len(newNames) is %v", len(splitkey), splitkey, len(news), len(newNames))
+	
 	execSplitCtx := &aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
@@ -748,15 +746,12 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		SplitKeys:   splitkey,
 		SplitCtx:    splitctx.Ctx,
 	}
-	tname := s.tableNames()
-	batch1, _ := s.ReadAll(old.ShardID, tname[0])
-	logutil.Infof("total rows before split happens, %d", len(batch1))
 	err = s.DB.ExecSplitDatabase(execSplitCtx)
-	logutil.Infof("total rows after split happens")
 	if err != nil {
 		logutil.Errorf("Split:S-%d ExecSplitDatabase fail.", old.ShardID)
 		return err
 	}
+
 	waitExpect(2500, func() bool {
 		for _, tb := range metaTbls {
 			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
@@ -766,12 +761,10 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		return true
 	})
+
 	for _, shard := range news {
 		tableName := sPrefix + strconv.Itoa(int(shard.ShardID))
 		dbName := aoedb.IdToNameFactory.Encode(shard.ShardID)
-		logutil.Infof("dbName is %v", dbName)
-		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
-		logutil.Infof("db is nil? %v, err is %v", db == nil, err)
 		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
 		if err != nil && err != aoeMeta.TableNotFoundErr {
 			logutil.Errorf("Split:S-%d append fail, err is %v, dbname is %v.", shard.ShardID, err, dbName)
@@ -826,7 +819,6 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 			logutil.Errorf("Split:S-%d append fail, err is %v.", shard.ShardID, err)
 			return err
 		}
-		logutil.Infof("split finished, new shard is %v", dbName)
 		offset = 1
 		size = 2
 		if createTable {
@@ -844,13 +836,11 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		}
 		s.DB.DropTable(&dropCtx)
 	}
-	logutil.Infof("split:S-%d return, err is %v", old.ShardID, err)
 	return err
 }
 
 //for test
 func (s *Storage) IsTablesSame(s2 *Storage, sid uint64) bool {
-	// batchs := make([]*batch.Batch, 0)
 	tbls := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
 	tbls2 := s.DB.TableNames(aoedb.IdToNameFactory.Encode(sid))
 	if len(tbls) != len(tbls2) {
