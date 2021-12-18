@@ -16,7 +16,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"os"
 	"strconv"
 
 	//"github.com/matrixorigin/matrixone/pkg/vm/driver/test"
@@ -224,18 +223,18 @@ func TestSplit(t *testing.T) {
 				cfg.Worker.RaftEventWorkers = 8
 				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(5000)
 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(5000)
-				cfg.Replication.ShardSplitCheckDuration.Duration = 2 * time.Second
+				//cfg.Replication.ShardSplitCheckDuration.Duration = 2 * time.Second
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> removeall")
-		os.RemoveAll(clusterDataPath)
+		//os.RemoveAll(clusterDataPath)
 	}()
 	c.Start()
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
-		c.Stop()
+		//c.Stop()
 	}()
 	stdLog.Printf("drivers all started.")
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
