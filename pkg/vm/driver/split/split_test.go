@@ -223,7 +223,7 @@ func TestSplit(t *testing.T) {
 				cfg.Worker.RaftEventWorkers = 8
 				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(5000)
 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(5000)
-				//cfg.Replication.ShardSplitCheckDuration.Duration = 2 * time.Second
+				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
@@ -263,7 +263,7 @@ func TestSplit(t *testing.T) {
 		if err == nil {
 			totalRowsBeforeSplit += 10000
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 		if checkSplit(c.AOEStorages[0], sids[0]) {
 			break
 		}
