@@ -118,12 +118,11 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
-	c.Start()
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-
+	c.Start()
 	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*60)
 
 	stdLog.Printf("driver all started.")

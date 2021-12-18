@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -77,6 +78,7 @@ func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 
 //OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
+	logutil.Debugf("get event from aoe, event is %v", event)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
 	if err != nil {
 		panic(err)
@@ -116,7 +118,7 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	}
 	return nil
 }
-func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
+func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
 	routePrefix := c.routePrefix(tid)
 	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
@@ -130,17 +132,20 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 			return err
 		}
 		if sid == oldSid {
-			oldKey := c.routeKey(tid, sid)
-			newKey := c.routeKey(tid, newSid)
-			err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
-			if err != nil {
-				logutil.Errorf("Set fails, err:%v", err)
-				return err
-			}
-			err = c.Driver.Delete(oldKey)
-			if err != nil {
-				logutil.Errorf("Delete fails, err:%v", err)
-				return err
+			for _, newSid := range newSids {
+				oldKey := c.routeKey(tid, sid)
+				newKey := c.routeKey(tid, newSid)
+				err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
+				if err != nil {
+					logutil.Errorf("Set fails, err:%v", err)
+					return err
+				}
+				err = c.Driver.Delete(oldKey)
+				if err != nil {
+					logutil.Errorf("Delete fails, err:%v", err)
+					return err
+				}
+				logutil.Debugf("update route info, t-%v|from %v to %v", tid, oldSid, newSids)
 			}
 		}
 	}
@@ -159,13 +164,17 @@ func (c *Catalog) OnDatabaseSplitted() error {
 			logutil.Errorf("Unmarshal fails, err:%v", err)
 			return err
 		}
-		for newShard, tbls := range splitEvent.News {
-			for _, tid := range tbls {
-				err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
-				if err != nil {
-					return err
-				}
+		for tid, newshards := range splitEvent.News {
+			err := c.updateRouteInfo(tid, splitEvent.Old, newshards)
+			if err != nil {
+				return err
 			}
+		}
+		key := c.splitKey(splitEvent.Old)
+		err = c.Driver.Delete(key)
+		if err != nil {
+			logutil.Errorf("Delete fails, err:%v", err)
+			return err
 		}
 	}
 	return nil
@@ -679,10 +688,10 @@ func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err err
 		}
 	}
 }
+
 func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 	sids := make([]uint64, 0)
 	pendingSids, err := c.GetPendingShards()
-	logutil.Infof("pending shards are %v", pendingSids)
 	if err != nil {
 		return nil, err
 	}
@@ -878,6 +887,35 @@ func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return strconv.Itoa(int(tableId))
 }
 
+//for test
+func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
+	return c.encodeTabletName(groupId, tableId)
+}
+
+//for test
+func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
+	t0 := time.Now()
+	for {
+		keyExisted := false
+		keys, _ := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys pre are%v", keys)
+			keyExisted = true
+		}
+		keys, _ = c.Driver.PrefixScan(c.splitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys are%v", keys)
+			keyExisted = true
+		}
+		if !keyExisted {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		c.OnDatabaseSplitted()
+	}
+	logutil.Infof("wait pending keys for %vms", time.Since(t0).Milliseconds())
+	return c.getShardids(tid)
+}
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
 	tid, _ := strconv.Atoi(tbl)
 	return uint64(tid)
@@ -967,10 +1005,15 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 		if !ok {
 			return nil, errors.New("invalid new shard id")
 		}
-		news[new] = make([]uint64, len(tbls))
-		for i, tbl := range tbls {
+		for _, tbl := range tbls {
+			if strings.Contains(tbl, "MetaTbl") {
+				continue
+			}
 			tid := c.decodeTabletName(tbl)
-			news[new][i] = tid
+			if news[tid] == nil {
+				news[tid] = make([]uint64, 0)
+			}
+			news[tid] = append(news[tid], new)
 		}
 	}
 	catalogSplitEvent := SplitEvent{

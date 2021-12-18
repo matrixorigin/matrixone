@@ -210,12 +210,16 @@ func NewCubeDriverWithFactory(
 	}
 
 	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) meta.Shard {
+		disableSplit := false
+		if g == uint64(pb.KVGroup) {
+			disableSplit = true
+		}
 		return meta.Shard{
 			Group:        g,
 			Start:        start,
 			End:          end,
 			Unique:       unique,
-			DisableSplit: true,
+			DisableSplit: disableSplit,
 		}
 	}
 
