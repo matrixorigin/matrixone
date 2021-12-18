@@ -1,4 +1,4 @@
-package test
+package split
 
 import (
 	"bytes"
@@ -29,6 +29,17 @@ import (
 	stdLog "log"
 	"testing"
 	"time"
+)
+
+const (
+	blockRows          = 10000
+	blockCntPerSegment = 2
+	colCnt             = 4
+	segmentCnt         = 5
+	blockCnt           = blockCntPerSegment * segmentCnt
+	restart            = false
+	clusterDataPath    = "./test"
+	snapshotPath       = "./test"
 )
 
 func MockTableInfo(i int) *aoe.TableInfo {
