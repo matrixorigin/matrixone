@@ -14,7 +14,7 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
 	github.com/huandu/go-clone v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20211216115233-447fd5927658
+	github.com/matrixorigin/matrixcube v0.0.0-20211217125958-ded43b2699a6
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
@@ -119,5 +119,3 @@ require (
 replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2
 
 replace go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824022435-0203115049c2
-
-replace github.com/matrixorigin/matrixcube => github.com/zhangxu19830126/matrixcube v0.0.0-20211217122403-7a66401eb582

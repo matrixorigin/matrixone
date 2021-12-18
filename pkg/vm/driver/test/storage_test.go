@@ -343,11 +343,17 @@ func TestSnapshot(t *testing.T) {
 
 	c.RestartNode(stopNode)
 	stdLog.Printf(" node%v started.", stopNode)
-	time.Sleep(10 * time.Second)
+	time.Sleep(20 * time.Second)
 
 	d2 := c.CubeDrivers[stopNode]
 	s0 := c.AOEStorages[leaderNode]
 	s2 := c.AOEStorages[stopNode]
+
+	// s0.Sync([]uint64{shard.ShardID})
+	// s2.Sync([]uint64{shard.ShardID})
+	// s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	// s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	// require.Equal(t, s0checkpointID, s2checkpointID)
 
 	//check tables
 	tbls, err := d2.TabletNames(shard.ShardID)
