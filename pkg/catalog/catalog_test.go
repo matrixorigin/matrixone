@@ -17,6 +17,7 @@ package catalog
 import (
 	"fmt"
 	stdLog "log"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -26,11 +27,13 @@ import (
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 
@@ -83,7 +86,107 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
+func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    "test_table" + strconv.Itoa(i),
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+		} else {
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
+		}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+	}
+	property := aoe.Property{Key: "bucket", Value: strconv.Itoa(bucket)}
+	tblInfo.Properties = append(tblInfo.Properties, property)
+	return tblInfo
+}
+func Properties(t *testing.T) {
+	nodeCount := 3
+	bucketCount := 2
+	tableCount := 2
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Worker.RaftEventWorkers = 8
+			}),
+			raftstore.WithTestClusterNodeCount(nodeCount),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath("./test")))
+
+	c.Start()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*60)
+	driver := c.CubeDrivers[0]
+
+	catalog := NewCatalog(driver)
+	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
+	tid_sid := make(map[uint64][]uint64)
+	for i := 0; i < tableCount; i++ {
+		tbl := MockTableInfoWithProperties(4, i, bucketCount)
+		tid, err := catalog.CreateTable(0, dbid, *tbl)
+		require.Nil(t, err)
+		sids, err := catalog.getShardids(tid)
+		require.Nil(t, err)
+		require.Equal(t, bucketCount, len(sids))
+		tid_sid[tid] = sids
+	}
+
+	for k := 0; k < nodeCount; k++ {
+		shardsFromStorage := c.AOEStorages[k].DB.DatabaseNames()
+		for tid, tableSids := range tid_sid {
+			shardInStorageCount := 0
+			for _, storageSidStr := range shardsFromStorage {
+				storageSid, _ := aoedb.IdToNameFactory.Decode(storageSidStr)
+				for _, tableSid := range tableSids {
+					if tableSid == storageSid {
+						shardInStorageCount++
+					}
+				}
+			}
+			logutil.Infof("node %v(total replitca count %v), table id %v, replica count %v", k, len(shardsFromStorage), tid, shardInStorageCount)
+		}
+	}
+
+	catalog.DropDatabase(0, "test_label")
+}
 func TestCatalogWithUtil(t *testing.T) {
+	os.Remove("test")
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
@@ -124,7 +227,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*60)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*60)
 
 	stdLog.Printf("driver all started.")
 
@@ -281,4 +384,40 @@ func TestCatalogWithUtil(t *testing.T) {
 
 	err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(0))
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: DropDatabase wrong err")
+
+	nodeCount := 3
+	bucketCount := 2
+
+	driver = c.CubeDrivers[0]
+
+	catalog = NewCatalog(driver)
+	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
+	tid_sid := make(map[uint64][]uint64)
+	for i := 0; i < tableCount; i++ {
+		tbl := MockTableInfoWithProperties(4, i, bucketCount)
+		tid, err := catalog.CreateTable(0, dbid, *tbl)
+		require.Nil(t, err)
+		sids, err := catalog.getShardids(tid)
+		require.Nil(t, err)
+		require.Equal(t, bucketCount, len(sids))
+		tid_sid[tid] = sids
+	}
+
+	for k := 0; k < nodeCount; k++ {
+		shardsFromStorage := c.AOEStorages[k].DB.DatabaseNames()
+		for tid, tableSids := range tid_sid {
+			shardInStorageCount := 0
+			for _, storageSidStr := range shardsFromStorage {
+				storageSid, _ := aoedb.IdToNameFactory.Decode(storageSidStr)
+				for _, tableSid := range tableSids {
+					if tableSid == storageSid {
+						shardInStorageCount++
+					}
+				}
+			}
+			logutil.Infof("node %v(total replitca count %v), table id %v, replica count %v", k, len(shardsFromStorage), tid, shardInStorageCount)
+		}
+	}
+
+	catalog.DropDatabase(0, "test_label")
 }

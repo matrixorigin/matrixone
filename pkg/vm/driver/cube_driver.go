@@ -126,6 +126,9 @@ type CubeDriver interface {
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
 	AOEStore() *aoedb.DB
+	//AddLabelToShard add a label to the shard
+	AddLabelToShard(shardID uint64, name, value string) error
+	AddSchedulingRule(ruleName string, groupByLabel string) error
 }
 
 type driver struct {
@@ -236,11 +239,13 @@ func NewCubeDriverWithFactory(
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.Args.(pb.Request)
-		if args.Shard == 0 {
-			return proxy.Dispatch(req)
+		if cmd.Args != nil {
+			args := cmd.Args.(pb.Request)
+			if args.Shard == 0 {
+				return proxy.Dispatch(req)
+			}
+			req.ToShard = args.Shard
 		}
-		req.ToShard = args.Shard
 		return proxy.DispatchTo(req, c.ServerConfig.Store.GetRouter().GetShard(req.ToShard),
 			c.ServerConfig.Store.GetRouter().LeaderReplicaStore(req.ToShard).ClientAddr)
 	})
@@ -793,4 +798,12 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) 
 
 func (h *driver) RaftStore() raftstore.Store {
 	return h.store
+}
+
+func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
+	return h.app.AddLabelToShard(uint64(pb.AOEGroup), shardID, name, value, time.Minute)
+}
+
+func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
+	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
 }
