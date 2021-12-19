@@ -18,12 +18,19 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/logdb"
+	"go.etcd.io/etcd/raft/v3"
 	stdLog "log"
+	"math"
+	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -33,18 +40,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	// "github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
+	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	// "go.etcd.io/etcd/raft/v3"
 )
 
 const (
@@ -54,6 +66,8 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
+	clusterDataPath    = "./test"
+	snapshotPath       = "./test"
 )
 
 var tableInfo *aoe.TableInfo
@@ -64,8 +78,419 @@ func init() {
 	idxInfo = adaptor.MockIndexInfo()
 	tableInfo.Id = 100
 }
+func MockTableInfo(i int) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    "mocktbl" + strconv.Itoa(i),
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+		} else {
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
+		}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+	}
+	return tblInfo
+}
+func MockVector(t types.Type, j, rows int) vector.IVector {
+	blockRows := uint64(rows)
+	var vec vector.IVector
+	switch t.Oid {
+	case types.T_int8:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int8
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int8(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int16:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int16
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int16(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []int64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, int64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint8:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint8
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint8(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint16:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint16
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint16(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []uint64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, uint64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_float32:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []float32
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, float32(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_float64:
+		vec = vector.NewStdVector(t, blockRows)
+		var vals []float64
+		for i := uint64(0); i < blockRows; i++ {
+			vals = append(vals, float64(j))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_varchar, types.T_char:
+		vec = vector.NewStrVector(t, blockRows)
+		vals := make([][]byte, 0, blockRows)
+		prefix := "str"
+		for i := uint64(0); i < blockRows; i++ {
+			s := fmt.Sprintf("%s%d", prefix, j)
+			vals = append(vals, []byte(s))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_datetime:
+		vec = vector.NewStdVector(t, blockRows)
+		vals := make([]types.Datetime, 0, blockRows)
+		for i := uint64(1); i <= blockRows; i++ {
+			vals = append(vals, types.FromClock(int32(j*100), 1, 1, 1, 1, 1, 1))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_date:
+		vec = vector.NewStdVector(t, blockRows)
+		vals := make([]types.Date, 0, blockRows)
+		for i := int32(1); i <= int32(blockRows); i++ {
+			vals = append(vals, types.FromCalendar(int32(j), 1, 1))
+		}
+		vec.Append(len(vals), vals)
+	default:
+		panic("not supported")
+	}
+	return vec
+}
+func MockBatch(tableInfo *aoe.TableInfo, i, rows int) *batch.Batch {
+	attrs := helper.Attribute(*tableInfo)
+	var typs []types.Type
+	for _, attr := range attrs {
+		typs = append(typs, attr.Type)
+	}
+	var attrsString []string
+	for idx := range typs {
+		attrsString = append(attrsString, "mock_"+strconv.Itoa(idx))
+	}
 
+	bat := batch.New(true, attrsString)
+	var err error
+	for j, colType := range typs {
+		vec := MockVector(colType, i, rows)
+		bat.Vecs[j], err = vec.CopyToVector()
+		if err != nil {
+			panic(err)
+		}
+		vec.Close()
+	}
+
+	return bat
+}
+func TestSnapshot(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Raft.RaftLog.ForceCompactCount = 1
+				cfg.Raft.RaftLog.CompactThreshold = 1
+				cfg.Replication.CompactLogCheckDuration.Duration = time.Millisecond * 100
+			}),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
+
+	c.Start()
+	stdLog.Printf("drivers all started.")
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*60)
+	d0 := c.CubeDrivers[0]
+
+	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	require.NoError(t, err)
+	stdLog.Printf("shard id is %v", shard.ShardID)
+	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
+	leaderStoreContainerID := leaderStore.Meta().ID
+	logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
+
+	var stopNode int
+	var leaderNode int
+	for i := 0; i < 3; i++ {
+		containerID := c.RaftCluster.GetStore(i).Meta().ID
+		if containerID != leaderStoreContainerID {
+			stopNode = i
+		}
+		if containerID == leaderStoreContainerID {
+			leaderNode = i
+		}
+	}
+	logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
+
+	c.StopNode(stopNode)
+	stdLog.Printf("node%v stopped.", stopNode)
+	d0 = c.CubeDrivers[leaderNode]
+
+	var insertBatches []*batch.Batch
+	for i := 0; i < 10; i++ {
+		//create table into the shard
+		tbl := MockTableInfo(i)
+		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+		stdLog.Printf(" create table %v", i)
+		require.Nil(t, err)
+		//append 1 rows into the table
+		batch := MockBatch(tbl, i, 10000)
+		insertBatches = append(insertBatches, batch)
+		var buf bytes.Buffer
+		err = protocol.EncodeBatch(batch, &buf)
+		require.Nil(t, err)
+		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+		stdLog.Printf(" append %v", i)
+		require.Nil(t, err)
+	}
+
+	var replicaID uint64
+	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
+	for _, replica := range replicas {
+		if replica.ContainerID == leaderStoreContainerID {
+			replicaID = replica.ID
+		}
+	}
+
+	var logdb logdb.LogDB
+	logdb = c.RaftCluster.GetStore(0).(raftstore.LogDBGetter).GetLogDB()
+	hasLog := func(index uint64) bool {
+		_, _, err := logdb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
+		if err == nil {
+			return true
+		}
+		if err == raft.ErrUnavailable {
+			logutil.Infof("err is %v", err)
+			return false
+		}
+		panic(err)
+	}
+	for i := 0; i < 50; i++ {
+		if hasLog(3) {
+			time.Sleep(1 * time.Second)
+		} else {
+			logutil.Infof("compaction finished")
+			break
+		}
+		if i == 49 {
+			t.Fatalf("failed to remove log entries from logdb")
+		}
+	}
+
+	c.RestartNode(stopNode)
+	stdLog.Printf(" node%v started.", stopNode)
+	time.Sleep(20 * time.Second)
+
+	d2 := c.CubeDrivers[stopNode]
+	s0 := c.AOEStorages[leaderNode]
+	s2 := c.AOEStorages[stopNode]
+
+	// s0.Sync([]uint64{shard.ShardID})
+	// s2.Sync([]uint64{shard.ShardID})
+	// s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	// s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
+	// require.Equal(t, s0checkpointID, s2checkpointID)
+
+	//check tables
+	tbls, err := d2.TabletNames(shard.ShardID)
+	require.Nil(t, err)
+	require.Equal(t, 10, len(tbls))
+	require.True(t, s0.IsTablesSame(s2, shard.ShardID))
+
+	//checkbatches
+	for _, tbl := range tbls {
+		leaderBatches, _ := s0.ReadAll(shard.ShardID, tbl)
+		batchs, err := s2.ReadAll(shard.ShardID, tbl)
+		require.Nil(t, err)
+		for i, batch := range batchs {
+			require.Equal(t, len(leaderBatches[i].Vecs), len(batch.Vecs))
+			for j, vec := range batch.Vecs {
+				require.Equal(t, vec.Col, leaderBatches[i].Vecs[j].Col, "type is %v and %v", vec.Typ, leaderBatches[i].Vecs[j].Typ)
+			}
+		}
+	}
+
+	stdLog.Printf("call stop")
+	c.Stop()
+}
+func TestSplit(t *testing.T) {
+	os.Remove(clusterDataPath)
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	ctlgListener := catalog.NewCatalogListener()
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &storage.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			opts.EventListener = ctlgListener
+			return aoe3.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Worker.RaftEventWorkers = 8
+				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(10000)
+				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
+				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
+			}),
+			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
+
+	c.Start()
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+	stdLog.Printf("drivers all started.")
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+
+	d0 := c.CubeDrivers[0]
+	catalog := catalog.NewCatalog(d0)
+	ctlgListener.UpdateCatalog(catalog)
+
+	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
+	require.NoError(t, err)
+	tbl := MockTableInfo(0)
+	tid, err := catalog.CreateTable(0, dbid, *tbl)
+	require.NoError(t, err)
+
+	sids, err := catalog.GetShardIDsByTid(tid)
+	logutil.Infof("sids is %v", sids)
+
+	totalRowsBeforeSplit := uint64(0)
+	logutil.Infof("split: start insert")
+	for i := 0; i < 20; i++ {
+		batch := MockBatch(tbl, i, 10000)
+		var buf bytes.Buffer
+		err = protocol.EncodeBatch(batch, &buf)
+		require.Nil(t, err)
+		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
+		if err == nil {
+			totalRowsBeforeSplit += 10000
+		}
+		time.Sleep(2 * time.Second)
+		if checkSplit(c.AOEStorages[0], sids[0]) {
+			break
+		}
+		if i == 39 {
+			t.Fatalf("failed to split")
+		}
+	}
+	//check ctlg
+	time.Sleep(3 * time.Second)
+	newsids, err := catalog.GetShardIDsByTid(tid)
+	logutil.Infof("newsids are %v", newsids)
+	for _, sid := range newsids {
+		require.NotEqual(t, sids[0], sid)
+	}
+	logutil.Infof("split: check ctlg finished")
+	//check data
+	batchesAfterSplit := make([]*batch.Batch, 0)
+	totalRowsAfterSplit := uint64(0)
+	for _, sid := range newsids {
+		batch, err := c.AOEStorages[0].ReadAll(sid, catalog.EncodeTabletName(sid, tid))
+		require.NoError(t, err)
+		batchesAfterSplit = append(batchesAfterSplit, batch...)
+		rows, _ := c.AOEStorages[0].TotalRows(sid)
+		totalRowsAfterSplit += rows
+	}
+	logutil.Infof("split: check data finished")
+
+	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit, totalRowsAfterSplit)
+	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
+}
+
+func checkSplit(s *aoe3.Storage, old uint64) bool {
+	dbName := aoedb.IdToNameFactory.Encode(old)
+	logutil.Infof("before checkSplit")
+	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	logutil.Infof("checkSplit, db is %v, err is %v", db, err)
+	if err == nil {
+		return false
+	}
+	return true
+}
 func TestAOEStorage(t *testing.T) {
+	os.Remove(clusterDataPath)
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
@@ -95,7 +520,7 @@ func TestAOEStorage(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			// raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
 	defer func() {
