@@ -364,14 +364,19 @@ max-backups = 0 # maximum numbers of old log files to retain.
 
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
-# In a distributed setting, the shard-groups should set to 2.
+# Docker or NAT network environment configuration,  
+# If a client cannot access Cube through the default client URLs listened to by Cube, you must manually set the advertise client URLs
+# For exmaple, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
 addr-raft = "localhost:10000"
+addr-advertise-raft = ""
 addr-client = "localhost:20000"
+addr-advertise-client = ""
 dir-deploy = ""
 version = ""
 githash = ""
 capacity = 0
 use-memory-as-storage = false
+# In a distributed setting, the shard-groups should set to 2.
 shard-groups = 1
 
 # Replication Configs
@@ -419,7 +424,10 @@ raft-event-worker = 32
 # In a distributed setting, there are three nodes act as prophet, each of which should have different names.
 name = "node0"
 data-dir = ""
+# RPC port for other client to access prophet.
+# Docker or NAT network  exmaple, rpc-addr = "0.0.0.0:30000", rpc-advertise-addr = "${HOST}:30000"
 rpc-addr = "localhost:30000"
+rpc-advertise-addr = ""
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 rpc-timeout = "10s"
 # In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
@@ -438,6 +446,9 @@ join = ""
 client-urls = "http://localhost:40000"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
 peer-urls = "http://localhost:50000"
+# In some situations such as in the Docker or NAT network environment, 
+# if a client cannot access prophet through the default client URLs listened to by prophet, you must manually set the advertise client URLs
+# For example,client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
 advertise-peer-urls = ""
 initial-cluster = ""
