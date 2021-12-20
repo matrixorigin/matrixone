@@ -364,7 +364,7 @@ max-backups = 0 # maximum numbers of old log files to retain.
 
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
-# Docker or NAT network environment configuration,  
+# Docker or NAT network environment configuration
 # If a client cannot access Cube through the default client URLs listened to by Cube, you must manually set the advertise client URLs
 # For exmaple, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
 addr-raft = "localhost:10000"
@@ -425,7 +425,8 @@ raft-event-worker = 32
 name = "node0"
 data-dir = ""
 # RPC port for other client to access prophet.
-# Docker or NAT network  exmaple, rpc-addr = "0.0.0.0:30000", rpc-advertise-addr = "${HOST}:30000"
+# Docker or NAT network environment configuration
+# For exmaple, rpc-addr = "0.0.0.0:30000", rpc-advertise-addr = "${HOST}:30000"
 rpc-addr = "localhost:30000"
 rpc-advertise-addr = ""
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
@@ -435,20 +436,25 @@ storage-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
 # If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's peer-urls.
 external-etcd = ["", "", ""]
+# If prophet cluster have 3 nodes (also prophet cluster should have 3 nodes at least), lease should be 3. external-etcd should config nodes advertise-client-urls.
 lease = 0
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting
 [prophet.embed-etcd]
 # For the genesis node in the three prophet, the join value should remain a empty string.
 # For the other two nodes in the prophet group, the join value should set to the genesis node's peer-urls.
+# see more: https://etcd.io/docs/v3.5/op-guide/clustering/
 join = ""
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
+# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000"). 
+# If the cluster runs on Docker, specify the IP address of Docker as "http://0.0.0.0:40000"
 client-urls = "http://localhost:40000"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
+# The list of peer URLs to be listened to by a prophet node
 peer-urls = "http://localhost:50000"
 # In some situations such as in the Docker or NAT network environment, 
 # if a client cannot access prophet through the default client URLs listened to by prophet, you must manually set the advertise client URLs
-# For example,client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
+# For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
 advertise-peer-urls = ""
 initial-cluster = ""
