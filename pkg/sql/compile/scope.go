@@ -370,6 +370,43 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 	return fill(u, bat)
 }
 
+func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowCreateDatabase)
+	if _, err := p.E.Database(p.Id); err != nil {
+		if p.IfNotExistFlag {
+			return nil
+		}
+		return err
+	}
+
+	results := p.ResultColumns()
+	names := make([]string, 0)
+	for _, r := range results {
+		names = append(names, r.Name)
+	}
+
+	bat := batch.New(true, names)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.New(results[i].Type)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("CREATE DATABASE `")
+	buf.WriteString(p.Id)
+	buf.WriteString("`")
+
+	dbName := make([][]byte, 1)
+	createDatabase := make([][]byte, 1)
+	dbName[0] = []byte(p.Id)
+	createDatabase[0] = buf.Bytes()
+
+	vector.Append(bat.Vecs[0], dbName)
+	vector.Append(bat.Vecs[1], createDatabase)
+
+	bat.InitZsOne(1)
+	return fill(u, bat)
+}
+
 // Insert will insert a batch into relation and return affectedRow
 func (s *Scope) Insert(ts uint64) (uint64, error) {
 	p, _ := s.Plan.(*plan.Insert)

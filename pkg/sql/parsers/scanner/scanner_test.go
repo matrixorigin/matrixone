@@ -129,6 +129,14 @@ func TestString(t *testing.T) {
 		in:   "'hello\\",
 		id:   LEX_ERROR,
 		want: "hello",
+	}, {
+		in: "'C:\\Program Files(x86)'",
+		id:   STRING,
+		want: "C:Program Files(x86)",
+	}, {
+		in: "'C:\\\\Program Files(x86)'",
+		id:   STRING,
+		want: "C:\\Program Files(x86)",
 	}}
 
 	for _, tcase := range testcases {
