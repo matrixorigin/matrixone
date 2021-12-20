@@ -30,6 +30,7 @@ func New(db string, sql string, e engine.Engine) *build {
 		e:   e,
 		db:  db,
 		sql: sql,
+		flg: true,
 	}
 }
 
