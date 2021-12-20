@@ -47,8 +47,8 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
-	tableCount         = 20
-	databaseCount      = 50
+	tableCount         = 5
+	databaseCount      = 10
 	preAllocShardNum   = 20
 )
 
