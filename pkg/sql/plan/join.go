@@ -16,8 +16,10 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -30,15 +32,15 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		return b.buildJoinCond(e.Right, rs, ss, qry)
 	case *tree.ComparisonExpr:
 		if e.Op != tree.EQUAL {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", tree.String(expr, dialect.MYSQL)))
 		}
 		left, ok := getColumnName(e.Left)
 		if !ok {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", tree.String(expr, dialect.MYSQL)))
 		}
 		right, ok := getColumnName(e.Right)
 		if !ok {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", tree.String(expr, dialect.MYSQL)))
 		}
 		r, rattr, err := qry.getJoinAttribute(true, append(rs, ss...), left)
 		if err != nil {
@@ -49,7 +51,7 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 			return err
 		}
 		if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", tree.String(expr, dialect.MYSQL)))
 		}
 		qry.Conds = append(qry.Conds, &JoinCondition{
 			R:     r,
@@ -59,7 +61,7 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		})
 		return nil
 	}
-	return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+	return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", tree.String(expr, dialect.MYSQL)))
 }
 
 func (b *build) buildUsingJoinCond(cols tree.IdentifierList, rs, ss []string, qry *Query) error {

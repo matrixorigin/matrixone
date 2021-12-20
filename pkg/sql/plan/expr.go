@@ -911,6 +911,26 @@ func pruneExtendAttribute(e extend.Extend) extend.Extend {
 	return e
 }
 
+func pruneExtend(e extend.Extend) extend.Extend {
+	switch v := e.(type) {
+	case *extend.UnaryExtend:
+		v.E = pruneExtend(v.E)
+	case *extend.ParenExtend:
+		v.E = pruneExtend(v.E)
+	case *extend.Attribute:
+		_, name := util.SplitTableAndColumn(v.Name)
+		v.Name = name
+	case *extend.BinaryExtend:
+		v.Left = pruneExtend(v.Left)
+		v.Right = pruneExtend(v.Right)
+	case *extend.MultiExtend:
+		for i, arg := range v.Args {
+			v.Args[i] = pruneExtend(arg)
+		}
+	}
+	return e
+}
+
 func andExtends(qry *Query, e extend.Extend, es []extend.Extend) []extend.Extend {
 	if extendRelations(qry, e) == 1 {
 		return append(es, e)
