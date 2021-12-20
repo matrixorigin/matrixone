@@ -30,7 +30,7 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 	{
 		fmt.Printf("++++e: %v\n", e)
 	}
-	if e, err = b.pruneExtend(e); err != nil {
+	if e, err = b.pruneExtend(e, false); err != nil {
 		return err
 	}
 	{

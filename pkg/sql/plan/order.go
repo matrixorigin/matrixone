@@ -28,7 +28,7 @@ func (b *build) buildOrderBy(orders tree.OrderBy, qry *Query) error {
 		if err != nil {
 			return err
 		}
-		if e, err = b.pruneExtend(e); err != nil {
+		if e, err = b.pruneExtend(e, false); err != nil {
 			return err
 		}
 		{

@@ -33,6 +33,7 @@ func New(db string, sql string, e engine.Engine) *build {
 
 func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 	stmt = rewrite.Rewrite(stmt)
+	stmt = rewrite.AstRewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		qry := &Query{

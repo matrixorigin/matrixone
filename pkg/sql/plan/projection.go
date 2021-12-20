@@ -54,7 +54,7 @@ func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
 		if err != nil {
 			return err
 		}
-		if e, err = b.pruneExtend(e); err != nil {
+		if e, err = b.pruneExtend(e, true); err != nil {
 			return err
 		}
 		{
