@@ -101,17 +101,17 @@ func TestInsertFunction(t *testing.T) {
 func TestDateType(t *testing.T) {
 	e, proc := newTestEngine()
 
-	sqls := []string {
+	sqls := []string{
 		"create table tdate (a date);",
 		"create table tdefdate (a date default '20211202')",
 		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
 		"insert into tdefdate values ();",
 	}
-	res := [][]string {
+	res := [][]string{
 		{"tdate", "a\n\t[2007-02-10 1997-02-10 0001-04-28 2004-11-12 0123-04-03]-&{<nil>}\n\n"},
 		{"tdefdate", "a\n\t2021-12-02\n\n"},
 	}
-	eqls := [][]string {
+	eqls := [][]string{
 		{"create table tble (a date);", ""},
 		{"insert into tble values ('20201310')", "[22000]Incorrect date value"},
 		{"insert into tble values ('20200631')", "[22000]Incorrect date value"},
@@ -134,6 +134,28 @@ func TestDateType(t *testing.T) {
 			}
 			require.Equal(t, eql[1], r.Error(), eql[0])
 		}
+	}
+}
+
+// TestDateComparison tests date type comparison operation
+func TestDateComparison(t *testing.T) {
+	e, proc := newTestEngine()
+	sqls := []string{
+		"create table tdate (a date);",
+		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
+		"select * from tdate where a < '2004-01-01'",
+		"select * from tdate where '2004-01-01' < a",
+		"select * from tdate where a > '2004-01-01'",
+		"select * from tdate where '2004-01-01' > a",
+		"select * from tdate where a = '2004-01-01'",
+		"select * from tdate where '2004-01-01' = a",
+		"select * from tdate where a <= '2004-01-01'",
+		"select * from tdate where '2004-01-01' <= a",
+		"select * from tdate where a >= '2004-01-01'",
+		"select * from tdate where '2004-01-01' >= a",
+	}
+	for _, sql := range sqls {
+		require.NoError(t, sqlRun(sql, e, proc), sql)
 	}
 }
 
