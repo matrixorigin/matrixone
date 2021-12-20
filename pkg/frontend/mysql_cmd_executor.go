@@ -52,6 +52,18 @@ type MysqlCmdExecutor struct {
 
 	//for load data closing
 	loadDataClose *CloseLoadData
+
+	ses *Session
+
+	routineMgr *RoutineManager
+}
+
+func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session)  {
+	cei.ses = ses
+}
+
+func (cei *MysqlCmdExecutor) GetSession() *Session {
+	return cei.ses
 }
 
 //get new process id
@@ -60,12 +72,20 @@ func (mce *MysqlCmdExecutor) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := mce.routine.getConnID()
+	routineId := mce.GetSession().protocol.ConnectionID()
 	return fmt.Sprintf("%d%d", routineId, mce.sqlCount)
 }
 
 func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
 	mce.sqlCount += a
+}
+
+func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
+	mce.routineMgr = mgr
+}
+
+func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
+	return mce.routineMgr
 }
 
 type outputQueue struct {
@@ -149,8 +169,7 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
-	rt := obj.(*Routine)
-	ses := rt.GetSession()
+	ses := obj.(*Session)
 
 	if bat == nil {
 		return nil
@@ -168,7 +187,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	begin := time.Now()
 
-	proto := rt.GetClientProtocol().(MysqlProtocol)
+	proto := ses.GetMysqlProtocol()
 	proto.PrepareBeforeProcessingResultSet()
 
 	//Create a new temporary resultset per pipeline thread.
@@ -438,17 +457,32 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
+	ses := mce.GetSession()
+	//TODO: check meta data
+	if _, err := ses.Pu.StorageEngine.Database(db); err != nil {
+		//echo client. no such database
+		return NewMysqlError(ER_BAD_DB_ERROR, db)
+	}
+	oldDB := ses.protocol.GetDatabaseName()
+	ses.protocol.SetDatabaseName(db)
+
+	logutil.Infof("User %s change database from [%s] to [%s]\n", ses.protocol.GetUserName(), oldDB, ses.protocol.GetDatabaseName())
+
+	return nil
+}
+
 //handle SELECT DATABASE()
 func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetName("DATABASE()")
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
-	val := mce.routine.db
+	val := ses.protocol.GetDatabaseName()
 	if val == "" {
 		val = "NULL"
 	}
@@ -468,8 +502,8 @@ handle "SELECT @@max_allowed_packet"
 */
 func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -495,8 +529,8 @@ handle "SELECT @@version_comment"
 */
 func (mce *MysqlCmdExecutor) handleVersionComment() error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -521,9 +555,8 @@ handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
-	routine := mce.routine
-	//ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	logutil.Infof("+++++load data")
 
@@ -552,25 +585,25 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	loadDb := string(load.Table.Schema())
 	loadTable := string(load.Table.Name())
 	if loadDb == "" {
-		if routine.db == "" {
+		if proto.GetDatabaseName() == "" {
 			return fmt.Errorf("load data need database")
 		}
 
 		//then, it uses the database name in the session
-		loadDb = routine.db
+		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := routine.ses.Pu.StorageEngine.Database(loadDb)
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb)
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
 	}
 
 	//change db to the database in the LOAD DATA statement if necessary
-	if loadDb != routine.db {
-		oldDB := routine.db
-		routine.db = loadDb
-		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", routine.user, oldDB, routine.db)
+	if loadDb != proto.GetDatabaseName() {
+		oldDB := proto.GetDatabaseName()
+		proto.SetDatabaseName(loadDb)
+		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", proto.GetUserName(), oldDB, proto.GetDatabaseName())
 	}
 
 	/*
@@ -606,10 +639,10 @@ handle cmd CMD_FIELD_LIST
 */
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
 
-	db := mce.routine.db
+	db := proto.GetDatabaseName()
 	if db == "" {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
@@ -623,7 +656,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 			return err
 		}
 
-		mce.db = mce.routine.db
+		mce.db = proto.GetDatabaseName()
 		mce.tableInfos = make(map[string]aoe.TableInfo)
 
 		//cache these info in the executor
@@ -675,7 +708,7 @@ handle setvar
 */
 func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	var err error = nil
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	proto := mce.GetSession().protocol
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
@@ -684,11 +717,27 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	return nil
 }
 
+/*
+getExecsFromComputation gets the execs from the computation engine
+*/
+func (mce *MysqlCmdExecutor) getExecsFromComputation(sql string) ([]*compile.Exec,error) {
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	proc := process.New(mheap.New(ses.GuestMmu))
+	proc.Id = mce.getNextProcessId()
+	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
+	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
+	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
+
+	comp := compile.New(proto.GetDatabaseName(), sql, proto.GetUserName(), ses.Pu.StorageEngine, proc)
+	return comp.Build()
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
-	pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
 
 	//pin the epoch with 1
@@ -703,8 +752,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
-	execs, err := comp.Build()
+	execs, err := mce.getExecsFromComputation(sql)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err,
 			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
@@ -763,10 +811,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		//check database
-		if mce.routine.db == "" {
+		if proto.GetDatabaseName() == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
-			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
+			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar:
 			default:
@@ -779,7 +827,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		switch st := stmt.(type) {
 		case *tree.Use:
 			selfHandle = true
-			err := mce.routine.ChangeDB(st.Name)
+			err := mce.handleChangeDB(st.Name)
 			if err != nil {
 				return err
 			}
@@ -789,8 +837,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
-			if string(st.Name) == mce.routine.db {
-				mce.routine.db = ""
+			if string(st.Name) == proto.GetDatabaseName() {
+				proto.SetUserName("")
 			}
 		case *tree.Load:
 			selfHandle = true
@@ -809,12 +857,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if selfHandle {
 			continue
 		}
-		if err = exec.SetSchema(mce.routine.db); err != nil {
+		if err = exec.SetSchema(proto.GetDatabaseName()); err != nil {
 			return err
 		}
 
 		cmpBegin := time.Now()
-		if err = exec.Compile(mce.routine, getDataFromPipeline); err != nil {
+		if err = exec.Compile(ses, getDataFromPipeline); err != nil {
 			return err
 		}
 
@@ -950,9 +998,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
 	logutil.Infof("cmd %v", req.GetCmd())
 
-	ses := mce.routine.GetSession()
+	ses := mce.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
-		pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+		pdHook := ses.GetEpochgc()
 		if !pdHook.CanAcceptSomething() {
 			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()), )
 			return resp, nil
@@ -986,7 +1034,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, nil
 			}
-			err = mce.routine.GetRoutineMgr().killStatement(procID)
+			err = mce.GetRoutineManager().killStatement(procID)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, err
@@ -1002,7 +1050,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		return resp, nil
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
-		err := mce.routine.ChangeDB(dbname)
+		err := mce.handleChangeDB(dbname)
 		if err != nil {
 			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		} else {

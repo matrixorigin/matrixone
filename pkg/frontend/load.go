@@ -1406,7 +1406,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			logutil.Errorf("loadLoop panic")
 		}
 	}()
-	ses := mce.routine.GetSession()
+	ses := mce.GetSession()
 
 	//begin:=  time.Now()
 	//defer func() {

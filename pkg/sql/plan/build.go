@@ -33,6 +33,7 @@ func New(db string, sql string, e engine.Engine) *build {
 
 func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 	stmt = rewrite.Rewrite(stmt)
+	stmt = rewrite.AstRewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		qry := &Query{
@@ -119,6 +120,12 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 	case *tree.ShowCreateTable:
 		plan := &ShowCreateTable{}
 		if err := b.BuildShowCreateTable(stmt, plan); err != nil {
+			return nil, err
+		}
+		return plan, nil
+	case *tree.ShowCreateDatabase:
+		plan := &ShowCreateDatabase{}
+		if err := b.BuildShowCreateDatabase(stmt, plan); err != nil {
 			return nil, err
 		}
 		return plan, nil

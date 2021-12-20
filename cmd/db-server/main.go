@@ -109,7 +109,7 @@ func registerSignalHandlers() {
 }
 
 func waitSignal() {
-	sigchan := make(chan os.Signal)
+	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
 	<-sigchan
 }

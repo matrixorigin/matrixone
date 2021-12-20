@@ -412,6 +412,16 @@ func (b *build) buildComparison(e *tree.ComparisonExpr, qry *Query, fn func(tree
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.NE, Left: left, Right: right}, nil
+	case tree.LIKE:
+		left, err := fn(e.Left, qry)
+		if err != nil {
+			return nil, err
+		}
+		right, err := fn(e.Right, qry)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Like, Left: left, Right: right}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }

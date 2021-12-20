@@ -40,6 +40,7 @@ const (
 	ShowTables
 	ShowColumns
 	ShowCreateTable
+	ShowCreateDatabase
 )
 
 var Address string

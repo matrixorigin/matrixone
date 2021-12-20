@@ -12,19 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package frontend
+package util
 
-// CmdExecutor handle the command from the client
-type CmdExecutor interface {
-	PrepareSessionBeforeExecRequest(*Session)
+import "fmt"
 
-	// ExecRequest execute the request and get the response
-	ExecRequest(req *Request) (*Response,error)
-
-	Close()
+func GetUint64(num interface{}) uint64 {
+	switch v := num.(type) {
+	case int64:
+		return uint64(v)
+	case uint64:
+		return v
+	}
+	return 0
 }
 
-type CmdExecutorImpl struct {
-	CmdExecutor
+func GetInt64(num interface{}) (int64, string) {
+	switch v := num.(type) {
+	case int64:
+		return v, ""
+	}
+	return -1, fmt.Sprintf("%d is out of range int64", num)
 }
-

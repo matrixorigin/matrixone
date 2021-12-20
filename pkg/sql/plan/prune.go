@@ -31,27 +31,31 @@ var (
 	ErrZeroModulus = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
 )
 
-func (b *build) pruneExtend(e extend.Extend) (extend.Extend, error) {
+func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {
 	var err error
 
 	switch n := e.(type) {
 	case *extend.UnaryExtend:
 		if n.Op == overload.Not {
-			return b.pruneNot(n)
+			if !isProjection {
+				return b.pruneConditionNot(n)
+			} else {
+				return b.pruneProjectionNot(n)
+			}
 		}
 		if n.Op == overload.UnaryMinus {
 			return b.pruneUnaryMinus(n)
 		}
 	case *extend.ParenExtend:
-		if n.E, err = b.pruneExtend(n.E); err != nil {
+		if n.E, err = b.pruneExtend(n.E, false); err != nil {
 			return nil, err
 		}
 		return n, nil
 	case *extend.BinaryExtend:
-		if n.Left, err = b.pruneExtend(n.Left); err != nil {
+		if n.Left, err = b.pruneExtend(n.Left, false); err != nil {
 			return nil, err
 		}
-		if n.Right, err = b.pruneExtend(n.Right); err != nil {
+		if n.Right, err = b.pruneExtend(n.Right, false); err != nil {
 			return nil, err
 		}
 		switch n.Op {
@@ -86,7 +90,7 @@ func (b *build) pruneExtend(e extend.Extend) (extend.Extend, error) {
 	return e, nil
 }
 
-func (b *build) pruneNot(e *extend.UnaryExtend) (extend.Extend, error) {
+func (b *build) pruneConditionNot(e *extend.UnaryExtend) (extend.Extend, error) {
 	cnt := 1
 	ext := e.E
 	for {
@@ -99,6 +103,30 @@ func (b *build) pruneNot(e *extend.UnaryExtend) (extend.Extend, error) {
 	}
 	if cnt%2 == 0 {
 		return ext, nil
+	}
+	// split not extends
+	ext = splitNot(ext)
+	return ext, nil
+}
+
+func (b *build) pruneProjectionNot(e *extend.UnaryExtend) (extend.Extend, error) {
+	cnt := 1
+	ext := e.E
+	for {
+		v, ok := ext.(*extend.UnaryExtend)
+		if !ok || v.Op != overload.Not {
+			break
+		}
+		cnt++
+		ext = v.E
+	}
+	if cnt > 2 {
+		temp := &extend.UnaryExtend{Op: overload.Not, E: ext}
+		if cnt % 2 == 0 {
+			return &extend.UnaryExtend{Op: overload.Not, E: temp}, nil
+		} else {
+			return temp, nil
+		}
 	}
 	v, ok := ext.(*extend.ValueExtend)
 	if !ok {
@@ -127,6 +155,44 @@ func (b *build) pruneNot(e *extend.UnaryExtend) (extend.Extend, error) {
 	}
 	v.V = vec
 	return v, nil
+}
+
+// splitNot will split a not extend
+// eg: split not (a == 0) to a != 0
+func splitNot(e extend.Extend) extend.Extend {
+	switch v := e.(type) {
+	case *extend.ParenExtend:
+		return &extend.ParenExtend{E: splitNot(v.E)}
+	case *extend.BinaryExtend:
+		return splitNotBinary(v)
+	case *extend.UnaryExtend:
+		if v.Op == overload.Not {
+			return splitNot(v.E)
+		}
+	}
+	return e
+}
+
+func splitNotBinary(e *extend.BinaryExtend) extend.Extend {
+	switch e.Op {
+	case overload.And:
+		return &extend.BinaryExtend{Op: overload.Or, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.Or:
+		return &extend.BinaryExtend{Op: overload.And, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.EQ:
+		return &extend.BinaryExtend{Op: overload.NE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.GE:
+		return &extend.BinaryExtend{Op: overload.LE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.GT:
+		return &extend.BinaryExtend{Op: overload.LT, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.LE:
+		return &extend.BinaryExtend{Op: overload.GE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.LT:
+		return &extend.BinaryExtend{Op: overload.GT, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	case overload.NE:
+		return &extend.BinaryExtend{Op: overload.EQ, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+	}
+	return e
 }
 
 func (b *build) pruneUnaryMinus(e *extend.UnaryExtend) (extend.Extend, error) {

@@ -12,23 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package rewrite
+package plan
 
 import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
-func rewriteInsert(stmt *tree.Insert) *tree.Insert {
-	jtbl, ok := stmt.Table.(*tree.JoinTableExpr)
-	if !ok {
-		return stmt
-	}
-	atbl, ok := jtbl.Left.(*tree.AliasedTableExpr)
-	if !ok {
-		return stmt
-	}
-	tbl, ok := atbl.Expr.(*tree.TableName)
-	if !ok {
-		return stmt
-	}
-	stmt.Table = tbl
-	return stmt
+func (b *build) BuildShowCreateDatabase(stmt *tree.ShowCreateDatabase, plan *ShowCreateDatabase) error {
+	plan.Id = string(stmt.Name)
+	plan.E = b.e
+	return nil
 }

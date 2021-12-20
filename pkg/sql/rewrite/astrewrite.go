@@ -15,8 +15,8 @@
 package rewrite
 
 import (
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"go/constant"
 )
 
 var logicalBinaryOps = map[tree.BinaryOp]struct{}{
@@ -98,7 +98,7 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 			return tree.NewNotExpr(rewriteFilterCondition(rangeExpr))
 		}
 		if parenExpr, ok := t.Expr.(*tree.ParenExpr); ok {
-			return tree.NewNotExpr(rewriteFilterCondition(parenExpr))
+			return tree.NewNotExpr(rewriteFilterCondition(parenExpr.Expr))
 		}
 		if notExpr, ok := t.Expr.(*tree.NotExpr); ok {
 			return tree.NewNotExpr(rewriteFilterCondition(notExpr))
@@ -107,6 +107,10 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 	// rewrite to != 0
 	case *tree.UnresolvedName, *tree.NumVal, *tree.CastExpr:
 		return tree.NewComparisonExpr(tree.NOT_EQUAL, t, tree.NewNumVal(constant.MakeInt64(0), "0", false))
+	case *tree.BinaryExpr:
+		if !isLogicalBinaryOp(t.Op) {
+			return tree.NewComparisonExpr(tree.NOT_EQUAL, t, tree.NewNumVal(constant.MakeInt64(0), "0", false))
+		}
 	}
 	return expr
 }

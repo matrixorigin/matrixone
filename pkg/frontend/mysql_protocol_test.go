@@ -42,11 +42,9 @@ type TestRoutineManager struct {
 }
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
-	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID(), 1024)
+	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024,tRM.pu.SV)
 	exe := NewMysqlCmdExecutor()
-	ses := NewSessionWithParameterUnit(tRM.pu)
-	routine := NewRoutine(rs, pro, exe, ses)
+	routine := NewRoutine(pro, exe, tRM.pu)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -878,7 +876,7 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = routine.io.Read()
+		msg, err = pro.tcpConn.Read()
 		if err != nil {
 			return errors.New("read msg error")
 		}
@@ -894,12 +892,12 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 	}
 
 	// finish handshake process
-	if !routine.established {
+	if !pro.IsEstablished() {
 		err := pro.handleHandshake(payload)
 		if err != nil {
 			return err
 		}
-		routine.Establish(pro)
+		pro.SetEstablished()
 		return nil
 	}
 
