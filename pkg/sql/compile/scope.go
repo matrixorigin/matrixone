@@ -77,15 +77,13 @@ func (s *Scope) CreateTable(ts uint64) error {
 
 // CreateIndex do create index work according to create index plan
 func (s *Scope) CreateIndex(ts uint64) error {
-	return errors.New(errno.FeatureNotSupported, "not support now.")
+	o, _ := s.Plan.(*plan.CreateIndex)
+	if o.HasExist && o.IfNotExistFlag {
+		return nil
+	}
 
-	//o, _ := s.Plan.(*plan.CreateIndex)
-	//defer o.Relation.Close()
-	//err := o.Relation.CreateIndex(ts, o.Defs)
-	//if o.IfNotExistFlag && err != nil && err.String() == "index already exist" {
-	//	return nil
-	//}
-	//return err
+	defer o.Relation.Close()
+	return o.Relation.CreateIndex(ts, o.Defs)
 }
 
 // DropDatabase do drop database work according to drop index plan
@@ -128,15 +126,13 @@ func (s *Scope) DropTable(ts uint64) error {
 
 // DropIndex do drop index word according to drop index plan
 func (s *Scope) DropIndex(ts uint64) error {
-	return errors.New(errno.FeatureNotSupported, "not support now.")
+	p, _ := s.Plan.(*plan.DropIndex)
+	if p.NotExisted && p.IfExistFlag {
+		return nil
+	}
 
-	//p, _ := s.Plan.(*plan.DropIndex)
-	//defer p.Relation.Close()
-	//err := p.Relation.DropIndex(ts, p.Id)
-	//if p.IfExistFlag && err != nil && err.String == "index not exist" {
-	//	return nil
-	//}
-	//return err
+	defer p.Relation.Close()
+	return p.Relation.DropIndex(ts, p.Id)
 }
 
 // todo: show should get information from system table next day.

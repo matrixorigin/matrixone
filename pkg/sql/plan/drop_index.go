@@ -14,15 +14,31 @@
 
 package plan
 
-import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
 func (b *build) BuildDropIndex(stmt *tree.DropIndex, plan *DropIndex) error {
+	var notExisted = true
+	indexName := string(stmt.Name)
+
 	_, _, r, err := b.tableName(&stmt.TableName)
 	if err != nil {
 		return err
 	}
+	for _, def := range r.TableDefs() {
+		if indexDef, ok := def.(*engine.IndexTableDef); ok {
+			if indexDef.Name == indexName {
+				notExisted = false
+				break
+			}
+		}
+	}
+
 	plan.Relation = r
 	plan.Id = string(stmt.Name)
 	plan.IfExistFlag = stmt.IfExists
+	plan.NotExisted = notExisted
 	return nil
 }

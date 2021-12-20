@@ -114,6 +114,7 @@ type CreateTable struct {
 
 type CreateIndex struct {
 	IfNotExistFlag bool
+	HasExist	   bool // if true, means this index has existed.
 	Id             string
 	Relation       engine.Relation
 	Defs           []engine.TableDef
@@ -134,6 +135,7 @@ type DropTable struct {
 
 type DropIndex struct {
 	IfExistFlag bool
+	NotExisted  bool // if true, means this index does not exist.
 	Id          string
 	Relation    engine.Relation
 }
