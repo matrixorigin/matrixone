@@ -672,6 +672,29 @@ func initCastRulesForBinaryOps() {
 				newReturnType: types.T_sel,
 			}
 			binOpsReturnType[index][types.T_date][types.T_date] = types.T_sel
+			// cast between varchar and datetime
+			binOpsTypeCastRules[index][types.T_varchar][types.T_datetime] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_datetime, Size: 4},
+				rightCast:     types.Type{Oid: types.T_datetime, Size: 4},
+				newReturnType: types.T_sel,
+			}
+			binOpsReturnType[index][types.T_varchar][types.T_datetime] = types.T_sel
+			binOpsTypeCastRules[index][types.T_datetime][types.T_varchar] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_datetime, Size: 4},
+				rightCast:     types.Type{Oid: types.T_datetime, Size: 4},
+				newReturnType: types.T_sel,
+			}
+			binOpsReturnType[index][types.T_datetime][types.T_varchar] = types.T_sel
+			// datetime to datetime
+			binOpsReturnType[index][types.T_datetime][types.T_datetime] = types.T_sel
+			binOpsTypeCastRules[index][types.T_datetime][types.T_datetime] = castResult{
+				has:           true,
+				leftCast:      types.Type{Oid: types.T_datetime, Size: 4},
+				rightCast:     types.Type{Oid: types.T_datetime, Size: 4},
+				newReturnType: types.T_sel,
+			}
 		}
 	}
 }

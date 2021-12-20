@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -122,7 +123,7 @@ func (b *build) pruneProjectionNot(e *extend.UnaryExtend) (extend.Extend, error)
 	}
 	if cnt > 2 {
 		temp := &extend.UnaryExtend{Op: overload.Not, E: ext}
-		if cnt % 2 == 0 {
+		if cnt%2 == 0 {
 			return &extend.UnaryExtend{Op: overload.Not, E: temp}, nil
 		} else {
 			return temp, nil
@@ -915,6 +916,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -969,6 +971,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1029,6 +1032,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1083,6 +1087,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1143,6 +1148,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1197,6 +1203,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1257,6 +1264,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1311,6 +1319,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1371,6 +1380,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1425,6 +1435,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1485,6 +1496,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -1539,6 +1551,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		case types.T_date:
+		case types.T_datetime:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
