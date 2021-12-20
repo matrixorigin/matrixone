@@ -17,6 +17,8 @@ package unittest
 import (
 	"bytes"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func newTestEngine() (engine.Engine, *process.Process) {
@@ -153,6 +154,28 @@ func TestDateComparison(t *testing.T) {
 		"select * from tdate where '2004-01-01' <= a",
 		"select * from tdate where a >= '2004-01-01'",
 		"select * from tdate where '2004-01-01' >= a",
+	}
+	for _, sql := range sqls {
+		require.NoError(t, sqlRun(sql, e, proc), sql)
+	}
+}
+
+// TestDatetimeComparison tests date type comparison operation
+func TestDatetimeComparison(t *testing.T) {
+	e, proc := newTestEngine()
+	sqls := []string{
+		"create table tdatetime (a datetime);",
+		"insert into tdatetime values ('2018-04-28 10:21:15'), ('17-04-28 03:05:01'), (250716163958), (20211203145633);",
+		"select * from tdatetime where a < '2020-01-01 10:21:15'",
+		"select * from tdatetime where '2020-01-01 10:21:15' < a",
+		"select * from tdatetime where a = '2020-01-01 10:21:15'",
+		"select * from tdatetime where '2020-01-01 10:21:15' = a",
+		"select * from tdatetime where a >= '2020-01-01 10:21:15'",
+		"select * from tdatetime where '2020-01-01 10:21:15' >= a",
+		"select * from tdatetime where a <= '2020-01-01 10:21:15'",
+		"select * from tdatetime where '2020-01-01 10:21:15' <= a",
+		"select * from tdatetime where a != '2020-01-01 10:21:15'",
+		"select * from tdatetime where '2020-01-01 10:21:15' != a",
 	}
 	for _, sql := range sqls {
 		require.NoError(t, sqlRun(sql, e, proc), sql)
