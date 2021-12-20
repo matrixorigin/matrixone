@@ -27,14 +27,8 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 	if err != nil {
 		return err
 	}
-	{
-		fmt.Printf("++++e: %v\n", e)
-	}
 	if e, err = b.pruneExtend(e, false); err != nil {
 		return err
-	}
-	{
-		fmt.Printf("+++after prune: %v\n", e)
 	}
 	if es := extend.AndExtends(e, nil); len(es) > 0 { // push down join condition
 		for i := 0; i < len(es); i++ { // extracting join information
@@ -131,7 +125,7 @@ func (b *build) pushDownRestrict(e extend.Extend, qry *Query) bool {
 		}
 	}
 	if len(mp) == 1 {
-		qry.RelsMap[name].AddRestrict(e)
+		qry.RelsMap[name].AddRestrict(pruneExtend(e))
 		return true
 	}
 	return false

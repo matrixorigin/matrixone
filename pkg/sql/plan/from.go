@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -115,7 +116,7 @@ func (b *build) buildJoin(stmt *tree.JoinTableExpr, qry *Query) ([]string, error
 		}
 		return append(lefts, rights...), nil
 	}
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", stmt.Cond))
+	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", tree.String(stmt.Cond, dialect.MYSQL)))
 }
 
 func (b *build) renameRelation(old, new string, qry *Query) error {
