@@ -47,7 +47,7 @@ const (
 	cPreSplitPrefix       = "PreSplit"
 	cSplitPrefix          = "Split"
 	cDeletedTablePrefix   = "DeletedTableQueue"
-	cRuleName			  = "Table"
+	cRuleName             = "Table"
 	timeout               = 2000 * time.Millisecond
 	idPoolSize            = 20
 )
@@ -427,10 +427,12 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 		rkey := c.routeKey(tbl.Id, shardId)
 		tableName := tbl.Name
 		aoeTableName := c.encodeTabletName(shardId, tbl.Id)
+		logutil.Infof("create tablet, tid %v, sid %v", tid, shardId)
 		if err := c.Driver.CreateTablet(aoeTableName, shardId, &tbl); err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
+		logutil.Infof("create tablet, tid %v, sid %v", tid, shardId)
 		tbl.Name = tableName
 		if err := c.Driver.AddLabelToShard(shardId, tbl.Name, strconv.Itoa(int(tid))); err != nil {
 			logutil.Errorf("ErrAddLabelFailed, %v, %v, %v", shardId, tid, err)

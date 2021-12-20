@@ -109,10 +109,10 @@ func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 	tblInfo.Properties = append(tblInfo.Properties, property)
 	return tblInfo
 }
-func Properties(t *testing.T) {
+func TestProperties(t *testing.T) {
 	nodeCount := 3
-	bucketCount := 2
-	tableCount := 2
+	bucketCount := 9
+	tableCount := 1
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
@@ -141,6 +141,7 @@ func Properties(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
+				cfg.Prophet.Replication.MaxReplicas = 1
 			}),
 			raftstore.WithTestClusterNodeCount(nodeCount),
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
@@ -152,6 +153,7 @@ func Properties(t *testing.T) {
 		c.Stop()
 	}()
 	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*60)
+	logutil.Infof("wait shard finished")
 	driver := c.CubeDrivers[0]
 
 	catalog := NewCatalog(driver)
@@ -159,7 +161,9 @@ func Properties(t *testing.T) {
 	tid_sid := make(map[uint64][]uint64)
 	for i := 0; i < tableCount; i++ {
 		tbl := MockTableInfoWithProperties(4, i, bucketCount)
+		logutil.Infof("before create table")
 		tid, err := catalog.CreateTable(0, dbid, *tbl)
+		logutil.Infof("after create table")
 		require.Nil(t, err)
 		sids, err := catalog.getShardids(tid)
 		require.Nil(t, err)
@@ -179,6 +183,7 @@ func Properties(t *testing.T) {
 					}
 				}
 			}
+			require.Equal(t, bucketCount/nodeCount, shardInStorageCount)
 			logutil.Infof("node %v(total replitca count %v), table id %v, replica count %v", k, len(shardsFromStorage), tid, shardInStorageCount)
 		}
 	}
@@ -385,39 +390,4 @@ func TestCatalogWithUtil(t *testing.T) {
 	err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(0))
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: DropDatabase wrong err")
 
-	nodeCount := 3
-	bucketCount := 2
-
-	driver = c.CubeDrivers[0]
-
-	catalog = NewCatalog(driver)
-	dbid, _ := catalog.CreateDatabase(0, "test_label", 0)
-	tid_sid := make(map[uint64][]uint64)
-	for i := 0; i < tableCount; i++ {
-		tbl := MockTableInfoWithProperties(4, i, bucketCount)
-		tid, err := catalog.CreateTable(0, dbid, *tbl)
-		require.Nil(t, err)
-		sids, err := catalog.getShardids(tid)
-		require.Nil(t, err)
-		require.Equal(t, bucketCount, len(sids))
-		tid_sid[tid] = sids
-	}
-
-	for k := 0; k < nodeCount; k++ {
-		shardsFromStorage := c.AOEStorages[k].DB.DatabaseNames()
-		for tid, tableSids := range tid_sid {
-			shardInStorageCount := 0
-			for _, storageSidStr := range shardsFromStorage {
-				storageSid, _ := aoedb.IdToNameFactory.Decode(storageSidStr)
-				for _, tableSid := range tableSids {
-					if tableSid == storageSid {
-						shardInStorageCount++
-					}
-				}
-			}
-			logutil.Infof("node %v(total replitca count %v), table id %v, replica count %v", k, len(shardsFromStorage), tid, shardInStorageCount)
-		}
-	}
-
-	catalog.DropDatabase(0, "test_label")
 }
