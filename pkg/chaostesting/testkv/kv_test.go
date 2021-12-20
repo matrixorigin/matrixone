@@ -19,57 +19,54 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"sync/atomic"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
-	"github.com/reusee/dscope"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/e4"
 )
 
 func TestKV(t *testing.T) {
 	defer he(nil, e4.TestingFatal(t))
 
-	defs := dscope.Methods(new(fz.Def))
+	scope := fz.NewScope(
 
-	// actions
-	defs = append(defs, &fz.MainAction{
-		Action: fz.RandomActionTree([]fz.ActionMaker{
-			func() fz.Action {
-				key := rand.Int63()
-				value := rand.Int63()
-				return fz.Seq(
-					ActionSet{
-						Key:   key,
-						Value: value,
-					},
-					ActionGet{
-						Key: key,
-					},
-				)
-			},
-		}, 128),
-	})
+		// config items
+		func(
+			maxClients MaxClients,
+		) fz.ConfigItems {
+			return fz.ConfigItems{maxClients}
+		},
 
-	// provide configs
-	defs = append(defs, func() MaxClients {
-		return 8
-	}, func(
-		maxClients MaxClients,
-	) fz.ConfigItems {
-		return fz.ConfigItems{maxClients}
-	})
+		// max clients
+		func() MaxClients {
+			return 8
+		},
+	).Fork(
 
-	scope := dscope.New(defs...)
+		// main action
+		&fz.MainAction{
+			Action: fz.RandomActionTree([]fz.ActionMaker{
+				func() fz.Action {
+					key := rand.Int63()
+					value := rand.Int63()
+					return fz.Seq(
+						ActionSet{
+							Key:   key,
+							Value: value,
+						},
+						ActionGet{
+							Key: key,
+						},
+					)
+				},
+			}, 128),
+		},
 
-	// overwrite
-	defs = defs[:0]
-
-	defs = append(defs, func() fz.EnableCPUProfile {
-		return true
-	})
-
-	scope = scope.Fork(defs...)
+		// cpu profile
+		func() fz.EnableCPUProfile {
+			return true
+		},
+	)
 
 	// config write
 	var writeConfig fz.WriteConfig
@@ -84,7 +81,7 @@ func TestKV(t *testing.T) {
 	scope.Assign(&readConfig)
 	content, err := os.ReadFile("config.xml")
 	ce(err)
-	defs, err = readConfig(bytes.NewReader(content))
+	defs, err := readConfig(bytes.NewReader(content))
 	ce(err)
 	scope = scope.Fork(defs...)
 
@@ -94,20 +91,14 @@ func TestKV(t *testing.T) {
 		func(
 			maxClients MaxClients,
 		) (
-			start fz.Start,
-			stop fz.Stop,
+			start fz.StartNode,
 			do fz.Do,
 		) {
 
 			// Start
-			start = func() error {
+			start = func(id fz.NodeID) (fz.Node, error) {
 				kv = NewKV(int(maxClients))
-				return nil
-			}
-
-			// Stop
-			stop = func() error {
-				return nil
+				return &TestKVNode{}, nil
 			}
 
 			// Do
@@ -131,7 +122,6 @@ func TestKV(t *testing.T) {
 		&fz.Operators{
 			fz.Operator{
 				AfterStop: func() {
-					pt("test done, %d kv operations\n", atomic.LoadInt64(&kv.numOps))
 				},
 			},
 		},
@@ -145,18 +135,10 @@ func TestKV(t *testing.T) {
 
 }
 
+type TestKVNode struct{}
+
+func (t *TestKVNode) Close() error {
+	return nil
+}
+
 type MaxClients int
-
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
-
-type ActionSet struct {
-	Key   any
-	Value any
-}
-
-type ActionGet struct {
-	Key any
-}

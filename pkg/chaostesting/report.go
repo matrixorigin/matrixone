@@ -14,4 +14,35 @@
 
 package fz
 
-type Def struct{}
+import (
+	"fmt"
+	"sync"
+)
+
+type AddReport func(format string, args ...any)
+
+type GetReports func() []string
+
+func (_ Def) Report() (
+	add AddReport,
+	get GetReports,
+) {
+
+	var reports []string
+	var l sync.Mutex
+
+	add = func(format string, args ...any) {
+		s := fmt.Sprintf(format, args...)
+		l.Lock()
+		defer l.Unlock()
+		reports = append(reports, s)
+	}
+
+	get = func() []string {
+		l.Lock()
+		defer l.Unlock()
+		return reports
+	}
+
+	return
+}
