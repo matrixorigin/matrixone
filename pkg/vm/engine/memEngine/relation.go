@@ -116,6 +116,14 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	return nil
 }
 
+func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+	return nil
+}
+
+func (r *relation) DropIndex(epoch uint64, name string) error{
+	return nil
+}
+
 func (r *relation) AddTableDef(_ uint64, _ engine.TableDef) error {
 	return nil
 }
