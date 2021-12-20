@@ -126,7 +126,8 @@ type Relation interface {
 	ID() string
 
 	Nodes() Nodes
-
+	CreateIndex(epoch uint64, defs []TableDef) error
+	DropIndex(epoch uint64, name string) error
 	TableDefs() []TableDef
 
 	Write(uint64, *batch.Batch) error

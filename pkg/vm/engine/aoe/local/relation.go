@@ -77,7 +77,12 @@ func (r *localRoRelation) Close() {
 func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }
-
+func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+	panic("not supported")
+}
+func (r *localRoRelation) DropIndex(epoch uint64, name string) error{
+	panic("not supported")
+}
 func (r *localRoRelation) Segment(segInfo aoe.Segment, proc *process.Process) aoe.Segment {
 	id, err := strconv.ParseUint(segInfo.ID(), 10, 64)
 	if err != nil {
