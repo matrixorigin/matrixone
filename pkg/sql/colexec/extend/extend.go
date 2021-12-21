@@ -20,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 )
 
+var FunctionRegistry = map[string]int{}
+
 var UnaryReturnTypes = map[int]func(Extend) types.T{
 	overload.UnaryMinus: func(e Extend) types.T {
 		return e.ReturnType()
