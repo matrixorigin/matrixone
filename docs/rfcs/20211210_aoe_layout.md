@@ -16,7 +16,7 @@ This is a proposal to define the data persistent layout.
 - High compression rate
 
 # Detailed Design
-## Data Hirachy
+## Data Hierachy
 ![image](https://user-images.githubusercontent.com/39627130/145529173-1c6ad8eb-84e2-4d7e-a49a-9085153f3436.png)
 
 As described [Here](https://github.com/matrixorigin/matrixone/blob/main/docs/rfcs/20211210_aoe_overall_design.md#data-storage). Each table data is a three-level LSM tree. For example, the maximum number of blocks in a segment is 4. Segment [0,1,2] are already merge sorted, respectively corresponding to a sort run in **L2**. Segment [3] is not merge sorted, but Block [12,13] have been sorted, respectively corresponding to a sort run in **L1**. Transient block 14 has reached the maximum row count of a block and is flowing to **L1**. Transient block 15 is the latest appendable block.
