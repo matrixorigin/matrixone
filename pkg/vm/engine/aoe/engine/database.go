@@ -104,7 +104,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
-				r.mp[tbl.Name] = lRelation
+				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
 			r.nodes = append(r.nodes, engine.Node{
 				Id:   addr,
@@ -115,7 +115,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
 					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
-					TabletId: tbl.Name,
+					TabletId: string(codec.Uint642Bytes(tbl.ShardId)),
 					Node: engine.Node{
 						Id:   addr,
 						Addr: addr,
