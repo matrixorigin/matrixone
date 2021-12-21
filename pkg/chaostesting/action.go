@@ -28,6 +28,10 @@ type MainAction struct {
 	Action Action
 }
 
+func (_ Def) MainAction() (_ MainAction) {
+	panic("fixme: provide MainAction")
+}
+
 var _ xml.Unmarshaler = new(MainAction)
 
 func (t *MainAction) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (err error) {

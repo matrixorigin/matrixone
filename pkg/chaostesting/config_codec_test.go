@@ -27,17 +27,17 @@ import (
 func TestConfigCodec(t *testing.T) {
 	defer he(nil, e4.TestingFatal(t))
 
-	defs := dscope.Methods(new(Def))
-	defs = append(defs, func() MainAction {
-		return MainAction{
-			Action: RandomActionTree([]ActionMaker{
-				func() Action {
-					return Seq()
-				},
-			}, 128),
-		}
-	})
-	scope := dscope.New(defs...)
+	scope := NewScope().Fork(
+		func() MainAction {
+			return MainAction{
+				Action: RandomActionTree([]ActionMaker{
+					func() Action {
+						return Seq()
+					},
+				}, 128),
+			}
+		},
+	)
 
 	scope.Call(func(
 		write WriteConfig,

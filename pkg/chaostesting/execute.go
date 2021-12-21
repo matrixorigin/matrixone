@@ -15,20 +15,19 @@
 package fz
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/reusee/dscope"
 )
 
 type (
-	Start func() error
-	Stop  func() error
-	Do    func(action Action) error
+	StartNode func(id NodeID) (Node, error)
+	Do        func(action Action) error
 )
 
 func (_ Def) DumbExecuteFuncs() (
-	_ Start,
-	_ Stop,
+	_ StartNode,
 	_ Do,
 ) {
 	panic("fixme: provide Start, Stop, Do")
@@ -37,13 +36,14 @@ func (_ Def) DumbExecuteFuncs() (
 type Execute func() error
 
 func (_ Def) Execute(
-	start Start,
-	stop Stop,
+	start StartNode,
+	numNodes NumNodes,
 	do Do,
 	mainAction MainAction,
 	ops Operators,
 	doAction doAction,
 	scope dscope.Scope,
+	getReports GetReports,
 ) Execute {
 	return func() (err error) {
 		defer he(&err)
@@ -62,10 +62,12 @@ func (_ Def) Execute(
 			}
 		}
 
-		if start == nil {
-			panic("Start not provided")
+		var nodes []Node
+		for i := NumNodes(0); i < numNodes; i++ {
+			node, err := start(NodeID(i))
+			ce(err)
+			nodes = append(nodes, node)
 		}
-		ce(start())
 
 		for _, op := range ops {
 			if op.BeforeDo != nil {
@@ -73,9 +75,6 @@ func (_ Def) Execute(
 			}
 		}
 
-		if do == nil {
-			panic("Do not provided")
-		}
 		ce(doAction(mainAction.Action))
 
 		for _, op := range ops {
@@ -84,15 +83,22 @@ func (_ Def) Execute(
 			}
 		}
 
-		if stop == nil {
-			panic("Stop not provided")
+		for _, node := range nodes {
+			ce(node.Close())
 		}
-		ce(stop())
 
 		for _, op := range ops {
 			if op.AfterStop != nil {
 				scope.Call(op.AfterStop)
 			}
+		}
+
+		reports := getReports()
+		for _, report := range reports {
+			pt("%s\n", report)
+		}
+		if len(reports) > 0 {
+			return fmt.Errorf("failure reported")
 		}
 
 		return

@@ -23,6 +23,8 @@ type KV struct {
 	kv     sync.Map
 	sem    chan struct{}
 	numOps int64
+	logSet func(key, value any)
+	logGet func(key, value any)
 }
 
 func NewKV(
@@ -34,6 +36,11 @@ func NewKV(
 }
 
 func (k *KV) Set(key any, value any) {
+	defer func() {
+		if k.logSet != nil {
+			k.logSet(key, value)
+		}
+	}()
 	k.sem <- struct{}{}
 	defer func() {
 		<-k.sem
@@ -43,6 +50,11 @@ func (k *KV) Set(key any, value any) {
 }
 
 func (k *KV) Get(key any) (value any) {
+	defer func() {
+		if k.logGet != nil {
+			k.logGet(key, value)
+		}
+	}()
 	k.sem <- struct{}{}
 	defer func() {
 		<-k.sem
