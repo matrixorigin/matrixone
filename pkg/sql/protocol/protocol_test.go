@@ -16,18 +16,36 @@ package protocol
 
 import (
 	"bytes"
-	"github.com/stretchr/testify/require"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
-// TestScope will be test in transfer_test.go, because here import cycle will happen
+func TestTransform(t *testing.T) {
+	var buf bytes.Buffer
+	ins := vm.Instruction{
+		Op: vm.Transform,
+		Arg: &transform.Argument{},
+	}
+	err := EncodeInstruction(ins, &buf)
+	require.NoError(t, err)
+	resultIns, _, err := DecodeInstruction(buf.Bytes())
+	require.NoError(t, err)
+	// Op
+	if resultIns.Op != ins.Op {
+		t.Errorf("Decode resultIns.Op failed. \nExpected/Got:\n%v\n%v", resultIns.Op, ins.Op)
+		return
+	}
+	fmt.Println(resultIns)
+}
 
 func TestInstruction(t *testing.T) {
 	var buf bytes.Buffer
