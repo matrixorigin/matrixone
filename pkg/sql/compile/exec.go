@@ -135,8 +135,8 @@ func (e *Exec) compileScope(pn plan.Plan) (*Scope, error) {
 	case *plan.ShowCreateDatabase:
 		return &Scope{
 			Magic: ShowCreateDatabase,
-			Plan: pn,
-			Proc: e.c.proc,
+			Plan:  pn,
+			Proc:  e.c.proc,
 		}, nil
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
