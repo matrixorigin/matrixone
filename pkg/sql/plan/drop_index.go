@@ -15,8 +15,14 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
+
+var (
+	errIndexNotExist = errors.New(errno.InvalidName, "index doesn't exist")
 )
 
 func (b *build) BuildDropIndex(stmt *tree.DropIndex, plan *DropIndex) error {
@@ -34,6 +40,10 @@ func (b *build) BuildDropIndex(stmt *tree.DropIndex, plan *DropIndex) error {
 				break
 			}
 		}
+	}
+
+	if notExisted && !stmt.IfExists {
+		return errIndexNotExist
 	}
 
 	plan.Relation = r
