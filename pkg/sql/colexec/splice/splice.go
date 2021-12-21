@@ -17,12 +17,8 @@ package splice
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
-
-type Argument struct {
-}
 
 func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("splice")
@@ -35,23 +31,34 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
-	bat := proc.Reg.InputBatch
-	b := proc.TempBatch
-
-	if bat == nil { // last batch
-		proc.Reg.InputBatch = b
-		b = nil
+	n := arg.(*Argument)
+	if len(proc.Reg.MergeReceivers) == 0 {
+		proc.Reg.InputBatch = n.bat
+		n.bat = nil
 		return true, nil
 	}
-
-	if len(bat.Zs) == 0 { // empty batch
-		return false, nil
+	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+		reg := proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
+		if bat == nil {
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
+			i--
+			continue
+		}
+		if len(bat.Zs) == 0 {
+			i--
+			continue
+		}
+		if n.bat == nil {
+			n.bat = bat
+		} else {
+			n.bat, err = n.bat.Append(proc.Mp, bat)
+			if err != nil {
+				return false, err
+			}
+		}
 	}
-
-	proc.TempBatch, err = b.Append(proc.Mp, bat)
-	if err != nil {
-		return false, err
-	}
-	proc.Reg.InputBatch = &batch.Batch{}
-	return false, nil
+	proc.Reg.InputBatch = n.bat
+	n.bat = nil
+	return true, nil
 }

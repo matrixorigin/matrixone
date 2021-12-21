@@ -220,7 +220,7 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 			Svars:    arg.Svars,
 			FreeVars: arg.FreeVars,
 			VarsMap:  arg.VarsMap,
-			Arg:	  transArg,
+			Arg:      transArg,
 		})
 		if err != nil {
 			return err
@@ -432,7 +432,7 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			Svars:    arg.Svars,
 			FreeVars: arg.FreeVars,
 			VarsMap:  arg.VarsMap,
-			Arg:	  UntransferTransformArg(arg.Arg),
+			Arg:      UntransferTransformArg(arg.Arg),
 		}
 		data = data[n:]
 
