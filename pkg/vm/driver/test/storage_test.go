@@ -255,7 +255,7 @@ func TestSnapshot(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Raft.RaftLog.ForceCompactCount = 1
 				cfg.Raft.RaftLog.CompactThreshold = 1
-				cfg.Replication.CompactLogCheckDuration.Duration = time.Millisecond * 100
+				cfg.Replication.CompactLogCheckDuration.Duration = time.Second * 5
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
@@ -412,7 +412,7 @@ func TestSplit(t *testing.T) {
 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
 				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
 			}),
-			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
@@ -519,7 +519,7 @@ func TestAOEStorage(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			// raftstore.WithTestClusterNodeCount(1),
-			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
