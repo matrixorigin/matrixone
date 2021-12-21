@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -34,8 +35,17 @@ func (qry *Query) backFill() {
 			_, name := util.SplitTableAndColumn(agg.Alias)
 			qry.VarsMap[name]++
 			if agg.Op == transformer.StarCount {
-				agg.Name = rel.Attrs[0]
-				rel.AttrsMap[agg.Name].Ref++
+				for j, attr := range rel.Attrs {
+					if j == len(rel.Attrs)-1 {
+						agg.Name = attr
+						rel.AttrsMap[agg.Name].Ref++
+					}
+					if rel.AttrsMap[attr].Ref > 0 {
+						agg.Name = attr
+						rel.AttrsMap[agg.Name].Ref++
+						break
+					}
+				}
 			}
 		}
 		for _, e := range rel.ProjectionExtends {

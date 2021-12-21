@@ -473,14 +473,26 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	defer conn.Close()
 	addr, _ := net.ResolveTCPAddr("tcp", s.NodeInfo.Addr)
 	if _, err := conn.Connect(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100), time.Second*3); err != nil {
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- nil:
+		}
 		return err
 	}
 	if err := conn.WriteAndFlush(&message.Message{Data: buf.Bytes()}); err != nil {
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- nil:
+		}
 		return err
 	}
 	for {
 		val, err := conn.Read()
 		if err != nil {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			return err
 		}
 		msg := val.(*message.Message)
@@ -496,6 +508,10 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 		}
 		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
 		if err != nil {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			return err
 		}
 		if arg.Reg.Ch == nil {
@@ -517,6 +533,10 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	case *times.Argument:
 		return s.RunCAQ(e)
 	case *transform.Argument:
+		if t == nil {
+			s.Instructions[0].Arg = &transform.Argument{}
+			return s.RunQ(e)
+		}
 		if t.Typ == transform.Bare {
 			return s.RunQ(e)
 		}
@@ -555,26 +575,32 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			},
 		}
 		ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
-			Op:  vm.Transform,
-			Arg: arg,
+			Op: vm.Transform,
+			Arg: &transform.Argument{
+				Typ:        arg.Typ,
+				IsMerge:    arg.IsMerge,
+				FreeVars:   arg.FreeVars,
+				Restrict:   arg.Restrict,
+				Projection: arg.Projection,
+				BoundVars:  arg.BoundVars,
+			},
 		})
 
 		ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
 		ss[0].Proc.Id = s.Proc.Id
 		ss[0].Proc.Lim = s.Proc.Lim
 	}
-	s.PreScopes = ss
-	s.Magic = Merge
-	s.Instructions[0] = vm.Instruction{
-		Op:  vm.Merge,
-		Arg: nil,
-	}
 	ctx, cancel := context.WithCancel(context.Background())
+	s.Magic = Merge
+	s.PreScopes = ss
+	s.Instructions[0] = vm.Instruction{
+		Op: vm.Merge,
+	}
 	s.Proc.Cancel = cancel
 	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 2),
+		Ch:  make(chan *batch.Batch, 1),
 	}
 
 	ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{

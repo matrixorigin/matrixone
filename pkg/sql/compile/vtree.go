@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/splice"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
@@ -68,36 +69,33 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
 	var rs *Scope
-	if d == 0 && isB {
-		rs = s
-	} else {
-		rs = &Scope{
-			Magic:     Merge,
-			PreScopes: []*Scope{s},
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
-		rs.Proc.Cancel = cancel
-		rs.Proc.Id = e.c.proc.Id
-		rs.Proc.Lim = e.c.proc.Lim
-		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-		rs.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-			Ctx: ctx,
-			Ch:  make(chan *batch.Batch, 1),
-		}
-		s.Instructions = append(s.Instructions, vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Mmu: rs.Proc.Mp.Gm,
-				Reg: rs.Proc.Reg.MergeReceivers[0],
-			},
-		})
+
+	rs = &Scope{
+		Magic:     Merge,
+		PreScopes: []*Scope{s},
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = e.c.proc.Id
+	rs.Proc.Lim = e.c.proc.Lim
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	rs.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 1),
+	}
+	s.Instructions = append(s.Instructions, vm.Instruction{
+		Op: vm.Connector,
+		Arg: &connector.Argument{
+			Mmu: rs.Proc.Mp.Gm,
+			Reg: rs.Proc.Reg.MergeReceivers[0],
+		},
+	})
 	switch {
 	case d == 0 && isB: // needn't do un-transform for simple query without group by and aggregation
-		s.Instructions = append(s.Instructions, vm.Instruction{
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Splice,
-			Arg: &transform.Argument{},
+			Arg: &splice.Argument{},
 		})
 	case isB:
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
@@ -324,8 +322,8 @@ func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
 	v.Arg.Typ = transform.Bare
 	ins = append(ins, vm.Instruction{Arg: v.Arg, Op: vm.Transform})
 
-	nodes := rel.Nodes()
-	if len(nodes) == 0 {
+	ns := rel.Nodes()
+	if len(ns) == 0 {
 		return nil, errors.New(errno.FeatureNotSupported, "not support select from empty table now")
 		// todo: should support it when AOE NewReader() return reader correctly
 		//rs := &Scope{
@@ -340,17 +338,50 @@ func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
 		//rs.Proc.Lim = e.c.proc.Lim
 		//return rs, nil
 	}
-
-	ss := &Scope{
-		Magic:        Remote,
-		DataSource:   src,
-		Instructions: ins,
-		NodeInfo:     nodes[0],
+	ss := make([]*Scope, len(ns))
+	for i := range ns {
+		ss[i] = &Scope{
+			DataSource:   src,
+			Instructions: ins,
+			NodeInfo:     ns[i],
+			Magic:        Remote,
+		}
+		ss[i].Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = e.c.proc.Id
+		ss[i].Proc.Lim = e.c.proc.Lim
 	}
-	ss.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
-	ss.Proc.Id = e.c.proc.Id
-	ss.Proc.Lim = e.c.proc.Lim
-	return ss, nil
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Op: vm.Merge,
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = e.c.proc.Id
+	rs.Proc.Lim = e.c.proc.Lim
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return rs, nil
+
 }
 
 func (e *Exec) compileAQ(v *vtree.View) (*Scope, error) {

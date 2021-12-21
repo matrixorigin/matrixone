@@ -701,8 +701,5 @@ func initCastRulesForBinaryOps() {
 
 // binaryOpsNeedCast returns true if a binary operator needs type-cast for its arguments.
 func binaryOpsNeedCast(op int, ltyp types.T, rtyp types.T) (castResult, bool) {
-	if op > NE || op < Or {
-		return castResult{}, false
-	}
 	return binOpsTypeCastRules[op-firstBinaryOp][ltyp][rtyp], binOpsTypeCastRules[op-firstBinaryOp][ltyp][rtyp].has
 }

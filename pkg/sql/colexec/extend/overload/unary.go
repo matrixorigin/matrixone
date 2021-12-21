@@ -115,8 +115,5 @@ func initCastRulesForUnaryOps() {
 
 // unaryOpsNeedCast returns true if a unary operator needs type-cast for its argument.
 func unaryOpsNeedCast(op int, argTyp types.T) (castResult, bool) {
-	if op < 0 || op > Not {
-		return castResult{}, false
-	}
 	return unaryOpsTypeCastRules[op-firstUnaryOp][argTyp], unaryOpsTypeCastRules[op-firstUnaryOp][argTyp].has
 }
