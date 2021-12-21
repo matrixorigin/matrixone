@@ -15,6 +15,9 @@
 package compile
 
 import (
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/binary"
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/multi"
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/unary"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"

@@ -35,7 +35,7 @@ var (
 
 	// variants only used to init and get items from unaryOpsReturnType and unaryOpsTypeCastRules
 	unaryOperators = []int{UnaryMinus, Not}
-	firstUnaryOp = unaryOperators[0]
+	firstUnaryOp   = unaryOperators[0]
 )
 
 func init() {
@@ -81,7 +81,7 @@ func GetUnaryOpReturnType(op int, arg types.T) types.T {
 
 func initSliceForUnaryOps() {
 	unaryOpsReturnType = make([][]types.T, len(unaryOperators))
-	for i  := range unaryOperators {
+	for i := range unaryOperators {
 		unaryOpsReturnType[i] = make([]types.T, maxt)
 		for j := range unaryOpsReturnType[i] {
 			unaryOpsReturnType[i][j] = noRt
