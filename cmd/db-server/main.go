@@ -256,8 +256,16 @@ func main() {
 		os.Exit(StartCubeExit)
 	}
 
+	addr := cfg.CubeConfig.AdvertiseClientAddr
+	if len(addr) != 0 {
+		logutil.Infof("compile init address from cube AdvertiseClientAddr %s",addr)
+	}else{
+		logutil.Infof("compile init address from cube ClientAddr %s",cfg.CubeConfig.ClientAddr)
+		addr = cfg.CubeConfig.ClientAddr
+	}
+
 	//put the node info to the computation
-	compile.InitAddress(cfg.CubeConfig.ClientAddr)
+	compile.InitAddress(addr)
 
 	c = catalog.NewCatalog(a)
 	config.ClusterCatalog = c
