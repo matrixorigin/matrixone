@@ -132,6 +132,7 @@ type Transformer struct {
 }
 
 type TransformArgument struct {
+	IsNull      bool
 	Typ			int
 	IsMerge 	bool
 	FreeVars 	[]string
@@ -142,7 +143,7 @@ type TransformArgument struct {
 
 func TransferTransformArg(arg *transform.Argument) TransformArgument {
 	if arg == nil {
-		return TransformArgument{}
+		return TransformArgument{IsNull: true}
 	}
 	var ra RestrictArgument
 	if arg.Restrict != nil {
@@ -166,6 +167,7 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		}
 	}
 	return TransformArgument{
+		IsNull: false,
 		Typ: arg.Typ,
 		IsMerge: arg.IsMerge,
 		FreeVars: arg.FreeVars,
@@ -176,7 +178,7 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 }
 
 func UntransferTransformArg(arg TransformArgument) *transform.Argument{
-	if reflect.DeepEqual(arg, TransformArgument{}) {
+	if arg.IsNull {
 		return nil
 	}
 	var ra *restrict.Argument

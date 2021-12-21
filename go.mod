@@ -15,7 +15,7 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/huandu/go-clone v1.3.0
 	// github.com/matrixorigin/matrixcube v0.0.0-20211216114139-2b4dd613790b
-	github.com/matrixorigin/matrixcube v0.0.0-20211220041330-cc59ca84ab28
+	github.com/matrixorigin/matrixcube v0.0.0-20211221024814-8dc69dd1afd1
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
