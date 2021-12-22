@@ -131,6 +131,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 func (r *relation) NewReader(num int) []engine.Reader {
 	readers := make([]engine.Reader, num)
 	var i int
+	logutil.Infof("segments is %d", len(r.segments))
 	if len(r.segments) == 0 {
 		for i = 0; i < num; i++ {
 			readers[i] = &aoeReader{blocks: nil}
