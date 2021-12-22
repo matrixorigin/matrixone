@@ -1122,6 +1122,8 @@ var defaultConfigurationTemplate = `# Change this config file according to your 
 #        4.5. In the external-etcd attribute, fill the three empty string with the three peer-urls of the three prophet node
 #        4.6. make sure the dir-data is different from the other nodes in the cluster
 #        4.7. change the shard-groups value to 2
+#
+#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
 
 
 
