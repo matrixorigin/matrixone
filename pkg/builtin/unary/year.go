@@ -29,6 +29,7 @@ import (
 
 func init() {
 	extend.FunctionRegistry["year"] = builtin.Year
+	extend.FunctionRegistry["toyear"] = builtin.Year
 	extend.UnaryReturnTypes[builtin.Year] = func(_ extend.Extend) types.T {
 		return types.T_int32
 	}
@@ -39,18 +40,35 @@ func init() {
 	overload.UnaryOps[builtin.Year] = []*overload.UnaryOp{
 		{
 			Typ:        types.T_date,
-			ReturnType: types.T_int32,
+			ReturnType: types.T_uint16,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Date)
-				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_int32, Size: 4})
+				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 4})
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt32Slice(vec.Data)
+				rs := encoding.DecodeUint16Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				vec.Col = rs
 				nulls.Set(vec.Nsp, lv.Nsp)
-				vector.SetCol(vec, year.Year(lvs, rs))
+				vector.SetCol(vec, year.DateToYear(lvs, rs))
+				return vec, nil
+			},
+		},
+		{
+			Typ:        types.T_datetime,
+			ReturnType: types.T_uint16,
+			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
+				lvs := lv.Col.([]types.Datetime)
+				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 4})
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeUint16Slice(vec.Data)
+				rs = rs[:len(lvs)]
+				vec.Col = rs
+				nulls.Set(vec.Nsp, lv.Nsp)
+				vector.SetCol(vec, year.DatetimeToYear(lvs, rs))
 				return vec, nil
 			},
 		},

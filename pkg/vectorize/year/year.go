@@ -3,18 +3,31 @@ package year
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 var (
-	year func([]types.Date, []int32) []int32
+	dateToYear     func([]types.Date, []uint16) []uint16
+	datetimeToYear func([]types.Datetime, []uint16) []uint16
 )
 
 func init() {
-	year = yearPure
+	dateToYear = dateToYearPure
+	datetimeToYear = datetimeToYearPure
 }
 
-func Year(xs []types.Date, rs []int32) []int32 {
-	return year(xs, rs)
+func DateToYear(xs []types.Date, rs []uint16) []uint16 {
+	return dateToYear(xs, rs)
 }
 
-func yearPure(xs []types.Date, rs []int32) []int32 {
+func dateToYearPure(xs []types.Date, rs []uint16) []uint16 {
+	for i, x := range xs {
+		rs[i] = x.Year()
+	}
+	return rs
+}
+
+func DatetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
+	return datetimeToYear(xs, rs)
+}
+
+func datetimeToYearPure(xs []types.Datetime, rs []uint16) []uint16 {
 	for i, x := range xs {
 		rs[i] = x.Year()
 	}

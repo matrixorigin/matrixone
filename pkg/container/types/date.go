@@ -181,7 +181,8 @@ func Today() Date {
 	return Date((sec + localTZ) / secsPerDay)
 }
 
-func (d Date) Year() (year int32) {
+// Year takes a date and returns a uint16 number as the year of this date
+func (d Date) Year() (year uint16) {
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
 	y := 400 * n
@@ -211,7 +212,7 @@ func (d Date) Year() (year int32) {
 	n -= n >> 2
 	y += n
 
-	year = int32(y) + 1
+	year = uint16(y) + 1
 
 	return year
 }
