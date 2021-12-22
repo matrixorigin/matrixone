@@ -16,35 +16,9 @@ package main
 
 import (
 	"fmt"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"math/rand"
 )
 
-func (_ Def2) Do(
-	kvs KVs,
-) fz.Do {
-
-	return func(action fz.Action) error {
-
-		//TODO make porcupine operations
-		pt("%+v\n", action)
-
-		switch action := action.(type) {
-
-		case ActionSet:
-			kv := kvs[action.NodeID]
-			return kv.Set(action.Key, action.Value, time.Second*5)
-
-		case ActionGet:
-			kv := kvs[action.NodeID]
-			var res int
-			return kv.Get(action.Key, &res, time.Second*5)
-
-		default:
-			panic(fmt.Errorf("unknown action: %#v", action))
-
-		}
-
-	}
+func randPort() string {
+	return fmt.Sprintf("%d", 10000+rand.Intn(50000))
 }

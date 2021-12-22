@@ -45,5 +45,7 @@ func (_ Def) RandomizeCubeConfig() RandomizeCubeConfig {
 		fz.RandBetween(&config.Replication.ShardCapacityBytes, 4*1024*1024, 128*1024*1024)
 		fz.RandBetween(&config.Replication.ShardSplitCheckBytes, 4*1024*1024, 128*1024*1024)
 
+		//TODO more fields
+
 	}
 }

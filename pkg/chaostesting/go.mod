@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/matrixorigin/matrixcube v0.0.0-20211217044609-f3f370f6d7b5
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
-	github.com/reusee/dscope v0.0.0-20211219082713-dd0b84986107
+	github.com/reusee/dscope v0.0.0-20211221162845-e8f9d8290e0c
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71
 	go.uber.org/zap v1.18.1
@@ -51,7 +51,7 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lni/goutils v1.3.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
+	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
@@ -65,7 +65,7 @@ require (
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.26.0 // indirect
 	github.com/prometheus/procfs v0.6.0 // indirect
-	github.com/reusee/pr v0.0.0-20211218123204-2c9d47ba8a8d // indirect
+	github.com/reusee/pr v0.0.0-20211219085637-0e1ddac0e236 // indirect
 	github.com/shirou/gopsutil/v3 v3.21.10 // indirect
 	github.com/sirupsen/logrus v1.7.0 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect

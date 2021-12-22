@@ -16,6 +16,7 @@ package fz
 
 import (
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/reusee/dscope"
@@ -84,7 +85,9 @@ func (_ Def) Execute(
 		}
 
 		for _, node := range nodes {
-			ce(node.Close())
+			if closer, ok := node.(io.Closer); ok {
+				ce(closer.Close())
+			}
 		}
 
 		for _, op := range ops {
