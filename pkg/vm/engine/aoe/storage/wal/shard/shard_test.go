@@ -232,6 +232,14 @@ func TestProxy2(t *testing.T) {
 	mgr.Checkpoint(indice[4])
 	time.Sleep(waitTime)
 	assert.Equal(t, uint64(17), s0.GetSafeId())
+
+	safe_ids := mgr.GetSafeIds()
+	assert.Equal(t, 1, len(safe_ids.Ids))
+	assert.Equal(t, uint64(17), safe_ids.Ids[0].Id)
+	entry := SafeIdsToEntry(safe_ids)
+	parsed_safe_ids, err := EntryToSafeIds(entry)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(17), parsed_safe_ids.Ids[0].Id)
 }
 
 func TestProxy3(t *testing.T) {
