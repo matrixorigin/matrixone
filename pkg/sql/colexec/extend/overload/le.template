@@ -29,7 +29,7 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-func init() {
+func initLe() {
     BinOps[LE] = []*BinOp{
     {{range .Numerics}}
     {

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initUnary() {
     UnaryOps[UnaryMinus] = []*UnaryOp{
     {{range .Minus}}
         {
@@ -87,14 +87,4 @@ func init() {
          },
      {{end}}
      }
-}
-
-// init function to init binOpsReturnType from
-// plus.go / mult.go / minus.go / div.go / mod.go
-func init() {
-	for i, op := range unaryOperators {
-		for _, uo := range UnaryOps[op] {
-			unaryOpsReturnType[i][uo.Typ] = uo.ReturnType
-		}
-	}
 }

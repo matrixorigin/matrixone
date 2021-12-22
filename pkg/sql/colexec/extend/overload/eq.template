@@ -28,7 +28,7 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-func init() {
+func initEq() {
     BinOps[EQ] = []*BinOp{
     {{range .Numerics}}
         {

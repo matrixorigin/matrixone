@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initOr() {
 	BinOps[Or] = []*BinOp{
 		{
 			LeftType:   types.T_sel,
