@@ -43,7 +43,7 @@ func init() {
 			ReturnType: types.T_uint16,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Date)
-				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 4})
+				vec, err := process.Get(proc, 2*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 2})
 				if err != nil {
 					return nil, err
 				}
@@ -60,7 +60,7 @@ func init() {
 			ReturnType: types.T_uint16,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Datetime)
-				vec, err := process.Get(proc, 8*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 4})
+				vec, err := process.Get(proc, 2*int64(len(lvs)), types.Type{Oid: types.T_uint16, Size: 2})
 				if err != nil {
 					return nil, err
 				}
