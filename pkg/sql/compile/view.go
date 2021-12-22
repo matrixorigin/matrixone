@@ -100,8 +100,48 @@ func constructView(bat *batch.Batch, fvar string) {
 			bat.Ht = ht
 			return
 		}
+	case types.T_date:
+		vs := vec.Col.([]types.Date)
+		count := int64(len(bat.Zs))
+		for i := int64(0); i < count; i += UnitLimit {
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
+			}
+			{
+				for k := 0; k < n; k++ {
+					keys[k] = uint64(vs[int(i)+k])
+				}
+			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
+		}
+		if len(bat.Zs) == int(ht.Cardinality()) {
+			bat.Ht = ht
+			return
+		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)
+		count := int64(len(bat.Zs))
+		for i := int64(0); i < count; i += UnitLimit {
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
+			}
+			{
+				for k := 0; k < n; k++ {
+					keys[k] = uint64(vs[int(i)+k])
+				}
+			}
+			hashes[0] = 0
+			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
+		}
+		if len(bat.Zs) == int(ht.Cardinality()) {
+			bat.Ht = ht
+			return
+		}
+	case types.T_datetime:
+		vs := vec.Col.([]types.Datetime)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
 			n := int(count - i)

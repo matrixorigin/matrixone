@@ -213,8 +213,22 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 				}
 				ctr.hashes[0] = 0
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_date:
+				vs := vecs[vi].Col.([]types.Date)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_datetime:
+				vs := vecs[vi].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
@@ -346,6 +360,16 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+							} else {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+							}
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
@@ -383,6 +407,16 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
+							}
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+							} else {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -444,6 +478,12 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
@@ -460,6 +500,12 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
 							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -621,6 +667,13 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.hashes[0] = 0
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_date:
+				vs := vecs[vi].Col.([]types.Date)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
@@ -637,6 +690,13 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_datetime:
+				vs := vecs[vi].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
@@ -736,6 +796,16 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+							} else {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+							}
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
@@ -763,6 +833,16 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
+							}
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+							} else {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -824,6 +904,12 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
@@ -840,6 +926,12 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
 							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -1000,6 +1092,13 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.hashes[0] = 0
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_date:
+				vs := vecs[vi].Col.([]types.Date)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
@@ -1016,6 +1115,13 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_datetime:
+				vs := vecs[vi].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
@@ -1105,6 +1211,16 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+							} else {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+							}
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
@@ -1142,6 +1258,16 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
+							}
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+							} else {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1203,6 +1329,12 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
@@ -1219,6 +1351,12 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
 							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -1393,8 +1531,22 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 				ctr.hashes[0] = 0
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_date:
+				vs := vecs[vi].Col.([]types.Date)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_datetime:
+				vs := vecs[vi].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
@@ -1484,6 +1636,16 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+							} else {
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+							}
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						for k := int64(0); k < n; k++ {
@@ -1521,6 +1683,16 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[0]
 							} else {
 								*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[vp-1]
+							}
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+							} else {
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1582,6 +1754,12 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						for k := int64(0); k < n; k++ {
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						}
+						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
 						for k := int64(0); k < n; k++ {
@@ -1598,6 +1776,12 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]float64)
 						for k := int64(0); k < n; k++ {
 							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = vs[i+k]
+						}
+						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
+						for k := int64(0); k < n; k++ {
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -1758,6 +1942,13 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 				ctr.hashes[0] = 0
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_date:
+				vs := vecs[vi].Col.([]types.Date)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
@@ -1774,6 +1965,13 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
+				for k := int64(0); k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[i+k])
+				}
+				ctr.hashes[0] = 0
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+			case types.T_datetime:
+				vs := vecs[vi].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
@@ -1861,6 +2059,16 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*4:vp*4]...)
 							}
 						}
+					case types.T_date:
+						vs := gvecs[j].Col.([]types.Date)
+						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:4]...)
+							} else {
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*4:vp*4]...)
+							}
+						}
 					case types.T_float32:
 						vs := gvecs[j].Col.([]float32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
@@ -1873,6 +2081,16 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						}
 					case types.T_int64:
 						vs := gvecs[j].Col.([]int64)
+						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+						for k := int64(0); k < n; k++ {
+							if vp := vps[k]; vp == 0 {
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[0:8]...)
+							} else {
+								ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(vp-1)*8:vp*8]...)
+							}
+						}
+					case types.T_datetime:
+						vs := gvecs[j].Col.([]types.Datetime)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
@@ -1949,6 +2167,12 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						for k := int64(0); k < n; k++ {
 							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 						}
+					case types.T_date:
+						vs := vecs[j].Col.([]types.Date)
+						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+						for k := int64(0); k < n; k++ {
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
+						}
 					case types.T_float32:
 						vs := vecs[j].Col.([]float32)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
@@ -1969,6 +2193,12 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 						}
 					case types.T_float64:
 						vs := vecs[j].Col.([]float64)
+						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+						for k := int64(0); k < n; k++ {
+							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
+						}
+					case types.T_datetime:
+						vs := vecs[j].Col.([]types.Datetime)
 						data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 						for k := int64(0); k < n; k++ {
 							ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
@@ -2188,6 +2418,94 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 		if flg { // reinsert
 			v.isB = true
 		}
+	case types.T_date:
+		if v.bat.Ht != nil {
+			v.isB = true
+			v.isOne = true
+			for _, z := range v.bat.Zs {
+				if z > 1 {
+					v.isOne = false
+				}
+			}
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
+			return nil
+		}
+		flg := true
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
+		vs := vec.Col.([]types.Date)
+		count := int64(len(bat.Zs))
+		for i := int64(0); i < count; i += UnitLimit {
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
+			}
+			{
+				for k := 0; k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[int(i)+k])
+				}
+			}
+			ctr.hashes[0] = 0
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
+					v.rows++
+					v.sels = append(v.sels, make([]int64, 0, 8))
+				}
+				ai := int64(vv) - 1
+				v.sels[ai] = append(v.sels[ai], i+int64(k))
+				if len(v.sels[ai]) > 1 {
+					flg = false
+				}
+			}
+		}
+		if flg { // reinsert
+			v.isB = true
+		}
+	case types.T_datetime:
+		if v.bat.Ht != nil {
+			v.isB = true
+			v.isOne = true
+			for _, z := range v.bat.Zs {
+				if z > 1 {
+					v.isOne = false
+				}
+			}
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
+			return nil
+		}
+		flg := true
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
+		vs := vec.Col.([]types.Datetime)
+		count := int64(len(bat.Zs))
+		for i := int64(0); i < count; i += UnitLimit {
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
+			}
+			{
+				for k := 0; k < n; k++ {
+					ctr.h8.keys[k] = uint64(vs[int(i)+k])
+				}
+			}
+			ctr.hashes[0] = 0
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
+					v.rows++
+					v.sels = append(v.sels, make([]int64, 0, 8))
+				}
+				ai := int64(vv) - 1
+				v.sels[ai] = append(v.sels[ai], i+int64(k))
+				if len(v.sels[ai]) > 1 {
+					flg = false
+				}
+			}
+		}
+		if flg { // reinsert
+			v.isB = true
+		}
 	case types.T_int64:
 		if v.bat.Ht != nil {
 			v.isB = true
@@ -2232,6 +2550,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 		if flg { // reinsert
 			v.isB = true
 		}
+
 	case types.T_uint8:
 		if v.bat.Ht != nil {
 			v.isB = true
