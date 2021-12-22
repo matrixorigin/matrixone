@@ -3051,20 +3051,24 @@ func (ctr *Container) constructBatch(rn string, varsMap map[string]int, freeVars
 		ctr.pctr.typ = H24
 		ctr.h24.keys = make([][3]uint64, UnitLimit)
 		ctr.h24.zKeys = make([][3]uint64, UnitLimit)
+		ctr.pctr.strHashMap = &hashtable.StringHashMap{}
 		ctr.pctr.strHashMap.Init()
 	case size <= 32:
 		ctr.pctr.typ = H32
 		ctr.h32.keys = make([][4]uint64, UnitLimit)
 		ctr.h32.zKeys = make([][4]uint64, UnitLimit)
+		ctr.pctr.strHashMap = &hashtable.StringHashMap{}
 		ctr.pctr.strHashMap.Init()
 	case size <= 40:
 		ctr.pctr.typ = H40
 		ctr.h40.keys = make([][5]uint64, UnitLimit)
 		ctr.h40.zKeys = make([][5]uint64, UnitLimit)
+		ctr.pctr.strHashMap = &hashtable.StringHashMap{}
 		ctr.pctr.strHashMap.Init()
 	default:
 		ctr.pctr.typ = HStr
 		ctr.pctr.hstr.keys = make([][]byte, UnitLimit)
+		ctr.pctr.strHashMap = &hashtable.StringHashMap{}
 		ctr.pctr.strHashMap.Init()
 	}
 	for i, r := range bat.Rs {
