@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initDiv() {
     BinOps[Div] = []*BinOp{
         {{range .Div}}
         {

@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initUnary() {
     UnaryOps[UnaryMinus] = []*UnaryOp{
     {{range .Minus}}
         {

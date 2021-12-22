@@ -25,7 +25,7 @@ import (
     "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initPlus() {
     BinOps[Plus] = []*BinOp{
     // Same types to plus
     {{range .Field1}}

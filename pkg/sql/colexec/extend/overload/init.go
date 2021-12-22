@@ -32,17 +32,20 @@ var (
 
 // set init here to make sure this function will be the last executed init function at this package
 func init() {
+	// init overload.BinOps and overload.UnaryOps
+	initOperatorFunctions()
+	// init cast-rule from ops
 	initCastRulesForBinaryOps()
 	initCastRulesForUnaryOps()
-	initReturnTypeFromMulti()
-
+	initCastRulesForMulti()
+	// init return type map from ops and cast-rule
 	initReturnTypeFromUnary()
 	initReturnTypeFromBinary()
-	initCastRulesForMulti()
+	initReturnTypeFromMulti()
 }
 
 type castRule struct {
-	NumArgs uint8 // numbers of arguments for this operator or functions
+	NumArgs uint8 			 // numbers of arguments for this operator or functions
 	sourceTypes []types.T    // source type for each argument
 	targetTypes []types.Type // cast type for each argument
 }
@@ -111,6 +114,35 @@ func appendRets(op int, args []types.T, ret types.T) {
 		OperatorReturnType[op][nArg] = []retType{}
 	}
 	OperatorReturnType[op][nArg] = append(OperatorReturnType[op][nArg], retType{argTypes: args, ret: ret})
+}
+
+func initOperatorFunctions() {
+	// unary
+	initUnary()
+	// binary
+	{ // compute
+		initPlus()
+		initMinus()
+		initMult()
+		initDiv()
+		initMod()
+	}
+	{ // compare
+		initEq()
+		initNe()
+		initGt()
+		initGe()
+		initLt()
+		initLe()
+	}
+	{ // logical
+		initAnd()
+		initOr()
+	}
+	// multi
+	// others
+	initCast()
+	initLike()
 }
 
 func initReturnTypeFromBinary() {
