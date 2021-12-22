@@ -14,13 +14,39 @@
 
 package main
 
-import "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	"math/rand"
 
-func (_ Def) MainConfig() fz.MainAction {
+	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+)
+
+func (_ Def2) MainConfig(
+	numNodes fz.NumNodes,
+) fz.MainAction {
 	return fz.MainAction{
+
+		// random tree
 		Action: fz.RandomActionTree([]fz.ActionMaker{
+
+			// set / get pair
 			func() fz.Action {
-				return ActionNoOP{}
+				id := rand.Int63()
+				nodeID := fz.NodeID(rand.Intn(int(numNodes)))
+				key := rand.Intn(1024)
+				value := rand.Intn(1024)
+				return fz.Seq(
+					ActionSet{
+						ID:     id,
+						NodeID: nodeID,
+						Key:    key,
+						Value:  value,
+					},
+					ActionGet{
+						ID:     id,
+						NodeID: nodeID,
+						Key:    key,
+					},
+				)
 			},
 		}, 64),
 	}

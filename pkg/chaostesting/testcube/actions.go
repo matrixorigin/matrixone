@@ -14,11 +14,22 @@
 
 package main
 
-import "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 
-func (_ Def2) Stop() fz.Stop {
-	return func() error {
-		//TODO
-		return nil
-	}
+func init() {
+	fz.RegisterAction(ActionSet{})
+	fz.RegisterAction(ActionGet{})
+}
+
+type ActionSet struct {
+	ID     int64
+	NodeID fz.NodeID
+	Key    any
+	Value  any
+}
+
+type ActionGet struct {
+	ID     int64
+	NodeID fz.NodeID
+	Key    any
 }

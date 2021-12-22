@@ -14,11 +14,16 @@
 
 package main
 
-import "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+)
 
-func (_ Def2) Start() fz.Start {
-	return func() error {
-		//TODO
-		return nil
+func (_ Def2) Start(
+	nodes Nodes,
+) fz.StartNode {
+	return func(nodeID fz.NodeID) (fz.Node, error) {
+		node := nodes[nodeID]
+		ce(node.App.Start())
+		return node, nil
 	}
 }

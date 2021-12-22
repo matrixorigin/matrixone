@@ -15,11 +15,30 @@
 package main
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"io"
+
+	"github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/matrixorigin/matrixcube/server"
+	"go.uber.org/zap"
 )
 
-func init() {
-	fz.RegisterAction(ActionNoOP{})
+type Node struct {
+	Logger    *zap.Logger
+	Config    *config.Config
+	RaftStore raftstore.Store
+	App       *server.Application
+	Endpoint  string
 }
 
-type ActionNoOP struct{}
+var _ io.Closer = new(Node)
+
+func (n *Node) Close() (err error) {
+	if n.RaftStore != nil {
+		n.RaftStore.Stop()
+	}
+	if n.App != nil {
+		n.App.Stop()
+	}
+	return
+}
