@@ -22,6 +22,7 @@ var (
 	}}
 )
 
+// Entry is a wrapper for Payload, providing a feature to sync between producer and consumer
 type Entry struct {
 	wg      sync.WaitGroup
 	Id      uint64

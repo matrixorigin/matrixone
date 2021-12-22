@@ -113,6 +113,7 @@ func (mgr *manager) GetRole() wal.Role {
 	return mgr.role
 }
 
+// Log payload, blocking until the payload is handled
 func (mgr *manager) SyncLog(payload wal.Payload) error {
 	if entry, err := mgr.Log(payload); err != nil {
 		return err
@@ -123,15 +124,10 @@ func (mgr *manager) SyncLog(payload wal.Payload) error {
 	}
 }
 
+// async Log payload. Caller is responsible to wait and free the returned entry
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 	entry := wal.GetEntry(0)
 	entry.Payload = payload
-	{
-		// index := entry.Payload.(*Index)
-		// if index.ShardId == 0 {
-		// 	panic("")
-		// }
-	}
 	if _, err := mgr.EnqueueRecevied(entry); err != nil {
 		entry.Free()
 		return nil, err

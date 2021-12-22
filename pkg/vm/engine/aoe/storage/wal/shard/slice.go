@@ -97,7 +97,7 @@ func NewBatchIndice(shardId uint64) *SliceIndice {
 func NewSimpleBatchIndice(index *Index) *SliceIndice {
 	return &SliceIndice{
 		shardId: index.ShardId,
-		indice:  []*SliceIndex{&SliceIndex{Index: index}},
+		indice:  []*SliceIndex{{Index: index}},
 	}
 }
 

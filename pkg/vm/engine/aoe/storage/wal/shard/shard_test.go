@@ -106,12 +106,87 @@ func (mc *mockConsumer) reset() {
 	mc.indice = NewBatchIndice(mc.shardId)
 }
 
+func TestIndexBasic(t *testing.T) {
+	index := &Index{
+		Id:       CreateIndexId(42, 2, 4),
+		Start:    100,
+		Capacity: 200,
+	}
+
+	// compare
+	assert.Equal(t, -1, index.Compare(&Index{
+		Id: CreateIndexId(42, 3, 4),
+	}))
+
+	assert.Equal(t, -1, index.Compare(&Index{
+		Id:       CreateIndexId(42, 2, 4),
+		Start:    150,
+		Capacity: 200,
+	}))
+
+	assert.Equal(t, 1, index.Compare(&Index{
+		Id:       CreateIndexId(42, 2, 4),
+		Start:    50,
+		Capacity: 200,
+	}))
+
+	// repr and parse
+	index_parsed := new(Index)
+	err := index_parsed.ParseRepr(index.Repr())
+	assert.Nil(t, err)
+	assert.Equal(t, 0, index.Compare(index_parsed))
+}
+
+func TestSliceCommitted(t *testing.T) {
+	shard_id := uint64(0)
+	proxy := newProxy(shard_id, nil)
+
+	indices := []*Index{
+		{Id: CreateIndexId(11, 0, 1)},
+		{Id: CreateIndexId(23, 0, 3)},
+		{Id: CreateIndexId(42, 0, 1)},
+	}
+
+	proxy.LogIndice(indices...)
+	assert.Equal(t, uint64(0), proxy.GetSafeId())
+
+	for _, index := range indices {
+		proxy.AppendIndex(index)
+	}
+	proxy.Checkpoint()
+	// first index is committed
+	assert.Equal(t, uint64(11), proxy.GetSafeId())
+
+	proxy.AppendIndex(&Index{Id: CreateIndexId(23, 2, 3)})
+	index23_1 := &Index{Id: CreateIndexId(23, 1, 3)}
+	slice_index_23_1_0 := index23_1.AsSlice()
+	slice_index_23_1_0.Info = &SliceInfo{Size: 2}
+	slice_index_23_1_1 := slice_index_23_1_0.Clone()
+	slice_index_23_1_1.Info.Offset = 1
+	assert.True(t, slice_index_23_1_1.Valid())
+	proxy.AppendBatchIndice(&SliceIndice{
+		shardId: shard_id,
+		indice:  []*SliceIndex{slice_index_23_1_0},
+	})
+	proxy.Checkpoint()
+	// we can't make any progress because index23_1 has been splitted into parts and we only submitted one of them
+	assert.Equal(t, uint64(11), proxy.GetSafeId())
+
+	// now we submit the last one
+	proxy.AppendBatchIndice(&SliceIndice{
+		shardId: shard_id,
+		indice:  []*SliceIndex{slice_index_23_1_1},
+	})
+	proxy.Checkpoint()
+	assert.Equal(t, uint64(42), proxy.GetSafeId())
+}
+
 func TestShardProxy(t *testing.T) {
 	shardProxy := newProxy(nextMockId(), nil)
 	producer := mockProducer{}
 	cnt := 5
 	consumers := make([]*mockConsumer, cnt)
-	for i, _ := range consumers {
+	for i := range consumers {
 		consumers[i] = newMockConsumer(uint64(1))
 	}
 	ii := 0
@@ -121,8 +196,7 @@ func TestShardProxy(t *testing.T) {
 			ic := ii % cnt
 			consumers[ic].consume(index)
 			ii++
-			idx := &(*index)
-			shardProxy.LogIndex(idx)
+			shardProxy.LogIndex(index)
 		}
 	}
 	for _, c := range consumers {
@@ -137,8 +211,7 @@ func TestShardProxy(t *testing.T) {
 			ic := ii % cnt
 			consumers[ic].consume(index)
 			ii++
-			idx := &(*index)
-			shardProxy.LogIndex(idx)
+			shardProxy.LogIndex(index)
 		}
 	}
 	for _, c := range consumers {

@@ -151,23 +151,17 @@ func (idx *Index) CompareID(o *Index) int {
 }
 
 func (idx *Index) Compare(o *Index) int {
-	if idx.ShardId != o.ShardId {
-		panic("cannot compare index with diff shard id")
-	}
-
-	ret := idx.Id.Compare(&o.Id)
-	if ret != 0 {
+	if ret := idx.CompareID(o); ret != 0 {
 		return ret
 	}
 
 	if idx.Start == o.Start {
-		ret = 0
+		return 0
 	} else if idx.Start > o.Start {
-		ret = 1
+		return 1
 	} else {
-		ret = -1
+		return -1
 	}
-	return ret
 }
 
 func (idx *Index) IsSameBatch(o *Index) bool {
@@ -189,7 +183,7 @@ func (idx *Index) IsApplied() bool {
 }
 
 func (idx *Index) IsBatchApplied() bool {
-	return idx.Capacity == idx.Start+idx.Count && idx.Id.IsEnd()
+	return idx.IsApplied() && idx.Id.IsEnd()
 }
 
 func (idx *Index) Marshal() ([]byte, error) {
@@ -222,6 +216,5 @@ func (idx *Index) UnMarshal(data []byte) error {
 	idx.Start = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Capacity = encoding.DecodeUint64(buf[:8])
-	buf = buf[8:]
 	return nil
 }
