@@ -20,28 +20,13 @@ import (
 	"unsafe"
 )
 
-func Crc32BytesHash(data unsafe.Pointer, length int) uint64
-
-func Crc32Int64Hash(data uint64) uint64
 func Crc32Int64BatchHash(data unsafe.Pointer, hashes *uint64, length int)
 func Crc32Int64CellBatchHash(data unsafe.Pointer, hashes *uint64, length int)
 
-func Crc32Int192Hash(data *[3]uint64) uint64
-func Crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
+func AesBytesHash(data unsafe.Pointer, length int) uint64
+func AesBytesGenKey(data unsafe.Pointer, length int) [2]uint64
+func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int) uint64
 
-func Crc32Int256Hash(data *[4]uint64) uint64
-func Crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
-
-func Crc32Int320Hash(data *[5]uint64) uint64
-func Crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
-
-func AesBytesHash(data unsafe.Pointer, length int) [2]uint64
-
-func AesInt192BatchHash(data *[3]uint64, hashes *uint64, length int)
-func AesInt192BatchGenKey(data *[3]uint64, hashes *[2]uint64, length int)
-
-func AesInt256BatchHash(data *[4]uint64, hashes *uint64, length int)
-func AesInt256BatchGenKey(data *[4]uint64, hashes *[2]uint64, length int)
-
-func AesInt320BatchHash(data *[5]uint64, hashes *uint64, length int)
-func AesInt320BatchGenKey(data *[5]uint64, hashes *[2]uint64, length int)
+func AesInt192BatchGenHashStates(data *[3]uint64, states *[3]uint64, length int)
+func AesInt256BatchGenHashStates(data *[4]uint64, states *[3]uint64, length int)
+func AesInt320BatchGenHashStates(data *[5]uint64, states *[3]uint64, length int)

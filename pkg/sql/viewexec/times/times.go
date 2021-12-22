@@ -41,7 +41,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	n.ctr.keyOffs = make([]uint32, UnitLimit)
 	n.ctr.zKeyOffs = make([]uint32, UnitLimit)
 	n.ctr.hashes = make([]uint64, UnitLimit)
-	n.ctr.fakeKeys = make([][2]uint64, UnitLimit)
+	n.ctr.strHashStates = make([][3]uint64, UnitLimit)
 	n.ctr.values = make([]uint64, UnitLimit)
 	n.ctr.h8.keys = make([]uint64, UnitLimit)
 	for i := 0; i < len(n.Ss); i++ {
@@ -91,15 +91,15 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		switch n.ctr.pctr.typ {
 		case H8:
-			n.ctr.bat.Ht = n.ctr.pctr.h8.ht
+			n.ctr.bat.Ht = n.ctr.pctr.intHashMap
 		case H24:
-			n.ctr.bat.Ht = n.ctr.pctr.h24.ht
+			n.ctr.bat.Ht = n.ctr.pctr.strHashMap
 		case H32:
-			n.ctr.bat.Ht = n.ctr.pctr.h32.ht
+			n.ctr.bat.Ht = n.ctr.pctr.strHashMap
 		case H40:
-			n.ctr.bat.Ht = n.ctr.pctr.h40.ht
+			n.ctr.bat.Ht = n.ctr.pctr.strHashMap
 		default:
-			n.ctr.bat.Ht = n.ctr.pctr.hstr.ht
+			n.ctr.bat.Ht = n.ctr.pctr.strHashMap
 		}
 		proc.Reg.InputBatch = n.ctr.bat
 		n.ctr.bat = nil
@@ -180,6 +180,9 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 			values[i] = make([]uint64, UnitLimit)
 		}
 	}
+	var strKeys [UnitLimit][]byte
+	var strKeys16 [UnitLimit][16]byte
+	var zStrKeys16 [UnitLimit][16]byte
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit {
 		n := count - i
@@ -195,76 +198,84 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
+				var padded int
 				for k := int64(0); k < n; k++ {
-					key := vs.Get(i + k)
-					values[vi][k] = v.hstr.ht.Find(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+					if vs.Lengths[i+k] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+k))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + k)
+					}
 				}
+				v.strHashMap.FindStringBatch(ctr.strHashStates, strKeys[:n], values[vi])
+				copy(strKeys16[:padded], zStrKeys16[:padded])
 			}
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
@@ -479,7 +490,7 @@ func (ctr *Container) probeH8(is []int, arg *Argument, bat *batch.Batch, proc *p
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h8.ht.InsertBatchWithRing(int(n), ctr.pctr.zs, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+		ctr.pctr.intHashMap.InsertBatchWithRing(int(n), ctr.pctr.zs, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -549,6 +560,9 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 			values[i] = make([]uint64, UnitLimit)
 		}
 	}
+	var strKeys [UnitLimit][]byte
+	var strKeys16 [UnitLimit][16]byte
+	var zStrKeys16 [UnitLimit][16]byte
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit {
 		n := count - i
@@ -564,76 +578,84 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
+				var padded int
 				for k := int64(0); k < n; k++ {
-					key := vs.Get(i + k)
-					values[vi][k] = v.hstr.ht.Find(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+					if vs.Lengths[i+k] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+k))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + k)
+					}
 				}
+				v.strHashMap.FindStringBatch(ctr.strHashStates, strKeys[:n], values[vi])
+				copy(strKeys16[:padded], zStrKeys16[:padded])
 			}
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
@@ -831,7 +853,6 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				}
 			}
 		}
-		ctr.hashes[0] = 0
 		{
 			for k := int64(0); k < n; k++ {
 				o := i + int64(k)
@@ -848,7 +869,7 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h24.ht.InsertBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.h24.keys[:n], ctr.values)
+		ctr.pctr.strHashMap.InsertString24BatchWithRing(ctr.pctr.zs, ctr.strHashStates, ctr.h24.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -918,6 +939,9 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 			values[i] = make([]uint64, UnitLimit)
 		}
 	}
+	var strKeys [UnitLimit][]byte
+	var strKeys16 [UnitLimit][16]byte
+	var zStrKeys16 [UnitLimit][16]byte
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit {
 		n := count - i
@@ -933,76 +957,84 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
+				var padded int
 				for k := int64(0); k < n; k++ {
-					key := vs.Get(i + k)
-					values[vi][k] = v.hstr.ht.Find(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+					if vs.Lengths[i+k] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+k))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + k)
+					}
 				}
+				v.strHashMap.FindStringBatch(ctr.strHashStates, strKeys[:n], values[vi])
+				copy(strKeys16[:padded], zStrKeys16[:padded])
 			}
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
@@ -1216,7 +1248,7 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h32.ht.InsertRawBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.fakeKeys, ctr.h32.keys[:n], ctr.values)
+		ctr.pctr.strHashMap.InsertString32BatchWithRing(ctr.pctr.zs, ctr.strHashStates, ctr.h32.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -1286,6 +1318,9 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 			values[i] = make([]uint64, UnitLimit)
 		}
 	}
+	var strKeys [UnitLimit][]byte
+	var strKeys16 [UnitLimit][16]byte
+	var zStrKeys16 [UnitLimit][16]byte
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit {
 		n := count - i
@@ -1301,76 +1336,84 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
+				var padded int
 				for k := int64(0); k < n; k++ {
-					key := vs.Get(i + k)
-					values[vi][k] = v.hstr.ht.Find(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+					if vs.Lengths[i+k] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+k))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + k)
+					}
 				}
+				v.strHashMap.FindStringBatch(ctr.strHashStates, strKeys[:n], values[vi])
+				copy(strKeys16[:padded], zStrKeys16[:padded])
 			}
 		}
 		copy(ctr.keyOffs, ctr.zKeyOffs)
@@ -1584,7 +1627,7 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 				ctr.pctr.zs[k] = z
 			}
 		}
-		ctr.pctr.h40.ht.InsertRawBatchWithRing(ctr.pctr.zs, ctr.hashes, ctr.fakeKeys, ctr.h40.keys[:n], ctr.values)
+		ctr.pctr.strHashMap.InsertString40BatchWithRing(ctr.pctr.zs, ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
 		for k, v := range ctr.values[:n] {
 			if ctr.pctr.zs[k] == 0 {
 				continue
@@ -1654,6 +1697,9 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 			values[i] = make([]uint64, UnitLimit)
 		}
 	}
+	var strKeys [UnitLimit][]byte
+	var strKeys16 [UnitLimit][16]byte
+	var zStrKeys16 [UnitLimit][16]byte
 	count := int64(len(bat.Zs))
 	for i := int64(0); i < count; i += UnitLimit {
 		n := count - i
@@ -1669,76 +1715,84 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int16:
 				vs := vecs[vi].Col.([]int16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int32:
 				vs := vecs[vi].Col.([]int32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_int64:
 				vs := vecs[vi].Col.([]int64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint8:
 				vs := vecs[vi].Col.([]uint8)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint16:
 				vs := vecs[vi].Col.([]uint16)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint32:
 				vs := vecs[vi].Col.([]uint32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_uint64:
 				vs := vecs[vi].Col.([]uint64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float32:
 				vs := vecs[vi].Col.([]float32)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_float64:
 				vs := vecs[vi].Col.([]float64)
 				for k := int64(0); k < n; k++ {
 					ctr.h8.keys[k] = uint64(vs[i+k])
 				}
 				ctr.hashes[0] = 0
-				v.h8.ht.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
+				v.intHashMap.FindBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), values[vi])
 			case types.T_char, types.T_varchar:
 				vs := vecs[vi].Col.(*types.Bytes)
+				var padded int
 				for k := int64(0); k < n; k++ {
-					key := vs.Get(i + k)
-					values[vi][k] = v.hstr.ht.Find(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+					if vs.Lengths[i+k] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+k))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + k)
+					}
 				}
+				v.strHashMap.FindStringBatch(ctr.strHashStates, strKeys[:n], values[vi])
+				copy(strKeys16[:padded], zStrKeys16[:padded])
 			}
 		}
 		{
@@ -1945,15 +1999,18 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 			}
 		}
 		for k := int64(0); k < n; k++ {
+			if l := len(ctr.pctr.hstr.keys[k]); l < 16 {
+				ctr.pctr.hstr.keys[k] = append(ctr.pctr.hstr.keys[k], hashtable.StrKeyPadding[l:]...)
+			}
+		}
+		ctr.pctr.strHashMap.InsertStringBatchWithRing(ctr.pctr.zs, ctr.strHashStates, ctr.pctr.hstr.keys[:n], ctr.values)
+		for k, v := range ctr.values[:n] {
+			ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
 			if ctr.pctr.zs[k] == 0 {
-				ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
 				continue
 			}
-			vv := ctr.pctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &ctr.pctr.hstr.keys[k][0], Len: len(ctr.pctr.hstr.keys[k])})
-			ctr.pctr.hstr.keys[k] = ctr.pctr.hstr.keys[k][:0]
-			ctr.pctr.values[k] = vv
 			o := i + int64(k)
-			if vv > ctr.pctr.rows {
+			if v > ctr.pctr.rows {
 				for j, vec := range ctr.bat.Vecs {
 					idx := o
 					if vi := ctr.pctr.freeIndexs[j][0]; vi >= 0 {
@@ -1975,7 +2032,7 @@ func (ctr *Container) probeHstr(is []int, arg *Argument, bat *batch.Batch, proc 
 				}
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ai := int64(vv) - 1
+			ai := int64(v) - 1
 			for j := range bat.Rs {
 				ctr.bat.Rs[j].Fill(ai, o, ctr.pctr.zs[k]/bat.Zs[o], bat.Vecs[is[j]])
 			}
@@ -2008,12 +2065,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]int8)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2027,7 +2084,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2052,12 +2109,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]int16)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2071,7 +2128,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2096,12 +2153,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]int32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2115,7 +2172,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2140,12 +2197,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]int64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2159,7 +2216,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2184,12 +2241,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]uint8)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2203,7 +2260,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2228,12 +2285,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]uint16)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2247,7 +2304,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2272,12 +2329,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]uint32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2291,7 +2348,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2316,12 +2373,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]uint64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2335,7 +2392,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2360,12 +2417,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]float32)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2379,7 +2436,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2404,12 +2461,12 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.h8.ht = v.bat.Ht.(*hashtable.Int64HashMap)
+			v.intHashMap = v.bat.Ht.(*hashtable.Int64HashMap)
 			return nil
 		}
 		flg := true
-		v.h8.ht = &hashtable.Int64HashMap{}
-		v.h8.ht.Init()
+		v.intHashMap = &hashtable.Int64HashMap{}
+		v.intHashMap.Init()
 		vs := vec.Col.([]float64)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
@@ -2423,7 +2480,7 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 				}
 			}
 			ctr.hashes[0] = 0
-			v.h8.ht.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+			v.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 			for k, vv := range ctr.values[:n] {
 				if vv > v.rows {
 					v.rows++
@@ -2448,26 +2505,47 @@ func (ctr *Container) fillBatch(v *view, bat *batch.Batch, proc *process.Process
 					v.isOne = false
 				}
 			}
-			v.hstr.ht = v.bat.Ht.(*hashtable.StringHashMap)
+			v.strHashMap = v.bat.Ht.(*hashtable.StringHashMap)
 			return nil
 		}
 		flg := true
-		v.hstr.ht = &hashtable.StringHashMap{}
-		v.hstr.ht.Init()
+		v.strHashMap = &hashtable.StringHashMap{}
+		v.strHashMap.Init()
 		vs := vec.Col.(*types.Bytes)
 		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i++ {
-			key := vs.Get(i)
-			vp := v.hstr.ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
-			if vp > v.rows {
-				v.rows++
-				v.sels = append(v.sels, make([]int64, 0, 8))
+		var strKeys [UnitLimit][]byte
+		var strKeys16 [UnitLimit][16]byte
+		var zStrKeys16 [UnitLimit][16]byte
+		for i := int64(0); i < count; i += UnitLimit {
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
 			}
-			ctr.values[i] = vp
-			ai := int64(vp) - 1
-			v.sels[ai] = append(v.sels[ai], i)
-			if len(v.sels[ai]) > 1 {
-				flg = false
+			var padded int
+			{
+				for k := 0; k < n; k++ {
+					if vs.Lengths[i+int64(k)] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+int64(k)))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + int64(k))
+					}
+				}
+			}
+			ctr.hashes[0] = 0
+			v.strHashMap.InsertStringBatch(ctr.strHashStates, strKeys[:n], ctr.values)
+			copy(strKeys16[:padded], zStrKeys16[:padded])
+			for k, vv := range ctr.values[:n] {
+				if vv > v.rows {
+					v.rows++
+					v.sels = append(v.sels, make([]int64, 0, 8))
+				}
+				ai := int64(vv) - 1
+				v.sels[ai] = append(v.sels[ai], i+int64(k))
+				if len(v.sels[ai]) > 1 {
+					flg = false
+				}
 			}
 		}
 		if flg { // reinsert
@@ -2648,31 +2726,27 @@ func (ctr *Container) constructBatch(rn string, varsMap map[string]int, freeVars
 		ctr.pctr.typ = H8
 		ctr.h8.keys = make([]uint64, UnitLimit)
 		ctr.h8.zKeys = make([]uint64, UnitLimit)
-		ctr.pctr.h8.ht = &hashtable.Int64HashMap{}
-		ctr.pctr.h8.ht.Init()
+		ctr.pctr.intHashMap = &hashtable.Int64HashMap{}
+		ctr.pctr.intHashMap.Init()
 	case size <= 24:
 		ctr.pctr.typ = H24
 		ctr.h24.keys = make([][3]uint64, UnitLimit)
 		ctr.h24.zKeys = make([][3]uint64, UnitLimit)
-		ctr.pctr.h24.ht = &hashtable.String24HashMap{}
-		ctr.pctr.h24.ht.Init()
+		ctr.pctr.strHashMap.Init()
 	case size <= 32:
 		ctr.pctr.typ = H32
 		ctr.h32.keys = make([][4]uint64, UnitLimit)
 		ctr.h32.zKeys = make([][4]uint64, UnitLimit)
-		ctr.pctr.h32.ht = &hashtable.String32HashMap{}
-		ctr.pctr.h32.ht.Init()
+		ctr.pctr.strHashMap.Init()
 	case size <= 40:
 		ctr.pctr.typ = H40
 		ctr.h40.keys = make([][5]uint64, UnitLimit)
 		ctr.h40.zKeys = make([][5]uint64, UnitLimit)
-		ctr.pctr.h40.ht = &hashtable.String40HashMap{}
-		ctr.pctr.h40.ht.Init()
+		ctr.pctr.strHashMap.Init()
 	default:
 		ctr.pctr.typ = HStr
 		ctr.pctr.hstr.keys = make([][]byte, UnitLimit)
-		ctr.pctr.hstr.ht = &hashtable.StringHashMap{}
-		ctr.pctr.hstr.ht.Init()
+		ctr.pctr.strHashMap.Init()
 	}
 	for i, r := range bat.Rs {
 		ctr.bat.Rs = append(ctr.bat.Rs, r.Dup())

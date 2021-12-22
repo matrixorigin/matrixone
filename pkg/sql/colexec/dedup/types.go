@@ -32,38 +32,33 @@ const (
 )
 
 type Container struct {
-	typ       int
-	rows      uint64
-	keyOffs   []uint32
-	zKeyOffs  []uint32
-	inserted  []uint8
-	zInserted []uint8
-	hashes    []uint64
-	fakeKeys  [][2]uint64
-	values    []uint64
+	typ           int
+	rows          uint64
+	keyOffs       []uint32
+	zKeyOffs      []uint32
+	inserted      []uint8
+	zInserted     []uint8
+	hashes        []uint64
+	strHashStates [][3]uint64
+	values        []uint64
+	intHashMap    *hashtable.Int64HashMap
+	strHashMap    *hashtable.StringHashMap
 
 	h8 struct {
 		keys  []uint64
 		zKeys []uint64
-		ht    *hashtable.Int64HashMap
 	}
 	h24 struct {
 		keys  [][3]uint64
 		zKeys [][3]uint64
-		ht    *hashtable.String24HashMap
 	}
 	h32 struct {
 		keys  [][4]uint64
 		zKeys [][4]uint64
-		ht    *hashtable.String32HashMap
 	}
 	h40 struct {
 		keys  [][5]uint64
 		zKeys [][5]uint64
-		ht    *hashtable.String40HashMap
-	}
-	hstr struct {
-		ht *hashtable.StringHashMap
 	}
 	bat *batch.Batch
 }

@@ -91,37 +91,34 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		n.ctr.inserted = make([]uint8, UnitLimit)
 		n.ctr.zInserted = make([]uint8, UnitLimit)
 		n.ctr.hashes = make([]uint64, UnitLimit)
-		n.ctr.fakeKeys = make([][2]uint64, UnitLimit)
+		n.ctr.strHashStates = make([][3]uint64, UnitLimit)
 		n.ctr.values = make([]uint64, UnitLimit)
+		n.ctr.intHashMap = &hashtable.Int64HashMap{}
+		n.ctr.strHashMap = &hashtable.StringHashMap{}
 		switch {
 		case size <= 8:
 			n.ctr.typ = H8
 			n.ctr.h8.keys = make([]uint64, UnitLimit)
 			n.ctr.h8.zKeys = make([]uint64, UnitLimit)
-			n.ctr.h8.ht = &hashtable.Int64HashMap{}
-			n.ctr.h8.ht.Init()
+			n.ctr.intHashMap.Init()
 		case size <= 24:
 			n.ctr.typ = H24
 			n.ctr.h24.keys = make([][3]uint64, UnitLimit)
 			n.ctr.h24.zKeys = make([][3]uint64, UnitLimit)
-			n.ctr.h24.ht = &hashtable.String24HashMap{}
-			n.ctr.h24.ht.Init()
+			n.ctr.strHashMap.Init()
 		case size <= 32:
 			n.ctr.typ = H32
 			n.ctr.h32.keys = make([][4]uint64, UnitLimit)
 			n.ctr.h32.zKeys = make([][4]uint64, UnitLimit)
-			n.ctr.h32.ht = &hashtable.String32HashMap{}
-			n.ctr.h32.ht.Init()
+			n.ctr.strHashMap.Init()
 		case size <= 40:
 			n.ctr.typ = H40
 			n.ctr.h40.keys = make([][5]uint64, UnitLimit)
 			n.ctr.h40.zKeys = make([][5]uint64, UnitLimit)
-			n.ctr.h40.ht = &hashtable.String40HashMap{}
-			n.ctr.h40.ht.Init()
+			n.ctr.strHashMap.Init()
 		default:
 			n.ctr.typ = HStr
-			n.ctr.hstr.ht = &hashtable.StringHashMap{}
-			n.ctr.hstr.ht.Init()
+			n.ctr.strHashMap.Init()
 		}
 	}
 	switch n.ctr.typ {
@@ -232,7 +229,7 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 			}
 		}
 		ctr.hashes[0] = 0
-		ctr.h8.ht.InsertBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+		ctr.intHashMap.InsertBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
 		cnt := 0
 		copy(ctr.inserted, ctr.zInserted)
 		for k, v := range ctr.values[:n] {
@@ -338,8 +335,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 				}
 			}
 		}
-		ctr.hashes[0] = 0
-		ctr.h24.ht.InsertBatch(ctr.hashes, ctr.h24.keys[:n], ctr.values)
+		ctr.strHashMap.InsertString24Batch(ctr.strHashStates, ctr.h24.keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		for k, v := range ctr.values[:n] {
@@ -445,7 +441,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 				}
 			}
 		}
-		ctr.h32.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h32.keys[:n], ctr.values)
+		ctr.strHashMap.InsertString32Batch(ctr.strHashStates, ctr.h32.keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		for k, v := range ctr.values[:n] {
@@ -551,7 +547,7 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 				}
 			}
 		}
-		ctr.h40.ht.InsertRawBatch(ctr.hashes, ctr.fakeKeys, ctr.h40.keys[:n], ctr.values)
+		ctr.strHashMap.InsertString40Batch(ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
 		for k, v := range ctr.values[:n] {
@@ -653,10 +649,15 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 				}
 			}
 		}
+		for k := int64(0); k < n; k++ {
+			if l := len(keys[k]); l < 16 {
+				keys[k] = append(keys[k], hashtable.StrKeyPadding[l:]...)
+			}
+		}
+		ctr.strHashMap.InsertStringBatch(ctr.strHashStates, keys[:n], ctr.values)
 		cnt := 0
 		copy(ctr.inserted[:n], ctr.zInserted[:n])
-		for k := int64(0); k < n; k++ {
-			v := ctr.hstr.ht.Insert(hashtable.StringRef{Ptr: &keys[k][0], Len: len(keys[k])})
+		for k, v := range ctr.values[:n] {
 			keys[k] = keys[k][:0]
 			if v > ctr.rows {
 				ctr.inserted[k] = 1
@@ -664,7 +665,6 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 				cnt++
 				ctr.bat.Zs = append(ctr.bat.Zs, 0)
 			}
-			ctr.values[k] = v
 			ai := int64(v) - 1
 			ctr.bat.Zs[ai] += bat.Zs[i+int64(k)]
 		}
