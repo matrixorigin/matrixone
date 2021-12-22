@@ -254,20 +254,16 @@ func initCastRulesForBinaryOps() {
 			for _, op := range ops {
 				for _, l := range ints {
 					for _, r := range ints {
-						if l != r {
 							OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
 								{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
 							}...)
-						}
 					}
 				}
 				for _, l := range uints {
 					for _, r := range uints {
-						if l != r {
 							OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
 								{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
 							}...)
-						}
 					}
 				}
 				for _, l := range ints {
@@ -295,6 +291,7 @@ func initCastRulesForBinaryOps() {
 					}
 				}
 				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+					{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_float32}, targetTypes: targetType},
 					{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_float64}, targetTypes: targetType},
 					{NumArgs: 2, sourceTypes: []types.T{types.T_float64, types.T_float32}, targetTypes: targetType},
 				}...)
