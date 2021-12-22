@@ -171,126 +171,6 @@ DATA CryptedPi<>+0x70(SB)/8, $0x5063d25a1cb7b6b9
 DATA CryptedPi<>+0x78(SB)/8, $0xb2623e6241e8e46e
 GLOBL CryptedPi<>(SB), (NOPTR+RODATA), $0x80
 
-// func AesBytesHash(data unsafe.Pointer, length int) uint64
-// Requires: AES
-TEXT ·AesBytesHash(SB), NOSPLIT, $0-24
-	MOVQ data+0(FP), SI
-	MOVQ length+8(FP), CX
-	MOVQ CX, BX
-
-	ADDQ SI, CX
-	SUBQ $0x40, CX
-
-	VMOVDQU CryptedPi<>+0x00(SB), X0
-	VMOVDQU CryptedPi<>+0x10(SB), X1
-	VMOVDQU CryptedPi<>+0x20(SB), X2
-	VMOVDQU CryptedPi<>+0x30(SB), X3
-
-loop:
-	CMPQ SI, CX
-	JGE  tail
-
-	VAESENC 0x00(SI), X0, X0
-	VAESENC 0x10(SI), X1, X1
-	VAESENC 0x20(SI), X2, X2
-	VAESENC 0x30(SI), X3, X3
-
-	ADDQ $0x40, SI
-	JMP  loop
-
-tail:
-	ADDQ $0x30, CX
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X0, X0
-
-	ADDQ $0x10, SI
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X1, X1
-
-	ADDQ $0x10, SI
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X2, X2
-
-done:
-	VAESENC (CX), X3, X3
-
-	VAESENC X1, X0, X0
-	VAESENC X2, X3, X3
-	VAESENC X3, X0, X0
-
-	VAESENC X1, X0, X0
-	VAESENC X2, X0, X0
-
-	VPSHUFD $0x4e, X0, X1
-	VPXOR   X0, X1, X0
-	MOVQ    X0, R8
-	XORQ    BX, R8
-	MOVQ    R8, ret+16(FP)
-
-	RET
-
-// func AesBytesGenKey(data unsafe.Pointer, length int) [2]uint64
-// Requires: AES
-TEXT ·AesBytesGenKey(SB), NOSPLIT, $0-32
-	MOVQ data+0(FP), SI
-	MOVQ length+8(FP), CX
-
-	ADDQ SI, CX
-	SUBQ $0x40, CX
-
-	VMOVDQU CryptedPi<>+0x00(SB), X0
-	VMOVDQU CryptedPi<>+0x10(SB), X1
-	VMOVDQU CryptedPi<>+0x20(SB), X2
-	VMOVDQU CryptedPi<>+0x30(SB), X3
-
-loop:
-	CMPQ SI, CX
-	JGE  tail
-
-	VAESENC 0x00(SI), X0, X0
-	VAESENC 0x10(SI), X1, X1
-	VAESENC 0x20(SI), X2, X2
-	VAESENC 0x30(SI), X3, X3
-
-	ADDQ $0x40, SI
-	JMP  loop
-
-tail:
-	ADDQ $0x30, CX
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X0, X0
-
-	ADDQ $0x10, SI
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X1, X1
-
-	ADDQ $0x10, SI
-	CMPQ SI, CX
-	JGE  done
-
-	VAESENC (SI), X2, X2
-
-done:
-	VAESENC (CX), X3, X3
-
-	VAESENC X2, X1, X1
-	VAESENC X3, X0, X0
-	VAESENC X1, X0, X0
-
-	VMOVDQU X0, ret+16(FP)
-
-	RET
-
 // func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int)
 // Requires: AES
 TEXT ·AesBytesBatchGenHashStates(SB), NOSPLIT, $0-24
@@ -380,7 +260,7 @@ done:
 // Requires: AES
 TEXT ·AesInt192BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
-	MOVQ hashes+8(FP), DI
+	MOVQ states+8(FP), DI
 	MOVQ length+16(FP), CX
 
 	VMOVDQU CryptedPi<>+0x20(SB), X0
@@ -499,7 +379,7 @@ done:
 // Requires: AES
 TEXT ·AesInt256BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVQ data+0(FP), SI
-	MOVQ hashes+8(FP), DI
+	MOVQ states+8(FP), DI
 	MOVQ length+16(FP), CX
 
 	VMOVDQU CryptedPi<>+0x20(SB), X0
@@ -726,7 +606,7 @@ tailLoop:
 done:
 	RET
 
-TEXT ·genCryptedPi(SB), NOSPLIT, $0-8
+TEXT genCryptedPi(SB), NOSPLIT, $0-8
 	MOVQ dst+0(FP), DI
 
 	VMOVDQU Pi<>+0x00(SB), X0
