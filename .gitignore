@@ -27,3 +27,4 @@ pkg/sql/colexec/extend/overload/*.go
 !pkg/sql/colexec/extend/overload/overloadGenerate.go 
 !pkg/sql/colexec/extend/overload/types.go 
 !pkg/sql/colexec/extend/overload/unary.go
+!pkg/sql/colexec/extend/overload/z.go
