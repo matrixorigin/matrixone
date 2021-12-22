@@ -18,4 +18,5 @@ import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 
 const (
 	Length = overload.NE + 1
+	Year   = overload.NE + 2
 )

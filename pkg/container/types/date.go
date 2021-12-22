@@ -71,8 +71,8 @@ const (
 	formatTwo5 = len("mmdd")
 	formatTwo6 = len("mdd")
 
-	MaxDateYear = 9999
-	MinDateYear = 0
+	MaxDateYear    = 9999
+	MinDateYear    = 0
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 
@@ -122,11 +122,11 @@ func ParseDate(s string) (Date, error) {
 		case formatTwo1: // yyyymmdd
 			parts[0], parts[1], parts[2] = s[0:4], s[4:6], s[6:]
 		case formatTwo2: // yyymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr0 + s[0:3], s[3:5], s[5:]
+			parts[0], parts[1], parts[2] = thisCenturyStr0+s[0:3], s[3:5], s[5:]
 		case formatTwo3: // yymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr1 + s[0:2], s[2:4], s[4:]
+			parts[0], parts[1], parts[2] = thisCenturyStr1+s[0:2], s[2:4], s[4:]
 		case formatTwo4: // ymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr2 + s[0:1], s[1:3], s[3:]
+			parts[0], parts[1], parts[2] = thisCenturyStr2+s[0:1], s[1:3], s[3:]
 		case formatTwo5: // mmdd
 			parts[0], parts[1], parts[2] = thisCenturyStr3, s[0:2], s[2:]
 		case formatTwo6: // mdd
@@ -170,7 +170,6 @@ func validDate(year int32, month, day uint8) bool {
 	return false
 }
 
-
 func (a Date) String() string {
 	y, m, d, _ := a.Calendar(true)
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
@@ -180,6 +179,41 @@ func (a Date) String() string {
 func Today() Date {
 	sec := Now().sec()
 	return Date((sec + localTZ) / secsPerDay)
+}
+
+func (d Date) Year() (year int32) {
+	// Account for 400 year cycles.
+	n := d / daysPer400Years
+	y := 400 * n
+	d -= daysPer400Years * n
+
+	// Cut off 100-year cycles.
+	// The last cycle has one extra leap year, so on the last day
+	// of that year, day / daysPer100Years will be 4 instead of 3.
+	// Cut it back down to 3 by subtracting n>>2.
+	n = d / daysPer100Years
+	n -= n >> 2
+	y += 100 * n
+	d -= daysPer100Years * n
+
+	// Cut off 4-year cycles.
+	// The last cycle has a missing leap year, which does not
+	// affect the computation.
+	n = d / daysPer4Years
+	y += 4 * n
+	d -= daysPer4Years * n
+
+	// Cut off years within a 4-year cycle.
+	// The last year is a leap year, so on the last day of that year,
+	// day / 365 will be 4 instead of 3. Cut it back down to 3
+	// by subtracting n>>2.
+	n = d / 365
+	n -= n >> 2
+	y += n
+
+	year = int32(y) + 1
+
+	return year
 }
 
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
