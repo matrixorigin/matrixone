@@ -29,11 +29,11 @@ var (
 )
 
 type shardFlusher struct {
-	mu           *sync.RWMutex
-	id           uint64
-	mask         *roaring64.Bitmap
-	driver       NodeDriver
-	pendingItems int
+	mu     *sync.RWMutex
+	id     uint64
+	mask   *roaring64.Bitmap
+	driver NodeDriver
+	// pendingItems int
 }
 
 func newShardFlusher(id uint64, driver NodeDriver) *shardFlusher {
@@ -45,13 +45,13 @@ func newShardFlusher(id uint64, driver NodeDriver) *shardFlusher {
 	}
 }
 
-func (sf *shardFlusher) updatePengingItems(items int) bool {
-	sf.pendingItems = items
-	if items >= 1000 {
-		return true
-	}
-	return false
-}
+// func (sf *shardFlusher) updatePengingItems(items int) bool {
+// 	sf.pendingItems = items
+// 	if items >= 1000 {
+// 		return true
+// 	}
+// 	return false
+// }
 
 func (sf *shardFlusher) addNode(id uint64) error {
 	sf.mu.Lock()
@@ -97,9 +97,9 @@ func (sf *shardFlusher) String() string {
 	sf.mu.RLock()
 	defer sf.mu.RUnlock()
 	str := fmt.Sprintf("ShardFlusher<%d>:{", sf.id)
-	for k, _ := range sf.mask.ToArray() {
+	for _, k := range sf.mask.ToArray() {
 		str = fmt.Sprintf("%s %d", str, k)
 	}
-	str = fmt.Sprintf("%s}", str)
+	str = fmt.Sprintf("%s }", str)
 	return str
 }
