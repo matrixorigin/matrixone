@@ -31,6 +31,7 @@ type Int64HashMap struct {
 	elemCnt     uint64
 	maxElemCnt  uint64
 	cells       []Int64HashMapCell
+	//confCnt     uint64
 }
 
 func (ht *Int64HashMap) Init() {
@@ -102,6 +103,19 @@ func (ht *Int64HashMap) findCell(hash uint64, key uint64) *Int64HashMapCell {
 		if cell.Key == key || cell.Mapped == 0 {
 			return cell
 		}
+		//ht.confCnt++
+	}
+
+	return nil
+}
+
+func (ht *Int64HashMap) findEmptyCell(hash uint64, key uint64) *Int64HashMapCell {
+	for idx := hash & ht.cellCntMask; true; idx = (idx + 1) & ht.cellCntMask {
+		cell := &ht.cells[idx]
+		if cell.Mapped == 0 {
+			return cell
+		}
+		//ht.confCnt++
 	}
 
 	return nil
@@ -140,7 +154,7 @@ func (ht *Int64HashMap) resizeOnDemand(n int) {
 		for j := range cells {
 			cell := &cells[j]
 			if cell.Mapped != 0 {
-				newCell := ht.findCell(hashes[j], cell.Key)
+				newCell := ht.findEmptyCell(hashes[j], cell.Key)
 				*newCell = *cell
 			}
 		}

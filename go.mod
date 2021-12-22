@@ -14,7 +14,6 @@ require (
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
 	github.com/huandu/go-clone v1.3.0
-	// github.com/matrixorigin/matrixcube v0.0.0-20211216114139-2b4dd613790b
 	github.com/matrixorigin/matrixcube v0.0.0-20211221024814-8dc69dd1afd1
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
@@ -103,7 +102,7 @@ require (
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
 	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3 // indirect
-	golang.org/x/exp v0.0.0-20211214223157-bafe2e20209a // indirect
+	golang.org/x/exp v0.0.0-20211221223016-e29036178569 // indirect
 	golang.org/x/net v0.0.0-20211216030914-fe4d6282115f // indirect
 	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/time v0.0.0-20211116232009-f0f3c7e86c11 // indirect

@@ -243,11 +243,31 @@ func constructView(bat *batch.Batch, fvar string) {
 	case types.T_char, types.T_varchar:
 		ht := &hashtable.StringHashMap{}
 		ht.Init()
+		var strKeys [UnitLimit][]byte
+		var strKeys16 [UnitLimit][16]byte
+		var zStrKeys16 [UnitLimit][16]byte
+		var states [UnitLimit][3]uint64
 		vs := vec.Col.(*types.Bytes)
 		count := int64(len(bat.Zs))
 		for i := int64(0); i < count; i += UnitLimit {
-			key := vs.Get(i)
-			ht.Insert(hashtable.StringRef{Ptr: &key[0], Len: len(key)})
+			n := int(count - i)
+			if n > UnitLimit {
+				n = UnitLimit
+			}
+			var padded int
+			{
+				for k := 0; k < n; k++ {
+					if vs.Lengths[i+int64(k)] < 16 {
+						copy(strKeys16[padded][:], vs.Get(i+int64(k)))
+						strKeys[k] = strKeys16[padded][:]
+						padded++
+					} else {
+						strKeys[k] = vs.Get(i + int64(k))
+					}
+				}
+			}
+			ht.InsertStringBatch(states[:], strKeys[:n], values)
+			copy(strKeys16[:padded], zStrKeys16[:padded])
 		}
 		if len(bat.Zs) == int(ht.Cardinality()) {
 			bat.Ht = ht
