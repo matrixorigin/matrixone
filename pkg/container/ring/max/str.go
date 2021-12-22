@@ -132,8 +132,8 @@ func (r *StrRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, v
 
 func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
-	for i := range zs {
-		if v := vs.Get(int64(i)); bytes.Compare(v, r.Vs[i]) > 0 {
+	for j := range zs {
+		if v := vs.Get(int64(j)); bytes.Compare(v, r.Vs[i]) > 0 {
 			r.Vs[i] = append(r.Vs[i][:0], v...)
 		}
 	}
