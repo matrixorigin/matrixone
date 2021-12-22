@@ -23,9 +23,7 @@ import (
 func Crc32Int64BatchHash(data unsafe.Pointer, hashes *uint64, length int)
 func Crc32Int64CellBatchHash(data unsafe.Pointer, hashes *uint64, length int)
 
-func AesBytesHash(data unsafe.Pointer, length int) uint64
-func AesBytesGenKey(data unsafe.Pointer, length int) [2]uint64
-func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int) uint64
+func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int)
 
 func AesInt192BatchGenHashStates(data *[3]uint64, states *[3]uint64, length int)
 func AesInt256BatchGenHashStates(data *[4]uint64, states *[3]uint64, length int)
