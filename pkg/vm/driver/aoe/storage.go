@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -596,6 +597,9 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		}
 		createDatabase := false
 		if db == nil {
+			if metadata.LogIndex == math.MaxUint64 {
+				return storage.ErrShardNotFound
+			}
 			ctx := aoedb.CreateDBCtx{
 				Id:     metadata.LogIndex,
 				Offset: 0,
@@ -710,12 +714,12 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		name := aoedb.IdToNameFactory.Encode(shard.ShardID)
 		newNames[i] = name
 	}
-	logutil.Infof("split, from %v to %v",old.ShardID, newNames)
+	logutil.Infof("split, from %v to %v", old.ShardID, newNames)
 
 	renameTable := func(oldName, dbName string) string {
 		return oldName
 	}
-	
+
 	splitctx := splitCtx{}
 	err := json.Unmarshal(ctx, &splitctx)
 	if err != nil {
@@ -734,7 +738,7 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 		metaTbl := db.SimpleGetTableByName(tb)
 		metaTbls = append(metaTbls, metaTbl)
 	}
-	
+
 	execSplitCtx := &aoedb.ExecSplitCtx{
 		DBMutationCtx: aoedb.DBMutationCtx{
 			Id:     old.LogIndex,
