@@ -791,7 +791,17 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 		}
 		arg.Bats = append(arg.Bats, bat)
 	}
-	if len(arg.Bats) == 0 {
+	if len(arg.Bats) != len(arg.Svars) {
+		for i, in := range s.Instructions {
+			if in.Op == vm.Connector {
+				arg := s.Instructions[i].Arg.(*connector.Argument)
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+		}
 		return nil
 	}
 	constructViews(arg.Bats, arg.Svars)
