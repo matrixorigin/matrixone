@@ -47,8 +47,8 @@ const (
 	unixToInternal = (1969*365 + 1969/4 - 1969/100 + 1969/400) * secsPerDay
 	wallToInternal = (1884*365 + 1884/4 - 1884/100 + 1884/400) * secsPerDay
 
-	minHourInDay, maxHourInDay           = 0, 23
-	minMinuteInHour, maxMinuteInHour     = 0, 59
+	minHourInDay, maxHourInDay = 0, 23
+	minMinuteInHour, maxMinuteInHour = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
 )
 
@@ -59,7 +59,7 @@ var (
 	reg1 = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
 	reg2 = regexp.MustCompile(`^(?P<hour>[0-9]+)[:](?P<minute>[0-9]+)[:](?P<second>[0-9]+)(?P<msec>[.][0-9]+)?$`)
 
-	nowDatetime       = "now()"
+	nowDatetime = "now()"
 	nowDatetimeLength = len(nowDatetime)
 
 	// regSimple is the regexp to match `yearMonthDayHourMinuteSecond.Sec` and some datetime like that
@@ -116,13 +116,13 @@ func ParseDatetime(s string) (Datetime, error) {
 						ymdhms[0], ymdhms[1], ymdhms[2] = match[1][0:4], match[1][4:6], match[1][6:8]
 						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][8:10], match[1][10:12], match[1][12:]
 					case format2:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr0+match[1][0:3], match[1][3:5], match[1][5:7]
+						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr0 + match[1][0:3], match[1][3:5], match[1][5:7]
 						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][7:9], match[1][9:11], match[1][11:]
 					case format3:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr1+match[1][0:2], match[1][2:4], match[1][4:6]
+						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr1 + match[1][0:2], match[1][2:4], match[1][4:6]
 						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][6:8], match[1][8:10], match[1][10:]
 					case format4:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr2+match[1][0:1], match[1][1:3], match[1][3:5]
+						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr2 + match[1][0:1], match[1][1:3], match[1][3:5]
 						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][5:7], match[1][7:9], match[1][9:]
 					}
 				} else {
@@ -132,7 +132,7 @@ func ParseDatetime(s string) (Datetime, error) {
 				return -1, errIncorrectDatetimeValue
 			}
 		}
-	case 2: // only possible to be `year-month-day hh:mm:ss.[0,9]*`
+	case 2:	// only possible to be `year-month-day hh:mm:ss.[0,9]*`
 		{ // to match year-month-day
 			match := reg1.FindStringSubmatch(datetimeParts[0])
 			switch len(match) {
@@ -259,8 +259,4 @@ func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Dateti
 
 func (dt Datetime) sec() int64 {
 	return int64(dt) >> 20
-}
-
-func (dt Datetime) Year() uint16 {
-	return dt.ToDate().Year()
 }

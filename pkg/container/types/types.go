@@ -126,9 +126,9 @@ func (t T) ToType() Type {
 		typ.Size = 1
 	case T_int16:
 		typ.Size = 2
-	case T_int32, T_date:
+	case T_int32:
 		typ.Size = 4
-	case T_int64, T_datetime:
+	case T_int64:
 		typ.Size = 8
 	case T_uint8:
 		typ.Size = 1
@@ -225,10 +225,6 @@ func (t T) OidString() string {
 		return "T_char"
 	case T_varchar:
 		return "T_varchar"
-	case T_date:
-		return "T_date"
-	case T_datetime:
-		return "T_datetime"
 	}
 	return "unknown_type"
 }
@@ -236,9 +232,9 @@ func (t T) OidString() string {
 // GoType returns go type string for T
 func (t T) GoType() string {
 	switch t {
-	case T_int64, T_datetime:
+	case T_int64:
 		return "int64"
-	case T_int32, T_date:
+	case T_int32:
 		return "int32"
 	case T_int16:
 		return "int16"
@@ -282,9 +278,9 @@ func (t T) TypeLen() int {
 		return 1
 	case T_int16:
 		return 2
-	case T_int32, T_date:
+	case T_int32:
 		return 4
-	case T_int64, T_datetime:
+	case T_int64:
 		return 8
 	case T_uint8:
 		return 1
