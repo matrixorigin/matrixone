@@ -384,12 +384,8 @@ github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czP
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7CQEsRxL8+/sAPW23uIqpwR+M8Aje81AH6w3/ZkxQw=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
-github.com/matrixorigin/matrixcube v0.0.0-20211221024814-8dc69dd1afd1 h1:2yzcLLBTSW56hQmVyC2zvwEwc0M7yNYUN5iOh1IIuOA=
-github.com/matrixorigin/matrixcube v0.0.0-20211221024814-8dc69dd1afd1/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
-github.com/matrixorigin/matrixcube v0.0.0-20211222092504-7e5dd75cf8d3 h1:8KlyO9VsnkJy+wEqOoYP16RQJ156KzeBhEt9Qx9F+R8=
-github.com/matrixorigin/matrixcube v0.0.0-20211222092504-7e5dd75cf8d3/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
-github.com/matrixorigin/matrixcube v0.0.0-20211223064405-dc587ee2ae93 h1:GgedIlLP0SMOV3lkqAGYnvwCUtpktOMb3vObT3N7qTs=
-github.com/matrixorigin/matrixcube v0.0.0-20211223064405-dc587ee2ae93/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
+github.com/matrixorigin/matrixcube v0.0.0-20211223110041-e1138dfb697c h1:ioWjiF9CRzUXZA6w6yxQl6w1NUykeiAsOg7yHdeTlRA=
+github.com/matrixorigin/matrixcube v0.0.0-20211223110041-e1138dfb697c/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=

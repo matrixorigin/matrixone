@@ -265,25 +265,31 @@ func TestSnapshot(t *testing.T) {
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*60)
 	d0 := c.CubeDrivers[0]
 
+	leaderNode := 0
+	stopNode := 2
+
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	stdLog.Printf("shard id is %v", shard.ShardID)
-	leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
-	leaderStoreContainerID := leaderStore.Meta().ID
-	logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
+	// stdLog.Printf("shard id is %v", shard.ShardID)
+	// leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
+	// leaderStoreContainerID := leaderStore.Meta().ID
+	// logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
 
-	var stopNode int
-	var leaderNode int
-	for i := 0; i < 3; i++ {
-		containerID := c.RaftCluster.GetStore(i).Meta().ID
-		if containerID != leaderStoreContainerID {
-			stopNode = i
-		}
-		if containerID == leaderStoreContainerID {
-			leaderNode = i
-		}
-	}
-	logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
+	// var stopNode int
+	// var leaderNode int
+	// for i := 0; i < 3; i++ {
+	// 	containerID := c.RaftCluster.GetStore(i).Meta().ID
+	// 	if containerID != leaderStoreContainerID {
+	// 		stopNode = i
+	// 	}
+	// 	if containerID == leaderStoreContainerID {
+	// 		leaderNode = i
+	// 	}
+	// }
+	// logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
+	// temp := leaderNode
+	// leaderNode = stopNode
+	// stopNode = temp
 
 	c.StopNode(stopNode)
 	stdLog.Printf("node%v stopped.", stopNode)
@@ -293,7 +299,15 @@ func TestSnapshot(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		//create table into the shard
 		tbl := MockTableInfo(i)
-		err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+		j:=0
+		for {
+			err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
+			if err == nil {
+				break
+			}
+			fmt.Printf("wait %v",j)
+			j++
+		}
 		stdLog.Printf(" create table %v", i)
 		require.Nil(t, err)
 		//append 1 rows into the table
@@ -303,6 +317,12 @@ func TestSnapshot(t *testing.T) {
 		err = protocol.EncodeBatch(batch, &buf)
 		require.Nil(t, err)
 		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+		for {
+			err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
+			if err == nil {
+				break
+			}
+		}
 		stdLog.Printf(" append %v", i)
 		require.Nil(t, err)
 	}
@@ -310,13 +330,13 @@ func TestSnapshot(t *testing.T) {
 	var replicaID uint64
 	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
 	for _, replica := range replicas {
-		if replica.ContainerID == leaderStoreContainerID {
+		if replica.ContainerID == c.RaftCluster.GetStore(leaderNode).Meta().ID {
 			replicaID = replica.ID
 		}
 	}
 
 	var logdb logdb.LogDB
-	logdb = c.RaftCluster.GetStore(0).(raftstore.LogDBGetter).GetLogDB()
+	logdb = c.RaftCluster.GetStore(leaderNode).(raftstore.LogDBGetter).GetLogDB()
 	hasLog := func(index uint64) bool {
 		_, _, err := logdb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
 		if err == nil {
