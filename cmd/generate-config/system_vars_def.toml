@@ -366,7 +366,7 @@ max-backups = 0 # maximum numbers of old log files to retain.
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
 # Docker or NAT network environment configuration
 # If a client cannot access Cube through the default client URLs listened to by Cube, you must manually set the advertise client URLs
-# For exmaple, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
+# For example, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
 addr-raft = "localhost:10000"                       # the address for raft-group rpc communication
 addr-advertise-raft = ""                            # for docker deployment
 addr-client = "localhost:20000"                     # the address for cube service
@@ -377,11 +377,18 @@ githash = ""                                        # cube git hash
 capacity = 0                                        # the maximum storage capacity of this node
 use-memory-as-storage = false                       # if this parameter is true, the data will be stored in memory and hence volatile
 shard-groups = 1                                    # In a distributed setting, the shard-groups should set to 2.
-
+dir-data = ""                                       # directory for cube data
+labels = [
+    ["zone", "default-zone"],
+    ["rack", "rack-0"],
+    ["host", "node-0"],
+]                                                   # label information of this node
 # Replication Configs
 [replication]
 # If pb scheduler doesn't hear from a node for longer than max-peer-down-time, it will ask this node to destroy itself if it comes back.
 max-peer-down-time = "30m"                          # the maximum time a node is allowed to leave
+shard-heartbeat-duration = "10s"                    # the period for this raft group to report information to scheduler
+store-heartbeat-duration = "10s"                     # the period for this node to report information to scheduler
 shard-split-check-duration = "30s"                  # the period of shard split checking
 shard-state-check-duration = "1m"                   # the period of shard state checking
 compact-log-check-duration = "60s"                  # the period of log compaction checking
@@ -395,7 +402,7 @@ max-concurrency-snap-chunks = 8
 snap-chunk-size = "4MB"
 
 [raft]
-enable-pre-vote = true                              # enable raft pre-vote
+enable-pre-vote = true
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 heartbeat-ticks = 2                                 # how many ticks one raft heartbeat has
 election-timeout-ticks = 10                         # how many ticks a election timeout has
@@ -403,19 +410,20 @@ max-size-per-msg = 0                                # maximum number of raft log
 max-inflight-msgs = 512                             # maximum number of raft message on the way of sending(inflight)
 max-entry-bytes = 314572800                         # maximum bytes for one cube write proposal
 send-raft-batch-size = 64
+
 [raft.raft-log]
 disable-sync = false                                # sync raft log when writing to disk
-compact-duration = "30s"                            # the period of raft log cleaning
+compact-duration = "30s"
 compact-threshold = 256                             # the threshold for raft log cleaning
 max-allow-transfer-lag = 2                          # when raft group transfer leadership, the maximum log lag the next leader can have
-ForceCompactCount = 0                               # the log count for raft leader to force compaction
-ForceCompactBytes = 0                               # the log size for raft leader to force compaction
 CompactProtectLag = 0
+force-compact-log-count = ""                        # the log count for raft leader to force compaction
+force-compact-log-bytes = ""                        # the log size for raft leader to force compaction
 
 [worker]
 raft-apply-worker = 32                              # the number of raft apply worker
 raft-msg-worker = 8                                 # the number of raft message worker
-raft-event-worker = 32                              # the number of raft event worker
+raft-event-worker = 32                              # the number of raft event worker for a shard
 
 # Prophet Configs
 [prophet]
@@ -484,7 +492,7 @@ hot-resource-cache-hits-threshold = 3               # threshold to determine whe
 tolerant-size-ratio = 0.0
 low-space-ratio = 0.8                               # space ratio to decide whether this node's storage is low
 high-space-ratio = 0.7                              # space ratio to decide whether this node's storage is high
-resource-score-formula-version = ""                 # resource score formula version
+resource-score-formula-version = ""
 scheduler-max-waiting-operator = 5                  # the maximum number of waiting state a scheduling operation can have
 enable-remove-down-replica = true                   # enable cube scheduler to remove down replica in a cluster
 enable-replace-offline-replica = true               # enable cube scheduler to replace offline replica
@@ -497,6 +505,7 @@ container-limit-mode = ""
 
 [prophet.replication]
 max-replicas = 1                                    # max number of replica in a prophet group
+location-labels = "zone,rack"                       # label information of this prophet node
 strictly-match-label = true                         # if this parameter is set to true, `location-labels` must be in the store label set
 enable-placement-rules = true                       # enable scheduling based on rule
 isolation-level = "rack"                            # replicas isolation level
