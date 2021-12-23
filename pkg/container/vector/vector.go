@@ -127,8 +127,9 @@ func New(typ types.Type) *Vector {
 			Col: &types.Bytes{},
 			Nsp: &nulls.Nulls{},
 		}
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.New", typ))
 	}
-	return nil
 }
 
 func Reset(v *Vector) {
@@ -240,6 +241,18 @@ func SetLength(v *Vector, n int) {
 		vs.Offsets = vs.Offsets[:n]
 		vs.Lengths = vs.Lengths[:n]
 		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		m := len(vs)
+		v.Col = vs[:n]
+		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		m := len(vs)
+		v.Col = vs[:n]
+		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.SetLength", v.Typ))
 	}
 }
 
@@ -517,6 +530,8 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	case types.T_datetime:
 		w.Col = v.Col.([]types.Datetime)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.Window", v.Typ))
 	}
 	return w
 }
@@ -556,7 +571,7 @@ func Append(v *Vector, arg interface{}) error {
 	case types.T_char, types.T_varchar, types.T_json:
 		return v.Col.(*types.Bytes).Append(arg.([][]byte))
 	}
-	return nil
+	return errors.New(fmt.Sprintf("unexpect type %s for function vector.Append", v.Typ))
 }
 
 func Shrink(v *Vector, sels []int64) {
@@ -823,6 +838,8 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		v.Col = shuffle.DatetimeShuffle(vs, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
+	default:
+		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.Typ))
 	}
 	return nil
 }
