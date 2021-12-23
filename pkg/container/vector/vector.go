@@ -570,8 +570,10 @@ func Append(v *Vector, arg interface{}) error {
 		v.Col = append(v.Col.([][]interface{}), arg.([][]interface{})...)
 	case types.T_char, types.T_varchar, types.T_json:
 		return v.Col.(*types.Bytes).Append(arg.([][]byte))
+	default:
+		return errors.New(fmt.Sprintf("unexpect type %s for function vector.Append", v.Typ))
 	}
-	return errors.New(fmt.Sprintf("unexpect type %s for function vector.Append", v.Typ))
+	return nil
 }
 
 func Shrink(v *Vector, sels []int64) {
