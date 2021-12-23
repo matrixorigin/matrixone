@@ -1,3 +1,4 @@
 /testcube
 /config.xml
 /*.profile
+/node-*.log

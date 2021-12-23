@@ -25,7 +25,7 @@ import (
     "github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initPlus() {
     BinOps[Plus] = []*BinOp{
     // Same types to plus
     {{range .Field1}}
@@ -241,14 +241,4 @@ func init() {
         },
     {{end}}
     }
-}
-
-// init function to init binOpsReturnType from
-// plus.go / mult.go / minus.go / div.go / mod.go
-func init() {
-	for i, op := range binOperators {
-		for _, bo := range BinOps[op] {
-			binOpsReturnType[i][bo.LeftType][bo.RightType] = bo.ReturnType
-		}
-	}
 }

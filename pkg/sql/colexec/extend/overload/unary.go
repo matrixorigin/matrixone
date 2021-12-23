@@ -22,38 +22,22 @@ import (
 )
 
 var (
-	// unaryOpsReturnType contains returnType of a unary expr, likes
-	// not (1 + 5), not bool, and so on
-	unaryOpsReturnType [][]types.T
-
 	// UnaryOps contains the unary operations indexed by operation type.
 	UnaryOps = map[int][]*UnaryOp{}
-
-	// unaryOpsTypeCastRules contains rules of type cast for unary operators.
-	// whose argument type can't be resolved directly.
-	unaryOpsTypeCastRules [][]castResult
-
-	// variants only used to init and get items from unaryOpsReturnType and unaryOpsTypeCastRules
-	unaryOperators = []int{UnaryMinus, Not}
-	firstUnaryOp   = unaryOperators[0]
 )
-
-func init() {
-	initSliceForUnaryOps()
-	initCastRulesForUnaryOps()
-}
 
 func UnaryEval(op int, typ types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
 	// do type cast if it needs.
 	if rule, ok := unaryOpsNeedCast(op, typ); ok {
 		var err error
-		if !v.Typ.Eq(rule.leftCast) {
-			v, err = BinaryEval(Typecast, typ, rule.leftCast.Oid, c, false, v, vector.New(rule.leftCast), p)
+		target := rule.targetTypes[0]
+		if !v.Typ.Eq(target) {
+			v, err = BinaryEval(Typecast, typ, target.Oid, c, false, v, vector.New(target), p)
 			if err != nil {
 				return nil, err
 			}
 		}
-		typ = rule.leftCast.Oid
+		typ = target.Oid
 	}
 
 	if os, ok := UnaryOps[op]; ok {
@@ -66,57 +50,20 @@ func UnaryEval(op int, typ types.T, c bool, v *vector.Vector, p *process.Process
 	return nil, fmt.Errorf("'%s' not yet implemented for %s", OpName[op], typ)
 }
 
-func unaryCheck(op int, arg types.T, val types.T) bool {
+func unaryCheck(_ int, arg types.T, val types.T) bool {
 	return arg == val
 }
 
-// GetUnaryOpReturnType returns the returnType of unary op and its arg types.
-func GetUnaryOpReturnType(op int, arg types.T) types.T {
-	t := unaryOpsReturnType[op-firstUnaryOp][arg]
-	if t == noRt {
-		t = arg
-	}
-	return t
-}
-
-func initSliceForUnaryOps() {
-	unaryOpsReturnType = make([][]types.T, len(unaryOperators))
-	for i := range unaryOperators {
-		unaryOpsReturnType[i] = make([]types.T, maxt)
-		for j := range unaryOpsReturnType[i] {
-			unaryOpsReturnType[i][j] = noRt
-		}
-	}
-}
-
-func initCastRulesForUnaryOps() {
-	unaryOpsTypeCastRules = make([][]castResult, len(unaryOperators))
-	for i := range unaryOpsTypeCastRules {
-		unaryOpsTypeCastRules[i] = make([]castResult, maxt)
-	}
-
-	chars := []types.T{types.T_char, types.T_varchar}
-	// Not Operator
-	{
-		index := Not - firstUnaryOp
-
-		// cast to Not Float64
-		nl, nret := types.Type{Oid: types.T_float64, Size: 8}, types.T_int8
-		for _, argTyp := range chars {
-			unaryOpsTypeCastRules[index][argTyp] = castResult{
-				has:           true,
-				leftCast:      nl,
-				newReturnType: types.T(nret),
-			}
-			unaryOpsReturnType[index][argTyp] = types.T(nret)
-		}
-	}
-}
-
 // unaryOpsNeedCast returns true if a unary operator needs type-cast for its argument.
-func unaryOpsNeedCast(op int, argTyp types.T) (castResult, bool) {
-	if op < 0 || op > Not {
-		return castResult{}, false
+func unaryOpsNeedCast(op int, argTyp types.T) (castRule, bool) {
+	rules, ok := OperatorCastRules[op]
+	if !ok {
+		return castRule{}, false
 	}
-	return unaryOpsTypeCastRules[op-firstUnaryOp][argTyp], unaryOpsTypeCastRules[op-firstUnaryOp][argTyp].has
+	for _, rule := range rules {
+		if rule.NumArgs == 1 && argTyp == rule.sourceTypes[0] {
+			return rule, true
+		}
+	}
+	return castRule{}, false
 }

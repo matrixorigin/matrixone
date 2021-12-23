@@ -22,12 +22,13 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/metric"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
-type DefaultCubeConfig func(id int) *config.Config
+type DefaultCubeConfig func(id fz.NodeID) *config.Config
 
 func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
-	return func(i int) *config.Config {
+	return func(i fz.NodeID) *config.Config {
 		return &config.Config{
 
 			DeployPath: "",

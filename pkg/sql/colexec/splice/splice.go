@@ -57,6 +57,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return false, err
 			}
 		}
+		i--
 	}
 	proc.Reg.InputBatch = n.bat
 	n.bat = nil

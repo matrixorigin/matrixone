@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func init() {
+func initMod() {
     BinOps[Mod] = []*BinOp{
         {{range .Field1}}
             {

@@ -30,7 +30,7 @@ var (
 	errUnexpected = errors.New("unexpected case for LIKE operator")
 )
 
-func init() {
+func initLike() {
 	BinOps[Like] = []*BinOp{
 	{{range .CharTypes}}
 		{

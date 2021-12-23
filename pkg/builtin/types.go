@@ -17,5 +17,7 @@ package builtin
 import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 
 const (
-	Length = overload.NE + 1
+	Length = iota + overload.NE + 1
+	Year
+	Round
 )

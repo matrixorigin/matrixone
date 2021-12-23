@@ -39,6 +39,7 @@ func (qry *Query) backFill() {
 					if j == len(rel.Attrs)-1 {
 						agg.Name = attr
 						rel.AttrsMap[agg.Name].Ref++
+						break
 					}
 					if rel.AttrsMap[attr].Ref > 0 {
 						agg.Name = attr

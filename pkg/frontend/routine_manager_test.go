@@ -2,11 +2,11 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/stretchr/testify/require"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -19,7 +19,7 @@ func create_test_server() *MOServer {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("../../system_vars_config.toml",
+	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
 		&config.GlobalSystemVariables); err != nil {
 		fmt.Printf("error:%v\n", err)
 		panic(err)

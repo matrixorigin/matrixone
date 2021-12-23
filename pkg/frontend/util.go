@@ -17,6 +17,11 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"os"
 	"runtime"
 	"strconv"
@@ -246,7 +251,7 @@ true/false - exists or not.
 true/false - file or directory
 error
  */
-func PathExists(path string) (bool, bool, error) {
+var PathExists = func(path string) (bool, bool, error) {
 	fi, err := os.Stat(path)
 	if err == nil {
 		return true, !fi.IsDir(),nil
@@ -277,4 +282,147 @@ func MakeDebugInfo(data []byte,bytesCount int,bytesPerLine int) string {
 		ps += fmt.Sprintf("%02x ",data[i])
 	}
 	return ps
+}
+
+
+var (
+	tmpDir = "./cube-test"
+)
+
+func cleanupTmpDir() error {
+	return os.RemoveAll(tmpDir)
+}
+
+/*
+type FrontendStub struct{
+	eng engine.Engine
+	srv rpcserver.Server
+	mo *MOServer
+	kvForEpochgc storage.Storage
+	wg sync.WaitGroup
+	cf *CloseFlag
+	pci *PDCallbackImpl
+	proc *process.Process
+}
+
+func NewFrontendStub() (*FrontendStub,error) {
+	e, srv, err, proc := getMemEngineAndComputationEngine()
+	if err != nil {
+		return nil,err
+	}
+
+	pci := getPCI()
+	mo, err := getMOserver("./test/system_vars_config.toml",
+		6002, pci , e)
+
+	if err != nil {
+		return nil, err
+	}
+
+	err = mo.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	return &FrontendStub{
+		eng: e,
+		srv: srv,
+		mo: mo,
+		kvForEpochgc: storage.NewTestStorage(),
+		cf:&CloseFlag{},
+		pci:pci,
+		proc:proc,
+	},nil
+}
+
+func StartFrontendStub(fs *FrontendStub) error {
+	return fs.pci.Start(fs.kvForEpochgc)
+}
+
+func CloseFrontendStub(fs *FrontendStub) error {
+	err := fs.mo.Stop()
+	if err != nil {
+		return err
+	}
+
+	fs.srv.Stop()
+	return fs.pci.Stop(fs.kvForEpochgc)
+}
+*/
+
+var testPorts = []int{6002, 6003, 6004}
+var testConfigFile = "./test/system_vars_config.toml"
+
+/*
+func getMemEngineAndComputationEngine() (engine.Engine, rpcserver.Server, error, *process.Process) {
+	e, err := testutil.NewTestEngine()
+	if err != nil {
+		return nil, nil, err, nil
+	}
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(mheap.New(gm))
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+	}
+
+	srv, err := testutil.NewTestServer(e, proc)
+	if err != nil {
+		return nil, nil, err, nil
+	}
+
+	go srv.Run()
+	return e, srv, err, proc
+}
+*/
+
+func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
+	pu,err := getParameterUnit(configFile,eng)
+	if err != nil {
+		return nil,err
+	}
+
+	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
+	sver := NewMOServer(address, pu, pd)
+	return sver, nil
+}
+
+func getPCI()(*PDCallbackImpl) {
+	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
+	return NewPDCallbackImpl(ppu)
+}
+
+func getSystemVariables(configFile string) (*mo_config.SystemVariables,error) {
+	sv := &mo_config.SystemVariables{}
+	var err error
+	//before anything using the configuration
+	if err = sv.LoadInitialValues(); err != nil {
+		logutil.Errorf("error:%v", err)
+		return nil, err
+	}
+
+	if err = mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
+		logutil.Errorf("error:%v", err)
+		return nil, err
+	}
+	return sv,err
+}
+
+func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
+	sv,err := getSystemVariables(configFile)
+	if err != nil {
+		return nil, err
+	}
+
+	hostMmu := host.New(sv.GetHostMmuLimitation())
+	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
+
+	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
+
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
+
+	return pu,nil
 }

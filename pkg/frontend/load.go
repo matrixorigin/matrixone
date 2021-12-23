@@ -266,40 +266,6 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 				plh.maxFieldCnt = 0
 				plh.bytes = 0
 			}
-
-		} else if lineOut.Lines != nil {
-			from := 0
-			countOfLines := len(lineOut.Lines)
-			//step 1 : skip dropped lines
-			if plh.lineCount < plh.load.IgnoredLines {
-				skipped := MinUint64(uint64(countOfLines), plh.load.IgnoredLines-plh.lineCount)
-				plh.lineCount += skipped
-				from += int(skipped)
-			}
-
-			fill := 0
-			//step 2 : append lines into line array
-			for i := from; i < countOfLines; i += fill {
-				fill = Min(countOfLines-i, plh.batchSize-plh.lineIdx)
-				wait_c := time.Now()
-				for j := 0; j < fill; j++ {
-					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i+j]
-					plh.lineIdx++
-					plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Lines[i+j]))
-				}
-				plh.csvLineArray2 += time.Since(wait_c)
-
-				if plh.lineIdx == plh.batchSize {
-					//logutil.Infof("+---+ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
-					err := saveLinesToStorage(plh, false)
-					if err != nil {
-						return err
-					}
-
-					plh.lineIdx = 0
-					plh.maxFieldCnt = 0
-				}
-			}
 		}
 		plh.asyncChanLoop += time.Since(wait_d)
 	}
@@ -565,7 +531,7 @@ func isWriteBatchTimeoutError(err error) bool {
 	return false
 }
 
-func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) error {
+func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, row2colChoose bool) error {
 	begin := time.Now()
 	defer func() {
 		handler.saveParsedLine += time.Since(begin)
@@ -600,11 +566,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 	batchBegin := handler.batchFilled
 	ignoreFieldError := handler.ignoreFieldError
 	result := handler.result
-	choose := true
 
 	//logutil.Infof("-----ignoreFieldError %v",handler.ignoreFieldError)
 
-	if choose {
+	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
 			//logutil.Infof("line %d %v ",i,line)
@@ -1411,6 +1376,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 	return err
 }
 
+//row2col algorithm
+var row2colChoose bool = true
+
 func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 	writeHandler := &WriteBatchHandler{
 		SharePart: SharePart{
@@ -1429,7 +1397,7 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 		defer handler.simdCsvWaitWriteRoutineToQuit.Done()
 
 		//step 3 : save into storage
-		err = rowToColumnAndSaveToStorage(writeHandler, force)
+		err = rowToColumnAndSaveToStorage(writeHandler, force, row2colChoose)
 		writeHandler.simdCsvErr = err
 
 		releaseBatch(handler, writeHandler.pl)

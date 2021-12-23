@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
@@ -560,15 +561,19 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	proto := ses.protocol
 
 	logutil.Infof("+++++load data")
-	if load.Fields.EscapedBy != 0 {
-		return fmt.Errorf("EscapedBy field is unsupported now")
-	}
-
 	/*
 		TODO:support LOCAL
 	*/
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
+	}
+
+	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+		return fmt.Errorf("load need FIELDS TERMINATED BY ")
+	}
+
+	if load.Fields != nil && load.Fields.EscapedBy != 0 {
+		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
@@ -655,6 +660,9 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	//case 1: there are no table infos for the db
 	//case 2: db changed
 	if mce.tableInfos == nil || mce.db != db {
+		if ses.Pu.ClusterCatalog == nil {
+			return fmt.Errorf("need cluster catalog")
+		}
 		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
 		if err != nil {
 			return err
@@ -721,20 +729,68 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	return nil
 }
 
-/*
-getExecsFromComputation gets the execs from the computation engine
-*/
-func (mce *MysqlCmdExecutor) getExecsFromComputation(sql string) ([]*compile.Exec, error) {
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-	proc := process.New(mheap.New(ses.GuestMmu))
-	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
-	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
-	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
+type ComputationWrapperImpl struct {
+	exec *compile.Exec
+}
 
-	comp := compile.New(proto.GetDatabaseName(), sql, proto.GetUserName(), ses.Pu.StorageEngine, proc)
-	return comp.Build()
+func NewComputationWrapperImpl(e *compile.Exec) *ComputationWrapperImpl {
+	return &ComputationWrapperImpl{exec: e}
+}
+
+// GetAst gets ast of the statement
+func (cw *ComputationWrapperImpl) GetAst() tree.Statement {
+	return cw.exec.Statement()
+}
+
+//SetDatabaseName sets the database name
+func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
+	return cw.exec.SetSchema(db)
+}
+
+func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
+	columns := cw.exec.Columns()
+	var mysqlCols []interface{} = nil
+	var err error = nil
+	for _, c := range columns {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		if err != nil {
+			return nil, err
+		}
+		mysqlCols = append(mysqlCols, col)
+	}
+	return mysqlCols, err
+}
+
+func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
+	return cw.exec.GetAffectedRows()
+}
+
+func (cw *ComputationWrapperImpl) Compile(u interface{},
+	fill func(interface{}, *batch.Batch) error) error {
+	return cw.exec.Compile(u, fill)
+}
+
+func (cw *ComputationWrapperImpl) Run(ts uint64) error {
+	return cw.exec.Run(ts)
+}
+
+/*
+GetComputationWrapper gets the execs from the computation engine
+*/
+var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process) ([]ComputationWrapper, error) {
+	comp := compile.New(db, sql, user, eng, proc)
+	execs, err := comp.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	var cw []ComputationWrapper = nil
+	for _, e := range execs {
+		cw = append(cw, NewComputationWrapperImpl(e))
+	}
+	return cw, err
 }
 
 //execute query
@@ -756,20 +812,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 
-	execs, err := mce.getExecsFromComputation(sql)
+	cws, err := GetComputationWrapper(proto.GetDatabaseName(),
+		sql,
+		proto.GetUserName(),
+		ses.Pu.StorageEngine,
+		proc)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err,
 			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
 	}
 
-	ses.Mrs = &MysqlResultSet{}
-
 	defer func() {
 		ses.Mrs = nil
 	}()
 
-	for _, exec := range execs {
-		stmt := exec.Statement()
+	for _, cw := range cws {
+		ses.Mrs = &MysqlResultSet{}
+		stmt := cw.GetAst()
 
 		//temp try 0 epoch
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
@@ -861,12 +920,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if selfHandle {
 			continue
 		}
-		if err = exec.SetSchema(proto.GetDatabaseName()); err != nil {
+		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
 			return err
 		}
 
 		cmpBegin := time.Now()
-		if err = exec.Compile(ses, getDataFromPipeline); err != nil {
+		if err = cw.Compile(ses, getDataFromPipeline); err != nil {
 			return err
 		}
 
@@ -881,14 +940,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
 			*tree.ShowIndex,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
-			columns := exec.Columns()
-
+			columns, err := cw.GetColumns()
+			if err != nil {
+				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err)
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
 			//send column count
 			colCnt := uint64(len(columns))
-			err := proto.SendColumnCountPacket(colCnt)
+			err = proto.SendColumnCountPacket(colCnt)
 			if err != nil {
 				return err
 			}
@@ -896,19 +957,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//column_count * Protocol::ColumnDefinition packets
 			cmd := ses.Cmd
 			for _, c := range columns {
-				col := new(MysqlColumn)
-				col.SetName(c.Name)
-				err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
-				if err != nil {
-					return err
-				}
-				ses.Mrs.AddColumn(col)
+				mysqlc := c.(Column)
+				ses.Mrs.AddColumn(mysqlc)
 
 				//logutil.Infof("doComQuery col name %v type %v ",col.Name(),col.ColumnType())
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/
-				err := proto.SendColumnDefinitionPacket(col, cmd)
+				err := proto.SendColumnDefinitionPacket(mysqlc, cmd)
 				if err != nil {
 					return err
 				}
@@ -928,7 +984,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Start pipeline
 				Producing the data row and sending the data row
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -958,7 +1014,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 1: Start
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -977,7 +1033,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Echo client
 			*/
 			resp := NewOkResponse(
-				exec.GetAffectedRows(),
+				cw.GetAffectedRows(),
 				0,
 				0,
 				0,

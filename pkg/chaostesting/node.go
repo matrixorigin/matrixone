@@ -14,8 +14,6 @@
 
 package fz
 
-import "io"
-
 type NumNodes int
 
 func (_ Def) NumNodes() NumNodes {
@@ -24,6 +22,4 @@ func (_ Def) NumNodes() NumNodes {
 
 type NodeID int
 
-type Node interface {
-	io.Closer
-}
+type Node interface{}
