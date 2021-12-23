@@ -19,7 +19,7 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/meta"
 )
 
-type cubeShardStateAware struct {
+type shardStateAware struct {
 	created         func(meta.Shard)
 	updated         func(meta.Shard)
 	splited         func(meta.Shard)
@@ -29,45 +29,45 @@ type cubeShardStateAware struct {
 	snapshotApplied func(meta.Shard)
 }
 
-var _ aware.ShardStateAware = new(cubeShardStateAware)
+var _ aware.ShardStateAware = new(shardStateAware)
 
-func (c *cubeShardStateAware) Created(shard meta.Shard) {
+func (c *shardStateAware) Created(shard meta.Shard) {
 	if c.created != nil {
 		c.created(shard)
 	}
 }
 
-func (c *cubeShardStateAware) Updated(shard meta.Shard) {
+func (c *shardStateAware) Updated(shard meta.Shard) {
 	if c.updated != nil {
 		c.updated(shard)
 	}
 }
 
-func (c *cubeShardStateAware) Splited(shard meta.Shard) {
+func (c *shardStateAware) Splited(shard meta.Shard) {
 	if c.splited != nil {
 		c.splited(shard)
 	}
 }
 
-func (c *cubeShardStateAware) Destroyed(shard meta.Shard) {
+func (c *shardStateAware) Destroyed(shard meta.Shard) {
 	if c.destroyed != nil {
 		c.destroyed(shard)
 	}
 }
 
-func (c *cubeShardStateAware) BecomeLeader(shard meta.Shard) {
+func (c *shardStateAware) BecomeLeader(shard meta.Shard) {
 	if c.becomeLeader != nil {
 		c.becomeLeader(shard)
 	}
 }
 
-func (c *cubeShardStateAware) BecomeFollower(shard meta.Shard) {
+func (c *shardStateAware) BecomeFollower(shard meta.Shard) {
 	if c.becomeFollower != nil {
 		c.becomeFollower(shard)
 	}
 }
 
-func (c *cubeShardStateAware) SnapshotApplied(shard meta.Shard) {
+func (c *shardStateAware) SnapshotApplied(shard meta.Shard) {
 	if c.snapshotApplied != nil {
 		c.snapshotApplied(shard)
 	}

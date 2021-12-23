@@ -21,9 +21,10 @@ import (
 
 	crdbpebble "github.com/cockroachdb/pebble"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixcube/aware"
 	"github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
 	"github.com/matrixorigin/matrixcube/storage/kv"
@@ -33,6 +34,10 @@ import (
 )
 
 type Nodes = []*Node
+
+func (_ Def2) NumNodes() fz.NumNodes {
+	return 3
+}
 
 func (_ Def) Nodes(
 	numNodes fz.NumNodes,
@@ -61,10 +66,13 @@ func (_ Def) Nodes(
 			Level:    zap.NewAtomicLevel(),
 			Encoding: "json",
 			OutputPaths: []string{
+				"stdout",
 				fmt.Sprintf("node-%d.log", nodeID),
 			},
 		}
-		loggerConfig.Level.SetLevel(zap.DebugLevel)
+		//loggerConfig.Level.SetLevel(zap.DebugLevel)
+		//loggerConfig.Level.SetLevel(zap.InfoLevel)
+		loggerConfig.Level.SetLevel(zap.FatalLevel)
 		logger, err := loggerConfig.Build()
 		ce(err)
 		defer logger.Sync()
@@ -83,8 +91,8 @@ func (_ Def) Nodes(
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]
 		}
-		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort("localhost", randPort())
-		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
+		conf.Prophet.EmbedEtcd.ClientUrls = endpoints[nodeID]
+		conf.Prophet.EmbedEtcd.PeerUrls = "http://" + net.JoinHostPort("localhost", randPort())
 
 		conf.Storage = func() config.StorageConfig {
 			kvStorage, err := pebble.NewStorage(
@@ -105,13 +113,39 @@ func (_ Def) Nodes(
 			}
 		}()
 
-		store := raftstore.NewStore(conf)
-		node.RaftStore = store
+		created := make(chan struct{})
+		conf.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
+			return &shardStateAware{
+				created: func(shard meta.Shard) {
+					close(created)
+				},
+				updated: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+				splited: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+				destroyed: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+				becomeLeader: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+				becomeFollower: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+				snapshotApplied: func(shard meta.Shard) {
+					//panic(fmt.Sprintf("%#v\n", shard))
+				},
+			}
+		}
 
-		app := server.NewApplication(server.Cfg{
-			Store: store,
-		})
-		node.App = app
+		store := raftstore.NewStore(conf)
+		store.Start()
+		if nodeID == 0 {
+			<-created
+		}
+		node.RaftStore = store
 
 		nodes = append(nodes, node)
 	}

@@ -5,9 +5,9 @@ go 1.18
 require (
 	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c
 	github.com/google/uuid v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20211217044609-f3f370f6d7b5
+	github.com/matrixorigin/matrixcube v0.0.0-20211227032515-e06131450121
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
-	github.com/reusee/dscope v0.0.0-20211221162845-e8f9d8290e0c
+	github.com/reusee/dscope v0.0.0-20211226125218-8580f65a4d05
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71
 	go.uber.org/zap v1.18.1
@@ -31,7 +31,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
-	github.com/fagongzi/goetty v1.11.4-0.20211219013410-3c231cada343 // indirect
+	github.com/fagongzi/goetty v1.13.0 // indirect
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d // indirect
 	github.com/form3tech-oss/jwt-go v3.2.3+incompatible // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
@@ -110,6 +110,8 @@ require (
 	sigs.k8s.io/yaml v1.2.0 // indirect
 )
 
-replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
-
-replace go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
+replace (
+	github.com/matrixorigin/matrixcube => ../../../../matrixcube
+	go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
+	go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
+)

@@ -19,7 +19,6 @@ import (
 
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/matrixorigin/matrixcube/server"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +26,6 @@ type Node struct {
 	Logger    *zap.Logger
 	Config    *config.Config
 	RaftStore raftstore.Store
-	App       *server.Application
 	Endpoint  string
 }
 
@@ -36,9 +34,6 @@ var _ io.Closer = new(Node)
 func (n *Node) Close() (err error) {
 	if n.RaftStore != nil {
 		n.RaftStore.Stop()
-	}
-	if n.App != nil {
-		n.App.Stop()
 	}
 	return
 }
