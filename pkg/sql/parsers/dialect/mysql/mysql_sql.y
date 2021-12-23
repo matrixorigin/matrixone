@@ -694,7 +694,8 @@ load_fields:
     {
         res := &tree.Fields{
             Terminated: "\t",
-			EscapedBy:    []byte("\\")[0],
+			EscapedBy:    []byte(string(0))[0],
+
         }
         for _, f := range $2 {
             if f.Terminated != "" {
