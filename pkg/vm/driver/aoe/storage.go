@@ -431,17 +431,17 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			shardId := batch.GetVector(bat, sShardId)
 			logIndex := batch.GetVector(bat, sLogIndex)
 			metadate := batch.GetVector(bat, sMetadata)
-			logutil.Infof("GetInitialStates Metadata is %v\n",
-				metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
 			customReq := &meta.ShardLocalState{}
-			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
+			offset := metadate.Col.(*types.Bytes).Offsets[vector.Length(metadate) - 1]
+			lengths:= metadate.Col.(*types.Bytes).Lengths[vector.Length(metadate) - 1]
+			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[offset:offset+lengths])
 			values = append(values, meta.ShardMetadata{
-				ShardID:  shardId.Col.([]uint64)[0],
-				LogIndex: logIndex.Col.([]uint64)[0],
+				ShardID:  shardId.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1],
+				LogIndex: logIndex.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1],
 				Metadata: *customReq,
 			})
-			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d \n",
-				logIndex.Col.([]uint64)[0], shardId.Col.([]uint64)[0])
+			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d, Metadata is %v\n",
+				logIndex.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1], shardId.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1], customReq.String())
 
 		}
 	}
