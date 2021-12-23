@@ -176,18 +176,6 @@ func NewCubeDriverWithFactory(
 		aoeDB: aoeDataStorage.(*aoe3.Storage).DB,
 		cmds:  make(map[uint64]rpc.CmdType),
 	}
-	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *meta.Shard, news []meta.Shard) {
-		switch group {
-		case uint64(pb.AOEGroup):
-			return func(old *meta.Shard, news []meta.Shard) {
-				//TODO: Not impl
-			}
-		default:
-			return func(old *meta.Shard, news []meta.Shard) {
-
-			}
-		}
-	}
 	c.CubeConfig.Storage.DataStorageFactory = func(group uint64) cstorage.DataStorage {
 		switch group {
 		case uint64(pb.KVGroup):
