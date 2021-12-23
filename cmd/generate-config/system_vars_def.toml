@@ -371,12 +371,12 @@ addr-raft = "localhost:10000"                       # the address for raft-group
 addr-advertise-raft = ""                            # for docker deployment
 addr-client = "localhost:20000"                     # the address for cube service
 addr-advertise-client = ""                          # for docker deployment
-dir-deploy = ""                                     # directory of cube data storage
+dir-deploy = ""                                     # TODO: ...
 version = ""                                        # cube version number
 githash = ""                                        # cube git hash
 capacity = 0                                        # the maximum storage capacity of this node
 use-memory-as-storage = false                       # if this parameter is true, the data will be stored in memory and hence volatile
-shard-groups = 1                                    # In a distributed setting, the shard-groups should set to 2.
+shard-groups = 1                                    # TODO: ...
 dir-data = ""                                       # directory for cube data
 labels = [
     ["zone", "default-zone"],
@@ -402,34 +402,34 @@ max-concurrency-snap-chunks = 8
 snap-chunk-size = "4MB"
 
 [raft]
-enable-pre-vote = true
+enable-pre-vote = true                              # TODO:
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 heartbeat-ticks = 2                                 # how many ticks one raft heartbeat has
 election-timeout-ticks = 10                         # how many ticks a election timeout has
 max-size-per-msg = 0                                # maximum number of raft log entry one raft message has
 max-inflight-msgs = 512                             # maximum number of raft message on the way of sending(inflight)
 max-entry-bytes = 314572800                         # maximum bytes for one cube write proposal
-send-raft-batch-size = 64
+send-raft-batch-size = 64                           # TODO:
 
 [raft.raft-log]
 disable-sync = false                                # sync raft log when writing to disk
-compact-duration = "30s"
+compact-duration = "30s"                            # TODO:
 compact-threshold = 256                             # the threshold for raft log cleaning
 max-allow-transfer-lag = 2                          # when raft group transfer leadership, the maximum log lag the next leader can have
-CompactProtectLag = 0
+CompactProtectLag = 0                               # TODO:
 force-compact-log-count = ""                        # the log count for raft leader to force compaction
 force-compact-log-bytes = ""                        # the log size for raft leader to force compaction
 
 [worker]
-raft-apply-worker = 32                              # the number of raft apply worker
-raft-msg-worker = 8                                 # the number of raft message worker
+raft-apply-worker = 32                              # TODO:
+raft-msg-worker = 8                                 # TODO:
 raft-event-worker = 32                              # the number of raft event worker for a shard
 
 # Prophet Configs
 [prophet]
 # In a distributed setting, there are three nodes act as prophet, each of which should have different names.
 name = "node0"
-data-dir = ""
+data-dir = ""                                       # TODO:
 # RPC port for other client to access prophet.
 # Docker or NAT network environment configuration
 # For exmaple, rpc-addr = "0.0.0.0:30000", rpc-advertise-addr = "${HOST}:30000"
@@ -463,8 +463,8 @@ peer-urls = "http://localhost:50000"
 # For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
 advertise-peer-urls = ""
-initial-cluster = ""
-initial-cluster-state = ""
+initial-cluster = ""                                # TODO:
+initial-cluster-state = ""                          # TODO:
 tick-interval = "500ms"                             # prophet raft group tick interval
 election-interval = "3000ms"                        # prophet raft group election interval
 enable-prevote = true                               # enable prophet raft group pre-vote
@@ -475,33 +475,33 @@ quota-backend-bytes = "8GB"                         # etcd quota backend bytes
 [prophet.schedule]
 max-snapshot-count = 3                              # maximum snapshot a node that can be scheduled by prophet is handling
 max-pending-peer-count = 16                         # maximum pending peers a node that can be scheduled can have
-max-merge-resource-size = 0
-max-merge-resource-keys = 0
-split-merge-interval = "0s"
-enable-one-way-merge = false
-enable-cross-table-merge = false
+max-merge-resource-size = 0                         # TODO:
+max-merge-resource-keys = 0                         # TODO:
+split-merge-interval = "0s"                         # TODO:
+enable-one-way-merge = false                        # TODO:
+enable-cross-table-merge = false                    # TODO:
 patrol-resource-interval = "100ms"                  # the period of cube leader patrol
 max-container-down-time = "30m"                     # the maximum time a node is allowed to leave
 leader-schedule-limit = 4                           # the maximum number of transfer leader
 leader-schedule-policy = "count"                    # the rebalance scheduling policy, (count | size), count: every node has the same raft leader. size: every raft leader on a node manage the same data size
 resource-schedule-limit = 2048                      # the maximum resource schedule operation can happen simultaneously
 replica-schedule-limit = 64                         # the maximum resource replication operation can happen simultaneously
-merge-schedule-limit = 0
+merge-schedule-limit = 0                            # TODO:
 hot-resource-schedule-limit = 4                     # the maximum hot resource schedule operation can happen simultaneously
 hot-resource-cache-hits-threshold = 3               # threshold to determine whether a shard is hot
-tolerant-size-ratio = 0.0
+tolerant-size-ratio = 0.0                           # TODO:
 low-space-ratio = 0.8                               # space ratio to decide whether this node's storage is low
 high-space-ratio = 0.7                              # space ratio to decide whether this node's storage is high
-resource-score-formula-version = ""
+resource-score-formula-version = ""                 # TODO:
 scheduler-max-waiting-operator = 5                  # the maximum number of waiting state a scheduling operation can have
 enable-remove-down-replica = true                   # enable cube scheduler to remove down replica in a cluster
 enable-replace-offline-replica = true               # enable cube scheduler to replace offline replica
 enable-make-up-replica = true                       # enable cube scheduler to create replica when replica number is short
 enable-remove-extra-replica = true                  # enable cube scheduler to remove redundant replica
 enable-location-replacement = true                  # enable cube scheduler to relocate replica
-enable-debug-metrics = false
-enable-joint-consensus = true
-container-limit-mode = ""
+enable-debug-metrics = false                        # TODO:
+enable-joint-consensus = true                       # TODO:
+container-limit-mode = ""                           # TODO:
 
 [prophet.replication]
 max-replicas = 1                                    # max number of replica in a prophet group
