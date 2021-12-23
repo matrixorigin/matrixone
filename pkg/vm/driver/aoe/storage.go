@@ -589,92 +589,8 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
-		dbName := aoedb.IdToNameFactory.Encode(metadata.ShardID)
-		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
-		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
-		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
-			return err
-		}
-		createDatabase := false
-		if db == nil {
-			if metadata.LogIndex == math.MaxUint64 {
-				return storage.ErrShardNotFound
-			}
-			ctx := aoedb.CreateDBCtx{
-				Id:     metadata.LogIndex,
-				Offset: 0,
-				Size:   3,
-				DB:     dbName,
-			}
-			db, err = s.DB.CreateDatabase(&ctx)
-			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
-			if err != nil {
-				return err
-			}
-			createDatabase = true
-		}
-		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
-		if err != nil && err != aoeMeta.TableNotFoundErr {
-			return err
-		}
-		createTable := false
-		if tbl == nil {
-			metaTblInfo := createMetadataTableInfo(metadata.ShardID)
-			offset := 0
-			size := 2
-			if createDatabase {
-				offset = 1
-				size = 3
-			}
-			schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, metaTblInfo)
-			ctx := aoedb.CreateTableCtx{
-				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     metadata.LogIndex,
-					Offset: offset,
-					Size:   size,
-					DB:     dbName,
-				},
-				Schema: schema,
-				Indice: indexSchema,
-			}
-			_, err = s.DB.CreateTable(&ctx)
-			if err != nil {
-				return err
-			}
-			createTable = true
-		}
-
-		bat, _ := shardMetadataToBatch(metadata)
-		offset := 0
-		size := 1
-		if createTable {
-			offset = 1
-			size = 2
-		}
-		if createDatabase {
-			offset = 2
-			size = 3
-		}
-		ctx := aoedb.AppendCtx{
-			TableMutationCtx: aoedb.TableMutationCtx{
-				DBMutationCtx: aoedb.DBMutationCtx{
-					Id:     metadata.LogIndex,
-					Offset: offset,
-					Size:   size,
-					DB:     dbName,
-				},
-				Table: tableName,
-			},
-			Data: bat,
-		}
-		err = s.DB.Append(&ctx)
+		err := s.saveShardMetadata(metadata)
 		if err != nil {
-			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
-			return err
-		}
-		err = s.DB.FlushDatabase(dbName)
-		if err != nil {
-			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
 			return err
 		}
 	}
@@ -706,7 +622,100 @@ func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
 	}
 	return err
 }
+func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *aoeMeta.Database, dbExisted bool, err error) {
+	dbName := aoedb.IdToNameFactory.Encode(sid)
+	db, err = s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if db != nil {
+		return db, true, err
+	}
+	if err != nil && err != aoeMeta.DatabaseNotFoundErr {
+		return nil, false, err
+	}
+	if logIndex == math.MaxUint64 {
+		return nil, false, storage.ErrShardNotFound
+	}
+	ctx := aoedb.CreateDBCtx{
+		Id:     logIndex,
+		Offset: offset,
+		Size:   size,
+		DB:     dbName,
+	}
+	db, err = s.DB.CreateDatabase(&ctx)
+	logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", sid, db.Id, s)
+	return db, false, err
+}
+func (s *Storage) saveShardMetadata(metadata meta.ShardMetadata) error {
+	tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
+	db, dbExisted, err := s.createAOEDatabaseIfNotExist(metadata.ShardID, metadata.LogIndex, 0, 3)
+	if err != nil{
+		return err
+	}
+	tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil && err != aoeMeta.TableNotFoundErr {
+		return err
+	}
+	createTable := false
+	if tbl == nil {
+		metaTblInfo := createMetadataTableInfo(metadata.ShardID)
+		offset := 0
+		size := 2
+		if createDatabase {
+			offset = 1
+			size = 3
+		}
+		schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, metaTblInfo)
+		ctx := aoedb.CreateTableCtx{
+			DBMutationCtx: aoedb.DBMutationCtx{
+				Id:     metadata.LogIndex,
+				Offset: offset,
+				Size:   size,
+				DB:     dbName,
+			},
+			Schema: schema,
+			Indice: indexSchema,
+		}
+		_, err = s.DB.CreateTable(&ctx)
+		if err != nil {
+			return err
+		}
+		createTable = true
+	}
 
+	bat, _ := shardMetadataToBatch(metadata)
+	offset := 0
+	size := 1
+	if createTable {
+		offset = 1
+		size = 2
+	}
+	if createDatabase {
+		offset = 2
+		size = 3
+	}
+	ctx := aoedb.AppendCtx{
+		TableMutationCtx: aoedb.TableMutationCtx{
+			DBMutationCtx: aoedb.DBMutationCtx{
+				Id:     metadata.LogIndex,
+				Offset: offset,
+				Size:   size,
+				DB:     dbName,
+			},
+			Table: tableName,
+		},
+		Data: bat,
+	}
+	err = s.DB.Append(&ctx)
+	if err != nil {
+		logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
+		return err
+	}
+	err = s.DB.FlushDatabase(dbName)
+	if err != nil {
+		logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
+		return err
+	}
+	return nil
+}
 func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
 	oldtableName := sPrefix + strconv.Itoa(int(old.ShardID))
 	newNames := make([]string, len(news))
