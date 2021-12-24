@@ -15,14 +15,21 @@
 package index
 
 import (
+	"github.com/RoaringBitmap/roaring/roaring64"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"sync"
 
 	"github.com/RoaringBitmap/roaring"
 )
 
 type OpType uint8
+
+type ColumnsAllocator struct {
+	sync.RWMutex
+	Allocators map[int]*common.IdAlloctor
+}
 
 const (
 	OpInv OpType = iota
@@ -51,6 +58,7 @@ type FilterCtx struct {
 	Err     error
 
 	BsiRequired bool
+	BlockSet []uint64
 }
 
 func NewFilterCtx(t OpType) *FilterCtx {
@@ -85,3 +93,41 @@ type Index interface {
 	Eval(ctx *FilterCtx) error
 	IndexFile() common.IVFile
 }
+
+type SegmentIndexHolder interface {
+	common.IRef
+	BlockHoldersManager
+	SegmentIndicesManager
+	Init(base.ISegmentFile)
+	EvalFilter(int, *FilterCtx) error
+	CollectMinMax(int) ([]interface{}, []interface{}, error)
+	Count(int, *roaring64.Bitmap) (uint64, error)
+	NullCount(int, *roaring64.Bitmap) (uint64, error)
+	Min(int, *roaring64.Bitmap) (interface{}, error)
+	Max(int, *roaring64.Bitmap) (interface{}, error)
+	Sum(int, *roaring64.Bitmap) (int64, uint64, error)
+	HolderType() base.SegmentType
+	GetID() common.ID
+	GetCB() PostCloseCB
+	close()
+}
+
+type BlockHoldersManager interface {
+	StrongRefBlock(uint64) *BlockIndexHolder
+	RegisterBlock(common.ID, base.BlockType, PostCloseCB) *BlockIndexHolder
+	DropBlock(uint64) *BlockIndexHolder
+	GetBlockCount() int32
+	//UpgradeBlock(uint64, base.BlockType) *BlockIndexHolder
+	stringNoLock() string
+}
+
+type SegmentIndicesManager interface {
+	AllocateVersion(int) uint64
+	VersionAllocater() *ColumnsAllocator
+	IndicesCount() int
+	DropIndex(filename string)
+	LoadIndex(base.ISegmentFile, string)
+	StringIndicesRefsNoLock() string
+}
+
+type PostCloseCB = func(interface{})

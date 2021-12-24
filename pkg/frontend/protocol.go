@@ -16,6 +16,9 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/fagongzi/goetty"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"net"
 	"sync"
 )
 
@@ -80,6 +83,14 @@ func NewResponse(category,status,cmd int,d interface{})*Response {
 	}
 }
 
+func NewGeneralErrorResponse(cmd uint8,err error)*Response{
+	return NewResponse(ErrorResponse, 0, int(cmd),err)
+}
+
+func NewGeneralOkResponse(cmd uint8)*Response{
+	return NewResponse(OkResponse, 0, int(cmd), nil, )
+}
+
 func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16,status,cmd int,d interface{})*Response {
 	resp := &Response{
 		category: OkResponse,
@@ -119,6 +130,10 @@ func (resp *Response) SetCategory(category int) {
 }
 
 type Protocol interface {
+	IsEstablished() bool
+
+	SetEstablished()
+
 	// GetRequest gets Request from Packet
 	GetRequest(payload []byte) *Request
 
@@ -128,8 +143,16 @@ type Protocol interface {
 	// ConnectionID the identity of the client
 	ConnectionID()uint32
 
-	// SetRoutine sets RoutineInterface
-	SetRoutine(*Routine)
+	// Peer gets the address [Host:Port] of the client
+	Peer() (string, string)
+
+	GetDatabaseName() string
+
+	SetDatabaseName(string)
+
+	GetUserName() string
+
+	SetUserName(string)
 
 	// Quit
 	Quit()
@@ -141,26 +164,56 @@ type ProtocolImpl struct{
 
 	io IOPackage
 
+	tcpConn goetty.IOSession
+
 	//random bytes
 	salt []byte
 
 	//the id of the connection
 	connectionID uint32
 
-	//routine
-	routine *Routine
+	// whether the handshake succeeded
+	established bool
+}
+
+func (cpi *ProtocolImpl) IsEstablished() bool {
+	return cpi.established
+}
+
+func (cpi *ProtocolImpl) SetEstablished()  {
+	logutil.Infof("SWITCH ESTABLISHED to true")
+	cpi.established = true
 }
 
 func (cpi *ProtocolImpl) ConnectionID() uint32 {
 	return cpi.connectionID
 }
 
-func (cpi *ProtocolImpl) SetRoutine(r *Routine)  {
-	cpi.routine = r
+func (cpi *ProtocolImpl) Quit()  {
+	if cpi.tcpConn != nil {
+		err := cpi.tcpConn.Close()
+		if err != nil {
+			logutil.Errorf("close tcp conn failed. error:%v",err)
+		}
+	}
 }
 
 func (cpi *ProtocolImpl) GetLock() sync.Locker {
 	return &cpi.lock
+}
+
+func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession)  {
+	cpi.tcpConn = tcp
+}
+
+func (cpi *ProtocolImpl) Peer() (string, string) {
+	addr := cpi.tcpConn.RemoteAddr()
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		logutil.Errorf("get peer host:port failed. error:%v ", err)
+		return "failed", "0"
+	}
+	return host, port
 }
 
 func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {

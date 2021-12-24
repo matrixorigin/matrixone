@@ -15,48 +15,64 @@
 package hashtable
 
 import (
-	"reflect"
 	"testing"
-	"unsafe"
 )
 
-type test struct {
-	crc32 uint64
-	aes   [2]uint64
-	in    string
+var data = [][]byte{
+	[]byte("Discard medicine more than two years old."),
+	[]byte("He who has a shady past knows that nice guys finish last."),
+	[]byte("I wouldn't marry him with a ten foot pole."),
+	[]byte("Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave"),
+	[]byte("The days of the digital watch are numbered.  -Tom Stoppard"),
+	[]byte("Nepal premier won't resign."),
+	[]byte("For every action there is an equal and opposite government program."),
+	[]byte("His money is twice tainted: 'taint yours and 'taint mine."),
+	[]byte("There is no reason for any individual to have a computer in their home. -Ken Olsen, 1977"),
+	[]byte("It's a tiny change to the code and not completely disgusting. - Bob Manchek"),
+	[]byte("size:  a.out:  bad magic"),
+	[]byte("The major problem is with sendmail.  -Mark Horton"),
+	[]byte("Give me a rock, paper and scissors and I will move the world.  CCFestoon"),
+	[]byte("If the enemy is within range, then so are you."),
+	[]byte("It's well we cannot hear the screams/That we create in others' dreams."),
+	[]byte("You remind me of a TV show, but that's all right: I watch it anyway."),
+	[]byte("C is as portable as Stonehedge!!"),
+	[]byte("Even if I could be Shakespeare, I think I should still choose to be Faraday. - A. Huxley"),
+	[]byte("The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule"),
+	[]byte("How can you write a big system without C++?  -Paul Glick"),
 }
 
-var golden = []test{
-	{0x298d35406e, [2]uint64{0x8fb82b95964584d6, 0x002be88bf0d3dd55}, "Discard medicine more than two years old."},
-	{0x39f47be063, [2]uint64{0x7860dca374649da4, 0x787a7bcf9ec35e46}, "He who has a shady past knows that nice guys finish last."},
-	{0x2a47abad31, [2]uint64{0x802f40d8f473b05c, 0x553c6023273220a6}, "I wouldn't marry him with a ten foot pole."},
-	{0x39e798b7a0, [2]uint64{0x7fd59bd907af4ca6, 0xbf4db935a751061d}, "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave"},
-	{0x3a4bf26149, [2]uint64{0x1dfe620b667f058e, 0x5fa5d3232442c02f}, "The days of the digital watch are numbered.  -Tom Stoppard"},
-	{0x1b92642e0e, [2]uint64{0x49d860244ad08724, 0x141e95cfe509d3da}, "Nepal premier won't resign."},
-	{0x43d44fe1cd, [2]uint64{0x25ec95d93289c3b2, 0x7228e2d671bb2495}, "For every action there is an equal and opposite government program."},
-	{0x39fcec9cdd, [2]uint64{0x772f10bdd103e8f1, 0xdeb958a7d2d4345f}, "His money is twice tainted: 'taint yours and 'taint mine."},
-	{0x586e141608, [2]uint64{0x5e21d7cbbae02691, 0x86c1c68e64ce5f90}, "There is no reason for any individual to have a computer in their home. -Ken Olsen, 1977"},
-	{0x4b9b00078e, [2]uint64{0x6ad642c8d29f1376, 0x681d80ab59c25960}, "It's a tiny change to the code and not completely disgusting. - Bob Manchek"},
-	{0x18a8d48b1d, [2]uint64{0xf4d82605decd9beb, 0x40596f059ca21c96}, "size:  a.out:  bad magic"},
-	{0x313ea4ade4, [2]uint64{0x13583ad9751cbac3, 0x22347975cdf322ce}, "The major problem is with sendmail.  -Mark Horton"},
-	{0x4863bd93af, [2]uint64{0x19e820da1821f2d8, 0x436cb1241403121c}, "Give me a rock, paper and scissors and I will move the world.  CCFestoon"},
-	{0x2e1ae28935, [2]uint64{0x4c92df71e6eac213, 0xedea1b46a32b818a}, "If the enemy is within range, then so are you."},
-	{0x4661b28c79, [2]uint64{0xde7a55d30c6d5af6, 0xb6219b4e1af12818}, "It's well we cannot hear the screams/That we create in others' dreams."},
-	{0x44c882cd2b, [2]uint64{0x94b1ce1bfe6d8f4b, 0xf2aaf6d18a861636}, "You remind me of a TV show, but that's all right: I watch it anyway."},
-	{0x2021d19a3a, [2]uint64{0x8d4d61cdf65ab085, 0x62170d990a0af255}, "C is as portable as Stonehedge!!"},
-	{0x58d6857712, [2]uint64{0xa813172c120a45f9, 0xc511248c219dbe28}, "Even if I could be Shakespeare, I think I should still choose to be Faraday. - A. Huxley"},
-	{0x846ef8f53a, [2]uint64{0x19903c972b8d5dd6, 0xdfbf46f0a719f0a3}, "The fugacity of a constituent in a mixture of gases at a given temperature is proportional to its mole fraction.  Lewis-Randall Rule"},
-	{0x3823212ad8, [2]uint64{0x808e02b3f219e062, 0x83d1ee4ff3c2b7d5}, "How can you write a big system without C++?  -Paul Glick"},
+var golden = [][3]uint64{
+	{0x4be8a24289833574, 0x0e81acd1121ffd55, 0xf0ca176cb96764d6},
+	{0xe3f80ef744d42dba, 0xe6490daeb1a804e8, 0xc54d224a69f727df},
+	{0xdacd703644732813, 0x5af6484087edae94, 0x10c28b9fa10b5b67},
+	{0x8c4ba0e74276ee2e, 0x056cb25ed1ca9992, 0x404cc96162cf52be},
+	{0xaca22a4cabcbd8fe, 0x12a76b3b0be817ed, 0xba4148ae3789caa6},
+	{0x6e3f3c24cae51d3a, 0x57f69ec79dc87095, 0x36bd9ac35c10bf68},
+	{0xaaab464fac792fca, 0x775daa9ad5fb440c, 0xd9be609774f1c4cc},
+	{0x2393198eb4e9919b, 0x611583800ee7f8bb, 0x672b4029a8708051},
+	{0x9287f199a3e787cf, 0x676a6e56a8c9bdc2, 0xb27b7a9fb767a437},
+	{0xb82af0449d123a1a, 0x9f95d840fe41d031, 0x75fd1654809e19f9},
+	{0xf16de8df103c5aec, 0x98b4feee40497c0a, 0x08068577541c857c},
+	{0xd1579f8434e169fa, 0xf9aeb01a5a514f5b, 0x6319f4edf7b722df},
+	{0xc67284ad3c025fba, 0x7e451fe699e29a7d, 0x7eb4650844a13e0b},
+	{0x6e82dd462b1926cc, 0x4932eab5ea001a0d, 0x14f0acf443ad1f60},
+	{0x651f6c7a7543b491, 0x42b056ce64e3a72b, 0xeb5dcc04f9160ee3},
+	{0x9bf66d5751889343, 0xea18ccafa003e96c, 0x6c28dafcd9cf455a},
+	{0x27ffea1f037a7d82, 0x11abb99dca7d6784, 0xc791810992f67d4d},
+	{0x41cdd2330eb7e72f, 0xae447fa70f095fba, 0x70c228d483d15bf4},
+	{0xbc3680511c7d5032, 0xd6b4a2dba42fb08f, 0x922e34b713db6621},
+	{0xa75a63e190d72688, 0x7cb351e80e703fa5, 0x0faa384e1da812f1},
 }
 
-func TestGoldenCastagnoli(t *testing.T) {
-	for _, g := range golden {
-		ptr, length := unsafe.Pointer((*reflect.StringHeader)(unsafe.Pointer(&g.in)).Data), len(g.in)
-		if crc := crc32BytesHash(ptr, length); crc != g.crc32 {
-			t.Errorf("crc32Hash(%s) = 0x%016x want 0x%016x", g.in, crc, g.crc32)
-		}
-		if aes := aesBytesHash(ptr, length); aes != g.aes {
-			t.Errorf("aesHash(%s) = 0x%016x%016x want 0x%016x%016x", g.in, aes[0], aes[1], g.aes[0], g.aes[1])
+func TestHashFn(t *testing.T) {
+	states := make([][3]uint64, len(data))
+	AesBytesBatchGenHashStates(&data[0], &states[0], len(data))
+	for i := range data {
+		if states[i] != golden[i] {
+			t.Errorf("AesBytesHashState(%s) = {0x%016x,0x%016x,0x%016x} want {0x%016x,0x%016x,0x%016x}",
+				data[i],
+				states[i][0], states[i][1], states[i][2],
+				golden[i][0], golden[i][1], golden[i][2])
 		}
 	}
 }

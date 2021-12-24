@@ -23,29 +23,82 @@ import (
 )
 
 func (e *MultiExtend) IsLogical() bool {
-	return overload.IsLogical(e.Op)
+	typ := overload.IsLogical(e.Op)
+	if typ == overload.MustLogical {
+		return true
+	} else if typ == overload.MayLogical {
+		for _, extend := range e.Args {
+			if !extend.IsLogical() {
+				return false
+			}
+		}
+		return true
+	} else {
+		return false
+	}
 }
 
 func (_ *MultiExtend) IsConstant() bool {
 	return false
 }
 
-func (_ *MultiExtend) Attributes() []string {
-	return nil
+func (e *MultiExtend) Attributes() []string {
+	var attrs []string
+	for _, arg := range e.Args {
+		attrs = append(attrs, arg.Attributes()...)
+	}
+	return attrs
 }
 
-func (_ *MultiExtend) ReturnType() types.T {
-	return 0
+func (e *MultiExtend) ReturnType() types.T {
+	if fn, ok := MultiReturnTypes[e.Op]; ok {
+		return fn(e.Args)
+	}
+	return types.T_any
 }
 
-func (_ *MultiExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
-	return nil, 0, nil
+func (e *MultiExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vector, types.T, error) {
+	var typ types.T
+
+	bs := make([]bool, len(e.Args))
+	vecs := make([]*vector.Vector, len(e.Args))
+	for i, arg := range e.Args {
+		vec, t, err := arg.Eval(bat, proc)
+		if err != nil {
+			return nil, 0, err
+		}
+		vecs[i] = vec
+		bs[i] = arg.IsConstant()
+		if i == 0 {
+			typ = t
+		}
+	}
+	vec, err := overload.MultiEval(e.Op, typ, bs, vecs, proc)
+	if err != nil {
+		return nil, 0, err
+	}
+	return vec, e.ReturnType(), nil
 }
 
-func (_ *MultiExtend) Eq(_ Extend) bool {
-	return false
+func (a *MultiExtend) Eq(e Extend) bool {
+	b := e.(*MultiExtend)
+	if a.Op != b.Op {
+		return false
+	}
+	if len(a.Args) != len(b.Args) {
+		return false
+	}
+	for i, arg := range a.Args {
+		if !arg.Eq(b.Args[i]) {
+			return false
+		}
+	}
+	return true
 }
 
-func (_ *MultiExtend) String() string {
+func (e *MultiExtend) String() string {
+	if fn, ok := MultiStrings[e.Op]; ok {
+		return fn(e.Args)
+	}
 	return ""
 }

@@ -14,7 +14,9 @@
 
 package event
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type SplitEvent struct {
 	DB    string
@@ -22,7 +24,7 @@ type SplitEvent struct {
 }
 
 func (e *SplitEvent) String() string {
-	info := fmt.Sprintf("DB<\"%s\"> Splitted | {", e.DB)
+	info := fmt.Sprintf("DB<\"%s\"> Splitting | {", e.DB)
 	for db, tables := range e.Names {
 		dbInfo := fmt.Sprintf("[\"%s\"]: ", db)
 		for _, table := range tables {
@@ -36,7 +38,8 @@ func (e *SplitEvent) String() string {
 }
 
 type Listener interface {
-	OnDatabaseSplitted(*SplitEvent) error
+	OnPreSplit(*SplitEvent) error
+	OnPostSplit(error, *SplitEvent) error
 	OnBackgroundError(error) error
 }
 

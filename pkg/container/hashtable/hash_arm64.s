@@ -14,42 +14,9 @@
 
 #include "textflag.h"
 
-// func crc32BytesHash(data unsafe.Pointer, length int) uint64
+// func Crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·crc32BytesHash(SB), NOSPLIT, $0-24
-	MOVD data+0(FP), R0
-	MOVD length+8(FP), R1
-	MOVD R1, R4
-	MOVD $-1, R2
-	ADD  R0, R1
-	SUB  $8, R1
-
-loop:
-	CMP     R0, R1
-	BLE     done
-	MOVD.P  8(R0), R3
-	CRC32CX R3, R2
-	JMP     loop
-
-done:
-	MOVD    (R1), R3
-	CRC32CX R3, R2
-	MOVW    R2, ret+16(FP)
-	MOVW    R4, ret+20(FP)
-	RET
-
-// func crc32Int64Hash(data uint64) uint64
-// Requires: CRC32
-TEXT ·crc32Int64Hash(SB), NOSPLIT, $0-16
-	MOVD    data+0(FP), R0
-	MOVD    $-1, R1
-	CRC32CX R0, R1
-	MOVD    R1, ret+8(FP)
-	RET
-
-// func crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
-// Requires: CRC32
-TEXT ·crc32Int64BatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int64BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -104,9 +71,9 @@ tailLoop:
 done:
 	RET
 
-// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
+// func Crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
+TEXT ·Crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -165,398 +132,372 @@ tailLoop:
 done:
 	RET
 
-DATA aesIV<>+0x00(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x08(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x10(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x18(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x20(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x28(SB)/8, $0x8F1BBCDCCA62C1D6
-DATA aesIV<>+0x30(SB)/8, $0x5A8279996ED9EBA1
-DATA aesIV<>+0x38(SB)/8, $0x8F1BBCDCCA62C1D6
-GLOBL aesIV<>(SB), (NOPTR+RODATA), $64
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
 
-// func aesBytesHash(data unsafe.Pointer, length int) [2]uint64
+DATA Pi<>+0x00(SB)/8, $0x3243f6a8885a308d
+DATA Pi<>+0x08(SB)/8, $0x313198a2e0370734
+DATA Pi<>+0x10(SB)/8, $0x4a4093822299f31d
+DATA Pi<>+0x18(SB)/8, $0x0082efa98ec4e6c8
+DATA Pi<>+0x20(SB)/8, $0x9452821e638d0137
+DATA Pi<>+0x28(SB)/8, $0x7be5466cf34e90c6
+DATA Pi<>+0x30(SB)/8, $0xcc0ac29b7c97c50d
+DATA Pi<>+0x38(SB)/8, $0xd3f84d5b5b547091
+DATA Pi<>+0x40(SB)/8, $0x79216d5d98979fb1
+DATA Pi<>+0x48(SB)/8, $0xbd1310ba698dfb5a
+DATA Pi<>+0x50(SB)/8, $0xc2ffd72dbd01adfb
+DATA Pi<>+0x58(SB)/8, $0x7b8e1afed6a267e9
+DATA Pi<>+0x60(SB)/8, $0x6ba7c9045f12c7f9
+DATA Pi<>+0x68(SB)/8, $0x924a19947b3916cf
+DATA Pi<>+0x70(SB)/8, $0x70801f2e2858efc1
+DATA Pi<>+0x78(SB)/8, $0x6636920d871574e6
+GLOBL Pi<>(SB), (NOPTR+RODATA), $0x80
+
+DATA CryptedPi<>+0x00(SB)/8, $0x822233b93c11087c
+DATA CryptedPi<>+0x08(SB)/8, $0xd2b32f4adde873da
+DATA CryptedPi<>+0x10(SB)/8, $0xae9c2fc7dd17bcdb
+DATA CryptedPi<>+0x18(SB)/8, $0x859110441a1569fc
+DATA CryptedPi<>+0x20(SB)/8, $0x47087d794fffb5c9
+DATA CryptedPi<>+0x28(SB)/8, $0xb7b6c8f565414445
+DATA CryptedPi<>+0x30(SB)/8, $0xfd260edabb308f8d
+DATA CryptedPi<>+0x38(SB)/8, $0x3ddefc67bc565a13
+DATA CryptedPi<>+0x40(SB)/8, $0xe4c1d50223544f10
+DATA CryptedPi<>+0x48(SB)/8, $0xaf40e05725c3192b
+DATA CryptedPi<>+0x50(SB)/8, $0x281d8ab9a16382e9
+DATA CryptedPi<>+0x58(SB)/8, $0xddc10c903b63a6cf
+DATA CryptedPi<>+0x60(SB)/8, $0x852d3ad603e8df72
+DATA CryptedPi<>+0x68(SB)/8, $0xa6642b57d1011deb
+DATA CryptedPi<>+0x70(SB)/8, $0x5063d25a1cb7b6b9
+DATA CryptedPi<>+0x78(SB)/8, $0xb2623e6241e8e46e
+GLOBL CryptedPi<>(SB), (NOPTR+RODATA), $0x80
+
+// func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int)
 // Requires: AES
-TEXT ·aesBytesHash(SB), NOSPLIT, $0-32
+TEXT ·AesBytesBatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
-	MOVD length+8(FP), R1
-	MOVD $ret+16(FP), R2
-	ADD  R0, R1
-	SUB  $64, R1
+	MOVD states+8(FP), R1
+	MOVD length+16(FP), R2
 
-	MOVD $aesIV<>+0(SB), R3
+	MOVD $CryptedPi<>(SB), R3
 	VLD1 (R3), [V0.B16, V1.B16, V2.B16, V3.B16]
-	VEOR V10.B16, V10.B16, V10.B16
+	VEOR V31.B16, V31.B16, V31.B16
 
 loop:
-	CMP R0, R1
-	BLE tail0
+	LDP.P 24(R0), (R4, R5)
+	MOVD  R5, R6
 
-	VLD1.P 64(R0), [V4.B16, V5.B16, V6.B16, V7.B16]
+	ADD R4, R5
+	SUB $64, R5
 
-	AESE	V10.B16, V0.B16
-	AESMC	V0.B16, V0.B16
-	VEOR	V4.B16, V0.B16, V0.B16
+	VMOV V0.B16, V4.B16
+	VMOV V1.B16, V5.B16
+	VMOV V2.B16, V6.B16
+	VMOV V3.B16, V7.B16
 
-	AESE	V10.B16, V1.B16
-	AESMC	V1.B16, V1.B16
-	VEOR	V5.B16, V1.B16, V1.B16
+innerLoop:
+	CMP R4, R5
+	BLE tail
 
-	AESE	V10.B16, V2.B16
-	AESMC	V2.B16, V2.B16
-	VEOR	V6.B16, V2.B16, V2.B16
+	VLD1.P 64(R4), [V8.B16, V9.B16, V10.B16, V11.B16]
 
-	AESE	V10.B16, V3.B16
-	AESMC	V3.B16, V3.B16
-	VEOR	V7.B16, V3.B16, V3.B16
+	AESE  V31.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	VEOR  V8.B16, V4.B16, V4.B16
 
-	JMP loop
+	AESE  V31.B16, V5.B16
+	AESMC V5.B16, V5.B16
+	VEOR  V9.B16, V5.B16, V5.B16
 
-tail0:
-	ADD $48, R1
+	AESE  V31.B16, V6.B16
+	AESMC V6.B16, V6.B16
+	VEOR  V10.B16, V6.B16, V6.B16
 
-	CMP R0, R1
-	BLE tail1
+	AESE  V31.B16, V7.B16
+	AESMC V7.B16, V7.B16
+	VEOR  V11.B16, V7.B16, V7.B16
 
-	VLD1.P 16(R0), [V4.B16]
-	AESE   V10.B16, V0.B16
-	AESMC  V0.B16, V0.B16
-	VEOR   V4.B16, V0.B16, V0.B16
+	JMP innerLoop
 
-tail1:
-	CMP R0, R1
-	BLE tail2
+tail:
+	ADD $48, R5
+	CMP R4, R5
+	BLE done
 
-	VLD1.P 16(R0), [V5.B16]
-	AESE   V10.B16, V1.B16
-	AESMC  V1.B16, V1.B16
-	VEOR   V5.B16, V1.B16, V1.B16
+	VLD1.P 16(R4), [V8.B16]
+	AESE   V31.B16, V4.B16
+	AESMC  V4.B16, V4.B16
+	VEOR   V8.B16, V4.B16, V4.B16
 
-tail2:
-	CMP R0, R1
-	BLE tail3
+	CMP R4, R5
+	BLE done
 
-	VLD1.P 16(R0), [V6.B16]
-	AESE   V10.B16, V2.B16
-	AESMC  V2.B16, V2.B16
-	VEOR   V6.B16, V2.B16, V2.B16
+	VLD1.P 16(R4), [V9.B16]
+	AESE   V31.B16, V5.B16
+	AESMC  V5.B16, V5.B16
+	VEOR   V9.B16, V5.B16, V5.B16
 
-tail3:
-	VLD1  (R1), [V7.B16]
-	AESE  V10.B16, V3.B16
-	AESMC V3.B16, V3.B16
-	VEOR  V7.B16, V3.B16, V3.B16
+	CMP R4, R5
+	BLE done
 
-	AESE  V10.B16, V0.B16
+	VLD1 (R4), [V10.B16]
+	AESE   V31.B16, V6.B16
+	AESMC  V6.B16, V6.B16
+	VEOR   V10.B16, V6.B16, V6.B16
+
+done:
+	VLD1  (R5), [V11.B16]
+	AESE  V31.B16, V7.B16
+	AESMC V7.B16, V7.B16
+	VEOR  V11.B16, V7.B16, V7.B16
+
+	AESE  V31.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	VEOR  V7.B16, V4.B16, V8.B16
+
+	VMOV  V5.B16, V9.B16
+	AESE  V31.B16, V9.B16
+	AESMC V9.B16, V9.B16
+	VEOR  V6.B16, V9.B16, V9.B16
+
+	AESE  V31.B16, V8.B16
+	AESMC V8.B16, V8.B16
+	VEOR  V9.B16, V8.B16, V8.B16
+
+	AESE  V31.B16, V7.B16
+	AESMC V7.B16, V7.B16
+	VEOR  V6.B16, V7.B16, V7.B16
+
+	AESE  V5.B16, V4.B16
+	AESMC V4.B16, V4.B16
+
+	AESE  V7.B16, V4.B16
+	AESMC V4.B16, V4.B16
+
+	AESE  V5.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	VEOR  V6.B16, V4.B16, V4.B16
+
+	VMOV V4.D[0], R4
+	VMOV V4.D[1], R5
+	EOR  R5, R4
+	EOR  R6, R4
+
+	MOVD.P R4, 8(R1)
+	VST1.P [V8.B16], 16(R1)
+
+	SUBS $1, R2
+	BNE  loop
+
+	RET
+
+// func AesInt192BatchGenHashStates(data *[3]uint64, states *[3]uint64, length int)
+// Requires: AES
+TEXT ·AesInt192BatchGenHashStates(SB), NOSPLIT, $0-24
+	MOVD data+0(FP), R0
+	MOVD states+8(FP), R1
+	MOVD length+16(FP), R2
+
+	MOVD $CryptedPi<>+0x20(SB), R3
+	VLD1 (R3), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VEOR V31.B16, V31.B16, V31.B16
+
+	VMOV V0.B16, V30.B16
+
+	AESE  V31.B16, V0.B16
 	AESMC V0.B16, V0.B16
-	VEOR  V1.B16, V0.B16, V0.B16
 
-	AESE  V10.B16, V2.B16
+	AESE  V31.B16, V1.B16
+	AESMC V1.B16, V1.B16
+
+	VMOV V2.B16, V4.B16
+
+	AESE  V31.B16, V2.B16
 	AESMC V2.B16, V2.B16
 	VEOR  V3.B16, V2.B16, V2.B16
 
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V2.B16, V0.B16, V0.B16
-
-	VMOV  V0.B16, V1.B16
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V0.B16, V1.B16, V0.B16
-
-	VMOV  V0.B16, V1.B16
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V0.B16, V1.B16, V0.B16
-
-	VMOV  V0.B16, V1.B16
-	AESE  V10.B16, V0.B16
-	AESMC V0.B16, V0.B16
-	VEOR  V0.B16, V1.B16, V0.B16
-
-	VST1 [V0.B16], (R2)
-
-	RET
-
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////
-
-// func crc32Int192Hash(data *[3]uint64)
-// Requires: CRC32
-TEXT ·crc32Int192Hash(SB), NOSPLIT, $0-16
-	MOVD    $data+0(FP), R0
-	MOVD    $-1, R1
-	LDP.P   16(R0), (R2, R3)
-	MOVD    (R0), R4
-	CRC32CX R2, R1
-	CRC32CX R3, R1
-	CRC32CX R4, R1
-	MOVD    R1, ret+8(FP)
-	RET
-
-// func crc32Int256Hash(data *[4]uint64)
-// Requires: CRC32
-TEXT ·crc32Int256Hash(SB), NOSPLIT, $0-16
-	MOVD    $data+0(FP), R0
-	MOVD    $-1, R1
-	LDP.P   16(R0), (R2, R3)
-	LDP.P   (R0), (R4, R5)
-	CRC32CX R2, R1
-	CRC32CX R3, R1
-	CRC32CX R4, R1
-	CRC32CX R5, R1
-	MOVD    R1, ret+8(FP)
-	RET
-
-// func crc32Int320Hash(data *[4]uint64)
-// Requires: CRC32
-TEXT ·crc32Int320Hash(SB), NOSPLIT, $0-16
-	MOVD    $data+0(FP), R0
-	MOVD    $-1, R1
-	LDP.P   16(R0), (R2, R3)
-	LDP.P   16(R0), (R4, R5)
-	MOVD    (R0), R6
-	CRC32CX R2, R1
-	CRC32CX R3, R1
-	CRC32CX R4, R1
-	CRC32CX R5, R1
-	CRC32CX R6, R1
-	MOVD    R1, ret+8(FP)
-	RET
-
-// func crc32Int192BatchHash(data *[3]uint64, hashes *uint64, length int)
-// Requires: CRC32
-TEXT ·crc32Int192BatchHash(SB), NOSPLIT, $0-24
-	MOVD data+0(FP), R0
-	MOVD hashes+8(FP), R1
-	MOVD length+16(FP), R2
-	CBZ  R2, done
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
+	VEOR  V4.B16, V3.B16, V3.B16
 
 loop:
-	SUBS $6, R2
-	BLT  tail
+	VLD1   (R0), [V4.B16]
+	ADD    $0x08, R0
+	VLD1.P 0x10(R0), [V5.B16]
 
-	MOVD $-1, R3
-	MOVD $-1, R4
-	MOVD $-1, R5
-	MOVD $-1, R6
-	MOVD $-1, R7
-	MOVD $-1, R8
+	VEOR V0.B16, V4.B16, V4.B16
+	VEOR V1.B16, V5.B16, V5.B16
 
-	LDP.P 16(R0), (R9, R10)
-	LDP.P 16(R0), (R11, R12)
-	LDP.P 16(R0), (R13, R14)
-	LDP.P 16(R0), (R15, R16)
-	LDP.P 16(R0), (R17, R19)
-	LDP.P 16(R0), (R20, R21)
-	LDP.P 16(R0), (R22, R23)
-	LDP.P 16(R0), (R24, R25)
-	LDP.P 16(R0), (R26, R27)
+	VMOV V5.B16, V6.B16
 
-	CRC32CX R9, R3
-	CRC32CX R12, R4
-	CRC32CX R15, R5
-	CRC32CX R19, R6
-	CRC32CX R22, R7
-	CRC32CX R25, R8
+	AESE  V31.B16, V6.B16
+	AESMC V6.B16, V6.B16
+	AESE  V4.B16, V6.B16
 
-	CRC32CX R10, R3
-	CRC32CX R13, R4
-	CRC32CX R16, R5
-	CRC32CX R20, R6
-	CRC32CX R23, R7
-	CRC32CX R26, R8
+	AESMC V6.B16, V6.B16
+	AESE  V2.B16, V6.B16
 
-	CRC32CX R11, R3
-	CRC32CX R14, R4
-	CRC32CX R17, R5
-	CRC32CX R21, R6
-	CRC32CX R24, R7
-	CRC32CX R27, R8
+	AESMC V6.B16, V6.B16
+	VEOR  V30.B16, V6.B16, V6.B16
 
-	STP.P (R3, R4), 16(R1)
-	STP.P (R5, R6), 16(R1)
-	STP.P (R7, R8), 16(R1)
+	VMOV  V6.D[0], R4
+	VMOV  V6.D[1], R5
+	EOR   R5, R4
 
-	JMP loop
+	AESE  V31.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	AESE  V5.B16, V4.B16
 
-tail:
-	ADDS $6, R2
-	BEQ  done
+	AESMC V4.B16, V4.B16
+	VEOR  V3.B16, V4.B16, V4.B16
 
-tailLoop:
-	MOVD $-1, R3
-
-	LDP.P  16(R0), (R4, R5)
-	MOVD.P 8(R0), R6
-
-	CRC32CX R4, R3
-	CRC32CX R5, R3
-	CRC32CX R6, R3
-
-	MOVD.P  R3, 8(R1)
+	MOVD.P R4, 0x08(R1)
+	VST1.P [V4.B16], 0x10(R1)
 
 	SUBS $1, R2
-	BNE  tailLoop
+	BNE  loop
 
 done:
 	RET
 
-// func crc32Int256BatchHash(data *[4]uint64, hashes *uint64, length int)
-// Requires: CRC32
-TEXT ·crc32Int256BatchHash(SB), NOSPLIT, $0-24
+// func AesInt256BatchGenHashStates(data *[4]uint64, states *[3]uint64, length int)
+// Requires: AES
+TEXT ·AesInt256BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
-	MOVD hashes+8(FP), R1
+	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2
-	CBZ  R2, done
+
+	MOVD $CryptedPi<>+0x20(SB), R3
+	VLD1 (R3), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VEOR V31.B16, V31.B16, V31.B16
+
+	VMOV V0.B16, V30.B16
+
+	AESE  V31.B16, V0.B16
+	AESMC V0.B16, V0.B16
+
+	AESE  V31.B16, V1.B16
+	AESMC V1.B16, V1.B16
+
+	VMOV V2.B16, V4.B16
+
+	AESE  V31.B16, V2.B16
+	AESMC V2.B16, V2.B16
+	VEOR  V3.B16, V2.B16, V2.B16
+
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
+	VEOR  V4.B16, V3.B16, V3.B16
 
 loop:
-	SUBS $4, R2
-	BLT  tail
+	VLD1.P 0x20(R0), [V4.B16, V5.B16]
 
-	MOVD $-1, R3
-	MOVD $-1, R4
-	MOVD $-1, R5
-	MOVD $-1, R6
+	VEOR V0.B16, V4.B16, V4.B16
+	VEOR V1.B16, V5.B16, V5.B16
 
-	LDP.P 16(R0), (R7, R8)
-	LDP.P 16(R0), (R9, R10)
-	LDP.P 16(R0), (R11, R12)
-	LDP.P 16(R0), (R13, R14)
-	LDP.P 16(R0), (R15, R16)
-	LDP.P 16(R0), (R17, R19)
-	LDP.P 16(R0), (R20, R21)
-	LDP.P 16(R0), (R22, R23)
+	VMOV V5.B16, V6.B16
 
-	CRC32CX R7, R3
-	CRC32CX R11, R4
-	CRC32CX R15, R5
-	CRC32CX R20, R6
+	AESE  V31.B16, V6.B16
+	AESMC V6.B16, V6.B16
+	AESE  V4.B16, V6.B16
 
-	CRC32CX R8, R3
-	CRC32CX R12, R4
-	CRC32CX R16, R5
-	CRC32CX R21, R6
+	AESMC V6.B16, V6.B16
+	AESE  V2.B16, V6.B16
 
-	CRC32CX R9, R3
-	CRC32CX R13, R4
-	CRC32CX R17, R5
-	CRC32CX R22, R6
+	AESMC V6.B16, V6.B16
+	VEOR  V30.B16, V6.B16, V6.B16
 
-	CRC32CX R10, R3
-	CRC32CX R14, R4
-	CRC32CX R19, R5
-	CRC32CX R23, R6
+	VMOV  V6.D[0], R4
+	VMOV  V6.D[1], R5
+	EOR   R5, R4
 
-	STP.P (R3, R4), 16(R1)
-	STP.P (R5, R6), 16(R1)
+	AESE  V31.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	AESE  V5.B16, V4.B16
 
-	JMP loop
+	AESMC V4.B16, V4.B16
+	VEOR  V3.B16, V4.B16, V4.B16
 
-tail:
-	ADDS $4, R2
-	BEQ  done
-
-tailLoop:
-	MOVD $-1, R3
-
-	LDP.P 16(R0), (R4, R5)
-	LDP.P 16(R0), (R6, R7)
-
-	CRC32CX R4, R3
-	CRC32CX R5, R3
-	CRC32CX R6, R3
-	CRC32CX R7, R3
-
-	MOVD.P  R3, 8(R1)
+	MOVD.P R4, 0x08(R1)
+	VST1.P [V4.B16], 0x10(R1)
 
 	SUBS $1, R2
-	BNE  tailLoop
+	BNE  loop
 
 done:
 	RET
 
-// func crc32Int320BatchHash(data *[5]uint64, hashes *uint64, length int)
-// Requires: CRC32
-TEXT ·crc32Int320BatchHash(SB), NOSPLIT, $0-24
+// func AesInt320BatchGenHashStates(data *[5]uint64, states *[3]uint64, length int)
+// Requires: AES
+TEXT ·AesInt320BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
-	MOVD hashes+8(FP), R1
+	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2
-	CBZ  R2, done
+
+	MOVD $CryptedPi<>(SB), R3
+	VLD1 (R3), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VEOR V31.B16, V31.B16, V31.B16
+
+	VMOV V0.B16, V30.B16
+	VMOV V3.B16, V29.B16
+
+	AESE  V31.B16, V0.B16
+	AESMC V0.B16, V0.B16
+
+	AESE  V31.B16, V1.B16
+	AESMC V1.B16, V1.B16
+
+	AESE  V31.B16, V3.B16
+	AESMC V3.B16, V3.B16
 
 loop:
-	SUBS $4, R2
-	BLT  tail
+	VLD1 (R0), [V4.B16, V5.B16]
+	ADD  $0x18, R0
+	VLD1.P 0x10(R0), [V6.B16]
 
-	MOVD $-1, R3
-	MOVD $-1, R4
-	MOVD $-1, R5
-	MOVD $-1, R6
+	VEOR V0.B16, V4.B16, V4.B16
+	VEOR V1.B16, V5.B16, V5.B16
+	VEOR V3.B16, V6.B16, V6.B16
 
-	LDP.P 16(R0), (R7, R8)
-	LDP.P 16(R0), (R9, R10)
-	LDP.P 16(R0), (R11, R12)
-	LDP.P 16(R0), (R13, R14)
-	LDP.P 16(R0), (R15, R16)
-	LDP.P 16(R0), (R17, R19)
-	LDP.P 16(R0), (R20, R21)
-	LDP.P 16(R0), (R22, R23)
-	LDP.P 16(R0), (R24, R25)
-	LDP.P 16(R0), (R26, R27)
+	AESE  V31.B16, V4.B16
+	AESMC V4.B16, V4.B16
+	VEOR  V6.B16, V4.B16, V7.B16
 
-	CRC32CX R7, R3
-	CRC32CX R12, R4
-	CRC32CX R17, R5
-	CRC32CX R23, R6
+	VMOV V5.B16, V8.B16
 
-	CRC32CX R8, R3
-	CRC32CX R13, R4
-	CRC32CX R19, R5
-	CRC32CX R24, R6
+	AESE  V31.B16, V8.B16
+	AESMC V8.B16, V8.B16
+	VEOR  V2.B16, V8.B16, V8.B16
 
-	CRC32CX R9, R3
-	CRC32CX R14, R4
-	CRC32CX R20, R5
-	CRC32CX R25, R6
+	AESE  V31.B16, V7.B16
+	AESMC V7.B16, V7.B16
+	AESE  V8.B16, V7.B16
 
-	CRC32CX R10, R3
-	CRC32CX R15, R4
-	CRC32CX R21, R5
-	CRC32CX R26, R6
+	AESMC V7.B16, V7.B16
+	AESE  V30.B16, V7.B16
 
-	CRC32CX R11, R3
-	CRC32CX R16, R4
-	CRC32CX R22, R5
-	CRC32CX R27, R6
+	AESMC V7.B16, V7.B16
+	VEOR  V29.B16, V7.B16, V7.B16
 
-	STP.P (R3, R4), 16(R1)
-	STP.P (R5, R6), 16(R1)
+	VMOV  V7.D[0], R4
+	VMOV  V7.D[1], R5
+	EOR   R5, R4
 
-	JMP loop
+	AESE  V5.B16, V4.B16
 
-tail:
-	ADDS $4, R2
-	BEQ  done
+	AESE  V31.B16, V6.B16
+	AESMC V6.B16, V6.B16
+	VEOR  V2.B16, V6.B16, V6.B16
 
-tailLoop:
-	MOVD $-1, R3
+	AESMC V4.B16, V4.B16
+	VEOR  V6.B16, V4.B16, V4.B16
 
-	LDP.P  16(R0), (R4, R5)
-	LDP.P  16(R0), (R6, R7)
-	MOVD.P 8(R0), R8
-
-	CRC32CX R4, R3
-	CRC32CX R5, R3
-	CRC32CX R6, R3
-	CRC32CX R7, R3
-	CRC32CX R8, R3
-
-	MOVD.P R3, 8(R1)
+	MOVD.P R4, 0x08(R1)
+	VST1.P [V4.B16], 0x10(R1)
 
 	SUBS $1, R2
-	BNE  tailLoop
+	BNE  loop
 
 done:
 	RET

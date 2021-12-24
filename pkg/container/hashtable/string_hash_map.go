@@ -16,7 +16,6 @@ package hashtable
 
 import (
 	"errors"
-	"unsafe"
 )
 
 type StringRef struct {
@@ -25,129 +24,301 @@ type StringRef struct {
 }
 
 type StringHashMapCell struct {
-	Hash   uint64
-	Key128 [2]uint64
-	Mapped uint64
+	HashState [3]uint64
+	Mapped    uint64
 }
 
+var StrKeyPadding [16]byte
+
 type StringHashMap struct {
-	bucketCntBits uint8
-	bucketCnt     uint64
-	elemCnt       uint64
-	maxElemCnt    uint64
-	rawData       []byte
-	bucketData    []StringHashMapCell
+	cellCntBits uint8
+	cellCnt     uint64
+	elemCnt     uint64
+	maxElemCnt  uint64
+	cells       []StringHashMapCell
+	//confCnt     uint64
 }
 
 func (ht *StringHashMap) Init() {
-	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
-
-	rawData := make([]byte, cellSize*kInitialBucketCnt)
-
-	ht.bucketCntBits = kInitialBucketCntBits
-	ht.bucketCnt = kInitialBucketCnt
+	ht.cellCntBits = kInitialCellCntBits
+	ht.cellCnt = kInitialCellCnt
 	ht.elemCnt = 0
-	ht.maxElemCnt = kInitialBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
-	ht.rawData = rawData
-	ht.bucketData = unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&rawData[0])), kInitialBucketCnt)
+	ht.maxElemCnt = kInitialCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	ht.cells = make([]StringHashMapCell, kInitialCellCnt)
 }
 
-func (ht *StringHashMap) Insert(key StringRef) (inserted bool, value *uint64) {
-	ht.resizeOnDemand()
+func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
 
-	var hash uint64
-	var key128 [2]uint64
+	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
-	if key.Len <= 8 {
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
-	} else if key.Len <= 16 {
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
-	} else {
-		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
-	}
-
-	inserted, _, cell := ht.findBucket(hash, &key128)
-	if inserted {
-		ht.elemCnt++
-		cell.Hash = hash
-		cell.Key128 = key128
-	}
-
-	value = &cell.Mapped
-
-	return
-}
-
-func (ht *StringHashMap) Find(key StringRef) *uint64 {
-	var hash uint64
-	var key128 [2]uint64
-
-	if key.Len <= 8 {
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 8), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32Int64Hash(key128[0]) | (uint64(key.Len) << 32)
-	} else if key.Len <= 16 {
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(&key128[0])), 16), unsafe.Slice(key.Ptr, key.Len))
-		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
-	} else {
-		hash = crc32BytesHash(unsafe.Pointer(key.Ptr), key.Len)
-		key128 = aesBytesHash(unsafe.Pointer(key.Ptr), key.Len)
-	}
-
-	_, _, cell := ht.findBucket(hash, &key128)
-
-	return &cell.Mapped
-}
-
-func (ht *StringHashMap) findBucket(hash uint64, key128 *[2]uint64) (empty bool, idx uint64, cell *StringHashMapCell) {
-	mask := ht.bucketCnt - 1
-	for idx = hash & mask; true; idx = (idx + 1) & mask {
-		cell = &ht.bucketData[idx]
-		empty = cell.Hash == 0
-		if empty || (cell.Hash == hash && cell.Key128 == *key128) {
-			return
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
 		}
+		values[i] = cell.Mapped
 	}
-
-	return
 }
 
-func (ht *StringHashMap) resizeOnDemand() {
-	if ht.elemCnt < ht.maxElemCnt {
+func (ht *StringHashMap) InsertString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt192BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt256BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt320BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertHashStateBatch(states [][3]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(states)))
+
+	for i := range states {
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]uint64, keys [][]byte, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		if zValues[i] == 0 {
+			continue
+		}
+
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+func (ht *StringHashMap) InsertString24BatchWithRing(zValues []int64, states [][3]uint64, keys [][3]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt192BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		if zValues[i] == 0 {
+			continue
+		}
+
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertString32BatchWithRing(zValues []int64, states [][3]uint64, keys [][4]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt256BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		if zValues[i] == 0 {
+			continue
+		}
+
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertString40BatchWithRing(zValues []int64, states [][3]uint64, keys [][5]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(keys)))
+
+	AesInt320BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		if zValues[i] == 0 {
+			continue
+		}
+
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) InsertHashStateBatchWithRing(zValues []int64, states [][3]uint64, values []uint64) {
+	ht.resizeOnDemand(uint64(len(states)))
+
+	for i := range states {
+		if zValues[i] == 0 {
+			continue
+		}
+
+		cell := ht.findCell(&states[i])
+		if cell.Mapped == 0 {
+			ht.elemCnt++
+			cell.HashState = states[i]
+			cell.Mapped = ht.elemCnt
+		}
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
+	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
+	AesInt192BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
+	AesInt256BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
+	AesInt320BatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindHashStateBatch(states [][3]uint64, values []uint64) {
+	for i := range states {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) findCell(state *[3]uint64) *StringHashMapCell {
+	mask := ht.cellCnt - 1
+	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+		cell := &ht.cells[idx]
+		if cell.Mapped == 0 || cell.HashState == *state {
+			return cell
+		}
+		//ht.confCnt++
+	}
+
+	return nil
+}
+
+func (ht *StringHashMap) findEmptyCell(state *[3]uint64) *StringHashMapCell {
+	mask := ht.cellCnt - 1
+	for idx := state[0] & mask; true; idx = (idx + 1) & mask {
+		cell := &ht.cells[idx]
+		if cell.Mapped == 0 {
+			return cell
+		}
+		//ht.confCnt++
+	}
+
+	return nil
+}
+
+func (ht *StringHashMap) resizeOnDemand(n uint64) {
+	targetCnt := ht.elemCnt + n
+	if targetCnt <= ht.maxElemCnt {
 		return
 	}
 
-	var newBucketCntBits uint8
-	if ht.bucketCntBits >= 23 {
-		newBucketCntBits = ht.bucketCntBits + 1
-	} else {
-		newBucketCntBits = ht.bucketCntBits + 2
+	newCellCntBits := ht.cellCntBits + 2
+	newCellCnt := uint64(1) << newCellCntBits
+	newMaxElemCnt := newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	for newMaxElemCnt < targetCnt {
+		newCellCntBits++
+		newCellCnt <<= 1
+		newMaxElemCnt = newCellCnt * kLoadFactorNumerator / kLoadFactorDenominator
 	}
 
-	newBucketCnt := uint64(1) << newBucketCntBits
-	newMaxElemCnt := newBucketCnt * kLoadFactorNumerator / kLoadFactorDenominator
+	oldCellCnt := ht.cellCnt
+	oldCells := ht.cells
 
-	const cellSize = int(unsafe.Sizeof(StringHashMapCell{}))
-
-	oldBucketCnt := ht.bucketCnt
-	oldBucketData := ht.bucketData
-
-	newRawData := make([]byte, uint64(cellSize)*newBucketCnt)
-	newBucketData := unsafe.Slice((*StringHashMapCell)(unsafe.Pointer(&newRawData[0])), newBucketCnt)
-
-	ht.bucketCntBits = newBucketCntBits
-	ht.bucketCnt = newBucketCnt
+	ht.cellCntBits = newCellCntBits
+	ht.cellCnt = newCellCnt
 	ht.maxElemCnt = newMaxElemCnt
-	ht.rawData = newRawData
-	ht.bucketData = newBucketData
+	ht.cells = make([]StringHashMapCell, newCellCnt)
 
-	for i := uint64(0); i < oldBucketCnt; i++ {
-		cell := &oldBucketData[i]
-		if cell.Hash != 0 {
-			_, newIdx, _ := ht.findBucket(cell.Hash, &cell.Key128)
-			ht.bucketData[newIdx] = *cell
+	for i := uint64(0); i < oldCellCnt; i++ {
+		cell := &oldCells[i]
+		if cell.Mapped != 0 {
+			newCell := ht.findEmptyCell(&cell.HashState)
+			*newCell = *cell
 		}
 	}
 }
@@ -166,15 +337,15 @@ func (it *StringHashMapIterator) Init(ht *StringHashMap) {
 }
 
 func (it *StringHashMapIterator) Next() (cell *StringHashMapCell, err error) {
-	for it.pos < it.table.bucketCnt {
-		cell = &it.table.bucketData[it.pos]
-		if cell.Hash != 0 {
+	for it.pos < it.table.cellCnt {
+		cell = &it.table.cells[it.pos]
+		if cell.Mapped != 0 {
 			break
 		}
 		it.pos++
 	}
 
-	if it.pos >= it.table.bucketCnt {
+	if it.pos >= it.table.cellCnt {
 		err = errors.New("out of range")
 		return
 	}

@@ -61,7 +61,11 @@ type T uint8
 type Type struct {
 	Oid       T
 	Size      int32 // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+
+	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
 	Width     int32
+
+	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
 	Precision int32
 }
 
@@ -122,9 +126,9 @@ func (t T) ToType() Type {
 		typ.Size = 1
 	case T_int16:
 		typ.Size = 2
-	case T_int32:
+	case T_int32, T_date:
 		typ.Size = 4
-	case T_int64:
+	case T_int64, T_datetime:
 		typ.Size = 8
 	case T_uint8:
 		typ.Size = 1
@@ -221,6 +225,10 @@ func (t T) OidString() string {
 		return "T_char"
 	case T_varchar:
 		return "T_varchar"
+	case T_date:
+		return "T_date"
+	case T_datetime:
+		return "T_datetime"
 	}
 	return "unknown_type"
 }
@@ -228,9 +236,9 @@ func (t T) OidString() string {
 // GoType returns go type string for T
 func (t T) GoType() string {
 	switch t {
-	case T_int64:
+	case T_int64, T_datetime:
 		return "int64"
-	case T_int32:
+	case T_int32, T_date:
 		return "int32"
 	case T_int16:
 		return "int16"
@@ -274,9 +282,9 @@ func (t T) TypeLen() int {
 		return 1
 	case T_int16:
 		return 2
-	case T_int32:
+	case T_int32, T_date:
 		return 4
-	case T_int64:
+	case T_int64, T_datetime:
 		return 8
 	case T_uint8:
 		return 1

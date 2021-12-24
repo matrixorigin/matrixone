@@ -16,26 +16,25 @@ package engine
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	stdLog "log"
-	"sync"
-
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"go.uber.org/zap/zapcore"
+	stdLog "log"
+	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	vengine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"go.uber.org/zap/zapcore"
+	"sync"
 
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -43,8 +42,6 @@ import (
 
 	"testing"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 const (
@@ -64,14 +61,14 @@ var (
 	tableName = "test_tb"
 	cols      = []vengine.TableDef{
 		&vengine.AttributeDef{
-			Attr: metadata.Attribute{
+			Attr: vengine.Attribute{
 				Name: "col1",
 				Type: types.Type{},
 				Alg:  0,
 			},
 		},
 		&vengine.AttributeDef{
-			Attr: metadata.Attribute{
+			Attr: vengine.Attribute{
 				Name: "col2",
 				Type: types.Type{},
 				Alg:  0,
@@ -81,12 +78,10 @@ var (
 )
 
 func TestAOEEngine(t *testing.T) {
-	//putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			//c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -125,7 +120,7 @@ func TestAOEEngine(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	var catalogs []*catalog2.Catalog
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 3; i++ {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
@@ -168,11 +163,11 @@ func TestAOEEngine(t *testing.T) {
 
 	mockTbl := adaptor.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
-	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+	_, _, _, _, defs , _ := helper.UnTransfer(*mockTbl)
 
 	time.Sleep(10 * time.Second)
 
-	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
+	err = db.Create(3, mockTbl.Name, defs)
 	if err != nil {
 		stdLog.Printf("create table %v failed, %v", mockTbl.Name, err)
 	} else {
@@ -194,6 +189,7 @@ func TestAOEEngine(t *testing.T) {
 	}
 	ibat := mock.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
+	//err = protocol.EncodeBatch(ibat, &buf)
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
@@ -214,31 +210,36 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
-	idxDef := vengine.IndexTableDef{Typ: 0, ColNames: []string{"mock_0"}, Name: "mock_idx"}
-	err = tb.CreateIndex(0, []vengine.TableDef{&idxDef})
-	require.NoError(t, err)
+	var vattrs []vengine.Attribute
+	tdefs := tb.TableDefs()
+	for _, def := range tdefs {
+		if v, ok := def.(*vengine.AttributeDef); ok {
+			vattrs = append(vattrs, v.Attr)
+		}
+	}
+	require.Equal(t, len(attrs), len(vattrs), "Attribute: wrong length")
 
-	err = tb.CreateIndex(0, []vengine.TableDef{&idxDef})
-	require.Equal(t, errors.New("index already exist"), err)
-
-	err = tb.DropIndex(0, idxDef.Name)
-	require.NoError(t, err)
-
-	err = tb.DropIndex(0, idxDef.Name)
-	require.Equal(t, errors.New("index not exist"), err)
-
-	relationAttrs := tb.Attribute()
-	require.Equal(t, len(attrs), len(relationAttrs), "Attribute: wrong length")
-
-	index := tb.Index()
+	var index []vengine.IndexTableDef
+	for _, def := range tdefs {
+		if i, ok := def.(*vengine.IndexTableDef); ok {
+			index = append(index, vengine.IndexTableDef{
+				Typ:   i.Typ,
+				ColNames: i.ColNames,
+			})
+		}
+	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
-	segments := tb.Segments()
-	for i := range segments {
-		segInfo := segments[i]
-		tb.Segment(segInfo, nil)
-	}
+	readers := tb.NewReader(6)
+	for _, reader := range readers {
+		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
 
+		require.NoError(t, err)
+		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"})
+		require.NoError(t, err)
+	}
+	num := tb.NewReader(15)
+	require.Equal(t, 15, len(num))
 	tb.Close()
 
 	err = db.Delete(5, mockTbl.Name)
@@ -254,12 +255,10 @@ func TestAOEEngine(t *testing.T) {
 }
 
 func doRestartEngine(t *testing.T) {
-	//putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			//c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -305,10 +304,10 @@ func doRestartEngine(t *testing.T) {
 	require.Equal(t, 9, len(tbls))
 
 	for _, tName := range tbls {
-		tb, err := db.Relation(tName)
+		_, err := db.Relation(tName)
 		require.NoError(t, err)
-		require.Equal(t, segmentCnt, len(tb.Segments()))
-		logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
+		//require.Equal(t, segmentCnt, len(tb.Segments()))
+		//logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
 	}
 }
 
@@ -319,7 +318,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	tbs, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
-	dbid, err := c[0].CreateDatabase(0, dbName, vengine.AOE)
+	dbid, err := c[0].CreateDatabase(0, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
@@ -373,7 +372,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, 0, cnt)
 
-	dbid, err = c[0].CreateDatabase(5, dbName, vengine.AOE)
+	dbid, err = c[0].CreateDatabase(5, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 

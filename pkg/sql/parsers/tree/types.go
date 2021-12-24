@@ -137,6 +137,12 @@ func (node *InternalType) Format(ctx *FmtCtx) {
 
 	switch fs {
 	case "set", "enum":
+	case "char":
+		if node.DisplayWith >= 0 {
+			ctx.WriteByte('(')
+			ctx.WriteString(strconv.FormatInt(int64(node.DisplayWith), 10))
+			ctx.WriteByte(')')
+		}
 	default:
 		if node.Precision > 0 {
 			ctx.WriteByte('(')
@@ -170,9 +176,15 @@ type LengthScaleOpt struct {
 	Precision   int32
 }
 
+const (
+	DefaultDisplayWidth = -1
+	NotDefineDisplayWidth = 0
+	NotDefineDec = -1
+)
+
 func GetDisplayWith(val int32) int32 {
 	if val == 0 {
-		return -1
+		return DefaultDisplayWidth
 	}
 	return val
 }

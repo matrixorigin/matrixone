@@ -15,8 +15,14 @@
 package frontend
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/fagongzi/goetty/buf"
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/stretchr/testify/require"
 	"math"
 	"reflect"
@@ -32,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	cvey "github.com/smartystreets/goconvey/convey"
 )
 
 type TestRoutineManager struct {
@@ -42,11 +49,9 @@ type TestRoutineManager struct {
 }
 
 func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
-	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID())
+	pro := NewMysqlClientProtocol(nextConnectionID(), rs, 1024,tRM.pu.SV)
 	exe := NewMysqlCmdExecutor()
-	ses := NewSessionWithParameterUnit(tRM.pu)
-	routine := NewRoutine(rs, pro, exe, ses)
+	routine := NewRoutine(pro, exe, tRM.pu)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -255,7 +260,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("../../system_vars_config.toml",
+	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
 		&config.GlobalSystemVariables); err != nil {
 		fmt.Printf("error:%v\n", err)
 		panic(err)
@@ -705,6 +710,78 @@ func makeMysqlDoubleResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0,0,0,0,makeMysqlDoubleResultSet())
 }
 
+func makeMysqlDateResultSet()*MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Date"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATE)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1,_ := types.ParseDate("1997-01-01")
+	d2,_ := types.ParseDate("2008-02-02")
+	var cases=[]types.Date{
+		d1,
+		d2,
+	}
+	for _,v := range cases{
+		var data = make([]interface{},1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDateResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlDateResultSet())
+}
+
+func makeMysqlDatetimeResultSet()*MysqlResultSet {
+	var rs = &MysqlResultSet{}
+
+	name := "Date"
+
+	mysqlCol := new(MysqlColumn)
+	mysqlCol.SetName(name)
+	mysqlCol.SetOrgName(name + "OrgName")
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	mysqlCol.SetSchema(name + "Schema")
+	mysqlCol.SetTable(name + "Table")
+	mysqlCol.SetOrgTable(name + "Table")
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
+
+	rs.AddColumn(mysqlCol)
+
+	d1,_ := types.ParseDatetime("2018-04-28 10:21:15")
+	d2,_ := types.ParseDatetime("2018-04-28 10:21:15.123")
+	d3,_ := types.ParseDatetime("2015-03-03 12:12:12")
+	var cases=[]types.Datetime{
+		d1,
+		d2,
+		d3,
+	}
+	for _,v := range cases{
+		var data = make([]interface{},1)
+		data[0] = v
+		rs.AddRow(data)
+	}
+
+	return rs
+}
+
+func makeMysqlDatetimeResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlDatetimeResultSet())
+}
+
 func make8ColumnsResultSet()*MysqlResultSet {
 	var rs = &MysqlResultSet{}
 
@@ -714,7 +791,11 @@ func make8ColumnsResultSet()*MysqlResultSet {
 		defines.MYSQL_TYPE_LONG,
 		defines.MYSQL_TYPE_LONGLONG,
 		defines.MYSQL_TYPE_VARCHAR,
-		defines.MYSQL_TYPE_FLOAT}
+		defines.MYSQL_TYPE_FLOAT,
+		defines.MYSQL_TYPE_DATE,
+		defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_DOUBLE,
+	}
 
 	var names=[]string{
 		"Tiny",
@@ -723,13 +804,23 @@ func make8ColumnsResultSet()*MysqlResultSet {
 		"Longlong",
 		"Varchar",
 		"Float",
+		"Date",
+		"Datetime",
+		"Double",
 	}
 
+	d1,_ := types.ParseDate("1997-01-01")
+	d2,_ := types.ParseDate("2008-02-02")
+
+	dt1,_ := types.ParseDatetime("2018-04-28 10:21:15")
+	dt2,_ := types.ParseDatetime("2018-04-28 10:21:15.123")
+	dt3,_ := types.ParseDatetime("2015-03-03 12:12:12")
+
 	var cases=[][]interface{}{
-		{int8(-128),int16(-32768),int32(-2147483648),int64(-9223372036854775808),"abc",float32(math.MaxFloat32)},
-		{int8(-127),int16(0),    int32(0),           int64(0),"abcde",float32(math.SmallestNonzeroFloat32)},
-		{int8(127),int16(32767),int32(2147483647),int64(9223372036854775807),"",float32(-math.MaxFloat32)},
-		{int8(126),int16(32766),int32(2147483646),int64(9223372036854775806),"x-",float32(-math.SmallestNonzeroFloat32)},
+		{int8(-128),int16(-32768),int32(-2147483648),int64(-9223372036854775808),"abc",float32(math.MaxFloat32),d1,dt1,float64(0.01)},
+		{int8(-127),int16(0),    int32(0),           int64(0),"abcde",float32(math.SmallestNonzeroFloat32),d2,dt2,float64(0.01)},
+		{int8(127),int16(32767),int32(2147483647),int64(9223372036854775807),"",float32(-math.MaxFloat32),d1,dt3,float64(0.01)},
+		{int8(126),int16(32766),int32(2147483646),int64(9223372036854775806),"x-",float32(-math.SmallestNonzeroFloat32),d2,dt1,float64(0.01)},
 	}
 
 	for i,ct := range columnTypes{
@@ -878,7 +969,7 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = routine.io.Read()
+		msg, err = pro.tcpConn.Read()
 		if err != nil {
 			return errors.New("read msg error")
 		}
@@ -894,12 +985,12 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 	}
 
 	// finish handshake process
-	if !routine.established {
+	if !pro.IsEstablished() {
 		err := pro.handleHandshake(payload)
 		if err != nil {
 			return err
 		}
-		routine.Establish(pro)
+		pro.SetEstablished()
 		return nil
 	}
 
@@ -1024,6 +1115,18 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 				status:   0,
 				data:     makeMysqlDoubleResult(),
 			}
+		case "date":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlDateResult(),
+			}
+		case "datetime":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlDatetimeResult(),
+			}
 		case "8columns":
 			resp = &Response{
 				category: ResultResponse,
@@ -1092,7 +1195,7 @@ func TestMysqlResultSet(t *testing.T){
 		panic(err)
 	}
 
-	if err := config.LoadvarsConfigFromFile("../../system_vars_config.toml",
+	if err := config.LoadvarsConfigFromFile("test/system_vars_config.toml",
 		&config.GlobalSystemVariables); err != nil {
 		fmt.Printf("error:%v\n", err)
 		panic(err)
@@ -1136,6 +1239,8 @@ func TestMysqlResultSet(t *testing.T){
 	do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
 	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
 	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
+	do_query_resp_resultset(t, db, false, false, "date", makeMysqlDateResultSet())
+	do_query_resp_resultset(t, db, false, false, "datetime", makeMysqlDatetimeResultSet())
 	do_query_resp_resultset(t, db, false, false, "8columns", make8ColumnsResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
 	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
@@ -1435,6 +1540,16 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						value, err := mrs.GetFloat64(rowIdx, i)
 						require.NoError(t, err)
 						data = strconv.AppendFloat(data, value, 'f', 4, 64)
+					case defines.MYSQL_TYPE_DATE:
+						value, err := mrs.GetValue(rowIdx, i)
+						require.NoError(t, err)
+						x := value.(types.Date).String()
+						data = []byte(x)
+					case defines.MYSQL_TYPE_DATETIME:
+						value, err := mrs.GetValue(rowIdx, i)
+						require.NoError(t, err)
+						x := value.(types.Datetime).String()
+						data = []byte(x)
 					default:
 						require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
 					}
@@ -1473,51 +1588,579 @@ func do_query_resp_states(t *testing.T, db *sql.DB, wantErr bool, query string) 
 	}
 }
 
-func check_resultset(t *testing.T,cpc *ChannelProtocolClient,skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
-	cpc.SendQuery("select * from B")
-	mrs_resp := cpc.GetResultSet()
+func Test_writePackets(t *testing.T) {
+	cvey.Convey("writepackets 16MB succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
 
-	rowIdx := uint64(0)
-	for _,row := range mrs_resp.Data {
-		//fmt.Println(row)
-		//fmt.Println(mrs.GetRow(rowIdx))
-		if !skipResultsetCheck {
-			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-				val := row[i]
-
-				column, err := mrs.GetColumn(i)
-				require.NoError(t, err)
-
-				col, ok := column.(*MysqlColumn)
-				require.True(t, ok)
-
-				isNUll, err := mrs.ColumnIsNull(rowIdx,i)
-				require.NoError(t, err)
-
-				if isNUll {
-					require.True(t, val == nil)
-				}else{
-					var value interface{}
-					value, err = mrs.GetValue(rowIdx,i)
-
-					switch col.ColumnType() {
-					case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
-						val, err = mrs_resp.GetString(rowIdx, i)
-						require.NoError(t, err)
-					}
-
-					//check
-					ret := reflect.DeepEqual(value,val)
-					//fmt.Println(i)
-					//fmt.Println(value)
-					//fmt.Println(val)
-					require.True(t, ret)
-				}
-			}
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
 		}
 
-		rowIdx++
-	}
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+		err = proto.writePackets(make([]byte,MaxPayloadSize,MaxPayloadSize))
+		cvey.So(err, cvey.ShouldBeNil)
+	})
+	cvey.Convey("writepackets 16MB failed",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
 
-	require.True(t, rowIdx == mrs.GetRowCount())
+		cnt := 0
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).DoAndReturn(func(msg interface{}) error {
+			if cnt == 0 {
+				cnt++
+				return nil
+			}else{
+				cnt++
+				return fmt.Errorf("write and flush failed.")
+			}
+		}).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+		err = proto.writePackets(make([]byte,MaxPayloadSize,MaxPayloadSize))
+		cvey.So(err, cvey.ShouldBeError)
+	})
+
+	cvey.Convey("writepackets 16MB failed 2",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).DoAndReturn(func(msg interface{}) error {
+			return fmt.Errorf("write and flush failed.")
+		}).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+		err = proto.writePackets(make([]byte,MaxPayloadSize,MaxPayloadSize))
+		cvey.So(err, cvey.ShouldBeError)
+	})
+}
+
+func Test_openpacket(t *testing.T) {
+	cvey.Convey("openpacket succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		err = proto.openPacket()
+		cvey.So(err,cvey.ShouldBeNil)
+		headLen := proto.tcpConn.OutBuf().GetWriteIndex() - proto.beginWriteIndex
+		cvey.So(headLen,cvey.ShouldEqual,HeaderLengthOfTheProtocol)
+	})
+
+	cvey.Convey("fillpacket succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Flush().Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		err = proto.fillPacket(make([]byte,MaxPayloadSize,MaxPayloadSize)...)
+		cvey.So(err,cvey.ShouldBeNil)
+
+		err = proto.closePacket(true)
+		cvey.So(err,cvey.ShouldBeNil)
+
+		proto.append(nil,make([]byte,1024,1024)...)
+	})
+
+	cvey.Convey("closepacket falied.",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		err = proto.openPacket()
+		cvey.So(err,cvey.ShouldBeNil)
+
+		proto.beginWriteIndex = proto.tcpConn.OutBuf().GetWriteIndex()
+		err = proto.closePacket(true)
+		cvey.So(err,cvey.ShouldBeError)
+	})
+
+	cvey.Convey("append -- data checks",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Flush().Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		mysqlPack := func(payload []byte) []byte {
+			n := len(payload)
+			var curLen int = 0
+			var header [4]byte
+			var data []byte = nil
+			var sequenceId byte = 0
+			for i := 0; i < n; i += curLen {
+				curLen = Min(int(MaxPayloadSize), n - i)
+				binary.LittleEndian.PutUint32(header[:],uint32(curLen))
+				header[3] = sequenceId
+				sequenceId++
+				data = append(data,header[:]...)
+				data = append(data,payload[i:i+curLen]...)
+				if i+curLen == n && curLen == int(MaxPayloadSize) {
+					binary.LittleEndian.PutUint32(header[:],uint32(0))
+					header[3] = sequenceId
+					sequenceId++
+					data = append(data,header[:]...)
+				}
+			}
+			return data
+		}
+
+		data16MB := func(cnt int) []byte {
+			data := make([]byte,cnt*int(MaxPayloadSize),cnt*int(MaxPayloadSize))
+			return data
+		}
+
+		type kase struct {
+			data []byte
+			len int
+		}
+
+		kases := []kase{
+			kase{
+				data:[]byte{1,2,3,4},
+				len: HeaderLengthOfTheProtocol+4,
+			},
+			kase{
+				data:data16MB(1),
+				len:HeaderLengthOfTheProtocol+int(MaxPayloadSize)+HeaderLengthOfTheProtocol,
+			},
+			kase{
+				data:data16MB(2),
+				len:HeaderLengthOfTheProtocol+int(MaxPayloadSize)+HeaderLengthOfTheProtocol+int(MaxPayloadSize)+HeaderLengthOfTheProtocol,
+			},
+			kase{
+				data:data16MB(3),
+				len:HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol,
+			},
+			kase{
+				data:data16MB(4),
+				len:HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol+int(MaxPayloadSize)+
+					HeaderLengthOfTheProtocol,
+			},
+		}
+
+		for _, c := range kases {
+			proto.setSequenceID(0)
+
+			err = proto.openRow(nil)
+			cvey.So(err,cvey.ShouldBeNil)
+			beginIdx := proto.beginWriteIndex
+
+			rawBuf := proto.append(nil,c.data...)
+
+			err = proto.closeRow(nil)
+			cvey.So(err,cvey.ShouldBeNil)
+
+			want := mysqlPack(c.data)
+
+			cvey.So(c.len,cvey.ShouldEqual,len(want))
+
+			buf := proto.tcpConn.OutBuf()
+			widx := buf.GetWriteIndex()
+			res := rawBuf[beginIdx : widx]
+
+			cvey.So(bytes.Equal(res, want), cvey.ShouldBeTrue)
+		}
+	})
+}
+
+func Test_resultset(t *testing.T) {
+	cvey.Convey("send result set batch row succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		res := make8ColumnsResultSet()
+
+		err = proto.SendResultSetTextBatchRow(res, uint64(len(res.Data)))
+		cvey.So(err,cvey.ShouldBeNil)
+	})
+
+	cvey.Convey("send result set batch row speedup succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		res := make8ColumnsResultSet()
+
+		err = proto.SendResultSetTextBatchRowSpeedup(res, uint64(len(res.Data)))
+		cvey.So(err,cvey.ShouldBeNil)
+	})
+
+	cvey.Convey("send result set succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		res := make8ColumnsResultSet()
+
+		err = proto.sendResultSet(res, int(COM_QUERY), 0, 0)
+		cvey.So(err,cvey.ShouldBeNil)
+
+		err = proto.SendResultSetTextRow(res,0)
+		cvey.So(err,cvey.ShouldBeNil)
+	})
+}
+
+func Test_send_packet(t *testing.T) {
+	cvey.Convey("send err packet",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		err = proto.sendErrPacket(1,"fake state","fake error")
+		cvey.So(err,cvey.ShouldBeNil)
+	})
+	cvey.Convey("send eof packet",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+		sv,err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0,ioses,1024,sv)
+
+		err = proto.sendEOFPacket(1,0)
+		cvey.So(err,cvey.ShouldBeNil)
+
+		err = proto.SendEOFPacketIf(1,0)
+		cvey.So(err,cvey.ShouldBeNil)
+
+		err = proto.sendEOFOrOkPacket(1,0)
+		cvey.So(err,cvey.ShouldBeNil)
+	})
+}
+
+func Test_analyse320resp(t *testing.T) {
+	cvey.Convey("analyse 320 resp succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+
+		var data []byte = nil
+		var cap uint16 = 0
+		cap |= uint16(CLIENT_CONNECT_WITH_DB)
+		var header [2]byte
+		proto.io.WriteUint16(header[:], 0, cap)
+		//int<2>             capabilities flags, CLIENT_PROTOCOL_41 never set
+		data = append(data, header[:]...)
+		//int<3>             max-packet size
+		data = append(data, 0xff, 0xff, 0xff)
+		//string[NUL]        username
+		username := "abc"
+		data = append(data, []byte(username)...)
+		data = append(data, 0x0)
+		//auth response
+		authResp := []byte{0x1, 0x2, 0x3, 0x4}
+		data = append(data, authResp...)
+		data = append(data, 0x0)
+		//database
+		dbName := "T"
+		data = append(data, []byte(dbName)...)
+		data = append(data, 0x0)
+
+		ok, resp320, err := proto.analyseHandshakeResponse320(data)
+		cvey.So(err, cvey.ShouldBeNil)
+		cvey.So(ok, cvey.ShouldBeTrue)
+
+		cvey.So(resp320.username, cvey.ShouldEqual, username)
+		cvey.So(bytes.Equal(resp320.authResponse, authResp), cvey.ShouldBeTrue)
+		cvey.So(resp320.database, cvey.ShouldEqual, dbName)
+	})
+
+	cvey.Convey("analyse 320 resp failed", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+
+		type kase struct {
+			data []byte
+			res bool
+		}
+
+		kases := []kase{
+			{data: []byte{0}, res: false},
+			{data: []byte{0,0,0,0}, res: false},
+			{data: []byte{0,0,1,2,3}, res: false},
+			{data: []byte{0,0,1,2,3,'a',0,}, res: true},
+			{data: []byte{0,0,1,2,3,'a',0,1,2,3}, res: true},
+			{data: []byte{uint8(CLIENT_CONNECT_WITH_DB),0,1,2,3,'a',0,}, res: false},
+			{data: []byte{uint8(CLIENT_CONNECT_WITH_DB),0,1,2,3,'a',0,'b','c'}, res: false},
+			{data: []byte{uint8(CLIENT_CONNECT_WITH_DB),0,1,2,3,'a',0,'b','c',0}, res: false},
+			{data: []byte{uint8(CLIENT_CONNECT_WITH_DB),0,1,2,3,'a',0,'b','c',0,'d','e'}, res: false},
+			{data: []byte{uint8(CLIENT_CONNECT_WITH_DB),0,1,2,3,'a',0,'b','c',0,'d','e',0}, res: true},
+		}
+
+		for _, c := range kases {
+			ok, _, _ := proto.analyseHandshakeResponse320(c.data)
+			cvey.So(ok,cvey.ShouldEqual,c.res)
+		}
+	})
+}
+
+func Test_analyse41resp(t *testing.T) {
+	cvey.Convey("analyse 41 resp succ",t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+
+		var data []byte = nil
+		var cap uint32 = 0
+		cap |= CLIENT_PROTOCOL_41 | CLIENT_CONNECT_WITH_DB
+		var header [4]byte
+		proto.io.WriteUint32(header[:], 0, cap)
+		//int<4>             capabilities flags of the client, CLIENT_PROTOCOL_41 always set
+		data = append(data, header[:]...)
+		//int<4>             max-packet size
+		data = append(data, 0xff, 0xff, 0xff,0xff)
+		//int<1>             character set
+		data = append(data,0x1)
+		//string[23]         reserved (all [0])
+		data = append(data,make([]byte,23,23)...)
+		//string[NUL]        username
+		username := "abc"
+		data = append(data, []byte(username)...)
+		data = append(data, 0x0)
+		//auth response
+		authResp := []byte{0x1, 0x2, 0x3, 0x4}
+		data = append(data, authResp...)
+		data = append(data, 0x0)
+		//database
+		dbName := "T"
+		data = append(data, []byte(dbName)...)
+		data = append(data, 0x0)
+
+		ok, resp41, err := proto.analyseHandshakeResponse41(data)
+		cvey.So(err, cvey.ShouldBeNil)
+		cvey.So(ok, cvey.ShouldBeTrue)
+
+		cvey.So(resp41.username, cvey.ShouldEqual, username)
+		cvey.So(bytes.Equal(resp41.authResponse, authResp), cvey.ShouldBeTrue)
+		cvey.So(resp41.database, cvey.ShouldEqual, dbName)
+	})
+
+	cvey.Convey("analyse 41 resp failed", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+		ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+		ioses.EXPECT().Read().Return(new(Packet),nil).AnyTimes()
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+
+		type kase struct {
+			data []byte
+			res bool
+		}
+
+		var cap uint32 = 0
+		cap |= CLIENT_PROTOCOL_41 | CLIENT_CONNECT_WITH_DB | CLIENT_PLUGIN_AUTH
+		var header [4]byte
+		proto.io.WriteUint32(header[:], 0, cap)
+
+		kases := []kase{
+			{data: []byte{0}, res: false},
+			{data: []byte{0,0,0,0}, res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',0,
+				'd','e','f',
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',0,
+				'd','e','f',0,
+				'T',
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',0,
+				'd','e','f',0,
+				'T',0,
+				'm','y','s',
+			}...), res: false},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',0,
+				'd','e','f',0,
+				'T',0,
+				'm','y','s','q','l','_','n','a','t','i','v','e','_','p','a','s','s','w','o','r','x',0,
+			}...), res: true},
+			{data: append(header[:],[]byte{
+				0,0,0,0,
+				0,
+				0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+				'a','b','c',0,
+				'd','e','f',0,
+				'T',0,
+				'm','y','s','q','l','_','n','a','t','i','v','e','_','p','a','s','s','w','o','r','d',0,
+			}...), res: true},
+
+		}
+
+		for _, c := range kases {
+			ok, _, _ := proto.analyseHandshakeResponse41(c.data)
+			cvey.So(ok,cvey.ShouldEqual,c.res)
+		}
+	})
 }

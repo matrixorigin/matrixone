@@ -182,8 +182,8 @@ name = "countOfRowsPerSendingToClient"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "set"
-values = ["10"]
+domain-type = "range"
+values = ["1000","1","10000"]
 comment = "send the count of rows to the client"
 update-mode = "dynamic"
 
@@ -268,34 +268,15 @@ comment = "the Node ID of the cube. In a distributed setting, each node in a clu
 update-mode = "dynamic"
 
 [[parameter]]
-name = "cubeDirPrefix"
+name = "storePath"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["./cube"]
-comment = "the root directory prefix of the cube. The actual dir is cubeDirPrefix + nodeID"
+values = ["./store"]
+comment = "the root directory of the storage and matrixcube's data. The actual dir is cubeDirPrefix + nodeID"
 update-mode = "dynamic"
 
-[[parameter]]
-name = "prophetEmbedEtcdJoinAddr"
-scope = ["global"]
-access = ["file"]
-type = "string"
-domain-type = "set"
-values = ["http://localhost:40000", "http://127.0.0.1:40000"]
-comment = "the join address of prophet of the cube"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "maxReplicas"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["1", "1", "1"]
-comment = "the number of replicas for each resource"
-update-mode = "dynamic"
 
 [[parameter]]
 name = "lengthOfQueryPrinted"
@@ -333,8 +314,28 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["error","info","debug","warning","warn","fatal"]
-comment = "default is error. The log level for cube."
+values = ["debug","info","error","warning","warn","fatal"]
+comment = "default is debug. The log level for cube."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "enableProfileGetDataFromPipeline"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "defult is false. true for profiling the getDataFromPipeline"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "maxBytesInOutbufToFlush"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["1024","32","3096"]
+comment = "KB. When the number of bytes in the outbuffer exceeds the it,the outbuffer will be flushed."
 update-mode = "dynamic"
 
 [[parameter]]
@@ -352,8 +353,8 @@ pre-allocated-group-num = 20
 max-group-num           = 0
 
 # Logger Configs
-level = "info" # debug, info, warn, error, fatal.
-format = "console" # json, console.
+level = "debug" # debug, info, warn, error, fatal.
+format = "json" # json, console.
 
 # log file config
 filename = "" # log file.
@@ -363,15 +364,19 @@ max-backups = 0 # maximum numbers of old log files to retain.
 
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
-# In a distributed setting, the shard-groups should set to 2.
-addr-raft = "localhost:20001"
-addr-client = "localhost:20002"
-dir-data = "./cube0/node"
+# Docker or NAT network environment configuration
+# If a client cannot access Cube through the default client URLs listened to by Cube, you must manually set the advertise client URLs
+# For exmaple, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
+addr-raft = "localhost:10000"
+addr-advertise-raft = ""
+addr-client = "localhost:20000"
+addr-advertise-client = ""
 dir-deploy = ""
 version = ""
 githash = ""
 capacity = 0
 use-memory-as-storage = false
+# In a distributed setting, the shard-groups should set to 2.
 shard-groups = 1
 
 # Replication Configs
@@ -380,6 +385,7 @@ shard-groups = 1
 max-peer-down-time = "30m"
 shard-split-check-duration = "30s"
 shard-state-check-duration = "1m"
+compact-log-check-duration = "60s"
 disable-shard-split = false
 allow-remove-leader = false
 shard-capacity-bytes = "96MB"
@@ -418,7 +424,11 @@ raft-event-worker = 32
 # In a distributed setting, there are three nodes act as prophet, each of which should have different names.
 name = "node0"
 data-dir = ""
-rpc-addr = "localhost:10001"
+# RPC port for other client to access prophet.
+# Docker or NAT network environment configuration
+# For exmaple, rpc-addr = "0.0.0.0:30000", rpc-advertise-addr = "${HOST}:30000"
+rpc-addr = "localhost:30000"
+rpc-advertise-addr = ""
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 rpc-timeout = "10s"
 # In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
@@ -426,17 +436,25 @@ storage-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
 # If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's peer-urls.
 external-etcd = ["", "", ""]
+# If prophet cluster have 3 nodes (also prophet cluster should have 3 nodes at least), lease should be 3. external-etcd should config nodes advertise-client-urls.
 lease = 0
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting
 [prophet.embed-etcd]
 # For the genesis node in the three prophet, the join value should remain a empty string.
 # For the other two nodes in the prophet group, the join value should set to the genesis node's peer-urls.
+# see more: https://etcd.io/docs/v3.5/op-guide/clustering/
 join = ""
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-client-urls = "http://localhost:2379"
+# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000"). 
+# If the cluster runs on Docker, specify the IP address of Docker as "http://0.0.0.0:40000"
+client-urls = "http://localhost:40000"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-peer-urls = "http://localhost:2380"
+# The list of peer URLs to be listened to by a prophet node
+peer-urls = "http://localhost:50000"
+# In some situations such as in the Docker or NAT network environment, 
+# if a client cannot access prophet through the default client URLs listened to by prophet, you must manually set the advertise client URLs
+# For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
 advertise-peer-urls = ""
 initial-cluster = ""
@@ -493,7 +511,7 @@ instance = ""
 
 # Storage Configs
 [meta.conf]
-block-max-rows = 40000
+block-max-rows = 160000
 segment-max-blocks = 40
 
 [scheduler-cfg]

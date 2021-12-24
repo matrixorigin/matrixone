@@ -23,10 +23,9 @@ import (
     "github.com/matrixorigin/matrixone/pkg/encoding"
     "github.com/matrixorigin/matrixone/pkg/vectorize/sub"
     "github.com/matrixorigin/matrixone/pkg/vm/process"
-    "github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
-func init(){
+func initMinus(){
     BinOps[Minus] = []*BinOp{
         // same type to minus
         {{range .Field1}}
@@ -44,14 +43,14 @@ func init(){
                         sub.{.RTYP}SubScalar(lvs[0], rvs, rvs)
                         return rv, nil
                     }
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.Decode{.RTYP}Slice(vec.Data)
                     rs = rs[:len(rvs)]
-                    vec.Nsp.Set(rv.Nsp)
-                    vec.SetCol(sub.{.RTYP}SubScalar(lvs[0], rvs, rs))
+                    nulls.Set(vec.Nsp, rv.Nsp)
+                    vector.SetCol(vec, sub.{.RTYP}SubScalar(lvs[0], rvs, rs))
                     return vec, nil
                 case !lc && rc:
                     if lv.Ref == 1 || lv.Ref == 0 {
@@ -59,21 +58,21 @@ func init(){
                         sub.{.LTYP}SubByScalar(rvs[0], lvs, lvs)
                         return lv, nil
                     }
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.Decode{.LTYP}Slice(vec.Data)
                     rs = rs[:len(lvs)]
-                    vec.Nsp.Set(lv.Nsp)
-                    vec.SetCol(sub.{.LTYP}SubByScalar(rvs[0], lvs, rs))
+                    nulls.Set(vec.Nsp, lv.Nsp)
+                    vector.SetCol(vec, sub.{.LTYP}SubByScalar(rvs[0], lvs, rs))
                     return vec, nil
                 case lv.Ref == 1 || lv.Ref == 0:
                     lv.Ref = 0
                     sub.{.LTYP}Sub(lvs, rvs, lvs)
                     lv.Nsp = lv.Nsp.Or(rv.Nsp)
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return lv, nil
                 case rv.Ref == 1 || rv.Ref == 0:
@@ -81,23 +80,23 @@ func init(){
                     sub.{.RTYP}Sub(lvs, rvs, rvs)
                     rv.Nsp = rv.Nsp.Or(lv.Nsp)
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     return rv, nil
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                 if err != nil {
                     return nil, err
                 }
                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                 rs = rs[:len(rvs)]
                 nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-                vec.SetCol(sub.{.RETTYP}Sub(lvs, rvs, rs))
+                vector.SetCol(vec, sub.{.RETTYP}Sub(lvs, rvs, rs))
                 if lv.Ref == 0 {
-                    register.Put(proc, lv)
+                    process.Put(proc, lv)
                 }
                 if rv.Ref == 0 {
-                    register.Put(proc, rv)
+                    process.Put(proc, rv)
                 }
                 return vec, nil
             },
@@ -120,17 +119,17 @@ func init(){
                         sub.{.RETTYP}SubScalar(RETURN_GO_TYPE(lvs[0]), rvs, rvs)
                         return rv, nil
                     }
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.Decode{.RTYP}Slice(vec.Data)
                     rs = rs[:len(rvs)]
-                    vec.Nsp.Set(rv.Nsp)
-                    vec.SetCol(sub.{.RTYP}SubScalar(RETURN_GO_TYPE(lvs[0]), rvs, rs))
+                    nulls.Set(vec.Nsp, rv.Nsp)
+                    vector.SetCol(vec, sub.{.RTYP}SubScalar(RETURN_GO_TYPE(lvs[0]), rvs, rs))
                     return vec, nil
                 case !lc && rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
                     if err != nil {
                         return nil, err
                     }
@@ -139,10 +138,10 @@ func init(){
                     for i := range rs {
                         rs[i] = RETURN_GO_TYPE(lvs[i])
                     }
-                    vec.Nsp.Set(lv.Nsp)
-                    vec.SetCol(sub.{.RTYP}SubByScalar(RETURN_GO_TYPE(lvs[0]), rs, rs))
+                    nulls.Set(vec.Nsp, lv.Nsp)
+                    vector.SetCol(vec, sub.{.RTYP}SubByScalar(RETURN_GO_TYPE(lvs[0]), rs, rs))
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     return vec, nil
                 case rv.Ref == 1 || rv.Ref == 0:
@@ -154,11 +153,11 @@ func init(){
                         rvs[i] = -r
                     }
                     if lv.Ref == 0 {
-                        register.Put(proc, lv)
+                        process.Put(proc, lv)
                     }
                     return rv, nil
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
                 if err != nil {
                     return nil, err
                 }
@@ -168,12 +167,12 @@ func init(){
                     rs[i] = RETURN_GO_TYPE(lvs[i])
                 }
                 nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-                vec.SetCol(sub.{.RETTYP}Sub(rs, rvs, rs))
+                vector.SetCol(vec, sub.{.RETTYP}Sub(rs, rvs, rs))
                 if lv.Ref == 0 {
-                    register.Put(proc, lv)
+                    process.Put(proc, lv)
                 }
                 if rv.Ref == 0 {
-                    register.Put(proc, rv)
+                    process.Put(proc, rv)
                 }
                 return vec, nil
             },
@@ -191,7 +190,7 @@ func init(){
                 rtl := {.RETURN_TYPE_LEN}
                 switch {
                 case lc && !rc:
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
                     if err != nil {
                         return nil, err
                     }
@@ -200,10 +199,10 @@ func init(){
                     for i := range rs {
                         rs[i] = RETURN_GO_TYPE(rvs[i])
                     }
-                    vec.Nsp.Set(rv.Nsp)
-                    vec.SetCol(sub.{.LTYP}SubScalar(lvs[0], rs, rs))
+                    nulls.Set(vec.Nsp, rv.Nsp)
+                    vector.SetCol(vec, sub.{.LTYP}SubScalar(lvs[0], rs, rs))
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return vec, nil
                 case !lc && rc:
@@ -212,25 +211,25 @@ func init(){
                         sub.{.LTYP}SubByScalar(RETURN_GO_TYPE(rvs[0]), lvs, lvs)
                         return lv, nil
                     }
-                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                    vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                     if err != nil {
                         return nil, err
                     }
                     rs := encoding.Decode{.RETTYP}Slice(vec.Data)
                     rs = rs[:len(lvs)]
-                    vec.Nsp.Set(lv.Nsp)
-                    vec.SetCol(sub.{.LTYP}SubByScalar(RETURN_GO_TYPE(rvs[0]), lvs, rs))
+                    nulls.Set(vec.Nsp, lv.Nsp)
+                    vector.SetCol(vec, sub.{.LTYP}SubByScalar(RETURN_GO_TYPE(rvs[0]), lvs, rs))
                     return vec, nil
                 case lv.Ref == 1 || lv.Ref == 0:
                     lv.Ref = 0
                     sub.{.RTYP}{.LTYP}Sub(lvs, rvs, lvs)
                     lv.Nsp = lv.Nsp.Or(rv.Nsp)
                     if rv.Ref == 0 {
-                        register.Put(proc, rv)
+                        process.Put(proc, rv)
                     }
                     return lv, nil
                 }
-                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
                 if err != nil {
                     return nil, err
                 }
@@ -240,12 +239,12 @@ func init(){
                     rs[i] = RETURN_GO_TYPE(rvs[i])
                 }
                 nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-                vec.SetCol(sub.{.RETTYP}Sub(lvs, rs, rs))
+                vector.SetCol(vec, sub.{.RETTYP}Sub(lvs, rs, rs))
                 if lv.Ref == 0 {
-                    register.Put(proc, lv)
+                    process.Put(proc, lv)
                 }
                 if rv.Ref == 0 {
-                    register.Put(proc, rv)
+                    process.Put(proc, rv)
                 }
                 return vec, nil
             },

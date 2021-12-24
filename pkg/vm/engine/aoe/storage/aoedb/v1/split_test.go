@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -51,9 +53,9 @@ func TestSplit1(t *testing.T) {
 	err = inst1.FlushDatabase(database.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, 0, database.UncheckpointedCnt())
 	coarseSize := database.GetSize()
 	size := coarseSize * 7 / 8
@@ -139,20 +141,21 @@ func TestSplit2(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
+	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 5. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 
@@ -283,20 +286,21 @@ func TestSplit3(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
+	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 6. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 
@@ -429,20 +433,21 @@ func TestSplit4(t *testing.T) {
 
 	t0 := database.SimpleGetTableByName(schemas[0].Name)
 	data0, _ := inst.GetTableData(t0)
-	assert.Equal(t, ck0.Length(), int(data0.GetRowCount()))
+	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
 	data0.Unref()
 
 	t1 := database.SimpleGetTableByName(schemas[1].Name)
 	data1, _ := inst.GetTableData(t1)
-	assert.Equal(t, ck1.Length(), int(data1.GetRowCount()))
+	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
 	data1.Unref()
 
 	// 6. Flush
 	err = inst.FlushDatabase(database.Name)
 	assert.Nil(t, err)
-	testutils.WaitExpect(500, func() bool {
-		return database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
 	coarseSize := database.GetSize()
 	size := coarseSize
 
@@ -502,6 +507,138 @@ func TestSplit4(t *testing.T) {
 		db.RUnlock()
 	}
 	assert.Equal(t, rows*2, totalRows)
+	testutils.WaitExpect(500, func() bool {
+		return t0.IsHardDeleted() && t1.IsHardDeleted()
+	})
+	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
+	inst.ForceCompactCatalog()
+	t.Log(database.Catalog.PString(metadata.PPL0, 0))
+	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
+
+	active := tables[0]
+	activeMeta := active.GetMeta()
+	rows1 := active.GetRowCount()
+
+	ck := mock.MockBatch(activeMeta.Schema.Types(), rows)
+	appendCtx = CreateAppendCtx(activeMeta.Database, gen, activeMeta.Schema.Name, ck)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+	assert.Equal(t, rows+rows1, active.GetRowCount())
+	inst.Close()
+
+	inst, _, _ = initTestDB2(t)
+	defer inst.Close()
+}
+
+func TestSplit5(t *testing.T) {
+	initTestEnv(t)
+	prepareSnapshotPath(defaultSnapshotPath, t)
+	// 1. Create a db instance and a database
+	inst, gen, database := initTestDB1(t)
+
+	// 2. Create 2 tables
+	schemas := make([]*metadata.Schema, 2)
+	var createCtx *CreateTableCtx
+	for i, _ := range schemas {
+		schema := metadata.MockSchema(i + 1)
+		createCtx = &CreateTableCtx{
+			DBMutationCtx: *CreateDBMutationCtx(database, gen),
+			Schema:        schema,
+		}
+		_, err := inst.CreateTable(createCtx)
+		assert.Nil(t, err)
+		schemas[i] = schema
+	}
+
+	// 3. Append rows to 1-1
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
+	ck0 := mock.MockBatch(schemas[0].Types(), rows)
+	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
+	err := inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 4. Append rows to 1-2
+	ck1 := mock.MockBatch(schemas[1].Types(), rows)
+	appendCtx = CreateAppendCtx(database, gen, schemas[1].Name, ck1)
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	t0 := database.SimpleGetTableByName(schemas[0].Name)
+	data0, _ := inst.GetTableData(t0)
+	assert.Equal(t, vector.Length(ck0.Vecs[0]), int(data0.GetRowCount()))
+	data0.Unref()
+
+	t1 := database.SimpleGetTableByName(schemas[1].Name)
+	data1, _ := inst.GetTableData(t1)
+	assert.Equal(t, vector.Length(ck1.Vecs[0]), int(data1.GetRowCount()))
+	data1.Unref()
+
+	// 5. Flush
+	err = inst.FlushDatabase(database.Name)
+	assert.Nil(t, err)
+	// testutils.WaitExpect(500, func() bool {
+	// 	return database.UncheckpointedCnt() == 0
+	// })
+	assert.Equal(t, database.UncheckpointedCnt(), 0)
+	coarseSize := database.GetSize()
+	size := coarseSize
+
+	// 6. Append rows to 1-2
+	appendCtx.Id = gen.Alloc(database.GetShardId())
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+
+	// 7. Prepapre split
+	prepareCtx := &PrepareSplitCtx{
+		DB:   database.Name,
+		Size: uint64(size),
+	}
+	_, _, keys, ctx, err := inst.PrepareSplitDatabase(prepareCtx)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(keys))
+
+	// 8. Exec split
+	newNames := make([]string, len(keys))
+	for i, _ := range newNames {
+		newNames[i] = fmt.Sprintf("splitted-%d", i)
+	}
+	renameTable := func(oldName, newDBName string) string {
+		return oldName
+	}
+	execCtx := &ExecSplitCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		NewNames:      newNames,
+		RenameTable:   renameTable,
+		SplitKeys:     keys,
+		SplitCtx:      ctx,
+	}
+	err = inst.ExecSplitDatabase(execCtx)
+	assert.Nil(t, err)
+
+	tables := make([]iface.ITableData, 0)
+	totalRows := uint64(0)
+	processor := new(metadata.LoopProcessor)
+	processor.TableFn = func(tbl *metadata.Table) error {
+		tbl.RLock()
+		defer tbl.RUnlock()
+		td, err := inst.Store.DataTables.WeakRefTable(tbl.Id)
+		assert.Nil(t, err)
+		totalRows += td.GetRowCount()
+		tables = append(tables, td)
+		return nil
+	}
+
+	var dbs []*metadata.Database
+	for _, name := range newNames {
+		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
+		assert.Nil(t, err)
+		dbs = append(dbs, db)
+		db.RLock()
+		err = db.RecurLoopLocked(processor)
+		assert.Nil(t, err)
+		db.RUnlock()
+	}
+	assert.Equal(t, rows*3, totalRows)
 	testutils.WaitExpect(500, func() bool {
 		return t0.IsHardDeleted() && t1.IsHardDeleted()
 	})

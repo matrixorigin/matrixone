@@ -15,6 +15,7 @@
 package aoedb
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"os"
 	"path/filepath"
 	"testing"
@@ -203,9 +204,9 @@ func TestReplay1(t *testing.T) {
 	err = inst.FlushDatabase(db2.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return db2.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return db2.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, 0, db2.UncheckpointedCnt())
 	assert.Equal(t, gen.Get(db2.GetShardId()), db2.GetCheckpointId())
 }
@@ -420,7 +421,7 @@ func TestReplay4(t *testing.T) {
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
+	assert.Equal(t, uint64(rows), uint64(vector.Length(ck.Vecs[0])))
 	insertCnt := 4
 	appendCtx := new(AppendCtx)
 	for i := 0; i < insertCnt; i++ {
@@ -551,9 +552,9 @@ func TestReplay5(t *testing.T) {
 	err = inst.FlushDatabase(meta.Database.Name)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return meta.Database.UncheckpointedCnt() == 0
-	})
+	// testutils.WaitExpect(200, func() bool {
+	// 	return meta.Database.UncheckpointedCnt() == 0
+	// })
 	assert.Equal(t, appendCtx.Id, meta.Database.GetCheckpointId())
 	assert.Equal(t, 0, meta.Database.UncheckpointedCnt())
 }

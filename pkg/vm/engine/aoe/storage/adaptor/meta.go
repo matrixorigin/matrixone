@@ -16,6 +16,7 @@ package adaptor
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -149,6 +150,6 @@ func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *shard.Index {
 			Offset: uint32(ctx.OpOffset),
 			Size:   uint32(ctx.OpSize),
 		},
-		Capacity: uint64(ctx.Data.Vecs[0].Length()),
+		Capacity: uint64(vector.Length(ctx.Data.Vecs[0])),
 	}
 }

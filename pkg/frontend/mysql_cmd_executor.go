@@ -16,10 +16,17 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"os"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,8 +37,8 @@ import (
 )
 
 //tableInfos of a database
-type TableInfoCache struct{
-	db string
+type TableInfoCache struct {
+	db         string
 	tableInfos map[string]aoe.TableInfo
 }
 
@@ -46,6 +53,18 @@ type MysqlCmdExecutor struct {
 
 	//for load data closing
 	loadDataClose *CloseLoadData
+
+	ses *Session
+
+	routineMgr *RoutineManager
+}
+
+func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session)  {
+	cei.ses = ses
+}
+
+func (cei *MysqlCmdExecutor) GetSession() *Session {
+	return cei.ses
 }
 
 //get new process id
@@ -54,12 +73,93 @@ func (mce *MysqlCmdExecutor) getNextProcessId() string {
 		temporary method:
 		routineId + sqlCount
 	*/
-	routineId := mce.routine.getConnID()
+	routineId := mce.GetSession().protocol.ConnectionID()
 	return fmt.Sprintf("%d%d", routineId, mce.sqlCount)
 }
 
 func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
 	mce.sqlCount += a
+}
+
+func (mce *MysqlCmdExecutor) SetRoutineManager(mgr *RoutineManager) {
+	mce.routineMgr = mgr
+}
+
+func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
+	return mce.routineMgr
+}
+
+type outputQueue struct {
+	proto MysqlProtocol
+	mrs *MysqlResultSet
+	rowIdx uint64
+	length uint64
+
+	getEmptyRowTime time.Duration
+	flushTime time.Duration
+}
+
+func NewOuputQueue(proto MysqlProtocol,mrs *MysqlResultSet,length uint64) *outputQueue {
+	return &outputQueue{
+		proto:  proto,
+		mrs:    mrs,
+		rowIdx: 0,
+		length: length,
+	}
+}
+
+func (o *outputQueue) reset()  {
+	o.getEmptyRowTime = 0
+	o.flushTime = 0
+}
+
+/*
+getEmptyRow returns a empty space for filling data.
+If there is no space, it flushes the data into the protocol
+and returns an empty space then.
+*/
+func (o *outputQueue) getEmptyRow() ([]interface{},error) {
+	//begin := time.Now()
+	//defer func() {
+	//	o.getEmptyRowTime += time.Since(begin)
+	//}()
+	if o.rowIdx >= o.length {
+		if err := o.flush(); err != nil {
+			return nil,err
+		}
+	}
+
+	row := o.mrs.Data[o.rowIdx]
+	o.rowIdx++
+	return row,nil
+}
+
+/*
+flush will force the data flushed into the protocol.
+ */
+func (o *outputQueue) flush() error {
+	//begin := time.Now()
+	//defer func() {
+	//	o.flushTime += time.Since(begin)
+	//}()
+	if o.rowIdx <= 0 {
+		return nil
+	}
+	//send group of row
+	if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
+		//return err
+		logutil.Errorf("flush error %v \n", err)
+		return err
+	}
+	o.rowIdx = 0
+	return nil
+}
+
+/*
+getData returns the data slice in the resultset
+ */
+func (o *outputQueue) getData() [][]interface{} {
+	return o.mrs.Data[:o.rowIdx]
 }
 
 /*
@@ -70,23 +170,26 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
-	rt := obj.(*Routine)
-	ses := rt.GetSession()
+	ses := obj.(*Session)
 
 	if bat == nil {
 		return nil
 	}
 
-	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
-	rowGroupSize = MaxInt64(rowGroupSize, 1)
-
 	goID := GetRoutineId()
 
 	logutil.Infof("goid %d \n", goID)
+	enableProfile := ses.Pu.SV.GetEnableProfileGetDataFromPipeline()
+
+	var cpuf *os.File = nil
+	if enableProfile {
+		cpuf, _ = os.Create("cpu_profile")
+	}
 
 	begin := time.Now()
 
-	proto := rt.GetClientProtocol().(MysqlProtocol)
+	proto := ses.GetMysqlProtocol()
+	proto.PrepareBeforeProcessingResultSet()
 
 	//Create a new temporary resultset per pipeline thread.
 	mrs := &MysqlResultSet{}
@@ -95,362 +198,277 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	mrs.Columns = ses.Mrs.Columns
 	mrs.Name2Index = ses.Mrs.Name2Index
 
+	begin3 := time.Now()
+	countOfResultSet := 1
 	//group row
-	mrs.Data = make([][]interface{}, rowGroupSize)
-	for i := int64(0); i < rowGroupSize; i++ {
+	mrs.Data = make([][]interface{}, countOfResultSet)
+	for i := 0; i < countOfResultSet; i++ {
 		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
 	}
+	allocateOutBufferTime := time.Since(begin3)
 
-	if n := len(bat.Sels); n == 0 {
-		n = bat.Vecs[0].Length()
-		groupCnt := int64(n)/rowGroupSize + 1
-		for g := int64(0); g < groupCnt; g++ { //group id
-			begin := g * rowGroupSize
-			end := MinInt64((g+1)*rowGroupSize, int64(n))
+	oq := NewOuputQueue(proto,mrs, uint64(countOfResultSet))
+	oq.reset()
 
-			r := uint64(0)
-			for j := begin; j < end; j++ { //row index
-				row := mrs.Data[r]
-				r++
-				for i, vec := range bat.Vecs { //col index
-					switch vec.Typ.Oid { //get col
-					case types.T_int8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int8)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int8)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_uint8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint8)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint8)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_int16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int16)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int16)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_uint16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint16)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint16)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_int32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int32)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_uint32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint32)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_int64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int64)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_uint64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint64)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_float32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float32)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_float64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float64)
-								row[i] = vs[j]
-							}
-						}
-					case types.T_char:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(j)
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = vs.Get(j)
-							}
-						}
-					case types.T_varchar:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(j)
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = vs.Get(j)
-							}
-						}
-					default:
-						logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-					}
-				}
-			}
+	row2colTime := time.Duration(0)
 
-			//fmt.Printf("row group -+> %v \n", mrs.Data[:r])
+	procBatchBegin := time.Now()
 
-			//send group of row
-			if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
-				//return err
-				logutil.Errorf("getDataFromPipeline error %v \n", err)
-				return err
-			}
+	n := vector.Length(bat.Vecs[0])
+
+	if enableProfile {
+		pprof.StartCPUProfile(cpuf)
+	}
+	for j := 0; j < n; j++ { //row index
+		if bat.Zs[j] <= 0{
+			continue
+		}
+		row, err := oq.getEmptyRow()
+		if err != nil {
+			return err
+		}
+		var rowIndex int64 = int64(j)
+		if len(bat.Sels) != 0{
+			rowIndex = bat.Sels[j]
 		}
 
-	} else {
-		n = bat.Vecs[0].Length()
-		groupCnt := int64(n)/rowGroupSize + 1
-		for g := int64(0); g < groupCnt; g++ { //group id
-			begin := g * rowGroupSize
-			end := MinInt64((g+1)*rowGroupSize, int64(n))
-
-			r := uint64(0)
-			for j := begin; j < end; j++ { //row index
-				row := mrs.Data[r]
-				r++
-				for i, vec := range bat.Vecs { //col index
-					switch vec.Typ.Oid { //get col
-					case types.T_int8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int8)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int8)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint8)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint8)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int16)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int16)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint16)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint16)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int32)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint32)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int64)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint64)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_float32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float32)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_float64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float64)
-								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_char:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(bat.Sels[j])
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = vs.Get(bat.Sels[j])
-							}
-						}
-					case types.T_varchar:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(bat.Sels[j])
-						} else {
-							if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = vs.Get(bat.Sels[j])
-							}
-						}
-					default:
-						logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+		//begin1 := time.Now()
+		for i, vec := range bat.Vecs { //col index
+			switch vec.Typ.Oid { //get col
+			case types.T_int8:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]int8)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int8)
+						row[i] = vs[rowIndex]
 					}
 				}
+			case types.T_uint8:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]uint8)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint8)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_int16:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]int16)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int16)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_uint16:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]uint16)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint16)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_int32:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]int32)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int32)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_uint32:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]uint32)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint32)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_int64:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]int64)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int64)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_uint64:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]uint64)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint64)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_float32:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]float32)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]float32)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_float64:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]float64)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]float64)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_char:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.(*types.Bytes)
+					row[i] = vs.Get(int64(rowIndex))
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(int64(rowIndex))
+					}
+				}
+			case types.T_varchar:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.(*types.Bytes)
+					row[i] = vs.Get(int64(rowIndex))
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(int64(rowIndex))
+					}
+				}
+			case types.T_date:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Date)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Date)
+						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_datetime:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Datetime)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Datetime)
+						row[i] = vs[rowIndex]
+					}
+				}
+			default:
+				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+			}
+		}
+		//row2colTime += time.Since(begin1)
+
+		//duplicate rows
+		for i := int64(0); i < bat.Zs[j] - 1; i++ {
+			erow,rr := oq.getEmptyRow()
+			if rr != nil {
+				return rr
 			}
 
-			//fmt.Printf("row group -*> %v \n", mrs.DataSource[:r])
-
-			//send row
-			if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
-				//return err
-				logutil.Errorf("getDataFromPipeline error %v \n", err)
-				return err
+			for l := 0; l < len(bat.Vecs); l++ {
+				erow[l] = row[l]
 			}
 		}
 	}
 
-	logutil.Infof("time of getDataFromPipeline : %s ", time.Since(begin).String())
+	//logutil.Infof("row group -+> %v ", oq.getData())
+
+	err := oq.flush()
+	if err != nil {
+		return err
+	}
+
+	if enableProfile {
+		pprof.StopCPUProfile()
+	}
+
+	procBatchTime := time.Since(procBatchBegin)
+	tTime := time.Since(begin)
+	logutil.Infof("rowCount %v \n" +
+		"time of getDataFromPipeline : %s \n" +
+		"processBatchTime %v \n" +
+		"row2colTime %v \n" +
+		"allocateOutBufferTime %v \n" +
+		"outputQueue.flushTime %v \n" +
+		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
+		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n" +
+		"protoStats %s\n",
+		n,
+		tTime,
+		procBatchTime,
+		row2colTime,
+		allocateOutBufferTime,
+		oq.flushTime,
+		procBatchTime - row2colTime - allocateOutBufferTime - oq.flushTime,
+		tTime - row2colTime  - allocateOutBufferTime,
+		proto.GetStats())
+
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleChangeDB(db string) error {
+	ses := mce.GetSession()
+	//TODO: check meta data
+	if _, err := ses.Pu.StorageEngine.Database(db); err != nil {
+		//echo client. no such database
+		return NewMysqlError(ER_BAD_DB_ERROR, db)
+	}
+	oldDB := ses.protocol.GetDatabaseName()
+	ses.protocol.SetDatabaseName(db)
+
+	logutil.Infof("User %s change database from [%s] to [%s]\n", ses.protocol.GetUserName(), oldDB, ses.protocol.GetDatabaseName())
 
 	return nil
 }
@@ -458,14 +476,14 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 //handle SELECT DATABASE()
 func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetName("DATABASE()")
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
-	val := mce.routine.db
+	val := ses.protocol.GetDatabaseName()
 	if val == "" {
 		val = "NULL"
 	}
@@ -485,8 +503,8 @@ handle "SELECT @@max_allowed_packet"
 */
 func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -512,8 +530,8 @@ handle "SELECT @@version_comment"
 */
 func (mce *MysqlCmdExecutor) handleVersionComment() error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -538,9 +556,8 @@ handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
-	routine := mce.routine
-	//ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.protocol
 
 	logutil.Infof("+++++load data")
 
@@ -549,6 +566,10 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	*/
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
+	}
+
+	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+		return fmt.Errorf("load need FIELDS TERMINATED BY ")
 	}
 
 	/*
@@ -569,25 +590,25 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	loadDb := string(load.Table.Schema())
 	loadTable := string(load.Table.Name())
 	if loadDb == "" {
-		if routine.db == "" {
+		if proto.GetDatabaseName() == "" {
 			return fmt.Errorf("load data need database")
 		}
 
 		//then, it uses the database name in the session
-		loadDb = routine.db
+		loadDb = ses.protocol.GetDatabaseName()
 	}
 
-	dbHandler, err := routine.ses.Pu.StorageEngine.Database(loadDb)
+	dbHandler, err := ses.Pu.StorageEngine.Database(loadDb)
 	if err != nil {
 		//echo client. no such database
 		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
 	}
 
 	//change db to the database in the LOAD DATA statement if necessary
-	if loadDb != routine.db {
-		oldDB := routine.db
-		routine.db = loadDb
-		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", routine.user, oldDB, routine.db)
+	if loadDb != proto.GetDatabaseName() {
+		oldDB := proto.GetDatabaseName()
+		proto.SetDatabaseName(loadDb)
+		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", proto.GetUserName(), oldDB, proto.GetDatabaseName())
 	}
 
 	/*
@@ -620,13 +641,13 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 
 /*
 handle cmd CMD_FIELD_LIST
- */
+*/
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	var err error = nil
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
 
-	db := mce.routine.db
+	db := proto.GetDatabaseName()
 	if db == "" {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
@@ -635,33 +656,36 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	//case 1: there are no table infos for the db
 	//case 2: db changed
 	if mce.tableInfos == nil || mce.db != db {
+		if ses.Pu.ClusterCatalog == nil {
+			return fmt.Errorf("need cluster catalog")
+		}
 		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
 		if err != nil {
 			return err
 		}
 
-		mce.db = mce.routine.db
+		mce.db = proto.GetDatabaseName()
 		mce.tableInfos = make(map[string]aoe.TableInfo)
 
 		//cache these info in the executor
-		for _,table := range tableInfos{
+		for _, table := range tableInfos {
 			mce.tableInfos[table.Name] = table
 		}
 	}
 
 	var attrs []aoe.ColumnInfo
-	table,ok := mce.tableInfos[tableName]
+	table, ok := mce.tableInfos[tableName]
 	if !ok {
 		//just give the empty info when there is no such table.
-		attrs = make([]aoe.ColumnInfo,0)
-	}else{
+		attrs = make([]aoe.ColumnInfo, 0)
+	} else {
 		attrs = table.Columns
 	}
 
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid),col)
+		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid), col)
 		if err != nil {
 			return err
 		}
@@ -689,10 +713,10 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 
 /*
 handle setvar
- */
+*/
 func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	var err error = nil
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+	proto := mce.GetSession().protocol
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
@@ -701,11 +725,75 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	return nil
 }
 
+type ComputationWrapperImpl struct {
+	exec *compile.Exec
+}
+
+func NewComputationWrapperImpl(e *compile.Exec) *ComputationWrapperImpl {
+	return &ComputationWrapperImpl{exec: e}
+}
+
+// GetAst gets ast of the statement
+func (cw *ComputationWrapperImpl) GetAst() tree.Statement {
+	return cw.exec.Statement()
+}
+
+//SetDatabaseName sets the database name
+func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error  {
+	return cw.exec.SetSchema(db)
+}
+
+func (cw *ComputationWrapperImpl) GetColumns() ([]interface{},error) {
+	columns := cw.exec.Columns()
+	var mysqlCols []interface{} = nil
+	var err error = nil
+	for _, c := range columns {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		if err != nil {
+			return nil,err
+		}
+		mysqlCols = append(mysqlCols,col)
+	}
+	return mysqlCols,err
+}
+
+func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
+	return cw.exec.GetAffectedRows()
+}
+
+func (cw *ComputationWrapperImpl) Compile(u interface{},
+		fill func(interface{}, *batch.Batch) error) error {
+	return cw.exec.Compile(u,fill)
+}
+
+func (cw *ComputationWrapperImpl) Run(ts uint64) error {
+	return cw.exec.Run(ts)
+}
+
+/*
+GetComputationWrapper gets the execs from the computation engine
+*/
+var GetComputationWrapper = func(db,sql,user string,eng engine.Engine, proc *process.Process) ([]ComputationWrapper,error) {
+	comp := compile.New(db, sql, user, eng, proc)
+	execs,err := comp.Build()
+	if err != nil {
+		return nil,err
+	}
+
+	var cw []ComputationWrapper = nil
+	for _, e := range execs {
+		cw = append(cw, NewComputationWrapperImpl(e))
+	}
+	return cw, err
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
-	pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+	ses := mce.GetSession()
+	proto := ses.GetMysqlProtocol()
+	pdHook := ses.GetEpochgc()
 	statementCount := uint64(1)
 
 	//pin the epoch with 1
@@ -714,28 +802,29 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
 
-	proc := process.New(ses.GuestMmu)
+	proc := process.New(mheap.New(ses.GuestMmu))
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
-	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
-	execs, err := comp.Build()
+	cws, err := GetComputationWrapper(proto.GetDatabaseName(),
+		sql,
+		proto.GetUserName(),
+		ses.Pu.StorageEngine,
+		proc)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err,
-			"--- Check the SQL syntax or the manual that corresponds to your MatrixOne server version for the right syntax to use")
+			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
 	}
-
-	ses.Mrs = &MysqlResultSet{}
 
 	defer func() {
 		ses.Mrs = nil
 	}()
 
-	for _, exec := range execs {
-		stmt := exec.Statement()
+	for _, cw := range cws {
+		ses.Mrs = &MysqlResultSet{}
+		stmt := cw.GetAst()
 
 		//temp try 0 epoch
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
@@ -781,12 +870,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		//check database
-		if mce.routine.db == "" {
+		if proto.GetDatabaseName() == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
-			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
+			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
-				*tree.Use,*tree.SetVar:
+				*tree.Use, *tree.SetVar:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -797,7 +886,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		switch st := stmt.(type) {
 		case *tree.Use:
 			selfHandle = true
-			err := mce.routine.ChangeDB(st.Name)
+			err := mce.handleChangeDB(st.Name)
 			if err != nil {
 				return err
 			}
@@ -807,8 +896,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.
-			if string(st.Name) == mce.routine.db {
-				mce.routine.db = ""
+			if string(st.Name) == proto.GetDatabaseName() {
+				proto.SetUserName("")
 			}
 		case *tree.Load:
 			selfHandle = true
@@ -827,12 +916,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if selfHandle {
 			continue
 		}
-		if err = exec.SetSchema(mce.routine.db); err != nil {
+		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
 			return err
 		}
 
 		cmpBegin := time.Now()
-		if err = exec.Compile(mce.routine, getDataFromPipeline); err != nil {
+		if err = cw.Compile(ses, getDataFromPipeline); err != nil {
 			return err
 		}
 
@@ -843,18 +932,20 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		switch stmt.(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreate, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
 			*tree.ShowIndex,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
-			columns := exec.Columns()
-
+			columns,err := cw.GetColumns()
+			if err != nil{
+				logutil.Errorf("GetColumns from Computation handler failed. error: %v",err)
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
 			//send column count
 			colCnt := uint64(len(columns))
-			err := proto.SendColumnCountPacket(colCnt)
+			err = proto.SendColumnCountPacket(colCnt)
 			if err != nil {
 				return err
 			}
@@ -862,19 +953,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//column_count * Protocol::ColumnDefinition packets
 			cmd := ses.Cmd
 			for _, c := range columns {
-				col := new(MysqlColumn)
-				col.SetName(c.Name)
-				err = convertEngineTypeToMysqlType(uint8(c.Typ),col)
-				if err != nil {
-					return err
-				}
-				ses.Mrs.AddColumn(col)
+				mysqlc := c.(Column)
+				ses.Mrs.AddColumn(mysqlc)
 
-				//fmt.Printf("doComQuery col name %v type %v \n",col.Name(),col.ColumnType())
+				//logutil.Infof("doComQuery col name %v type %v ",col.Name(),col.ColumnType())
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/
-				err := proto.SendColumnDefinitionPacket(col, cmd)
+				err := proto.SendColumnDefinitionPacket(mysqlc, cmd)
 				if err != nil {
 					return err
 				}
@@ -894,7 +980,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Start pipeline
 				Producing the data row and sending the data row
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -924,7 +1010,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 1: Start
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -943,7 +1029,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Echo client
 			*/
 			resp := NewOkResponse(
-				exec.GetAffectedRows(),
+				cw.GetAffectedRows(),
 				0,
 				0,
 				0,
@@ -968,16 +1054,11 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
 	logutil.Infof("cmd %v", req.GetCmd())
 
-	ses := mce.routine.GetSession()
+	ses := mce.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
-		pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+		pdHook := ses.GetEpochgc()
 		if !pdHook.CanAcceptSomething() {
-			resp = NewResponse(
-				ErrorResponse,
-				0,
-				req.GetCmd(),
-				fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()),
-			)
+			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()), )
 			return resp, nil
 		}
 	}
@@ -995,77 +1076,78 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		seps := strings.Split(query," ")
+		if len(seps) <= 0 {
+			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"), )
+			return resp, nil
+		}
+
+		if strings.ToLower(seps[0]) == "kill" {
+			//last one is processID
+			procIdStr := seps[len(seps) - 1]
+			procID, err := strconv.ParseUint(procIdStr,10,64)
+			if err != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+				return resp, nil
+			}
+			err = mce.GetRoutineManager().killStatement(procID)
+			if err != nil {
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+				return resp, err
+			}
+			resp = NewGeneralOkResponse(COM_QUERY)
+			return resp,nil
+		}
+
 		err := mce.doComQuery(query)
 		if err != nil {
-			resp = NewResponse(
-				ErrorResponse,
-				0,
-				int(COM_QUERY),
-				err,
-			)
+			resp = NewGeneralErrorResponse(COM_QUERY, err)
 		}
 		return resp, nil
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
-		err := mce.routine.ChangeDB(dbname)
+		err := mce.handleChangeDB(dbname)
 		if err != nil {
-			resp = NewResponse(ErrorResponse, 0, int(COM_INIT_DB), err)
+			resp = NewGeneralErrorResponse(COM_INIT_DB, err)
 		} else {
-			resp = NewResponse(OkResponse, 0, int(COM_INIT_DB), nil)
+			resp = NewGeneralOkResponse(COM_INIT_DB)
 		}
 
 		return resp, nil
 	case COM_FIELD_LIST:
 		var payload = string(req.GetData().([]byte))
 		//find null
-		nullIdx := strings.IndexRune(payload,rune(0))
+		nullIdx := strings.IndexRune(payload, rune(0))
 		var tableName string
 		if nullIdx < len(payload) {
 
 			tableName = payload[:nullIdx]
 			//wildcard := payload[nullIdx+1:]
-			//fmt.Printf("table name %s wildcard [%s] \n",tableName,wildcard)
+			//logutil.Infof("table name %s wildcard [%s] ",tableName,wildcard)
 			err := mce.handleCmdFieldList(tableName)
 			if err != nil {
-				resp = NewResponse(
-					ErrorResponse,
-					0,
-					int(COM_FIELD_LIST),
-					err,
-				)
+				resp = NewGeneralErrorResponse(COM_FIELD_LIST, err)
 			}
-		}else{
-			resp = NewResponse(ErrorResponse,
-				0,
-				int(COM_FIELD_LIST),
-				fmt.Errorf("wrong format for COM_FIELD_LIST"))
+		} else {
+			resp = NewGeneralErrorResponse(COM_FIELD_LIST, fmt.Errorf("wrong format for COM_FIELD_LIST"))
 		}
 
 		return resp, nil
 	case COM_PING:
-		resp = NewResponse(
-			OkResponse,
-			0,
-			int(COM_PING),
-			nil,
-		)
+		resp = NewGeneralOkResponse(COM_PING)
+
 		return resp, nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
-		resp = NewResponse(
-			ErrorResponse,
-			0,
-			req.GetCmd(),
-			err,
-		)
+		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	//fmt.Printf("close executor\n")
+	//logutil.Infof("close executor")
 	if mce.loadDataClose != nil {
-		//fmt.Printf("close process load data\n")
+		//logutil.Infof("close process load data")
 		mce.loadDataClose.Close()
 	}
 }
@@ -1076,7 +1158,7 @@ func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 
 /*
 convert the type in computation engine to the type in mysql.
- */
+*/
 func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_int8:
@@ -1107,6 +1189,10 @@ func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_STRING)
 	case types.T_varchar:
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	case types.T_date:
+		col.SetColumnType(defines.MYSQL_TYPE_DATE)
+	case types.T_datetime:
+		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

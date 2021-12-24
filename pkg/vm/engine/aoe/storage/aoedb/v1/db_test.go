@@ -18,6 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -44,9 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -215,7 +214,7 @@ func TestAppend(t *testing.T) {
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, int(rows), ck.Vecs[0].Length())
+	assert.Equal(t, int(rows), vector.Length(ck.Vecs[0]))
 	invalidName := "xxx"
 	appendCtx := CreateAppendCtx(database, gen, invalidName, ck)
 	err = inst.Append(appendCtx)
@@ -575,9 +574,9 @@ func TestMultiTables(t *testing.T) {
 					rel, err := inst.Relation(database.Name, tname)
 					assert.Nil(t, err)
 					for _, segId := range rel.SegmentIds().Ids {
-						seg := rel.Segment(segId, nil)
+						seg := rel.Segment(segId)
 						for _, id := range seg.Blocks() {
-							blk := seg.Block(id, nil)
+							blk := seg.Block(id)
 							cds := make([]*bytes.Buffer, len(attrs))
 							dds := make([]*bytes.Buffer, len(attrs))
 							for i := range cds {
@@ -594,8 +593,8 @@ func TestMultiTables(t *testing.T) {
 							//}
 							assert.Nil(t, err)
 							for attri, attr := range attrs {
-								v := bat.GetVector(attr)
-								if attri == 0 && v.Length() > 5000 {
+								v := batch.GetVector(bat, attr)
+								if attri == 0 && vector.Length(v) > 5000 {
 									// edata := baseCk.Vecs[attri].Col.([]int32)
 
 									// odata := v.Col.([]int32)
@@ -609,8 +608,8 @@ func TestMultiTables(t *testing.T) {
 									// t.Logf("data[5000]=%d", data[5000])
 									// t.Logf("data[5001]=%d", data[5001])
 								}
-								assert.True(t, v.Length() <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
-								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, v.Length())
+								assert.True(t, vector.Length(v) <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
+								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, vector.Length(v))
 							}
 						}
 					}
@@ -629,9 +628,9 @@ func TestMultiTables(t *testing.T) {
 			assert.Nil(t, err)
 			sids := rel.SegmentIds().Ids
 			segId := sids[len(sids)-1]
-			seg := rel.Segment(segId, nil)
+			seg := rel.Segment(segId)
 			blks := seg.Blocks()
-			blk := seg.Block(blks[len(blks)-1], nil)
+			blk := seg.Block(blks[len(blks)-1])
 			cds := make([]*bytes.Buffer, len(attrs))
 			dds := make([]*bytes.Buffer, len(attrs))
 			for i := range cds {
@@ -648,10 +647,10 @@ func TestMultiTables(t *testing.T) {
 			//}
 			assert.Nil(t, err)
 			for _, attr := range attrs {
-				v := bat.GetVector(attr)
-				assert.Equal(t, int(rows), v.Length())
-				// t.Log(v.Length())
-				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, v.Length())
+				v := batch.GetVector(bat, attr)
+				assert.Equal(t, int(rows), vector.Length(v))
+				// t.Log(vector.Length(v))
+				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, vector.Length(v))
 			}
 		}
 	}
@@ -1081,9 +1080,6 @@ func TestEngine(t *testing.T) {
 		attrs = append(attrs, colDef.Name)
 		cols = append(cols, i)
 	}
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
 
 	tableCnt := 20
 	var twg sync.WaitGroup
@@ -1118,9 +1114,9 @@ func TestEngine(t *testing.T) {
 			rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 			assert.Nil(t, err)
 			for _, segId := range rel.SegmentIds().Ids {
-				seg := rel.Segment(segId, proc)
+				seg := rel.Segment(segId)
 				for _, id := range seg.Blocks() {
-					blk := seg.Block(id, proc)
+					blk := seg.Block(id)
 					blk.Prefetch(attrs)
 					//assert.Nil(t, err)
 					//for _, attr := range attrs {
@@ -1323,6 +1319,73 @@ func decodeBlockIds(ids []string) []string {
 	}
 	return res
 }
+
+func TestFilterUnclosedSegment(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
+
+	schema := metadata.MockSchemaAll(1)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+	for i := 0; i < int(blkCnt); i++ {
+		assert.Nil(t, inst.Append(appendCtx))
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segId)
+	t.Logf("%+v", seg.GetIndexHolder())
+	segment := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	sparseFilter := segment.NewSparseFilter()
+
+	// test sparse filter upon unclosed segment
+	res, _ := sparseFilter.Eq("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ne("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(8))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Lt("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Gt("mock_0", int8(5))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Le("mock_0", int8(0))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Ge("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Eq("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Lt("mock_0", int8(1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{"1", "2", "3", "4"}))
+	res, _ = sparseFilter.Gt("mock_0", int8(9))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Le("mock_0", int8(-1))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+	res, _ = sparseFilter.Ge("mock_0", int8(10))
+	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+
+	inst.Close()
+}
+
 func TestFilter(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -2710,3 +2773,27 @@ func TestRepeatCreateAndDropIndex(t *testing.T) {
 	inst.Close()
 }
 
+func matchStringArray(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	mapper := make(map[string]int)
+	for _, e := range a {
+		if _, ok := mapper[e]; ok {
+			mapper[e] += 1
+		} else {
+			mapper[e] = 1
+		}
+	}
+	for _, e := range b {
+		if _, ok := mapper[e]; !ok {
+			return false
+		} else {
+			mapper[e] -= 1
+		}
+	}
+	return true
+}

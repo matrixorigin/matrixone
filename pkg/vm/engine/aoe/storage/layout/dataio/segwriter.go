@@ -401,7 +401,7 @@ func flush(w *os.File, iter iface.BlockIterator, meta *metadata.Segment) error {
 
 func preprocessColumn(column []*vector.Vector, sortedIdx *[]uint16, isPrimary bool) error {
 	if isPrimary {
-		*sortedIdx = make([]uint16, column[0].Length() * len(column))
+		*sortedIdx = make([]uint16, vector.Length(column[0]) * len(column))
 		if err := mergesort.MergeSortedColumn(column, sortedIdx); err != nil {
 			return err
 		}

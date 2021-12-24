@@ -15,62 +15,59 @@
 package handler
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	s := new(compile.Scope)
 	s.Instructions = ps.Ins
 	s.Magic = ps.Magic
-	if s.Magic == compile.Remote {
-		s.Magic = compile.Merge
-	}
-	s.Proc = process.New(guest.New(proc.Gm.Limit, proc.Gm.Mmu))
-	s.Proc.Lim = proc.Lim
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ps.Ss))
-	{
-		for i, j := 0, len(ps.Ss); i < j; i++ {
+	s.NodeInfo.Id = ps.NodeInfo.Id
+	s.NodeInfo.Addr = ps.NodeInfo.Addr
+	s.Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+	if len(ps.PreScopes) > 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.Proc.Cancel = cancel
+		s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ps.PreScopes))
+		for i := 0; i < len(ps.PreScopes); i++ {
 			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
-				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}, 8),
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
 			}
 		}
 	}
-	if len(ps.Data.Segs) > 0 {
+	if len(ps.DataSource.RefCounts) > 0 {
 		s.DataSource = new(compile.Source)
-		s.DataSource.RelationName = ps.Data.ID
-		s.DataSource.DBName = ps.Data.DB
-		s.DataSource.RefCount = ps.Data.Refer
-		s.DataSource.Segments = make([]*relation.Segment, len(ps.Data.Segs))
-		for i, seg := range ps.Data.Segs {
-			s.DataSource.Segments[i] = &relation.Segment{
-				Id:       seg.Id,
-				GroupId:  seg.GroupId,
-				Version:  seg.Version,
-				IsRemote: seg.IsRemote,
-				TabletId: seg.TabletId,
-			}
-		}
+		s.DataSource.IsMerge = ps.DataSource.IsMerge
+		s.DataSource.SchemaName = ps.DataSource.SchemaName
+		s.DataSource.RelationName = ps.DataSource.RelationName
+		s.DataSource.RefCounts = ps.DataSource.RefCounts
+		s.DataSource.Attributes = ps.DataSource.Attributes
 	}
-	s.PreScopes = make([]*compile.Scope, len(ps.Ss))
-	for i := range ps.Ss {
-		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, s.Proc, s.Proc.Reg.MergeReceivers[i])
-		s.PreScopes[i] = recoverScope(ps.Ss[i], proc)
+	s.PreScopes = make([]*compile.Scope, len(ps.PreScopes))
+	for i := range ps.PreScopes {
+		ps.PreScopes[i].Ins = recoverInstructions(ps.PreScopes[i].Ins, s.Proc, s.Proc.Reg.MergeReceivers[i])
+		s.PreScopes[i] = recoverScope(ps.PreScopes[i], s.Proc)
 	}
 	return s
 }
 
 func recoverInstructions(ins vm.Instructions, proc *process.Process, reg *process.WaitRegister) vm.Instructions {
 	for i, in := range ins {
-		if in.Code == vm.Transfer {
-			in.Arg = &transfer.Argument{Proc: proc, Reg: reg}
+		if in.Op == vm.Connector {
+			in.Arg = &connector.Argument{
+				Reg: reg,
+				Mmu: proc.Mp.Gm,
+			}
 		}
 		ins[i] = in
 	}

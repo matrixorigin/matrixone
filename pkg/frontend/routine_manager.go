@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"errors"
-	"fmt"
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -33,18 +32,26 @@ type RoutineManager struct {
 	pu *config.ParameterUnit
 }
 
+func (rm *RoutineManager) getEpochgc() *PDCallbackImpl {
+	return rm.pdHook
+}
+
+func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
+	return rm.pu
+}
+
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	defer func() {
 		if err := recover(); err != nil {
 			logutil.Errorf("create routine manager failed. err:%v",err)
 		}
 	}()
-	IO := NewIOPackage(true)
-	pro := NewMysqlClientProtocol(IO, nextConnectionID())
+	pro := NewMysqlClientProtocol(nextConnectionID(),rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()),rm.pu.SV)
 	exe := NewMysqlCmdExecutor()
-	ses := NewSessionWithParameterUnit(rm.pu)
-	routine := NewRoutine(rs, pro, exe, ses)
-	routine.pdHook = rm.pdHook
+	exe.SetRoutineManager(rm)
+
+	routine := NewRoutine(pro, exe, rm.pu)
+	routine.SetRoutineMgr(rm)
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
@@ -79,6 +86,28 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rt.Quit()
 }
 
+
+/*
+KILL statement
+ */
+func (rm *RoutineManager) killStatement(id uint64) error {
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
+	var rt *Routine = nil
+	for _, value := range rm.clients {
+		if uint64(value.getConnID()) == id {
+			rt = value
+			break
+		}
+	}
+
+	if rt != nil {
+		logutil.Infof("will close the statement %d",id)
+		rt.notifyClose()
+	}
+	return nil
+}
+
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
 	defer func() {
 		if err := recover(); err != nil {
@@ -87,7 +116,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}()
 	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		if !rm.pdHook.CanAcceptSomething() {
-			fmt.Printf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.\n")
+			logutil.Errorf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")
 			return errors.New("The Heartbeat From PDLeader Is Timeout. The Server Reject Connection.\n")
 		}
 	}
@@ -111,7 +140,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	payload := packet.Payload
 	for uint32(length) == MaxPayloadSize {
 		var err error
-		msg, err = routine.io.Read()
+		msg, err = protocol.tcpConn.Read()
 		if err != nil {
 			return errors.New("read msg error")
 		}
@@ -127,7 +156,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	// finish handshake process
-	if !routine.established {
+	if !protocol.IsEstablished() {
 		logutil.Infof("HANDLE HANDSHAKE")
 
 		/*
@@ -139,7 +168,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		if err != nil {
 			return err
 		}
-		routine.Establish(protocol)
+		protocol.SetEstablished()
 		return nil
 	}
 

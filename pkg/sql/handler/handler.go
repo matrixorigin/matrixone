@@ -16,6 +16,7 @@ package handler
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -41,13 +42,13 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 	}
 	s := recoverScope(ps, hp.proc)
 	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
-		Code: vm.Output,
+		Op: vm.Output,
 		Arg: &output.Argument{
 			Data: conn,
 			Func: writeBack,
 		},
 	}
-	if err := s.MergeRun(hp.engine); err != nil {
+	if err := s.ParallelRun(hp.engine); err != nil {
 		conn.WriteAndFlush(&message.Message{Code: []byte(err.Error())})
 	}
 	return conn.WriteAndFlush(&message.Message{Sid: 1})
@@ -57,7 +58,7 @@ func writeBack(u interface{}, bat *batch.Batch) error {
 	var buf bytes.Buffer
 
 	conn := u.(goetty.IOSession)
-	if bat == nil {
+	if bat == nil || len(bat.Zs) == 0 {
 		return nil
 	}
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {

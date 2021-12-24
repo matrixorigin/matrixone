@@ -21,6 +21,12 @@ import (
 )
 
 type Session struct {
+	//protocol layer
+	protocol Protocol
+
+	//epoch gc handler
+	pdHook *PDCallbackImpl
+
 	//cmd from the client
 	Cmd int
 
@@ -35,16 +41,17 @@ type Session struct {
 	Pu *config.ParameterUnit
 }
 
-func NewSession() *Session {
+func NewSession(proto Protocol,pdHook *PDCallbackImpl,
+		gm *guest.Mmu,mp *mempool.Mempool,PU *config.ParameterUnit) *Session {
 	return &Session{
-		GuestMmu: guest.New(config.GlobalSystemVariables.GetGuestMmuLimitation(), config.HostMmu),
+		protocol: proto,
+		pdHook: pdHook,
+		GuestMmu: gm,
+		Mempool: mp,
+		Pu: PU,
 	}
 }
 
-func NewSessionWithParameterUnit(pu *config.ParameterUnit) *Session {
-	return &Session{
-		GuestMmu: guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
-		Mempool:  pu.Mempool,
-		Pu:       pu,
-	}
+func (ses *Session) GetEpochgc() *PDCallbackImpl {
+	return ses.pdHook
 }

@@ -111,8 +111,8 @@ func (sf *UnsortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common
 	return nil
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
-	blk := sf.GetBlock(*id)
+func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id common.ID, meta *base.IndexMeta) common.IVFile {
+	blk := sf.GetBlock(id)
 	if blk == nil {
 		return nil
 	}

@@ -16,105 +16,436 @@ package compile
 
 import (
 	"bytes"
-	"errors"
+	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/createDatabase"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/createTable"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/dropDatabase"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/insert"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/showColumns"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
-	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
-
-	"github.com/fagongzi/goetty"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+const (
+	nullString = "NULL"
+)
+
+// CreateDatabase do create database work according to create database plan.
+func (s *Scope) CreateDatabase(ts uint64) error {
+	p, _ := s.Plan.(*plan.CreateDatabase)
+	if _, err := p.E.Database(p.Id); err == nil {
+		if p.IfNotExistFlag {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", p.Id))
+	}
+	return p.E.Create(ts, p.Id, 0)
+}
+
+// CreateTable do create table work according to create table plan.
+func (s *Scope) CreateTable(ts uint64) error {
+	p, _ := s.Plan.(*plan.CreateTable)
+	if r, err := p.Db.Relation(p.Id); err == nil {
+		r.Close()
+		if p.IfNotExistFlag {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", p.Id))
+	}
+	return p.Db.Create(ts, p.Id, p.Defs)
+}
+
+// CreateIndex do create index work according to create index plan
+func (s *Scope) CreateIndex(ts uint64) error {
+	o, _ := s.Plan.(*plan.CreateIndex)
+	if o.HasExist && o.IfNotExistFlag {
+		return nil
+	}
+
+	defer o.Relation.Close()
+	return o.Relation.CreateIndex(ts, o.Defs)
+}
+
+// DropDatabase do drop database work according to drop index plan
+func (s *Scope) DropDatabase(ts uint64) error {
+	p, _ := s.Plan.(*plan.DropDatabase)
+	if _, err := p.E.Database(p.Id); err != nil {
+		if p.IfExistFlag {
+			return nil
+		}
+		return err
+	}
+	return p.E.Delete(ts, p.Id)
+}
+
+// DropTable do drop table work according to drop table plan
+func (s *Scope) DropTable(ts uint64) error {
+	p, _ := s.Plan.(*plan.DropTable)
+	for i := range p.Dbs {
+		db, err := p.E.Database(p.Dbs[i])
+		if err != nil {
+			if p.IfExistFlag {
+				continue
+			}
+			return err
+		}
+		if r, err := db.Relation(p.Ids[i]); err != nil {
+			if p.IfExistFlag {
+				continue
+			}
+			return err
+		} else {
+			r.Close()
+		}
+		if err := db.Delete(ts, p.Ids[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DropIndex do drop index word according to drop index plan
+func (s *Scope) DropIndex(ts uint64) error {
+	p, _ := s.Plan.(*plan.DropIndex)
+	if p.NotExisted && p.IfExistFlag {
+		return nil
+	}
+
+	defer p.Relation.Close()
+	return p.Relation.DropIndex(ts, p.Id)
+}
+
+// todo: show should get information from system table next day.
+
+// ShowDatabases will show all database names
+func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowDatabases)
+	attrs := p.ResultColumns()
+	bat := batch.New(true, []string{attrs[0].Name})
+	// Column 1
+	{
+		rs := p.E.Databases()
+		vs := make([][]byte, len(rs))
+
+		// like
+		count := 0
+		if p.Like == nil {
+			for _, r := range rs {
+				vs[count] = []byte(r)
+				count++
+			}
+		} else {
+			tempSlice := make([]int64, 1)
+			for _, r := range rs {
+				str := []byte(r)
+				if k, _ := like.PureLikePure(str, p.Like, tempSlice); k != nil {
+					vs[count] = str
+					count++
+				}
+			}
+		}
+		vs = vs[:count]
+
+		vec := vector.New(attrs[0].Type)
+		if err := vector.Append(vec, vs); err != nil {
+			return err
+		}
+		bat.Vecs[0] = vec
+		bat.InitZsOne(count)
+	}
+	return fill(u, bat)
+}
+
+// ShowTables will show all table names in a database
+func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowTables)
+	attrs := p.ResultColumns()
+	bat := batch.New(true, []string{attrs[0].Name})
+	// Column 1
+	{
+		rs := p.Db.Relations()
+		vs := make([][]byte, len(rs))
+
+		// like
+		count := 0
+		if p.Like == nil {
+			for _, r := range rs {
+				vs[count] = []byte(r)
+				count++
+			}
+		} else {
+			tempSlice := make([]int64, 1)
+			for _, r := range rs {
+				str := []byte(r)
+				if k, _ := like.PureLikePure(str, p.Like, tempSlice); k != nil {
+					vs[count] = str
+					count++
+				}
+			}
+		}
+		vs = vs[:count]
+
+		vec := vector.New(attrs[0].Type)
+		if err := vector.Append(vec, vs); err != nil {
+			return err
+		}
+		bat.Vecs[0] = vec
+		bat.InitZsOne(count)
+	}
+	return fill(u, bat)
+}
+
+type columnInfo struct {
+	name string
+	typ  types.Type
+	dft  string // default value
+}
+
+// ShowColumns will show column information from a table
+func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowColumns)
+	results := p.ResultColumns() // field, type, null, key, default, extra
+	defs := p.Relation.TableDefs()
+	attrs := make([]columnInfo, len(defs))
+
+	names := make([]string, 0)
+	for _, resultColumn := range results {
+		names = append(names, resultColumn.Name)
+	}
+
+	count := 0
+	tmpSlice := make([]int64, 1)
+	for _, def := range defs {
+		if attrDef, ok := def.(*engine.AttributeDef); ok {
+			if p.Like != nil { // deal with like rule
+				if k, _ := like.PureLikePure([]byte(attrDef.Attr.Name), p.Like, tmpSlice); k == nil {
+					continue
+				}
+			}
+			attrs[count] = columnInfo{
+				name: attrDef.Attr.Name,
+				typ:  attrDef.Attr.Type,
+			}
+			if attrDef.Attr.HasDefaultExpr() {
+				if attrDef.Attr.Default.IsNull {
+					attrs[count].dft = nullString
+				} else {
+					switch attrDef.Attr.Type.Oid {
+					case types.T_date:
+						attrs[count].dft = fmt.Sprintf("%s", attrDef.Attr.Default.Value)
+					default:
+						attrs[count].dft = fmt.Sprintf("%v", attrDef.Attr.Default.Value)
+					}
+				}
+			}
+			count++
+		}
+	}
+	attrs = attrs[:count]
+
+	bat := batch.New(true, names)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.New(results[i].Type)
+	}
+
+	vnames := make([][]byte, len(attrs))
+	vtyps := make([][]byte, len(attrs))
+	vdfts := make([][]byte, len(attrs))
+	undefine := make([][]byte, len(attrs))
+
+	for i, attr := range attrs {
+		var typ string
+
+		if attr.typ.Width > 0 {
+			typ = fmt.Sprintf("%s(%v)", strings.ToLower(attr.typ.String()), attr.typ.Width)
+		} else {
+			typ = strings.ToLower(attr.typ.String())
+		}
+
+		vnames[i] = []byte(attr.name)
+		vtyps[i] = []byte(typ)
+		vdfts[i] = []byte(attr.dft)
+		undefine[i] = []byte("")
+	}
+
+	vector.Append(bat.Vecs[0], vnames)   // field
+	vector.Append(bat.Vecs[1], vtyps)    // type
+	vector.Append(bat.Vecs[2], undefine) // null todo: not implement
+	vector.Append(bat.Vecs[3], undefine) // key todo: not implement
+	vector.Append(bat.Vecs[4], vdfts)    // default
+	vector.Append(bat.Vecs[5], undefine) // extra todo: not implement
+
+	bat.InitZsOne(count)
+	return fill(u, bat)
+}
+
+func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowCreateTable)
+	results := p.ResultColumns()
+	tn := p.Relation.ID()
+	defs := p.Relation.TableDefs()
+
+	names := make([]string, 0)
+	for _, r := range results {
+		names = append(names, r.Name)
+	}
+
+	bat := batch.New(true, names)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.New(results[i].Type)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("CREATE TABLE `")
+	buf.WriteString(tn)
+	buf.WriteString("` (\n")
+	var attributeDefs []*engine.AttributeDef
+	var indexTableDefs []*engine.IndexTableDef
+	primaryIndexDef := new(engine.PrimaryIndexDef)
+	for _, d := range defs {
+		switch v := d.(type) {
+		case *engine.AttributeDef:
+			attributeDefs = append(attributeDefs, v)
+		case *engine.IndexTableDef:
+			indexTableDefs = append(indexTableDefs, v)
+		case *engine.PrimaryIndexDef:
+			*primaryIndexDef = *v
+		}
+	}
+	prefix := " "
+	if attributeDefs != nil {
+		for _, a := range attributeDefs {
+			buf.WriteString(prefix)
+			a.Format(&buf)
+			prefix = ",\n "
+		}
+	}
+	if len(primaryIndexDef.Names) > 0 {
+		buf.WriteString(prefix)
+		primaryIndexDef.Format(&buf)
+		prefix = ",\n "
+	}
+	if indexTableDefs != nil {
+		for _, i := range indexTableDefs {
+			buf.WriteString(prefix)
+			i.Format(&buf)
+			prefix = ",\n "
+		}
+	}
+	buf.WriteString("\n)")
+
+	tableName := make([][]byte, 1)
+	createTable := make([][]byte, 1)
+	tableName[0] = []byte(tn)
+	createTable[0] = buf.Bytes()
+
+	vector.Append(bat.Vecs[0], tableName)
+	vector.Append(bat.Vecs[1], createTable)
+
+	bat.InitZsOne(1)
+	return fill(u, bat)
+}
+
+func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ShowCreateDatabase)
+	if _, err := p.E.Database(p.Id); err != nil {
+		if p.IfNotExistFlag {
+			return nil
+		}
+		return err
+	}
+
+	results := p.ResultColumns()
+	names := make([]string, 0)
+	for _, r := range results {
+		names = append(names, r.Name)
+	}
+
+	bat := batch.New(true, names)
+	for i := range bat.Vecs {
+		bat.Vecs[i] = vector.New(results[i].Type)
+	}
+
+	var buf bytes.Buffer
+	buf.WriteString("CREATE DATABASE `")
+	buf.WriteString(p.Id)
+	buf.WriteString("`")
+
+	dbName := make([][]byte, 1)
+	createDatabase := make([][]byte, 1)
+	dbName[0] = []byte(p.Id)
+	createDatabase[0] = buf.Bytes()
+
+	vector.Append(bat.Vecs[0], dbName)
+	vector.Append(bat.Vecs[1], createDatabase)
+
+	bat.InitZsOne(1)
+	return fill(u, bat)
+}
+
+// Insert will insert a batch into relation and return affectedRow
+func (s *Scope) Insert(ts uint64) (uint64, error) {
+	p, _ := s.Plan.(*plan.Insert)
+	defer p.Relation.Close()
+	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+}
+
 func (s *Scope) Run(e engine.Engine) error {
-	segs := make([]engine.Segment, len(s.DataSource.Segments))
-	cs := make([]uint64, 0, len(s.DataSource.RefCount))
-	attrs := make([]string, 0, len(s.DataSource.RefCount))
-	{
-		for k, v := range s.DataSource.RefCount {
-			cs = append(cs, v)
-			attrs = append(attrs, k)
-		}
-	}
-	p := pipeline.New(cs, attrs, s.Instructions)
-	{
-		db, err := e.Database(s.DataSource.DBName)
-		if err != nil {
-			return err
-		}
-		r, err := db.Relation(s.DataSource.RelationName)
-		if err != nil {
-			return err
-		}
-		defer r.Close()
-		for i, seg := range s.DataSource.Segments {
-			segs[i] = r.Segment(engine.SegmentInfo{
-				Id:       seg.Id,
-				GroupId:  seg.GroupId,
-				TabletId: seg.TabletId,
-				Node:     seg.Node,
-				Version:  seg.Version,
-			}, s.Proc)
-		}
-	}
-	if _, err := p.Run(segs, s.Proc); err != nil {
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
+	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
+	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
+		return err
 	}
 	return nil
 }
 
 func (s *Scope) MergeRun(e engine.Engine) error {
 	var err error
-	var wg sync.WaitGroup
 
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
-			wg.Add(1)
 			go func(s *Scope) {
 				if rerr := s.Run(e); rerr != nil {
 					err = rerr
 				}
-				wg.Done()
 			}(s.PreScopes[i])
 		case Merge:
-			wg.Add(1)
 			go func(s *Scope) {
 				if rerr := s.MergeRun(e); rerr != nil {
 					err = rerr
 				}
-				wg.Done()
 			}(s.PreScopes[i])
 		case Remote:
-			wg.Add(1)
 			go func(s *Scope) {
 				if rerr := s.RemoteRun(e); rerr != nil {
 					err = rerr
 				}
-				wg.Done()
+			}(s.PreScopes[i])
+		case Parallel:
+			go func(s *Scope) {
+				if rerr := s.ParallelRun(e); rerr != nil {
+					err = rerr
+				}
 			}(s.PreScopes[i])
 		}
 	}
@@ -122,340 +453,415 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
 		err = rerr
 	}
-	wg.Wait()
-	if err != nil {
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
-	}
-	return nil
+	return err
 }
 
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var buf bytes.Buffer
 
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*transfer.Argument)
-	defer func() {
-		if arg.Reg.Ch != nil {
-			arg.Reg.Wg.Add(1)
-			arg.Reg.Ch <- nil
-			arg.Reg.Wg.Wait()
-		}
-	}()
+	if Address == s.NodeInfo.Addr {
+		return s.ParallelRun(e)
+	}
+	ps := Transfer(s)
+	err := protocol.EncodeScope(ps, &buf)
+	if err != nil {
+		return err
+	}
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	encoder, decoder := rpcserver.NewCodec(1 << 30)
 	conn := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
 	defer conn.Close()
 	addr, _ := net.ResolveTCPAddr("tcp", s.NodeInfo.Addr)
 	if _, err := conn.Connect(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100), time.Second*3); err != nil {
-		return err
-	}
-	if err := protocol.EncodeScope(Transfer(s), &buf); err != nil {
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- nil:
+		}
 		return err
 	}
 	if err := conn.WriteAndFlush(&message.Message{Data: buf.Bytes()}); err != nil {
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- nil:
+		}
 		return err
 	}
 	for {
 		val, err := conn.Read()
 		if err != nil {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			return err
 		}
 		msg := val.(*message.Message)
 		if len(msg.Code) > 0 {
-			return errors.New(string(msg.Code))
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
+			return errors.New(errno.SystemError, string(msg.Code))
 		}
 		if msg.Sid == 1 {
 			break
 		}
 		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
 		if err != nil {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			return err
 		}
 		if arg.Reg.Ch == nil {
 			if bat != nil {
-				bat.Clean(s.Proc)
+				batch.Clean(bat, s.Proc.Mp)
 			}
 			continue
 		}
-		arg.Reg.Wg.Add(1)
-		arg.Reg.Ch <- bat
-		arg.Reg.Wg.Wait()
+		select {
+		case <-arg.Reg.Ctx.Done():
+		case arg.Reg.Ch <- bat:
+		}
 	}
 	return nil
 }
 
-func (s *Scope) Insert(ts uint64) (uint64, error) {
-	o, _ := s.Operator.(*insert.Insert)
-	defer o.R.Close()
-	return uint64(o.Bat.Vecs[0].Length()), o.R.Write(ts, o.Bat)
-}
-
-func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	bat := batch.New(true, []string{"Pipeline"})
-	{
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append([][]byte{[]byte(s.Operator.String())}); err != nil {
-			return err
+func (s *Scope) ParallelRun(e engine.Engine) error {
+	switch t := s.Instructions[0].Arg.(type) {
+	case *times.Argument:
+		return s.RunCAQ(e)
+	case *transform.Argument:
+		if t == nil {
+			s.Instructions[0].Arg = &transform.Argument{}
+			return s.RunQ(e)
 		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) CreateTable(ts uint64) error {
-	o, _ := s.Operator.(*createTable.CreateTable)
-	if r, err := o.Db.Relation(o.Id); err == nil {
-		r.Close()
-		if o.Flg {
-			return nil
+		if t.Typ == transform.Bare {
+			return s.RunQ(e)
 		}
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
+		return s.RunAQ(e)
 	}
-	return o.Db.Create(ts, o.Id, o.Defs, o.Pdef, nil, "")
+	return nil
 }
 
-func (s *Scope) CreateDatabase(ts uint64) error {
-	o, _ := s.Operator.(*createDatabase.CreateDatabase)
-	if _, err := o.E.Database(o.Id); err == nil {
-		if o.Flg {
-			return nil
-		}
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database '%v' already exists", o.Id))
-	}
-	return o.E.Create(ts, o.Id, 0)
-}
+func (s *Scope) RunQ(e engine.Engine) error {
+	var rd engine.Reader
 
-func (s *Scope) DropTable(ts uint64) error {
-	o, _ := s.Operator.(*dropTable.DropTable)
-	for i := range o.Dbs {
-		db, err := o.E.Database(o.Dbs[i])
+	ss := make([]*Scope, 1)
+	{ // get table reader
+		db, err := e.Database(s.DataSource.SchemaName)
 		if err != nil {
-			if o.Flg {
-				continue
-			}
 			return err
 		}
-		if r, err := db.Relation(o.Ids[i]); err != nil {
-			if o.Flg {
-				continue
-			}
-			return err
-		} else {
-			r.Close()
-		}
-		if err := db.Delete(ts, o.Ids[i]); err != nil {
+		rel, err := db.Relation(s.DataSource.RelationName)
+		if err != nil {
 			return err
 		}
+		defer rel.Close()
+		rd = rel.NewReader(1)[0]
 	}
-	return nil
+	arg := s.Instructions[0].Arg.(*transform.Argument)
+	{
+		ss[0] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rd,
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+			Op: vm.Transform,
+			Arg: &transform.Argument{
+				Typ:        arg.Typ,
+				IsMerge:    arg.IsMerge,
+				FreeVars:   arg.FreeVars,
+				Restrict:   arg.Restrict,
+				Projection: arg.Projection,
+				BoundVars:  arg.BoundVars,
+			},
+		})
+
+		ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[0].Proc.Id = s.Proc.Id
+		ss[0].Proc.Lim = s.Proc.Lim
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Magic = Merge
+	s.PreScopes = ss
+	s.Instructions[0] = vm.Instruction{
+		Op: vm.Merge,
+	}
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
+	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
+		Ctx: ctx,
+		Ch:  make(chan *batch.Batch, 1),
+	}
+
+	ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+		Op: vm.Connector,
+		Arg: &connector.Argument{
+			Mmu: s.Proc.Mp.Gm,
+			Reg: s.Proc.Reg.MergeReceivers[0],
+		},
+	})
+
+	return s.MergeRun(e)
 }
 
-func (s *Scope) DropDatabase(ts uint64) error {
-	o, _ := s.Operator.(*dropDatabase.DropDatabase)
-	if _, err := o.E.Database(o.Id); err != nil {
-		if o.Flg {
-			return nil
+func (s *Scope) RunAQ(e engine.Engine) error {
+	var rds []engine.Reader
+
+	mcpu := runtime.NumCPU()
+	ss := make([]*Scope, mcpu)
+	{
+		db, err := e.Database(s.DataSource.SchemaName)
+		if err != nil {
+			return err
 		}
+		rel, err := db.Relation(s.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rds = rel.NewReader(mcpu)
+	}
+	arg := s.Instructions[0].Arg.(*transform.Argument)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rds[i],
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Transform,
+			Arg: &transform.Argument{
+				Typ:        arg.Typ,
+				IsMerge:    arg.IsMerge,
+				FreeVars:   arg.FreeVars,
+				Restrict:   arg.Restrict,
+				Projection: arg.Projection,
+				BoundVars:  arg.BoundVars,
+			},
+		})
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Magic = Merge
+	s.PreScopes = ss
+	s.Instructions[0] = vm.Instruction{
+		Op:  vm.Plus,
+		Arg: &plus.Argument{Typ: arg.Typ},
+	}
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return s.MergeRun(e)
+}
+
+func (s *Scope) RunCAQ(e engine.Engine) error {
+	var err error
+	var rds []engine.Reader
+	var arg *times.Argument
+
+	mcpu := runtime.NumCPU()
+	ss := make([]*Scope, mcpu)
+	{
+		s0 := s.PreScopes[0]
+		db, err := e.Database(s0.DataSource.SchemaName)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(s0.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rds = rel.NewReader(mcpu)
+		s.DataSource = s0.DataSource
+		arg = s.Instructions[0].Arg.(*times.Argument)
+		arg.Arg = s0.Instructions[0].Arg.(*transform.Argument)
+	}
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rds[i],
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+	}
+	s.PreScopes = s.PreScopes[1:]
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Proc.Cancel = cancel
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(s.PreScopes))
+	{
+		for i := 0; i < len(s.PreScopes); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range s.PreScopes {
+		s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
+		case Normal:
+			go func(s *Scope) {
+				if rerr := s.Run(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Merge:
+			go func(s *Scope) {
+				if rerr := s.MergeRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Remote:
+			go func(s *Scope) {
+				if rerr := s.RemoteRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		case Parallel:
+			go func(s *Scope) {
+				if rerr := s.ParallelRun(e); rerr != nil {
+					err = rerr
+				}
+			}(s.PreScopes[i])
+		}
+	}
+	if err != nil {
 		return err
 	}
-	return o.E.Delete(ts, o.Id)
-}
-
-func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.Operator.(*showTables.ShowTables)
-	bat := batch.New(true, []string{"Tables"})
-	{
-		rs := o.Db.Relations()
-		vs := make([][]byte, len(rs))
-
-		// like
-		count := 0
-		if o.Like == nil {
-			for _, r := range rs {
-				vs[count] = []byte(r)
-				count++
-			}
-		} else {
-			tempSlice := make([]int64, 1)
-			for _, r := range rs {
-				str := []byte(r)
-				if k, _ := like.PureLikePure(str, o.Like, tempSlice); k != nil {
-					vs[count] = str
-					count++
+	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+		reg := s.Proc.Reg.MergeReceivers[i]
+		bat := <-reg.Ch
+		if bat == nil {
+			continue
+		}
+		if len(bat.Zs) == 0 {
+			i--
+			continue
+		}
+		arg.Bats = append(arg.Bats, bat)
+	}
+	if len(arg.Bats) != len(arg.Svars) {
+		for i, in := range s.Instructions {
+			if in.Op == vm.Connector {
+				arg := s.Instructions[i].Arg.(*connector.Argument)
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
 				}
+				break
 			}
 		}
-		vs = vs[:count]
-
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.Operator.(*showDatabases.ShowDatabases)
-	bat := batch.New(true, []string{"Databases"})
-	{
-		rs := o.E.Databases()
-		vs := make([][]byte, len(rs))
-
-		// like
-		count := 0
-		if o.Like == nil {
-			for _, r := range rs {
-				vs[count] = []byte(r)
-				count++
-			}
-		} else {
-			tempSlice := make([]int64, 1)
-			for _, r := range rs {
-				str := []byte(r)
-				if k, _ := like.PureLikePure(str, o.Like, tempSlice); k != nil {
-					vs[count] = str
-					count++
-				}
-			}
-		}
-		vs = vs[:count]
-
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.Operator.(*showColumns.ShowColumns)
-	cs := o.R.Attribute()
-	var idxs []int
-	count := 0
-	bat := batch.New(true, []string{"Filed", "Type", "Null", "Key", "Default", "Extra"})
-	{
-		vs := make([][]byte, len(cs))
-		if o.Like == nil {
-			for _, c := range cs {
-				vs[count] = []byte(c.Name)
-				idxs = append(idxs, count)
-				count++
-			}
-		} else {
-			tmpSlice := make([]int64, 1)
-			for i, c := range cs {
-				colName := []byte(c.Name)
-				if k, _ := like.PureLikePure(colName, o.Like, tmpSlice); k != nil {
-					vs[count] = colName
-					idxs = append(idxs, i)
-					count++
-				}
-			}
-		}
-		vs = vs[:count]
-
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	{
-		vs := make([][]byte, count)
-		for i, idx := range idxs {
-			var str string
-			if cs[idx].Type.Width > 0 {
-				str = fmt.Sprintf("%s(%v)", strings.ToLower(cs[idx].Type.String()), cs[idx].Type.Width)
-			} else {
-				str = strings.ToLower(cs[idx].Type.String())
-			}
-			vs[i] = []byte(str)
-		}
-		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[1] = vec
-	}
-	{
-		vs := make([][]byte, count)
-		for i, idx := range idxs {
-			if cs[idx].Nullability {
-				vs[i] = []byte("Yes")
-			} else {
-				vs[i] = []byte("No")
-			}
-		}
-		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[2] = vec
-	}
-	{
-		vs := make([][]byte, count)
-		for i, idx := range idxs {
-			if cs[idx].PrimaryKey {
-				vs[i] = []byte("Pri")
-			} else {
-				vs[i] = []byte("")
-			}
-		}
-		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[3] = vec
-	}
-	{
-		vs := make([][]byte, count)
-		for i, idx := range idxs {
-			if cs[idx].HasDefaultExpr() {
-				str := fmt.Sprintf("%v", cs[idx].Default.Value)
-				vs[i] = []byte(str)
-			} else {
-				vs[i] = []byte("")
-			}
-		}
-		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[4] = vec
-	}
-	{
-		vs := make([][]byte, count)
-		for i, _ := range idxs {
-			// TODO: Show extra attribute
-			vs[i] = []byte("")
-		}
-		vec := vector.New(types.Type {Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[5] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) CreateIndex(ts uint64) error {
-	o, _ := s.Operator.(*createIndex.CreateIndex)
-	defer o.R.Close()
-	err := o.R.CreateIndex(ts, o.Defs)
-	if o.IfNotExists && err == errors.New("index already exist") {
 		return nil
 	}
-	return err
-}
-
-func (s *Scope) DropIndex(ts uint64) error {
-	o, _ := s.Operator.(*dropIndex.DropIndex)
-	defer o.R.Close()
-	err := o.R.DropIndex(ts, o.IndexName)
-	if o.IfNotExists && err == errors.New("index not exist") {
-		return nil
+	constructViews(arg.Bats, arg.Svars)
+	for i := 0; i < mcpu; i++ {
+		ss[i].Instructions = vm.Instructions{vm.Instruction{
+			Op: vm.Times,
+			Arg: &times.Argument{
+				IsBare:   arg.IsBare,
+				R:        arg.R,
+				Rvars:    arg.Rvars,
+				Ss:       arg.Ss,
+				Svars:    arg.Svars,
+				VarsMap:  arg.VarsMap,
+				Bats:     arg.Bats,
+				FreeVars: arg.FreeVars,
+				Arg: &transform.Argument{
+					Typ:        arg.Arg.Typ,
+					IsMerge:    arg.Arg.IsMerge,
+					FreeVars:   arg.Arg.FreeVars,
+					Restrict:   arg.Arg.Restrict,
+					Projection: arg.Arg.Projection,
+					BoundVars:  arg.Arg.BoundVars,
+				},
+			},
+		}}
 	}
-	return err
+	rs := &Scope{
+		PreScopes: ss,
+		Magic:     Merge,
+	}
+	rs.Instructions = s.Instructions
+	rs.Instructions[0] = vm.Instruction{
+		Op:  vm.Plus,
+		Arg: &plus.Argument{Typ: arg.Arg.Typ},
+	}
+	{
+		ctx, cancel := context.WithCancel(context.Background())
+		rs.Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		rs.Proc.Cancel = cancel
+		rs.Proc.Cancel = cancel
+		rs.Proc.Id = s.Proc.Id
+		rs.Proc.Lim = s.Proc.Lim
+		rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+		{
+			for i := 0; i < len(ss); i++ {
+				rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+					Ctx: ctx,
+					Ch:  make(chan *batch.Batch, 1),
+				}
+			}
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op: vm.Connector,
+				Arg: &connector.Argument{
+					Mmu: rs.Proc.Mp.Gm,
+					Reg: rs.Proc.Reg.MergeReceivers[i],
+				},
+			})
+		}
+	}
+	return rs.MergeRun(e)
 }

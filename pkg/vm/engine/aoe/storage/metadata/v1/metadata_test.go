@@ -383,7 +383,8 @@ func TestDropTable(t *testing.T) {
 	err = writer.CommitWrite()
 	assert.Nil(t, err)
 
-	loader := NewDBSSLoader(catalog, writer.name)
+	replaced, _ := catalog.SimpleGetDatabaseByName(db.Name)
+	loader := NewDBSSLoader(catalog, replaced, writer.name)
 	err = loader.PrepareLoad()
 	assert.Nil(t, err)
 	err = loader.CommitLoad()
@@ -965,12 +966,14 @@ func TestDatabase1(t *testing.T) {
 	now = time.Now()
 	var viewsMu sync.Mutex
 	views := make(map[string]*databaseLogEntry)
+	dbDirs := make(map[string]string)
+
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		go func(shardId uint64) {
+		name := fmt.Sprintf("db%d", uint64(i))
+		go func(shardId uint64, name string) {
 			defer wg.Done()
-			dbName := fmt.Sprintf("db%d", shardId)
-			db, err := catalog.SimpleGetDatabaseByName(dbName)
+			db, err := catalog.SimpleGetDatabaseByName(name)
 			assert.Nil(t, err)
 			writer := NewDBSSWriter(db, dir, gen.Get(shardId))
 			err = writer.PrepareWrite()
@@ -979,8 +982,9 @@ func TestDatabase1(t *testing.T) {
 			assert.Nil(t, err)
 			viewsMu.Lock()
 			views[db.Name] = writer.view
+			dbDirs[filepath.Base(writer.name)] = db.Name
 			viewsMu.Unlock()
-		}(uint64(i))
+		}(uint64(i), name)
 	}
 	wg.Wait()
 
@@ -990,7 +994,10 @@ func TestDatabase1(t *testing.T) {
 		if !strings.HasSuffix(file.Name(), ".meta") {
 			continue
 		}
-		loader := NewDBSSLoader(catalog, filepath.Join(dir, file.Name()))
+		dbName := dbDirs[file.Name()]
+		replaced, err := catalog.SimpleGetDatabaseByName(dbName)
+		assert.Nil(t, err)
+		loader := NewDBSSLoader(catalog, replaced, filepath.Join(dir, file.Name()))
 		err = loader.PrepareLoad()
 		assert.Nil(t, err)
 		err = loader.CommitLoad()
@@ -1134,7 +1141,8 @@ func TestDatabase2(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(db1.GetCount())
-	loader := NewDBSSLoader(catalog, writer.name)
+	replaced, _ := catalog.SimpleGetDatabaseByName(db1.Name)
+	loader := NewDBSSLoader(catalog, replaced, writer.name)
 	err = loader.PrepareLoad()
 	assert.Nil(t, err)
 	err = loader.CommitLoad()

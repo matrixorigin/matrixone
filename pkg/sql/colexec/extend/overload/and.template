@@ -23,12 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/and"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
 
-func init() {
+func initAnd() {
 	BinOps[And] = []*BinOp{
-		&BinOp{
+		{
 			LeftType:   types.T_sel,
 			RightType:  types.T_sel,
 			ReturnType: types.T_sel,
@@ -37,9 +36,9 @@ func init() {
 				if lv.Ref == 1 || lv.Ref == 0 {
 					lv.Ref = 0
 					lvs = lvs[:and.SelAnd(lvs, rvs, lvs)]
-					lv.Nsp = lv.Nsp.Or(rv.Nsp).Filter(lvs)
+					lv.Nsp = nulls.Filter(lv.Nsp.Or(rv.Nsp), lvs)
 					if rv.Ref == 0 {
-						register.Put(proc, rv)
+						process.Put(proc, rv)
 					}
 					lv.Col = lvs
 					return lv, nil
@@ -47,9 +46,9 @@ func init() {
 				if rv.Ref == 1 || rv.Ref == 0 {
 					rv.Ref = 0
 					rvs = rvs[:and.SelAnd(rvs, lvs, rvs)]
-					rv.Nsp = rv.Nsp.Or(lv.Nsp).Filter(rvs)
+					rv.Nsp = nulls.Filter(rv.Nsp.Or(lv.Nsp), rvs)
 					if lv.Ref == 0 {
-						register.Put(proc, lv)
+						process.Put(proc, lv)
 					}
 					rv.Col = rvs
 					return rv, nil
@@ -58,19 +57,19 @@ func init() {
 				if n < len(rvs) {
 					n = len(rvs)
 				}
-				vec, err := register.Get(proc, int64(n)*8, lv.Typ)
+				vec, err := process.Get(proc, int64(n)*8, lv.Typ)
 				if err != nil {
 					return nil, err
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:and.SelAnd(lvs, rvs, rs)]
 				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-				vec.Nsp.Filter(rs)
+				nulls.Filter(vec.Nsp, rs)
 				if lv.Ref == 0 {
-					register.Put(proc, lv)
+					process.Put(proc, lv)
 				}
 				if rv.Ref == 0 {
-					register.Put(proc, rv)
+					process.Put(proc, rv)
 				}
 				vec.Col = rs
 				return vec, nil

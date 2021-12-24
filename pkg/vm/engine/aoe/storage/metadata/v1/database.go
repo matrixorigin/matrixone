@@ -679,7 +679,6 @@ func (db *Database) SplitCheck(size, index uint64) (coarseSize uint64, coarseCou
 		totalSize += tableSize
 		if len(table.SegmentSet) <= 1 {
 			activeSize += tableSize
-			rangeSpec.Range.Right = math.MaxUint64
 			rangeSpec.CoarseSize += tableSize
 			spec.AddSpec(rangeSpec)
 			if activeSize >= partSize {
@@ -704,6 +703,10 @@ func (db *Database) SplitCheck(size, index uint64) (coarseSize uint64, coarseCou
 			if rangeSpec.Range.Right != uint64(0) {
 				spec.AddSpec(rangeSpec)
 			}
+		}
+		lastRange := spec.LastSpec()
+		if lastRange != nil {
+			lastRange.Range.Right = math.MaxUint64
 		}
 		shardSpec.AddSpec(spec)
 	}
@@ -870,7 +873,7 @@ func (db *Database) onNewTable(entry *Table) error {
 	if nn != nil {
 		e := nn.GetTable()
 		// Conflict checks all committed and uncommitted entries.
-		if !e.IsDeletedLocked() {
+		if !e.IsDeleted() {
 			return DuplicateErr
 		}
 		db.TableSet[entry.Id] = entry

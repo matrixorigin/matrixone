@@ -17,13 +17,11 @@ package hashtable
 import (
 	"errors"
 	"math/bits"
-	"unsafe"
 )
 
 type FixedSet struct {
-	bucketCnt uint32
-	rawBitmap []byte
-	bitmap    []uint64
+	cellCnt uint32
+	bitmap  []uint64
 }
 
 type FixedSetIterator struct {
@@ -33,12 +31,9 @@ type FixedSetIterator struct {
 	bitmapVal  uint64
 }
 
-func (ht *FixedSet) Init(bucketCnt uint32) {
-	rawBitmap := make([]byte, ((int64(bucketCnt)-1)/64+1)*8)
-
-	ht.bucketCnt = bucketCnt
-	ht.rawBitmap = rawBitmap
-	ht.bitmap = unsafe.Slice((*uint64)(unsafe.Pointer(&rawBitmap[0])), cap(rawBitmap)/8)[:len(rawBitmap)/8]
+func (ht *FixedSet) Init(cellCnt uint32) {
+	ht.cellCnt = cellCnt
+	ht.bitmap = make([]uint64, (int64(cellCnt)-1)/64+1)
 }
 
 func (ht *FixedSet) Insert(key uint32) (inserted bool) {

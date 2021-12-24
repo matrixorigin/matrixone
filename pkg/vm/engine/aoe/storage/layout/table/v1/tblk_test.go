@@ -128,7 +128,7 @@ func TestTBlock(t *testing.T) {
 	}
 
 	idx1 := gen.Next(shardId)
-	idx1.Capacity = uint64(insertBat.Vecs[0].Length())
+	idx1.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
 	indexWal.SyncLog(idx1)
 	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
@@ -139,7 +139,7 @@ func TestTBlock(t *testing.T) {
 	assert.Equal(t, blk1.GetMeta().Segment.Table.Database.GetCheckpointId(), blk1.GetMeta().Segment.Table.GetCommit().GetIndex())
 
 	idx2 := gen.Next(shardId)
-	idx2.Capacity = uint64(insertBat.Vecs[0].Length())
+	idx2.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
 	indexWal.SyncLog(idx2)
 	err = blk1.WithPinedContext(appendFn(idx2))
 	assert.Nil(t, err)
@@ -151,13 +151,13 @@ func TestTBlock(t *testing.T) {
 	assert.False(t, blk2.node.IsLoaded())
 
 	idx3 := gen.Next(shardId)
-	idx3.Capacity = uint64(insertBat.Vecs[0].Length())
+	idx3.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
 	indexWal.SyncLog(idx3)
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
 
 	idx4 := gen.Next(shardId)
-	idx4.Capacity = uint64(insertBat.Vecs[0].Length())
+	idx4.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
 	indexWal.SyncLog(idx4)
 	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
@@ -175,7 +175,7 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	idx5 := gen.Next(shardId)
-	idx5.Capacity = uint64(insertBat.Vecs[0].Length())
+	idx5.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
 	indexWal.SyncLog(idx5)
 	err = blk1.WithPinedContext(appendFn(idx5))
 	assert.Nil(t, err)

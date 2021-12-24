@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
@@ -163,6 +164,8 @@ func (splitter *Splitter) Prepare() error {
 	if err = spec.Unmarshal(splitter.ctx); err != nil {
 		return err
 	}
+	spec.Index = splitter.index.Id.Id
+	logutil.Infof("PrepareExec Split Spec: %s", spec.String())
 	if err = splitter.dbImpl.DoFlushDatabase(splitter.database); err != nil {
 		return err
 	}
@@ -177,10 +180,12 @@ func (splitter *Splitter) Prepare() error {
 }
 
 func (splitter *Splitter) Commit() error {
-	err := splitter.msplitter.Commit()
-	if err == nil {
-		splitter.dbImpl.Opts.EventListener.OnDatabaseSplitted(splitter.event)
+	err := splitter.dbImpl.Opts.EventListener.OnPreSplit(splitter.event)
+	if err != nil {
+		panic(err)
 	}
+	err = splitter.msplitter.Commit()
+	splitter.dbImpl.Opts.EventListener.OnPostSplit(err, splitter.event)
 	return err
 }
 

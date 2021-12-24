@@ -17,15 +17,15 @@ package hashtable
 import "unsafe"
 
 const (
-	kInitialBucketCntBits = 10
-	kInitialBucketCnt     = 1 << kInitialBucketCntBits
+	kInitialCellCntBits = 10
+	kInitialCellCnt     = 1 << kInitialCellCntBits
 
-	kLoadFactorNumerator   = 5
-	kLoadFactorDenominator = 10
+	kLoadFactorNumerator   = 1
+	kLoadFactorDenominator = 2
 
-	kTwoLevelBucketBits = 8
-	kTwoLevelBucketNum  = 1 << kTwoLevelBucketBits
-	kMaxTwoLevelBucket  = kTwoLevelBucketNum - 1
+	kTwoLevelBucketCntBits = 8
+	kTwoLevelBucketCnt     = 1 << kTwoLevelBucketCntBits
+	kMaxTwoLevelBucketCnt  = kTwoLevelBucketCnt - 1
 )
 
 type Aggregator interface {

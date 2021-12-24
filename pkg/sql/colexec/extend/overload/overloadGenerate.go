@@ -54,6 +54,7 @@ var filesAndFunctions map[string]func() error = map[string]func() error{
 	"mod.go":	GenerateMod,
 	"and.go": GenerateAnd,
 	"or.go": GenerateOr,
+	"like.go": GenerateLike,
 	// unary operators.
 	"unaryops.go": GenerateUnaryOperators,
 	// binary comparison operators.
@@ -793,6 +794,39 @@ func GenerateNotEqual() error {
 		return err
 	}
 	err = temp.ExecuteTemplate(file, "ne", pTs)
+	file.Close()
+	return err
+}
+
+// GenerateLike makes like.go
+func GenerateLike() error {
+	modTemplate, err := os.ReadFile("like.template")
+	if err != nil {
+		return err
+	}
+	tempText := string(modTemplate)
+	tempText = rewriteTemplateText(tempText)
+
+	temp, err := template.New("like").Parse(tempText)
+	if err != nil {
+		return err
+	}
+
+	type pts struct {
+		CharTypes []lrt
+	}
+	var pTs = pts{nil}
+	for _, p1 := range chars {
+		for _, p2 := range chars {
+			pTs.CharTypes = append(pTs.CharTypes, lrt{p1, p2, types.T_sel})
+		}
+	}
+
+	file, err := os.OpenFile("like.go", os.O_CREATE|os.O_WRONLY, 0755)
+	if err != nil {
+		return err
+	}
+	err = temp.ExecuteTemplate(file, "like", pTs)
 	file.Close()
 	return err
 }

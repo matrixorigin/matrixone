@@ -17,7 +17,6 @@ package vector
 import (
 	"bytes"
 	"errors"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"io"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -242,7 +242,7 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 }
 
 func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
-	if offset < 0 || offset >= vec.Length() {
+	if offset < 0 || offset >= ro.Length(vec) {
 		return n, VecInvalidOffsetErr
 	}
 	if v.IsReadonly() {
@@ -251,8 +251,8 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	v.Lock()
 	defer v.Unlock()
 	n = v.Capacity() - v.Length()
-	if n > vec.Length()-offset {
-		n = vec.Length() - offset
+	if n > ro.Length(vec)-offset {
+		n = ro.Length(vec) - offset
 	}
 	startRow := v.Length()
 
@@ -261,9 +261,9 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 		return n, err
 	}
 	if vec.Nsp.Np != nil {
-		for row := startRow; row < startRow+vec.Length(); row++ {
-			if vec.Nsp.Contains(uint64(offset + row - startRow)) {
-				v.VMask.Add(uint64(row))
+		for row := startRow; row < startRow+ro.Length(vec); row++ {
+			if nulls.Contains(vec.Nsp, uint64(offset + row - startRow)) {
+				nulls.Add(v.VMask, uint64(row))
 			}
 		}
 	}
@@ -273,7 +273,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	if len(v.Data) == cap(v.Data) {
 		mask = mask | container.ReadonlyMask
 	}
-	if v.VMask.Any() {
+	if nulls.Any(v.VMask) {
 		mask = mask | container.HasNullMask
 	}
 	atomic.StoreUint64(&v.StatMask, mask)
@@ -295,9 +295,9 @@ func (v *StdVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 		Data: v.Data[startIdx:endIdx],
 	}
 	if v.VMask.Np != nil {
-		vmask := v.VMask.Range(uint64(start), uint64(end), &nulls.Nulls{})
+		vmask := nulls.Range(v.VMask, uint64(start), uint64(end), &nulls.Nulls{})
 		vec.VMask = vmask
-		if vmask.Any() {
+		if nulls.Any(vmask) {
 			mask = mask | container.HasNullMask
 		}
 	} else {
@@ -344,7 +344,7 @@ func (v *StdVector) GetLatestView() IVector {
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
-			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
+			vec.VMask = nulls.Range(v.VMask, 0, uint64(endPos), &nulls.Nulls{})
 		} else {
 			vec.VMask = &nulls.Nulls{}
 			vec.VMask.Np = v.VMask.Np.Clone()
@@ -365,7 +365,7 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	nullSize := 0
 	var nullbuf []byte
 	var err error
-	if v.VMask.Any() {
+	if nulls.Any(v.VMask) {
 		nullbuf, err = v.VMask.Show()
 		if err != nil {
 			return nil, err
@@ -411,80 +411,80 @@ func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 		curCol := encoding.DecodeInt8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int16:
 		col := make([]int16, length)
 		curCol := encoding.DecodeInt16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int32:
 		col := make([]int32, length)
 		curCol := encoding.DecodeInt32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int64:
 		col := make([]int64, length)
 		curCol := encoding.DecodeInt64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint8:
 		col := make([]uint8, length)
 		curCol := encoding.DecodeUint8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint16:
 		col := make([]uint16, length)
 		curCol := encoding.DecodeUint16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint32:
 		col := make([]uint32, length)
 		curCol := encoding.DecodeUint32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint64:
 		col := make([]uint64, length)
 		curCol := encoding.DecodeUint64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 
 	case types.T_decimal:
 		col := make([]types.Decimal, length)
 		curCol := encoding.DecodeDecimalSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_float32:
 		col := make([]float32, length)
 		curCol := encoding.DecodeFloat32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_float64:
 		col := make([]float64, length)
 		curCol := encoding.DecodeFloat64Slice(v.Data)
 		copy(col[0:], curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_date:
 		col := make([]types.Date, length)
 		curCol := encoding.DecodeDateSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_datetime:
 		col := make([]types.Datetime, length)
 		curCol := encoding.DecodeDatetimeSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	default:
 		return nil, VecTypeNotSupportErr
 	}

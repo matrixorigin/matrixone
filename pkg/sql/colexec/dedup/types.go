@@ -16,34 +16,53 @@ package dedup
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/hash"
-	"github.com/matrixorigin/matrixone/pkg/intmap/fastmap"
+	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 )
 
 const (
-	UnitLimit = 1024
+	UnitLimit = 256
 )
 
-var (
-	ZeroBools  []bool
-	OneUint64s []uint64
+const (
+	H8 = iota
+	H24
+	H32
+	H40
+	HStr
 )
 
 type Container struct {
-	n      int
-	rows   int64
-	diffs  []bool
-	matchs []int64
-	hashs  []uint64
-	sels   [][]int64    // sels
-	slots  *fastmap.Map // hash code -> sels index
-	bat    *batch.Batch
-	vec    *vector.Vector
-	groups map[uint64][]*hash.SetGroup // hash code -> group list
+	typ           int
+	rows          uint64
+	keyOffs       []uint32
+	zKeyOffs      []uint32
+	inserted      []uint8
+	zInserted     []uint8
+	hashes        []uint64
+	strHashStates [][3]uint64
+	values        []uint64
+	intHashMap    *hashtable.Int64HashMap
+	strHashMap    *hashtable.StringHashMap
+
+	h8 struct {
+		keys  []uint64
+		zKeys []uint64
+	}
+	h24 struct {
+		keys  [][3]uint64
+		zKeys [][3]uint64
+	}
+	h32 struct {
+		keys  [][4]uint64
+		zKeys [][4]uint64
+	}
+	h40 struct {
+		keys  [][5]uint64
+		zKeys [][5]uint64
+	}
+	bat *batch.Batch
 }
 
 type Argument struct {
-	Attrs []string
-	Ctr   Container
+	ctr *Container
 }

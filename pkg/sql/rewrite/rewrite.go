@@ -14,9 +14,7 @@
 
 package rewrite
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-)
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 func Rewrite(stmt tree.Statement) tree.Statement {
 	switch stmt := stmt.(type) {
@@ -25,8 +23,6 @@ func Rewrite(stmt tree.Statement) tree.Statement {
 	case *tree.ParenSelect:
 		stmt.Select = rewriteSelect(stmt.Select)
 		return stmt
-	case *tree.Insert:
-		return rewriteInsert(stmt)
 	}
 	return stmt
 }

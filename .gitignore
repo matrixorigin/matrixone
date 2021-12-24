@@ -14,7 +14,10 @@ main
 mo-server
 *.toml
 cube*/
+store/
 pkg/catalog/test/
+pkg/config/system_vars.go
+pkg/config/system_vars_test.go
 pkg/vm/driver/test/test/
 pkg/vm/engine/aoe/engine/test/
 pkg/sql/colexec/extend/overload/*.go 
@@ -24,3 +27,4 @@ pkg/sql/colexec/extend/overload/*.go
 !pkg/sql/colexec/extend/overload/overloadGenerate.go 
 !pkg/sql/colexec/extend/overload/types.go 
 !pkg/sql/colexec/extend/overload/unary.go
+!pkg/sql/colexec/extend/overload/init.go

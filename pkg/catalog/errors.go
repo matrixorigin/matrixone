@@ -49,4 +49,6 @@ var (
 	ErrIndexExist = errors.New("index already exist")
 	//ErrIndexNotExist is the error for trying to drop an index that doesn't exit.
 	ErrIndexNotExist = errors.New("index not exist")
+	//ErrShardPending is for pending shards
+	ErrShardPending = errors.New("shard is pending")
 )

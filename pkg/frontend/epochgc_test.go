@@ -37,7 +37,6 @@ import (
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
-	// cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -47,7 +46,6 @@ var preAllocShardNum = uint64(20)
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	// cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()
@@ -84,7 +82,7 @@ func TestEpochGC(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
-			c.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = NewPDCallbackImpl(ppu)
+			c.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pcis[node]
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -374,7 +372,9 @@ func run_pci(id uint64, close *CloseFlag, pci *PDCallbackImpl,
 				fmt.Printf("C %v\n", err)
 			}
 
+			ep,_ := pci.IncQueryCountAtCurrentEpoch(1)
 			time.Sleep(cell * time.Millisecond)
+			pci.DecQueryCountAtEpoch(ep,1)
 		}
 
 		for j := 0; j < 3; j++ {
@@ -392,7 +392,7 @@ func run_pci(id uint64, close *CloseFlag, pci *PDCallbackImpl,
 }
 
 func Test_PCI_stall(t *testing.T) {
-	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false, 10000)
+	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
 	pci := NewPDCallbackImpl(ppu)
 
 	kv := storage.NewTestStorage()

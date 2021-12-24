@@ -200,6 +200,12 @@ func (p *proxy) InitSafeId(id uint64) {
 	p.lastIndex = id
 }
 
+func (p *proxy) GetLastId() uint64 {
+	p.logmu.RLock()
+	defer p.logmu.RUnlock()
+	return p.lastIndex
+}
+
 func (p *proxy) LogIndex(index *Index) {
 	if p.idAlloctor != nil {
 		index.Id.Id = p.idAlloctor.Alloc()

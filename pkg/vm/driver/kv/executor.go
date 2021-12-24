@@ -22,7 +22,7 @@ import (
 
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
 	"github.com/matrixorigin/matrixcube/util"
-	// "github.com/matrixorigin/matrixcube/pb/rpc"
 )
 
 // Storage memory storage
@@ -150,7 +149,7 @@ func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []b
 
 	id := uint64(0)
 	if v, ok := ce.attrs[string(req.Key)]; ok {
-		id, _ = codec.Bytes2Uint64(v.([]byte))
+		id, _ = driver.Bytes2Uint64(v.([]byte))
 	} else {
 		value, err := ce.kv.Get(req.Key)
 		if err != nil {
@@ -158,7 +157,7 @@ func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []b
 			return 0, rep
 		}
 		if len(value) > 0 {
-			id, _ = codec.Bytes2Uint64(value)
+			id, _ = driver.Bytes2Uint64(value)
 		}
 	}
 
@@ -168,7 +167,7 @@ func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []b
 		id += customReq.Batch
 	}
 
-	newV := codec.Uint642Bytes(id)
+	newV := driver.Uint642Bytes(id)
 	ce.attrs[string(req.Key)] = newV
 
 	wb.Set(req.Key, newV)
@@ -190,11 +189,11 @@ func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (ui
 
 	var rep []byte
 
-	if _, ok := ce.attrs[codec.Bytes2String(req.Key)]; ok {
+	if _, ok := ce.attrs[driver.Bytes2String(req.Key)]; ok {
 		rep = errDriver.ErrorResp(errors.New("key is already existed"))
 		return 0, rep
 	} else {
-		ce.attrs[codec.Bytes2String(req.Key)] = "1"
+		ce.attrs[driver.Bytes2String(req.Key)] = "1"
 	}
 
 	value, err := ce.kv.Get(req.Key)
