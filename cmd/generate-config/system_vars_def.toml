@@ -348,6 +348,16 @@ values = ["314572800"]
 comment = "default is 300MB. The max entries bytes for the write batch in the cube."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "printLogInterVal"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["10", "1", "1000"]
+comment = "default printLog Interval is 10s."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

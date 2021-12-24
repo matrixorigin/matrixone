@@ -4791,7 +4791,7 @@ yydefault:
 			}
 			yyLOCAL = &tree.Fields{
 				Optionally: true,
-				EscapedBy:  b,
+				EnclosedBy: b,
 			}
 		}
 		yyVAL.union = yyLOCAL
