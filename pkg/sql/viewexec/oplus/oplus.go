@@ -517,7 +517,7 @@ func (ctr *Container) fillH24(bat *batch.Batch, proc *process.Process) error {
 				case types.T_date:
 					vs := vecs[j].Col.([]types.Date)
 					for k := int64(0); k < n; k++ {
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 					}
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_int64:
@@ -541,7 +541,7 @@ func (ctr *Container) fillH24(bat *batch.Batch, proc *process.Process) error {
 				case types.T_datetime:
 					vs := vecs[j].Col.([]types.Datetime)
 					for k := int64(0); k < n; k++ {
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 					}
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_char, types.T_varchar:
@@ -614,7 +614,7 @@ func (ctr *Container) fillH24(bat *batch.Batch, proc *process.Process) error {
 			case types.T_date:
 				vs := vecs[j].Col.([]types.Date)
 				for k := int64(0); k < n; k++ {
-					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_int64:
@@ -638,7 +638,7 @@ func (ctr *Container) fillH24(bat *batch.Batch, proc *process.Process) error {
 			case types.T_datetime:
 				vs := vecs[j].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
-					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
@@ -744,7 +744,7 @@ func (ctr *Container) fillH32(bat *batch.Batch, proc *process.Process) error {
 				case types.T_date:
 					vs := vecs[j].Col.([]types.Date)
 					for k := int64(0); k < n; k++ {
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 					}
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_int64:
@@ -768,7 +768,7 @@ func (ctr *Container) fillH32(bat *batch.Batch, proc *process.Process) error {
 				case types.T_datetime:
 					vs := vecs[j].Col.([]types.Datetime)
 					for k := int64(0); k < n; k++ {
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 					}
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_char, types.T_varchar:
@@ -841,7 +841,7 @@ func (ctr *Container) fillH32(bat *batch.Batch, proc *process.Process) error {
 			case types.T_date:
 				vs := vecs[j].Col.([]types.Date)
 				for k := int64(0); k < n; k++ {
-					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_int64:
@@ -865,7 +865,7 @@ func (ctr *Container) fillH32(bat *batch.Batch, proc *process.Process) error {
 			case types.T_datetime:
 				vs := vecs[j].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
-					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
@@ -971,7 +971,7 @@ func (ctr *Container) fillH40(bat *batch.Batch, proc *process.Process) error {
 				case types.T_date:
 					vs := vecs[j].Col.([]types.Date)
 					for k := int64(0); k < n; k++ {
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 					}
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_int64:
@@ -995,7 +995,7 @@ func (ctr *Container) fillH40(bat *batch.Batch, proc *process.Process) error {
 				case types.T_datetime:
 					vs := vecs[j].Col.([]types.Datetime)
 					for k := int64(0); k < n; k++ {
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 					}
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_char, types.T_varchar:
@@ -1068,7 +1068,7 @@ func (ctr *Container) fillH40(bat *batch.Batch, proc *process.Process) error {
 			case types.T_date:
 				vs := vecs[j].Col.([]types.Date)
 				for k := int64(0); k < n; k++ {
-					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 				}
 				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_int64:
@@ -1092,7 +1092,7 @@ func (ctr *Container) fillH40(bat *batch.Batch, proc *process.Process) error {
 			case types.T_datetime:
 				vs := vecs[j].Col.([]types.Datetime)
 				for k := int64(0); k < n; k++ {
-					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 				}
 				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
@@ -1194,10 +1194,10 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 					}
 				case types.T_date:
 					vs := vecs[j].Col.([]types.Date)
+					data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*4]
 					for k := int64(0); k < n; k++ {
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+						ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 					}
-					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_int64:
 					vs := vecs[j].Col.([]int64)
 					data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
@@ -1218,10 +1218,10 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 					}
 				case types.T_datetime:
 					vs := vecs[j].Col.([]types.Datetime)
+					data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 					for k := int64(0); k < n; k++ {
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+						ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 					}
-					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				case types.T_char, types.T_varchar:
 					vs := vecs[j].Col.(*types.Bytes)
 					for k := int64(0); k < n; k++ {
@@ -1294,10 +1294,10 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 				}
 			case types.T_date:
 				vs := vecs[j].Col.([]types.Date)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
 				for k := int64(0); k < n; k++ {
-					*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*4:(i+k+1)*4]...)
 				}
-				add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_int64:
 				vs := vecs[j].Col.([]int64)
 				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
@@ -1318,10 +1318,10 @@ func (ctr *Container) fillHStr(bat *batch.Batch, proc *process.Process) error {
 				}
 			case types.T_datetime:
 				vs := vecs[j].Col.([]types.Datetime)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
 				for k := int64(0); k < n; k++ {
-					*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+					ctr.hstr.keys[k] = append(ctr.hstr.keys[k], data[(i+k)*8:(i+k+1)*8]...)
 				}
-				add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 			case types.T_char, types.T_varchar:
 				vs := vecs[j].Col.(*types.Bytes)
 				for k := int64(0); k < n; k++ {

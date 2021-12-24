@@ -504,6 +504,10 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			return errors.New(errno.SystemError, string(msg.Code))
 		}
 		if msg.Sid == 1 {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			break
 		}
 		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
