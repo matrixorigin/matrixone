@@ -209,7 +209,6 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 		if quit {
 			break
 		}
-
 		wait_d := time.Now()
 		if lineOut.Line == nil && lineOut.Lines == nil {
 			break
@@ -1242,11 +1241,15 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	return nil
 }
 
+var threadNum uint32 = 0
+var startTime time.Time
+
 /*
 save batch to storage.
 when force is true, batchsize will be changed.
 */
 func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
+	threadNum++
 	var err error = nil
 	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
@@ -1264,6 +1267,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		//logutil.Infof("----batchBytes %v B %v MB",batchBytes,batchBytes / 1024.0 / 1024.0)
 		//
 		wait_a := time.Now()
+		startTime = wait_a
+		logutil.Infof("threadNum is %v, startTime is %v", threadNum, wait_a)
+
 		err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
@@ -1294,6 +1300,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 
 		handler.resetBatch += time.Since(wait_b)
 	} else {
+		wait_a := time.Now()
+		startTime = wait_a
+		logutil.Infof("threadNum is %v, startTime is %v", threadNum, wait_a)
 		if force {
 			//first, remove redundant rows at last
 			needLen := handler.batchFilled
@@ -1373,6 +1382,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 			}
 		}
 	}
+	threadNum--
+	wait_b := time.Now()
+	logutil.Infof("threadNum is %v, startTime is %v, endTime is %v", threadNum, startTime, wait_b)
 	return err
 }
 
@@ -1598,14 +1610,30 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}()
 
+	chan1 := make(chan int)
+	go func() {
+		for {
+			select {
+			case <-chan1:
+				logutil.Infof("load stream is over, start to leave. ThreadNum is %v", threadNum)
+				return
+			default:
+				logutil.Infof("Print the ThreadNum, ThreadNum is %v, startTime is %v", threadNum, startTime)
+				time.Sleep(10 * time.Second)
+			}
+		}
+	}()
+
 	//until now, the last writer has been counted.
 	//There are no more new threads can be spawned.
 	//wait csvReader and rowConverter to quit.
 	wg.Wait()
+	logutil.Infof("wg syncGroup is over")
 
 	//until now, csvReader and rowConverter has quit.
 	//wait writers to quit
 	handler.simdCsvWaitWriteRoutineToQuit.Wait()
+	logutil.Infof("handler.simdCsvWaitWriteRoutineToQuit syncGroup is over")
 
 	//until now, all writers has quit.
 	//tell stats to quit. NOTIFY_EVENT_END must be the last event in the queue.
@@ -1613,6 +1641,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//wait stats to quit
 	statsWg.Wait()
+	logutil.Infof("statsWg syncGroup is over")
+
+	go func() {
+		chan1 <- 1
+	}()
 
 	//logutil.Infof("-----total row2col %s fillBlank %s toStorage %s",
 	//	handler.row2col,handler.fillBlank,handler.toStorage)
