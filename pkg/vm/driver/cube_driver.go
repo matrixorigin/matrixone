@@ -45,7 +45,7 @@ import (
 )
 
 const (
-	defaultRPCTimeout     = time.Second * 2
+	defaultRPCTimeout     = time.Second * 10
 	defaultRetryTimes     = 5
 	defaultRetryWaitTime  = time.Second * 2
 	defaultStartupTimeout = time.Second * 300
