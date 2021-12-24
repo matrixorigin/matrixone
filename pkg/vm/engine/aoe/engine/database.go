@@ -20,9 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	log "github.com/sirupsen/logrus"
+
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
 )
@@ -106,12 +107,12 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
-			logutil.Infof("addr is %v, db.catalog.Driver.RaftStore().GetConfig().ClientAddr is %v", addr,
-				db.catalog.Driver.RaftStore().GetConfig().ClientAddr)
-			r.nodes = append(r.nodes, engine.Node{
-				Id:   addr,
-				Addr: addr,
-			})
+			if !Exist(r.nodes, addr) {
+				r.nodes = append(r.nodes, engine.Node{
+					Id:   addr,
+					Addr: addr,
+				})
+			}
 			for _, id := range ids.Ids {
 				if addr != db.catalog.Driver.RaftStore().GetConfig().ClientAddr {
 					continue
@@ -130,5 +131,16 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 
 		}
 	}
+	logutil.Infof("nodes is %v", r.nodes)
 	return r, nil
+}
+
+func Exist(nodes engine.Nodes, iter string) bool {
+	exist := false
+	for _, node := range nodes {
+		if node.Id == iter {
+			exist = true
+		}
+	}
+	return exist
 }
