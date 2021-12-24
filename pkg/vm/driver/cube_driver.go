@@ -45,7 +45,9 @@ import (
 )
 
 const (
-	defaultRPCTimeout     = time.Second * 10
+	defaultRPCTimeout     = time.Second * 2
+	defaultRetryTimes     = 5
+	defaultRetryWaitTime  = time.Second * 2
 	defaultStartupTimeout = time.Second * 300
 )
 
@@ -756,14 +758,21 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 	return rsp, nil
 }
 
-func (h *driver) Exec(cmd interface{}) ([]byte, error) {
+func (h *driver) Exec(cmd interface{}) (res []byte, err error) {
 	t0 := time.Now()
 	cr := &server.CustomRequest{}
 	h.BuildRequest(cr, cmd)
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.Exec(*cr, defaultRPCTimeout)
+	for i := 0; i < defaultRetryTimes; i++ {
+		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		if err == nil {
+			break
+		}
+		time.Sleep(defaultRetryWaitTime)
+	}
+	return
 }
 
 func (h *driver) AsyncExec(cmd interface{}, cb func(server.CustomRequest, []byte, error), arg interface{}) {
@@ -778,14 +787,21 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(ser
 	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
-func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	cr := &server.CustomRequest{}
 	h.BuildRequest(cr, cmd)
-	return h.app.Exec(*cr, defaultRPCTimeout)
+	for i := 0; i < defaultRetryTimes; i++ {
+		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		if err == nil {
+			break
+		}
+		time.Sleep(defaultRetryWaitTime)
+	}
+	return
 }
 
 func (h *driver) RaftStore() raftstore.Store {
