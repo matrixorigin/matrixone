@@ -265,78 +265,59 @@ func TestSnapshot(t *testing.T) {
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*60)
 	d0 := c.CubeDrivers[0]
 
-	leaderNode := 0
+	insertNode := 0
 	stopNode := 2
 
 	shard, err := d0.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	// stdLog.Printf("shard id is %v", shard.ShardID)
-	// leaderStore := c.RaftCluster.GetShardLeaderStore(shard.ShardID)
-	// leaderStoreContainerID := leaderStore.Meta().ID
-	// logutil.Infof("leaderStoreContainerID is %v", leaderStoreContainerID)
-
-	// var stopNode int
-	// var leaderNode int
-	// for i := 0; i < 3; i++ {
-	// 	containerID := c.RaftCluster.GetStore(i).Meta().ID
-	// 	if containerID != leaderStoreContainerID {
-	// 		stopNode = i
-	// 	}
-	// 	if containerID == leaderStoreContainerID {
-	// 		leaderNode = i
-	// 	}
-	// }
-	// logutil.Infof("stop: %v, leader: %v", stopNode, leaderNode)
-	// temp := leaderNode
-	// leaderNode = stopNode
-	// stopNode = temp
+	logutil.Infof("node0-%v, node1-%v, node2-%v", c.AOEStorages[0], c.AOEStorages[1], c.AOEStorages[2])
 
 	c.StopNode(stopNode)
 	stdLog.Printf("node%v stopped.", stopNode)
-	d0 = c.CubeDrivers[leaderNode]
+	d0 = c.CubeDrivers[insertNode]
 
 	var insertBatches []*batch.Batch
 	for i := 0; i < 10; i++ {
 		//create table into the shard
 		tbl := MockTableInfo(i)
-		j:=0
+		j := 0
 		for {
 			err = d0.CreateTablet(tbl.Name, shard.ShardID, tbl)
 			if err == nil {
+				stdLog.Printf("create table %v\n", i)
 				break
 			}
-			fmt.Printf("wait %v",j)
+			fmt.Printf("wait %v\n", j)
 			j++
 		}
-		stdLog.Printf(" create table %v", i)
-		require.Nil(t, err)
-		//append 1 rows into the table
+		//append 10000 rows into the table
 		batch := MockBatch(tbl, i, 10000)
 		insertBatches = append(insertBatches, batch)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
 		require.Nil(t, err)
-		err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
 		for {
 			err = d0.Append(tbl.Name, shard.ShardID, buf.Bytes())
 			if err == nil {
+				stdLog.Printf(" append %v\n", i)
 				break
 			}
+			fmt.Printf("Append wait %v\n", j)
+			j++
 		}
-		stdLog.Printf(" append %v", i)
 		require.Nil(t, err)
 	}
 
 	var replicaID uint64
-	replicas := c.RaftCluster.GetShardByID(leaderNode, shard.ShardID).Replicas
+	replicas := c.RaftCluster.GetShardByID(insertNode, shard.ShardID).Replicas
 	for _, replica := range replicas {
-		if replica.ContainerID == c.RaftCluster.GetStore(leaderNode).Meta().ID {
+		if replica.ContainerID == c.RaftCluster.GetStore(insertNode).Meta().ID {
 			replicaID = replica.ID
 		}
 	}
 
 	var logdb logdb.LogDB
-	logdb = c.RaftCluster.GetStore(leaderNode).(raftstore.LogDBGetter).GetLogDB()
+	logdb = c.RaftCluster.GetStore(insertNode).(raftstore.LogDBGetter).GetLogDB()
 	hasLog := func(index uint64) bool {
 		_, _, err := logdb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
 		if err == nil {
@@ -365,17 +346,22 @@ func TestSnapshot(t *testing.T) {
 	time.Sleep(20 * time.Second)
 
 	d2 := c.CubeDrivers[stopNode]
-	s0 := c.AOEStorages[leaderNode]
+	s0 := c.AOEStorages[insertNode]
 	s2 := c.AOEStorages[stopNode]
 
-	// s0.Sync([]uint64{shard.ShardID})
-	// s2.Sync([]uint64{shard.ShardID})
-	// s0checkpointID := s0.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
-	// s2checkpointID := s2.DB.GetDBCheckpointId(aoedb.IdToNameFactory.Encode(shard.ShardID))
-	// require.Equal(t, s0checkpointID, s2checkpointID)
-
+	s0.Sync([]uint64{shard.ShardID})
+	s2.Sync([]uint64{shard.ShardID})
 	//check tables
 	tbls, err := d2.TabletNames(shard.ShardID)
+	j := 0
+	for {
+		tbls, err = d2.TabletNames(shard.ShardID)
+		if err == nil {
+			break
+		}
+		j++
+		fmt.Printf("TabletNames wait %v\n", j)
+	}
 	require.Nil(t, err)
 	require.Equal(t, 10, len(tbls))
 	require.True(t, s0.IsTablesSame(s2, shard.ShardID))

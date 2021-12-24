@@ -390,12 +390,14 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 
 //CreateSnapshot create a snapshot
 func (s *Storage) CreateSnapshot(shardID uint64, path string) error {
+	s.DB.FlushDatabase(aoedb.IdToNameFactory.Encode(shardID))
 	ctx := aoedb.CreateSnapshotCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
 		Sync: false,
 	}
-	_, err := s.DB.CreateSnapshot(&ctx)
+	idx, err := s.DB.CreateSnapshot(&ctx)
+	logutil.Infof("createSnapshot, index is %v, storage is %v", idx, s)
 	return err
 }
 
@@ -406,6 +408,7 @@ func (s *Storage) ApplySnapshot(shardID uint64, path string) error {
 		Path: path,
 	}
 	logutil.Infof("ApplySnapshot")
+	logutil.Infof("applysnapshot, storage is %v", s)
 	err := s.DB.ApplySnapshot(&ctx)
 	return err
 }
