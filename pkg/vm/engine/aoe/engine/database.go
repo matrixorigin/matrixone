@@ -107,6 +107,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
+			logutil.Debugf("ClientAddr is %v, shardId is %d", addr, tbl.ShardId)
 			if !Exist(r.nodes, addr) {
 				r.nodes = append(r.nodes, engine.Node{
 					Id:   addr,
@@ -117,6 +118,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				if addr != db.catalog.Driver.RaftStore().GetConfig().ClientAddr {
 					continue
 				}
+				logutil.Debugf("shardId is %d, segment is %d", tbl.ShardId, id)
 				r.segments = append(r.segments, SegmentInfo{
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
