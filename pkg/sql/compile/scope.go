@@ -510,7 +510,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			}
 			break
 		}
-		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
+		bat, _, err := protocol.DecodeBatchWithProcess(val.(*message.Message).Data, s.Proc)
 		if err != nil {
 			select {
 			case <-arg.Reg.Ctx.Done():
