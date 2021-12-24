@@ -356,12 +356,6 @@ max-group-num           = 0
 level = "debug" # debug, info, warn, error, fatal.
 format = "json" # json, console.
 
-# log file config
-filename = "" # log file.
-max-size = 512 # maximum log file size.
-max-days = 0 # maximum log file days kept.
-max-backups = 0 # maximum numbers of old log files to retain.
-
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
 # Docker or NAT network environment configuration
@@ -392,10 +386,6 @@ compact-log-check-duration = "60s"                  # the period of log compacti
 disable-shard-split = false                         # to disable shard split, set this value to true
 allow-remove-leader = false                         # to allow leader removal, set this value to true
 shard-capacity-bytes = "96MB"                       # shard capacity
-
-[snapshot]
-max-concurrency-snap-chunks = 8
-snap-chunk-size = "4MB"
 
 [raft]
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
@@ -440,7 +430,6 @@ peer-urls = "http://localhost:50000"
 # For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
 advertise-peer-urls = ""
-election-interval = "3000ms"                        # prophet raft group election interval
 
 [prophet.schedule]
 max-snapshot-count = 3                              # maximum snapshot a node that can be scheduled by prophet is handling
@@ -448,7 +437,6 @@ max-pending-peer-count = 16                         # maximum pending peers a no
 patrol-resource-interval = "100ms"                  # the period of cube leader patrol
 max-container-down-time = "30m"                     # the maximum time a node is allowed to leave
 leader-schedule-limit = 4                           # the maximum number of transfer leader
-leader-schedule-policy = "count"                    # the rebalance scheduling policy, (count | size), count: every node has the same raft leader. size: every raft leader on a node manage the same data size
 resource-schedule-limit = 2048                      # the maximum resource schedule operation can happen simultaneously
 replica-schedule-limit = 64                         # the maximum resource replication operation can happen simultaneously
 low-space-ratio = 0.8                               # space ratio to decide whether this node's storage is low
@@ -466,17 +454,3 @@ addr = ""                                           # cube uses prometheus push 
 interval = 0                                        # the period to send cube metrics
 job = ""                                            # prometheus job
 instance = ""                                       # prometheus instance
-
-# Storage Configs
-[meta.conf]
-block-max-rows = 160000
-segment-max-blocks = 40
-
-[scheduler-cfg]
-block-writers = 8
-segment-writers = 4
-
-[cache-cfg]
-index-cache-size = 134217728        # 128M
-insert-cache-size = 4294967296      # 4G
-data-cache-size = 4294967296        # 4G
