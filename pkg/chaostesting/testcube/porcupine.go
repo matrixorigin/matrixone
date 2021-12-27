@@ -15,6 +15,8 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -24,7 +26,7 @@ import (
 
 type (
 	LogPorcupineOp func(
-		fn func() (input any, output any, err error),
+		fn func() (clientID int, input any, output any, err error),
 	) error
 	GetPorcupineOps func() []porcupine.Operation
 )
@@ -38,10 +40,10 @@ func (_ Def) Porcupine() (
 	var lock sync.Mutex
 
 	log = func(
-		fn func() (input any, output any, err error),
+		fn func() (clientID int, input any, output any, err error),
 	) error {
 		t0 := time.Now()
-		input, output, err := fn()
+		clientID, input, output, err := fn()
 		if err != nil {
 			return err
 		}
@@ -49,10 +51,11 @@ func (_ Def) Porcupine() (
 		lock.Lock()
 		defer lock.Unlock()
 		ops = append(ops, porcupine.Operation{
-			Input:  input,
-			Output: output,
-			Call:   t0.UnixNano(),
-			Return: t1.UnixNano(),
+			ClientId: clientID,
+			Input:    input,
+			Output:   output,
+			Call:     t0.UnixNano(),
+			Return:   t1.UnixNano(),
 		})
 		return nil
 	}
@@ -70,10 +73,27 @@ func (_ Def) PorcupineReport(
 	get GetPorcupineOps,
 ) fz.Operators {
 	return fz.Operators{
+
+		// checker
 		fz.PorcupineChecker(
 			fz.PorcupineKVModel,
 			get,
 			nil,
+			time.Second*10,
 		),
+
+		// write to file
+		fz.Operator{
+			AfterStop: func() {
+				//TODO write to uuid-specific file
+				f, err := os.Create("porcupine-log")
+				ce(err)
+				defer f.Close()
+				for _, op := range get() {
+					fmt.Fprintf(f, "%+v\n", op)
+				}
+			},
+		},
 	}
+
 }

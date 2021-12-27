@@ -14,22 +14,18 @@
 
 package main
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	"bytes"
+	"testing"
 
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+)
 
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
-}
-
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+func TestConfigCodec(t *testing.T) {
+	NewScope().Call(func(
+		write fz.WriteConfig,
+	) {
+		buf := new(bytes.Buffer)
+		ce(write(buf))
+	})
 }

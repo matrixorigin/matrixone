@@ -27,7 +27,7 @@ import (
 
 type KV struct {
 	Set func(key any, value any, timeout time.Duration) error
-	Get func(key any, target any, timeout time.Duration) error
+	Get func(key any, target any, timeout time.Duration) (bool, error)
 }
 
 const (
@@ -131,7 +131,7 @@ func (_ Def) NewKV() NewKV {
 
 			},
 
-			Get: func(key any, target any, timeout time.Duration) (err error) {
+			Get: func(key any, target any, timeout time.Duration) (ok bool, err error) {
 				defer he(&err)
 
 				req := rpc.Request{}
@@ -162,15 +162,18 @@ func (_ Def) NewKV() NewKV {
 
 				select {
 				case result := <-resultChan:
-					ce(sb.Copy(
-						sb.Decode(bytes.NewReader(result)),
-						sb.Unmarshal(target),
-					))
-					return nil
+					if len(result) > 0 {
+						ce(sb.Copy(
+							sb.Decode(bytes.NewReader(result)),
+							sb.Unmarshal(target),
+						))
+						return true, nil
+					}
+					return false, nil
 				case err := <-errChan:
-					return err
+					return false, err
 				case <-time.After(timeout):
-					return raftstore.ErrTimeout
+					return false, raftstore.ErrTimeout
 				}
 
 			},

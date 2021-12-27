@@ -12,26 +12,51 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"bytes"
+	"testing"
+
 	"github.com/reusee/dscope"
+	"github.com/reusee/e4"
 )
 
-type Def struct{}
+func TestNodeConfigItem(t *testing.T) {
+	defer he(nil, e4.TestingFatal(t))
 
-type Def2 struct{}
+	NewScope().Fork(
+		func() MainAction {
+			return MainAction{}
+		},
+		func() NodeConfigSources {
+			return NodeConfigSources{
+				Sources: []NodeConfigSource{
+					{
+						String: "a",
+					},
+					{
+						String: "b",
+					},
+					{
+						String: "c",
+					},
+				},
+			}
+		},
+	).Call(func(
+		write WriteConfig,
+		read ReadConfig,
+		scope dscope.Scope,
+	) {
 
-//TODO add cluster scope
+		buf := new(bytes.Buffer)
+		ce(write(buf))
 
-func NewScope() Scope {
-	var defs []any
-	defs = append(defs, dscope.Methods(new(fz.Def))...)
-	defs = append(defs, dscope.Methods(new(Def))...)
-	scope := dscope.New(defs...)
-	defs = defs[:0]
-	defs = append(defs, dscope.Methods(new(Def2))...)
-	scope = scope.Fork(defs...)
-	return scope
+		defs, err := read(buf)
+		ce(err)
+
+		scope.Fork(defs...)
+
+	})
 }

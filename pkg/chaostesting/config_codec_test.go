@@ -24,6 +24,12 @@ import (
 	"github.com/reusee/e4"
 )
 
+type actionFoo struct{}
+
+func init() {
+	RegisterAction(actionFoo{})
+}
+
 func TestConfigCodec(t *testing.T) {
 	defer he(nil, e4.TestingFatal(t))
 
@@ -32,7 +38,15 @@ func TestConfigCodec(t *testing.T) {
 			return MainAction{
 				Action: RandomActionTree([]ActionMaker{
 					func() Action {
-						return Seq()
+						return Seq(
+							Par(
+								Seq(
+									Seq(),
+									actionFoo{},
+								),
+								Par(),
+							),
+						)
 					},
 				}, 128),
 			}

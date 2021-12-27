@@ -2,3 +2,5 @@
 /config.xml
 /*.profile
 /node-*.log
+/porcupine-log
+/configs/*.xml

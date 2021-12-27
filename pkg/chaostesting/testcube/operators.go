@@ -19,7 +19,7 @@ import "github.com/matrixorigin/matrixone/pkg/chaostesting"
 func (_ Def) Operators() fz.Operators {
 	return fz.Operators{
 		fz.SaveConfig("config.xml"),
-		fz.SaveCPUProfile("cpu.profile"),
-		fz.SaveAllocsProfile("allocs.profile"),
+		//fz.SaveCPUProfile("cpu.profile"),
+		//fz.SaveAllocsProfile("allocs.profile"),
 	}
 }
