@@ -390,12 +390,14 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 
 //CreateSnapshot create a snapshot
 func (s *Storage) CreateSnapshot(shardID uint64, path string) error {
+	s.DB.FlushDatabase(aoedb.IdToNameFactory.Encode(shardID))
 	ctx := aoedb.CreateSnapshotCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
 		Sync: false,
 	}
-	_, err := s.DB.CreateSnapshot(&ctx)
+	idx, err := s.DB.CreateSnapshot(&ctx)
+	logutil.Infof("createSnapshot, index is %v, storage is %v", idx, s)
 	return err
 }
 
@@ -405,7 +407,7 @@ func (s *Storage) ApplySnapshot(shardID uint64, path string) error {
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
 	}
-	logutil.Infof("ApplySnapshot")
+	logutil.Infof("applysnapshot, storage is %v", s)
 	err := s.DB.ApplySnapshot(&ctx)
 	return err
 }
@@ -457,17 +459,17 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			shardId := batch.GetVector(bat, sShardId)
 			logIndex := batch.GetVector(bat, sLogIndex)
 			metadate := batch.GetVector(bat, sMetadata)
-			logutil.Infof("GetInitialStates Metadata is %v\n",
-				metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
 			customReq := &meta.ShardLocalState{}
-			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
+			offset := metadate.Col.(*types.Bytes).Offsets[vector.Length(metadate) - 1]
+			lengths:= metadate.Col.(*types.Bytes).Lengths[vector.Length(metadate) - 1]
+			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[offset:offset+lengths])
 			values = append(values, meta.ShardMetadata{
-				ShardID:  shardId.Col.([]uint64)[0],
-				LogIndex: logIndex.Col.([]uint64)[0],
+				ShardID:  shardId.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1],
+				LogIndex: logIndex.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1],
 				Metadata: *customReq,
 			})
-			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d \n",
-				logIndex.Col.([]uint64)[0], shardId.Col.([]uint64)[0])
+			logutil.Infof("GetInitialStates LogIndex is %d, ShardID is %d, Metadata is %v\n",
+				logIndex.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1], shardId.Col.([]uint64)[len(shardId.Col.([]uint64)) - 1], customReq.String())
 
 		}
 	}
@@ -589,7 +591,90 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 
 func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
-		err := s.saveShardMetadata(metadata)
+		dbName := aoedb.IdToNameFactory.Encode(metadata.ShardID)
+		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
+		db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
+		if err != nil && err != aoeMeta.DatabaseNotFoundErr {
+			return err
+		}
+		createDatabase := false
+		if db == nil {
+			if metadata.LogIndex == math.MaxUint64 {
+				return storage.ErrShardNotFound
+			}
+			ctx := aoedb.CreateDBCtx{
+				Id:     metadata.LogIndex,
+				Offset: 0,
+				Size:   3,
+				DB:     dbName,
+			}
+			db, err = s.DB.CreateDatabase(&ctx)
+			logutil.Infof("create database, raft sid is %v, aoe sid is %v, storage is %v.", metadata.ShardID, db.Id, s)
+			if err != nil {
+				return err
+			}
+			createDatabase = true
+		}
+		tbl, err := s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+		if err != nil && err != aoeMeta.TableNotFoundErr {
+			return err
+		}
+		createTable := false
+		if tbl == nil {
+			metaTblInfo := createMetadataTableInfo(metadata.ShardID)
+			offset := 0
+			size := 2
+			if createDatabase {
+				offset = 1
+				size = 3
+			}
+			schema, indexSchema := adaptor.TableInfoToSchema(s.DB.Store.Catalog, metaTblInfo)
+			ctx := aoedb.CreateTableCtx{
+				DBMutationCtx: aoedb.DBMutationCtx{
+					Id:     metadata.LogIndex,
+					Offset: offset,
+					Size:   size,
+					DB:     dbName,
+				},
+				Schema: schema,
+				Indice: indexSchema,
+			}
+			_, err = s.DB.CreateTable(&ctx)
+			if err != nil {
+				return err
+			}
+			createTable = true
+		}
+
+		bat, _ := shardMetadataToBatch(metadata)
+		offset := 0
+		size := 1
+		if createTable {
+			offset = 1
+			size = 2
+		}
+		if createDatabase {
+			offset = 2
+			size = 3
+		}
+		ctx := aoedb.AppendCtx{
+			TableMutationCtx: aoedb.TableMutationCtx{
+				DBMutationCtx: aoedb.DBMutationCtx{
+					Id:     metadata.LogIndex,
+					Offset: offset,
+					Size:   size,
+					DB:     dbName,
+				},
+				Table: tableName,
+			},
+			Data: bat,
+		}
+		err = s.DB.Append(&ctx)
+		if err != nil {
+			logutil.Errorf("SaveShardMetadata is failed: %v", err.Error())
+			return err
+		}
+		err = s.DB.FlushDatabase(dbName)
 		if err != nil {
 			return err
 		}

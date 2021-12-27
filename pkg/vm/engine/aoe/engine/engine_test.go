@@ -207,6 +207,7 @@ func TestAOEEngine(t *testing.T) {
 
 	//test relation
 	tb, err = db.Relation(mockTbl.Name)
+	require.Equal(t, 1, len(tb.Nodes()))
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
 

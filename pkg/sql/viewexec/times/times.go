@@ -800,9 +800,9 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Date)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -840,9 +840,9 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Datetime)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -907,7 +907,7 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_date:
 						vs := gvecs[j].Col.([]types.Date)
 						for k := int64(0); k < n; k++ {
-							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
@@ -931,7 +931,7 @@ func (ctr *Container) probeH24(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_datetime:
 						vs := gvecs[j].Col.([]types.Datetime)
 						for k := int64(0); k < n; k++ {
-							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -1215,9 +1215,9 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Date)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1265,9 +1265,9 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Datetime)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1332,7 +1332,7 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_date:
 						vs := gvecs[j].Col.([]types.Date)
 						for k := int64(0); k < n; k++ {
-							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
+							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int32(vs[i+k])
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_int64:
@@ -1356,7 +1356,7 @@ func (ctr *Container) probeH32(is []int, arg *Argument, bat *batch.Batch, proc *
 					case types.T_datetime:
 						vs := gvecs[j].Col.([]types.Datetime)
 						for k := int64(0); k < n; k++ {
-							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
+							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = int64(vs[i+k])
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 					case types.T_char, types.T_varchar:
@@ -1640,9 +1640,9 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Date)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int32(vs[0])
 							} else {
-								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
+								*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int32(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
@@ -1690,9 +1690,9 @@ func (ctr *Container) probeH40(is []int, arg *Argument, bat *batch.Batch, proc *
 						vs := gvecs[j].Col.([]types.Datetime)
 						for k := int64(0); k < n; k++ {
 							if vp := vps[k]; vp == 0 {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int64(vs[0])
 							} else {
-								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
+								*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = int64(vs[vp-1])
 							}
 						}
 						add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])

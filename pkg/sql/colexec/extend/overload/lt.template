@@ -29,7 +29,7 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-func init() {
+func initLt() {
     BinOps[LT] = []*BinOp{
     // Left Type is same to Right Type.
     {{range .Numerics}}

@@ -16,18 +16,20 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"os"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,7 +60,7 @@ type MysqlCmdExecutor struct {
 	routineMgr *RoutineManager
 }
 
-func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session)  {
+func (cei *MysqlCmdExecutor) PrepareSessionBeforeExecRequest(ses *Session) {
 	cei.ses = ses
 }
 
@@ -89,16 +91,16 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto MysqlProtocol
-	mrs *MysqlResultSet
+	proto  MysqlProtocol
+	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
 
 	getEmptyRowTime time.Duration
-	flushTime time.Duration
+	flushTime       time.Duration
 }
 
-func NewOuputQueue(proto MysqlProtocol,mrs *MysqlResultSet,length uint64) *outputQueue {
+func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64) *outputQueue {
 	return &outputQueue{
 		proto:  proto,
 		mrs:    mrs,
@@ -107,7 +109,7 @@ func NewOuputQueue(proto MysqlProtocol,mrs *MysqlResultSet,length uint64) *outpu
 	}
 }
 
-func (o *outputQueue) reset()  {
+func (o *outputQueue) reset() {
 	o.getEmptyRowTime = 0
 	o.flushTime = 0
 }
@@ -117,25 +119,25 @@ getEmptyRow returns a empty space for filling data.
 If there is no space, it flushes the data into the protocol
 and returns an empty space then.
 */
-func (o *outputQueue) getEmptyRow() ([]interface{},error) {
+func (o *outputQueue) getEmptyRow() ([]interface{}, error) {
 	//begin := time.Now()
 	//defer func() {
 	//	o.getEmptyRowTime += time.Since(begin)
 	//}()
 	if o.rowIdx >= o.length {
 		if err := o.flush(); err != nil {
-			return nil,err
+			return nil, err
 		}
 	}
 
 	row := o.mrs.Data[o.rowIdx]
 	o.rowIdx++
-	return row,nil
+	return row, nil
 }
 
 /*
 flush will force the data flushed into the protocol.
- */
+*/
 func (o *outputQueue) flush() error {
 	//begin := time.Now()
 	//defer func() {
@@ -156,7 +158,7 @@ func (o *outputQueue) flush() error {
 
 /*
 getData returns the data slice in the resultset
- */
+*/
 func (o *outputQueue) getData() [][]interface{} {
 	return o.mrs.Data[:o.rowIdx]
 }
@@ -206,7 +208,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto,mrs, uint64(countOfResultSet))
+	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet))
 	oq.reset()
 
 	row2colTime := time.Duration(0)
@@ -219,7 +221,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		pprof.StartCPUProfile(cpuf)
 	}
 	for j := 0; j < n; j++ { //row index
-		if bat.Zs[j] <= 0{
+		if bat.Zs[j] <= 0 {
 			continue
 		}
 		row, err := oq.getEmptyRow()
@@ -227,7 +229,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			return err
 		}
 		var rowIndex int64 = int64(j)
-		if len(bat.Sels) != 0{
+		if len(bat.Sels) != 0 {
 			rowIndex = bat.Sels[j]
 		}
 
@@ -239,7 +241,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]int8)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]int8)
@@ -251,7 +253,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]uint8)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]uint8)
@@ -263,7 +265,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]int16)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]int16)
@@ -275,7 +277,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]uint16)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]uint16)
@@ -287,7 +289,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]int32)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]int32)
@@ -299,7 +301,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]uint32)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]uint32)
@@ -311,7 +313,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]int64)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]int64)
@@ -323,7 +325,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]uint64)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]uint64)
@@ -335,7 +337,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]float32)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]float32)
@@ -347,7 +349,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]float64)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]float64)
@@ -359,7 +361,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.(*types.Bytes)
 					row[i] = vs.Get(int64(rowIndex))
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.(*types.Bytes)
@@ -371,7 +373,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.(*types.Bytes)
 					row[i] = vs.Get(int64(rowIndex))
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.(*types.Bytes)
@@ -383,7 +385,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]types.Date)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Date)
@@ -395,7 +397,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					vs := vec.Col.([]types.Datetime)
 					row[i] = vs[rowIndex]
 				} else {
-					if nulls.Contains(vec.Nsp,uint64(rowIndex)) { //is null
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 						row[i] = nil
 					} else {
 						vs := vec.Col.([]types.Datetime)
@@ -410,8 +412,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		//row2colTime += time.Since(begin1)
 
 		//duplicate rows
-		for i := int64(0); i < bat.Zs[j] - 1; i++ {
-			erow,rr := oq.getEmptyRow()
+		for i := int64(0); i < bat.Zs[j]-1; i++ {
+			erow, rr := oq.getEmptyRow()
 			if rr != nil {
 				return rr
 			}
@@ -435,14 +437,14 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	procBatchTime := time.Since(procBatchBegin)
 	tTime := time.Since(begin)
-	logutil.Infof("rowCount %v \n" +
-		"time of getDataFromPipeline : %s \n" +
-		"processBatchTime %v \n" +
-		"row2colTime %v \n" +
-		"allocateOutBufferTime %v \n" +
-		"outputQueue.flushTime %v \n" +
+	logutil.Infof("rowCount %v \n"+
+		"time of getDataFromPipeline : %s \n"+
+		"processBatchTime %v \n"+
+		"row2colTime %v \n"+
+		"allocateOutBufferTime %v \n"+
+		"outputQueue.flushTime %v \n"+
 		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
-		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n" +
+		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n"+
 		"protoStats %s\n",
 		n,
 		tTime,
@@ -450,8 +452,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		row2colTime,
 		allocateOutBufferTime,
 		oq.flushTime,
-		procBatchTime - row2colTime - allocateOutBufferTime - oq.flushTime,
-		tTime - row2colTime  - allocateOutBufferTime,
+		procBatchTime-row2colTime-allocateOutBufferTime-oq.flushTime,
+		tTime-row2colTime-allocateOutBufferTime,
 		proto.GetStats())
 
 	return nil
@@ -559,12 +561,19 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	proto := ses.protocol
 
 	logutil.Infof("+++++load data")
-
 	/*
 		TODO:support LOCAL
 	*/
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
+	}
+
+	if load.Fields == nil || len(load.Fields.Terminated) == 0 {
+		return fmt.Errorf("load need FIELDS TERMINATED BY ")
+	}
+
+	if load.Fields != nil && load.Fields.EscapedBy != 0 {
+		return fmt.Errorf("EscapedBy field is unsupported now")
 	}
 
 	/*
@@ -651,6 +660,9 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	//case 1: there are no table infos for the db
 	//case 2: db changed
 	if mce.tableInfos == nil || mce.db != db {
+		if ses.Pu.ClusterCatalog == nil {
+			return fmt.Errorf("need cluster catalog")
+		}
 		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
 		if err != nil {
 			return err
@@ -717,20 +729,68 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	return nil
 }
 
-/*
-getExecsFromComputation gets the execs from the computation engine
-*/
-func (mce *MysqlCmdExecutor) getExecsFromComputation(sql string) ([]*compile.Exec,error) {
-	ses := mce.GetSession()
-	proto := ses.GetMysqlProtocol()
-	proc := process.New(mheap.New(ses.GuestMmu))
-	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
-	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
-	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
+type ComputationWrapperImpl struct {
+	exec *compile.Exec
+}
 
-	comp := compile.New(proto.GetDatabaseName(), sql, proto.GetUserName(), ses.Pu.StorageEngine, proc)
-	return comp.Build()
+func NewComputationWrapperImpl(e *compile.Exec) *ComputationWrapperImpl {
+	return &ComputationWrapperImpl{exec: e}
+}
+
+// GetAst gets ast of the statement
+func (cw *ComputationWrapperImpl) GetAst() tree.Statement {
+	return cw.exec.Statement()
+}
+
+//SetDatabaseName sets the database name
+func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
+	return cw.exec.SetSchema(db)
+}
+
+func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
+	columns := cw.exec.Columns()
+	var mysqlCols []interface{} = nil
+	var err error = nil
+	for _, c := range columns {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		if err != nil {
+			return nil, err
+		}
+		mysqlCols = append(mysqlCols, col)
+	}
+	return mysqlCols, err
+}
+
+func (cw *ComputationWrapperImpl) GetAffectedRows() uint64 {
+	return cw.exec.GetAffectedRows()
+}
+
+func (cw *ComputationWrapperImpl) Compile(u interface{},
+	fill func(interface{}, *batch.Batch) error) error {
+	return cw.exec.Compile(u, fill)
+}
+
+func (cw *ComputationWrapperImpl) Run(ts uint64) error {
+	return cw.exec.Run(ts)
+}
+
+/*
+GetComputationWrapper gets the execs from the computation engine
+*/
+var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *process.Process) ([]ComputationWrapper, error) {
+	comp := compile.New(db, sql, user, eng, proc)
+	execs, err := comp.Build()
+	if err != nil {
+		return nil, err
+	}
+
+	var cw []ComputationWrapper = nil
+	for _, e := range execs {
+		cw = append(cw, NewComputationWrapperImpl(e))
+	}
+	return cw, err
 }
 
 //execute query
@@ -752,20 +812,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 
-	execs, err := mce.getExecsFromComputation(sql)
+	cws, err := GetComputationWrapper(proto.GetDatabaseName(),
+		sql,
+		proto.GetUserName(),
+		ses.Pu.StorageEngine,
+		proc)
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR, err,
 			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use")
 	}
 
-	ses.Mrs = &MysqlResultSet{}
-
 	defer func() {
 		ses.Mrs = nil
 	}()
 
-	for _, exec := range execs {
-		stmt := exec.Statement()
+	for _, cw := range cws {
+		ses.Mrs = &MysqlResultSet{}
+		stmt := cw.GetAst()
 
 		//temp try 0 epoch
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
@@ -796,7 +859,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 							//next statement
 							continue
-						}else if strings.ToLower(ve.Name) == "version_comment" {
+						} else if strings.ToLower(ve.Name) == "version_comment" {
 							err = mce.handleVersionComment()
 							if err != nil {
 								return err
@@ -857,12 +920,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if selfHandle {
 			continue
 		}
-		if err = exec.SetSchema(proto.GetDatabaseName()); err != nil {
+		if err = cw.SetDatabaseName(proto.GetDatabaseName()); err != nil {
 			return err
 		}
 
 		cmpBegin := time.Now()
-		if err = exec.Compile(ses, getDataFromPipeline); err != nil {
+		if err = cw.Compile(ses, getDataFromPipeline); err != nil {
 			return err
 		}
 
@@ -877,14 +940,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
 			*tree.ShowIndex,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
-			columns := exec.Columns()
-
+			columns, err := cw.GetColumns()
+			if err != nil {
+				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err)
+			}
 			/*
 				Step 1 : send column count and column definition.
 			*/
 			//send column count
 			colCnt := uint64(len(columns))
-			err := proto.SendColumnCountPacket(colCnt)
+			err = proto.SendColumnCountPacket(colCnt)
 			if err != nil {
 				return err
 			}
@@ -892,19 +957,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//column_count * Protocol::ColumnDefinition packets
 			cmd := ses.Cmd
 			for _, c := range columns {
-				col := new(MysqlColumn)
-				col.SetName(c.Name)
-				err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
-				if err != nil {
-					return err
-				}
-				ses.Mrs.AddColumn(col)
+				mysqlc := c.(Column)
+				ses.Mrs.AddColumn(mysqlc)
 
 				//logutil.Infof("doComQuery col name %v type %v ",col.Name(),col.ColumnType())
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/
-				err := proto.SendColumnDefinitionPacket(col, cmd)
+				err := proto.SendColumnDefinitionPacket(mysqlc, cmd)
 				if err != nil {
 					return err
 				}
@@ -924,7 +984,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Start pipeline
 				Producing the data row and sending the data row
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -954,7 +1014,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 1: Start
 			*/
-			if er := exec.Run(epoch); er != nil {
+			if er := cw.Run(epoch); er != nil {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
@@ -973,7 +1033,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Echo client
 			*/
 			resp := NewOkResponse(
-				exec.GetAffectedRows(),
+				cw.GetAffectedRows(),
 				0,
 				0,
 				0,
@@ -1002,7 +1062,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		pdHook := ses.GetEpochgc()
 		if !pdHook.CanAcceptSomething() {
-			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()), )
+			resp = NewGeneralErrorResponse(uint8(req.GetCmd()), fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()))
 			return resp, nil
 		}
 	}
@@ -1020,16 +1080,16 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
 		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
-		seps := strings.Split(query," ")
+		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
-			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"), )
+			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"))
 			return resp, nil
 		}
 
 		if strings.ToLower(seps[0]) == "kill" {
 			//last one is processID
-			procIdStr := seps[len(seps) - 1]
-			procID, err := strconv.ParseUint(procIdStr,10,64)
+			procIdStr := seps[len(seps)-1]
+			procID, err := strconv.ParseUint(procIdStr, 10, 64)
 			if err != nil {
 				resp = NewGeneralErrorResponse(COM_QUERY, err)
 				return resp, nil
@@ -1040,7 +1100,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 				return resp, err
 			}
 			resp = NewGeneralOkResponse(COM_QUERY)
-			return resp,nil
+			return resp, nil
 		}
 
 		err := mce.doComQuery(query)

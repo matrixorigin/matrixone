@@ -504,6 +504,10 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			return errors.New(errno.SystemError, string(msg.Code))
 		}
 		if msg.Sid == 1 {
+			select {
+			case <-arg.Reg.Ctx.Done():
+			case arg.Reg.Ch <- nil:
+			}
 			break
 		}
 		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
@@ -791,7 +795,17 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 		}
 		arg.Bats = append(arg.Bats, bat)
 	}
-	if len(arg.Bats) == 0 {
+	if len(arg.Bats) != len(arg.Svars) {
+		for i, in := range s.Instructions {
+			if in.Op == vm.Connector {
+				arg := s.Instructions[i].Arg.(*connector.Argument)
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+		}
 		return nil
 	}
 	constructViews(arg.Bats, arg.Svars)

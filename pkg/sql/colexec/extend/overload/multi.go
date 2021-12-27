@@ -21,7 +21,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func MultiEval(op int, typ types.T, _ []bool, _ []*vector.Vector, _ *process.Process) (*vector.Vector, error) {
+func MultiEval(op int, typ types.T, bs []bool, vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if os, ok := MultiOps[op]; ok {
+		for _, o := range os {
+			if o.Typ == typ {
+				return o.Fn(vecs, proc, bs)
+			}
+		}
+	}
 	return nil, fmt.Errorf("%s not yet implemented for %s", OpName[op], typ)
 }
 
