@@ -444,7 +444,7 @@ func TestSplit(t *testing.T) {
 
 	totalRowsBeforeSplit := uint64(0)
 	logutil.Infof("split: start insert")
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 40; i++ {
 		batch := MockBatch(tbl, i, 10000)
 		var buf bytes.Buffer
 		err = protocol.EncodeBatch(batch, &buf)
@@ -490,6 +490,9 @@ func checkSplit(s *aoe3.Storage, old uint64) bool {
 	logutil.Infof("before checkSplit")
 	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	logutil.Infof("checkSplit, db is %v, err is %v", db, err)
+	if db != nil{
+		logutil.Infof("db size is %v", db.GetSize())
+	}
 	if err == nil {
 		return false
 	}
