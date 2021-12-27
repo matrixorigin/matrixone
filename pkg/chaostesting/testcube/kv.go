@@ -30,24 +30,23 @@ type KV struct {
 	Get func(key any, target any, timeout time.Duration) error
 }
 
-type KVs = []*KV
-
 const (
-	OpGet = iota
-	OpSet
+	OpSet = iota + 1
+	OpGet
 )
 
-func (_ Def) KVs(
-	nodes Nodes,
-) (kvs KVs) {
+type NewKV func(node *Node) *KV
 
-	for _, node := range nodes {
+func (_ Def) NewKV() NewKV {
+
+	return func(node *Node) *KV {
 
 		type ReqInfo struct {
+			Req    rpc.Request
 			Result chan []byte
 			Error  chan error
 		}
-		reqInfos := make(map[string]*ReqInfo)
+		reqInfos := make(map[uuid.UUID]*ReqInfo)
 		reqInfosLock := new(sync.Mutex)
 
 		shardsProxy := node.RaftStore.GetShardsProxy()
@@ -56,12 +55,9 @@ func (_ Def) KVs(
 			func(resp rpc.Response) {
 				reqInfosLock.Lock()
 				defer reqInfosLock.Unlock()
-				defer func() {
-					delete(reqInfos, string(resp.ID))
-				}()
-				info, ok := reqInfos[string(resp.ID)]
+				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(resp.ID))]
 				if !ok {
-					return
+					panic("req not found")
 				}
 				info.Result <- resp.Value
 			},
@@ -69,25 +65,34 @@ func (_ Def) KVs(
 			func(reqID []byte, err error) {
 				reqInfosLock.Lock()
 				defer reqInfosLock.Unlock()
-				defer func() {
-					delete(reqInfos, string(reqID))
-				}()
-				info, ok := reqInfos[string(reqID)]
+				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(reqID))]
 				if !ok {
-					return
+					panic("req not found")
 				}
 				info.Error <- err
 			},
 		)
-		shardsProxy.SetRetryController(nil) //TODO
 
-		kvs = append(kvs, &KV{
+		shardsProxy.SetRetryController(RetryFunc(func(id []byte) (req rpc.Request, retry bool) {
+			reqInfosLock.Lock()
+			defer reqInfosLock.Unlock()
+			info, ok := reqInfos[uuid.UUID(*(*[16]byte)(id))]
+			if !ok {
+				panic("req not found")
+			}
+			req = info.Req
+			retry = true
+			return
+		}))
+
+		return &KV{
 
 			Set: func(key any, value any, timeout time.Duration) (err error) {
 				defer he(&err)
 
 				req := rpc.Request{}
-				req.ID = uuid.NewV4().Bytes()
+				id := uuid.NewV4()
+				req.ID = id.Bytes()
 				req.CustomType = OpSet
 				req.Type = rpc.CmdType_Write
 				keyBuf := new(bytes.Buffer)
@@ -101,11 +106,16 @@ func (_ Def) KVs(
 				reqInfosLock.Lock()
 				resultChan := make(chan []byte, 1)
 				errChan := make(chan error, 1)
-				reqInfos[string(req.ID)] = &ReqInfo{
+				reqInfos[id] = &ReqInfo{
 					Result: resultChan,
 					Error:  errChan,
 				}
 				reqInfosLock.Unlock()
+				defer func() {
+					reqInfosLock.Lock()
+					delete(reqInfos, id)
+					reqInfosLock.Unlock()
+				}()
 
 				ce(node.RaftStore.GetShardsProxy().Dispatch(req))
 
@@ -125,7 +135,8 @@ func (_ Def) KVs(
 				defer he(&err)
 
 				req := rpc.Request{}
-				req.ID = uuid.NewV4().Bytes()
+				id := uuid.NewV4()
+				req.ID = id.Bytes()
 				req.CustomType = OpGet
 				req.Type = rpc.CmdType_Read
 				keyBuf := new(bytes.Buffer)
@@ -136,11 +147,18 @@ func (_ Def) KVs(
 				reqInfosLock.Lock()
 				resultChan := make(chan []byte, 1)
 				errChan := make(chan error, 1)
-				reqInfos[string(req.ID)] = &ReqInfo{
+				reqInfos[id] = &ReqInfo{
 					Result: resultChan,
 					Error:  errChan,
 				}
 				reqInfosLock.Unlock()
+				defer func() {
+					reqInfosLock.Lock()
+					delete(reqInfos, id)
+					reqInfosLock.Unlock()
+				}()
+
+				ce(node.RaftStore.GetShardsProxy().Dispatch(req))
 
 				select {
 				case result := <-resultChan:
@@ -156,8 +174,16 @@ func (_ Def) KVs(
 				}
 
 			},
-		})
+		}
+
 	}
 
-	return
+}
+
+type RetryFunc func(id []byte) (rpc.Request, bool)
+
+var _ raftstore.RetryController = RetryFunc(nil)
+
+func (r RetryFunc) Retry(reqID []byte) (rpc.Request, bool) {
+	return r(reqID)
 }

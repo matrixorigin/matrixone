@@ -22,7 +22,7 @@ import (
 
 func PorcupineChecker(
 	model porcupine.Model,
-	operations *[]porcupine.Operation,
+	operations func() []porcupine.Operation,
 	events *[]porcupine.Event,
 ) Operator {
 
@@ -33,7 +33,7 @@ func PorcupineChecker(
 		) {
 
 			if operations != nil {
-				res, info := porcupine.CheckOperationsVerbose(model, *operations, time.Minute*10)
+				res, info := porcupine.CheckOperationsVerbose(model, operations(), time.Minute*10)
 				_ = info
 				if res != porcupine.Ok {
 					report("porcupine check failed")
@@ -51,4 +51,55 @@ func PorcupineChecker(
 		},
 	}
 
+}
+
+var PorcupineKVModel = porcupine.Model{
+	Partition:      porcupine.NoPartition,
+	PartitionEvent: porcupine.NoPartitionEvent,
+
+	Init: func() any {
+		// copy-on-write map
+		return make(map[any]any)
+	},
+
+	Step: func(state any, input any, output any) (ok bool, newState any) {
+		m := state.(map[any]any)
+		arg := input.([2]any)
+		op := arg[0].(string)
+		key := arg[1]
+		value := output
+
+		switch op {
+
+		case "get":
+			return m[key] == value, state
+
+		case "set":
+			newMap := make(map[any]any, len(m)+1)
+			for k, v := range m {
+				newMap[k] = v
+			}
+			newMap[key] = value
+			return true, newMap
+
+		}
+
+		panic("impossible")
+	},
+
+	Equal: func(state1, state2 any) bool {
+		m1 := state1.(map[any]any)
+		m2 := state2.(map[any]any)
+		for k, v := range m1 {
+			if v != m2[k] {
+				return false
+			}
+		}
+		for k, v := range m2 {
+			if v != m1[k] {
+				return false
+			}
+		}
+		return true
+	},
 }

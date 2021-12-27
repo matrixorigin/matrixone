@@ -16,38 +16,55 @@ package main
 
 import (
 	"math/rand"
+	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
 func (_ Def2) MainConfig(
 	numNodes fz.NumNodes,
 ) fz.MainAction {
+
+	var nextID int64
+
+	// random tree
+	tree := fz.RandomActionTree([]fz.ActionMaker{
+
+		// set
+		func() fz.Action {
+			id := atomic.AddInt64(&nextID, 1)
+			key := rand.Intn(1024)
+			value := rand.Intn(1024)
+			return ActionSet{
+				ID:    id,
+				Key:   key,
+				Value: value,
+			}
+		},
+
+		// set / get pair
+		func() fz.Action {
+			id := atomic.AddInt64(&nextID, 1)
+			key := rand.Intn(1024)
+			value := rand.Intn(1024)
+			return fz.Seq(
+				ActionSet{
+					ID:    id,
+					Key:   key,
+					Value: value,
+				},
+				ActionGet{
+					ID:  id,
+					Key: key,
+				},
+			)
+		},
+
+		//
+	}, 1024)
+
 	return fz.MainAction{
-
-		// random tree
-		Action: fz.RandomActionTree([]fz.ActionMaker{
-
-			// set / get pair
-			func() fz.Action {
-				id := rand.Int63()
-				nodeID := fz.NodeID(rand.Intn(int(numNodes)))
-				key := rand.Intn(1024)
-				value := rand.Intn(1024)
-				return fz.Seq(
-					ActionSet{
-						ID:     id,
-						NodeID: nodeID,
-						Key:    key,
-						Value:  value,
-					},
-					ActionGet{
-						ID:     id,
-						NodeID: nodeID,
-						Key:    key,
-					},
-				)
-			},
-		}, 64),
+		Action: tree,
 	}
+
 }

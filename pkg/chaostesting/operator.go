@@ -15,8 +15,6 @@
 package fz
 
 import (
-	"reflect"
-
 	"github.com/reusee/dscope"
 )
 
@@ -32,6 +30,4 @@ type Operators []Operator
 
 var _ dscope.Reducer = Operators{}
 
-func (c Operators) Reduce(_ dscope.Scope, vs []reflect.Value) reflect.Value {
-	return dscope.Reduce(vs)
-}
+func (c Operators) IsReducer() {}
