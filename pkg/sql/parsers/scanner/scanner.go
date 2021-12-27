@@ -107,6 +107,32 @@ func (s *Scanner) Scan() (int, string) {
 		return ';', ""
 	case ch == '.' && isDigit(s.peek(1)):
 		return s.scanNumber()
+	case ch == '/':
+		s.skip(1)
+		switch s.cur() {
+		case '/':
+			s.skip(1)
+			id, str := s.scanCommentTypeLine(2)
+			if id == LEX_ERROR {
+				return id, str
+			}
+			return s.Scan()
+		case '*':
+			s.skip(1)
+			switch {
+			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
+				// TODO: ExtractMysqlComment
+				return s.scanMySQLSpecificComment()
+			default:
+				id, str := s.scanCommentTypeBlock()
+				if id == LEX_ERROR {
+					return id, str
+				}
+				return s.Scan()
+			}
+		default:
+			return int(ch), ""
+		}
 	default:
 		return s.stepBackOneChar(ch)
 	}
@@ -140,23 +166,6 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 		return VALUE_ARG, string(buf)
 	case '.':
 		return int(ch), ""
-	case '/':
-		switch s.cur() {
-		case '/':
-			s.skip(1)
-			return s.scanCommentTypeLine(2)
-		case '*':
-			s.skip(1)
-			switch {
-			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
-				// TODO: ExtractMysqlComment
-				return s.scanMySQLSpecificComment()
-			default:
-				return s.scanCommentTypeBlock()
-			}
-		default:
-			return int(ch), ""
-		}
 	case '#':
 		return s.scanCommentTypeLine(1)
 	case '-':
