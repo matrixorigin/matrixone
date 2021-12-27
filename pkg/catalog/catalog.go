@@ -465,7 +465,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	}
 
 	for {
-		err := c.Driver.AddSchedulingRule(cRuleName,cLabelName)
+		err := c.Driver.AddSchedulingRule(cRuleName, cLabelName)
 		if err == nil {
 			break
 		}
@@ -785,38 +785,39 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 		return cnt, err
 	}
 	for i := 1; i < len(rsp); i += 2 {
-		if tbl, err := DecodeTable(rsp[i]); err != nil {
+		tbl, err := DecodeTable(rsp[i])
+		if err != nil {
 			logutil.Errorf("Decode err for table info, %v, %v", err, rsp[i])
 			continue
-		} else {
-			shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.Id), 0)
+		}
+		shardIds,err := c.getShardidsWithTimeout(tbl.Id)
+		if err != nil {
+			logutil.Errorf("get shardid failed, %v", err)
+			continue
+		}
+		success := true
+		for _, sid := range shardIds {
 			if err != nil {
-				logutil.Errorf("Failed to get shards for table %v, %v", rsp[i], err)
-				continue
+				logutil.Errorf("convert shardid failed, %v", err)
+				success = false
+				break
 			}
-			success := true
-			for _, shardId := range shardIds {
-				if sid, err := Bytes2Uint64(shardId[len(c.routePrefix(tbl.Id)):]); err != nil {
-					logutil.Errorf("convert shardid failed, %v", err)
-					success = false
-					break
-				} else {
-					_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
-					if err != nil {
-						logutil.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
-						success = false
-						break
-					}
-				}
+			_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
+			if err != nil {
+				logutil.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
+				success = false
+				break
 			}
-			if success {
-				if c.Driver.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
-					logutil.Errorf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
-				} else {
-					cnt++
-				}
+
+		}
+		if success {
+			if c.Driver.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
+				logutil.Errorf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
+			} else {
+				cnt++
 			}
 		}
+
 	}
 	return cnt, nil
 }
