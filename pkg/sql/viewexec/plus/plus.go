@@ -77,6 +77,7 @@ func (ctr *Container) processBoundVars(proc *process.Process) (bool, error) {
 			if ctr.bat != nil {
 				proc.Reg.InputBatch = ctr.bat
 				ctr.bat = nil
+				return false, nil
 			}
 			return true, nil
 		}
@@ -98,6 +99,7 @@ func (ctr *Container) processFreeVars(proc *process.Process) (bool, error) {
 			if ctr.bat != nil {
 				proc.Reg.InputBatch = ctr.bat
 				ctr.bat = nil
+				return false, nil
 			}
 			return true, nil
 		}

@@ -36,6 +36,7 @@ import (
 
 func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope, error) {
 	var s *Scope
+	var rs *Scope
 	var err error
 
 	if vt == nil {
@@ -68,8 +69,6 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 	}
-	var rs *Scope
-
 	rs = &Scope{
 		Magic:     Merge,
 		PreScopes: []*Scope{s},

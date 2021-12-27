@@ -537,10 +537,6 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	case *times.Argument:
 		return s.RunCAQ(e)
 	case *transform.Argument:
-		if t == nil {
-			s.Instructions[0].Arg = &transform.Argument{}
-			return s.RunQ(e)
-		}
 		if t.Typ == transform.Bare {
 			return s.RunQ(e)
 		}
@@ -781,6 +777,16 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 		}
 	}
 	if err != nil {
+		for i, in := range s.Instructions {
+			if in.Op == vm.Connector {
+				arg := s.Instructions[i].Arg.(*connector.Argument)
+				select {
+				case <-arg.Reg.Ctx.Done():
+				case arg.Reg.Ch <- nil:
+				}
+				break
+			}
+		}
 		return err
 	}
 	for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
