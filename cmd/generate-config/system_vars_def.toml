@@ -356,6 +356,12 @@ max-group-num           = 0
 level = "debug" # debug, info, warn, error, fatal.
 format = "json" # json, console.
 
+# log file config
+filename = "" # log file.
+max-size = 512 # maximum log file size.
+max-days = 0 # maximum log file days kept.
+max-backups = 0 # maximum numbers of old log files to retain.
+
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
 # Docker or NAT network environment configuration
@@ -454,3 +460,17 @@ addr = ""                                           # cube uses prometheus push 
 interval = 0                                        # the period to send cube metrics
 job = ""                                            # prometheus job
 instance = ""                                       # prometheus instance
+
+# Storage Configs
+[meta.conf]
+block-max-rows = 160000
+segment-max-blocks = 40
+
+[scheduler-cfg]
+block-writers = 8
+segment-writers = 4
+
+[cache-cfg]
+index-cache-size = 134217728        # 128M
+insert-cache-size = 4294967296      # 4G
+data-cache-size = 4294967296        # 4G
