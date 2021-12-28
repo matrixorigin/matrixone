@@ -706,7 +706,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	if (DefaultCapability & CLIENT_PLUGIN_AUTH) != 0 {
 		//int<1>              length of auth-plugin-data
 		//set 21 always
-		pos = mp.io.WriteUint8(data, pos, 21)
+		pos = mp.io.WriteUint8(data, pos, uint8(len(mp.salt) + 1))
 	} else {
 		//int<1>              [00]
 		//set 0 always
@@ -981,8 +981,24 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 	}
 
 	read, err := mp.tcpConn.Read()
+	if err != nil {
+		return nil,err
+	}
 
-	data := read.(*Packet).Payload
+	if read == nil {
+		return nil, fmt.Errorf("read nil from tcp conn")
+	}
+
+	pack,ok := read.(*Packet)
+	if !ok {
+		return nil,fmt.Errorf("It is not the Packet")
+	}
+
+	if pack == nil {
+		return nil,fmt.Errorf("packet is null")
+	}
+
+	data := pack.Payload
 	mp.sequenceId++
 	return data, nil
 }
@@ -1708,10 +1724,25 @@ func (mp *MysqlProtocolImpl) recvPayload() ([]byte, error) {
 }
 */
 
+/*
+generate random ascii string.
+Reference to :mysql 8.0.23 mysys/crypt_genhash_impl.cc generate_user_salt(char*,int)
+ */
+func generate_salt(n int) []byte {
+	buf := make([]byte,n)
+	rand.Read(buf)
+	for i := 0; i < n; i++ {
+		buf[i] &= 0x7f
+		if buf[i] == 0 || buf[i] == '$' {
+			buf[i]++
+		}
+	}
+	return buf
+}
+
 func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesToFlush int, SV *config.SystemVariables) *MysqlProtocolImpl {
 	rand.Seed(time.Now().UTC().UnixNano())
-	salt := make([]byte, 20)
-	rand.Read(salt)
+	salt := generate_salt(20)
 
 	mysql := &MysqlProtocolImpl{
 		ProtocolImpl: ProtocolImpl{

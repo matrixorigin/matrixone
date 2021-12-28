@@ -625,13 +625,22 @@ variable:
 system_variable:
     AT_AT_ID
     {
-        v := strings.ToLower($1)
-        isGlobal := false
-        if strings.HasPrefix(v, "global.") {
+        vs := strings.Split($1, ".")
+        var isGlobal bool
+        if strings.ToLower(vs[0]) == "global" {
             isGlobal = true
         }
+        var r string
+        if len(vs) == 2 {
+           r = vs[1]
+        } else if len(vs) == 1 {
+           r = vs[0]
+        } else {
+        	yylex.Error("variable syntax error")
+            return 1
+        }
         $$ = &tree.VarExpr{
-            Name: $1,
+            Name: r,
             System: true,
             Global: isGlobal,
         }
@@ -640,8 +649,18 @@ system_variable:
 user_variable:
     AT_ID
     {
+        vs := strings.Split($1, ".")
+        var r string
+        if len(vs) == 2 {
+           r = vs[1]
+        } else if len(vs) == 1 {
+           r = vs[0]
+        } else {
+        	yylex.Error("variable syntax error")
+            return 1
+        }
         $$ = &tree.VarExpr{
-            Name: $1,
+            Name: r,
             System: false,
             Global: false,
         }
@@ -1220,28 +1239,25 @@ var_assignment:
     }
 |   id_prefix_at equal_or_assignment set_expr
     {
-        $$ = &tree.VarAssignmentExpr{
-            System: true,
-            Name: $1,
-            Value: $3,
-        }
-    }
-|   id_prefix_at '.' ID equal_or_assignment set_expr
-    {
-        v := strings.ToLower($1)
-        if v != "session" && v != "global" && v != "local"{
-            yylex.Error("expecting session or global")
-            return 1
-        }
+    	vs := strings.Split($1, ".")
         var isGlobal bool
-        if v == "global" {
+        if strings.ToLower(vs[0]) == "global" {
             isGlobal = true
+        }
+        var r string
+        if len(vs) == 2 {
+        	r = vs[1]
+        } else if len(vs) == 1{
+        	r = vs[0]
+        } else {
+        	yylex.Error("variable syntax error")
+            return 1
         }
         $$ = &tree.VarAssignmentExpr{
             System: true,
             Global: isGlobal,
-            Name: $3,
-            Value: $5,
+            Name: r,
+            Value: $3,
         }
     }
 |   NAMES charset_name
