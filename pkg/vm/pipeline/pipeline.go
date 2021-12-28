@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,8 +51,18 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var bat *batch.Batch
 
 	defer func() {
-		proc.Reg.InputBatch = nil
-		vm.Run(p.instructions, proc)
+		if err != nil {
+			for i, in := range p.instructions {
+				if in.Op == vm.Connector {
+					arg := p.instructions[i].Arg.(*connector.Argument)
+					arg.Reg.Ch <- nil
+					break
+				}
+			}
+		} else {
+			proc.Reg.InputBatch = nil
+			vm.Run(p.instructions, proc)
+		}
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
@@ -71,7 +82,21 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
-	defer proc.Cancel()
+	defer func() {
+		if err != nil {
+			for i, in := range p.instructions {
+				if in.Op == vm.Connector {
+					arg := p.instructions[i].Arg.(*connector.Argument)
+					arg.Reg.Ch <- nil
+					break
+				}
+			}
+		} else {
+			proc.Reg.InputBatch = nil
+			vm.Run(p.instructions, proc)
+		}
+		proc.Cancel()
+	}()
 	if err := vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}

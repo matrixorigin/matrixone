@@ -46,6 +46,8 @@ import (
 
 const (
 	defaultRPCTimeout     = time.Second * 10
+	defaultRetryTimes     = 5
+	defaultRetryWaitTime  = time.Second * 2
 	defaultStartupTimeout = time.Second * 300
 )
 
@@ -126,6 +128,9 @@ type CubeDriver interface {
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
 	AOEStore() *aoedb.DB
+	//AddLabelToShard add a label to the shard
+	AddLabelToShard(shardID uint64, name, value string) error
+	AddSchedulingRule(ruleName string, groupByLabel string) error
 }
 
 type driver struct {
@@ -173,18 +178,6 @@ func NewCubeDriverWithFactory(
 		aoeDB: aoeDataStorage.(*aoe3.Storage).DB,
 		cmds:  make(map[uint64]rpc.CmdType),
 	}
-	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *meta.Shard, news []meta.Shard) {
-		switch group {
-		case uint64(pb.AOEGroup):
-			return func(old *meta.Shard, news []meta.Shard) {
-				//TODO: Not impl
-			}
-		default:
-			return func(old *meta.Shard, news []meta.Shard) {
-
-			}
-		}
-	}
 	c.CubeConfig.Storage.DataStorageFactory = func(group uint64) cstorage.DataStorage {
 		switch group {
 		case uint64(pb.KVGroup):
@@ -210,12 +203,16 @@ func NewCubeDriverWithFactory(
 	}
 
 	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) meta.Shard {
+		disableSplit := false
+		if g == uint64(pb.KVGroup) {
+			disableSplit = true
+		}
 		return meta.Shard{
 			Group:        g,
 			Start:        start,
 			End:          end,
 			Unique:       unique,
-			DisableSplit: true,
+			DisableSplit: disableSplit,
 		}
 	}
 
@@ -236,11 +233,13 @@ func NewCubeDriverWithFactory(
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.Args.(pb.Request)
-		if args.Shard == 0 {
-			return proxy.Dispatch(req)
+		if cmd.Args != nil {
+			args := cmd.Args.(pb.Request)
+			if args.Shard == 0 {
+				return proxy.Dispatch(req)
+			}
+			req.ToShard = args.Shard
 		}
-		req.ToShard = args.Shard
 		return proxy.DispatchTo(req, c.ServerConfig.Store.GetRouter().GetShard(req.ToShard),
 			c.ServerConfig.Store.GetRouter().LeaderReplicaStore(req.ToShard).ClientAddr)
 	})
@@ -759,14 +758,21 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 	return rsp, nil
 }
 
-func (h *driver) Exec(cmd interface{}) ([]byte, error) {
+func (h *driver) Exec(cmd interface{}) (res []byte, err error) {
 	t0 := time.Now()
 	cr := &server.CustomRequest{}
 	h.BuildRequest(cr, cmd)
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.Exec(*cr, defaultRPCTimeout)
+	for i := 0; i < defaultRetryTimes; i++ {
+		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		if err == nil {
+			break
+		}
+		time.Sleep(defaultRetryWaitTime)
+	}
+	return
 }
 
 func (h *driver) AsyncExec(cmd interface{}, cb func(server.CustomRequest, []byte, error), arg interface{}) {
@@ -781,16 +787,31 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(ser
 	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
-func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	cr := &server.CustomRequest{}
 	h.BuildRequest(cr, cmd)
-	return h.app.Exec(*cr, defaultRPCTimeout)
+	for i := 0; i < defaultRetryTimes; i++ {
+		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		if err == nil {
+			break
+		}
+		time.Sleep(defaultRetryWaitTime)
+	}
+	return
 }
 
 func (h *driver) RaftStore() raftstore.Store {
 	return h.store
+}
+
+func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
+	return h.app.AddLabelToShard(uint64(pb.AOEGroup), shardID, name, value, time.Minute)
+}
+
+func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
+	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
 }

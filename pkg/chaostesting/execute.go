@@ -151,6 +151,11 @@ func (_ Def) DoAction(
 				}()
 			}
 			wg.Wait()
+			select {
+			case err := <-errCh:
+				return err
+			default:
+			}
 
 		default:
 			// send to target
@@ -159,6 +164,7 @@ func (_ Def) DoAction(
 			}
 
 		}
+
 		return nil
 	}
 

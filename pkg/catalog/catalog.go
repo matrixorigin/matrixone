@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,18 +36,21 @@ import (
 )
 
 const (
-	defaultCatalogId    = uint64(1)
-	cPrefix             = "meta"
-	cDBPrefix           = "DBINFO"
-	cDBIDPrefix         = "DBID"
-	cTablePrefix        = "Table"
-	cTableIDPrefix      = "TID"
-	cRoutePrefix        = "Route"
-	cPreSplitPrefix     = "PreSplit"
-	cSplitPrefix        = "Split"
-	cDeletedTablePrefix = "DeletedTableQueue"
-	timeout             = 2000 * time.Millisecond
-	idPoolSize          = 20
+	defaultCatalogId      = uint64(1)
+	cPrefix               = "meta"
+	cDBPrefix             = "DBINFO"
+	cDBIDPrefix           = "DBID"
+	cCatalogShardIDPrefix = "ShardID"
+	cTablePrefix          = "Table"
+	cTableIDPrefix        = "TID"
+	cRoutePrefix          = "Route"
+	cPreSplitPrefix       = "PreSplit"
+	cSplitPrefix          = "Split"
+	cDeletedTablePrefix   = "DeletedTableQueue"
+	cRuleName             = "RuleTable"
+	cLabelName            = "LabelTable"
+	timeout               = 2000 * time.Millisecond
+	idPoolSize            = 20
 )
 
 // Catalog is for handling meta information in a query.
@@ -56,6 +60,8 @@ type Catalog struct {
 	dbIdEnd   uint64
 	tidStart  uint64
 	tidEnd    uint64
+	sidStart  uint64
+	sidEnd    uint64
 	pLock     int32
 }
 type CatalogListener struct {
@@ -77,6 +83,7 @@ func (l *CatalogListener) UpdateCatalog(catalog *Catalog) {
 
 //OnPreSplit set presplit key.
 func (l *CatalogListener) OnPreSplit(event *event.SplitEvent) error {
+	logutil.Debugf("get event from aoe, event is %v", event)
 	catalogSplitEvent, err := l.catalog.decodeSplitEvent(event)
 	if err != nil {
 		panic(err)
@@ -116,7 +123,7 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	}
 	return nil
 }
-func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
+func (c *Catalog) updateRouteInfo(tid, oldSid uint64, newSids []uint64) error {
 	routePrefix := c.routePrefix(tid)
 	shardIds, err := c.Driver.PrefixKeys(routePrefix, 0)
 	if err != nil {
@@ -130,17 +137,20 @@ func (c *Catalog) updateRouteInfo(tid, oldSid, newSid uint64) error {
 			return err
 		}
 		if sid == oldSid {
-			oldKey := c.routeKey(tid, sid)
-			newKey := c.routeKey(tid, newSid)
-			err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
-			if err != nil {
-				logutil.Errorf("Set fails, err:%v", err)
-				return err
-			}
-			err = c.Driver.Delete(oldKey)
-			if err != nil {
-				logutil.Errorf("Delete fails, err:%v", err)
-				return err
+			for _, newSid := range newSids {
+				oldKey := c.routeKey(tid, sid)
+				newKey := c.routeKey(tid, newSid)
+				err = c.Driver.Set(newKey, []byte(strconv.Itoa(int(tid))))
+				if err != nil {
+					logutil.Errorf("Set fails, err:%v", err)
+					return err
+				}
+				err = c.Driver.Delete(oldKey)
+				if err != nil {
+					logutil.Errorf("Delete fails, err:%v", err)
+					return err
+				}
+				logutil.Debugf("update route info, t-%v|from %v to %v", tid, oldSid, newSids)
 			}
 		}
 	}
@@ -159,13 +169,17 @@ func (c *Catalog) OnDatabaseSplitted() error {
 			logutil.Errorf("Unmarshal fails, err:%v", err)
 			return err
 		}
-		for newShard, tbls := range splitEvent.News {
-			for _, tid := range tbls {
-				err := c.updateRouteInfo(tid, splitEvent.Old, newShard)
-				if err != nil {
-					return err
-				}
+		for tid, newshards := range splitEvent.News {
+			err := c.updateRouteInfo(tid, splitEvent.Old, newshards)
+			if err != nil {
+				return err
 			}
+		}
+		key := c.splitKey(splitEvent.Old)
+		err = c.Driver.Delete(key)
+		if err != nil {
+			logutil.Errorf("Delete fails, err:%v", err)
+			return err
 		}
 	}
 	return nil
@@ -388,15 +402,43 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	wg := sync.WaitGroup{}
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
-	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
+	bucket := uint64(0)
+	for _, property := range tbl.Properties {
+		if property.Key == "bucket" {
+			bucket, err = strconv.ParseUint(property.Value, 10, 64)
+			if err != nil {
+				return 0, err
+			}
+
+		}
+	}
+	if bucket < uint64(1) {
+		bucket = uint64(1)
+	}
+	for i := uint64(0); i < bucket; i++ {
+		catalogSid, err := c.allocId(cCatalogShardIDPrefix)
+		if err != nil {
+			return tid, err
+		}
+		shardId, err := c.getAvailableShard(catalogSid)
+		if err != nil {
+			return tid, ErrNoAvailableShard
+		}
+
 		rkey := c.routeKey(tbl.Id, shardId)
 		tableName := tbl.Name
 		aoeTableName := c.encodeTabletName(shardId, tbl.Id)
+		logutil.Infof("create tablet, tid %v, sid %v", tid, shardId)
 		if err := c.Driver.CreateTablet(aoeTableName, shardId, &tbl); err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
 			return tid, ErrTabletCreateFailed
 		}
+		logutil.Infof("create tablet, tid %v, sid %v", tid, shardId)
 		tbl.Name = tableName
+		if err := c.Driver.AddLabelToShard(shardId, cLabelName, tbl.Name); err != nil {
+			logutil.Errorf("ErrAddLabelFailed, %v, %v, %v", shardId, tid, err)
+			return tid, ErrTabletCreateFailed
+		}
 		tbl.State = aoe.StatePublic
 		meta, err := EncodeTable(tbl)
 		if err != nil {
@@ -420,10 +462,15 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			}
 		}, nil)
 		wg.Wait()
-
-		return tbl.Id, err
 	}
-	return tid, ErrNoAvailableShard
+
+	for {
+		err := c.Driver.AddSchedulingRule(cRuleName,cLabelName)
+		if err == nil {
+			break
+		}
+	}
+	return tbl.Id, err
 }
 
 // DropTable drops table in database.
@@ -679,10 +726,10 @@ func (c *Catalog) getShardidsWithTimeout(tid uint64) (shardids []uint64, err err
 		}
 	}
 }
+
 func (c *Catalog) getShardids(tid uint64) ([]uint64, error) {
 	sids := make([]uint64, 0)
 	pendingSids, err := c.GetPendingShards()
-	logutil.Infof("pending shards are %v", pendingSids)
 	if err != nil {
 		return nil, err
 	}
@@ -878,6 +925,35 @@ func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return strconv.Itoa(int(tableId))
 }
 
+//for test
+func (c *Catalog) EncodeTabletName(groupId, tableId uint64) string {
+	return c.encodeTabletName(groupId, tableId)
+}
+
+//for test
+func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
+	t0 := time.Now()
+	for {
+		keyExisted := false
+		keys, _ := c.Driver.PrefixScan(c.preSplitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys pre are%v", keys)
+			keyExisted = true
+		}
+		keys, _ = c.Driver.PrefixScan(c.splitPrefix(), 0)
+		if len(keys) != 0 {
+			logutil.Infof("pending keys are%v", keys)
+			keyExisted = true
+		}
+		if !keyExisted {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		c.OnDatabaseSplitted()
+	}
+	logutil.Infof("wait pending keys for %vms", time.Since(t0).Milliseconds())
+	return c.getShardids(tid)
+}
 func (c *Catalog) decodeTabletName(tbl string) uint64 {
 	tid, _ := strconv.Atoi(tbl)
 	return uint64(tid)
@@ -967,10 +1043,15 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 		if !ok {
 			return nil, errors.New("invalid new shard id")
 		}
-		news[new] = make([]uint64, len(tbls))
-		for i, tbl := range tbls {
+		for _, tbl := range tbls {
+			if strings.Contains(tbl, "MetaTbl") {
+				continue
+			}
 			tid := c.decodeTabletName(tbl)
-			news[new][i] = tid
+			if news[tid] == nil {
+				news[tid] = make([]uint64, 0)
+			}
+			news[tid] = append(news[tid], new)
 		}
 	}
 	catalogSplitEvent := SplitEvent{
@@ -1068,6 +1149,28 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 				}
 			}
 		}()
+	case cCatalogShardIDPrefix:
+		func() {
+			for {
+				select {
+				case <-timeoutC:
+					logutil.Errorf("wait for available sid timeout, current cache range is [%d, %d)", c.sidStart, c.sidEnd)
+					err = ErrShardidTimeout
+					return
+				default:
+					if atomic.LoadInt32(&c.pLock) == 0 {
+						id = atomic.AddUint64(&c.sidStart, 1) - 1
+						if id <= atomic.LoadUint64(&c.sidEnd) {
+							logutil.Debugf("alloc shard id finished, id is %d, endId is %d", id, c.sidEnd)
+							return
+						} else {
+							c.refreshShardIDCache()
+						}
+					}
+					time.Sleep(time.Millisecond * 10)
+				}
+			}
+		}()
 	default:
 		return id, errors.New("unsupported id category")
 	}
@@ -1142,6 +1245,42 @@ func (c *Catalog) refreshDBIDCache() {
 
 		atomic.SwapUint64(&c.dbIdEnd, id)
 		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize+1)
+	}, nil)
+	wg.Wait()
+}
+
+//refreshShardIDCache alloc catalog shard ids and refresh sidStart and sidEnd.
+func (c *Catalog) refreshShardIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh shard id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.sidStart, c.sidEnd)
+	}()
+	if c.sidStart <= c.sidEnd {
+		logutil.Debugf("enter refreshDBIDCache, no need, return, [%d, %d)", c.sidStart, c.sidEnd)
+		return
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	c.Driver.AsyncAllocID(String2Bytes(cCatalogShardIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			logutil.Errorf("refresh shard id failed, checkpoint is %d, %d", c.sidStart, c.sidEnd)
+			return
+		}
+		id, err := Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+
+		atomic.SwapUint64(&c.sidEnd, id)
+		atomic.SwapUint64(&c.sidStart, id-idPoolSize+1)
 	}, nil)
 	wg.Wait()
 }

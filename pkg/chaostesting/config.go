@@ -23,7 +23,7 @@ import (
 
 type ConfigItems []any
 
-var _ dscope.Reducer = ConfigItems{}
+var _ dscope.CustomReducer = ConfigItems{}
 
 func (_ ConfigItems) Reduce(_ dscope.Scope, vs []reflect.Value) reflect.Value {
 	var ret ConfigItems

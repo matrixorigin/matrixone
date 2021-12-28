@@ -22,14 +22,12 @@ func init() {
 }
 
 type ActionSet struct {
-	ID     int64
-	NodeID fz.NodeID
-	Key    any
-	Value  any
+	ID    int64
+	Key   any
+	Value any
 }
 
 type ActionGet struct {
-	ID     int64
-	NodeID fz.NodeID
-	Key    any
+	ID  int64
+	Key any
 }

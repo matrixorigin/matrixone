@@ -45,7 +45,13 @@ func TestPorcupine(t *testing.T) {
 		&fz.Operators{
 
 			// porcupine checker
-			fz.PorcupineChecker(kvModel, &operations, nil),
+			fz.PorcupineChecker(
+				fz.PorcupineKVModel,
+				func() []porcupine.Operation {
+					return operations
+				},
+				nil,
+			),
 
 			// show ops
 			//fz.Operator{
@@ -166,55 +172,4 @@ type TestPorcupineNode struct {
 
 func (t *TestPorcupineNode) Close() error {
 	return nil
-}
-
-var kvModel = porcupine.Model{
-	Partition:      porcupine.NoPartition,
-	PartitionEvent: porcupine.NoPartitionEvent,
-
-	Init: func() any {
-		// copy-on-write map
-		return make(map[any]any)
-	},
-
-	Step: func(state any, input any, output any) (ok bool, newState any) {
-		m := state.(map[any]any)
-		arg := input.([2]any)
-		op := arg[0].(string)
-		key := arg[1]
-		value := output
-
-		switch op {
-
-		case "get":
-			return m[key] == value, state
-
-		case "set":
-			newMap := make(map[any]any, len(m)+1)
-			for k, v := range m {
-				newMap[k] = v
-			}
-			newMap[key] = value
-			return true, newMap
-
-		}
-
-		panic("impossible")
-	},
-
-	Equal: func(state1, state2 any) bool {
-		m1 := state1.(map[any]any)
-		m2 := state2.(map[any]any)
-		for k, v := range m1 {
-			if v != m2[k] {
-				return false
-			}
-		}
-		for k, v := range m2 {
-			if v != m1[k] {
-				return false
-			}
-		}
-		return true
-	},
 }

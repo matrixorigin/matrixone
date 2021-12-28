@@ -4728,7 +4728,7 @@ yydefault:
 		{
 			res := &tree.Fields{
 				Terminated: "\t",
-				EscapedBy:  []byte("\\")[0],
+				EscapedBy:  0,
 			}
 			for _, f := range yyDollar[2].fieldsListUnion() {
 				if f.Terminated != "" {

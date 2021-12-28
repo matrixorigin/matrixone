@@ -20,9 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	log "github.com/sirupsen/logrus"
+
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
 )
@@ -104,18 +105,25 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
-				r.mp[tbl.Name] = lRelation
+				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
-			r.nodes = append(r.nodes, engine.Node{
-				Id:   addr,
-				Addr: addr,
-			})
+			logutil.Debugf("ClientAddr is %v, shardId is %d", addr, tbl.ShardId)
+			if !Exist(r.nodes, addr) {
+				r.nodes = append(r.nodes, engine.Node{
+					Id:   addr,
+					Addr: addr,
+				})
+			}
 			for _, id := range ids.Ids {
+				if addr != db.catalog.Driver.RaftStore().GetConfig().ClientAddr {
+					continue
+				}
+				logutil.Debugf("shardId is %d, segment is %d", tbl.ShardId, id)
 				r.segments = append(r.segments, SegmentInfo{
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
 					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
-					TabletId: tbl.Name,
+					TabletId: string(codec.Uint642Bytes(tbl.ShardId)),
 					Node: engine.Node{
 						Id:   addr,
 						Addr: addr,
@@ -125,5 +133,16 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 
 		}
 	}
+	logutil.Infof("nodes is %v", r.nodes)
 	return r, nil
+}
+
+func Exist(nodes engine.Nodes, iter string) bool {
+	exist := false
+	for _, node := range nodes {
+		if node.Id == iter {
+			exist = true
+		}
+	}
+	return exist
 }

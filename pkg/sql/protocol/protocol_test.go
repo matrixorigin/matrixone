@@ -152,7 +152,6 @@ func TestVector(t *testing.T) {
 func TestRing(t *testing.T) {
 	var buf bytes.Buffer
 	avgRing := &avg.AvgRing{
-		Da: []byte("Copyright 2021 Matrix Origin"),
 		Ns: []int64{123123123, 123123908950, 9089374534},
 		Vs: []float64{123.123, 34534.345, 234123.345345},
 		Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
@@ -173,8 +172,8 @@ func TestRing(t *testing.T) {
 		return
 	}
 	// Da
-	if string(ar.Da) != string(avgRing.Da) {
-		t.Errorf("Decode Batch.Attrs failed. \\nExpected/Got:\\n%v\\n%v", string(ar.Da), string(avgRing.Da))
+	if string(ar.Da) == "" {
+		t.Errorf("Decode Batch.Da failed.")
 		return
 	}
 	// Ns

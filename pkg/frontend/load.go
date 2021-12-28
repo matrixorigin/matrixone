@@ -118,6 +118,8 @@ const (
 	NOTIFY_EVENT_END
 )
 
+const NULL_FLAG = "\\N"
+
 type notifyEvent struct {
 	neType notifyEventType
 	err    error
@@ -599,7 +601,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					continue
 				}
 
-				isNullOrEmpty := len(field) == 0
+				isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
 
 				//put it into batch
 				vec := batchData.Vecs[colIdx]
