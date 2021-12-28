@@ -134,8 +134,8 @@ function start_service(){
 
 function make_tester(){
 	logger "INF" "Build mysql-tester"
-	cd $G_STAGE && git clone "$URL_TESTER_REPO"
-	cd $TESTER_REPO && TESTER_COMMIT_ID=$(git rev-parse HEAD)
+	cd $G_STAGE && git clone "$URL_TESTER_REPO" 
+	cd $TESTER_REPO && git reset --hard 43f2855be35b94ec1455a75f13337da6a56f08e6 && TESTER_COMMIT_ID=$(git rev-parse HEAD)
 	logger "INF" "mysql-tester commit ID: $TESTER_COMMIT_ID"
 	logger "INF" "Build mysql-teser"
 	make 
