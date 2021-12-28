@@ -764,7 +764,7 @@ field_item:
         }
         $$ = &tree.Fields{
             Optionally: true,
-            EscapedBy: b,
+            EnclosedBy: b,
         }
     }
 |   ENCLOSED BY field_terminator

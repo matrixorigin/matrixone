@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -135,14 +136,37 @@ func newNotifyEvent(t notifyEventType, e error, w *WriteBatchHandler) *notifyEve
 }
 
 type PoolElement struct {
+	id        int
 	bat       *batch.Batch
 	lineArray [][]string
+}
+
+type ThreadInfo struct {
+	threadCnt int32
+	startTime atomic.Value
+}
+
+func (t *ThreadInfo) SetTime(tmp time.Time) {
+	t.startTime.Store(tmp)
+}
+
+func (t *ThreadInfo) GetTime() (val interface{}) {
+	return t.startTime.Load()
+}
+
+func (t *ThreadInfo) SetCnt(id int32) {
+	atomic.StoreInt32(&t.threadCnt, id)
+}
+
+func (t *ThreadInfo) GetCnt() int32 {
+	return atomic.LoadInt32(&t.threadCnt)
 }
 
 type ParseLineHandler struct {
 	SharePart
 	DebugTime
 
+	threadInfo                  map[int]*ThreadInfo
 	simdCsvReader               *simdcsv.Reader
 	closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
@@ -161,6 +185,7 @@ type ParseLineHandler struct {
 type WriteBatchHandler struct {
 	SharePart
 	DebugTime
+	*ThreadInfo
 
 	batchData   *batch.Batch
 	pl          *PoolElement
@@ -209,7 +234,6 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 		if quit {
 			break
 		}
-
 		wait_d := time.Now()
 		if lineOut.Line == nil && lineOut.Lines == nil {
 			break
@@ -293,7 +317,7 @@ func (plh *ParseLineHandler) close() {
 /*
 alloc space for the batch
 */
-func makeBatch(handler *ParseLineHandler) *PoolElement {
+func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 	batchData := batch.New(true, handler.attrName)
 
 	//logutil.Infof("----- batchSize %d attrName %v",batchSize,handler.attrName)
@@ -342,6 +366,7 @@ func makeBatch(handler *ParseLineHandler) *PoolElement {
 	}
 
 	return &PoolElement{
+		id:        id,
 		bat:       batchData,
 		lineArray: make([][]string, handler.batchSize),
 	}
@@ -402,7 +427,7 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 
 	//allocate batch
 	for j := 0; j < cap(handler.simdCsvBatchPool); j++ {
-		batchData := makeBatch(handler)
+		batchData := makeBatch(handler, j)
 		handler.simdCsvBatchPool <- batchData
 	}
 	return nil
@@ -452,6 +477,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
 
 	wHandler.pl = allocBatch(handler)
+	wHandler.ThreadInfo = handler.threadInfo[wHandler.pl.id]
 	wHandler.simdCsvLineArray = wHandler.pl.lineArray
 	for i := 0; i < handler.lineIdx; i++ {
 		wHandler.simdCsvLineArray[i] = handler.simdCsvLineArray[i]
@@ -1264,7 +1290,10 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		//logutil.Infof("----batchBytes %v B %v MB",batchBytes,batchBytes / 1024.0 / 1024.0)
 		//
 		wait_a := time.Now()
+		handler.ThreadInfo.SetTime(wait_a)
+		handler.ThreadInfo.SetCnt(1)
 		err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
 		} else if isWriteBatchTimeoutError(err) {
@@ -1358,7 +1387,11 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				//	logutil.Infof("len %d type %d %s ",vec.Length(),vec.Typ.Oid,vec.Typ.String())
 				//}
 
+				wait_a := time.Now()
+				handler.ThreadInfo.SetTime(wait_a)
+				handler.ThreadInfo.SetCnt(1)
 				err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
 					handler.result.Records += uint64(needLen)
 				} else if isWriteBatchTimeoutError(err) {
@@ -1464,6 +1497,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			result:               result,
 			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
 		},
+		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
 	}
@@ -1471,6 +1505,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()), runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvBatchPool = make(chan *PoolElement, handler.simdCsvConcurrencyCountOfWriteBatch)
+	for i := 0; i < handler.simdCsvConcurrencyCountOfWriteBatch; i++ {
+		handler.threadInfo[i] = &ThreadInfo{}
+	}
 
 	//logutil.Infof("-----write concurrent count %d ",handler.simdCsvConcurrencyCountOfWriteBatch)
 
@@ -1598,6 +1635,31 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}()
 
+	close := CloseFlag{}
+	go func() {
+		for {
+			if close.IsClosed() {
+				logutil.Infof("load stream is over, start to leave.")
+				return
+			} else {
+				for i, v := range handler.threadInfo {
+					ret := v.GetTime()
+					if ret == nil {
+						continue
+					} else {
+						startTime := ret.(time.Time)
+						threadCnt := v.GetCnt()
+						if threadCnt == 1 {
+							logutil.Infof("Print the ThreadInfo. id:%v, startTime:%v, spendTime:%v", i, startTime, time.Since(startTime))
+						}
+					}
+				}
+				var a = time.Duration(ses.Pu.SV.GetPrintLogInterVal())
+				time.Sleep(a * time.Second)
+			}
+		}
+	}()
+
 	//until now, the last writer has been counted.
 	//There are no more new threads can be spawned.
 	//wait csvReader and rowConverter to quit.
@@ -1613,6 +1675,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//wait stats to quit
 	statsWg.Wait()
+	close.Close()
 
 	//logutil.Infof("-----total row2col %s fillBlank %s toStorage %s",
 	//	handler.row2col,handler.fillBlank,handler.toStorage)
