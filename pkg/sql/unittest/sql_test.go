@@ -105,7 +105,7 @@ func TestDateType(t *testing.T) {
 	sqls := []string{
 		"create table tdate (a date);",
 		"create table tdefdate (a date default '20211202')",
-		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
+		"insert into tdate values ('20070210'), ('1997-02-10'), ('0001-04-28'), (20041112), ('0123-04-03');",
 		"insert into tdefdate values ();",
 	}
 	res := [][]string{
@@ -143,7 +143,7 @@ func TestDateComparison(t *testing.T) {
 	e, proc := newTestEngine()
 	sqls := []string{
 		"create table tdate (a date);",
-		"insert into tdate values ('20070210'), ('1997-02-10'), ('01-04-28'), (20041112), ('0000000123-4-3');",
+		"insert into tdate values ('20070210'), ('1997-02-10'), ('2001-04-28'), (20041112), ('0123-04-03');",
 		"select * from tdate where a < '2004-01-01'",
 		"select * from tdate where '2004-01-01' < a",
 		"select * from tdate where a > '2004-01-01'",
@@ -165,7 +165,7 @@ func TestDatetimeComparison(t *testing.T) {
 	e, proc := newTestEngine()
 	sqls := []string{
 		"create table tdatetime (a datetime);",
-		"insert into tdatetime values ('2018-04-28 10:21:15'), ('17-04-28 03:05:01'), (250716163958), (20211203145633);",
+		"insert into tdatetime values ('2018-04-28 10:21:15'), ('2017-04-28 03:05:01'), (20250716163958), (20211203145633);",
 		"select * from tdatetime where a < '2020-01-01 10:21:15'",
 		"select * from tdatetime where '2020-01-01 10:21:15' < a",
 		"select * from tdatetime where a = '2020-01-01 10:21:15'",
@@ -189,11 +189,11 @@ func TestDatetimeType(t *testing.T) {
 	// TestCase expected run success
 	sqls := []string{
 		"create table tbl1 (a datetime);", // test datetime format without msec part
-		"insert into tbl1 values ('2018-04-28 10:21:15'), ('17-04-28 03:05:01'), (250716163958), (20211203145633);",
+		"insert into tbl1 values ('2018-04-28 10:21:15'), ('2017-04-28 03:05:01'), (20250716163958), (20211203145633);",
 		"create table tbl2 (a datetime);", // test datetime with msec part
-		"insert into tbl2 values ('2018-04-28 10:21:15.123'), ('17-04-28 03:05:01.456'), (250716163958.567), (20211203145633.890);",
+		"insert into tbl2 values ('2018-04-28 10:21:15.123'), ('2017-04-28 03:05:01.456'), (20250716163958.567), (20211203145633.890);",
 		"create table tbl3 (a datetime);", // test datetime without hour / minute / second
-		"insert into tbl3 values ('20180428'), ('170428'), (250716), (20211203);",
+		"insert into tbl3 values ('20180428'), ('20170428'), (20250716), (20211203);",
 
 		"create table tdatetimedef (a datetime default '2015-03-03 12:12:12');",
 		"insert into tdatetimedef values ();",
@@ -211,8 +211,8 @@ func TestDatetimeType(t *testing.T) {
 	}
 
 	res := [][]string{
-		{"tbl1", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"},
-		{"tbl2", "a\n\t[2018-04-28 10:21:15 0017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"}, // that is disputed. what does msec do?
+		{"tbl1", "a\n\t[2018-04-28 10:21:15 2017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"},
+		{"tbl2", "a\n\t[2018-04-28 10:21:15 2017-04-28 03:05:01 2025-07-16 16:39:58 2021-12-03 14:56:33]-&{<nil>}\n\n"}, // that is disputed. what does msec do?
 		{"tbl3", "a\n\t[2018-04-28 00:00:00 2017-04-28 00:00:00 2025-07-16 00:00:00 2021-12-03 00:00:00]-&{<nil>}\n\n"},
 		{"tdatetimedef", "a\n\t2015-03-03 12:12:12\n\n"},
 	}
@@ -334,7 +334,7 @@ func sqlRun(sql string, e engine.Engine, proc *process.Process) error {
 	return nil
 }
 
-// a simple select function Todo: need delete when support select * from relation.
+// a simple select function
 func TempSelect(e engine.Engine, schema, name string) string {
 	var buff bytes.Buffer
 

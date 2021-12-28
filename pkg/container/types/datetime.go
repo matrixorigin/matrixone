@@ -18,9 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"regexp"
 	"strconv"
-	"strings"
 	"time"
 	"unsafe"
 )
@@ -54,158 +52,80 @@ const (
 
 var (
 	errIncorrectDatetimeValue = errors.New(errno.DataException, "Incorrect datetime value")
-
-	// reg1 reg2 are regexps to match `year-month-day hh:mm:ss.msec`
-	reg1 = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
-	reg2 = regexp.MustCompile(`^(?P<hour>[0-9]+)[:](?P<minute>[0-9]+)[:](?P<second>[0-9]+)(?P<msec>[.][0-9]+)?$`)
-
-	nowDatetime       = "now()"
-	nowDatetimeLength = len(nowDatetime)
-
-	// regSimple is the regexp to match `yearMonthDayHourMinuteSecond.Sec` and some datetime like that
-	regSimple = regexp.MustCompile(`^(?P<part1>[0-9]+)(?P<part2>[.][0-9]+)?$`)
-
-	// format1 format2 format3 format4 are valid length cases for datetime-format used in ParseDatetime
-	format1 = 4 + 2 + 2 + 2 + 2 + 2 // full year + month + day + hour + minute + second
-	format2 = 3 + 2 + 2 + 2 + 2 + 2
-	format3 = 2 + 2 + 2 + 2 + 2 + 2
-	format4 = 1 + 2 + 2 + 2 + 2 + 2 // shortest year + month + day + hour + minute + second
 )
 
-// ParseDatetime parse a format string to be a Datetime
-// support Format:
-//	All Datetime
-//	Datetime + day time(hh:mm:ss or hh:mm:ss.[0, 9]*)
+// ParseDatetime will parse a string to be a Datetime
+// Support Format:
+// 1. all the Date value
+// 2. yyyy-mm-dd hh:mm:ss(.msec)
+// 3. yyyymmddhhmmss(.msec)
 func ParseDatetime(s string) (Datetime, error) {
-	var year int32
-	var month, day, hour, minute, second uint8
-	var msec uint32 = 0
-	var ymdhms [6]string // strings of year, month, day, hour, minute, second
-
-	if len(s) < shortestDateFormat {
-		return -1, errIncorrectDatetimeValue
-	}
-
-	//if len(s) == nowDatetimeLength && s == nowDatetime { // special case
-	//	return Now(), nil
-	//}
-
-	{ // match which string without hour-minute-second part.
+	if len(s) < 14 {
 		if d, err := ParseDate(s); err == nil {
 			return d.ToTime(), nil
 		}
+		return -1, errIncorrectDatetimeValue
 	}
+	var year int32
+	var month, day, hour, minute, second uint8
+	var msec uint32 = 0
 
-	datetimeParts := strings.Split(s, " ")
-	switch len(datetimeParts) {
-	case 1: // possible to be `yearMonthDayHourMinuteSecond.Msec`
-		{
-			match := regSimple.FindStringSubmatch(datetimeParts[0])
-			switch len(match) {
-			case 3:
-				if len(match[1]) <= format1 && len(match[1]) >= format4 {
-					if len(match[2]) > 1 {
-						if ms, err := strconv.ParseUint(match[2][1:], 10, 32); err != nil {
-							return -1, errIncorrectDatetimeValue
-						} else {
-							msec = uint32(ms)
-						}
-					}
-					switch len(match[1]) {
-					case format1:
-						ymdhms[0], ymdhms[1], ymdhms[2] = match[1][0:4], match[1][4:6], match[1][6:8]
-						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][8:10], match[1][10:12], match[1][12:]
-					case format2:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr0+match[1][0:3], match[1][3:5], match[1][5:7]
-						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][7:9], match[1][9:11], match[1][11:]
-					case format3:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr1+match[1][0:2], match[1][2:4], match[1][4:6]
-						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][6:8], match[1][8:10], match[1][10:]
-					case format4:
-						ymdhms[0], ymdhms[1], ymdhms[2] = thisCenturyStr2+match[1][0:1], match[1][1:3], match[1][3:5]
-						ymdhms[3], ymdhms[4], ymdhms[5] = match[1][5:7], match[1][7:9], match[1][9:]
-					}
-				} else {
+	year = int32(s[0]-'0') * 1000 + int32(s[1]-'0') * 100 + int32(s[2]-'0') * 10 + int32(s[3]-'0')
+	if s[4] == '-' {
+		if len(s) < 19 {
+			return -1, errIncorrectDatetimeValue
+		}
+		month = (s[5]-'0') * 10 + (s[6]-'0')
+		if s[7] != '-' {
+			return -1, errIncorrectDatetimeValue
+		}
+		day = (s[8]-'0') * 10 + (s[9]-'0')
+		if s[10] != ' ' {
+			return -1, errIncorrectDatetimeValue
+		}
+		if !validDate(year, month, day) {
+			return -1, errIncorrectDatetimeValue
+		}
+		hour = (s[11]-'0') * 10 + (s[12]-'0')
+		if s[13] != ':' {
+			return -1, errIncorrectDatetimeValue
+		}
+		minute = (s[14]-'0') * 10 + (s[15]-'0')
+		if s[16] != ':' {
+			return -1, errIncorrectDatetimeValue
+		}
+		second = (s[17]-'0') * 10 + (s[18]-'0')
+		if !validTimeInDay(hour, minute, second) {
+			return -1, errIncorrectDatetimeValue
+		}
+		if len(s) > 19 {
+			if len(s) > 20 && s[19] == '.' {
+				m, err := strconv.ParseUint(s[20:], 10, 32)
+				if err != nil {
 					return -1, errIncorrectDatetimeValue
 				}
-			default:
+				msec = uint32(m)
+			} else {
 				return -1, errIncorrectDatetimeValue
 			}
 		}
-	case 2: // only possible to be `year-month-day hh:mm:ss.[0,9]*`
-		{ // to match year-month-day
-			match := reg1.FindStringSubmatch(datetimeParts[0])
-			switch len(match) {
-			case 4:
-				ymdhms[0], ymdhms[1], ymdhms[2] = match[1], match[2], match[3]
-			default:
-				return -1, errIncorrectDatetimeValue
-			}
-		}
-		{ // to match hh:mm:ss.[0-9]*
-			match := reg2.FindStringSubmatch(datetimeParts[1])
-			switch len(match) {
-			case 5:
-				ymdhms[3], ymdhms[4], ymdhms[5] = match[1], match[2], match[3]
-				if len(match[4]) > 1 { // with fractional part, and match[4] is '.xx'
-					if ms, err := strconv.ParseUint(match[4][1:], 10, 32); err != nil {
-						return -1, errIncorrectDatetimeValue
-					} else {
-						msec = uint32(ms)
-					}
+	} else {
+		month = (s[4]-'0') * 10 + (s[5]-'0')
+		day = (s[6]-'0') * 10 + (s[7]-'0')
+		hour = (s[8]-'0') * 10 + (s[9]-'0')
+		minute = (s[10]-'0') * 10 + (s[11]-'0')
+		second = (s[12]-'0') * 10 + (s[13]-'0')
+		if len(s) > 14 {
+			if len(s) > 15 && s[14] == '.' {
+				m, err := strconv.ParseUint(s[15:], 10, 32)
+				if err != nil {
+					return -1, errIncorrectDatetimeValue
 				}
-			default:
+				msec = uint32(m)
+			} else {
 				return -1, errIncorrectDatetimeValue
 			}
 		}
-	default:
-		return -1, errIncorrectDatetimeValue
-	}
-
-	{ // year
-		y, err := strconv.ParseInt(ymdhms[0], 10, 32)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		year = int32(y)
-	}
-	{ // month
-		m, err := strconv.ParseUint(ymdhms[1], 10, 8)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		month = uint8(m)
-	}
-	{ // day
-		d, err := strconv.ParseUint(ymdhms[2], 10, 8)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		day = uint8(d)
-	}
-	{ // hour
-		h, err := strconv.ParseUint(ymdhms[3], 10, 8)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		hour = uint8(h)
-	}
-	{ // minute
-		m, err := strconv.ParseUint(ymdhms[4], 10, 8)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		minute = uint8(m)
-	}
-	{ // second
-		s, err := strconv.ParseUint(ymdhms[5], 10, 8)
-		if err != nil {
-			return -1, errIncorrectDatetimeValue
-		}
-		second = uint8(s)
-	}
-	if !validDate(year, month, day) || !validTimeInDay(hour, minute, second) {
-		return -1, errIncorrectDatetimeValue
 	}
 	return FromClock(year, month, day, hour, minute, second, msec), nil
 }
