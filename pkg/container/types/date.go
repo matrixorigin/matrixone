@@ -181,8 +181,47 @@ func Today() Date {
 	return Date((sec + localTZ) / secsPerDay)
 }
 
+const dayInfoTableMinYear = 1924
+const dayInfoTableMaxYear = 2099
+const dayInfoTableYears = dayInfoTableMaxYear - dayInfoTableMinYear + 1
+const dayInfoTableSize = dayInfoTableYears*365 + (dayInfoTableMaxYear-dayInfoTableMinYear)/4 + 1
+const dayNumOfTableEpoch = 702360 // the day number of "1924-01-01"
+
+type dayInfo struct {
+	year  uint16
+	month uint8
+	week  uint8
+}
+
+var dayInfoTable [dayInfoTableSize]dayInfo
+
+// this init function takes a bit of build time
+func init() {
+	yearNow := uint16(1924)
+	i := int32(0)
+	for yearIndex := 0; yearIndex < dayInfoTableYears; yearIndex++ {
+		if yearIndex%4 == 0 { // this is a leap year
+			for j := 0; j < 366; j++ {
+				dayInfoTable[i].year = yearNow
+				i++
+			}
+		} else {
+			for j := 0; j < 365; j++ {
+				dayInfoTable[i].year = yearNow
+				i++
+			}
+		}
+		yearNow++
+	}
+}
+
 // Year takes a date and returns an uint16 number as the year of this date
 func (d Date) Year() uint16 {
+	dayNum := int32(d)
+	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
+	if insideDayInfoTable {
+		return dayInfoTable[dayNum-dayNumOfTableEpoch].year
+	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
 	y := 400 * n
