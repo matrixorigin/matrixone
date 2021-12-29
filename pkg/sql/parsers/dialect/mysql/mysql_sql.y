@@ -1788,7 +1788,7 @@ table_name_unresolved:
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$1, $3})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3, $1})
     }
 
 db_name:
@@ -1801,11 +1801,11 @@ unresolved_object_name:
     }
 |   ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(2, [3]string{$1, $3})
+        $$ = tree.SetUnresolvedObjectName(2, [3]string{$3, $1})
     }
 |   ident '.' ident '.' ident
     {
-        $$ = tree.SetUnresolvedObjectName(3, [3]string{$1, $3, $5})
+        $$ = tree.SetUnresolvedObjectName(3, [3]string{$5, $3, $1})
     }
 
 drop_stmt:
