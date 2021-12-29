@@ -99,6 +99,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 	for _, tbl := range tablets {
 		if ids, err := db.catalog.Driver.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
 			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
+			return nil, err
 		} else {
 			if len(ids.Ids) == 0 {
 				continue
