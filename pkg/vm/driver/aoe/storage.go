@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -614,21 +615,36 @@ func waitExpect(timeout int, expect func() bool) {
 }
 
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
-	var err error
-	t0 := time.Now()
-	defer func() {
-		logutil.Debugf("[S-%d|logIndex:%d,%d]createIndex handler cost %d ms", shard.ID, ^uint64(0), 0, time.Since(t0).Milliseconds())
-	}()
 	if removeData {
+		t0 := time.Now()
+		dbName := aoedb.IdToNameFactory.Encode(shard.ID)
+		db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
+		if err == metadata.DatabaseNotFoundErr {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		s.DB.FlushDatabase(dbName)
+		logIndex := db.GetCheckpointId()
+		defer func() {
+			logutil.Infof(
+				"[S-%d|logIndex:%d,%d]RemoveShard handler cost %d ms",
+				shard.ID, logIndex+1, 0, time.Since(t0).Milliseconds())
+		}()
+
 		ctx := aoedb.DropDBCtx{
-			Id:     ^uint64(0),
+			Id:     logIndex + 1,
 			Offset: 0,
 			Size:   1,
-			DB:     aoedb.IdToNameFactory.Encode(shard.ID),
+			DB:     dbName,
 		}
 		_, err = s.DB.DropDatabase(&ctx)
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *aoeMeta.Database, dbExisted bool, err error) {

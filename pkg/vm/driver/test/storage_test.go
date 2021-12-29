@@ -490,7 +490,7 @@ func checkSplit(s *aoe3.Storage, old uint64) bool {
 	logutil.Infof("before checkSplit")
 	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	logutil.Infof("checkSplit, db is %v, err is %v", db, err)
-	if db != nil{
+	if db != nil {
 		logutil.Infof("db size is %v", db.GetSize())
 	}
 	if err == nil {
