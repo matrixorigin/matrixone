@@ -37,8 +37,9 @@ func Round(xs, rs []float64, dec int) []float64 {
 
 func init() {
 	extend.FunctionRegistry["round"] = builtin.Round
+	overload.AppendFunctionRets(builtin.Round, []types.T{types.T_float64, types.T_float64}, types.T_float64)
 	extend.MultiReturnTypes[builtin.Round] = func(es []extend.Extend) types.T {
-		return types.T_float64
+		return getMultiReturnType(builtin.Round, es)
 	}
 	extend.MultiStrings[builtin.Round] = func(es []extend.Extend) string {
 		if len(es) > 1 {

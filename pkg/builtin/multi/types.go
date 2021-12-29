@@ -13,3 +13,17 @@
 // limitations under the License.
 
 package multi
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+)
+
+func getMultiReturnType(op int, es []extend.Extend) types.T {
+	ts := make([]types.T, len(es))
+	for i := range ts {
+		ts[i] = es[i].ReturnType()
+	}
+	return overload.GetMultiReturnType(op, ts)
+}
