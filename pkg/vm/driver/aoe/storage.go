@@ -614,21 +614,33 @@ func waitExpect(timeout int, expect func() bool) {
 }
 
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
-	var err error
-	t0 := time.Now()
-	defer func() {
-		logutil.Debugf("[S-%d|logIndex:%d,%d]createIndex handler cost %d ms", shard.ID, ^uint64(0), 0, time.Since(t0).Milliseconds())
-	}()
 	if removeData {
+		t0 := time.Now()
+		dbName := aoedb.IdToNameFactory.Encode(shard.ID)
+		s.DB.FlushDatabase(dbName)
+		db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
+		if err != nil {
+			return err
+		}
+		logIndex := db.GetCheckpointId()
+		defer func() {
+			logutil.Infof(
+				"[S-%d|logIndex:%d,%d]RemoveShard handler cost %d ms",
+				shard.ID, logIndex+1, 0, time.Since(t0).Milliseconds())
+		}()
+
 		ctx := aoedb.DropDBCtx{
-			Id:     ^uint64(0),
+			Id:     logIndex + 1,
 			Offset: 0,
 			Size:   1,
-			DB:     aoedb.IdToNameFactory.Encode(shard.ID),
+			DB:     dbName,
 		}
 		_, err = s.DB.DropDatabase(&ctx)
+		if err != nil {
+			return err
+		}
 	}
-	return err
+	return nil
 }
 
 func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *aoeMeta.Database, dbExisted bool, err error) {
