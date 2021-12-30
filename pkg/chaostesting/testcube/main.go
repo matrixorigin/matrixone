@@ -14,7 +14,10 @@
 
 package main
 
-import "os"
+import (
+	"os"
+	"syscall"
+)
 
 func main() {
 
@@ -45,4 +48,12 @@ func main() {
 		fn(os.Args[2:])
 
 	})
+}
+
+func init() {
+	// set open file soft limit
+	var rLimit syscall.Rlimit
+	syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	rLimit.Cur = rLimit.Max
+	syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 }

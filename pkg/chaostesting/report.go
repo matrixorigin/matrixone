@@ -15,33 +15,48 @@
 package fz
 
 import (
-	"fmt"
+	"reflect"
 	"sync"
 )
 
-type AddReport func(format string, args ...any)
+type AddReport func(value any)
 
-type GetReports func() []string
+type GetReport func(target any) bool
+
+type GetReports func() []any
 
 func (_ Def) Report() (
 	add AddReport,
-	get GetReports,
+	getAll GetReports,
+	get GetReport,
 ) {
 
-	var reports []string
+	var reports []any
 	var l sync.Mutex
 
-	add = func(format string, args ...any) {
-		s := fmt.Sprintf(format, args...)
+	add = func(report any) {
 		l.Lock()
 		defer l.Unlock()
-		reports = append(reports, s)
+		reports = append(reports, report)
 	}
 
-	get = func() []string {
+	getAll = func() []any {
 		l.Lock()
 		defer l.Unlock()
 		return reports
+	}
+
+	get = func(target any) (found bool) {
+		t := reflect.TypeOf(target).Elem()
+		l.Lock()
+		defer l.Unlock()
+		for _, report := range reports {
+			if reflect.TypeOf(report) == t {
+				reflect.ValueOf(target).Elem().Set(reflect.ValueOf(report))
+				found = true
+			}
+		}
+		return
 	}
 
 	return

@@ -14,17 +14,21 @@
 
 package fz
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 func SaveConfig(filename string) Operator {
 	return Operator{
 		AfterStop: func(
 			writeConfig WriteConfig,
 		) {
-			f, err := os.Create(filename)
+			f, err := os.CreateTemp(filepath.Dir(filename), "*.tmp")
 			ce(err)
-			defer f.Close()
 			ce(writeConfig(f))
+			ce(f.Close())
+			ce(os.Rename(f.Name(), filename))
 		},
 	}
 }

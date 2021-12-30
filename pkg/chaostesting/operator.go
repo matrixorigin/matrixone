@@ -25,6 +25,7 @@ type Operator struct {
 	BeforeDo    any
 	AfterDo     any
 	AfterStop   any
+	AfterReport any
 	Finally     any
 }
 

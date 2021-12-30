@@ -15,10 +15,17 @@
 package fz
 
 import (
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/google/uuid"
 )
+
+const porcupineReportsDir = "reports"
+
+type PorcupineReport string
 
 func PorcupineChecker(
 	model porcupine.Model,
@@ -31,15 +38,21 @@ func PorcupineChecker(
 
 		AfterStop: func(
 			report AddReport,
+			uuid uuid.UUID,
 		) {
-
-			pt("start porcupine check\n")
 
 			if operations != nil {
 				res, info := porcupine.CheckOperationsVerbose(model, operations(), timeout)
-				_ = info
 				if res != porcupine.Ok {
-					report("porcupine check failed")
+					report(PorcupineReport("porcupine check failed"))
+					f, err := os.CreateTemp(porcupineReportsDir, "*.tmp")
+					ce(err)
+					ce(porcupine.Visualize(model, info, f))
+					ce(f.Close())
+					ce(os.Rename(f.Name(), filepath.Join(
+						porcupineReportsDir,
+						uuid.String()+"-porcupine.html",
+					)))
 				}
 			}
 
@@ -47,7 +60,7 @@ func PorcupineChecker(
 				res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
 				_ = info
 				if res != porcupine.Ok {
-					report("porcupine check failed")
+					report(PorcupineReport("porcupine check failed"))
 				}
 			}
 

@@ -4,3 +4,4 @@
 /node-*.log
 /porcupine-log
 /configs/*.xml
+/reports/*

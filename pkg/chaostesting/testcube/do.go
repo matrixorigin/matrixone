@@ -32,7 +32,7 @@ func (_ Def2) Do(
 		kvs = append(kvs, newKV(nodes[i]))
 	}
 
-	return func(action fz.Action) error {
+	return func(threadID int64, action fz.Action) error {
 
 		switch action := action.(type) {
 
@@ -42,7 +42,7 @@ func (_ Def2) Do(
 					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Second*32); err != nil {
 						return 0, nil, nil, err
 					}
-					return action.ClientID, [2]any{"set", action.Key}, action.Value, nil
+					return int(threadID), [2]any{"set", action.Key}, action.Value, nil
 				},
 			)
 
@@ -55,9 +55,9 @@ func (_ Def2) Do(
 						return 0, nil, nil, err
 					}
 					if !ok {
-						return action.ClientID, [2]any{"get", action.Key}, nil, nil
+						return int(threadID), [2]any{"get", action.Key}, nil, nil
 					}
-					return action.ClientID, [2]any{"get", action.Key}, res, nil
+					return int(threadID), [2]any{"get", action.Key}, res, nil
 				},
 			)
 

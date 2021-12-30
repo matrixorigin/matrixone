@@ -18,15 +18,16 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 
 	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
-func (def Def) CmdGenConfigs(
-	scope Scope,
-) Commands {
+const configFilesDir = "configs"
+
+func (def Def) CmdGenConfigs() Commands {
 	return Commands{
 
 		"gen-configs": func(args []string) {
@@ -39,39 +40,42 @@ func (def Def) CmdGenConfigs(
 			}
 
 			// ensure output dir
-			outputDir := "configs"
-			_, err := os.Stat(outputDir)
+			_, err := os.Stat(configFilesDir)
 			if errors.Is(err, os.ErrNotExist) {
 				err = nil
-				ce(os.Mkdir(outputDir, 0755))
+				ce(os.Mkdir(configFilesDir, 0755))
 			}
 			ce(err)
 
-			fzDef := new(fz.Def)
-			def2 := new(Def2)
-
+			sem := make(chan struct{}, runtime.NumCPU())
 			for i := 0; i < num; i++ {
-				scope.Fork(
-					// resets
-					fzDef.UUID,
-					def.NodeConfigs,
-					def2.MainAction,
-				).Call(func(
-					write fz.WriteConfig,
-					id uuid.UUID,
-				) {
+				i := i
+				sem <- struct{}{}
+				go func() {
+					defer func() {
+						<-sem
+					}()
 
-					f, err := os.CreateTemp(outputDir, "*.tmp")
-					ce(err)
-					ce(write(f))
-					ce(f.Close())
-					ce(os.Rename(
-						f.Name(),
-						filepath.Join(outputDir, id.String()+".xml"),
-					))
-					pt("generated %s\n", id.String())
+					NewScope().Call(func(
+						write fz.WriteConfig,
+						id uuid.UUID,
+					) {
 
-				})
+						f, err := os.CreateTemp(configFilesDir, "*.tmp")
+						ce(err)
+						ce(write(f))
+						ce(f.Close())
+						ce(os.Rename(
+							f.Name(),
+							filepath.Join(configFilesDir, id.String()+".xml"),
+						))
+						pt("generated %d / %d %s\n", i+1, num, id.String())
+
+					})
+				}()
+			}
+			for i := 0; i < cap(sem); i++ {
+				sem <- struct{}{}
 			}
 
 		},

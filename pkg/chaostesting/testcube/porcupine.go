@@ -15,12 +15,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
@@ -38,6 +41,7 @@ func (_ Def) Porcupine() (
 
 	var ops []porcupine.Operation
 	var lock sync.Mutex
+	tStart := time.Now()
 
 	log = func(
 		fn func() (clientID int, input any, output any, err error),
@@ -54,8 +58,8 @@ func (_ Def) Porcupine() (
 			ClientId: clientID,
 			Input:    input,
 			Output:   output,
-			Call:     t0.UnixNano(),
-			Return:   t1.UnixNano(),
+			Call:     int64(t0.Sub(tStart)),
+			Return:   int64(t1.Sub(tStart)),
 		})
 		return nil
 	}
@@ -69,9 +73,20 @@ func (_ Def) Porcupine() (
 	return
 }
 
+const reportFilesDir = "reports"
+
 func (_ Def) PorcupineReport(
 	get GetPorcupineOps,
 ) fz.Operators {
+
+	// ensure output dir
+	_, err := os.Stat(reportFilesDir)
+	if errors.Is(err, os.ErrNotExist) {
+		err = nil
+		ce(os.Mkdir(reportFilesDir, 0755))
+	}
+	ce(err)
+
 	return fz.Operators{
 
 		// checker
@@ -82,16 +97,37 @@ func (_ Def) PorcupineReport(
 			time.Second*10,
 		),
 
-		// write to file
+		// write log to file
 		fz.Operator{
-			AfterStop: func() {
-				//TODO write to uuid-specific file
-				f, err := os.Create("porcupine-log")
+			AfterReport: func(
+				uuid uuid.UUID,
+				getReport fz.GetReport,
+			) {
+
+				var report fz.PorcupineReport
+				if !getReport(&report) {
+					// no error
+					return
+				}
+
+				f, err := os.CreateTemp(reportFilesDir, "*.tmp")
 				ce(err)
-				defer f.Close()
 				for _, op := range get() {
 					fmt.Fprintf(f, "%+v\n", op)
 				}
+				ce(f.Close())
+
+				filePath := filepath.Join(
+					reportFilesDir,
+					uuid.String()+"-porcupine.log",
+				)
+				ce(os.Rename(
+					f.Name(),
+					filePath,
+				))
+
+				pt("porcupine log written to %s\n", filePath)
+
 			},
 		},
 	}

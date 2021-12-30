@@ -29,61 +29,67 @@ func (_ Def2) MainAction(
 
 	const num = 32
 
-	// random tree
-	tree := fz.RandomActionTree([]fz.ActionMaker{
+	// action maker for specific client
+	makers := func(clientID int) []fz.ActionMaker {
+		return []fz.ActionMaker{
 
-		// set
-		func() fz.Action {
-			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(num / 2)
-			value := rand.Intn(num / 2)
-			clientID := rand.Intn(int(numNodes))
-			return ActionSet{
-				ID:       id,
-				ClientID: clientID,
-				Key:      key,
-				Value:    value,
-			}
-		},
-
-		// get
-		func() fz.Action {
-			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(num / 2)
-			clientID := rand.Intn(int(numNodes))
-			return ActionGet{
-				ID:       id,
-				ClientID: clientID,
-				Key:      key,
-			}
-		},
-
-		// set / get pair
-		func() fz.Action {
-			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(num / 2)
-			value := rand.Intn(num / 2)
-			clientID := rand.Intn(int(numNodes))
-			return fz.Seq(
-				ActionSet{
+			// set
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				value := rand.Intn(num / 2)
+				return ActionSet{
 					ID:       id,
 					ClientID: clientID,
 					Key:      key,
 					Value:    value,
-				},
-				ActionGet{
+				}
+			},
+
+			// get
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				return ActionGet{
 					ID:       id,
 					ClientID: clientID,
 					Key:      key,
-				},
-			)
-		},
+				}
+			},
 
-		//
-	}, num)
+			// set / get pair
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				value := rand.Intn(num / 2)
+				return fz.Seq(
+					ActionSet{
+						ID:       id,
+						ClientID: clientID,
+						Key:      key,
+						Value:    value,
+					},
+					ActionGet{
+						ID:       id,
+						ClientID: clientID,
+						Key:      key,
+					},
+				)
+			},
+		}
+	}
+
+	// parallel client actions
+	var action fz.ParallelAction
+	for i := fz.NumNodes(0); i < numNodes; i++ {
+		action.Actions = append(
+			action.Actions,
+			fz.RandomActionTree(makers(int(i)), num),
+		)
+	}
 
 	return fz.MainAction{
-		Action: tree,
+		Action: action,
 	}
 
 }
