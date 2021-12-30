@@ -1429,7 +1429,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		}
 		// Vs
 		da := encoding.EncodeUint64Slice(v.Vs)
-		n = len(v.Vs)
+		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
 			buf.Write(da)
@@ -1540,7 +1540,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		}
 		// Vs
 		da := encoding.EncodeUint64Slice(v.Vs)
-		n = len(v.Vs)
+		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
 			buf.Write(da)
