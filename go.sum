@@ -153,6 +153,7 @@ github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7
 github.com/etcd-io/bbolt v1.3.3/go.mod h1:ZF2nL25h33cCyBtcyWeZ2/I3HQOfTP+0PIEvHjkjCrw=
 github.com/fagongzi/goetty v1.11.3 h1:N4UcOF/wORC8nU4OcSnW6kekO+CTyl3XXKIETSizCvY=
 github.com/fagongzi/goetty v1.11.3/go.mod h1:J5KOKdUzqQWinZWqULUPmr1l1bv27DxKKSlNc6jwSVg=
+github.com/fagongzi/goetty v1.13.0/go.mod h1:M1HA6OyQA3/4bV70W588Uek6sF7NxgxT/3gGhlf0yj0=
 github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287 h1:bWwBFLJ0q1EqWktUu9LExKDt7PtZPSp0D9k3lg6u+Fo=
 github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287/go.mod h1:1aUifpZCjAdZK7L3vRRl2cpSktbKasAU5vOSyLSCODs=
 github.com/fagongzi/util v0.0.0-20201116094402-221cc40c4593/go.mod h1:jYDIbpaqHXCCQ7QIDXRVfsQYAGKSNNb6N8BPTgdpcdE=
@@ -384,6 +385,8 @@ github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7C
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
 github.com/matrixorigin/matrixcube v0.0.0-20211224074520-5ad67dcc4d3d h1:dGY0B4wSIEX1xFSRYLXYoX+tocYFa1cgvIQ/BLmF2Y0=
 github.com/matrixorigin/matrixcube v0.0.0-20211224074520-5ad67dcc4d3d/go.mod h1:5xrn3BfKKYJw9rDwO5E/RwWg0wPE3H8wnQyjpwIhyYk=
+github.com/matrixorigin/matrixcube v0.0.0-20211230085950-7b0d18d9f325 h1:zmhEELAWYbq4hYU9pQiCHhGVyLTBdV68ZntWMvUqtNU=
+github.com/matrixorigin/matrixcube v0.0.0-20211230085950-7b0d18d9f325/go.mod h1:Q36DFaha0+4iWb4iv+fMxROclQBlVz4bP+jQDOkUgcw=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=

@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v0.4.1
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
-	github.com/fagongzi/goetty v1.11.3
+	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
@@ -14,7 +14,7 @@ require (
 	github.com/golang/mock v1.3.1
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
-	github.com/matrixorigin/matrixcube v0.0.0-20211224074520-5ad67dcc4d3d
+	github.com/matrixorigin/matrixcube v0.0.0-20211230085950-7b0d18d9f325
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
