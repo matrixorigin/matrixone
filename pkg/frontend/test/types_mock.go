@@ -6,6 +6,7 @@ package mock_frontend
 
 import (
 	reflect "reflect"
+	"net"
 
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -22,6 +23,10 @@ type MockComputationWrapper struct {
 type MockComputationWrapperMockRecorder struct {
 	mock *MockComputationWrapper
 }
+
+func (m *MockIOSession) RawConn() (net.Conn, error) {
+	return nil, nil
+   }
 
 // NewMockComputationWrapper creates a new mock instance.
 func NewMockComputationWrapper(ctrl *gomock.Controller) *MockComputationWrapper {
