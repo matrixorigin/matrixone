@@ -14,22 +14,20 @@
 
 package main
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	"bytes"
+	"encoding/json"
+	"testing"
+)
 
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
-
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
-}
-
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+func TestNodeConfigMarshal(t *testing.T) {
+	NewScope().Call(func(
+		defaultConf DefaultCubeConfig,
+	) {
+		conf := defaultConf(0)
+		buf := new(bytes.Buffer)
+		if err := json.NewEncoder(buf).Encode(conf); err != nil {
+			t.Fatal(err)
+		}
+	})
 }

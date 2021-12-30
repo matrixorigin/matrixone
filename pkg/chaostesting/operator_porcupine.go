@@ -24,6 +24,7 @@ func PorcupineChecker(
 	model porcupine.Model,
 	operations func() []porcupine.Operation,
 	events *[]porcupine.Event,
+	timeout time.Duration,
 ) Operator {
 
 	return Operator{
@@ -32,8 +33,10 @@ func PorcupineChecker(
 			report AddReport,
 		) {
 
+			pt("start porcupine check\n")
+
 			if operations != nil {
-				res, info := porcupine.CheckOperationsVerbose(model, operations(), time.Minute*10)
+				res, info := porcupine.CheckOperationsVerbose(model, operations(), timeout)
 				_ = info
 				if res != porcupine.Ok {
 					report("porcupine check failed")
@@ -41,7 +44,7 @@ func PorcupineChecker(
 			}
 
 			if events != nil {
-				res, info := porcupine.CheckEventsVerbose(model, *events, time.Minute*10)
+				res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
 				_ = info
 				if res != porcupine.Ok {
 					report("porcupine check failed")

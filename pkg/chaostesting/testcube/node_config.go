@@ -14,22 +14,30 @@
 
 package main
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	"github.com/matrixorigin/matrixcube/config"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+)
 
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
+type NodeConfigs []*config.Config
 
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
-}
+func (_ Def) NodeConfigs(
+	numNodes fz.NumNodes,
+	defaultConfig DefaultCubeConfig,
+	randomizeConfig RandomizeCubeConfig,
+) (configs NodeConfigs) {
 
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+	for nodeID := fz.NodeID(0); nodeID < fz.NodeID(numNodes); nodeID++ {
+
+		node := &Node{}
+
+		conf := defaultConfig(nodeID)
+		randomizeConfig(conf)
+		node.Config = conf
+
+		configs = append(configs, conf)
+
+	}
+
+	return
 }

@@ -21,11 +21,13 @@ import (
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
-func (_ Def2) MainConfig(
+func (_ Def2) MainAction(
 	numNodes fz.NumNodes,
 ) fz.MainAction {
 
 	var nextID int64
+
+	const num = 32
 
 	// random tree
 	tree := fz.RandomActionTree([]fz.ActionMaker{
@@ -33,35 +35,52 @@ func (_ Def2) MainConfig(
 		// set
 		func() fz.Action {
 			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(1024)
-			value := rand.Intn(1024)
+			key := rand.Intn(num / 2)
+			value := rand.Intn(num / 2)
+			clientID := rand.Intn(int(numNodes))
 			return ActionSet{
-				ID:    id,
-				Key:   key,
-				Value: value,
+				ID:       id,
+				ClientID: clientID,
+				Key:      key,
+				Value:    value,
+			}
+		},
+
+		// get
+		func() fz.Action {
+			id := atomic.AddInt64(&nextID, 1)
+			key := rand.Intn(num / 2)
+			clientID := rand.Intn(int(numNodes))
+			return ActionGet{
+				ID:       id,
+				ClientID: clientID,
+				Key:      key,
 			}
 		},
 
 		// set / get pair
 		func() fz.Action {
 			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(1024)
-			value := rand.Intn(1024)
+			key := rand.Intn(num / 2)
+			value := rand.Intn(num / 2)
+			clientID := rand.Intn(int(numNodes))
 			return fz.Seq(
 				ActionSet{
-					ID:    id,
-					Key:   key,
-					Value: value,
+					ID:       id,
+					ClientID: clientID,
+					Key:      key,
+					Value:    value,
 				},
 				ActionGet{
-					ID:  id,
-					Key: key,
+					ID:       id,
+					ClientID: clientID,
+					Key:      key,
 				},
 			)
 		},
 
 		//
-	}, 1024)
+	}, num)
 
 	return fz.MainAction{
 		Action: tree,

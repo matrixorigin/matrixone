@@ -14,22 +14,14 @@
 
 package main
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import "github.com/reusee/dscope"
 
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
+type Commands map[string]func([]string)
 
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
-}
+var _ dscope.Reducer = Commands{}
 
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+func (_ Commands) IsReducer() {}
+
+func (_ Def) Commands() Commands {
+	return nil
 }

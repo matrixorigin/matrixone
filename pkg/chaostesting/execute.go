@@ -50,18 +50,14 @@ func (_ Def) Execute(
 		defer he(&err)
 
 		defer func() {
-			for _, op := range ops {
-				if op.Finally != nil {
-					scope.Call(op.Finally)
-				}
-			}
+			ce(ops.parallelDo(scope, func(op Operator) any {
+				return op.Finally
+			}))
 		}()
 
-		for _, op := range ops {
-			if op.BeforeStart != nil {
-				scope.Call(op.BeforeStart)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeStart
+		}))
 
 		var nodes []Node
 		for i := NumNodes(0); i < numNodes; i++ {
@@ -70,19 +66,15 @@ func (_ Def) Execute(
 			nodes = append(nodes, node)
 		}
 
-		for _, op := range ops {
-			if op.BeforeDo != nil {
-				scope.Call(op.BeforeDo)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeDo
+		}))
 
 		ce(doAction(mainAction.Action))
 
-		for _, op := range ops {
-			if op.AfterDo != nil {
-				scope.Call(op.AfterDo)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.AfterDo
+		}))
 
 		for _, node := range nodes {
 			if closer, ok := node.(io.Closer); ok {
@@ -90,11 +82,9 @@ func (_ Def) Execute(
 			}
 		}
 
-		for _, op := range ops {
-			if op.AfterStop != nil {
-				scope.Call(op.AfterStop)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.AfterStop
+		}))
 
 		reports := getReports()
 		for _, report := range reports {

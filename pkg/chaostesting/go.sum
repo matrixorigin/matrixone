@@ -408,8 +408,8 @@ github.com/reusee/pa v0.0.0-20210520023210-223bb0bf8859 h1:O9D09CNGaoSUf6AXzucws
 github.com/reusee/pr v0.0.0-20211219085637-0e1ddac0e236 h1:ngFoIJwn3zvn076Yc02Omfq4zdKx7LFAR07qwlWl1BA=
 github.com/reusee/pr v0.0.0-20211219085637-0e1ddac0e236/go.mod h1:fSOMkLHlAN656Dsoao9Wwix95HuXevvNA+FnNm9tdhE=
 github.com/reusee/qa v0.0.0-20210413131534-5cab38434e4a h1:IOyuRFrJXvfCoicz853kgaXF70+r1xknNyMPUUOzfoM=
-github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71 h1:5akUe4UfefyPTIxpdX7UFhjXQZJgPkkYTZWd/lOyvSQ=
-github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71/go.mod h1:TrGksFp53KnL5e+b3SzDltvcYxIXaayvUIJojSjVH9U=
+github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8 h1:iPdhUAnZmG3QW396kKjNPu9SRn13j16XFQyEG4Tu7aI=
+github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8/go.mod h1:TrGksFp53KnL5e+b3SzDltvcYxIXaayvUIJojSjVH9U=
 github.com/rogpeppe/fastuuid v0.0.0-20150106093220-6724a57986af/go.mod h1:XWv6SoW27p1b0cqNHllgS5HIMJraePCO15w5zCzIWYg=
 github.com/rogpeppe/fastuuid v1.2.0/go.mod h1:jVj6XXZzXRy/MSR5jhDC/2q6DgLz+nrA6LYCDYWNEvQ=
 github.com/rogpeppe/go-internal v1.3.0/go.mod h1:M8bDsm7K2OlrFYOpmOWEs/qY81heoFRclV5y23lUDJ4=

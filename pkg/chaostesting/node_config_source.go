@@ -12,24 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
-
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
+type NodeConfigSources struct {
+	Sources []NodeConfigSource `xml:"Source"`
 }
 
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
+type NodeConfigSource struct {
+	String string `xml:",cdata"`
 }
 
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+func (_ Def) NodeConfigSources() (_ NodeConfigSources) {
+	return
+}
+
+func (_ Def) NodeConfigSourcesItem(
+	srcs NodeConfigSources,
+) ConfigItems {
+	return ConfigItems{srcs}
 }

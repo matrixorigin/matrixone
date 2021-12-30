@@ -17,10 +17,15 @@ package main
 import (
 	"testing"
 
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/e4"
 )
 
 func TestRun(t *testing.T) {
 	defer he(nil, e4.TestingFatal(t))
-	ce(run())
+	NewScope().Call(func(
+		execute fz.Execute,
+	) {
+		ce(execute())
+	})
 }

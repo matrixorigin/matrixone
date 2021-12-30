@@ -9,7 +9,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
 	github.com/reusee/dscope v0.0.0-20211226125218-8580f65a4d05
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
-	github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71
+	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	go.uber.org/zap v1.18.1
 )
 

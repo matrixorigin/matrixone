@@ -14,22 +14,24 @@
 
 package main
 
-import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import (
+	"bytes"
+	"encoding/json"
 
-func init() {
-	fz.RegisterAction(ActionSet{})
-	fz.RegisterAction(ActionGet{})
-}
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+)
 
-type ActionSet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
-	Value    int   `xml:",attr"`
-}
-
-type ActionGet struct {
-	ID       int64 `xml:",attr"`
-	ClientID int   `xml:",attr"`
-	Key      int   `xml:",attr"`
+func (_ Def2) NodeConfigs(
+	confs NodeConfigs,
+) (srcs fz.NodeConfigSources) {
+	for _, conf := range confs {
+		buf := new(bytes.Buffer)
+		encoder := json.NewEncoder(buf)
+		encoder.SetIndent("", "  ")
+		ce(encoder.Encode(conf))
+		srcs.Sources = append(srcs.Sources, fz.NodeConfigSource{
+			String: buf.String(),
+		})
+	}
+	return
 }

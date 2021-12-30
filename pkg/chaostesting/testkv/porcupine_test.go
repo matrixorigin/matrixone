@@ -51,6 +51,7 @@ func TestPorcupine(t *testing.T) {
 					return operations
 				},
 				nil,
+				time.Second*5,
 			),
 
 			// show ops

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"sync"
 
 	crdbpebble "github.com/cockroachdb/pebble"
 	"github.com/lni/vfs"
@@ -40,31 +41,23 @@ func (_ Def2) NumNodes() fz.NumNodes {
 }
 
 func (_ Def) Nodes(
-	numNodes fz.NumNodes,
-	defaultConfig DefaultCubeConfig,
-	randomizeConfig RandomizeCubeConfig,
+	configs NodeConfigs,
 	tempDir fz.TempDir,
+	numNodes fz.NumNodes,
 ) (nodes Nodes) {
 
 	var endpoints []string
-
 	for i := fz.NumNodes(0); i < numNodes; i++ {
 		endpoints = append(endpoints, "http://"+net.JoinHostPort("localhost", randPort()))
 	}
 
-	for nodeID := fz.NodeID(0); nodeID < fz.NodeID(numNodes); nodeID++ {
+	for nodeID, conf := range configs {
 
-		node := &Node{
-			Endpoint: endpoints[nodeID],
-		}
-
-		conf := defaultConfig(nodeID)
-		randomizeConfig(conf)
-		node.Config = conf
+		node := &Node{}
 
 		loggerConfig := zap.Config{
 			Level:    zap.NewAtomicLevel(),
-			Encoding: "json",
+			Encoding: "console",
 			OutputPaths: []string{
 				"stdout",
 				fmt.Sprintf("node-%d.log", nodeID),
@@ -91,8 +84,8 @@ func (_ Def) Nodes(
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]
 		}
-		conf.Prophet.EmbedEtcd.ClientUrls = endpoints[nodeID]
-		conf.Prophet.EmbedEtcd.PeerUrls = "http://" + net.JoinHostPort("localhost", randPort())
+		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
+		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort("localhost", randPort())
 
 		conf.Storage = func() config.StorageConfig {
 			kvStorage, err := pebble.NewStorage(
@@ -113,29 +106,37 @@ func (_ Def) Nodes(
 			}
 		}()
 
-		created := make(chan struct{})
+		cond := sync.NewCond(new(sync.Mutex))
+		var created, isLeader, isFollower bool
 		conf.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 			return &shardStateAware{
 				created: func(shard meta.Shard) {
-					close(created)
+					cond.L.Lock()
+					created = true
+					cond.L.Unlock()
+					cond.Broadcast()
 				},
 				updated: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
 				},
 				splited: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
 				},
 				destroyed: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
 				},
 				becomeLeader: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
+					cond.L.Lock()
+					isLeader = true
+					isFollower = false
+					cond.L.Unlock()
+					cond.Broadcast()
 				},
 				becomeFollower: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
+					cond.L.Lock()
+					isLeader = false
+					isFollower = true
+					cond.L.Unlock()
+					cond.Broadcast()
 				},
 				snapshotApplied: func(shard meta.Shard) {
-					//panic(fmt.Sprintf("%#v\n", shard))
 				},
 			}
 		}
@@ -143,7 +144,17 @@ func (_ Def) Nodes(
 		store := raftstore.NewStore(conf)
 		store.Start()
 		if nodeID == 0 {
-			<-created
+			cond.L.Lock()
+			for !isLeader || !created {
+				cond.Wait()
+			}
+			cond.L.Unlock()
+		} else {
+			cond.L.Lock()
+			for !isFollower {
+				cond.Wait()
+			}
+			cond.L.Unlock()
 		}
 		node.RaftStore = store
 

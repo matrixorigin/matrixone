@@ -15,6 +15,7 @@
 package fz
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -35,6 +36,18 @@ func (_ Def) NamedConfigItems(
 ) {
 	m = make(map[string]NamedConfigItem)
 	for _, item := range items {
+
+		// test
+		data, err := xml.Marshal(item)
+		ce(err)
+		ptr := reflect.New(reflect.TypeOf(item))
+		ce(xml.Unmarshal(data, ptr.Interface()))
+		data2, err := xml.Marshal(ptr.Elem().Interface())
+		ce(err)
+		if !bytes.Equal(data, data2) {
+			panic(fmt.Errorf("config item marshal / unmarshal mismatch:\n%s\n%s", data, data2))
+		}
+
 		name := reflect.TypeOf(item).Name()
 		item := NamedConfigItem{
 			Name:  name,
@@ -66,11 +79,7 @@ func (_ Def) WriteConfig(
 		encoder := xml.NewEncoder(w)
 		encoder.Indent("", "    ")
 		for _, named := range nameds {
-			ce(encoder.EncodeElement(named.Value, xml.StartElement{
-				Name: xml.Name{
-					Local: named.Name,
-				},
-			}))
+			ce(encoder.Encode(named.Value))
 		}
 
 		return
