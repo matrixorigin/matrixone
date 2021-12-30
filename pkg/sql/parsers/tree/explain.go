@@ -44,7 +44,7 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 		st := stmt.(*ShowColumns)
 		if st.Table != nil {
 			ctx.WriteByte(' ')
-			st.Table.Format(ctx)
+			st.Table.ToTableName().Format(ctx)
 		}
 		if st.ColName != nil {
 			ctx.WriteByte(' ')

@@ -968,10 +968,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//check database
 		if proto.GetDatabaseName() == "" {
 			//if none database has been selected, database operations must be failed.
-			switch stmt.(type) {
+			switch t := stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar:
+			case *tree.ShowColumns:
+				if t.Table.ToTableName().SchemaName == "" {
+					return NewMysqlError(ER_NO_DB_ERROR)
+				}
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}

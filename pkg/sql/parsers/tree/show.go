@@ -30,7 +30,7 @@ type ShowCreateTable struct {
 
 func (node *ShowCreateTable) Format(ctx *FmtCtx) {
 	ctx.WriteString("show create table ")
-	node.Name.Format(ctx)
+	node.Name.ToTableName().Format(ctx)
 }
 
 func NewShowCreate(n *UnresolvedObjectName) *ShowCreateTable {

@@ -6318,7 +6318,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:1790
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[1].str, yyDollar[3].str})
+			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].str, yyDollar[1].str})
 		}
 		yyVAL.union = yyLOCAL
 	case 259:
@@ -6334,7 +6334,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:1803
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[1].str, yyDollar[3].str})
+			yyLOCAL = tree.SetUnresolvedObjectName(2, [3]string{yyDollar[3].str, yyDollar[1].str})
 		}
 		yyVAL.union = yyLOCAL
 	case 261:
@@ -6342,7 +6342,7 @@ yydefault:
 		var yyLOCAL *tree.UnresolvedObjectName
 //line mysql_sql.y:1807
 		{
-			yyLOCAL = tree.SetUnresolvedObjectName(3, [3]string{yyDollar[1].str, yyDollar[3].str, yyDollar[5].str})
+			yyLOCAL = tree.SetUnresolvedObjectName(3, [3]string{yyDollar[5].str, yyDollar[3].str, yyDollar[1].str})
 		}
 		yyVAL.union = yyLOCAL
 	case 268:
