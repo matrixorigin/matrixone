@@ -777,3 +777,92 @@ func TestReplay11(t *testing.T) {
 	assert.Equal(t, toRemove, observer.removed)
 	catalog.Close()
 }
+
+func TestReplay15(t *testing.T)  {
+	// Delete part of the data of the last entry
+	ReplayTruncate(3000, t)
+	// Only keep the meta data of the last entry
+	ReplayTruncate(2970, t)
+	// Only keep the first 8 bytes of the meta of the last entry
+	ReplayTruncate(2908, t)
+}
+func ReplayTruncate(size int64, t *testing.T) {
+	dir := initTestEnv(t)
+	initDataAndMetaDir(dir)
+	opts := buildOpts(dir, true)
+	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
+
+	schema := metadata.MockSchema(2)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
+	blkfiles := make([]string, 0)
+	toRemove := make([]string, 0)
+	seg := tbl.SegmentSet[0]
+	for i := 0; i < len(seg.BlockSet)-2; i++ {
+		blk := seg.BlockSet[i]
+		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		err := blk.SimpleUpgrade(nil)
+		assert.Nil(t, err)
+		name := mockBlkFile(*blk.AsCommonID(), dir, t)
+		blkfiles = append(blkfiles, name)
+	}
+	unblk := seg.BlockSet[len(seg.BlockSet)-2]
+	name := mockBlkFile(*unblk.AsCommonID(), dir, t)
+	toRemove = append(blkfiles, name)
+
+	unblk = seg.BlockSet[len(seg.BlockSet)-1]
+	name = mockBlkFile(*unblk.AsCommonID(), dir, t)
+	toRemove = append(blkfiles, name)
+	sort.Slice(toRemove, func(i, j int) bool {
+		return toRemove[i] < toRemove[j]
+	})
+
+	opts.Meta.Catalog.Close()
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)
+	assert.Nil(t, err)
+	catalog.Start()
+
+	observer := &replayObserver{
+		removed: make([]string, 0),
+	}
+	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
+	assert.NotNil(t, replayHandle)
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
+	replayHandle.Cleanup()
+
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.Equal(t, 2, len(observer.removed))
+	sort.Slice(observer.removed, func(i, j int) bool {
+		return observer.removed[i] < observer.removed[j]
+	})
+	catalog.Store.Truncate(size)
+	catalog.Close()
+
+	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)
+	assert.Nil(t, err)
+	catalog.Start()
+
+	observer = &replayObserver{
+		removed: make([]string, 0),
+	}
+	replayHandle = NewReplayHandle(dir, catalog, nil, observer)
+	assert.NotNil(t, replayHandle)
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
+	replayHandle.Cleanup()
+
+	tbl2, err = catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.Equal(t, 1, len(observer.removed))
+	sort.Slice(observer.removed, func(i, j int) bool {
+		return observer.removed[i] < observer.removed[j]
+	})
+
+	catalog.Close()
+}
