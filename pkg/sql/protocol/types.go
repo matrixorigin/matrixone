@@ -137,7 +137,7 @@ type TransformArgument struct {
 	FreeVars 	[]string
 	HasRestrict bool
 	Restrict 	RestrictArgument
-	hasProj     bool
+	HasProj     bool
 	Projection 	ProjectionArgument
 	BoundVars 	[]Transformer
 }
@@ -178,7 +178,7 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		FreeVars: arg.FreeVars,
 		HasRestrict: hasRestrict,
 		Restrict: ra,
-		hasProj: hasProjection,
+		HasProj: hasProjection,
 		Projection: pa,
 		BoundVars: bv,
 	}
@@ -195,7 +195,7 @@ func UntransferTransformArg(arg TransformArgument) *transform.Argument{
 		}
 	}
 	var pa *projection.Argument
-	if arg.hasProj {
+	if arg.HasProj {
 		pa = &projection.Argument{
 			Rs: arg.Projection.Rs,
 			As: arg.Projection.As,
