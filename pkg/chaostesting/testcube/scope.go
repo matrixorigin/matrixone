@@ -23,8 +23,6 @@ type Def struct{}
 
 type Def2 struct{}
 
-//TODO add cluster scope
-
 func NewScope() Scope {
 	var defs []any
 	defs = append(defs, dscope.Methods(new(fz.Def))...)

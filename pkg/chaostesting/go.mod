@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c
+	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
 	github.com/matrixorigin/matrixcube v0.0.0-20211227032515-e06131450121
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
@@ -11,6 +12,11 @@ require (
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	go.uber.org/zap v1.18.1
+)
+
+require (
+	github.com/mattn/go-colorable v0.1.2 // indirect
+	github.com/mattn/go-isatty v0.0.9 // indirect
 )
 
 require (

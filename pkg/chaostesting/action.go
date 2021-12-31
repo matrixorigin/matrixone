@@ -28,8 +28,8 @@ type MainAction struct {
 	Action Action
 }
 
-func (_ Def) MainAction() (_ MainAction) {
-	panic("fixme: provide MainAction")
+func (_ Def) MainAction() (m MainAction) {
+	panic(fmt.Errorf("fixme: provide %T", m))
 }
 
 var _ xml.Unmarshaler = new(MainAction)
