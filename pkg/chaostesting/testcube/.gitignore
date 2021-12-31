@@ -3,5 +3,5 @@
 /*.profile
 /node-*.log
 /porcupine-log
-/configs/*.xml
-/reports/*
+/scope.dot
+/scope.svg

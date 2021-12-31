@@ -54,7 +54,7 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 			Labels: [][]string{
 				{"node", fmt.Sprintf("%d", i)},
 			},
-			Capacity:           128 * 1024 * 1024,
+			Capacity:           512 * 1024 * 1024 * 1024 * 1024,
 			UseMemoryAsStorage: false,
 			ShardGroups:        uint64(3),
 
@@ -90,9 +90,7 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 			},
 
 			Worker: config.WorkerConfig{
-				RaftEventWorkers:       128,
-				ApplyWorkerCount:       128,
-				SendRaftMsgWorkerCount: 128,
+				RaftEventWorkers: 128,
 			},
 
 			Prophet: *pConfig,

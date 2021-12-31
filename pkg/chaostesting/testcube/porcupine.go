@@ -15,10 +15,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -73,24 +70,16 @@ func (_ Def) Porcupine() (
 	return
 }
 
-const reportFilesDir = "reports"
-
 func (_ Def) PorcupineReport(
 	get GetPorcupineOps,
+	newChecker fz.NewPorcupineChecker,
+	testDataDir fz.TestDataDir,
 ) fz.Operators {
-
-	// ensure output dir
-	_, err := os.Stat(reportFilesDir)
-	if errors.Is(err, os.ErrNotExist) {
-		err = nil
-		ce(os.Mkdir(reportFilesDir, 0755))
-	}
-	ce(err)
 
 	return fz.Operators{
 
 		// checker
-		fz.PorcupineChecker(
+		newChecker(
 			fz.PorcupineKVModel,
 			get,
 			nil,
@@ -102,34 +91,31 @@ func (_ Def) PorcupineReport(
 			AfterReport: func(
 				uuid uuid.UUID,
 				getReport fz.GetReport,
+				write fz.WriteTestDataFile,
 			) {
 
-				var report fz.PorcupineReport
-				if !getReport(&report) {
-					// no error
-					return
-				}
+				//var report fz.PorcupineReport
+				//if !getReport(&report) {
+				//	// no error
+				//	return
+				//}
 
-				f, err := os.CreateTemp(reportFilesDir, "*.tmp")
+				f, err, done := write(uuid, "porcupine", "log")
 				ce(err)
 				for _, op := range get() {
 					fmt.Fprintf(f, "%+v\n", op)
 				}
-				ce(f.Close())
-
-				filePath := filepath.Join(
-					reportFilesDir,
-					uuid.String()+"-porcupine.log",
-				)
-				ce(os.Rename(
-					f.Name(),
-					filePath,
-				))
-
-				pt("porcupine log written to %s\n", filePath)
+				ce(done())
 
 			},
 		},
 	}
 
+}
+
+func (_ Def2) PorcupineOptions() (
+	genVisual fz.PorcupineAlwaysGenerateVisualization,
+) {
+	genVisual = true
+	return
 }

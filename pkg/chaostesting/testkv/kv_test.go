@@ -102,7 +102,7 @@ func TestKV(t *testing.T) {
 			}
 
 			// Do
-			do = func(action fz.Action) error {
+			do = func(threadID int64, action fz.Action) error {
 				switch action := action.(type) {
 
 				case ActionSet:
