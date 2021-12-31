@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"runtime"
 	"strings"
@@ -659,6 +660,9 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 		ss[i].Proc.Id = s.Proc.Id
 		ss[i].Proc.Lim = s.Proc.Lim
 	}
+	for len(ss) > 3 {
+		ss = newMergeScope(ss, arg.Typ, s.Proc)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Magic = Merge
 	s.PreScopes = ss
@@ -838,6 +842,9 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 			},
 		}}
 	}
+	for len(ss) > 3 {
+		ss = newMergeScope(ss, arg.Arg.Typ, s.Proc)
+	}
 	rs := &Scope{
 		PreScopes: ss,
 		Magic:     Merge,
@@ -874,4 +881,55 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 		}
 	}
 	return rs.MergeRun(e)
+}
+
+func newMergeScope(ss []*Scope, typ int, proc *process.Process) []*Scope {
+	step := int(math.Log2(float64(len(ss))))
+	n := len(ss) / step
+	rs := make([]*Scope, n)
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step:],
+				Magic:     Merge,
+			}
+		} else {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step : (i+1)*step],
+				Magic:     Merge,
+			}
+		}
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.Plus,
+			Arg: &plus.Argument{Typ: typ},
+		})
+		{
+			m := len(rs[i].PreScopes)
+			ctx, cancel := context.WithCancel(context.Background())
+			rs[i].Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Id = proc.Id
+			rs[i].Proc.Lim = proc.Lim
+			rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, m)
+			{
+				for j := 0; j < m; j++ {
+					rs[i].Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
+						Ctx: ctx,
+						Ch:  make(chan *batch.Batch, 1),
+					}
+				}
+			}
+			for j := 0; j < m; j++ {
+				ss[i*step+j].Instructions = append(ss[i*step+j].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs[i].Proc.Mp.Gm,
+						Reg: rs[i].Proc.Reg.MergeReceivers[j],
+					},
+				})
+			}
+		}
+	}
+	return rs
 }
