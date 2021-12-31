@@ -216,11 +216,6 @@ func (bw *BlockWriter) executeIVecs() error {
 		data[i] = ivec.(vector.IVectorNode)
 	}
 
-	// for compatibility
-	var indices []index.Index
-	buf, err := index.DefaultRWHelper.WriteIndices(indices)
-	w.Write(buf)
-
 	if err = bw.ivecsSerializer(w, data, bw.meta); err != nil {
 		w.Close()
 		return err
@@ -261,10 +256,6 @@ func (bw *BlockWriter) executeVecs() error {
 	}
 	if bw.preExecutor != nil {
 		bw.preExecutor()
-	}
-	if err = bw.indexSerializer(w, bw.data, bw.meta); err != nil {
-		closeFunc()
-		return err
 	}
 	if err = bw.vecsSerializer(w, bw.data, bw.meta); err != nil {
 		closeFunc()
@@ -356,7 +347,23 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 			return err
 		}
 	}
-	return nil
+	// flush indices
+	var indices []index.Index
+	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
+		typ := colDef.Type
+		isPrimary := idx == meta.Segment.Table.Schema.PrimaryKey
+		zmi, err := index.BuildBlockZoneMapIndex(data[idx], typ, int16(idx), isPrimary)
+		if err != nil {
+			return err
+		}
+		indices = append(indices, zmi)
+	}
+	ibuf, err := index.DefaultRWHelper.WriteIndices(indices)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(ibuf)
+	return err
 }
 
 func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
@@ -479,5 +486,9 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 			return err
 		}
 	}
-	return nil
+	// for compatibility
+	var indices []index.Index
+	ibuf, err := index.DefaultRWHelper.WriteIndices(indices)
+	_, err = w.Write(ibuf)
+	return err
 }

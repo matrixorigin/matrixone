@@ -32,34 +32,6 @@ type SegmentSparseFilter struct {
 	segment *Segment
 }
 
-/*func (s2 SegmentSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Ne(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Lt(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Le(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Gt(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Ge(s string, i interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-
-func (s2 SegmentSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Reader, error) {
-	panic("implement me")
-}
-*/
 func NewSegmentSparseFilter(s *Segment) aoe.SparseFilter {
 	return &SegmentSparseFilter{segment: s}
 }

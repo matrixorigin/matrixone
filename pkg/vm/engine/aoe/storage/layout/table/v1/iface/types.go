@@ -16,6 +16,8 @@ package iface
 
 import (
 	"bytes"
+	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"io"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -235,6 +237,19 @@ type IBlock interface {
 	GetVectorWrapper(col int) (*svec.VectorWrapper, error)
 	GetVectorCopy(attr string, compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*vector.Vector, error)
 	Prefetch(attr string) error
+
+	Sum(int, *roaring64.Bitmap) (int64, uint64)
+	Max(int, *roaring64.Bitmap) interface{}
+	Min(int, *roaring64.Bitmap) interface{}
+	Count(int, *roaring64.Bitmap) uint64
+	NullCount(int, *roaring64.Bitmap) uint64
+	Eq(int, uint64, interface{}) *roaring.Bitmap
+	Ne(int, uint64, interface{}) *roaring.Bitmap
+	Ge(int, uint64, interface{}) *roaring.Bitmap
+	Le(int, uint64, interface{}) *roaring.Bitmap
+	Gt(int, uint64, interface{}) *roaring.Bitmap
+	Lt(int, uint64, interface{}) *roaring.Bitmap
+	Btw(int, uint64, interface{}, interface{}) *roaring.Bitmap
 
 	// WeakRefSegment does not require UnRef Segment
 	WeakRefSegment() ISegment

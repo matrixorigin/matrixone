@@ -15,6 +15,7 @@
 package sched
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -278,6 +279,12 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 		return
 	}
 	defer event.Data.Unref()
+	// TODO(zzl): thread safe?
+	if event.Data.GetType() == base.PERSISTENT_BLK {
+		flushIdxEvent := NewFlushBlockIndexEvent(&Context{Opts: s.opts}, event.Data)
+		flushIdxEvent.FlushAll = true
+		s.Schedule(flushIdxEvent)
+	}
 	if !event.SegmentClosed {
 		return
 	}
@@ -335,7 +342,7 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	event.Segment.Unref()
 	// start flush index
 	flushCtx := &Context{Opts: s.opts}
-	newevent := NewFlushIndexEvent(flushCtx, event.Segment)
+	newevent := NewFlushSegIndexEvent(flushCtx, event.Segment)
 	newevent.FlushAll = true
 	s.Schedule(newevent)
 }

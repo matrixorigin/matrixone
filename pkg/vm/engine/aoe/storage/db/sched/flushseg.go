@@ -37,10 +37,15 @@ func (e *flushSegEvent) Execute() error {
 	meta := e.Segment.GetMeta()
 	blks := make([]iface.IBlock, 0)
 	for _, id := range ids {
-		blk := e.Segment.WeakRefBlock(id)
+		blk := e.Segment.StrongRefBlock(id)
 		blks = append(blks, blk)
 	}
 	iter := table.NewBacktrackingBlockIterator(blks, 0)
-	w := dataio.NewSegmentWriter(iter, meta, meta.Table.Database.Catalog.Cfg.Dir)
+	fn := func() {
+		for _, blk := range blks {
+			blk.Unref()
+		}
+	}
+	w := dataio.NewSegmentWriter(iter, meta, meta.Table.Database.Catalog.Cfg.Dir, fn)
 	return w.Execute()
 }
