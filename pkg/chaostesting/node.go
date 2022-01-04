@@ -20,6 +20,20 @@ func (_ Def) NumNodes() NumNodes {
 	return 3
 }
 
+func (_ Def) NumNodesConfigItem(
+	num NumNodes,
+) ConfigItems {
+	return ConfigItems{num}
+}
+
 type NodeID int
 
 type Node interface{}
+
+type CloseNode func(id NodeID) error
+
+func (_ Def) CloseNode() CloseNode {
+	return func(id NodeID) error {
+		return nil
+	}
+}

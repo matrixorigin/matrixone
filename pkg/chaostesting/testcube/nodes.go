@@ -15,13 +15,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixcube/aware"
 	"github.com/matrixorigin/matrixcube/config"
@@ -32,41 +30,19 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/storage/kv/mem"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
-	"go.uber.org/zap"
 )
 
-type Nodes = []*Node
-
-func (_ Def2) NumNodes() fz.NumNodes {
-	return 3
-}
-
-func (_ Def) Nodes(
+func (_ Def2) Nodes(
 	configs NodeConfigs,
 	tempDir fz.TempDir,
 	numNodes fz.NumNodes,
-	id uuid.UUID,
-	testDataFilePath fz.TestDataFilePath,
-) (nodes Nodes) {
+	logger fz.Logger,
+) (nodes fz.Nodes) {
 
 	var endpoints []string
 	for i := fz.NumNodes(0); i < numNodes; i++ {
 		endpoints = append(endpoints, "http://"+net.JoinHostPort("localhost", randPort()))
 	}
-
-	loggerConfig := []byte(`
-  {
-    "level": "debug",
-    "encoding": "json",
-    "outputPaths": [
-      "` + testDataFilePath(id, "cube", "log") + `"
-    ]
-  }
-  `)
-	var cfg zap.Config
-	ce(json.Unmarshal(loggerConfig, &cfg))
-	logger, err := cfg.Build()
-	ce(err)
 
 	for nodeID, conf := range configs {
 

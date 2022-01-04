@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/anishathalye/porcupine"
-	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
@@ -89,7 +88,6 @@ func (_ Def) PorcupineReport(
 		// write log to file
 		fz.Operator{
 			AfterReport: func(
-				uuid uuid.UUID,
 				getReport fz.GetReport,
 				write fz.WriteTestDataFile,
 			) {
@@ -100,7 +98,7 @@ func (_ Def) PorcupineReport(
 				//	return
 				//}
 
-				f, err, done := write(uuid, "porcupine", "log")
+				f, err, done := write("porcupine", "log")
 				ce(err)
 				for _, op := range get() {
 					fmt.Fprintf(f, "%+v\n", op)
