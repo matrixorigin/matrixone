@@ -78,8 +78,8 @@ func (ids *SafeIds) Marshal() ([]byte, error) {
 
 func (ids *SafeIds) Unmarshal(buf []byte) error {
 	ids.Ids = make([]SafeId, len(buf)/SafeIdSize)
-	for i, id := range ids.Ids {
-		id.Unmarshal(buf[i*SafeIdSize : (i+1)*SafeIdSize])
+	for i := range ids.Ids {
+		ids.Ids[i].Unmarshal(buf[i*SafeIdSize : (i+1)*SafeIdSize])
 	}
 	return nil
 }
