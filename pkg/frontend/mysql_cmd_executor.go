@@ -553,6 +553,62 @@ func (mce *MysqlCmdExecutor) handleVersionComment() error {
 }
 
 /*
+handle "SELECT @@session.tx_isolation"
+*/
+func (mce *MysqlCmdExecutor) handleTxIsolation() error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := ses.protocol
+
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col.SetName("@@session.tx_isolation")
+	ses.Mrs.AddColumn(col)
+
+	var data = make([]interface{}, 1)
+	data[0] = "REPEATABLE-READ"
+	ses.Mrs.AddRow(data)
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+/*
+handle "SELECT @@xxx.yyyy"
+ */
+func (mce *MysqlCmdExecutor) handleSelectVariables(v string) error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := ses.protocol
+
+	if v == "tx_isolation" || v == "transaction_isolation"{
+		col := new(MysqlColumn)
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+		col.SetName("@@tx_isolation")
+		ses.Mrs.AddColumn(col)
+
+		var data = make([]interface{}, 1)
+		data[0] = "REPEATABLE-READ"
+		ses.Mrs.AddRow(data)
+	}else{
+		return fmt.Errorf("unsupported system variable %s",v)
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+/*
 handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
@@ -729,6 +785,34 @@ func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	return nil
 }
 
+/*
+handle show variables
+*/
+func (mce *MysqlCmdExecutor) handleShowVariables(_ *tree.ShowVariables) error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := mce.GetSession().protocol
+
+	col1 := new(MysqlColumn)
+	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col1.SetName("VARIABLE_NAME")
+
+	col2 := new(MysqlColumn)
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	col2.SetName("VARIABLE_VALUE")
+
+	ses.Mrs.AddColumn(col1)
+	ses.Mrs.AddColumn(col2)
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
 }
@@ -867,6 +951,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 							//next statement
 							continue
+						}else if strings.ToLower(ve.Name) == "tx_isolation" {
+							err = mce.handleTxIsolation()
+							if err != nil {
+								return err
+							}
+
+							//next statement
+							continue
 						}
 					}
 				}
@@ -876,10 +968,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//check database
 		if proto.GetDatabaseName() == "" {
 			//if none database has been selected, database operations must be failed.
-			switch stmt.(type) {
+			switch t := stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowCreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
 				*tree.Use, *tree.SetVar:
+			case *tree.ShowColumns:
+				if t.Table.ToTableName().SchemaName == "" {
+					return NewMysqlError(ER_NO_DB_ERROR)
+				}
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -912,6 +1008,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
+			if err != nil {
+				return err
+			}
+		case *tree.ShowVariables:
+			selfHandle = true
+			err = mce.handleShowVariables(st)
 			if err != nil {
 				return err
 			}

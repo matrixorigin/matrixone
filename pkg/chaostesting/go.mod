@@ -3,14 +3,21 @@ module github.com/matrixorigin/matrixone/pkg/chaostesting
 go 1.18
 
 require (
-	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c
+	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20211227032515-e06131450121
+	github.com/matrixorigin/matrixcube v0.0.0-20220104023931-06bafdaab5a7
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
-	github.com/reusee/dscope v0.0.0-20211226125218-8580f65a4d05
+	github.com/reusee/dscope v0.0.0-20220101090512-5e8a967881b0
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
-	github.com/reusee/sb v0.0.0-20211214142515-c9cbed185b71
+	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	go.uber.org/zap v1.18.1
+)
+
+require (
+	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c // indirect
+	github.com/emicklei/dot v0.16.0 // indirect
+	github.com/mattn/go-colorable v0.1.2 // indirect
+	github.com/mattn/go-isatty v0.0.9 // indirect
 )
 
 require (
@@ -111,7 +118,6 @@ require (
 )
 
 replace (
-	github.com/matrixorigin/matrixcube => ../../../../matrixcube
 	go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
 	go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
 )

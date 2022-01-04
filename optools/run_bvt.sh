@@ -45,16 +45,13 @@ if [[ ! $MAKE_ONE =~ ^(True|False)$ ]]; then
 	exit 1
 fi
 
-# This is a workaround before publishing matrixone as an open source project
-[[ 'X' == "X$REPO_TOKEN" ]] && (echo 'Not found repo token, please export environment variable "export REPO_TOKEN=<YourRepoToken>"'; exit 1)
-
 TESTER_REPO="$G_STAGE/mysql-tester"
 TESTER_COMMIT_ID=""
 ONE_REPO="$G_STAGE/matrixone"
 ONE_COMMIT_ID=""
 
-URL_TESTER_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/mysql-tester.git"
-URL_ONE_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/matrixone.git"
+URL_TESTER_REPO="https://github.com/matrixorigin/mysql-tester.git"
+URL_ONE_REPO="https://github.com/matrixorigin/matrixone.git"
 
 BIN_NAME="mo-server"
 CONFIG_NAME="system_vars_config.toml"

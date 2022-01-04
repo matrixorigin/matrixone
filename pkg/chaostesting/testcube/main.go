@@ -15,21 +15,36 @@
 package main
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"os"
 )
 
-func run() (err error) {
-	defer he(&err)
-
-	scope := NewScope()
-
-	var execute fz.Execute
-	scope.Assign(&execute)
-	ce(execute())
-
-	return
-}
-
 func main() {
-	run()
+
+	NewScope().Call(func(
+		cmds Commands,
+	) {
+
+		printCommands := func() {
+			pt("available commands:")
+			for name := range cmds {
+				pt(" %s", name)
+			}
+			pt("\n")
+		}
+
+		if len(os.Args) < 2 {
+			printCommands()
+			return
+		}
+
+		cmd := os.Args[1]
+		fn, ok := cmds[cmd]
+		if !ok {
+			pt("no such command\n")
+			printCommands()
+			return
+		}
+		fn(os.Args[2:])
+
+	})
 }

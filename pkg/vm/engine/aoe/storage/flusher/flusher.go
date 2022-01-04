@@ -156,8 +156,7 @@ func (f *driver) ShardNodeDeleted(shardId, nodeId uint64) {
 func (f *driver) getShard(id uint64) *shardFlusher {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
-	sf, _ := f.shards[id]
-	return sf
+	return f.shards[id]
 }
 
 func (f *driver) addShard(ctx *shardCreatedCtx) *shardFlusher {
@@ -184,7 +183,6 @@ func (f *driver) addShardNode(ctx *shardNodeCreatedCtx) {
 	if err := s.addNode(ctx.nodeId); err != nil {
 		logutil.Warn(err.Error())
 	}
-	return
 }
 
 func (f *driver) deleteShardNode(ctx *shardNodeDeletedCtx) {
@@ -201,7 +199,6 @@ func (f *driver) deleteShardNode(ctx *shardNodeDeletedCtx) {
 		}
 		f.deleteShard(deleteCtx)
 	}
-	return
 }
 
 func (f *driver) onPengdingItems(items []*shard.ItemsToCheckpointStat) {

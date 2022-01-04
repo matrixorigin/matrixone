@@ -322,21 +322,6 @@ func (e *Exec) compileQ(v *vtree.View) (*Scope, error) {
 	ins = append(ins, vm.Instruction{Arg: v.Arg, Op: vm.Transform})
 
 	ns := rel.Nodes()
-	if len(ns) == 0 {
-		return nil, errors.New(errno.FeatureNotSupported, "not support select from empty table now")
-		// todo: should support it when AOE NewReader() return reader correctly
-		//rs := &Scope{
-		//	PreScopes:    nil,
-		//	Magic:        Normal,
-		//	DataSource:   src,
-		//	Instructions: ins,
-		//}
-		//rs.DataSource.R = rel.NewReader(1)[0]
-		//rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
-		//rs.Proc.Id = e.c.proc.Id
-		//rs.Proc.Lim = e.c.proc.Lim
-		//return rs, nil
-	}
 	ss := make([]*Scope, len(ns))
 	for i := range ns {
 		ss[i] = &Scope{

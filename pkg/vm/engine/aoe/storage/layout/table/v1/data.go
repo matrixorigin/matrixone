@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -634,8 +633,8 @@ func (ts *Tables) PrepareInstallTable(meta *metadata.Table, ctx InstallContext) 
 		}
 	}
 	data.InitReplay()
-	logutil.Info(data.String())
-	logutil.Infof("%s, %d", meta.Repr(false), data.GetRowCount())
+	//logutil.Info(data.String())
+	//logutil.Infof("%s, %d", meta.Repr(false), data.GetRowCount())
 	return data, nil
 }
 

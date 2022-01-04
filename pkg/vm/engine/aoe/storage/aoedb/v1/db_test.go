@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"io/ioutil"
 	"math/rand"
@@ -886,7 +887,7 @@ func TestRebuildIndices(t *testing.T) {
 		//t.Log(f.Eq("mock_0", int32(-1)))
 		//t.Log(sumr.Count("mock_0", nil))
 		t.Log(inst.IndexBufMgr.String())
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		inst.Scheduler.Schedule(e)
 		time.Sleep(10 * time.Millisecond)
 		t.Log(inst.IndexBufMgr.String())
@@ -996,7 +997,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder = seg.GetIndexHolder()
 
 	loader := func(i uint64) {
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
 		inst.Scheduler.Schedule(e)
 		wg.Done()
@@ -1032,7 +1033,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	holder = seg.GetIndexHolder()
 
 	loader = func(i uint64) {
-		e := sched.NewFlushIndexEvent(&sched.Context{}, seg)
+		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
 		inst.Scheduler.Schedule(e)
 		wg.Done()
@@ -1327,9 +1328,12 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
 
 	schema := metadata.MockSchemaAll(1)
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-0", metadata.NumBsi, 0)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
+		Indice:        indice,
 	}
 	tblMeta, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -1337,23 +1341,31 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
-
+	nulls.Add(baseCk.Vecs[0].Nsp, 3)
+	nulls.Add(baseCk.Vecs[0].Nsp, 4)
 	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-	for i := 0; i < int(blkCnt); i++ {
+	for i := 0; i < int(blkCnt-1); i++ {
 		assert.Nil(t, inst.Append(appendCtx))
 	}
+	baseCk = mock.MockBatch(tblMeta.Schema.Types(), rows/2+1)
+	nulls.Add(baseCk.Vecs[0].Nsp, 3)
+	nulls.Add(baseCk.Vecs[0].Nsp, 4)
+	appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
+	assert.Nil(t, inst.Append(appendCtx))
 	time.Sleep(100 * time.Millisecond)
 
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
 	seg := tblData.WeakRefSegment(segId)
-	t.Logf("%+v", seg.GetIndexHolder())
+	//t.Logf("%+v", seg.GetIndexHolder())
 	segment := &db.Segment{
 		Data: seg,
 		Ids:  new(atomic.Value),
 	}
 	sparseFilter := segment.NewSparseFilter()
+	summarizer := segment.NewSummarizer()
+	filter := segment.NewFilter()
 
 	// test sparse filter upon unclosed segment
 	res, _ := sparseFilter.Eq("mock_0", int8(-1))
@@ -1382,6 +1394,130 @@ func TestFilterUnclosedSegment(t *testing.T) {
 	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
 	res, _ = sparseFilter.Ge("mock_0", int8(10))
 	assert.True(t, matchStringArray(decodeBlockIds(res), []string{}))
+
+	// test summarizer upon unclosed segment
+
+	mockBM := roaring.NewBitmap()
+	mockBM.AddRange(1, 7)
+	mockBM.AddRange(11, 17)
+	mockBM.AddRange(21, 27)
+	mockBM.AddRange(31, 37)
+	sum, cnt, err := summarizer.Sum("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, sum, int64(14*3 + 8))
+	assert.Equal(t, cnt, uint64(4*3 + 3))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	min, err := summarizer.Min("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, min, int8(5))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	max, err := summarizer.Max("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, max, int8(9))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	nullCnt, err := summarizer.NullCount("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, nullCnt, uint64(2*4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 10)
+	mockBM.AddRange(13, 20)
+	mockBM.AddRange(23, 30)
+	mockBM.AddRange(33, 40)
+	cnt, err = summarizer.Count("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(5*3 + 1))
+	cnt, err = summarizer.Count("mock_0", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(8*3 + 4))
+
+	// test filter upon unclosed segment
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 40)
+	res_, err := filter.Ne("mock_0", int8(-1))
+	assert.Nil(t, err)
+	assert.NotNil(t, res_)
+	mockBM.Clear()
+	mockBM.AddRange(0, 36)
+	mockBM.Remove(3)
+	mockBM.Remove(4)
+	mockBM.Remove(13)
+	mockBM.Remove(14)
+	mockBM.Remove(23)
+	mockBM.Remove(24)
+	mockBM.Remove(33)
+	mockBM.Remove(34)
+	assert.True(t, mockBM.Equals(res_))
+	res_, _ = filter.Eq("mock_0", int8(-1))
+	assert.Equal(t, true, res_.IsEmpty())
+	res_, _ = filter.Eq("mock_0", int8(3))
+	assert.Equal(t, true, res_.IsEmpty())
+	res_, _ = filter.Eq("mock_0", int8(5))
+	mockBM = roaring.NewBitmap()
+	mockBM.Add(5)
+	mockBM.Add(15)
+	mockBM.Add(25)
+	mockBM.Add(35)
+	mockBM.Xor(res_)
+	assert.True(t, mockBM.IsEmpty())
+	res_, _ = filter.Gt("mock_0", int8(4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(5, 10)
+	mockBM.AddRange(15, 20)
+	mockBM.AddRange(25, 30)
+	mockBM.AddRange(35, 36)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Ge("mock_0", int8(4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(5, 10)
+	mockBM.AddRange(15, 20)
+	mockBM.AddRange(25, 30)
+	mockBM.AddRange(35, 36)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Le("mock_0", int8(4))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 3)
+	mockBM.AddRange(10, 13)
+	mockBM.AddRange(20, 23)
+	mockBM.AddRange(30, 33)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Lt("mock_0", int8(6))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 6)
+	mockBM.AddRange(10, 16)
+	mockBM.AddRange(20, 26)
+	mockBM.AddRange(30, 36)
+	mockBM.Remove(3)
+	mockBM.Remove(4)
+	mockBM.Remove(13)
+	mockBM.Remove(14)
+	mockBM.Remove(23)
+	mockBM.Remove(24)
+	mockBM.Remove(33)
+	mockBM.Remove(34)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Btw("mock_0", int8(3), int8(8))
+	mockBM.AddRange(5, 9)
+	mockBM.AddRange(15, 19)
+	mockBM.AddRange(25, 29)
+	mockBM.AddRange(35, 36)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
 
 	inst.Close()
 }
@@ -2501,7 +2637,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
-	insertCnt := uint64(3)
+	insertCnt := uint64(2)
 
 	var wg sync.WaitGroup
 	{

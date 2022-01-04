@@ -22,12 +22,14 @@ func init() {
 }
 
 type ActionSet struct {
-	ID    int64
-	Key   any
-	Value any
+	ID       int64 `xml:",attr"`
+	ClientID int   `xml:",attr"`
+	Key      int   `xml:",attr"`
+	Value    int   `xml:",attr"`
 }
 
 type ActionGet struct {
-	ID  int64
-	Key any
+	ID       int64 `xml:",attr"`
+	ClientID int   `xml:",attr"`
+	Key      int   `xml:",attr"`
 }

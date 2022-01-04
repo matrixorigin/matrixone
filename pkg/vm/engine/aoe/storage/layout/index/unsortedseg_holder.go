@@ -16,10 +16,13 @@ package index
 
 import (
 	"fmt"
+	roaring2 "github.com/RoaringBitmap/roaring"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
@@ -63,20 +66,34 @@ func (holder *unsortedSegmentHolder) Init(file base.ISegmentFile) {
 func (holder *unsortedSegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	holder.tree.RLock()
 	defer holder.tree.RUnlock()
-	// only zone map considered currently
-	// TODO(zzl): bsi
 	blkSet := make([]uint64, 0)
+	res := roaring2.NewBitmap()
 	for _, blkHolder := range holder.tree.blockHolders {
-		subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
-		if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
-			return err
-		}
-		if subCtx.BoolRes {
-			blkSet = append(blkSet, blkHolder.ID.BlockID)
-			ctx.BoolRes = true
+		if ctx.BsiRequired {
+			subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin, BMRes: ctx.BMRes.Clone(), BsiRequired: true}
+			if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+				return err
+			}
+			if !subCtx.BMRes.IsEmpty() {
+				//logutil.Infof("...... %+v", subCtx.BMRes.ToArray())
+				res.Or(subCtx.BMRes)
+			}
+		} else {
+			subCtx := &FilterCtx{Op: ctx.Op, Val: ctx.Val, ValMax: ctx.ValMax, ValMin: ctx.ValMin}
+			if err := blkHolder.EvalFilter(colIdx, subCtx); err != nil {
+				return err
+			}
+			if subCtx.BoolRes {
+				blkSet = append(blkSet, blkHolder.ID.BlockID)
+				ctx.BoolRes = true
+			}
 		}
 	}
 	ctx.BlockSet = blkSet
+	ctx.BMRes = res
+	if !ctx.BMRes.IsEmpty() {
+		ctx.BoolRes = true
+	}
 	return nil
 }
 
@@ -86,28 +103,95 @@ func (holder *unsortedSegmentHolder) CollectMinMax(colIdx int) ([]interface{}, [
 }
 
 func (holder *unsortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
-	// TODO(zzl)
-	return 0, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	total := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		cnt, err := blkHolder.Count(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		total += cnt
+	}
+	return total, nil
 }
 
-func (holder *unsortedSegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
-	// TODO(zzl)
-	return 0, nil
+func (holder *unsortedSegmentHolder) NullCount(colIdx int, maxRows uint64, filter *roaring.Bitmap) (uint64, error) {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	total := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		cnt, err := blkHolder.NullCount(colIdx, maxRows, filter)
+		if err != nil {
+			return 0, err
+		}
+		total += cnt
+	}
+	return total, nil
 }
 
 func (holder *unsortedSegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
-	// TODO(zzl)
-	return nil, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	var gmin interface{}
+	flag := true
+	for _, blkHolder := range holder.tree.blockHolders {
+		min, err := blkHolder.Min(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		if min == nil {
+			continue
+		}
+		if flag {
+			gmin = min
+			flag = false
+		}
+		if common.CompareInterface(gmin, min) > 0 {
+			gmin = min
+		}
+	}
+	return gmin, nil
 }
 
 func (holder *unsortedSegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
-	// TODO(zzl)
-	return nil, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	var gmax interface{}
+	flag := true
+	for _, blkHolder := range holder.tree.blockHolders {
+		max, err := blkHolder.Max(colIdx, filter)
+		if err != nil {
+			return 0, err
+		}
+		if max == nil {
+			continue
+		}
+		if flag {
+			gmax = max
+			flag = false
+		}
+		if common.CompareInterface(max, gmax) > 0 {
+			gmax = max
+		}
+	}
+	return gmax, nil
 }
 
 func (holder *unsortedSegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uint64, error) {
-	// TODO(zzl)
-	return 0, 0, nil
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	gsum := int64(0)
+	gcnt := uint64(0)
+	for _, blkHolder := range holder.tree.blockHolders {
+		sum, cnt, err := blkHolder.Sum(colIdx, filter)
+		if err != nil {
+			return 0, 0, err
+		}
+		gsum += sum
+		gcnt += cnt
+	}
+	return gsum, gcnt, nil
 }
 
 func (holder *unsortedSegmentHolder) StrongRefBlock(id uint64) *BlockIndexHolder {
@@ -168,9 +252,16 @@ func (holder *unsortedSegmentHolder) AllocateVersion(colIdx int) uint64 {
 	panic("unsupported")
 }
 
-// VersionAllocater is not supported in unsortedSegmentHolder
-func (holder *unsortedSegmentHolder) VersionAllocater() *ColumnsAllocator {
-	panic("unsupported")
+func (holder *unsortedSegmentHolder) FetchCurrentVersion(col uint16, blkId uint64) uint64 {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	blk, ok := holder.tree.blockHolders[blkId]
+	if !ok {
+		logutil.Infof("%d\n%+v\n", blkId, holder.tree.blockHolders)
+		panic("logic error")
+		//return uint64(1)
+	}
+	return blk.fetchCurrentVersion(col)
 }
 
 // IndicesCount is not supported in unsortedSegmentHolder
@@ -180,7 +271,24 @@ func (holder *unsortedSegmentHolder) IndicesCount() int {
 
 // DropIndex is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) DropIndex(filename string) {
-	panic("unsupported")
+	if name, ok := common.ParseBlockBitSlicedIndexFileName(filepath.Base(filename)); ok {
+		_, tid, sid, bid, _, ok := common.ParseBlockBitSlicedIndexFileNameToInfo(name)
+		if !ok {
+			panic("unexpected error")
+		}
+		if sid != holder.ID.SegmentID || tid != holder.ID.TableID {
+			panic("unexpected error")
+		}
+		holder.tree.RLock()
+		blk, ok := holder.tree.blockHolders[bid]
+		if !ok {
+			panic("unexpected error")
+		}
+		blk.DropIndex(filename)
+		holder.tree.RUnlock()
+		return
+	}
+	panic("unexpected error")
 }
 
 // LoadIndex is not supported in unsortedSegmentHolder

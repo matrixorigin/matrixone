@@ -40,6 +40,7 @@ const (
 	LockSuffix = ".lock"
 	NodeSuffix = ".nod"
 	BSISuffix = ".bsi"
+	BBSISuffix = ".bbsi"
 
 	SpillDirName = "spill"
 	TempDirName  = "temp"
@@ -83,6 +84,18 @@ func MakeLockFileName(dirname, name string) string {
 
 func MakeBitSlicedIndexFileName(version, tid, sid uint64, col uint16) string {
 	return fmt.Sprintf("%d_%d_%d_%d.bsi", version, tid, sid, col)
+}
+
+func MakeBlockBitSlicedIndexFileName(version, tid, sid, bid uint64, col uint16) string {
+	return fmt.Sprintf("%d_%d_%d_%d_%d.bbsi", version, tid, sid, bid, col)
+}
+
+func ParseBlockBitSlicedIndexFileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, BBSISuffix)
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
 }
 
 func ParseSegmentFileName(filename string) (name string, ok bool) {
@@ -139,6 +152,34 @@ func ParseBitSlicedIndexFileNameToInfo(filename string) (version, tblId, segId u
 		return 0, 0, 0, 0, false
 	}
 	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint16(arr[3]), true
+}
+
+func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblId, segId, blkId uint64, colIdx uint16, ok bool) {
+	filename = strings.Trim(filename, BBSISuffix)
+	infos := strings.Split(filename, "_")
+	arr := make([]int, 5)
+	var err error
+	arr[0], err = strconv.Atoi(infos[0])
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	arr[1], err = strconv.Atoi(infos[1])
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	arr[2], err = strconv.Atoi(infos[2])
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	arr[3], err = strconv.Atoi(infos[3])
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	arr[4], err = strconv.Atoi(infos[4])
+	if err != nil {
+		return 0, 0, 0, 0, 0, false
+	}
+	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint64(arr[3]), uint16(arr[4]),true
 }
 
 func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {

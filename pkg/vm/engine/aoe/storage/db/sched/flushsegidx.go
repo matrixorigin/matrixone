@@ -27,20 +27,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
-// flushIndexEvent would generate, flush, and load index for the given segment.
+// flushSegIndexEvent would generate, flush, and load index for the given segment.
 // Columns are configurable. Notice that no matter how many versions of the same
 // index for the same column of one segment exists, we always generate the newest
 // version and try loading it on that segment. During loading phase there would
 // also be a stale check to ensure never load stale versions.
-type flushIndexEvent struct {
+type flushSegIndexEvent struct {
 	BaseEvent
 	Segment  iface.ISegment
 	Cols     []uint16
 	FlushAll bool
 }
 
-func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
-	e := &flushIndexEvent{Segment: host, Cols: make([]uint16, 0)}
+func NewFlushSegIndexEvent(ctx *Context, host iface.ISegment) *flushSegIndexEvent {
+	e := &flushSegIndexEvent{Segment: host, Cols: make([]uint16, 0)}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, FlushIndexTask, ctx.DoneCB, ctx.Waitable),
@@ -48,7 +48,7 @@ func NewFlushIndexEvent(ctx *Context, host iface.ISegment) *flushIndexEvent {
 	return e
 }
 
-func (e *flushIndexEvent) Execute() error {
+func (e *flushSegIndexEvent) Execute() error {
 	ids := e.Segment.BlockIds()
 	meta := e.Segment.GetMeta()
 	dir := e.Segment.GetSegmentFile().GetDir()
@@ -86,18 +86,17 @@ func (e *flushIndexEvent) Execute() error {
 			vecs = append(vecs, &vec.Vector)
 			nodes = append(nodes, vec.MNode)
 		}
-		bsi, err := index.BuildNumericBsiIndex(vecs, meta.Table.Schema.ColDefs[colIdx].Type, int16(colIdx))
+		bsi, err := index.BuildNumericBsiIndex(vecs, meta.Table.Schema.ColDefs[colIdx].Type, int16(colIdx), 0)
 		if err != nil {
 			panic(err)
 		}
 		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
 		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
 		filename = filepath.Join(dir, filename)
-		//logutil.Infof("%s", filename)
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
 			panic(err)
 		}
-		logutil.Infof("BSI Flushed | %s", filename)
+		logutil.Infof("[SEG] BSI Flushed | %s", filename)
 		wg.Add(1)
 		go func() {
 			e.Segment.GetIndexHolder().LoadIndex(e.Segment.GetSegmentFile(), filename)

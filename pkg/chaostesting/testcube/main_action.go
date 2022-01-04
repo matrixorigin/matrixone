@@ -21,50 +21,76 @@ import (
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
-func (_ Def2) MainConfig(
+func (_ Def2) MainAction(
 	numNodes fz.NumNodes,
 ) fz.MainAction {
 
 	var nextID int64
 
-	// random tree
-	tree := fz.RandomActionTree([]fz.ActionMaker{
+	const num = 8
 
-		// set
-		func() fz.Action {
-			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(1024)
-			value := rand.Intn(1024)
-			return ActionSet{
-				ID:    id,
-				Key:   key,
-				Value: value,
-			}
-		},
+	// action maker for specific client
+	makers := func(clientID int) []fz.ActionMaker {
+		return []fz.ActionMaker{
 
-		// set / get pair
-		func() fz.Action {
-			id := atomic.AddInt64(&nextID, 1)
-			key := rand.Intn(1024)
-			value := rand.Intn(1024)
-			return fz.Seq(
-				ActionSet{
-					ID:    id,
-					Key:   key,
-					Value: value,
-				},
-				ActionGet{
-					ID:  id,
-					Key: key,
-				},
-			)
-		},
+			// set
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				value := rand.Intn(num / 2)
+				return ActionSet{
+					ID:       id,
+					ClientID: clientID,
+					Key:      key,
+					Value:    value,
+				}
+			},
 
-		//
-	}, 1024)
+			// get
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				return ActionGet{
+					ID:       id,
+					ClientID: clientID,
+					Key:      key,
+				}
+			},
+
+			// set / get pair
+			func() fz.Action {
+				id := atomic.AddInt64(&nextID, 1)
+				key := rand.Intn(num / 2)
+				value := rand.Intn(num / 2)
+				return fz.Seq(
+					ActionSet{
+						ID:       id,
+						ClientID: clientID,
+						Key:      key,
+						Value:    value,
+					},
+					ActionGet{
+						ID:       id,
+						ClientID: clientID,
+						Key:      key,
+					},
+				)
+			},
+		}
+	}
+
+	// parallel client actions
+	var action fz.ParallelAction
+	for i := fz.NumNodes(0); i < numNodes; i++ {
+		action.Actions = append(
+			action.Actions,
+			fz.RandSeq(makers(int(i)), num),
+			//fz.RandomActionTree(makers(int(i)), num),
+		)
+	}
 
 	return fz.MainAction{
-		Action: tree,
+		Action: action,
 	}
 
 }

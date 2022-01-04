@@ -274,18 +274,38 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
+	if r.Size == replayer.offset {
+		// Have read to the end of the file.
+		// No longer need additional overhead
+		return io.EOF
+	}
 	entry := logstore.NewAsyncBaseEntry()
 	defer entry.Free()
 	meta := entry.GetMeta()
-	_, err := meta.ReadFrom(r)
+	metaSize, err := meta.ReadFrom(r)
 	if err != nil {
+		if !errors.Is(err, io.EOF){
+			return err
+		}
+		replayer.tryTruncate()
 		return err
 	}
 	if entry, n, err := defaultHandler(r, entry); err != nil {
+		if !errors.Is(err, io.EOF){
+			return err
+		}
+		// Only metadata is written
+		replayer.tryTruncate()
 		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {
-			return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+			if r.Size == replayer.offset + int64(metaSize) + n{
+				// Have read to the end of the file
+				replayer.tryTruncate()
+				return io.EOF
+			} else {
+				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+			}
 		}
 		if err = replayer.onReplayEntry(entry, observer); err != nil {
 			return err
@@ -465,4 +485,11 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))
 	}
 	return nil
+}
+
+func (replayer *catalogReplayer) tryTruncate() {
+	err := replayer.Truncate(replayer.catalog.Store)
+	if err != nil {
+		panic(fmt.Sprintf("doReplay Truncate: %v", err.Error()))
+	}
 }

@@ -42,25 +42,30 @@ func TestPorcupine(t *testing.T) {
 
 	fz.NewScope(
 
-		&fz.Operators{
+		func(
+			newChecker fz.NewPorcupineChecker,
+		) fz.Operators {
+			return fz.Operators{
 
-			// porcupine checker
-			fz.PorcupineChecker(
-				fz.PorcupineKVModel,
-				func() []porcupine.Operation {
-					return operations
-				},
-				nil,
-			),
+				// porcupine checker
+				newChecker(
+					fz.PorcupineKVModel,
+					func() []porcupine.Operation {
+						return operations
+					},
+					nil,
+					time.Second*5,
+				),
 
-			// show ops
-			//fz.Operator{
-			//	AfterStop: func() {
-			//		for _, op := range operations {
-			//			pt("%+v\n", op)
-			//		}
-			//	},
-			//},
+				// show ops
+				//fz.Operator{
+				//	AfterStop: func() {
+				//		for _, op := range operations {
+				//			pt("%+v\n", op)
+				//		}
+				//	},
+				//},
+			}
 		},
 	).Fork(
 
@@ -110,7 +115,7 @@ func TestPorcupine(t *testing.T) {
 
 		// do
 		func() fz.Do {
-			return func(action fz.Action) error {
+			return func(threadID int64, action fz.Action) error {
 
 				switch action := action.(type) {
 

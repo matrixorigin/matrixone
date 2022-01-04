@@ -15,10 +15,15 @@
 package main
 
 import (
-	"fmt"
-	"math/rand"
+	"strconv"
+	"sync/atomic"
 )
 
+var nextPort int64
+
 func randPort() string {
-	return fmt.Sprintf("%d", 10000+rand.Intn(50000))
+	return strconv.FormatInt(
+		3000+atomic.AddInt64(&nextPort, 1)%60000,
+		10,
+	)
 }

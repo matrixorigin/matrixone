@@ -17,6 +17,7 @@ package fz
 import (
 	"encoding/xml"
 	"fmt"
+	"math/rand"
 )
 
 type SequentialAction struct {
@@ -84,4 +85,14 @@ func (s *SequentialAction) UnmarshalXML(d *xml.Decoder, start xml.StartElement) 
 		}
 	}
 
+}
+
+func RandSeq(makers []ActionMaker, num int) SequentialAction {
+	var actions []Action
+	for i := 0; i < num; i++ {
+		actions = append(actions, makers[rand.Intn(len(makers))]())
+	}
+	return SequentialAction{
+		Actions: actions,
+	}
 }

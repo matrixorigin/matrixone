@@ -15,16 +15,18 @@
 package main
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
 type (
 	LogPorcupineOp func(
-		fn func() (input any, output any, err error),
+		fn func() (clientID int, input any, output any, err error),
 	) error
 	GetPorcupineOps func() []porcupine.Operation
 )
@@ -36,12 +38,13 @@ func (_ Def) Porcupine() (
 
 	var ops []porcupine.Operation
 	var lock sync.Mutex
+	tStart := time.Now()
 
 	log = func(
-		fn func() (input any, output any, err error),
+		fn func() (clientID int, input any, output any, err error),
 	) error {
 		t0 := time.Now()
-		input, output, err := fn()
+		clientID, input, output, err := fn()
 		if err != nil {
 			return err
 		}
@@ -49,10 +52,11 @@ func (_ Def) Porcupine() (
 		lock.Lock()
 		defer lock.Unlock()
 		ops = append(ops, porcupine.Operation{
-			Input:  input,
-			Output: output,
-			Call:   t0.UnixNano(),
-			Return: t1.UnixNano(),
+			ClientId: clientID,
+			Input:    input,
+			Output:   output,
+			Call:     int64(t0.Sub(tStart)),
+			Return:   int64(t1.Sub(tStart)),
 		})
 		return nil
 	}
@@ -68,12 +72,50 @@ func (_ Def) Porcupine() (
 
 func (_ Def) PorcupineReport(
 	get GetPorcupineOps,
+	newChecker fz.NewPorcupineChecker,
+	testDataDir fz.TestDataDir,
 ) fz.Operators {
+
 	return fz.Operators{
-		fz.PorcupineChecker(
+
+		// checker
+		newChecker(
 			fz.PorcupineKVModel,
 			get,
 			nil,
+			time.Second*10,
 		),
+
+		// write log to file
+		fz.Operator{
+			AfterReport: func(
+				uuid uuid.UUID,
+				getReport fz.GetReport,
+				write fz.WriteTestDataFile,
+			) {
+
+				//var report fz.PorcupineReport
+				//if !getReport(&report) {
+				//	// no error
+				//	return
+				//}
+
+				f, err, done := write(uuid, "porcupine", "log")
+				ce(err)
+				for _, op := range get() {
+					fmt.Fprintf(f, "%+v\n", op)
+				}
+				ce(done())
+
+			},
+		},
 	}
+
+}
+
+func (_ Def2) PorcupineOptions() (
+	genVisual fz.PorcupineAlwaysGenerateVisualization,
+) {
+	genVisual = true
+	return
 }

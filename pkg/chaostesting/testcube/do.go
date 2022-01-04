@@ -27,30 +27,37 @@ func (_ Def2) Do(
 	log LogPorcupineOp,
 ) fz.Do {
 
-	kv := newKV(nodes[0])
+	var kvs []*KV
+	for i := 0; i < len(nodes); i++ {
+		kvs = append(kvs, newKV(nodes[i]))
+	}
 
-	return func(action fz.Action) error {
+	return func(threadID int64, action fz.Action) error {
 
 		switch action := action.(type) {
 
 		case ActionSet:
 			return log(
-				func() (any, any, error) {
-					if err := kv.Set(action.Key, action.Value, time.Second*32); err != nil {
-						return nil, nil, err
+				func() (int, any, any, error) {
+					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Second*32); err != nil {
+						return 0, nil, nil, err
 					}
-					return [2]any{"set", action.Key}, action.Value, nil
+					return int(threadID), [2]any{"set", action.Key}, action.Value, nil
 				},
 			)
 
 		case ActionGet:
 			return log(
-				func() (any, any, error) {
+				func() (int, any, any, error) {
 					var res int
-					if err := kv.Get(action.Key, &res, time.Second*32); err != nil {
-						return nil, nil, err
+					ok, err := kvs[action.ClientID].Get(action.Key, &res, time.Second*32)
+					if err != nil {
+						return 0, nil, nil, err
 					}
-					return [2]any{"get", action.Key}, res, nil
+					if !ok {
+						return int(threadID), [2]any{"get", action.Key}, nil, nil
+					}
+					return int(threadID), [2]any{"get", action.Key}, res, nil
 				},
 			)
 

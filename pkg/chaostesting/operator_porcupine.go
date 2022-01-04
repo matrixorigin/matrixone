@@ -18,39 +18,74 @@ import (
 	"time"
 
 	"github.com/anishathalye/porcupine"
+	"github.com/google/uuid"
 )
 
-func PorcupineChecker(
+type PorcupineReport string
+
+type NewPorcupineChecker func(
 	model porcupine.Model,
-	operations func() []porcupine.Operation,
+	getOps func() []porcupine.Operation,
 	events *[]porcupine.Event,
-) Operator {
+	timeout time.Duration,
+) Operator
 
-	return Operator{
+func (_ Def) NewPorcupineChecker(
+	genVisual PorcupineAlwaysGenerateVisualization,
+	write WriteTestDataFile,
+) NewPorcupineChecker {
 
-		AfterStop: func(
-			report AddReport,
-		) {
+	return func(
+		model porcupine.Model,
+		getOps func() []porcupine.Operation,
+		events *[]porcupine.Event,
+		timeout time.Duration,
+	) Operator {
 
-			if operations != nil {
-				res, info := porcupine.CheckOperationsVerbose(model, operations(), time.Minute*10)
-				_ = info
-				if res != porcupine.Ok {
-					report("porcupine check failed")
+		return Operator{
+
+			AfterStop: func(
+				report AddReport,
+				uuid uuid.UUID,
+			) {
+
+				if getOps != nil {
+					res, info := porcupine.CheckOperationsVerbose(model, getOps(), timeout)
+					if res != porcupine.Ok {
+						report(PorcupineReport("porcupine check failed"))
+					}
+					if res != porcupine.Ok || genVisual {
+						f, err, done := write(uuid, "porcupine", "html")
+						ce(err)
+						ce(porcupine.Visualize(model, info, f))
+						ce(done())
+					}
 				}
-			}
 
-			if events != nil {
-				res, info := porcupine.CheckEventsVerbose(model, *events, time.Minute*10)
-				_ = info
-				if res != porcupine.Ok {
-					report("porcupine check failed")
+				if events != nil {
+					res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
+					if res != porcupine.Ok {
+						report(PorcupineReport("porcupine check failed"))
+					}
+					if res != porcupine.Ok || genVisual {
+						f, err, done := write(uuid, "porcupine", "html")
+						ce(err)
+						ce(porcupine.Visualize(model, info, f))
+						ce(done())
+					}
 				}
-			}
 
-		},
+			},
+		}
+
 	}
 
+}
+
+type PorcupineAlwaysGenerateVisualization bool
+
+func (_ Def) PorcupineAlwaysGenerateVisualization() PorcupineAlwaysGenerateVisualization {
+	return false
 }
 
 var PorcupineKVModel = porcupine.Model{

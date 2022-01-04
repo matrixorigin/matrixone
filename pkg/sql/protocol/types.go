@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"reflect"
 )
 
 const (
@@ -136,7 +135,9 @@ type TransformArgument struct {
 	Typ			int
 	IsMerge 	bool
 	FreeVars 	[]string
+	HasRestrict bool
 	Restrict 	RestrictArgument
+	HasProj     bool
 	Projection 	ProjectionArgument
 	BoundVars 	[]Transformer
 }
@@ -146,11 +147,15 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		return TransformArgument{IsNull: true}
 	}
 	var ra RestrictArgument
+	hasRestrict := false
 	if arg.Restrict != nil {
+		hasRestrict = true
 		ra = RestrictArgument{Attrs: arg.Restrict.Attrs}
 	}
 	var pa ProjectionArgument
+	hasProjection := false
 	if arg.Projection != nil {
+		hasProjection = true
 		pa = ProjectionArgument{
 			Rs: arg.Projection.Rs,
 			As:	arg.Projection.As,
@@ -171,7 +176,9 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		Typ: arg.Typ,
 		IsMerge: arg.IsMerge,
 		FreeVars: arg.FreeVars,
+		HasRestrict: hasRestrict,
 		Restrict: ra,
+		HasProj: hasProjection,
 		Projection: pa,
 		BoundVars: bv,
 	}
@@ -182,13 +189,13 @@ func UntransferTransformArg(arg TransformArgument) *transform.Argument{
 		return nil
 	}
 	var ra *restrict.Argument
-	if !reflect.DeepEqual(arg.Restrict, RestrictArgument{}) {
+	if arg.HasRestrict {
 		ra = &restrict.Argument{
 			Attrs: arg.Restrict.Attrs,
 		}
 	}
 	var pa *projection.Argument
-	if !reflect.DeepEqual(arg.Projection, ProjectionArgument{}) {
+	if arg.HasProj {
 		pa = &projection.Argument{
 			Rs: arg.Projection.Rs,
 			As: arg.Projection.As,

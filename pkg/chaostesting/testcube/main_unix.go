@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fz
+//go:build linux || darwin
 
-import "os"
+package main
 
-func SaveConfig(filename string) Operator {
-	return Operator{
-		AfterStop: func(
-			writeConfig WriteConfig,
-		) {
-			f, err := os.Create(filename)
-			ce(err)
-			defer f.Close()
-			ce(writeConfig(f))
-		},
-	}
+import "syscall"
+
+func init() {
+	// set open file soft limit
+	var rLimit syscall.Rlimit
+	syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	rLimit.Cur = rLimit.Max
+	syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
 }

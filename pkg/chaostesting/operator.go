@@ -15,6 +15,8 @@
 package fz
 
 import (
+	"sync"
+
 	"github.com/reusee/dscope"
 )
 
@@ -23,6 +25,7 @@ type Operator struct {
 	BeforeDo    any
 	AfterDo     any
 	AfterStop   any
+	AfterReport any
 	Finally     any
 }
 
@@ -31,3 +34,35 @@ type Operators []Operator
 var _ dscope.Reducer = Operators{}
 
 func (c Operators) IsReducer() {}
+
+func (o Operators) parallelDo(scope dscope.Scope, getFn func(op Operator) any) error {
+	wg := new(sync.WaitGroup)
+	errCh := make(chan error, 1)
+	for _, op := range o {
+		fn := getFn(op)
+		if fn != nil {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var err error
+				defer func() {
+					if err != nil {
+						select {
+						case errCh <- err:
+						default:
+						}
+					}
+				}()
+				defer he(&err)
+				scope.Call(fn)
+			}()
+		}
+	}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+	}
+	return nil
+}

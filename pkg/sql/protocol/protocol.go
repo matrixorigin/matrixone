@@ -665,6 +665,7 @@ func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 		buf.WriteByte(Paren)
 		return EncodeExtend(v.E, buf)
 	case *extend.FuncExtend:
+		buf.WriteByte(Func)
 		buf.Write(encoding.EncodeUint32(uint32(len(v.Name))))
 		buf.WriteString(v.Name)
 		buf.Write(encoding.EncodeUint32(uint32(len(v.Args))))
@@ -675,6 +676,7 @@ func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 		}
 		return nil
 	case *extend.StarExtend:
+		buf.WriteByte(Star)
 		return nil
 	case *extend.ValueExtend:
 		buf.WriteByte(Value)
@@ -1429,7 +1431,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		}
 		// Vs
 		da := encoding.EncodeUint64Slice(v.Vs)
-		n = len(v.Vs)
+		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
 			buf.Write(da)
@@ -1540,7 +1542,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		}
 		// Vs
 		da := encoding.EncodeUint64Slice(v.Vs)
-		n = len(v.Vs)
+		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
 			buf.Write(da)
@@ -2748,6 +2750,7 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		r.Mp = proc.Mp
 		return r, data, nil
 	case MinInt8Ring:
 		r := new(min.Int8Ring)
@@ -3099,6 +3102,7 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		r.Mp = proc.Mp
 		return r, data, nil
 	case SumIntRing:
 		r := new(sum.IntRing)
@@ -3303,6 +3307,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]uint16)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeUint16Slice(vs))
+		buf.Write(encoding.EncodeUint64(v.Link))
 		buf.Write(encoding.EncodeUint32(uint32(len(v.Data))))
 		buf.Write(v.Data)
 	case types.T_uint32:

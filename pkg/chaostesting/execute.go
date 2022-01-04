@@ -18,20 +18,30 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/reusee/dscope"
 )
 
 type (
 	StartNode func(id NodeID) (Node, error)
-	Do        func(action Action) error
+	Do        func(threadID int64, action Action) error
 )
 
-func (_ Def) DumbExecuteFuncs() (
-	_ StartNode,
-	_ Do,
+func (_ Def) ExecuteFuncs() (
+	start StartNode,
+	do Do,
 ) {
-	panic("fixme: provide Start, Stop, Do")
+	panic(fmt.Errorf("fixme: provide %T %T", start, do))
+}
+
+type NextThreadID func() int64
+
+func (_ Def) NextThreadID() NextThreadID {
+	var n int64
+	return func() int64 {
+		return atomic.AddInt64(&n, 1)
+	}
 }
 
 type Execute func() error
@@ -39,29 +49,25 @@ type Execute func() error
 func (_ Def) Execute(
 	start StartNode,
 	numNodes NumNodes,
-	do Do,
 	mainAction MainAction,
 	ops Operators,
 	doAction doAction,
 	scope dscope.Scope,
 	getReports GetReports,
+	nextThreadID NextThreadID,
 ) Execute {
 	return func() (err error) {
 		defer he(&err)
 
 		defer func() {
-			for _, op := range ops {
-				if op.Finally != nil {
-					scope.Call(op.Finally)
-				}
-			}
+			ce(ops.parallelDo(scope, func(op Operator) any {
+				return op.Finally
+			}))
 		}()
 
-		for _, op := range ops {
-			if op.BeforeStart != nil {
-				scope.Call(op.BeforeStart)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeStart
+		}))
 
 		var nodes []Node
 		for i := NumNodes(0); i < numNodes; i++ {
@@ -70,19 +76,15 @@ func (_ Def) Execute(
 			nodes = append(nodes, node)
 		}
 
-		for _, op := range ops {
-			if op.BeforeDo != nil {
-				scope.Call(op.BeforeDo)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeDo
+		}))
 
-		ce(doAction(mainAction.Action))
+		ce(doAction(nextThreadID(), mainAction.Action))
 
-		for _, op := range ops {
-			if op.AfterDo != nil {
-				scope.Call(op.AfterDo)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.AfterDo
+		}))
 
 		for _, node := range nodes {
 			if closer, ok := node.(io.Closer); ok {
@@ -90,16 +92,19 @@ func (_ Def) Execute(
 			}
 		}
 
-		for _, op := range ops {
-			if op.AfterStop != nil {
-				scope.Call(op.AfterStop)
-			}
-		}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.AfterStop
+		}))
 
 		reports := getReports()
 		for _, report := range reports {
 			pt("%s\n", report)
 		}
+
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.AfterReport
+		}))
+
 		if len(reports) > 0 {
 			return fmt.Errorf("failure reported")
 		}
@@ -108,21 +113,22 @@ func (_ Def) Execute(
 	}
 }
 
-type doAction func(action Action) error
+type doAction func(threadID int64, action Action) error
 
 func (_ Def) DoAction(
 	do Do,
+	nextThreadID NextThreadID,
 ) (
 	doAction doAction,
 ) {
 
-	doAction = func(action Action) error {
+	doAction = func(threadID int64, action Action) error {
 		switch action := action.(type) {
 
 		case SequentialAction:
 			// sequential action
 			for _, action := range action.Actions {
-				if err := doAction(action); err != nil {
+				if err := doAction(threadID, action); err != nil {
 					return err
 				}
 			}
@@ -141,7 +147,7 @@ func (_ Def) DoAction(
 				wg.Add(1)
 				go func() {
 					defer wg.Done()
-					err := doAction(action)
+					err := doAction(nextThreadID(), action)
 					if err != nil {
 						select {
 						case errCh <- err:
@@ -159,7 +165,7 @@ func (_ Def) DoAction(
 
 		default:
 			// send to target
-			if err := do(action); err != nil {
+			if err := do(threadID, action); err != nil {
 				return err
 			}
 

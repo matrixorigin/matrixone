@@ -124,11 +124,6 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		algo uint8
 		err  error
 	)
-	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
-	if err != nil {
-		panic(err)
-	}
-	bf.Meta.Indices = idxMeta
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
@@ -194,6 +189,14 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		currOffset += int(bf.Parts[key].Len)
 	}
 	bf.DataAlgo = int(algo)
+	if _, err = bf.Seek(int64(currOffset), io.SeekStart); err != nil {
+		panic(err)
+	}
+	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
+	if err != nil {
+		panic(err)
+	}
+	bf.Meta.Indices = idxMeta
 }
 
 func (bf *BlockFile) Stat() common.FileInfo {

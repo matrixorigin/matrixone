@@ -26,7 +26,6 @@ type Node struct {
 	Logger    *zap.Logger
 	Config    *config.Config
 	RaftStore raftstore.Store
-	Endpoint  string
 }
 
 var _ io.Closer = new(Node)

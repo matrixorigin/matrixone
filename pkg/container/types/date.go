@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"regexp"
-	"strconv"
 	"time"
 )
 
@@ -60,95 +59,39 @@ var (
 )
 
 const (
-	shortestDateFormat = len("mdd")
-	todayDate          = "today()"
-	todayLength        = len(todayDate)
-
-	formatTwo1 = len("yyyymmdd")
-	formatTwo2 = len("yyymmdd")
-	formatTwo3 = len("yymmdd")
-	formatTwo4 = len("ymmdd")
-	formatTwo5 = len("mmdd")
-	formatTwo6 = len("mdd")
-
 	MaxDateYear    = 9999
 	MinDateYear    = 0
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
-
-	thisCenturyStr0 = "2"
-	thisCenturyStr1 = "20"
-	thisCenturyStr2 = "200"
-	thisCenturyStr3 = "2000"
 )
 
-// ParseDate will parse string to be a Date.
-// can only solve string Format like :
-// 1. 'year-month-day'
-//	{
-//		at this format, each part (year, month, day) doesn't always need to be filled completely
-//		year can be YYYY or YYY or YY or Y
-//  	month can be X or 0X
-//		day can be X or 0X
-//	}
-// 2. 'YearMonthDay'
-//	{
-//		at this format, each part should follow the rule: len(Day) is 2, len(Month) > 0, len(Month) <= len(Year) and can not be 1 at the same time
-//		in short, format can be:
-//		yyyymmdd, yyymmdd, yymmdd, ymmdd, mmdd, mdd (year will start from 2000 if incomplete)
-//	}
-// And the supported range is '0000-01-01' to '9999-12-31'
+// ParseDate will parse a string to be a Date
+// Support Format:
+// `yyyy-mm-dd`
+// `yyyymmdd`
 func ParseDate(s string) (Date, error) {
-	var parts [3]string
-	var year int64
-	var month, day uint64
-	var err error
+	var y int32
+	var m, d uint8
 
-	l := len(s)
-	if l < shortestDateFormat {
+	if len(s) < 8 {
 		return -1, errIncorrectDateValue
 	}
-	// todo: may it should use function but not a string constant
-	//if l == todayLength && s == todayDate { // special case
-	//	return Today(), nil
-	//}
 
-	match := regDate.FindStringSubmatch(s)
-
-	if len(match) == 4 { // Format `year-month-day`
-		parts[0], parts[1], parts[2] = match[1], match[2], match[3]
-	} else { // Format `yearMonthDay`
-		switch l {
-		case formatTwo1: // yyyymmdd
-			parts[0], parts[1], parts[2] = s[0:4], s[4:6], s[6:]
-		case formatTwo2: // yyymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr0+s[0:3], s[3:5], s[5:]
-		case formatTwo3: // yymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr1+s[0:2], s[2:4], s[4:]
-		case formatTwo4: // ymmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr2+s[0:1], s[1:3], s[3:]
-		case formatTwo5: // mmdd
-			parts[0], parts[1], parts[2] = thisCenturyStr3, s[0:2], s[2:]
-		case formatTwo6: // mdd
-			parts[0], parts[1], parts[2] = thisCenturyStr3, s[0:1], s[1:]
-		default:
+	y = int32(s[0]-'0') * 1000 + int32(s[1]-'0') * 100 + int32(s[2]-'0') * 10 + int32(s[3]-'0')
+	if s[4] == '-' {
+		if len(s) != 10 || s[7] != '-'{
 			return -1, errIncorrectDateValue
 		}
+		m = (s[5]-'0') * 10 + (s[6]-'0')
+		d = (s[8]-'0') * 10 + (s[9]-'0')
+	} else {
+		if len(s) != 8 {
+			return -1, errIncorrectDateValue
+		}
+		m = (s[4]-'0') * 10 + (s[5]-'0')
+		d = (s[6]-'0') * 10 + (s[7]-'0')
 	}
 
-	year, err = strconv.ParseInt(parts[0], 10, 32)
-	if err != nil {
-		return -1, errIncorrectDateValue
-	}
-	month, err = strconv.ParseUint(parts[1], 10, 8)
-	if err != nil {
-		return -1, errIncorrectDateValue
-	}
-	day, err = strconv.ParseUint(parts[2], 10, 8)
-	if err != nil {
-		return -1, errIncorrectDateValue
-	}
-	y, m, d := int32(year), uint8(month), uint8(day)
 	if validDate(y, m, d) {
 		return FromCalendar(y, m, d), nil
 	}
@@ -181,8 +124,47 @@ func Today() Date {
 	return Date((sec + localTZ) / secsPerDay)
 }
 
+const dayInfoTableMinYear = 1924
+const dayInfoTableMaxYear = 2099
+const dayInfoTableYears = dayInfoTableMaxYear - dayInfoTableMinYear + 1
+const dayInfoTableSize = dayInfoTableYears*365 + (dayInfoTableMaxYear-dayInfoTableMinYear)/4 + 1
+const dayNumOfTableEpoch = 702360 // the day number of "1924-01-01"
+
+type dayInfo struct {
+	year  uint16
+	month uint8
+	week  uint8
+}
+
+var dayInfoTable [dayInfoTableSize]dayInfo
+
+// this init function takes a bit of build time
+func init() {
+	yearNow := uint16(1924)
+	i := int32(0)
+	for yearIndex := 0; yearIndex < dayInfoTableYears; yearIndex++ {
+		if yearIndex%4 == 0 { // this is a leap year
+			for j := 0; j < 366; j++ {
+				dayInfoTable[i].year = yearNow
+				i++
+			}
+		} else {
+			for j := 0; j < 365; j++ {
+				dayInfoTable[i].year = yearNow
+				i++
+			}
+		}
+		yearNow++
+	}
+}
+
 // Year takes a date and returns an uint16 number as the year of this date
 func (d Date) Year() uint16 {
+	dayNum := int32(d)
+	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
+	if insideDayInfoTable {
+		return dayInfoTable[dayNum-dayNumOfTableEpoch].year
+	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
 	y := 400 * n
