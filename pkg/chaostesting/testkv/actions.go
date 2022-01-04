@@ -24,21 +24,21 @@ func init() {
 }
 
 type ActionSet struct {
-	Key   any
-	Value any
+	Key   int64
+	Value int64
 }
 
 type ActionGet struct {
-	Key any
+	Key int64
 }
 
 type ActionSetAtNode struct {
-	Key   any
-	Value any
+	Key   int64
+	Value int64
 	Node  fz.NodeID
 }
 
 type ActionGetAtNode struct {
-	Key  any
+	Key  int64
 	Node fz.NodeID
 }

@@ -87,7 +87,7 @@ func (s *SequentialAction) UnmarshalXML(d *xml.Decoder, start xml.StartElement) 
 
 }
 
-func RandSeq(num int, makers ...ActionMaker) SequentialAction {
+func RandSeq(makers []ActionMaker, num int) SequentialAction {
 	var actions []Action
 	for i := 0; i < num; i++ {
 		actions = append(actions, makers[rand.Intn(len(makers))]())

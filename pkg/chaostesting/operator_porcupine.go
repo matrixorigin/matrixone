@@ -15,58 +15,77 @@
 package fz
 
 import (
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/anishathalye/porcupine"
 	"github.com/google/uuid"
 )
 
-const porcupineReportsDir = "reports"
-
 type PorcupineReport string
 
-func PorcupineChecker(
+type NewPorcupineChecker func(
 	model porcupine.Model,
-	operations func() []porcupine.Operation,
+	getOps func() []porcupine.Operation,
 	events *[]porcupine.Event,
 	timeout time.Duration,
-) Operator {
+) Operator
 
-	return Operator{
+func (_ Def) NewPorcupineChecker(
+	genVisual PorcupineAlwaysGenerateVisualization,
+	write WriteTestDataFile,
+) NewPorcupineChecker {
 
-		AfterStop: func(
-			report AddReport,
-			uuid uuid.UUID,
-		) {
+	return func(
+		model porcupine.Model,
+		getOps func() []porcupine.Operation,
+		events *[]porcupine.Event,
+		timeout time.Duration,
+	) Operator {
 
-			if operations != nil {
-				res, info := porcupine.CheckOperationsVerbose(model, operations(), timeout)
-				if res != porcupine.Ok {
-					report(PorcupineReport("porcupine check failed"))
-					f, err := os.CreateTemp(porcupineReportsDir, "*.tmp")
-					ce(err)
-					ce(porcupine.Visualize(model, info, f))
-					ce(f.Close())
-					ce(os.Rename(f.Name(), filepath.Join(
-						porcupineReportsDir,
-						uuid.String()+"-porcupine.html",
-					)))
+		return Operator{
+
+			AfterStop: func(
+				report AddReport,
+				uuid uuid.UUID,
+			) {
+
+				if getOps != nil {
+					res, info := porcupine.CheckOperationsVerbose(model, getOps(), timeout)
+					if res != porcupine.Ok {
+						report(PorcupineReport("porcupine check failed"))
+					}
+					if res != porcupine.Ok || genVisual {
+						f, err, done := write(uuid, "porcupine", "html")
+						ce(err)
+						ce(porcupine.Visualize(model, info, f))
+						ce(done())
+					}
 				}
-			}
 
-			if events != nil {
-				res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
-				_ = info
-				if res != porcupine.Ok {
-					report(PorcupineReport("porcupine check failed"))
+				if events != nil {
+					res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
+					if res != porcupine.Ok {
+						report(PorcupineReport("porcupine check failed"))
+					}
+					if res != porcupine.Ok || genVisual {
+						f, err, done := write(uuid, "porcupine", "html")
+						ce(err)
+						ce(porcupine.Visualize(model, info, f))
+						ce(done())
+					}
 				}
-			}
 
-		},
+			},
+		}
+
 	}
 
+}
+
+type PorcupineAlwaysGenerateVisualization bool
+
+func (_ Def) PorcupineAlwaysGenerateVisualization() PorcupineAlwaysGenerateVisualization {
+	return false
 }
 
 var PorcupineKVModel = porcupine.Model{

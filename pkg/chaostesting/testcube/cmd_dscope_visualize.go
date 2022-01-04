@@ -14,15 +14,18 @@
 
 package main
 
-import "github.com/matrixorigin/matrixone/pkg/chaostesting"
+import "os"
 
-func (_ Def) Operators() fz.Operators {
+func (_ Def) CmdDscopeVisualize() Commands {
+	return Commands{
+		"dscope-visualize": func(args []string) {
 
-	//TODO more cube metrics
+			scope := NewScope()
+			f, err := os.Create("scope.dot")
+			ce(err)
+			defer f.Close()
+			ce(scope.Visualize(f))
 
-	return fz.Operators{
-		//fz.SaveConfig("config.xml"),
-		//fz.SaveCPUProfile("cpu.profile"),
-		//fz.SaveAllocsProfile("allocs.profile"),
+		},
 	}
 }

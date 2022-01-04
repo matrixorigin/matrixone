@@ -15,12 +15,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
 	"sync"
 
-	crdbpebble "github.com/cockroachdb/pebble"
+	"github.com/google/uuid"
 	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixcube/aware"
 	"github.com/matrixorigin/matrixcube/config"
@@ -29,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
 	"github.com/matrixorigin/matrixcube/storage/kv"
-	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
+	"github.com/matrixorigin/matrixcube/storage/kv/mem"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"go.uber.org/zap"
 )
@@ -44,6 +45,8 @@ func (_ Def) Nodes(
 	configs NodeConfigs,
 	tempDir fz.TempDir,
 	numNodes fz.NumNodes,
+	id uuid.UUID,
+	testDataFilePath fz.TestDataFilePath,
 ) (nodes Nodes) {
 
 	var endpoints []string
@@ -51,24 +54,24 @@ func (_ Def) Nodes(
 		endpoints = append(endpoints, "http://"+net.JoinHostPort("localhost", randPort()))
 	}
 
+	loggerConfig := []byte(`
+  {
+    "level": "debug",
+    "encoding": "json",
+    "outputPaths": [
+      "` + testDataFilePath(id, "cube", "log") + `"
+    ]
+  }
+  `)
+	var cfg zap.Config
+	ce(json.Unmarshal(loggerConfig, &cfg))
+	logger, err := cfg.Build()
+	ce(err)
+
 	for nodeID, conf := range configs {
 
 		node := &Node{}
 
-		loggerConfig := zap.Config{
-			Level:    zap.NewAtomicLevel(),
-			Encoding: "console",
-			OutputPaths: []string{
-				"stdout",
-				fmt.Sprintf("node-%d.log", nodeID),
-			},
-		}
-		//loggerConfig.Level.SetLevel(zap.DebugLevel)
-		//loggerConfig.Level.SetLevel(zap.InfoLevel)
-		loggerConfig.Level.SetLevel(zap.FatalLevel)
-		logger, err := loggerConfig.Build()
-		ce(err)
-		defer logger.Sync()
 		node.Logger = logger
 
 		fs := vfs.Default
@@ -88,14 +91,21 @@ func (_ Def) Nodes(
 		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort("localhost", randPort())
 
 		conf.Storage = func() config.StorageConfig {
-			kvStorage, err := pebble.NewStorage(
-				fs.PathJoin(string(tempDir), fmt.Sprintf("storage-%d", nodeID)),
-				logger,
-				&crdbpebble.Options{},
-			)
-			ce(err)
+
+			// pebble
+			//kvStorage, err := pebble.NewStorage(
+			//	fs.PathJoin(string(tempDir), fmt.Sprintf("storage-%d", nodeID)),
+			//	logger,
+			//	&crdbpebble.Options{},
+			//)
+			//ce(err)
+
+			// memory
+			kvStorage := mem.NewStorage()
+
 			base := kv.NewBaseStorage(kvStorage, fs)
 			dataStorage := kv.NewKVDataStorage(base, simple.NewSimpleKVExecutor(kvStorage))
+
 			return config.StorageConfig{
 				DataStorageFactory: func(group uint64) storage.DataStorage {
 					return dataStorage

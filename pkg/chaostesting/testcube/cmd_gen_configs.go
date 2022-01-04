@@ -15,17 +15,12 @@
 package main
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 
 	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
-
-const configFilesDir = "configs"
 
 func (def Def) CmdGenConfigs() Commands {
 	return Commands{
@@ -39,14 +34,6 @@ func (def Def) CmdGenConfigs() Commands {
 				ce(err)
 			}
 
-			// ensure output dir
-			_, err := os.Stat(configFilesDir)
-			if errors.Is(err, os.ErrNotExist) {
-				err = nil
-				ce(os.Mkdir(configFilesDir, 0755))
-			}
-			ce(err)
-
 			sem := make(chan struct{}, runtime.NumCPU())
 			for i := 0; i < num; i++ {
 				i := i
@@ -59,16 +46,14 @@ func (def Def) CmdGenConfigs() Commands {
 					NewScope().Call(func(
 						write fz.WriteConfig,
 						id uuid.UUID,
+						writeFile fz.WriteTestDataFile,
 					) {
 
-						f, err := os.CreateTemp(configFilesDir, "*.tmp")
+						f, err, done := writeFile(id, "config", "xml")
 						ce(err)
 						ce(write(f))
-						ce(f.Close())
-						ce(os.Rename(
-							f.Name(),
-							filepath.Join(configFilesDir, id.String()+".xml"),
-						))
+						ce(done())
+
 						pt("generated %d / %d %s\n", i+1, num, id.String())
 
 					})

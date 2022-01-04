@@ -27,7 +27,7 @@ func (_ Def2) MainAction(
 
 	var nextID int64
 
-	const num = 32
+	const num = 8
 
 	// action maker for specific client
 	makers := func(clientID int) []fz.ActionMaker {
@@ -84,7 +84,8 @@ func (_ Def2) MainAction(
 	for i := fz.NumNodes(0); i < numNodes; i++ {
 		action.Actions = append(
 			action.Actions,
-			fz.RandomActionTree(makers(int(i)), num),
+			fz.RandSeq(makers(int(i)), num),
+			//fz.RandomActionTree(makers(int(i)), num),
 		)
 	}
 
