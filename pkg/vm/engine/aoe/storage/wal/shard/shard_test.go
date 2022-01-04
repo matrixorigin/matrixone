@@ -196,7 +196,8 @@ func TestShardProxy(t *testing.T) {
 			ic := ii % cnt
 			consumers[ic].consume(index)
 			ii++
-			shardProxy.LogIndex(index)
+			idx := *index
+			shardProxy.LogIndex(&idx)
 		}
 	}
 	for _, c := range consumers {
@@ -211,7 +212,8 @@ func TestShardProxy(t *testing.T) {
 			ic := ii % cnt
 			consumers[ic].consume(index)
 			ii++
-			shardProxy.LogIndex(index)
+			idx := *index
+			shardProxy.LogIndex(&idx)
 		}
 	}
 	for _, c := range consumers {
