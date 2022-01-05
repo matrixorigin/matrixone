@@ -85,7 +85,7 @@ func (_ Def2) MainAction(
 				var newActions []fz.Action
 				newActions = append(newActions, seq.Actions[:pos]...)
 				newActions = append(newActions, ActionStopNode{
-					NodeID: int(i),
+					NodeID: fz.NodeID(i),
 				})
 				newActions = append(newActions, seq.Actions[pos:]...)
 				seq.Actions = newActions

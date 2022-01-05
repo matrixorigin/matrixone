@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"sync"
 	"time"
 
@@ -117,7 +118,18 @@ func (_ Def) NewKV() NewKV {
 					reqInfosLock.Unlock()
 				}()
 
-				ce(node.RaftStore.GetShardsProxy().Dispatch(req))
+				for {
+					err = node.RaftStore.GetShardsProxy().Dispatch(req)
+					if err != nil {
+						var tryAgain *raftstore.ErrTryAgain
+						if errors.As(err, &tryAgain) {
+							time.Sleep(tryAgain.Wait)
+							continue
+						}
+						ce(err)
+					}
+					break
+				}
 
 				select {
 				case result := <-resultChan:
@@ -158,7 +170,18 @@ func (_ Def) NewKV() NewKV {
 					reqInfosLock.Unlock()
 				}()
 
-				ce(node.RaftStore.GetShardsProxy().Dispatch(req))
+				for {
+					err = node.RaftStore.GetShardsProxy().Dispatch(req)
+					if err != nil {
+						var tryAgain *raftstore.ErrTryAgain
+						if errors.As(err, &tryAgain) {
+							time.Sleep(tryAgain.Wait)
+							continue
+						}
+						ce(err)
+					}
+					break
+				}
 
 				select {
 				case result := <-resultChan:

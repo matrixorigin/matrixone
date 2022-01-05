@@ -27,23 +27,35 @@ type Logger = *zap.Logger
 
 func (_ Def) Logger(
 	testDataFilePath TestDataFilePath,
+	id UUID,
 ) Logger {
+
 	logFilePath := testDataFilePath("cube", "log")
 	ce(os.Truncate(logFilePath, 0), e4.Ignore(os.ErrNotExist))
-	loggerConfig := []byte(`
+
+	cfg := zap.NewProductionConfig()
+	cfg.Level = zap.NewAtomicLevel()
+	cfg.Level.SetLevel(zap.DebugLevel)
+	cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05.000")
+	cfg.EncoderConfig.EncodeDuration = zapcore.MillisDurationEncoder
+	ce(json.Unmarshal([]byte(`
   {
-    "level": "debug",
     "encoding": "json",
     "outputPaths": [
-      "` + logFilePath + `"
+      "`+logFilePath+`"
     ]
   }
-  `)
-	var cfg zap.Config
-	ce(json.Unmarshal(loggerConfig, &cfg))
+  `), &cfg))
 	logger, err := cfg.Build(
 		zap.OnFatal(zapcore.WriteThenPanic),
+		zap.AddStacktrace(zapcore.FatalLevel),
+		zap.AddCaller(),
 	)
 	ce(err)
+
+	logger = logger.With(
+		zap.String("case", id.String()),
+	)
+
 	return logger
 }

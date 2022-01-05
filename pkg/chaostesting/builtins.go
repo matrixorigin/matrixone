@@ -32,7 +32,9 @@ func (_ Def) CreatedAtConfigItem(
 	return ConfigItems{t}
 }
 
-func (_ Def) UUID() uuid.UUID {
+type UUID = uuid.UUID
+
+func (_ Def) UUID() UUID {
 	return uuid.New()
 }
 
