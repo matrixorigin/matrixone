@@ -1111,7 +1111,7 @@ var defaultConfigurationTemplate = `# Change this config file according to your 
 #
 #    3. set up the other two prophet nodes
 #        3.1. apply the above 8 steps of prophet genesis node setting
-#        3.2. change the prophet join address from empty string to the prophet genesis node's client-urls
+#        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
 #   
 #    4. set up pure storage node
 #        4.1. make sure the nodeID is unique
