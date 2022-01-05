@@ -86,13 +86,13 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
-func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
-	idxInfo:= helper.IndexDefs(r.pid,r.tbl.Id,nil,defs)
+func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
+	idxInfo := helper.IndexDefs(r.pid, r.tbl.Id, nil, defs)
 	//TODO
-	return r.catalog.CreateIndex(epoch,idxInfo[0])
+	return r.catalog.CreateIndex(epoch, idxInfo[0])
 }
-func (r *relation) DropIndex(epoch uint64, name string) error{
-	return r.catalog.DropIndex(epoch,r.tbl.Id,r.tbl.SchemaId,name)
+func (r *relation) DropIndex(epoch uint64, name string) error {
+	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
 }
 
 func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
@@ -104,11 +104,19 @@ func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
 }
 
 func (r *relation) Rows() int64 {
-	return 0
+	totalRows := int64(0)
+	for _, aoeRelation := range r.mp {
+		totalRows += aoeRelation.Rows()
+	}
+	return totalRows
 }
 
-func (r *relation) Size(_ string) int64 {
-	return 0
+func (r *relation) Size(attr string) int64 {
+	totalSize := int64(0)
+	for _, aoeRelation := range r.mp {
+		totalSize += aoeRelation.Size(attr)
+	}
+	return totalSize
 }
 
 func (r *relation) Nodes() engine.Nodes {
