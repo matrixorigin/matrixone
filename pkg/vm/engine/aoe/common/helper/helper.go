@@ -86,8 +86,21 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 		})
 	}
 	for _, idx := range tbl.Indices {
+		var tp engine.IndexT
+		switch idx.Type {
+		case aoe.ZoneMap:
+			tp = engine.ZoneMap
+		case aoe.FixStrBsi:
+			tp = engine.BsiIndex
+		case aoe.NumBsi:
+			tp = engine.BsiIndex
+		case aoe.Bsi:
+			tp = engine.BsiIndex
+		default:
+			tp = engine.Invalid
+		}
 		defs = append(defs, &engine.IndexTableDef{
-			Typ:      engine.IndexT(idx.Type),
+			Typ:      tp,
 			ColNames: idx.ColumnNames,
 			Name:     idx.Name,
 		})

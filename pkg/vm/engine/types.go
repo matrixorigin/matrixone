@@ -94,9 +94,20 @@ type IndexTableDef struct {
 
 type IndexT int
 
+func (node IndexT) ToString() string {
+	switch node {
+	case ZoneMap:
+		return "ZONEMAP"
+	case BsiIndex:
+		return "BSI"
+	default:
+		return "INVAILD"
+	}
+}
+
 const (
-	ZoneMap IndexT = iota
-	Invalid
+	Invalid IndexT = iota
+	ZoneMap
 	BsiIndex
 )
 
