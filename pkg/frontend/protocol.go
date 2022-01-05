@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/fagongzi/goetty"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"net"
 	"sync"
+
+	"github.com/fagongzi/goetty"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // Response Categories
@@ -68,13 +69,13 @@ type Response struct {
 	data interface{}
 
 	/*
-	ok response
-	 */
+		ok response
+	*/
 	affectedRows, lastInsertId uint64
-	warnings uint16
+	warnings                   uint16
 }
 
-func NewResponse(category,status,cmd int,d interface{})*Response {
+func NewResponse(category, status, cmd int, d interface{}) *Response {
 	return &Response{
 		category: category,
 		status:   status,
@@ -83,23 +84,23 @@ func NewResponse(category,status,cmd int,d interface{})*Response {
 	}
 }
 
-func NewGeneralErrorResponse(cmd uint8,err error)*Response{
-	return NewResponse(ErrorResponse, 0, int(cmd),err)
+func NewGeneralErrorResponse(cmd uint8, err error) *Response {
+	return NewResponse(ErrorResponse, 0, int(cmd), err)
 }
 
-func NewGeneralOkResponse(cmd uint8)*Response{
-	return NewResponse(OkResponse, 0, int(cmd), nil, )
+func NewGeneralOkResponse(cmd uint8) *Response {
+	return NewResponse(OkResponse, 0, int(cmd), nil)
 }
 
-func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16,status,cmd int,d interface{})*Response {
+func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16, status, cmd int, d interface{}) *Response {
 	resp := &Response{
-		category: OkResponse,
-		status:   status,
-		cmd:      cmd,
-		data:     d,
+		category:     OkResponse,
+		status:       status,
+		cmd:          cmd,
+		data:         d,
 		affectedRows: affectedRows,
 		lastInsertId: lastInsertId,
-		warnings: warnings,
+		warnings:     warnings,
 	}
 
 	return resp
@@ -141,7 +142,7 @@ type Protocol interface {
 	SendResponse(*Response) error
 
 	// ConnectionID the identity of the client
-	ConnectionID()uint32
+	ConnectionID() uint32
 
 	// Peer gets the address [Host:Port] of the client
 	Peer() (string, string)
@@ -158,7 +159,7 @@ type Protocol interface {
 	Quit()
 }
 
-type ProtocolImpl struct{
+type ProtocolImpl struct {
 	//mutex
 	lock sync.Mutex
 
@@ -180,7 +181,7 @@ func (cpi *ProtocolImpl) IsEstablished() bool {
 	return cpi.established
 }
 
-func (cpi *ProtocolImpl) SetEstablished()  {
+func (cpi *ProtocolImpl) SetEstablished() {
 	logutil.Infof("SWITCH ESTABLISHED to true")
 	cpi.established = true
 }
@@ -189,11 +190,11 @@ func (cpi *ProtocolImpl) ConnectionID() uint32 {
 	return cpi.connectionID
 }
 
-func (cpi *ProtocolImpl) Quit()  {
+func (cpi *ProtocolImpl) Quit() {
 	if cpi.tcpConn != nil {
 		err := cpi.tcpConn.Close()
 		if err != nil {
-			logutil.Errorf("close tcp conn failed. error:%v",err)
+			logutil.Errorf("close tcp conn failed. error:%v", err)
 		}
 	}
 }
@@ -202,7 +203,7 @@ func (cpi *ProtocolImpl) GetLock() sync.Locker {
 	return &cpi.lock
 }
 
-func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession)  {
+func (cpi *ProtocolImpl) SetTcpConnection(tcp goetty.IOSession) {
 	cpi.tcpConn = tcp
 }
 
@@ -231,7 +232,7 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 
 	switch resp.category {
 	case OkResponse:
-		s,ok := resp.data.(string)
+		s, ok := resp.data.(string)
 		if !ok {
 			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, "")
 		}
