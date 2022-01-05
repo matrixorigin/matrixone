@@ -15,10 +15,9 @@
 package main
 
 import (
-	"io"
-
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"go.uber.org/zap"
 )
 
@@ -28,11 +27,14 @@ type Node struct {
 	RaftStore raftstore.Store
 }
 
-var _ io.Closer = new(Node)
-
-func (n *Node) Close() (err error) {
-	if n.RaftStore != nil {
-		n.RaftStore.Stop()
+func (_ Def2) CloseNode(
+	nodes fz.Nodes,
+) fz.CloseNode {
+	return func(id fz.NodeID) error {
+		node := nodes[id].(*Node)
+		if node.RaftStore != nil {
+			node.RaftStore.Stop()
+		}
+		return nil
 	}
-	return
 }

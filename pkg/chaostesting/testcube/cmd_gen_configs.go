@@ -49,7 +49,7 @@ func (def Def) CmdGenConfigs() Commands {
 						writeFile fz.WriteTestDataFile,
 					) {
 
-						f, err, done := writeFile(id, "config", "xml")
+						f, err, done := writeFile("config", "xml")
 						ce(err)
 						ce(write(f))
 						ce(done())

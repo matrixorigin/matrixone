@@ -87,7 +87,8 @@ func (_ Def) WriteConfig(
 }
 
 var configWeights = map[string]int{
-	"MainAction": 1,
+	"MainAction":        1,
+	"NodeConfigSources": 2,
 }
 
 type ReadConfig func(r io.Reader) ([]any, error)

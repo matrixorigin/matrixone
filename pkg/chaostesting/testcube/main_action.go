@@ -16,7 +16,6 @@ package main
 
 import (
 	"math/rand"
-	"sync/atomic"
 
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -24,8 +23,6 @@ import (
 func (_ Def2) MainAction(
 	numNodes fz.NumNodes,
 ) fz.MainAction {
-
-	var nextID int64
 
 	const num = 8
 
@@ -35,11 +32,9 @@ func (_ Def2) MainAction(
 
 			// set
 			func() fz.Action {
-				id := atomic.AddInt64(&nextID, 1)
 				key := rand.Intn(num / 2)
 				value := rand.Intn(num / 2)
 				return ActionSet{
-					ID:       id,
 					ClientID: clientID,
 					Key:      key,
 					Value:    value,
@@ -48,10 +43,8 @@ func (_ Def2) MainAction(
 
 			// get
 			func() fz.Action {
-				id := atomic.AddInt64(&nextID, 1)
 				key := rand.Intn(num / 2)
 				return ActionGet{
-					ID:       id,
 					ClientID: clientID,
 					Key:      key,
 				}
@@ -59,18 +52,15 @@ func (_ Def2) MainAction(
 
 			// set / get pair
 			func() fz.Action {
-				id := atomic.AddInt64(&nextID, 1)
 				key := rand.Intn(num / 2)
 				value := rand.Intn(num / 2)
 				return fz.Seq(
 					ActionSet{
-						ID:       id,
 						ClientID: clientID,
 						Key:      key,
 						Value:    value,
 					},
 					ActionGet{
-						ID:       id,
 						ClientID: clientID,
 						Key:      key,
 					},
@@ -81,11 +71,30 @@ func (_ Def2) MainAction(
 
 	// parallel client actions
 	var action fz.ParallelAction
+	numStopInserted := 0
+	maxNumStop := int(numNodes - (numNodes/2 + 1))
 	for i := fz.NumNodes(0); i < numNodes; i++ {
+
+		seq := fz.RandSeq(makers(int(i)), num)
+
+		// ActionStopNode
+		if numStopInserted < maxNumStop {
+			if rand.Intn(10) == 0 {
+				numStopInserted++
+				pos := rand.Intn(len(seq.Actions) + 1)
+				var newActions []fz.Action
+				newActions = append(newActions, seq.Actions[:pos]...)
+				newActions = append(newActions, ActionStopNode{
+					NodeID: int(i),
+				})
+				newActions = append(newActions, seq.Actions[pos:]...)
+				seq.Actions = newActions
+			}
+		}
+
 		action.Actions = append(
 			action.Actions,
-			fz.RandSeq(makers(int(i)), num),
-			//fz.RandomActionTree(makers(int(i)), num),
+			seq,
 		)
 	}
 

@@ -39,17 +39,16 @@ func (_ Def) TestDataDir() (dir TestDataDir) {
 }
 
 type TestDataFilePath func(
-	id uuid.UUID,
 	category string,
 	extension string,
 ) string
 
 func (_ Def) TestDataFilePath(
 	dir TestDataDir,
+	id uuid.UUID,
 ) TestDataFilePath {
 	outputDir := string(dir)
 	return func(
-		id uuid.UUID,
 		category string,
 		extension string,
 	) string {
@@ -61,7 +60,6 @@ func (_ Def) TestDataFilePath(
 }
 
 type WriteTestDataFile func(
-	id uuid.UUID,
 	category string,
 	extension string,
 ) (
@@ -73,12 +71,12 @@ type WriteTestDataFile func(
 func (_ Def) WriteTestDataFile(
 	dir TestDataDir,
 	getFilePath TestDataFilePath,
+	id uuid.UUID,
 ) WriteTestDataFile {
 
 	outputDir := string(dir)
 
 	return func(
-		id uuid.UUID,
 		category string,
 		extension string,
 	) (
@@ -96,7 +94,7 @@ func (_ Def) WriteTestDataFile(
 				return err
 			}
 
-			name := getFilePath(id, category, extension)
+			name := getFilePath(category, extension)
 			if err := os.Rename(file.Name(), name); err != nil {
 				return err
 			}

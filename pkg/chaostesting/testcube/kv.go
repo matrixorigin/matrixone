@@ -69,7 +69,7 @@ func (_ Def) NewKV() NewKV {
 				if !ok {
 					panic("req not found")
 				}
-				info.Error <- err
+				info.Error <- we(err)
 			},
 		)
 
@@ -124,9 +124,9 @@ func (_ Def) NewKV() NewKV {
 					_ = result
 					return nil
 				case err := <-errChan:
-					return err
+					return we(err)
 				case <-time.After(timeout):
-					return raftstore.ErrTimeout
+					return we(raftstore.ErrTimeout)
 				}
 
 			},
@@ -171,9 +171,9 @@ func (_ Def) NewKV() NewKV {
 					}
 					return false, nil
 				case err := <-errChan:
-					return false, err
+					return false, we(err)
 				case <-time.After(timeout):
-					return false, raftstore.ErrTimeout
+					return false, we(raftstore.ErrTimeout)
 				}
 
 			},

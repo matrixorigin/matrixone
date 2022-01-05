@@ -17,13 +17,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/matrixorigin/matrixcube/config"
@@ -33,7 +28,7 @@ import (
 
 func (_ Def) CmdRun(
 	read fz.ReadConfig,
-	testDataDir fz.TestDataDir,
+	getCases GetTestCases,
 ) Commands {
 
 	runOne := func(configPath string) (err error) {
@@ -43,6 +38,12 @@ func (_ Def) CmdRun(
 			} else {
 				color.Red("FAILED %s", configPath)
 			}
+
+			if p := recover(); p != nil {
+				color.Red("PANIC %s", configPath)
+				panic(p)
+			}
+
 		}()
 		defer he(&err,
 			e4.Info("config file: %s", configPath),
@@ -85,50 +86,9 @@ func (_ Def) CmdRun(
 	return Commands{
 		"run": func(args []string) {
 
-			type Run struct {
-				ConfigPath string
-				LastRunAt  time.Time
-			}
-			var runs []Run
-
-			if len(args) == 0 {
-				// run all
-				ce(filepath.WalkDir(string(testDataDir), func(path string, entry fs.DirEntry, err error) error {
-					if err != nil {
-						return err
-					}
-					if entry.IsDir() {
-						return nil
-					}
-					if !strings.HasSuffix(path, "-config.xml") {
-						return nil
-					}
-					runs = append(runs, Run{
-						ConfigPath: path,
-					})
-					return nil
-				}), e4.Ignore(os.ErrNotExist))
-
-			} else {
-				// run some
-				for _, path := range args {
-					path := path
-					_, err := os.Stat(path)
-					if errors.Is(err, os.ErrNotExist) {
-						err = nil
-						path = filepath.Join(string(testDataDir), path+"-config.xml")
-					}
-					ce(err)
-					runs = append(runs, Run{
-						ConfigPath: path,
-					})
-				}
-			}
-
-			//TODO sort by last run time
-
 			sem := make(chan struct{}, runtime.NumCPU())
-			for _, run := range runs {
+			sem = make(chan struct{}, 4)
+			for _, run := range getCases(args) {
 				run := run
 				sem <- struct{}{}
 				go func() {

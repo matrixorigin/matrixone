@@ -21,12 +21,16 @@ import (
 )
 
 type Operator struct {
-	BeforeStart any
-	BeforeDo    any
-	AfterDo     any
-	AfterStop   any
-	AfterReport any
-	Finally     any
+	Finally any
+
+	BeforeDo any
+	AfterDo  any
+
+	BeforeClose any
+	AfterClose  any
+
+	BeforeReport any
+	AfterReport  any
 }
 
 type Operators []Operator
