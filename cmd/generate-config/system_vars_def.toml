@@ -435,13 +435,13 @@ external-etcd = ["", "", ""]
 # see more: https://etcd.io/docs/v3.5/op-guide/clustering/
 join = ""
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000"). 
+# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000").
 # If the cluster runs on Docker, specify the IP address of Docker as "http://0.0.0.0:40000"
 client-urls = "http://localhost:40000"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
 # The list of peer URLs to be listened to by a prophet node
 peer-urls = "http://localhost:50000"
-# In some situations such as in the Docker or NAT network environment, 
+# In some situations such as in the Docker or NAT network environment,
 # if a client cannot access prophet through the default client URLs listened to by prophet, you must manually set the advertise client URLs
 # For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = ""
@@ -473,14 +473,14 @@ instance = ""                                       # prometheus instance
 
 # Storage Configs
 [meta.conf]
-block-max-rows = 160000
-segment-max-blocks = 40
+block-max-rows = 160000                             # the maximum rows of a block
+segment-max-blocks = 40                             # the maximum blocks of a segment
 
 [scheduler-cfg]
-block-writers = 8
-segment-writers = 4
+block-writers = 8                                   # the maximum parallelism of block flushing
+segment-writers = 4                                 # the maximum parallelism of segment flushing
 
 [cache-cfg]
-index-cache-size = 134217728        # 128M
-insert-cache-size = 4294967296      # 4G
-data-cache-size = 4294967296        # 4G
+index-cache-size = 134217728        # 128M          # index shared cache size
+insert-cache-size = 4294967296      # 4G            # mutable data shared cache size
+data-cache-size = 4294967296        # 4G            # immutable data shared cache size
