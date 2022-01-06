@@ -45,14 +45,14 @@ func init() {
 }
 
 type castRule struct {
-	NumArgs uint8 			 // numbers of arguments for this operator or functions
+	NumArgs     uint8        // numbers of arguments for this operator or functions
 	sourceTypes []types.T    // source type for each argument
 	targetTypes []types.Type // cast type for each argument
 }
 
 type retType struct {
 	argTypes []types.T
-	ret  	 types.T
+	ret      types.T
 }
 
 // GetUnaryOpReturnType returns the returnType of unary ops or binary functions
@@ -85,7 +85,22 @@ func GetBinOpReturnType(op int, lt, rt types.T) types.T {
 
 // GetMultiReturnType returns the returnType of multi ops or multi functions
 func GetMultiReturnType(op int, ts []types.T) types.T {
-	return types.T_sel
+	if m, ok := OperatorReturnType[op]; ok {
+		if rs, okk := m[uint8(len(ts))]; okk {
+			for _, r := range rs {
+				count := 0
+				for ; count < len(ts); count++ {
+					if r.argTypes[count] != ts[count] {
+						break
+					}
+				}
+				if count == len(ts) {
+					return r.ret
+				}
+			}
+		}
+	}
+	return types.T_any
 }
 
 // appendOperatorRets will add operator-return-type information into related structure
@@ -286,16 +301,16 @@ func initCastRulesForBinaryOps() {
 			for _, op := range ops {
 				for _, l := range ints {
 					for _, r := range ints {
-							OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-								{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
-							}...)
+						OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+							{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
+						}...)
 					}
 				}
 				for _, l := range uints {
 					for _, r := range uints {
-							OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-								{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
-							}...)
+						OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+							{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
+						}...)
 					}
 				}
 				for _, l := range ints {
