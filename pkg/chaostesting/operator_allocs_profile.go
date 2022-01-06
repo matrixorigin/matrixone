@@ -21,7 +21,7 @@ import (
 
 func SaveAllocsProfile(filename string) Operator {
 	return Operator{
-		AfterStop: func() {
+		AfterClose: func() {
 			profile := pprof.Lookup("allocs")
 			if profile == nil {
 				return

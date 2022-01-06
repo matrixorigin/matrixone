@@ -14,21 +14,16 @@
 
 package main
 
-import (
-	"bytes"
-	"strings"
-	"testing"
-)
+func (_ Def) CmdList(
+	getCases GetTestCases,
+) Commands {
+	return Commands{
 
-func TestUpdateCubeConfig(t *testing.T) {
-	NewScope().Call(func(
-		update UpdateCubeConfigTOML,
-	) {
-
-		config, err := update(strings.NewReader(""))
-		ce(err)
-		config, err = update(bytes.NewReader(config))
-		ce(err)
-
-	})
+		"list": func(args []string) {
+			cases := getCases(args)
+			for _, c := range cases {
+				pt("%s %v\n", c.ConfigPath, c.LastRunAt)
+			}
+		},
+	}
 }

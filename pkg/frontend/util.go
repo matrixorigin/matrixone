@@ -17,16 +17,17 @@ package frontend
 import (
 	"bytes"
 	"fmt"
-	mo_config "github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 type CloseFlag struct {
@@ -36,8 +37,8 @@ type CloseFlag struct {
 
 //1 for closed
 //0 for others
-func (cf *CloseFlag) setClosed(value uint32)  {
-	atomic.StoreUint32(&cf.closed,value)
+func (cf *CloseFlag) setClosed(value uint32) {
+	atomic.StoreUint32(&cf.closed, value)
 }
 
 func (cf *CloseFlag) Open() {
@@ -49,57 +50,57 @@ func (cf *CloseFlag) Close() {
 }
 
 func (cf *CloseFlag) IsClosed() bool {
-	return atomic.LoadUint32(&cf.closed) !=0
+	return atomic.LoadUint32(&cf.closed) != 0
 }
 
 func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
-func Min(a int, b int) int{
+func Min(a int, b int) int {
 	if a < b {
 		return a
-	}else{
+	} else {
 		return b
 	}
 }
 
-func MinInt64(a int64, b int64) int64{
+func MinInt64(a int64, b int64) int64 {
 	if a < b {
 		return a
-	}else{
+	} else {
 		return b
 	}
 }
 
-func MinUint64(a uint64, b uint64) uint64{
+func MinUint64(a uint64, b uint64) uint64 {
 	if a < b {
 		return a
-	}else{
+	} else {
 		return b
 	}
 }
 
-func Max(a int, b int) int{
+func Max(a int, b int) int {
 	if a < b {
 		return b
-	}else{
+	} else {
 		return a
 	}
 }
 
-func MaxInt64(a int64, b int64) int64{
+func MaxInt64(a int64, b int64) int64 {
 	if a < b {
 		return b
-	}else{
+	} else {
 		return a
 	}
 }
 
-func MaxUint64(a uint64, b uint64) uint64{
+func MaxUint64(a uint64, b uint64) uint64 {
 	if a < b {
 		return b
-	}else{
+	} else {
 		return a
 	}
 }
@@ -110,14 +111,13 @@ func (ul Uint64List) Len() int {
 	return len(ul)
 }
 
-func (ul Uint64List) Less(i,j int) bool {
+func (ul Uint64List) Less(i, j int) bool {
 	return ul[i] < ul[j]
 }
 
-func (ul Uint64List) Swap(i,j int) {
-	ul[i],ul[j] = ul[j],ul[i]
+func (ul Uint64List) Swap(i, j int) {
+	ul[i], ul[j] = ul[j], ul[i]
 }
-
 
 // GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
@@ -138,16 +138,16 @@ type DebugCounter struct {
 func NewDebugCounter(l int) *DebugCounter {
 	return &DebugCounter{
 		length:  l,
-		counter: make([]uint64,l),
+		counter: make([]uint64, l),
 	}
 }
 
-func (dc *DebugCounter) Add(i int,v uint64)  {
-	atomic.AddUint64(&dc.counter[i],v)
+func (dc *DebugCounter) Add(i int, v uint64) {
+	atomic.AddUint64(&dc.counter[i], v)
 }
 
 func (dc *DebugCounter) Set(i int, v uint64) {
-	atomic.StoreUint64(&dc.counter[i],v)
+	atomic.StoreUint64(&dc.counter[i], v)
 }
 
 func (dc *DebugCounter) Get(i int) uint64 {
@@ -163,12 +163,12 @@ func (dc *DebugCounter) DCRoutine() {
 
 	for dc.Cf.IsOpened() {
 		for i := 0; i < dc.length; i++ {
-			if i != 0 && i % 8 == 0 {
+			if i != 0 && i%8 == 0 {
 				fmt.Printf("\n")
 			}
 			v := dc.Get(i)
-			fmt.Printf("[%4d %4d]",i,v)
-			dc.Set(i,0)
+			fmt.Printf("[%4d %4d]", i, v)
+			dc.Set(i, 0)
 		}
 		fmt.Printf("\n")
 		time.Sleep(5 * time.Second)
@@ -193,8 +193,8 @@ type Timeout struct {
 
 func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
 	return &Timeout{
-		lastTime: time.Now(),
-		timeGap:  tg,
+		lastTime:   time.Now(),
+		timeGap:    tg,
 		autoUpdate: autoUpdateWhenChecked,
 	}
 }
@@ -218,7 +218,6 @@ func (t *Timeout) isTimeout() bool {
 	if t.autoUpdate {
 		t.lastTime = time.Now()
 	}
-
 	return true
 }
 
@@ -227,9 +226,9 @@ length:
 -1, complete string.
 0, empty string
 >0 , length of characters at the header of the string.
- */
-func SubStringFromBegin(str string,length int) string {
-	if length == 0 || length < -1{
+*/
+func SubStringFromBegin(str string, length int) string {
+	if length == 0 || length < -1 {
 		return ""
 	}
 
@@ -237,9 +236,9 @@ func SubStringFromBegin(str string,length int) string {
 		return str
 	}
 
-	l := Min(len(str),length)
+	l := Min(len(str), length)
 	if l != len(str) {
-		return str[:l]+"..."
+		return str[:l] + "..."
 	}
 	return str[:l]
 }
@@ -250,11 +249,11 @@ return:
 true/false - exists or not.
 true/false - file or directory
 error
- */
+*/
 var PathExists = func(path string) (bool, bool, error) {
 	fi, err := os.Stat(path)
 	if err == nil {
-		return true, !fi.IsDir(),nil
+		return true, !fi.IsDir(), nil
 	}
 	if os.IsNotExist(err) {
 		return false, false, err
@@ -265,25 +264,24 @@ var PathExists = func(path string) (bool, bool, error) {
 
 /*
 MakeDebugInfo prints bytes in multi-lines.
- */
-func MakeDebugInfo(data []byte,bytesCount int,bytesPerLine int) string {
+*/
+func MakeDebugInfo(data []byte, bytesCount int, bytesPerLine int) string {
 	if len(data) == 0 || bytesCount == 0 || bytesPerLine == 0 {
 		return ""
 	}
-	pl := Min(bytesCount,len(data))
+	pl := Min(bytesCount, len(data))
 	ps := ""
 	for i := 0; i < pl; i++ {
-		if i > 0 && (i % bytesPerLine == 0) {
+		if i > 0 && (i%bytesPerLine == 0) {
 			ps += "\n"
 		}
-		if i % bytesPerLine == 0 {
-			ps += fmt.Sprintf("%d",i / bytesPerLine) + " : "
+		if i%bytesPerLine == 0 {
+			ps += fmt.Sprintf("%d", i/bytesPerLine) + " : "
 		}
-		ps += fmt.Sprintf("%02x ",data[i])
+		ps += fmt.Sprintf("%02x ", data[i])
 	}
 	return ps
 }
-
 
 var (
 	tmpDir = "./cube-test"
@@ -380,9 +378,9 @@ func getMemEngineAndComputationEngine() (engine.Engine, rpcserver.Server, error,
 */
 
 func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
-	pu,err := getParameterUnit(configFile,eng)
+	pu, err := getParameterUnit(configFile, eng)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
@@ -390,12 +388,12 @@ func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Eng
 	return sver, nil
 }
 
-func getPCI()(*PDCallbackImpl) {
+func getPCI() *PDCallbackImpl {
 	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
 	return NewPDCallbackImpl(ppu)
 }
 
-func getSystemVariables(configFile string) (*mo_config.SystemVariables,error) {
+func getSystemVariables(configFile string) (*mo_config.SystemVariables, error) {
 	sv := &mo_config.SystemVariables{}
 	var err error
 	//before anything using the configuration
@@ -408,11 +406,11 @@ func getSystemVariables(configFile string) (*mo_config.SystemVariables,error) {
 		logutil.Errorf("error:%v", err)
 		return nil, err
 	}
-	return sv,err
+	return sv, err
 }
 
 func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
-	sv,err := getSystemVariables(configFile)
+	sv, err := getSystemVariables(configFile)
 	if err != nil {
 		return nil, err
 	}
@@ -424,5 +422,5 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 
 	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, engine.Nodes{}, nil)
 
-	return pu,nil
+	return pu, nil
 }

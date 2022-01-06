@@ -222,8 +222,9 @@ import (
 // MO table option
 %token <str> PROPERTIES
 
-// Create Index
+// Index
 %token <str> PARSER VISIBLE INVISIBLE BTREE HASH RTREE BSI
+%token <str> ZONEMAP
 
 // Alter
 %token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER
@@ -3521,11 +3522,24 @@ constraint_elem:
 	}
 |	key_or_index not_exists_opt index_name_and_type_opt '(' index_column_list ')' index_option_list
 	{
+		keyTyp := tree.INDEX_TYPE_INVALID
+		if $3[1] != "" {
+           	t := strings.ToLower($3[1])
+            switch t {
+            case "zonemap":
+            	keyTyp = tree.INDEX_TYPE_ZONEMAP
+            case "bsi":
+            	keyTyp = tree.INDEX_TYPE_BSI
+            default:
+            	yylex.Error("Invail the type of index")
+                return 1
+            }
+		}
 		$$ = &tree.Index{
 			IfNotExists: $2,
 			KeyParts: $5,
 			Name: $3[0],
-			Empty: $3[1] == "",
+			KeyType: keyTyp,
 			IndexOption: $7,
 		}
 	}
@@ -3599,6 +3613,8 @@ index_type:
 	BTREE
 |	HASH
 |	RTREE
+|	ZONEMAP
+|	BSI
 
 index_name:
 	{
@@ -5783,5 +5799,7 @@ not_keyword:
 
 //mo_keywords:
 //	PROPERTIES
+//  BSI
+//  ZONEMAP
 
 %%

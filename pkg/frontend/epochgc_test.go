@@ -18,19 +18,22 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"testing"
 	"time"
 
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/storage"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 
-	"go.uber.org/zap/zapcore"
 	stdLog "log"
+
+	"go.uber.org/zap/zapcore"
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -372,9 +375,9 @@ func run_pci(id uint64, close *CloseFlag, pci *PDCallbackImpl,
 				fmt.Printf("C %v\n", err)
 			}
 
-			ep,_ := pci.IncQueryCountAtCurrentEpoch(1)
+			ep, _ := pci.IncQueryCountAtCurrentEpoch(1)
 			time.Sleep(cell * time.Millisecond)
-			pci.DecQueryCountAtEpoch(ep,1)
+			pci.DecQueryCountAtEpoch(ep, 1)
 		}
 
 		for j := 0; j < 3; j++ {
@@ -408,4 +411,49 @@ func Test_PCI_stall(t *testing.T) {
 		closeHandle[i].Close()
 	}
 	time.Sleep(2 * time.Second)
+}
+
+func Test_DeleteDDLPermanentlyRoutine(t *testing.T) {
+	convey.Convey("DeleteDDLPermanentlyRoutine succ", t, func() {
+		sci := &PDCallbackImpl{}
+		max_ep := 1
+		sci.removeEpoch = func(epoch uint64) {}
+		sci.enableLog = true
+		sci.DeleteDDLPermanentlyRoutine(uint64(max_ep))
+
+		buf := sci.CollectData()
+		convey.So(buf, convey.ShouldResemble, make([]byte, 8))
+
+		f := func(uint64) {}
+		sci.SetRemoveEpoch(f)
+
+		ret := sci.GetClusterMinimumRemovableEpoch()
+		convey.So(ret, convey.ShouldEqual, 0)
+
+		mt := &Meta{1, 2, 3}
+		sci.ddlQueue = make(map[uint64][]*Meta)
+		sci.AddMeta(1, mt)
+		tar := make(map[uint64][]*Meta)
+		tar[1] = []*Meta{mt}
+
+		convey.So(sci.ddlQueue, convey.ShouldResemble, tar)
+
+		tar[1] = []*Meta{mt, mt}
+		sci.AddMeta(1, mt)
+		convey.So(sci.ddlQueue, convey.ShouldResemble, tar)
+
+		convey.So(sci.removeEpochMetasUnsafe(2), convey.ShouldBeNil)
+
+		convey.So(sci.removeEpochMetasUnsafe(1), convey.ShouldResemble, tar[1])
+
+		convey.So(sci.AddEpochInfo(1, 2), convey.ShouldEqual, 0)
+
+		sci.server_epoch = 1
+		sci.epoch_info = make(map[uint64]uint64)
+		convey.So(sci.AddEpochInfo(1, 2), convey.ShouldEqual, 1)
+		convey.So(sci.epoch_info, convey.ShouldResemble, map[uint64]uint64{1: 2})
+
+		convey.So(sci.SetEpochInfo(0, 1), convey.ShouldEqual, 0)
+		convey.So(sci.SetEpochInfo(1, 1), convey.ShouldEqual, 1)
+	})
 }

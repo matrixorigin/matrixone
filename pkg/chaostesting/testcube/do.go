@@ -15,21 +15,24 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
 func (_ Def2) Do(
 	newKV NewKV,
-	nodes Nodes,
+	nodes fz.Nodes,
 	log LogPorcupineOp,
+	closeNode fz.CloseNode,
 ) fz.Do {
 
 	var kvs []*KV
 	for i := 0; i < len(nodes); i++ {
-		kvs = append(kvs, newKV(nodes[i]))
+		kvs = append(kvs, newKV(nodes[i].(*Node)))
 	}
 
 	return func(threadID int64, action fz.Action) error {
@@ -39,9 +42,15 @@ func (_ Def2) Do(
 		case ActionSet:
 			return log(
 				func() (int, any, any, error) {
-					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Second*32); err != nil {
-						return 0, nil, nil, err
+					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Minute*2); err != nil {
+						if errors.Is(err, raftstore.ErrTimeout) {
+							// timeout
+							return int(threadID), [2]any{"set", action.Key}, fz.KVResultTimeout, nil
+						}
+						// error
+						return int(threadID), nil, nil, err
 					}
+					// ok
 					return int(threadID), [2]any{"set", action.Key}, action.Value, nil
 				},
 			)
@@ -50,16 +59,26 @@ func (_ Def2) Do(
 			return log(
 				func() (int, any, any, error) {
 					var res int
-					ok, err := kvs[action.ClientID].Get(action.Key, &res, time.Second*32)
+					ok, err := kvs[action.ClientID].Get(action.Key, &res, time.Minute*2)
 					if err != nil {
-						return 0, nil, nil, err
+						if errors.Is(err, raftstore.ErrTimeout) {
+							// timeout
+							return int(threadID), [2]any{"get", action.Key}, fz.KVResultTimeout, nil
+						}
+						// error
+						return int(threadID), nil, nil, err
 					}
 					if !ok {
-						return int(threadID), [2]any{"get", action.Key}, nil, nil
+						// not found
+						return int(threadID), [2]any{"get", action.Key}, fz.KVResultNotFound, nil
 					}
+					// ok
 					return int(threadID), [2]any{"get", action.Key}, res, nil
 				},
 			)
+
+		case ActionStopNode:
+			return closeNode(fz.NodeID(action.NodeID))
 
 		default:
 			panic(fmt.Errorf("unknown action: %#v", action))

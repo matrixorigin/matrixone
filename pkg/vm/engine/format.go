@@ -18,9 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"strconv"
-	"strings"
 )
 
 func (node *AttributeDef) Format(buf *bytes.Buffer) {
@@ -86,8 +84,7 @@ func (node *IndexTableDef) Format(buf *bytes.Buffer) {
 	buf.WriteString(")")
 
 	buf.WriteString(" USING ")
-	typ := tree.IndexType(node.Typ)
-	buf.WriteString(strings.ToUpper(typ.ToString()))
+	buf.WriteString(node.Typ.ToString())
 }
 
 func makeVal2Str(typ types.Type, value interface{}, isNull bool) string {

@@ -90,15 +90,18 @@ func TestKV(t *testing.T) {
 	scope = scope.Fork(
 		func(
 			maxClients MaxClients,
+			numNodes fz.NumNodes,
 		) (
-			start fz.StartNode,
 			do fz.Do,
+			nodes fz.Nodes,
 		) {
 
-			// Start
-			start = func(id fz.NodeID) (fz.Node, error) {
-				kv = NewKV(int(maxClients))
-				return &TestKVNode{}, nil
+			// KV
+			kv = NewKV(int(maxClients))
+
+			// Nodes
+			for i := 0; i < int(numNodes); i++ {
+				nodes = append(nodes, &TestKVNode{})
 			}
 
 			// Do
@@ -118,12 +121,6 @@ func TestKV(t *testing.T) {
 			}
 
 			return
-		},
-		&fz.Operators{
-			fz.Operator{
-				AfterStop: func() {
-				},
-			},
 		},
 	)
 

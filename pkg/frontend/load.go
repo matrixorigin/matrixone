@@ -594,7 +594,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	result := handler.result
 
 	//logutil.Infof("-----ignoreFieldError %v",handler.ignoreFieldError)
-
 	if row2colChoose {
 		wait_d := time.Now()
 		for i, line := range fetchLines {
@@ -1264,7 +1263,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
 	}
-
 	return nil
 }
 
@@ -1412,7 +1410,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 //row2col algorithm
 var row2colChoose bool = true
 
-func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
+var saveLinesToStorage = func(handler *ParseLineHandler, force bool) error {
 	writeHandler := &WriteBatchHandler{
 		SharePart: SharePart{
 			lineIdx:     handler.lineIdx,
@@ -1444,6 +1442,29 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 		}
 	}()
 	return nil
+}
+
+func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duration) {
+	for {
+		if close.IsClosed() {
+			logutil.Infof("load stream is over, start to leave.")
+			return
+		} else {
+			for i, v := range handler.threadInfo {
+				ret := v.GetTime()
+				if ret == nil {
+					continue
+				} else {
+					startTime := ret.(time.Time)
+					threadCnt := v.GetCnt()
+					if threadCnt == 1 {
+						logutil.Infof("Print the ThreadInfo. id:%v, startTime:%v, spendTime:%v", i, startTime, time.Since(startTime))
+					}
+				}
+			}
+			time.Sleep(a * time.Second)
+		}
+	}
 }
 
 /*
@@ -1636,28 +1657,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	}()
 
 	close := CloseFlag{}
+	var a = time.Duration(ses.Pu.SV.GetPrintLogInterVal())
 	go func() {
-		for {
-			if close.IsClosed() {
-				logutil.Infof("load stream is over, start to leave.")
-				return
-			} else {
-				for i, v := range handler.threadInfo {
-					ret := v.GetTime()
-					if ret == nil {
-						continue
-					} else {
-						startTime := ret.(time.Time)
-						threadCnt := v.GetCnt()
-						if threadCnt == 1 {
-							logutil.Infof("Print the ThreadInfo. id:%v, startTime:%v, spendTime:%v", i, startTime, time.Since(startTime))
-						}
-					}
-				}
-				var a = time.Duration(ses.Pu.SV.GetPrintLogInterVal())
-				time.Sleep(a * time.Second)
-			}
-		}
+		PrintThreadInfo(handler, &close, a)
 	}()
 
 	//until now, the last writer has been counted.

@@ -16,7 +16,6 @@ package fz
 
 import (
 	"fmt"
-	"io"
 	"sync"
 	"sync/atomic"
 
@@ -24,15 +23,15 @@ import (
 )
 
 type (
-	StartNode func(id NodeID) (Node, error)
-	Do        func(threadID int64, action Action) error
+	Nodes = []Node
+	Do    func(threadID int64, action Action) error
 )
 
 func (_ Def) ExecuteFuncs() (
-	start StartNode,
+	nodes Nodes,
 	do Do,
 ) {
-	panic(fmt.Errorf("fixme: provide %T %T", start, do))
+	panic(fmt.Errorf("fixme: provide %T %T", nodes, do))
 }
 
 type NextThreadID func() int64
@@ -47,7 +46,7 @@ func (_ Def) NextThreadID() NextThreadID {
 type Execute func() error
 
 func (_ Def) Execute(
-	start StartNode,
+	nodes Nodes,
 	numNodes NumNodes,
 	mainAction MainAction,
 	ops Operators,
@@ -55,6 +54,7 @@ func (_ Def) Execute(
 	scope dscope.Scope,
 	getReports GetReports,
 	nextThreadID NextThreadID,
+	closeNode CloseNode,
 ) Execute {
 	return func() (err error) {
 		defer he(&err)
@@ -66,17 +66,6 @@ func (_ Def) Execute(
 		}()
 
 		ce(ops.parallelDo(scope, func(op Operator) any {
-			return op.BeforeStart
-		}))
-
-		var nodes []Node
-		for i := NumNodes(0); i < numNodes; i++ {
-			node, err := start(NodeID(i))
-			ce(err)
-			nodes = append(nodes, node)
-		}
-
-		ce(ops.parallelDo(scope, func(op Operator) any {
 			return op.BeforeDo
 		}))
 
@@ -86,14 +75,20 @@ func (_ Def) Execute(
 			return op.AfterDo
 		}))
 
-		for _, node := range nodes {
-			if closer, ok := node.(io.Closer); ok {
-				ce(closer.Close())
-			}
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeClose
+		}))
+
+		for i := range nodes {
+			ce(closeNode(NodeID(i)))
 		}
 
 		ce(ops.parallelDo(scope, func(op Operator) any {
-			return op.AfterStop
+			return op.AfterClose
+		}))
+
+		ce(ops.parallelDo(scope, func(op Operator) any {
+			return op.BeforeReport
 		}))
 
 		reports := getReports()
@@ -129,7 +124,7 @@ func (_ Def) DoAction(
 			// sequential action
 			for _, action := range action.Actions {
 				if err := doAction(threadID, action); err != nil {
-					return err
+					return we(err)
 				}
 			}
 
@@ -140,7 +135,7 @@ func (_ Def) DoAction(
 			for _, action := range action.Actions {
 				select {
 				case err := <-errCh:
-					return err
+					return we(err)
 				default:
 				}
 				action := action
@@ -159,14 +154,14 @@ func (_ Def) DoAction(
 			wg.Wait()
 			select {
 			case err := <-errCh:
-				return err
+				return we(err)
 			default:
 			}
 
 		default:
 			// send to target
 			if err := do(threadID, action); err != nil {
-				return err
+				return we(err)
 			}
 
 		}

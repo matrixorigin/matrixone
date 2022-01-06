@@ -410,14 +410,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 		}
 		//row2colTime += time.Since(begin1)
-
 		//duplicate rows
 		for i := int64(0); i < bat.Zs[j]-1; i++ {
 			erow, rr := oq.getEmptyRow()
 			if rr != nil {
 				return rr
 			}
-
 			for l := 0; l < len(bat.Vecs); l++ {
 				erow[l] = row[l]
 			}
@@ -580,13 +578,13 @@ func (mce *MysqlCmdExecutor) handleTxIsolation() error {
 
 /*
 handle "SELECT @@xxx.yyyy"
- */
+*/
 func (mce *MysqlCmdExecutor) handleSelectVariables(v string) error {
 	var err error = nil
 	ses := mce.GetSession()
 	proto := ses.protocol
 
-	if v == "tx_isolation" || v == "transaction_isolation"{
+	if v == "tx_isolation" || v == "transaction_isolation" {
 		col := new(MysqlColumn)
 		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 		col.SetName("@@tx_isolation")
@@ -595,8 +593,8 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(v string) error {
 		var data = make([]interface{}, 1)
 		data[0] = "REPEATABLE-READ"
 		ses.Mrs.AddRow(data)
-	}else{
-		return fmt.Errorf("unsupported system variable %s",v)
+	} else {
+		return fmt.Errorf("unsupported system variable %s", v)
 	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
@@ -913,7 +911,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	for _, cw := range cws {
 		ses.Mrs = &MysqlResultSet{}
 		stmt := cw.GetAst()
-
 		//temp try 0 epoch
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
@@ -951,7 +948,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 							//next statement
 							continue
-						}else if strings.ToLower(ve.Name) == "tx_isolation" {
+						} else if strings.ToLower(ve.Name) == "tx_isolation" {
 							err = mce.handleTxIsolation()
 							if err != nil {
 								return err

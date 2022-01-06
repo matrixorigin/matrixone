@@ -12,17 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
 import (
-	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
+	"encoding/json"
+	"os"
+
+	"github.com/reusee/e4"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
-func (_ Def2) Start(
-	nodes Nodes,
-) fz.StartNode {
-	return func(nodeID fz.NodeID) (fz.Node, error) {
-		node := nodes[nodeID]
-		return node, nil
-	}
+type Logger = *zap.Logger
+
+func (_ Def) Logger(
+	testDataFilePath TestDataFilePath,
+) Logger {
+	logFilePath := testDataFilePath("cube", "log")
+	ce(os.Truncate(logFilePath, 0), e4.Ignore(os.ErrNotExist))
+	loggerConfig := []byte(`
+  {
+    "level": "debug",
+    "encoding": "json",
+    "outputPaths": [
+      "` + logFilePath + `"
+    ]
+  }
+  `)
+	var cfg zap.Config
+	ce(json.Unmarshal(loggerConfig, &cfg))
+	logger, err := cfg.Build(
+		zap.OnFatal(zapcore.WriteThenPanic),
+	)
+	ce(err)
+	return logger
 }

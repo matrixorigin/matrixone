@@ -37,9 +37,6 @@ func TestPorcupine(t *testing.T) {
 	// shared kv
 	kv := NewKV(128)
 
-	// nodes
-	var nodes []*TestPorcupineNode
-
 	fz.NewScope(
 
 		func(
@@ -101,20 +98,22 @@ func TestPorcupine(t *testing.T) {
 			}
 		},
 
-		// start node
-		func() fz.StartNode {
-			return func(id fz.NodeID) (fz.Node, error) {
+		// nodes
+		func(n fz.NumNodes) (nodes fz.Nodes) {
+			for i := 0; i < int(n); i++ {
 				node := &TestPorcupineNode{
-					ID: id,
+					ID: fz.NodeID(i),
 					KV: kv,
 				}
 				nodes = append(nodes, node)
-				return node, nil
 			}
+			return
 		},
 
 		// do
-		func() fz.Do {
+		func(
+			nodes fz.Nodes,
+		) fz.Do {
 			return func(threadID int64, action fz.Action) error {
 
 				switch action := action.(type) {
@@ -123,7 +122,7 @@ func TestPorcupine(t *testing.T) {
 					// get
 					node := nodes[action.Node]
 					t0 := time.Now()
-					value := node.KV.Get(action.Key)
+					value := node.(*TestPorcupineNode).KV.Get(action.Key)
 					t1 := time.Now()
 					// save operation
 					opsLock.Lock()
@@ -140,7 +139,7 @@ func TestPorcupine(t *testing.T) {
 					// set
 					node := nodes[action.Node]
 					t0 := time.Now()
-					node.KV.Set(action.Key, action.Value)
+					node.(*TestPorcupineNode).KV.Set(action.Key, action.Value)
 					t1 := time.Now()
 					// save operation
 					opsLock.Lock()

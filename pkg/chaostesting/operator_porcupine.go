@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/anishathalye/porcupine"
-	"github.com/google/uuid"
 )
 
 type PorcupineReport string
@@ -44,9 +43,8 @@ func (_ Def) NewPorcupineChecker(
 
 		return Operator{
 
-			AfterStop: func(
+			AfterClose: func(
 				report AddReport,
-				uuid uuid.UUID,
 			) {
 
 				if getOps != nil {
@@ -55,7 +53,7 @@ func (_ Def) NewPorcupineChecker(
 						report(PorcupineReport("porcupine check failed"))
 					}
 					if res != porcupine.Ok || genVisual {
-						f, err, done := write(uuid, "porcupine", "html")
+						f, err, done := write("porcupine", "html")
 						ce(err)
 						ce(porcupine.Visualize(model, info, f))
 						ce(done())
@@ -68,7 +66,7 @@ func (_ Def) NewPorcupineChecker(
 						report(PorcupineReport("porcupine check failed"))
 					}
 					if res != porcupine.Ok || genVisual {
-						f, err, done := write(uuid, "porcupine", "html")
+						f, err, done := write("porcupine", "html")
 						ce(err)
 						ce(porcupine.Visualize(model, info, f))
 						ce(done())
@@ -88,6 +86,22 @@ func (_ Def) PorcupineAlwaysGenerateVisualization() PorcupineAlwaysGenerateVisua
 	return false
 }
 
+type kvResultNotFound struct{}
+
+var KVResultNotFound = kvResultNotFound{}
+
+func (_ kvResultNotFound) String() string {
+	return "not-found"
+}
+
+type kvResultTimeout struct{}
+
+var KVResultTimeout = kvResultTimeout{}
+
+func (_ kvResultTimeout) String() string {
+	return "timeout"
+}
+
 var PorcupineKVModel = porcupine.Model{
 	Partition:      porcupine.NoPartition,
 	PartitionEvent: porcupine.NoPartitionEvent,
@@ -102,19 +116,27 @@ var PorcupineKVModel = porcupine.Model{
 		arg := input.([2]any)
 		op := arg[0].(string)
 		key := arg[1]
-		value := output
 
 		switch op {
 
 		case "get":
-			return m[key] == value, state
+			if output == KVResultNotFound {
+				_, ok := m[key]
+				return !ok, state
+			} else if output == KVResultTimeout {
+				return true, state
+			}
+			return m[key] == output, state
 
 		case "set":
+			if output == KVResultTimeout {
+				return true, state
+			}
 			newMap := make(map[any]any, len(m)+1)
 			for k, v := range m {
 				newMap[k] = v
 			}
-			newMap[key] = value
+			newMap[key] = output
 			return true, newMap
 
 		}

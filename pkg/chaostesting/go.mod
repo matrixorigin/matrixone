@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
-	github.com/matrixorigin/matrixcube v0.0.0-20220104023931-06bafdaab5a7
+	github.com/matrixorigin/matrixcube v0.0.0-20220105020136-9b6d37696b54
 	github.com/pelletier/go-toml/v2 v2.0.0-beta.4
 	github.com/reusee/dscope v0.0.0-20220101090512-5e8a967881b0
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313

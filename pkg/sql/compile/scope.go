@@ -237,25 +237,26 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	count := 0
 	tmpSlice := make([]int64, 1)
 	for _, def := range defs {
-		if attrDef, ok := def.(*engine.AttributeDef); ok {
+		switch tableOption := def.(type) {
+		case *engine.AttributeDef:
 			if p.Like != nil { // deal with like rule
-				if k, _ := like.PureLikePure([]byte(attrDef.Attr.Name), p.Like, tmpSlice); k == nil {
+				if k, _ := like.PureLikePure([]byte(tableOption.Attr.Name), p.Like, tmpSlice); k == nil {
 					continue
 				}
 			}
 			attrs[count] = columnInfo{
-				name: attrDef.Attr.Name,
-				typ:  attrDef.Attr.Type,
+				name: tableOption.Attr.Name,
+				typ:  tableOption.Attr.Type,
 			}
-			if attrDef.Attr.HasDefaultExpr() {
-				if attrDef.Attr.Default.IsNull {
+			if tableOption.Attr.HasDefaultExpr() {
+				if tableOption.Attr.Default.IsNull {
 					attrs[count].dft = nullString
 				} else {
-					switch attrDef.Attr.Type.Oid {
+					switch tableOption.Attr.Type.Oid {
 					case types.T_date:
-						attrs[count].dft = fmt.Sprintf("%s", attrDef.Attr.Default.Value)
+						attrs[count].dft = fmt.Sprintf("%s", tableOption.Attr.Default.Value)
 					default:
-						attrs[count].dft = fmt.Sprintf("%v", attrDef.Attr.Default.Value)
+						attrs[count].dft = fmt.Sprintf("%v", tableOption.Attr.Default.Value)
 					}
 				}
 			}
@@ -347,9 +348,9 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 		prefix = ",\n "
 	}
 	if indexTableDefs != nil {
-		for _, i := range indexTableDefs {
+		for _, idx := range indexTableDefs {
 			buf.WriteString(prefix)
-			i.Format(&buf)
+			idx.Format(&buf)
 			prefix = ",\n "
 		}
 	}

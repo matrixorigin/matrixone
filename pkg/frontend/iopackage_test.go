@@ -17,14 +17,16 @@ package frontend
 import (
 	"errors"
 	"fmt"
-	"github.com/fagongzi/goetty"
-	"github.com/fagongzi/goetty/codec"
-	"github.com/fagongzi/goetty/codec/simple"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/codec"
+	"github.com/fagongzi/goetty/codec/simple"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestBasicIOPackage_WriteUint8(t *testing.T) {
@@ -223,7 +225,7 @@ func TestBasicIOPackage_ReadUint64(t *testing.T) {
 
 var svrRun int32
 
-func isClosed()bool {
+func isClosed() bool {
 	return atomic.LoadInt32(&svrRun) != 0
 }
 
@@ -261,8 +263,9 @@ func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware
 	setServer(0)
 
 	fmt.Println("Server started")
-	to := NewTimeout(5 * time.Minute,false)
-	for !isClosed() && !to.isTimeout() {}
+	to := NewTimeout(5*time.Minute, false)
+	for !isClosed() && !to.isTimeout() {
+	}
 	err = echoServer.Stop()
 	if err != nil {
 		return
@@ -320,10 +323,48 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 		echoServer(echoHandler, nil, encoder, decoder)
 	}()
 
-	to := NewTimeout(1 * time.Minute,false)
-	for isClosed() && !to.isTimeout(){}
+	to := NewTimeout(1*time.Minute, false)
+	for isClosed() && !to.isTimeout() {
+	}
 	time.Sleep(15 * time.Second)
 	echoClient()
 	setServer(1)
 	wg.Wait()
+}
+
+func Test_AppendUint(t *testing.T) {
+	convey.Convey("AppendUint succ", t, func() {
+		var io IOPackageImpl
+		var data, data2 []byte = []byte{'a'}, []byte{'a', 'b'}
+		var value uint8 = 'b'
+		data = io.AppendUint8(data, value)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value2 uint16 = 'c'
+		data = io.AppendUint16(data, value2)
+		data2 = append(data2, []byte{0, 'c'}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value3 uint32 = 'd'
+		data = io.AppendUint32(data, value3)
+		data2 = append(data2, []byte{0, 0, 0, 'd'}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var value4 uint64 = 'e'
+		data = io.AppendUint64(data, value4)
+		data2 = append(data2, []byte{0, 0, 0, 0, 0, 0, 0, 'e'}...)
+		convey.So(data, convey.ShouldResemble, data2)
+
+		var pos int = 9
+		u, i, b := io.ReadUint64(data, pos)
+		convey.So(u, convey.ShouldEqual, 0)
+		convey.So(i, convey.ShouldEqual, 0)
+		convey.So(b, convey.ShouldEqual, false)
+
+		io.endian = true
+		pos = 0
+		u, i, b = io.ReadUint64(data, pos)
+		convey.So(i, convey.ShouldEqual, 8)
+		convey.So(b, convey.ShouldEqual, true)
+	})
 }

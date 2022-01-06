@@ -18,25 +18,26 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/components/prophet/storage"
-	cubeconfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"log"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
+	cubeconfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 /*
 	PD callback control block
- */
+*/
 type PDCallbackImpl struct {
 	cubeconfig.StoreHeartbeatDataProcessor
 	/*
-	pd structure
-	 */
+		pd structure
+	*/
 
 	Id int
 
@@ -49,9 +50,9 @@ type PDCallbackImpl struct {
 	serverInfo map[uint64]uint64
 
 	/*
-	chan may be blocked.
-	temporal scheme
-	 */
+		chan may be blocked.
+		temporal scheme
+	*/
 	msgChan chan *ChanMessage
 
 	//ms
@@ -59,20 +60,20 @@ type PDCallbackImpl struct {
 	timerClose    CloseFlag
 
 	/*
-	0 : for the persistence of the cluster epoch
-	1 : for the persistence of the server info
-	2 : for the persistence of the minimumRemovableEpoch
-	 */
+		0 : for the persistence of the cluster epoch
+		1 : for the persistence of the server info
+		2 : for the persistence of the minimumRemovableEpoch
+	*/
 	persistTimeout []*Timeout
-	persistClose CloseFlag
+	persistClose   CloseFlag
 
 	//second
 	periodOfDDLDelete int
 	ddlDeleteClose    CloseFlag
 
 	/*
-	server structure
-	 */
+		server structure
+	*/
 	server_epoch uint64
 	//from the pd leader
 	server_minimumRemovableEpoch uint64
@@ -89,20 +90,20 @@ type PDCallbackImpl struct {
 	removeEpoch func(epoch uint64)
 
 	/*
-	ddl queue
-	kv<epoch,[meta1,meta2,...,]
-	meta_i includes table,database,index,etc
-	 */
+		ddl queue
+		kv<epoch,[meta1,meta2,...,]
+		meta_i includes table,database,index,etc
+	*/
 	ddlQueue map[uint64][]*Meta
 
 	/*
-	enableLogging
-	 */
+		enableLogging
+	*/
 	enableLog bool
 
 	/*
-	close
-	 */
+		close
+	*/
 	closeOnce sync.Once
 
 	/*
@@ -113,13 +114,13 @@ type PDCallbackImpl struct {
 
 /*
 NewPDCallbackImpl
- */
+*/
 func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 	return &PDCallbackImpl{
 		cluster_epoch: 1,
-		serverInfo:                      make(map[uint64]uint64),
-		msgChan:                         make(chan *ChanMessage),
-		periodOfTimer:                   pu.timerPeriod,
+		serverInfo:    make(map[uint64]uint64),
+		msgChan:       make(chan *ChanMessage),
+		periodOfTimer: pu.timerPeriod,
 		persistTimeout: []*Timeout{
 			NewTimeout(time.Duration(pu.persistencePeriod)*time.Second, true),
 			NewTimeout(time.Duration(pu.persistencePeriod)*time.Second, true),
@@ -130,45 +131,45 @@ func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 		ddl_info:          make(map[uint64]uint64),
 		ddlQueue:          make(map[uint64][]*Meta),
 		heartbeatTimeout:  NewTimeout(time.Duration(pu.heartbeatTimeout)*time.Second, false),
-		removeEpoch: nil,
-		enableLog: pu.enableLog,
-		limitOfCubeLoad: pu.limitOfCubeLoad,
+		removeEpoch:       nil,
+		enableLog:         pu.enableLog,
+		limitOfCubeLoad:   pu.limitOfCubeLoad,
 	}
 }
 
 type PDCallbackParameterUnit struct {
 	/*
-	the period of the epoch timer.
-	Second
-	 */
+		the period of the epoch timer.
+		Second
+	*/
 	timerPeriod int
 
 	/*
-	the period of the persistence.
-	Second
-	 */
+		the period of the persistence.
+		Second
+	*/
 	persistencePeriod int
 
 	/*
-	the period of the ddl delete.
-	Second
-	 */
+		the period of the ddl delete.
+		Second
+	*/
 	ddlDeletePeriod int
 
 	/*
-	the timeout of heartbeat.
-	Second
-	 */
+		the timeout of heartbeat.
+		Second
+	*/
 	heartbeatTimeout int
 
 	/*
-	the limit of cube load
-	 */
+		the limit of cube load
+	*/
 	limitOfCubeLoad int
 
 	/*
-	enable logging
-	 */
+		enable logging
+	*/
 	enableLog bool
 }
 
@@ -177,29 +178,29 @@ tp : the period of the epoch timer. Second
 pp : the period of the persistence. Second
 ddp : 	the period of the ddl delete. Second
 ht : 	the timeout of heartbeat. Second
- */
+*/
 func NewPDCallbackParameterUnit(tp, pp, ddp, ht int, enableLog bool, lt int) *PDCallbackParameterUnit {
 	return &PDCallbackParameterUnit{
 		timerPeriod:       tp,
 		persistencePeriod: pp,
 		ddlDeletePeriod:   ddp,
 		heartbeatTimeout:  ht,
-		enableLog: enableLog,
-		limitOfCubeLoad: lt,
+		enableLog:         enableLog,
+		limitOfCubeLoad:   lt,
 	}
 }
 
 type MsgType int
 
 const (
-	MSG_TYPE_SERVER_INFO MsgType = iota+1
+	MSG_TYPE_SERVER_INFO MsgType = iota + 1
 	MSG_TYPE_MINI_REM_EPOCH
 	MSG_TYPE_CLUSTER_EPOCH
 )
 
 type ChanMessage struct {
-	tp MsgType
-	body []byte
+	tp    MsgType
+	body  []byte
 	body2 [][]byte
 	body3 [][]byte
 }
@@ -212,38 +213,38 @@ const (
 
 type Meta struct {
 	MtEpoch uint64
-	MtType int
-	MtId uint64
+	MtType  int
+	MtId    uint64
 }
 
 func (m Meta) String() string {
-	return fmt.Sprintf("epoch %d type %d id %d",m.MtEpoch,m.MtType,m.MtId)
+	return fmt.Sprintf("epoch %d type %d id %d", m.MtEpoch, m.MtType, m.MtId)
 }
 
-func NewMeta(ep uint64,tp int,id uint64) *Meta {
+func NewMeta(ep uint64, tp int, id uint64) *Meta {
 	return &Meta{
 		MtEpoch: ep,
-		MtType: tp,
-		MtId:   id,
+		MtType:  tp,
+		MtId:    id,
 	}
 }
 
 var (
-	CLUSTER_EPOCH_KEY = []byte("cluster_epoch")
+	CLUSTER_EPOCH_KEY  = []byte("cluster_epoch")
 	MINI_REM_EPOCH_KEY = []byte("minimum_removable_epoch")
-	SERVER_PREFIX = []byte("server_i")
+	SERVER_PREFIX      = []byte("server_i")
 )
 
 //get all kv from cube
-func (pci *PDCallbackImpl) getCustomData(k []byte,v []byte) error  {
-	if bytes.HasPrefix(k,CLUSTER_EPOCH_KEY) {
+func (pci *PDCallbackImpl) getCustomData(k []byte, v []byte) error {
+	if bytes.HasPrefix(k, CLUSTER_EPOCH_KEY) {
 		//get cluster epoch
 		ce := binary.BigEndian.Uint64(v)
 		atomic.StoreUint64(&pci.cluster_epoch, ce)
-	} else if bytes.HasPrefix(k,MINI_REM_EPOCH_KEY) {
+	} else if bytes.HasPrefix(k, MINI_REM_EPOCH_KEY) {
 		//get minimum removable epoch
 		pci.cluster_minimumRemovableEpoch = binary.BigEndian.Uint64(v)
-	} else if bytes.HasPrefix(k,SERVER_PREFIX) {
+	} else if bytes.HasPrefix(k, SERVER_PREFIX) {
 		//get <server,maximumRemovableEpoch>
 		serverId := binary.BigEndian.Uint64(k[len(SERVER_PREFIX):])
 		maxRE := binary.BigEndian.Uint64(v)
@@ -257,7 +258,7 @@ func (pci *PDCallbackImpl) getCustomData(k []byte,v []byte) error  {
 /*
 When the node changes from the follower to the leader, the Start will be executed.
 kv : the persistent storage
- */
+*/
 func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
@@ -269,7 +270,7 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	//load cluster_epoch
 	//load minimumRemovableEpoch
 	//load kv<server,maximumRemovableEpoch>
-	err := kv.LoadCustomData(int64(pci.limitOfCubeLoad),pci.getCustomData)
+	err := kv.LoadCustomData(int64(pci.limitOfCubeLoad), pci.getCustomData)
 	if err != nil {
 		return err
 	}
@@ -294,7 +295,7 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 /*
 When the node changes from the leader to the follower, the Stop will be executed.
 kv : the persistent storage
- */
+*/
 func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	if pci.enableLog {
 		logutil.Infof("-------PDC Stop enter\n")
@@ -302,7 +303,7 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	}
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-	if pci.enableLog{
+	if pci.enableLog {
 		logutil.Infof("-------PDC Stop Get Lock\n")
 	}
 
@@ -311,8 +312,8 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 
 	//stop persistent worker
 	/*
-	Do not close chan twice.
-	 */
+		Do not close chan twice.
+	*/
 	if pci.enableLog {
 		logutil.Infof("-------PDC Stop close channel\n")
 	}
@@ -335,7 +336,7 @@ When the leader receives a heartbeat, the HandleHeartbeatReq will be executed.
 id : the id of the node,
 data : the message that the node sent
 kv : the persistent storage
- */
+*/
 func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error) {
 	if pci.enableLog {
 		logutil.Infof("-------PDC HandleHeartbeatReq enter\n")
@@ -355,9 +356,9 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	var minRE uint64 = math.MaxUint64
 
 	/*
-	TODO: performance optimization
-	the minimumRemovableEpoch can be evaluated asynchronously
-	 */
+		TODO: performance optimization
+		the minimumRemovableEpoch can be evaluated asynchronously
+	*/
 	/**
 	Actually, the membership of the cluster may changed.
 	When a new server joins, its initial maximumRemovableEpoch is 0.
@@ -366,42 +367,42 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 
 	When a server leaves,  its info will exist in the server_info in next several epochs.
 	It has no side effects also.
-	 */
+	*/
 	if pci.persistTimeout[1].isTimeout() {
 		var keys [][]byte = nil
 		var b2 [][]byte = nil
 		var kk [8]byte
-		for k,v := range pci.serverInfo {
-			minRE = MinUint64(minRE,v)
+		for k, v := range pci.serverInfo {
+			minRE = MinUint64(minRE, v)
 
 			var k_buf []byte = nil
 			k_buf = append(k_buf, SERVER_PREFIX...)
 
-			binary.BigEndian.PutUint64(kk[:],k)
+			binary.BigEndian.PutUint64(kk[:], k)
 			k_buf = append(k_buf, kk[:]...)
 
-			v_buf := make([]byte,8)
-			binary.BigEndian.PutUint64(v_buf,v)
+			v_buf := make([]byte, 8)
+			binary.BigEndian.PutUint64(v_buf, v)
 
-			keys = append(keys,k_buf)
-			b2 = append(b2,v_buf)
+			keys = append(keys, k_buf)
+			b2 = append(b2, v_buf)
 		}
 		if pci.enableLog {
 			logutil.Infof("-------PDC HandleHeartbeatReq server_info to channel\n")
 		}
 		//step 3: put these values into the worker
 		pci.msgChan <- &ChanMessage{
-			tp:   MSG_TYPE_SERVER_INFO,
-			body: nil,
+			tp:    MSG_TYPE_SERVER_INFO,
+			body:  nil,
 			body2: keys,
 			body3: b2,
 		}
 		if pci.enableLog {
 			logutil.Infof("-------PDC HandleHeartbeatReq enter server_info to channel done\n")
 		}
-	}else{
+	} else {
 		for _, v := range pci.serverInfo {
-			minRE = MinUint64(minRE,v)
+			minRE = MinUint64(minRE, v)
 		}
 	}
 
@@ -410,8 +411,8 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	//logutil.Infof("node %d maxre %d minRe %d \n",id,maxre,minRE)
 
 	if pci.persistTimeout[2].isTimeout() {
-		buf := make([]byte,8)
-		binary.BigEndian.PutUint64(buf,pci.cluster_minimumRemovableEpoch)
+		buf := make([]byte, 8)
+		binary.BigEndian.PutUint64(buf, pci.cluster_minimumRemovableEpoch)
 		if pci.enableLog {
 			logutil.Infof("-------PDC HandleHeartbeatReq epoch to channel\n")
 		}
@@ -425,29 +426,29 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	}
 
 	//step 4: response to the server
-	var rsp []byte = make([]byte,16)
+	var rsp []byte = make([]byte, 16)
 	ce := atomic.LoadUint64(&pci.cluster_epoch)
-	binary.BigEndian.PutUint64(rsp,ce)
-	binary.BigEndian.PutUint64(rsp[8:],pci.cluster_minimumRemovableEpoch)
+	binary.BigEndian.PutUint64(rsp, ce)
+	binary.BigEndian.PutUint64(rsp[8:], pci.cluster_minimumRemovableEpoch)
 
-	return rsp,nil
+	return rsp, nil
 }
 
 /**
 Timer routine for epoch increment
- */
-func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
+*/
+func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int) {
 	pci.timerClose.Open()
 
 	for pci.timerClose.IsOpened() {
 		//step 1: incr cluster_epoch
-		ce := atomic.AddUint64(&pci.cluster_epoch,1)
+		ce := atomic.AddUint64(&pci.cluster_epoch, 1)
 
 		if pci.persistTimeout[0].isTimeout() {
-			buf := make([]byte,8)
-			binary.BigEndian.PutUint64(buf,ce)
+			buf := make([]byte, 8)
+			binary.BigEndian.PutUint64(buf, ce)
 			if pci.enableLog {
-				logutil.Infof("------- gen epoch %d\n",ce)
+				logutil.Infof("------- gen epoch %d\n", ce)
 			}
 			//step 2: put these values into the worker
 			pci.msgChan <- &ChanMessage{
@@ -462,7 +463,7 @@ func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
 
 /*
 store the message into the kv
- */
+*/
 func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv storage.Storage) {
 	pci.persistClose.Open()
 
@@ -474,7 +475,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			if pci.enableLog {
 				logutil.Infof("-------cluster epoch %v \n", msg.body)
 			}
-			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
+			err := kv.PutCustomData(CLUSTER_EPOCH_KEY, msg.body)
 			if err != nil {
 				//panic(err)
 				log.Fatal(err)
@@ -485,17 +486,17 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 				logutil.Infof("-------server info %v \n", msg.body2)
 			}
 			//save kv<server,maximumRemovableEpoch>
-			err := kv.BatchPutCustomData(msg.body2,msg.body3)
+			err := kv.BatchPutCustomData(msg.body2, msg.body3)
 			if err != nil {
 				//panic(err)
 				log.Fatal(err)
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
 			if pci.enableLog {
-				logutil.Infof("-------minimum removable epoch %v \n",msg.body)
+				logutil.Infof("-------minimum removable epoch %v \n", msg.body)
 			}
 			//save minimumRemovableEpoch
-			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
+			err := kv.PutCustomData(MINI_REM_EPOCH_KEY, msg.body)
 			if err != nil {
 				//panic(err)
 				log.Fatal(err)
@@ -506,8 +507,8 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 
 /**
 pd leader start the routine.
- */
-func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
+*/
+func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine() {
 	pci.ddlDeleteClose.Open()
 	for pci.ddlDeleteClose.IsOpened() {
 		//step 1: delete these ddls
@@ -528,7 +529,7 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 /*
 when the server receives a heartbeat response from the leader, the HandleHeartbeatRsp will be executed.
 data : the response from the leader
- */
+*/
 func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	if sci.enableLog {
 		logutil.Infof("-------PDC HandleHeartbeatRsp enter\n")
@@ -543,9 +544,9 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	pd_mre := binary.BigEndian.Uint64(data[8:])
 
 	/*
-	change server_epoch;
-	calc maxRemovableEpoch;
-	 */
+		change server_epoch;
+		calc maxRemovableEpoch;
+	*/
 	if cluster_epoch > sci.server_epoch {
 		sci.server_epoch = cluster_epoch
 		sci.epoch_info[sci.server_epoch] = 0
@@ -556,7 +557,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		for k := range sci.epoch_info {
 			//careful
 			if k < sci.server_epoch {
-				eps = append(eps,k)
+				eps = append(eps, k)
 			}
 
 			//if sci.epoch_info[k] > 0 {
@@ -569,9 +570,9 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 
 		maxRE := uint64(0)
 		//calc the maximumRemovableEpoch until the first non-zero epoch
-		for _,k := range eps {
-			v,ok := sci.epoch_info[k]
-			if !ok{
+		for _, k := range eps {
+			v, ok := sci.epoch_info[k]
+			if !ok {
 				continue
 			}
 
@@ -580,7 +581,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 				break
 			}
 
-			maxRE = MaxUint64(maxRE,k)
+			maxRE = MaxUint64(maxRE, k)
 		}
 
 		//TODO: atomic set
@@ -601,23 +602,23 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		var eps Uint64List = nil
 		for ep := range sci.epoch_info {
 			if ep <= sci.server_minimumRemovableEpoch {
-				eps = append(eps,ep)
+				eps = append(eps, ep)
 			}
 		}
 
 		//delete these epoch infos
-		for _,ep := range eps {
+		for _, ep := range eps {
 			v := sci.epoch_info[ep]
 			if v != 0 {
-				panic(fmt.Errorf("query_cnt is not zero in removableEpoch. epoch %d epoch_info %v",ep,sci.epoch_info))
+				panic(fmt.Errorf("query_cnt is not zero in removableEpoch. epoch %d epoch_info %v", ep, sci.epoch_info))
 			}
 
 			sci.removeEpochInfoUnsafe(ep)
 		}
 
 		/*
-		if there is a ddl in this epoch, then run async drop task
-		 */
+			if there is a ddl in this epoch, then run async drop task
+		*/
 		var ddl_ep []uint64 = nil
 		var ddl_max_ep uint64 = 0
 		for ep, ddlc := range sci.ddl_info {
@@ -630,7 +631,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 			}
 		}
 
-		for _,ep := range ddl_ep {
+		for _, ep := range ddl_ep {
 			sci.removeDDLInfoUnsafe(ep)
 		}
 
@@ -645,12 +646,12 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 /*
 drop task routine
 less than or equal to the epoch will be deleted.
- */
+*/
 func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
 	if sci.removeEpoch != nil && max_ep > 0 {
 		if sci.enableLog {
-			logutil.Infof("async delete ddl epoch %d \n",max_ep)
+			logutil.Infof("async delete ddl epoch %d \n", max_ep)
 		}
 		sci.removeEpoch(max_ep)
 	}
@@ -661,8 +662,8 @@ func (sci *PDCallbackImpl) CollectData() []byte {
 	defer sci.rwlock.RUnlock()
 
 	//TODO: atmoic read
-	var buf []byte = make([]byte,8)
-	binary.BigEndian.PutUint64(buf,sci.server_maximumRemovableEpoch)
+	var buf []byte = make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, sci.server_maximumRemovableEpoch)
 	//logutil.Infof("%d send heartbeat\n",sci.Id)
 	return buf
 }
@@ -687,7 +688,7 @@ func (sci *PDCallbackImpl) IncQueryCountAtCurrentEpoch(qc uint64) (uint64, uint6
 	return sci.server_epoch, sci.epoch_info[sci.server_epoch]
 }
 
-func (sci *PDCallbackImpl) IncQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
+func (sci *PDCallbackImpl) IncQueryCountAtEpoch(ep, qc uint64) (uint64, uint64) {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	if ep == 0 {
@@ -697,8 +698,7 @@ func (sci *PDCallbackImpl) IncQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
 	return ep, sci.epoch_info[ep]
 }
 
-
-func (sci *PDCallbackImpl) IncDDLCountAtEpoch(ep,ddlc uint64) (uint64, uint64) {
+func (sci *PDCallbackImpl) IncDDLCountAtEpoch(ep, ddlc uint64) (uint64, uint64) {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	if ep == 0 {
@@ -716,11 +716,11 @@ func (sci *PDCallbackImpl) IncDDLCountAtEpoch(ep,ddlc uint64) (uint64, uint64) {
 	epoch
 	query_cnt after subtracted
 */
-func (sci *PDCallbackImpl) DecQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
+func (sci *PDCallbackImpl) DecQueryCountAtEpoch(ep, qc uint64) (uint64, uint64) {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	if ep == 0 {
-		return 0,0
+		return 0, 0
 	}
 	sci.epoch_info[ep] -= qc
 	return ep, sci.epoch_info[ep]
@@ -730,8 +730,8 @@ func (sci *PDCallbackImpl) DecQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
 the server has the rights to accept something.
 false: if the heartbeat is timeout
 true: if the heartbeat is instant
- */
-func (sci *PDCallbackImpl) CanAcceptSomething() bool{
+*/
+func (sci *PDCallbackImpl) CanAcceptSomething() bool {
 	sci.rwlock.RLock()
 	defer sci.rwlock.RUnlock()
 	return !sci.heartbeatTimeout.isTimeout()
@@ -743,7 +743,7 @@ func (sci *PDCallbackImpl) SetRemoveEpoch(f func(uint64)) {
 	sci.removeEpoch = f
 }
 
-func (sci *PDCallbackImpl) GetClusterMinimumRemovableEpoch() uint64{
+func (sci *PDCallbackImpl) GetClusterMinimumRemovableEpoch() uint64 {
 	sci.rwlock.RLock()
 	defer sci.rwlock.RUnlock()
 	return sci.cluster_minimumRemovableEpoch
@@ -752,44 +752,44 @@ func (sci *PDCallbackImpl) GetClusterMinimumRemovableEpoch() uint64{
 /*
 put a meta into the queue.
 it will not be persisted.
- */
-func (sci *PDCallbackImpl) AddMeta(ep uint64,mt *Meta) {
+*/
+func (sci *PDCallbackImpl) AddMeta(ep uint64, mt *Meta) {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 
-	q,ok := sci.ddlQueue[ep]
+	q, ok := sci.ddlQueue[ep]
 	if !ok {
 		q = []*Meta{mt}
 		sci.ddlQueue[ep] = q
-	}else{
-		q = append(q,mt)
+	} else {
+		q = append(q, mt)
 		sci.ddlQueue[ep] = q
 	}
 }
 
 //multi-thread unsafe
 func (sci *PDCallbackImpl) removeEpochMetasUnsafe(ep uint64) []*Meta {
-	q,ok := sci.ddlQueue[ep]
+	q, ok := sci.ddlQueue[ep]
 	if !ok {
 		return nil
-	}else{
-		delete(sci.ddlQueue,ep)
+	} else {
+		delete(sci.ddlQueue, ep)
 		return q
 	}
 }
 
 //multi-thread unsafe
 func (sci *PDCallbackImpl) removeEpochInfoUnsafe(ep uint64) {
-	delete(sci.epoch_info,ep)
+	delete(sci.epoch_info, ep)
 }
 
 //multi-thread unsafe
 func (sci *PDCallbackImpl) removeDDLInfoUnsafe(ep uint64) {
-	delete(sci.ddl_info,ep)
+	delete(sci.ddl_info, ep)
 }
 
 //for test
-func (sci *PDCallbackImpl) AddEpochInfo(ep,qc uint64) uint64 {
+func (sci *PDCallbackImpl) AddEpochInfo(ep, qc uint64) uint64 {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	if sci.server_epoch == 0 {
@@ -800,7 +800,7 @@ func (sci *PDCallbackImpl) AddEpochInfo(ep,qc uint64) uint64 {
 }
 
 //for test
-func (sci *PDCallbackImpl) SetEpochInfo(ep,qc uint64) uint64 {
+func (sci *PDCallbackImpl) SetEpochInfo(ep, qc uint64) uint64 {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	if ep == 0 {
