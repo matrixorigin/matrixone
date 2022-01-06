@@ -24,6 +24,8 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		TYPE = MYSQL_TYPE
+		ZONEMAP = MYSQL_ZONEMAP
 		BSI = MYSQL_BSI
 		ROW = MYSQL_ROW
 		PROPERTIES = MYSQL_PROPERTIES
@@ -827,7 +829,8 @@ func initTokens(dialectType dialect.DialectType) {
 		"x509":                     X509,
 		"year":                     YEAR,
 		"year_month":               UNUSED,
-		"zerofill":                 ZEROFILL,
+		"zerofill":                  ZEROFILL,
+		"zonemap":					ZONEMAP,
 		"adddate":                  ADDDATE,
 		"count":                    COUNT,
 		"approx_count_distinct":    APPROX_COUNT_DISTINCT,
@@ -853,11 +856,14 @@ func initTokens(dialectType dialect.DialectType) {
 		"variance":                 VARIANCE,
 		"var_pop":                  VAR_POP,
 		"var_samp":                 VAR_SAMP,
+		"type":						TYPE,
 	}
 }
 
 // mysql
 var (
+	TYPE					 int
+	ZONEMAP   				 int
 	BSI						 int
 	ROW						 int
 	PROPERTIES				 int

@@ -16,9 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"go/constant"
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go/constant"
+	"math"
 )
 
 func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) error {
@@ -145,6 +144,29 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 		return &engine.PrimaryIndexDef{
 			Names: pkNames,
 		}, pkNames, nil
+	case *tree.Index:
+		keyType := engine.ZoneMap
+		switch n.KeyType {
+		case tree.INDEX_TYPE_BSI:
+			keyType = engine.BsiIndex
+		case tree.INDEX_TYPE_ZONEMAP:
+			keyType = engine.ZoneMap
+		}
+
+		nameMap := map[string]struct{}{}
+		colNames := make([]string, len(n.KeyParts))
+		for i, key := range n.KeyParts {
+			if _, ok := nameMap[key.ColName.Parts[0]]; ok {
+				return nil, nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
+			}
+			colNames[i] = key.ColName.Parts[0]
+			nameMap[key.ColName.Parts[0]] = struct{}{}
+		}
+		return &engine.IndexTableDef{
+			Name: n.Name,
+			Typ: keyType,
+			ColNames: colNames,
+		}, primaryKeys, nil
 	default:
 		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
 	}

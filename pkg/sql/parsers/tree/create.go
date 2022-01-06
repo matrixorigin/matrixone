@@ -607,6 +607,8 @@ func (it IndexType) ToString() string {
 		return "rtree"
 	case INDEX_TYPE_BSI:
 		return "bsi"
+	case INDEX_TYPE_ZONEMAP:
+		return "zonemap"
 	default:
 		return "Unknown IndexType"
 	}
@@ -618,6 +620,7 @@ const (
 	INDEX_TYPE_HASH
 	INDEX_TYPE_RTREE
 	INDEX_TYPE_BSI
+	INDEX_TYPE_ZONEMAP
 )
 
 type VisibleType int
@@ -730,7 +733,7 @@ type Index struct {
 	IfNotExists bool
 	KeyParts    []*KeyPart
 	Name        string
-	Empty       bool
+	KeyType     IndexType
 	IndexOption *IndexOption
 }
 
@@ -743,8 +746,9 @@ func (node *Index) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Name)
 	}
-	if !node.Empty {
-		ctx.WriteString(" using none")
+	if node.KeyType != INDEX_TYPE_INVALID {
+		ctx.WriteString(" using ")
+		ctx.WriteString(node.KeyType.ToString())
 	}
 	if node.KeyParts != nil {
 		prefix := " ("
@@ -761,11 +765,11 @@ func (node *Index) Format(ctx *FmtCtx) {
 	}
 }
 
-func NewIndex(k []*KeyPart, n string, e bool, io *IndexOption) *Index {
+func NewIndex(k []*KeyPart, n string, t IndexType, io *IndexOption) *Index {
 	return &Index{
 		KeyParts:    k,
 		Name:        n,
-		Empty:       e,
+		KeyType:     t,
 		IndexOption: io,
 	}
 }
