@@ -207,7 +207,6 @@ func TestAOEEngine(t *testing.T) {
 
 	//test relation
 	tb, err = db.Relation(mockTbl.Name)
-	require.Equal(t, 1, len(tb.Nodes()))
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
@@ -224,7 +223,7 @@ func TestAOEEngine(t *testing.T) {
 	for _, def := range tdefs {
 		if i, ok := def.(*vengine.IndexTableDef); ok {
 			index = append(index, vengine.IndexTableDef{
-				Typ:   i.Typ,
+				Typ:   int(i.Typ),
 				ColNames: i.ColNames,
 			})
 		}
@@ -240,7 +239,7 @@ func TestAOEEngine(t *testing.T) {
 		require.NoError(t, err)
 	}
 	num := tb.NewReader(15)
-	require.Equal(t, 15, len(num))
+	require.Equal(t, 10, len(num))
 	tb.Close()
 
 	err = db.Delete(5, mockTbl.Name)

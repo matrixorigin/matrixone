@@ -86,6 +86,14 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
+	return nil
+}
+
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
+	return nil
+}
+
 func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
 	idxInfo:= helper.IndexDefs(r.pid,r.tbl.Id,nil,defs)
 	//TODO
@@ -93,14 +101,6 @@ func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
 }
 func (r *relation) DropIndex(epoch uint64, name string) error{
 	return r.catalog.DropIndex(epoch,r.tbl.Id,r.tbl.SchemaId,name)
-}
-
-func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
-	return nil
-}
-
-func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
-	return nil
 }
 
 func (r *relation) Rows() int64 {
@@ -138,36 +138,22 @@ func (r *relation) NewReader(num int) []engine.Reader {
 		}
 		return readers
 	}
-	blockNum := 0
+	readStore := &store{
+		rhs: make(chan *batch.Batch, 5000),
+		start: false,
+	}
 	blocks := make([]aoe.Block, 0)
 	for _, sid := range r.segments {
 		segment := r.Segment(sid)
 		ids := segment.Blocks()
-		blockNum += len(ids)
 		for _, id := range ids {
 			blocks = append(blocks, segment.Block(id))
 		}
 	}
-	mod := blockNum / num
-	if mod == 0 {
-		mod = 1
-	}
-	for i = 0; i < num; i++ {
-		if i == num-1 || i == blockNum-1 {
-			readers[i] = &aoeReader{
-				blocks: blocks[i*mod:],
-			}
-			break
-		}
-		readers[i] = &aoeReader{
-			blocks: blocks[i*mod : (i+1)*mod],
-		}
-	}
-	i++
-	if i < num {
-		for j := i; j < num; j++ {
-			readers[j] = &aoeReader{blocks: nil}
-		}
+	readStore.SetBlocks(blocks)
+	for i := 0; i < num; i++ {
+		readers[i] = &aoeReader{reader: readStore, id: i+1}
 	}
 	return readers
 }
+

@@ -1,9 +1,8 @@
 package engine
 
 import (
-	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -16,11 +15,16 @@ func (a *aoeReader) NewSummarizer() engine.Summarizer {
 }
 
 func (a *aoeReader) NewSparseFilter() engine.SparseFilter {
-	return nil
+	return NewAoeSparseFilter(a.reader, a)
 }
 
 func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
-	if a.blocks == nil || len(a.blocks) == 0 {
+	bat := a.reader.GetBatch(refCount, attrs)
+	if bat == nil {
+		logutil.Infof("dequeue is %d", a.reader.dequeue)
+	}
+	return bat, nil
+	/*if a.blocks == nil || len(a.blocks) == 0 {
 		return nil, nil
 	}
 
@@ -50,5 +54,5 @@ func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		bat.Zs[i] = 1
 	}
 	a.blocks = a.blocks[1:]
-	return bat, nil
+	return bat, nil*/
 }
