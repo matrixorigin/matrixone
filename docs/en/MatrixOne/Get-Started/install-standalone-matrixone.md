@@ -1,6 +1,6 @@
-# **Install MatrixOne**
+# **Install standalone MatrixOne**
 
-MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
+MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version either by [building from source](#building-from-source) or [using docker](#using-docker).
  
 ## **Building from source**
 
