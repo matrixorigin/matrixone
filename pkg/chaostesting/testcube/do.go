@@ -34,12 +34,16 @@ func (_ Def2) Do(
 	for i := 0; i < len(nodes); i++ {
 		kvs = append(kvs, newKV(nodes[i].(*Node)))
 	}
+	stopped := make(map[fz.NodeID]bool)
 
 	return func(threadID int64, action fz.Action) error {
 
 		switch action := action.(type) {
 
 		case ActionSet:
+			if stopped[fz.NodeID(action.ClientID)] {
+				return nil
+			}
 			return log(
 				func() (int, any, any, error) {
 					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Minute*2); err != nil {
@@ -56,6 +60,9 @@ func (_ Def2) Do(
 			)
 
 		case ActionGet:
+			if stopped[fz.NodeID(action.ClientID)] {
+				return nil
+			}
 			return log(
 				func() (int, any, any, error) {
 					var res int
@@ -78,6 +85,7 @@ func (_ Def2) Do(
 			)
 
 		case ActionStopNode:
+			stopped[action.NodeID] = true
 			return closeNode(fz.NodeID(action.NodeID))
 
 		default:

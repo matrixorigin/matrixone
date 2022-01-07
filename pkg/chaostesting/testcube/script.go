@@ -15,26 +15,41 @@
 package main
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/chaostesting"
-	"github.com/reusee/dscope"
+	"errors"
+	"os"
+
+	"github.com/reusee/starlarkutil"
+	"go.starlark.net/starlark"
 )
 
-type Def struct{}
+func loadScript() (
+	defs []any,
+	err error,
+) {
+	defer he(&err)
 
-type Def2 struct{}
+	const scriptFileName = "script.py"
 
-func NewScope() Scope {
-	var defs []any
-	defs = append(defs, dscope.Methods(new(fz.Def))...)
-	defs = append(defs, dscope.Methods(new(Def))...)
-	scope := dscope.New(defs...)
-	defs = defs[:0]
-	defs = append(defs, dscope.Methods(new(Def2))...)
-	scope = scope.Fork(defs...)
-	defs, err := loadScript()
-	ce(err)
-	if len(defs) > 0 {
-		scope = scope.Fork(defs...)
+	src, err := os.ReadFile(scriptFileName)
+	if errors.Is(err, os.ErrNotExist) {
+		return
 	}
-	return scope
+	ce(err)
+
+	_, err = starlark.ExecFile(
+		new(starlark.Thread),
+		scriptFileName,
+		src,
+		starlark.StringDict{
+
+			"parallel": starlarkutil.MakeFunc("parallel", func(n int) {
+				defs = append(defs, func() Parallel {
+					return Parallel(n)
+				})
+			}),
+		},
+	)
+	ce(err)
+
+	return
 }

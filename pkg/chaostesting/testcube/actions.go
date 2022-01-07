@@ -34,7 +34,7 @@ type ActionGet struct {
 }
 
 type ActionStopNode struct {
-	NodeID int `xml:",attr"`
+	NodeID fz.NodeID `xml:",attr"`
 }
 
 //TODO node restart

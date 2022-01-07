@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/matrixorigin/matrixcube/config"
@@ -26,22 +27,30 @@ import (
 	"github.com/reusee/e4"
 )
 
+type Parallel int
+
+func (_ Def) Parallel() Parallel {
+	return Parallel(runtime.NumCPU())
+}
+
 func (_ Def) CmdRun(
 	read fz.ReadConfig,
 	getCases GetTestCases,
+	parallel Parallel,
 ) Commands {
 
 	runOne := func(configPath string) (err error) {
 		defer func() {
-			if err == nil {
-				color.Green("OK %s", configPath)
-			} else {
-				color.Red("FAILED %s", configPath)
-			}
 
 			if p := recover(); p != nil {
 				color.Red("PANIC %s", configPath)
 				panic(p)
+			}
+
+			if err == nil {
+				color.Green("OK %s", configPath)
+			} else {
+				color.Red("FAILED %s", configPath)
 			}
 
 		}()
@@ -76,8 +85,18 @@ func (_ Def) CmdRun(
 		// run
 		scope.Call(func(
 			execute fz.Execute,
+			logger fz.Logger,
 		) {
-			ce(execute())
+			done := make(chan struct{})
+			go func() {
+				ce(execute())
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(time.Minute * 5):
+				logger.Error("test timeout")
+			}
 		})
 
 		return
@@ -86,8 +105,7 @@ func (_ Def) CmdRun(
 	return Commands{
 		"run": func(args []string) {
 
-			sem := make(chan struct{}, runtime.NumCPU())
-			sem = make(chan struct{}, 4)
+			sem := make(chan struct{}, parallel)
 			for _, run := range getCases(args) {
 				run := run
 				sem <- struct{}{}
