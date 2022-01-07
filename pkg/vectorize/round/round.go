@@ -14,10 +14,6 @@
 
 package round
 
-import (
-	"math"
-)
-
 /* round package provides rounding function for all numeric types(uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64).
    the round functions here round numbers using the banker's rule, that is, round to the nearest even number in the situation of .5,
 	1.5 ----> 2
@@ -25,6 +21,10 @@ import (
 	3.5 ----> 4 and so on.
 	caveat: for integer numbers, overflow can happen.
 */
+
+import (
+	"math"
+)
 
 var (
 	roundUint8   func([]uint8, []uint8, int64) []uint8
@@ -88,11 +88,7 @@ func roundUint8Pure(xs []uint8, rs []uint8, digits int64) []uint8 {
 			quotient := (xs[i] + scale/2) / scale
 			if quotient*scale == xs[i]+scale/2 {
 				// round half(.5) to the nearest even number
-				flag := uint8(0)
-				if xs[i] < 0 {
-					flag = 1
-				}
-				rs[i] = ((quotient + flag) & (0xFE)) * scale
+				rs[i] = (quotient & 0xFE) * scale
 			} else {
 				// round others
 				rs[i] = quotient * scale
@@ -120,11 +116,7 @@ func roundUint16Pure(xs []uint16, rs []uint16, digits int64) []uint16 {
 			quotient := (xs[i] + scale/2) / scale
 			if quotient*scale == xs[i]+scale/2 {
 				// round .5 to the nearest even number
-				flag := uint16(0)
-				if xs[i] < 0 {
-					flag = 1
-				}
-				rs[i] = ((quotient + flag) & (0xFFFE)) * scale
+				rs[i] = (quotient & 0xFFFE) * scale
 			} else {
 				// round others
 				rs[i] = quotient * scale
@@ -152,11 +144,7 @@ func roundUint32Pure(xs []uint32, rs []uint32, digits int64) []uint32 {
 			quotient := (xs[i] + scale/2) / scale
 			if quotient*scale == xs[i]+scale/2 {
 				// round .5 to the nearest even number
-				flag := uint32(0)
-				if xs[i] < 0 {
-					flag = 1
-				}
-				rs[i] = ((quotient + flag) & (0xFFFFFFFE)) * scale
+				rs[i] = (quotient & 0xFFFFFFFE) * scale
 			} else {
 				// round others
 				rs[i] = quotient * scale
@@ -184,11 +172,7 @@ func roundUint64Pure(xs []uint64, rs []uint64, digits int64) []uint64 {
 			quotient := (xs[i] + scale/2) / scale
 			if quotient*scale == xs[i]+scale/2 {
 				// round .5 to the nearest even number
-				flag := uint64(0)
-				if xs[i] < 0 {
-					flag = 1
-				}
-				rs[i] = ((quotient + flag) & (0xFFFFFFFFFFFFFFFE)) * scale
+				rs[i] = (quotient & 0xFFFFFFFFFFFFFFFE) * scale
 			} else {
 				// round others
 				rs[i] = quotient * scale
@@ -350,7 +334,7 @@ func roundFloat32Pure(xs []float32, rs []float32, digits int64) []float32 {
 		scale := math.Pow10(int(-digits))
 		for i, _ := range xs {
 			value := float64(xs[i]) / scale
-			roundResult := math.RoundToEven(value)
+			roundResult := math.RoundToEven(value) // the go standard library implementation of RoundToEven is pretty neat
 			rs[i] = float32(roundResult * scale)
 		}
 	} else {

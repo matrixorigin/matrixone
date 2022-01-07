@@ -15,207 +15,200 @@
 package round
 
 import (
-	"fmt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
 )
 
 func TestRoundUint8(t *testing.T) {
 	nums := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
 	res := make([]uint8, len(nums))
-	res_0 := roundUint8(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundUint8(nums, res, 0)
+	correctRes0 := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233}
+	for i, _ := range res0 {
+		require.Equal(t, res0[i], correctRes0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundUint8(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundUint8(nums, res, -1)
+	correctResMinus1 := []uint8{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230}
+	for i, _ := range resMinus1 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundUint8(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
+	resMinus2 := roundUint8(nums, res, -2)
+	correctResMinus2 := []uint8{0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100}
+	for i := 0; i < len(resMinus2)-1; i++ { // roundUint8(233, 2) here will cause integer overflow and the result is undefined, so this test is skipped
+		require.Equal(t, correctResMinus2[i], resMinus1[i])
 	}
-	fmt.Println()
 }
 
 func TestRoundUint16(t *testing.T) {
 	nums := []uint16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368}
 	res := make([]uint16, len(nums))
-	res_0 := roundUint16(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundUint16(nums, res, 0)
+	correctRes0 := []uint16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundUint16(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundUint16(nums, res, -1)
+	correctResMinus1 := []uint16{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370}
+	for i, _ := range resMinus1 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundUint16(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
+	resMinus2 := roundUint16(nums, res, -2)
+	correctResMinus2 := []uint16{0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 200, 400, 600, 1000, 1600, 2600, 4200, 6800, 10900, 17700, 28700, 46400}
+	for i, _ := range resMinus2 {
+		require.Equal(t, correctResMinus2[i], resMinus2[i])
 	}
-	fmt.Println()
 }
 
 func TestRoundUint32(t *testing.T) {
 	nums := []uint32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
 	res := make([]uint32, len(nums))
-	res_0 := roundUint32(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundUint32(nums, res, 0)
+	correctRes0 := []uint32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
+	for i, _ := range res0 {
+		require.Equal(t, res0[i], correctRes0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundUint32(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundUint32(nums, res, -1)
+	correctResMinus1 := []uint32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370, 75020, 121390, 196420, 317810}
+	for i, _ := range res0 {
+		require.Equal(t, resMinus1[i], correctResMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundUint32(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
+	resMinus2 := roundUint32(nums, res, -2)
+	correctResMinus2 := []uint32{0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 200, 400, 600, 1000, 1600, 2600, 4200, 6800, 10900, 17700, 28700, 46400, 75000, 121400, 196400, 317800}
+	for i, _ := range res0 {
+		require.Equal(t, resMinus2[i], correctResMinus2[i])
 	}
-	fmt.Println()
 }
 
 func TestRoundUint64(t *testing.T) {
 	nums := []uint64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
 	res := make([]uint64, len(nums))
-	res_0 := roundUint64(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundUint64(nums, res, 0)
+	correctRes0 := []uint64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundUint64(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundUint64(nums, res, -1)
+	correctResMinus1 := []uint64{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 6760, 10950, 17710, 28660, 46370, 75020, 121390, 196420, 317810}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundUint64(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
+	resMinus2 := roundUint64(nums, res, -2)
+	correctResMinus2 := []uint64{0, 0, 0, 0, 0, 0, 0, 0, 100, 100, 100, 200, 400, 600, 1000, 1600, 2600, 4200, 6800, 10900, 17700, 28700, 46400, 75000, 121400, 196400, 317800}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus2[i], resMinus2[i])
 	}
-	fmt.Println()
 }
 
 func TestRoundInt8(t *testing.T) {
 	nums := []int8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89}
 	res := make([]int8, len(nums))
-	res_0 := roundInt8(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundInt8(nums, res, 0)
+	correctRes0 := []int8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundInt8(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundInt8(nums, res, -1)
+	correctResMinus1 := []int8{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundInt8(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
-	}
-	fmt.Println()
 }
 
 func TestRoundInt16(t *testing.T) {
 	nums := []int16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
 	res := make([]int16, len(nums))
-	res_0 := roundInt16(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundInt16(nums, res, 0)
+	correctRes0 := []int16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundInt16(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundInt16(nums, res, -1)
+	correctResMinus1 := []int16{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundInt16(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
-	}
-	fmt.Println()
 }
 
 func TestRoundInt32(t *testing.T) {
-	nums := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
+	nums := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181, 32768}
 	res := make([]int32, len(nums))
-	res_0 := roundInt32(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	res0 := roundInt32(nums, res, 0)
+	correctRes0 := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181, 32768}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundInt32(nums, res, -1)
-	// res_minus_2 := roundUint16(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundInt32(nums, res, -1)
+	correctResMinus1 := []int32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundInt32(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\n", n, res_minus_2[i])
-	}
-	fmt.Println()
 }
 
 func TestRoundInt64(t *testing.T) {
-	nums := []int64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
-	res := make([]int64, len(nums))
-	res_0 := roundInt64(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%d, 0) is %d\t", n, res_0[i])
+	nums := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181, 32768, 1234567}
+	res := make([]int32, len(nums))
+	res0 := roundInt32(nums, res, 0)
+	correctRes0 := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181, 32768, 1234567}
+	for i, _ := range res0 {
+		require.Equal(t, correctRes0[i], res0[i])
 	}
-	fmt.Println()
-	res_minus_1 := roundInt64(nums, res, -1)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -1) is %d\t", n, res_minus_1[i])
+	resMinus1 := roundInt32(nums, res, -1)
+	correctResMinus1 := []int32{0, 0, 0, 0, 10, 10, 20, 30, 60, 90, 140, 230, 380, 610, 990, 1600, 2580, 4180, 0, 0, 0, 0, -10, -10, -20, -30, -60, -90, -140, -230, -380, -610, -990, -1600, -2580, -4180, 32770, 1234570}
+	for i, _ := range res0 {
+		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
-	fmt.Println()
-	res_minus_2 := roundInt64(nums, res, -2)
-	for i, n := range nums {
-		fmt.Printf("round(%d, -2) is %d\t", n, res_minus_2[i])
+}
+
+const tolerance = .00001
+
+func floatCompare(x, y float64) bool {
+	diff := math.Abs(x - y)
+	mean := math.Abs(x + y)
+	if math.IsNaN(diff / mean) {
+		return true
 	}
-	fmt.Println()
+	return (diff / mean) < tolerance
 }
 
 func TestRoundFloat32(t *testing.T) {
-	nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 123456.7, 1234567.8, 123456789.0, 12345678.9, 1234567.89, 123456.789, 12345.6789, 1234.56789, -1.2, -12.3, -123.4, -1234.5, -12345.6, -123456.7, -1234567.8, -123456789.0, -12345678.9, -1234567.89, -123456.789, -12345.6789, -1234.56789}
+	nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
 	res := make([]float32, len(nums))
-	res_0 := roundFloat32Pure(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%f, 0) is %f\t", n, res_0[i])
+	res0 := roundFloat32Pure(nums, res, 0)
+	correctRes0 := []float32{2, -2, 2, -2, 1, 12, 123, 1234, 12346, 1235, -1, -12, -123, -1234, -12346}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(float64(correctRes0[i]), float64(res0[i])))
 	}
-	fmt.Println()
-	res_1 := roundFloat32Pure(nums, res, 1)
-	for i, n := range nums {
-		fmt.Printf("round(%f, 1) is %f\t", n, res_1[i])
+	resMinus1 := roundFloat32Pure(nums, res, -1)
+	correctResMinus1 := []float32{0, 0, 0, 0, 0, 10, 120, 1230, 12350, 1230, 0, -10, -120, -1230, -12350}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(float64(correctResMinus1[i]), float64(resMinus1[i])))
 	}
-	fmt.Println()
-	res_2 := roundFloat32Pure(nums, res, 2)
-	for i, n := range nums {
-		fmt.Printf("round(%f, 2) is %f\t", n, res_2[i])
+	res1 := roundFloat32Pure(nums, res, 1)
+	correctRes1 := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.6, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+	for i, _ := range res1 {
+		assert.True(t, floatCompare(float64(correctRes1[i]), float64(res1[i])))
 	}
-	fmt.Println()
 }
 
 func TestRoundFloat64(t *testing.T) {
-	nums := []float64{1.2, 12.3, 123.4, 1234.5, 12345.6, 123456.7, 1234567.8, 123456789.0, 12345678.9, 1234567.89, 123456.789, 12345.6789, 1234.56789, -1.2, -12.3, -123.4, -1234.5, -12345.6, -123456.7, -1234567.8, -123456789.0, -12345678.9, -1234567.89, -123456.789, -12345.6789, -1234.56789}
+	nums := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
 	res := make([]float64, len(nums))
-	res_0 := roundFloat64Pure(nums, res, 0)
-	for i, n := range nums {
-		fmt.Printf("round(%f, j) is %f\t", n, res_0[i])
+	res0 := roundFloat64Pure(nums, res, 0)
+	correctRes0 := []float64{2, -2, 2, -2, 1, 12, 123, 1234, 12346, 1235, -1, -12, -123, -1234, -12346}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(correctRes0[i], res0[i]))
 	}
-	fmt.Println()
-	res_minus_1 := roundFloat64Pure(nums, res, 1)
-	for i, n := range nums {
-		fmt.Printf("round(%f, 1) is %f\t", n, res_minus_1[i])
+	resMinus1 := roundFloat64Pure(nums, res, -1)
+	correctResMinus1 := []float64{0, 0, 0, 0, 0, 10, 120, 1230, 12350, 1230, 0, -10, -120, -1230, -12350}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(correctResMinus1[i], resMinus1[i]))
 	}
-	fmt.Println()
-	res_minus_2 := roundFloat64Pure(nums, res, 2)
-	for i, n := range nums {
-		fmt.Printf("round(%f, 2) is %f\t", n, res_minus_2[i])
+	nums = []float64{1.5, -1.5, 2.5, -2.5, 1.23, 12.34, 123.45, 1234.56, 123.456, 1234.567, -1.2, -12.3, -1234, -123.45, -12345.6}
+	res1 := roundFloat64Pure(nums, res, 1)
+	correctRes1 := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.6, 123.5, 1234.6, -1.2, -12.3, -1234, -123.4, -12345.6}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(correctRes1[i], res1[i]))
 	}
-	fmt.Println()
 }
