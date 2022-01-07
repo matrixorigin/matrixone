@@ -19,7 +19,12 @@ package round
 	1.5 ----> 2
 	2.5 ----> 2
 	3.5 ----> 4 and so on.
-	caveat: for integer numbers, overflow can happen.
+	caveat: for integer numbers, overflow can happen and it's behavior is undefined.
+	round function takes one or two parameters as its argument, and the second argument must be a constant.
+	round(x, N)
+	round(x) == round(x, 0)
+	N < 0, N zeroes in front of decimal point
+	N >= 0, round to the Nth placeholder after decimal point
 */
 
 import (

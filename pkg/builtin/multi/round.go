@@ -29,13 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func Round(xs, rs []float64, dec int) []float64 {
-	for i, x := range xs {
-		rs[i] = x
-	}
-	return rs
-}
-
 type argsAndRet struct {
 	args []types.T
 	ret  types.T
