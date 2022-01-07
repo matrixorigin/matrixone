@@ -53,9 +53,9 @@ type store struct {
 	blocks 		[]aoe.Block
 	workers		int
 	start    	bool
-	mu   		sync.RWMutex
-	equeue 		int64
-	dequeue  	int64
+	mu      sync.RWMutex
+	enqueue int64
+	dequeue int64
 }
 
 type worker struct {

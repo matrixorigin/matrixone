@@ -34,11 +34,11 @@ GET:tim := time.Now()
 func (s *store) SetBatch(bat *batch.Batch){
 	tim := time.Now()
 	s.rhs <- bat
-	s.equeue += time.Since(tim).Milliseconds()
+	s.enqueue += time.Since(tim).Milliseconds()
 }
 
 func (s *store) ReadStart(refCount []uint64, attrs []string) {
-	num := 2
+	num := 4
 	mod := len(s.blocks) / num
 	if mod == 0 {
 		mod = 1
@@ -88,10 +88,8 @@ func (s *store) RemoveWorker(id int32) {
 		}
 	}*/
 	if s.workers == 0 {
-		logutil.Infof("enqueue is %d", s.equeue)
+		logutil.Infof("enqueue is %d", s.enqueue)
 		s.SetBatch(nil)
-		logutil.Infof("enqueue2 is %d", s.equeue)
 		close(s.rhs)
-		logutil.Infof("enqueue3 is %d", s.equeue)
 	}
 }
