@@ -1107,11 +1107,10 @@ var defaultConfigurationTemplate = `# Change this config file according to your 
 #        2.5. change the rpc-addr ip to the machine ip
 #        2.6. change the client-urls ip to the machine ip
 #        2.7. change the peer-urls ip to the machine ip
-#        2.8. change the shard-groups value to 2
-#        2.9. make sure the dir-data is different from the other nodes in the cluster
+#        2.8. make sure the dir-data is different from the other nodes in the cluster
 #
 #    3. set up the other two prophet nodes
-#        3.1. apply the above 9 steps of prophet genesis node setting
+#        3.1. apply the above 8 steps of prophet genesis node setting
 #        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
 #   
 #    4. set up pure storage node
@@ -1119,9 +1118,8 @@ var defaultConfigurationTemplate = `# Change this config file according to your 
 #        4.2. change storage-node to false
 #        4.3. change the addr-raft ip to the machine ip
 #        4.4. change the addr-client ip to the machine ip
-#        4.5. In the external-etcd attribute, fill the three empty string with the three peer-urls of the three prophet node
+#        4.5. In the external-etcd attribute, fill the three empty string with the three client-urls of the three prophet node
 #        4.6. make sure the dir-data is different from the other nodes in the cluster
-#        4.7. change the shard-groups value to 2
 #
 #Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
 
