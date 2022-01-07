@@ -134,7 +134,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 	logutil.Infof("segments is %d", len(r.segments))
 	if len(r.segments) == 0 {
 		for i = 0; i < num; i++ {
-			readers[i] = &aoeReader{blocks: nil}
+			readers[i] = &aoeReader{reader: nil}
 		}
 		return readers
 	}

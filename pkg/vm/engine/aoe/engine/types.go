@@ -38,10 +38,6 @@ type SegmentInfo struct {
 }
 
 type aoeReader struct {
-	zs     []int64
-	cds    []*bytes.Buffer
-	dds    []*bytes.Buffer
-	blocks []aoe.Block
 	reader *store
 	id 		int
 }
