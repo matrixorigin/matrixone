@@ -40,6 +40,8 @@ type SegmentInfo struct {
 type aoeReader struct {
 	reader *store
 	id 		int
+	refCount []uint64
+	attrs 	 []string
 }
 
 type store struct {
@@ -57,8 +59,8 @@ type store struct {
 type worker struct {
 	id 			int32
 	zs     		[]int64
-	cds    		[]*bytes.Buffer
-	dds    		[]*bytes.Buffer
+	cds    		[][]*bytes.Buffer
+	dds    		[][]*bytes.Buffer
 	blocks 		[]aoe.Block
 	storeReader *store
 }

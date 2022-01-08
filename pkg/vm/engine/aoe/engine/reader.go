@@ -19,6 +19,10 @@ func (a *aoeReader) NewSparseFilter() engine.SparseFilter {
 }
 
 func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
+	if a.refCount == nil  {
+		a.refCount = refCount
+		a.attrs = attrs
+	}
 	bat := a.reader.GetBatch(refCount, attrs)
 	if bat == nil {
 		logutil.Infof("dequeue is %d ", a.reader.dequeue)

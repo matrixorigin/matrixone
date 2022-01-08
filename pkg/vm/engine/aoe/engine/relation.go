@@ -139,7 +139,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 		return readers
 	}
 	readStore := &store{
-		rhs: make(chan *batch.Batch, 5000),
+		rhs: make(chan *batch.Batch, 64),
 		start: false,
 	}
 	blocks := make([]aoe.Block, 0)
@@ -152,7 +152,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 	}
 	readStore.SetBlocks(blocks)
 	for i := 0; i < num; i++ {
-		readers[i] = &aoeReader{reader: readStore, id: i+1}
+		readers[i] = &aoeReader{reader: readStore, id: i+1, refCount: nil, attrs: nil}
 	}
 	return readers
 }
