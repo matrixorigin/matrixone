@@ -23,7 +23,13 @@ var nextPort int64
 
 func randPort() string {
 	return strconv.FormatInt(
-		3000+atomic.AddInt64(&nextPort, 1)%60000,
+		10000+atomic.AddInt64(&nextPort, 1)%50000,
 		10,
 	)
+}
+
+type ListenHost string
+
+func (_ Def) ListenHost() ListenHost {
+	return "localhost"
 }

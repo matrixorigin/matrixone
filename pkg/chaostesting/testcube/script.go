@@ -47,6 +47,14 @@ func loadScript() (
 					return Parallel(n)
 				})
 			}),
+
+			"listen_host": starlarkutil.MakeFunc("listen_host", func(host ListenHost) {
+				defs = append(defs, func() ListenHost {
+					return host
+				})
+			}),
+
+			//
 		},
 	)
 	ce(err)

@@ -30,7 +30,7 @@ func (_ Def) Logger(
 	id UUID,
 ) Logger {
 
-	logFilePath := testDataFilePath("cube", "log")
+	logFilePath := testDataFilePath(id, "cube", "log")
 	ce(os.Truncate(logFilePath, 0), e4.Ignore(os.ErrNotExist))
 
 	cfg := zap.NewProductionConfig()

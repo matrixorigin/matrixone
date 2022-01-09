@@ -5,8 +5,8 @@ go 1.18
 require (
 	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
-	github.com/matrixorigin/matrixcube v0.2.1-0.20220107070318-770ed0a13c29
-	github.com/reusee/dscope v0.0.0-20220101090512-5e8a967881b0
+	github.com/matrixorigin/matrixcube v0.2.1-0.20220109030015-43fe1ddcc08b
+	github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	github.com/reusee/starlarkutil v0.0.0-20211219090033-2a5093890e47
@@ -121,4 +121,5 @@ require (
 replace (
 	go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
 	go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824030015-8e8fdd5cd251
+	github.com/matrixorigin/matrixcube => ../../../../matrixcube/fix
 )

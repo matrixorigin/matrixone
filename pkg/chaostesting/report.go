@@ -15,6 +15,7 @@
 package fz
 
 import (
+	"fmt"
 	"reflect"
 	"sync"
 )
@@ -60,4 +61,33 @@ func (_ Def) Report() (
 	}
 
 	return
+}
+
+func (_ Def) ReportFiles(
+	clear ClearTestDataFile,
+	get GetReports,
+	write WriteTestDataFile,
+) Operators {
+	return Operators{
+		{
+
+			BeforeDo: func() {
+				ce(clear("report", "log"))
+			},
+
+			BeforeReport: func() {
+				reports := get()
+				if len(reports) == 0 {
+					return
+				}
+				file, err, done := write("report", "log")
+				ce(err)
+				for _, report := range reports {
+					_, err := file.WriteString(fmt.Sprintf("%s\n\n", report))
+					ce(err)
+				}
+				ce(done())
+			},
+		},
+	}
 }

@@ -86,7 +86,9 @@ func (_ Def) CmdRun(
 		scope.Call(func(
 			execute fz.Execute,
 			logger fz.Logger,
+			cleanup fz.Cleanup,
 		) {
+			defer cleanup()
 			done := make(chan struct{})
 			go func() {
 				ce(execute())

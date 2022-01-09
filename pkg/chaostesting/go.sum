@@ -326,6 +326,8 @@ github.com/matrixorigin/matrixcube v0.2.1-0.20220106055721-7ab2f0d9df91 h1:u+7hd
 github.com/matrixorigin/matrixcube v0.2.1-0.20220106055721-7ab2f0d9df91/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220107070318-770ed0a13c29 h1:HgQ/DoECoaUEWxaz2tZQg3zWNQOkkgc5HLydxBx7H/A=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220107070318-770ed0a13c29/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220109030015-43fe1ddcc08b h1:HQ1m5jidqrB5dLG5EQ+bF+qoLcCOKeJtHFdXS/Ls99I=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220109030015-43fe1ddcc08b/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
 github.com/mattn/go-colorable v0.1.2 h1:/bC9yWikZXAL9uJdulbSfyVNIR3n3trXl+v8+1sx8mU=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=
@@ -415,6 +417,8 @@ github.com/reusee/dscope v0.0.0-20210406042911-7228063ab887/go.mod h1:VKlvkUcHsW
 github.com/reusee/dscope v0.0.0-20210927163816-996990a3ac8a/go.mod h1:tTsasuEX+yrz/+3Ldde74CT9thEbH1Rwwjgulrs8kbc=
 github.com/reusee/dscope v0.0.0-20220101090512-5e8a967881b0 h1:evvCCMUPg8cF3f6ZdlLzk5jV94IeyU93J/wyJ7jKkXI=
 github.com/reusee/dscope v0.0.0-20220101090512-5e8a967881b0/go.mod h1:13kE69aor4wIlGDzqL5XiItnb460aokFRKVn9UEJ7dA=
+github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11 h1:J4thRSsDU/bRAjRxefOBfe21BwtHejjsyEJwIH4vzKE=
+github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11/go.mod h1:13kE69aor4wIlGDzqL5XiItnb460aokFRKVn9UEJ7dA=
 github.com/reusee/e4 v0.0.0-20210220140921-dc464f80154d/go.mod h1:Zfo0mBaNabtnbCtT4+HG9734x9G1VDT3Dwrqhp4wMfE=
 github.com/reusee/e4 v0.0.0-20210402104900-6d2655a0545c/go.mod h1:Zfo0mBaNabtnbCtT4+HG9734x9G1VDT3Dwrqhp4wMfE=
 github.com/reusee/e4 v0.0.0-20210710045002-e0d2a4069a09/go.mod h1:tn7INLQH/YwWai6I0MV227/HgZgagrroPgzfUTLV8No=
