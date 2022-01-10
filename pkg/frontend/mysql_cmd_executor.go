@@ -973,6 +973,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				if t.Table.ToTableName().SchemaName == "" {
 					return NewMysqlError(ER_NO_DB_ERROR)
 				}
+			case *tree.ShowTables:
+				if t.DBName == "" {
+					return NewMysqlError(ER_NO_DB_ERROR)
+				}
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
