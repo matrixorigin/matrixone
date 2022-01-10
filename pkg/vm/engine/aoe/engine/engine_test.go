@@ -163,7 +163,7 @@ func TestAOEEngine(t *testing.T) {
 
 	mockTbl := adaptor.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
-	_, _, _, _, defs , _ := helper.UnTransfer(*mockTbl)
+	_, _, _, _, defs, _ := helper.UnTransfer(*mockTbl)
 
 	time.Sleep(10 * time.Second)
 
@@ -194,9 +194,15 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
 
+	totalRows := 0
 	for i := 0; i < blockCnt; i++ {
 		err = tb.Write(4, ibat)
 		require.NoError(t, err)
+		totalRows += blockRows
+		tb, err = db.Relation(mockTbl.Name)
+		require.Nil(t, err)
+		rows := tb.Rows()
+		require.Equal(t, totalRows, int(rows))
 	}
 
 	tb.Close()
@@ -207,9 +213,20 @@ func TestAOEEngine(t *testing.T) {
 
 	//test relation
 	tb, err = db.Relation(mockTbl.Name)
+	rows := tb.Rows()
+	require.Equal(t, totalRows, int(rows))
 	require.Equal(t, 1, len(tb.Nodes()))
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
+
+	rows1 := tb.Rows()
+	err = tb.Write(4, ibat)
+	require.Nil(t, err)
+
+	tb, err = db.Relation(mockTbl.Name)
+	require.Nil(t, err)
+	rows = tb.Rows()
+	require.Equal(t, int64(rows1+blockRows), int64(rows))
 
 	var vattrs []vengine.Attribute
 	tdefs := tb.TableDefs()
@@ -224,7 +241,7 @@ func TestAOEEngine(t *testing.T) {
 	for _, def := range tdefs {
 		if i, ok := def.(*vengine.IndexTableDef); ok {
 			index = append(index, vengine.IndexTableDef{
-				Typ:   i.Typ,
+				Typ:      i.Typ,
 				ColNames: i.ColNames,
 			})
 		}
