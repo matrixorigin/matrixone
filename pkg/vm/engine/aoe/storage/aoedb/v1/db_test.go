@@ -822,50 +822,6 @@ func TestBuildIndex(t *testing.T) {
 	inst.Close()
 }
 
-func TestFixedStringBSI(t *testing.T) {
-	waitTime := time.Duration(100) * time.Millisecond
-	if invariants.RaceEnabled {
-		waitTime *= 2
-	}
-	initTestEnv(t)
-	inst, gen, database := initTestDB3(t)
-	schema := metadata.MockSchemaAll(14)
-	indice := metadata.NewIndexSchema()
-	_, err := indice.MakeIndex("idx-1", metadata.FixStrBsi, 13)
-	assert.Nil(t, err)
-	createCtx := &CreateTableCtx{
-		DBMutationCtx: *CreateDBMutationCtx(database, gen),
-		Schema:        schema,
-		Indice:        indice,
-	}
-	tblMeta, err := inst.CreateTable(createCtx)
-	assert.Nil(t, err)
-	assert.NotNil(t, tblMeta)
-	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
-	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
-	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
-
-	insertCnt := uint64(10)
-
-	var wg sync.WaitGroup
-	{
-		for i := uint64(0); i < insertCnt; i++ {
-			wg.Add(1)
-			go func() {
-				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
-				wg.Done()
-			}()
-		}
-	}
-	wg.Wait()
-	time.Sleep(waitTime)
-	//tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
-	//assert.Nil(t, err)
-
-
-}
-
 func TestRebuildIndices(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
