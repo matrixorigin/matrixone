@@ -304,8 +304,15 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 		id.BlockID = bid
 		id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
 		vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
-		// TODO: str bsi
-		node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+		var node *Node
+		switch idxMeta.Data[0].Type {
+		case base.NumBsi:
+			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+		case base.FixStrBsi:
+			node = newNode(holder.BufMgr, vf, false, StringBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+		default:
+			panic("unsupported index type")
+		}
 		idxes, ok := holder.self.colIndices[col]
 		if !ok {
 			idxes = make([]*Node, 0)

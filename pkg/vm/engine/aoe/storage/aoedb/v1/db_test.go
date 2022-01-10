@@ -822,6 +822,50 @@ func TestBuildIndex(t *testing.T) {
 	inst.Close()
 }
 
+func TestFixedStringBSI(t *testing.T) {
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	schema := metadata.MockSchemaAll(14)
+	indice := metadata.NewIndexSchema()
+	_, err := indice.MakeIndex("idx-1", metadata.FixStrBsi, 13)
+	assert.Nil(t, err)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+		Indice:        indice,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(10)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+	//tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	//assert.Nil(t, err)
+
+
+}
+
 func TestRebuildIndices(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -1539,6 +1583,8 @@ func TestFilter(t *testing.T) {
 	schema := metadata.MockSchemaAll(14)
 	indice := metadata.NewIndexSchema()
 	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, colIdx...)
+	assert.Nil(t, err)
+	_, err = indice.MakeIndex("idx-2", metadata.FixStrBsi, 13)
 	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -2298,7 +2344,47 @@ func TestFilter(t *testing.T) {
 	mockBM.Xor(res_)
 	assert.Equal(t, true, mockBM.IsEmpty())
 
-	// todo: char / varchar
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 40)
+	res_, err = filter.Ne("mock_13", []byte("str/"))
+ 	assert.Nil(t, err)
+	assert.NotNil(t, res_)
+	assert.True(t, mockBM.Equals(res_))
+	res_, err = filter.Eq("mock_13", []byte("str/"))
+	assert.Equal(t, true, roaring.NewBitmap().Equals(res_))
+	res_, _ = filter.Eq("mock_13", []byte("str3"))
+	mockBM = roaring.NewBitmap()
+	mockBM.Add(12)
+	mockBM.Add(13)
+	mockBM.Add(14)
+	mockBM.Add(15)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Gt("mock_13", []byte("str4"))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(20, 40)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Ge("mock_13", []byte("str5"))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(20, 40)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Le("mock_13", []byte("str3"))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 16)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Lt("mock_13", []byte("str4"))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(0, 16)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
+	res_, _ = filter.Btw("mock_13", []byte("str3"), []byte("str8"))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(12, 36)
+	mockBM.Xor(res_)
+	assert.Equal(t, true, mockBM.IsEmpty())
 
 	_, err = filter.Eq("xxxx", 0)
 	assert.NotNil(t, err)
@@ -2601,7 +2687,23 @@ func TestFilter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, cnt, uint64(40))
 
-	// todo: varchar / char support
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 7)
+	min, err = summarizer.Min("mock_13", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, min, []byte("str0"))
+	max, err = summarizer.Max("mock_13", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, max, []byte("str1"))
+	nullCnt, err = summarizer.NullCount("mock_13", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, nullCnt, uint64(0))
+	cnt, err = summarizer.Count("mock_13", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(4))
+	cnt, err = summarizer.Count("mock_13", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(40))
 
 	_, err = summarizer.Min("xxxx", nil)
 	assert.NotNil(t, err)

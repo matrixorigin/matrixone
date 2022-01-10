@@ -23,6 +23,7 @@ import (
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/index/bsi"
 	"os"
 	"path/filepath"
 	"sync"
@@ -190,15 +191,16 @@ func (holder *sortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (ui
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -211,10 +213,10 @@ func (holder *sortedSegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (ui
 			count := index.Count(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return count, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -236,15 +238,16 @@ func (holder *sortedSegmentHolder) NullCount(colIdx int, max uint64, filter *roa
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -257,10 +260,10 @@ func (holder *sortedSegmentHolder) NullCount(colIdx int, max uint64, filter *roa
 			count := index.NullCount(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return count, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -282,15 +285,16 @@ func (holder *sortedSegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (inte
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -303,10 +307,10 @@ func (holder *sortedSegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (inte
 			min, _ := index.Min(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return min, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return min, nil
 		}
 		err := node.Close()
@@ -327,15 +331,16 @@ func (holder *sortedSegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (inte
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -348,10 +353,10 @@ func (holder *sortedSegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (inte
 			max, _ := index.Max(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return max, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return max, nil
 		}
 		err := node.Close()
@@ -636,8 +641,15 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 			id.SegmentID = holder.ID.SegmentID
 			id.Idx = uint16(idxMeta.Data[0].Cols.ToArray()[0])
 			vf := segFile.MakeVirtualSeparateIndexFile(file, &id, idxMeta.Data[0])
-			// TODO: str bsi
-			node := newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+			var node *Node
+			switch idxMeta.Data[0].Type {
+			case base.NumBsi:
+				node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+			case base.FixStrBsi:
+				node = newNode(holder.BufMgr, vf, false, StringBsiIndexConstructor, idxMeta.Data[0].Cols, nil)
+			default:
+				panic("unsupported index type")
+			}
 			idxes, ok := holder.self.colIndices[col]
 			if !ok {
 				idxes = make([]*Node, 0)

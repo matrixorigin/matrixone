@@ -433,8 +433,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 		for _, tbl := range database.TableSet {
 			indice := tbl.GetCommit().Indice
 			for _, idx := range indice.Indice {
-				// todo: str bsi
-				if idx.Type == metadata.NumBsi {
+				if idx.Type == metadata.NumBsi || idx.Type == metadata.FixStrBsi {
 					for _, seg := range tbl.SegmentSet {
 						if !seg.IsSortedLocked() {
 							continue
