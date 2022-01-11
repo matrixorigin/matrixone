@@ -37,11 +37,14 @@ func (_ Def2) Nodes(
 	tempDir fz.TempDir,
 	numNodes fz.NumNodes,
 	logger fz.Logger,
+	listenHost ListenHost,
 ) (nodes fz.Nodes) {
+
+	host := string(listenHost)
 
 	var endpoints []string
 	for i := fz.NumNodes(0); i < numNodes; i++ {
-		endpoints = append(endpoints, "http://"+net.JoinHostPort("localhost", randPort()))
+		endpoints = append(endpoints, "http://"+net.JoinHostPort(host, randPort()))
 	}
 
 	for nodeID, conf := range configs {
@@ -53,18 +56,18 @@ func (_ Def2) Nodes(
 		fs := vfs.Default
 		conf.FS = fs
 
-		conf.RaftAddr = net.JoinHostPort("127.0.0.1", randPort())
-		conf.ClientAddr = net.JoinHostPort("127.0.0.1", randPort())
+		conf.RaftAddr = net.JoinHostPort(host, randPort())
+		conf.ClientAddr = net.JoinHostPort(host, randPort())
 		conf.DataPath = filepath.Join(string(tempDir), fmt.Sprintf("data-%d", nodeID))
 		conf.Logger = logger
 
 		conf.Prophet.DataDir = filepath.Join(string(tempDir), fmt.Sprintf("prophet-%d", nodeID))
-		conf.Prophet.RPCAddr = net.JoinHostPort("127.0.0.1", randPort())
+		conf.Prophet.RPCAddr = net.JoinHostPort(host, randPort())
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]
 		}
 		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
-		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort("localhost", randPort())
+		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, randPort())
 
 		conf.Storage = func() config.StorageConfig {
 

@@ -15,13 +15,18 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/signal"
+
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
 func main() {
 
 	NewScope().Call(func(
 		cmds Commands,
+		cleanup fz.Cleanup,
 	) {
 
 		printCommands := func() {
@@ -44,7 +49,16 @@ func main() {
 			printCommands()
 			return
 		}
-		fn(os.Args[2:])
+
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
+
+		go func() {
+			fn(os.Args[2:])
+			cancel()
+		}()
+
+		<-ctx.Done()
+		cleanup()
 
 	})
 }
