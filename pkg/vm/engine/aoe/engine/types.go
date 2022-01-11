@@ -40,29 +40,36 @@ type SegmentInfo struct {
 type aoeReader struct {
 	reader *store
 	id 		int
-	refCount []uint64
-	attrs 	 []string
+	prv 	*batData
+	dequeue int64
 }
 
 type store struct {
 	rel	   		*relation
 	readers 	[]engine.Reader
-	rhs    		chan *batch.Batch
+	rhs    		chan *batData
 	blocks 		[]aoe.Block
 	workers		int
 	start    	bool
 	mu      sync.RWMutex
-	enqueue int64
-	dequeue int64
+}
+
+type batData struct {
+	bat 		*batch.Batch
+	cds    		[]*bytes.Buffer
+	dds    		[]*bytes.Buffer
+	use         bool
+	workerid    int32
 }
 
 type worker struct {
 	id 			int32
 	zs     		[]int64
-	cds    		[][]*bytes.Buffer
-	dds    		[][]*bytes.Buffer
+	batDatas   	[]*batData
 	blocks 		[]aoe.Block
 	storeReader *store
+	enqueue 	int64
+	allocTime   int64
 }
 
 type AoeSparseFilter struct {

@@ -1,17 +1,14 @@
 package engine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"time"
 )
 
 func (s *store) SetBlocks(blocks []aoe.Block){
 	s.blocks = blocks
 }
 
-func (s *store) GetBatch(refCount []uint64, attrs []string) *batch.Batch {
+func (s *store) GetBatch(refCount []uint64, attrs []string) *batData {
 	if !s.start {
 		s.mu.Lock()
 		if s.start {
@@ -22,19 +19,16 @@ func (s *store) GetBatch(refCount []uint64, attrs []string) *batch.Batch {
 		s.mu.Unlock()
 		s.ReadStart(refCount, attrs)
 	}
-GET:tim := time.Now()
+GET:
 	bat, ok := <-s.rhs
-	s.dequeue += time.Since(tim).Milliseconds()
 	if !ok {
 		return nil
 	}
 	return bat
 }
 
-func (s *store) SetBatch(bat *batch.Batch){
-	tim := time.Now()
+func (s *store) SetBatch(bat *batData){
 	s.rhs <- bat
-	s.enqueue += time.Since(tim).Milliseconds()
 }
 
 func (s *store) ReadStart(refCount []uint64, attrs []string) {
@@ -78,17 +72,7 @@ func (s *store) RemoveWorker(id int32) {
 		panic("workers error")
 	}
 	s.workers--
-	/*for i, v := range s.workers{
-		if v.ID() == id {
-			if i == len(s.workers) {
-				s.workers = s.workers[i:]
-				break
-			}
-			s.workers = append(s.workers[:i], s.workers[i+1:]...)
-		}
-	}*/
 	if s.workers == 0 {
-		logutil.Infof("enqueue is %d", s.enqueue)
 		s.SetBatch(nil)
 		close(s.rhs)
 	}
