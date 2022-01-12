@@ -54,6 +54,18 @@ func loadScript() (
 				})
 			}),
 
+			"port_range": starlarkutil.MakeFunc("port_range", func(lower int64, upper int64) {
+				defs = append(defs, func() PortRange {
+					return PortRange{lower, upper}
+				})
+			}),
+
+			"timeout_report_threshold": starlarkutil.MakeFunc("timeout_report_threshold", func(n TimeoutReportThreshold) {
+				defs = append(defs, func() TimeoutReportThreshold {
+					return n
+				})
+			}),
+
 			//
 		},
 	)

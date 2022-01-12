@@ -20,8 +20,6 @@ import (
 	"github.com/anishathalye/porcupine"
 )
 
-type PorcupineReport string
-
 type NewPorcupineChecker func(
 	model porcupine.Model,
 	getOps func() []porcupine.Operation,
@@ -54,7 +52,10 @@ func (_ Def) NewPorcupineChecker(
 				if getOps != nil {
 					res, info := porcupine.CheckOperationsVerbose(model, getOps(), timeout)
 					if res != porcupine.Ok {
-						report(PorcupineReport("porcupine check failed"))
+						report(Report{
+							Kind: "porcupine",
+							Desc: "porcupine check failed",
+						})
 					}
 					if res != porcupine.Ok || genVisual {
 						f, err, done := write("porcupine", "html")
@@ -67,7 +68,10 @@ func (_ Def) NewPorcupineChecker(
 				if events != nil {
 					res, info := porcupine.CheckEventsVerbose(model, *events, timeout)
 					if res != porcupine.Ok {
-						report(PorcupineReport("porcupine check failed"))
+						report(Report{
+							Kind: "porcupine",
+							Desc: "porcupine check failed",
+						})
 					}
 					if res != porcupine.Ok || genVisual {
 						f, err, done := write("porcupine", "html")

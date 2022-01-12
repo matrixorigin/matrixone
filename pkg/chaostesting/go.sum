@@ -328,6 +328,14 @@ github.com/matrixorigin/matrixcube v0.2.1-0.20220107070318-770ed0a13c29 h1:HgQ/D
 github.com/matrixorigin/matrixcube v0.2.1-0.20220107070318-770ed0a13c29/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220109030015-43fe1ddcc08b h1:HQ1m5jidqrB5dLG5EQ+bF+qoLcCOKeJtHFdXS/Ls99I=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220109030015-43fe1ddcc08b/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220111025353-db805f757194 h1:rsnUhA7ybHQhNs+pU2q6s9beZ1KLXQrhRUFqPWzD+NI=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220111025353-db805f757194/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220112084348-085493a5516b h1:2nVXGhzGyBThszgaNstERxAWcSXaVsa0D4F7oFLDVps=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220112084348-085493a5516b/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220112090905-238bfc4830e7 h1:ZkEJqCkfJ70S5RQc7azQfkTy/Rq6FY5tTMMvNB1Jmdk=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220112090905-238bfc4830e7/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82 h1:FZ0Ad+EexWbUNQQEx1iztNLg/r+uDXAlutAZbzxgA3I=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
 github.com/mattn/go-colorable v0.1.2 h1:/bC9yWikZXAL9uJdulbSfyVNIR3n3trXl+v8+1sx8mU=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=

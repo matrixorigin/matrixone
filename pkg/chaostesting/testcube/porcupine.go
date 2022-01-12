@@ -74,7 +74,6 @@ func (_ Def) PorcupineReport(
 	newChecker fz.NewPorcupineChecker,
 	testDataDir fz.TestDataDir,
 	clear fz.ClearTestDataFile,
-	getReport fz.GetReport,
 	write fz.WriteTestDataFile,
 ) fz.Operators {
 
@@ -95,7 +94,7 @@ func (_ Def) PorcupineReport(
 				ce(clear("porcupine", "log"))
 			},
 
-			AfterReport: func() {
+			AfterClose: func() {
 
 				f, err, done := write("porcupine", "log")
 				ce(err)

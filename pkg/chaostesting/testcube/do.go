@@ -17,6 +17,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -29,6 +30,7 @@ func (_ Def2) Do(
 	nodes fz.Nodes,
 	log LogPorcupineOp,
 	closeNode fz.CloseNode,
+	restartNode RestartNode,
 	timeoutCounter TimeoutCounter,
 ) fz.Do {
 
@@ -36,7 +38,7 @@ func (_ Def2) Do(
 	for i := 0; i < len(nodes); i++ {
 		kvs = append(kvs, newKV(nodes[i].(*Node)))
 	}
-	stopped := make(map[fz.NodeID]bool)
+	var stopped sync.Map
 
 	// see https://drive.google.com/file/d/1nPdvhB0PutEJzdCq5ms6UI58dp50fcAN/view, p70
 	waitChan := make(chan chan struct{}, 1)
@@ -68,7 +70,7 @@ func (_ Def2) Do(
 		switch action := action.(type) {
 
 		case ActionSet:
-			if stopped[fz.NodeID(action.ClientID)] {
+			if _, ok := stopped.Load(fz.NodeID(action.ClientID)); ok {
 				return nil
 			}
 			wait()
@@ -89,7 +91,7 @@ func (_ Def2) Do(
 			)
 
 		case ActionGet:
-			if stopped[fz.NodeID(action.ClientID)] {
+			if _, ok := stopped.Load(fz.NodeID(action.ClientID)); ok {
 				return nil
 			}
 			wait()
@@ -118,8 +120,13 @@ func (_ Def2) Do(
 		case ActionStopNode:
 			lock()
 			defer unlock()
-			stopped[action.NodeID] = true
+			stopped.Store(action.NodeID, true)
 			return closeNode(fz.NodeID(action.NodeID))
+
+		case ActionRestartNode:
+			lock()
+			defer unlock()
+			return restartNode(fz.NodeID(action.NodeID))
 
 		default:
 			panic(fmt.Errorf("unknown action: %#v", action))
@@ -136,15 +143,25 @@ func (_ Def) TimeoutCounter() TimeoutCounter {
 	return &n
 }
 
+type TimeoutReportThreshold int64
+
+func (_ Def) TimeoutReportThreshold() TimeoutReportThreshold {
+	return 5
+}
+
 func (_ Def) ReportTimeout(
 	report fz.AddReport,
 	counter TimeoutCounter,
+	threshold TimeoutReportThreshold,
 ) fz.Operators {
 	return fz.Operators{
 		{
 			AfterDo: func() {
-				if *counter >= 5 {
-					report(fmt.Sprintf("too many timeout %d", *counter))
+				if *counter >= int64(threshold) {
+					report(fz.Report{
+						Kind: "timeout",
+						Desc: fmt.Sprintf("too many timeout %d", *counter),
+					})
 				}
 			},
 		},

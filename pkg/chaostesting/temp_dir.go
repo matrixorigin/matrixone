@@ -20,7 +20,9 @@ import (
 
 type TempDir string
 
-func (_ Def) TempDir() (
+func (_ Def) TempDir(
+	logger Logger,
+) (
 	dir TempDir,
 	cleanup Cleanup,
 ) {
@@ -28,6 +30,7 @@ func (_ Def) TempDir() (
 	ce(err)
 	dir = TempDir(d)
 	return dir, func() {
+		logger.Info("remove temp dir")
 		os.RemoveAll(d)
 	}
 }

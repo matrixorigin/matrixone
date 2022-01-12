@@ -20,6 +20,7 @@ func init() {
 	fz.RegisterAction(ActionSet{})
 	fz.RegisterAction(ActionGet{})
 	fz.RegisterAction(ActionStopNode{})
+	fz.RegisterAction(ActionRestartNode{})
 }
 
 type ActionSet struct {
@@ -37,4 +38,6 @@ type ActionStopNode struct {
 	NodeID fz.NodeID `xml:",attr"`
 }
 
-//TODO node restart
+type ActionRestartNode struct {
+	NodeID fz.NodeID `xml:",attr"`
+}

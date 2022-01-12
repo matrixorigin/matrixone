@@ -19,13 +19,27 @@ import (
 	"sync/atomic"
 )
 
+type PortRange [2]int64
+
+func (_ Def) PortRange() PortRange {
+	return PortRange{20000, 50000}
+}
+
+type RandPort func() string
+
 var nextPort int64
 
-func randPort() string {
-	return strconv.FormatInt(
-		10000+atomic.AddInt64(&nextPort, 1)%50000,
-		10,
-	)
+func (_ Def) RandPort(
+	portRange PortRange,
+) RandPort {
+	lower := int64(portRange[0])
+	mod := int64(portRange[1] - portRange[0])
+	return func() (ret string) {
+		return strconv.FormatInt(
+			lower+atomic.AddInt64(&nextPort, 1)%mod,
+			10,
+		)
+	}
 }
 
 type ListenHost string
