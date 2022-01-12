@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
@@ -49,7 +50,7 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -104,7 +105,7 @@ func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -158,7 +159,7 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -212,7 +213,7 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -266,7 +267,7 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -320,7 +321,7 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {
@@ -375,7 +376,7 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 	if err != nil {
 		return nil, err
 	}
-	if !ctx.BoolRes {
+	if !ctx.BoolRes && f.segment.Data.GetType() == base.SORTED_SEG {
 		return []string{}, nil
 	}
 	if ctx.BlockSet != nil {

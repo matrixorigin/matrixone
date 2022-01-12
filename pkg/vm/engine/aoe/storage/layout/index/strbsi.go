@@ -52,8 +52,10 @@ func getStringBsi(t types.Type) *bsi.StringBSI {
 	var bsiIdx bsi.BitSlicedIndex
 	switch t.Oid {
 	case types.T_char:
-		//bsiIdx = bsi.NewStringBSI(int(t.Width), int(t.Size))
-		bsiIdx = bsi.NewStringBSI(8, 255)
+		// upper layer use `Width` to represent the maximum
+		// number of characters, which is equal to our bsi
+		// `charSize`
+		bsiIdx = bsi.NewStringBSI(8, int(t.Width))
 	default:
 		panic("not supported")
 	}

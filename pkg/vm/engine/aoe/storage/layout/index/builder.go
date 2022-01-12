@@ -881,7 +881,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -901,7 +904,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -921,7 +927,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -941,7 +950,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -961,7 +973,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -981,7 +996,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1001,7 +1019,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1021,7 +1042,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1041,7 +1065,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1061,7 +1088,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1081,7 +1111,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1101,7 +1134,10 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 		} else {
 			min = vec[0]
 			max = min
-			for _, e := range vec {
+			for i, e := range vec {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				if e > max {
 					max = e
 				}
@@ -1122,6 +1158,9 @@ func BuildBlockZoneMapIndex(data *vector.Vector, t types.Type, colIdx int16, isS
 			min = vec.Get(0)
 			max = min
 			for i := 0; i < len(vec.Lengths); i++ {
+				if nulls.Contains(data.Nsp, uint64(i)) {
+					continue
+				}
 				e := vec.Get(int64(i))
 				if bytes.Compare(e, max) > 0 {
 					max = e

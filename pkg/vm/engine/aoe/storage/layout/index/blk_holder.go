@@ -22,6 +22,7 @@ import (
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/index/bsi"
 	"os"
 	"path/filepath"
 	"sync"
@@ -113,7 +114,7 @@ func (holder *BlockIndexHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 				continue
 			}
 		} else {
-			if index.Type() != base.NumBsi {
+			if index.Type() != base.NumBsi && index.Type() != base.FixStrBsi {
 				node.Close()
 				continue
 			}
@@ -341,15 +342,16 @@ func (holder *BlockIndexHolder) Count(colIdx int, filter *roaring.Bitmap) (uint6
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -362,10 +364,10 @@ func (holder *BlockIndexHolder) Count(colIdx int, filter *roaring.Bitmap) (uint6
 			count := index.Count(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return count, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -387,15 +389,16 @@ func (holder *BlockIndexHolder) NullCount(colIdx int, maxRows uint64, filter *ro
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -409,10 +412,10 @@ func (holder *BlockIndexHolder) NullCount(colIdx int, maxRows uint64, filter *ro
 			count = maxRows - count
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return count, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return count, nil
 		}
 		err := node.Close()
@@ -434,15 +437,16 @@ func (holder *BlockIndexHolder) Min(colIdx int, filter *roaring.Bitmap) (interfa
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -455,10 +459,10 @@ func (holder *BlockIndexHolder) Min(colIdx int, filter *roaring.Bitmap) (interfa
 			min, _ := index.Min(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return min, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return min, nil
 		}
 		err := node.Close()
@@ -479,15 +483,16 @@ func (holder *BlockIndexHolder) Max(colIdx int, filter *roaring.Bitmap) (interfa
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -500,10 +505,10 @@ func (holder *BlockIndexHolder) Max(colIdx int, filter *roaring.Bitmap) (interfa
 			max, _ := index.Max(bm)
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return max, err
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return max, nil
 		}
 		err := node.Close()
@@ -524,15 +529,16 @@ func (holder *BlockIndexHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, 
 
 	for _, idx := range idxes {
 		node := idx.GetManagedNode()
-		if node.DataNode.(Index).Type() == base.NumBsi {
-			index := node.DataNode.(*NumericBsiIndex)
-			if index.IndexFile().RefCount() == 0 {
+		if node.DataNode.(Index).Type() == base.NumBsi || node.DataNode.(Index).Type() == base.FixStrBsi {
+			index := node.DataNode.(bsi.BitSlicedIndex)
+			internal := node.DataNode.(Index)
+			if internal.IndexFile().RefCount() == 0 {
 				if err := node.Close(); err != nil {
 					return 0, 0, err
 				}
 				continue
 			}
-			index.IndexFile().Ref()
+			internal.IndexFile().Ref()
 			bm := roaring2.NewBitmap()
 			if filter != nil {
 				arr := filter.ToArray()
@@ -553,10 +559,10 @@ func (holder *BlockIndexHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, 
 			}
 			err := node.Close()
 			if err != nil {
-				index.IndexFile().Unref()
+				internal.IndexFile().Unref()
 				return res, cnt, nil
 			}
-			index.IndexFile().Unref()
+			internal.IndexFile().Unref()
 			return res, cnt, nil
 		}
 		err := node.Close()
