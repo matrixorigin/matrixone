@@ -86,17 +86,17 @@ func (e *flushSegIndexEvent) Execute() error {
 			vecs = append(vecs, &vec.Vector)
 			nodes = append(nodes, vec.MNode)
 		}
-		bsi, err := index.BuildNumericBsiIndex(vecs, meta.Table.Schema.ColDefs[colIdx].Type, int16(colIdx), 0)
+		bsi, err := index.BuildBitSlicedIndex(vecs, meta.Table.Schema.ColDefs[colIdx].Type, int16(colIdx), 0)
 		if err != nil {
 			panic(err)
 		}
 		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
 		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
 		filename = filepath.Join(dir, filename)
-		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
+		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(index.Index), filename); err != nil {
 			panic(err)
 		}
-		logutil.Infof("[SEG] BSI Flushed | %s", filename)
+		logutil.Infof("[SEG] BSI Flushed, type %d | %s", bsi.(index.Index).Type(), filename)
 		wg.Add(1)
 		go func() {
 			e.Segment.GetIndexHolder().LoadIndex(e.Segment.GetSegmentFile(), filename)

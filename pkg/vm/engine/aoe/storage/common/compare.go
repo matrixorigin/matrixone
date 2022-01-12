@@ -15,6 +15,7 @@
 package common
 
 import (
+	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -55,6 +56,9 @@ func CompareInterface(a, b interface{}) int64 {
 	}
 	if av, ok := a.(types.Datetime); ok {
 		return int64(av - b.(types.Datetime))
+	}
+	if av, ok := a.([]byte); ok {
+		return int64(bytes.Compare(av, b.([]byte)))
 	}
 	logutil.Infof("%+v\n%+v\n", a, b)
 	panic("invalid type")

@@ -144,7 +144,9 @@ func TestStrBsi(t *testing.T) {
 	assert.Nil(t, err)
 	defer f.Close()
 
-	node := NewStringBsiEmptyNode(uint64(capacity), nil)
+	stat, _ := f.Stat()
+	vf := common.NewMemFile(stat.Size())
+	node := NewStringBsiEmptyNode(vf, false, nil)
 	_, err = node.ReadFrom(f)
 	assert.Nil(t, err)
 	t.Log(capacity)

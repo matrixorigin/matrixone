@@ -88,14 +88,14 @@ func (e *flushBlockIndexEvent) Execute() error {
 		}
 		nodes = append(nodes, vec.MNode)
 		startPos := int(schema.BlockMaxRows * uint64(meta.Idx))
-		bsi, err := index.BuildNumericBsiIndex([]*vector.Vector{&vec.Vector}, schema.ColDefs[colIdx].Type, int16(colIdx), startPos)
+		bsi, err := index.BuildBitSlicedIndex([]*vector.Vector{&vec.Vector}, schema.ColDefs[colIdx].Type, int16(colIdx), startPos)
 		if err != nil {
 			panic(err)
 		}
 		version := e.Block.GetIndexHolder().AllocateVersion(colIdx)
 		filename := common.MakeBlockBitSlicedIndexFileName(version, meta.Segment.Table.Id, meta.Segment.Id, meta.Id, uint16(colIdx))
 		filename = filepath.Join(filepath.Join(dir, "data"), filename)
-		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(*index.NumericBsiIndex), filename); err != nil {
+		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(index.Index), filename); err != nil {
 			panic(err)
 		}
 		logutil.Infof("[BLK] BSI Flushed | %s", filename)

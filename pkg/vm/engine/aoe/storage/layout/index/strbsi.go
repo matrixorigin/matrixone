@@ -26,31 +26,21 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-func initStringBsi(t types.Type) *bsi.StringBSI {
-	var bsiIdx bsi.BitSlicedIndex
-	switch t.Oid {
-	case types.T_char:
-		bsiIdx = bsi.NewStringBSI(int(t.Width), int(t.Size))
-	default:
-		panic("not supported")
-	}
-	return bsiIdx.(*bsi.StringBSI)
-}
-
-func StringBsiIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewStringBsiEmptyNode(capacity, freeFunc)
+func StringBsiIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewStringBsiEmptyNode(vf, useCompress, freeFunc)
 }
 
 type StringBsiIndex struct {
 	bsi.StringBSI
 	T         types.Type
 	Col       int16
-	AllocSize uint64
-	FreeFunc  buf.MemoryFreeFunc
+	File        common.IVFile
+	UseCompress bool
+	FreeFunc    buf.MemoryFreeFunc
 }
 
 func NewStringBsiIndex(t types.Type, colIdx int16) *StringBsiIndex {
-	bsiIdx := initStringBsi(t)
+	bsiIdx := getStringBsi(t)
 	return &StringBsiIndex{
 		T:         t,
 		Col:       colIdx,
@@ -58,10 +48,25 @@ func NewStringBsiIndex(t types.Type, colIdx int16) *StringBsiIndex {
 	}
 }
 
-func NewStringBsiEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func getStringBsi(t types.Type) *bsi.StringBSI {
+	var bsiIdx bsi.BitSlicedIndex
+	switch t.Oid {
+	case types.T_char:
+		// upper layer use `Width` to represent the maximum
+		// number of characters, which is equal to our bsi
+		// `charSize`
+		bsiIdx = bsi.NewStringBSI(8, int(t.Width))
+	default:
+		panic("not supported")
+	}
+	return bsiIdx.(*bsi.StringBSI)
+}
+
+func NewStringBsiEmptyNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StringBsiIndex{
-		AllocSize: capacity,
-		FreeFunc:  freeFunc,
+		File:        vf,
+		UseCompress: useCompress,
+		FreeFunc:    freeFunc,
 	}
 }
 
@@ -70,7 +75,47 @@ func (i *StringBsiIndex) GetCol() int16 {
 }
 
 func (i *StringBsiIndex) Eval(ctx *FilterCtx) error {
-	return nil
+	if ctx.BMRes.IsEmpty() {
+		return nil
+	}
+	var err error
+	switch ctx.Op {
+	case OpEq:
+		ctx.BMRes, err = i.Eq(ctx.Val, ctx.BMRes)
+	case OpNe:
+		ctx.BMRes, err = i.Ne(ctx.Val, ctx.BMRes)
+	case OpGe:
+		ctx.BMRes, err = i.Ge(ctx.Val, ctx.BMRes)
+	case OpGt:
+		ctx.BMRes, err = i.Gt(ctx.Val, ctx.BMRes)
+	case OpLe:
+		ctx.BMRes, err = i.Le(ctx.Val, ctx.BMRes)
+	case OpLt:
+		ctx.BMRes, err = i.Lt(ctx.Val, ctx.BMRes)
+	case OpIn:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Ge(ctx.ValMin, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Le(ctx.ValMax, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.And(bm)
+	case OpOut:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Gt(ctx.ValMax, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Lt(ctx.ValMin, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.Or(bm)
+	}
+	return err
 }
 
 func (i *StringBsiIndex) FreeMemory() {
@@ -80,7 +125,7 @@ func (i *StringBsiIndex) FreeMemory() {
 }
 
 func (i *StringBsiIndex) IndexFile() common.IVFile {
-	return nil
+	return i.File
 }
 
 func (i *StringBsiIndex) Type() base.IndexType {
@@ -88,26 +133,31 @@ func (i *StringBsiIndex) Type() base.IndexType {
 }
 
 func (i *StringBsiIndex) GetMemorySize() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *StringBsiIndex) GetMemoryCapacity() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *StringBsiIndex) Reset() {
 }
 
 func (i *StringBsiIndex) ReadFrom(r io.Reader) (n int64, err error) {
-	data := make([]byte, i.AllocSize)
-	nr, err := r.Read(data)
+	buf := make([]byte, i.GetMemoryCapacity())
+	nr, err := r.Read(buf)
 	if err != nil {
-		return n, err
+		return int64(nr), err
 	}
-	buf := data[2 : 2+encoding.TypeSize]
-	i.T = encoding.DecodeType(buf)
-	i.StringBSI = *initStringBsi(i.T)
-	err = i.Unmarshal(data)
+	err = i.Unmarshal(buf)
 	return int64(nr), err
 }
 
