@@ -1,8 +1,11 @@
 # How MatrixOne documentation project is managed?
 
 The MatrixOne documentation is managed in 3 repos:
+
 * The main project framework and CI settings are in the [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) repo. 
+
 * The markdown contents are in the docs/en/MatrixOne folder of [matrixone](https://github.com/matrixorigin/matrixone) repo. 
+
 * The images and unstructured data are located in the [artwork](https://github.com/matrixorigin/artwork) repo. 
 
 The `matrixorigin.io` repo contains a submodule which links to matrixone repo contents. The images are referred as webimage links from `artwork` repo. The `matrixorigin.io` has implemented a CI project, which will be triggered by a new code merge. This CI workflow publishs the documentation to https://docs.matrixorigin.io/.
@@ -12,11 +15,17 @@ The documentation project is based on the [mkdocs-material](https://github.com/s
 # How MatrixOne documentation content is organized?
 
 The MatrixOne documentation content is planned with 6 main modules.  
+
 * Overview: MatrixOne's introduction, features, architecture, tech design etc. 
+
 * Get Started: How to quickly deploy and run a MatrixOne in a standalone or a distributed environment.
+
 * Develop: How to develop some applications based on MatrixOne using different programming language.
+
 * Troubleshoot: Introduce common errors and debugging tools.
+
 * Reference: SQL reference, Configuration parameters, Error Codes.
+
 * FAQs: Product, Technical Design,SQL, Deployment FAQs.
 
 # How to contribute to documentation project?
