@@ -42,6 +42,12 @@ var (
 	chars = []types.T{
 		types.T_char, types.T_varchar,
 	}
+
+	// dates contains all time-related types in mo. It has its own compute and express logic, so
+	// it is different to other types and can not use the same template as others.
+	dates = []types.T{
+		types.T_date, types.T_datetime,
+	}
 )
 
 
@@ -441,6 +447,9 @@ func GenerateUnaryOperators() error {
 		Not:   nil,
 	}
 	for _, num := range numerics{
+		if num == types.T_int8 { // this already implemented directly in the template
+			continue
+		}
 		pTs.Not = append(pTs.Not, tr{num, types.T_int8})
 	}
 
@@ -514,6 +523,7 @@ func GenerateCast() error {
 
 	type pts struct {
 		SameType []lrt
+		SameType2 []lrt
 		LeftToRight []lrt
 		Specials1	[]lrt // left type is T_char or T_varchar
 		Specials2	[]lrt // right type is T_char or T_varchar
@@ -522,12 +532,13 @@ func GenerateCast() error {
 
 	var pTs = pts{
 		nil,
-		[]lrt{
-			// cast from each type to the others
-		},
+		nil,
+		nil,
 		nil,
 		nil,
 		[]lrt{
+			{types.T_char, types.T_char, types.T_char},
+			{types.T_varchar, types.T_varchar, types.T_varchar},
 			{types.T_char, types.T_varchar, types.T_varchar},
 			{types.T_varchar, types.T_char, types.T_char},
 		},
@@ -542,8 +553,8 @@ func GenerateCast() error {
 			}
 		}
 	}
-	for _, charType := range chars {
-		pTs.SameType = append(pTs.SameType, lrt{charType, charType, charType})
+	for _, timeType := range dates {
+		pTs.SameType2 = append(pTs.SameType2, lrt{timeType, timeType, timeType})
 	}
 	for _, numType := range numerics {
 		pTs.Specials1 = append(pTs.Specials1, []lrt{

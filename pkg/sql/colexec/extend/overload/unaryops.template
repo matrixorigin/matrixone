@@ -58,18 +58,39 @@ func initUnary() {
 
     // Unary Not will return int8
      UnaryOps[Not] = []*UnaryOp{
+         {
+              Typ:        types.T_int8,
+              ReturnType: types.T_int8,
+              Fn: func(v *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
+                  rtl := 1
+                  if v.Typ.Oid == types.T_int8 && (v.Ref == 1 || v.Ref == 0) {
+                      v.Ref = 0
+                      vs := v.Col.([]int8)
+                      not.Int8Not(vs, vs)
+                      return v, nil
+                  }
+                  vs := v.Col.([]int8)
+                  vec, err := process.Get(proc, int64(rtl) * int64(len(vs)), types.Type{
+                          Oid:    types.T_int8,
+                          Size:   1,
+                  })
+                  if err != nil {
+                      return nil, err
+                  }
+                  rs := encoding.DecodeInt8Slice(vec.Data)
+                  rs = rs[:len(vs)]
+                  vector.SetCol(vec, not.Int8Not(vs, rs))
+                  nulls.Set(vec.Nsp, v.Nsp)
+                  return vec, nil
+              },
+          },
+
      {{range .Not}}
          {
              Typ:        types.LEFT_TYPE_OID,
              ReturnType: types.RETURN_TYPE_OID,
              Fn: func(v *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
                  rtl := {.RETURN_TYPE_LEN}
-                 if v.Typ.Oid == types.RETURN_TYPE_OID && (v.Ref == 1 || v.Ref == 0) {
-                     v.Ref = 0
-                     vs := v.Col.([]RETURN_GO_TYPE)
-                     not.{.RETTYP}Not(vs, vs)
-                     return v, nil
-                 }
                  vs := v.Col.([]L_GO_TYPE)
                  vec, err := process.Get(proc, int64(rtl) * int64(len(vs)), types.Type{
                          Oid:    types.RETURN_TYPE_OID,

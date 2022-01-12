@@ -33,9 +33,14 @@ func (r *relation) Nodes() engine.Nodes {
 }
 
 func (r *relation) TableDefs() []engine.TableDef {
-	defs := make([]engine.TableDef, len(r.md.Attrs))
+	defs := make([]engine.TableDef, len(r.md.Attrs) + len(r.md.Index))
 	for i, attr := range r.md.Attrs {
 		defs[i] = &engine.AttributeDef{Attr: attr}
+	}
+	j := len(r.md.Attrs)
+	for _, index := range r.md.Index {
+		defs[j] = &index
+		j++
 	}
 	return defs
 }

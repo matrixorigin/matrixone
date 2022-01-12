@@ -15,18 +15,19 @@
 package overload
 
 import (
-	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
 	// ErrDivByZero is reported on a division by zero.
-	ErrDivByZero = errors.New("division by zero")
+	ErrDivByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
 	// ErrModByZero is reported when computing the rest of a division by zero.
-	ErrModByZero = errors.New("zero modulus")
+	ErrModByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
 
 	// BinOps contains the binary operations indexed by operation type.
 	BinOps = map[int][]*BinOp{}
