@@ -27,9 +27,9 @@ import (
 
 var (
 	// ErrDivByZero is reported on a division by zero.
-	ErrDivByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
+	ErrDivByZero = overload.ErrDivByZero
 	// ErrZeroModulus is reported when computing the rest of a division by zero.
-	ErrZeroModulus = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
+	ErrZeroModulus = overload.ErrModByZero
 )
 
 func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {

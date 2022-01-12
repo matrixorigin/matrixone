@@ -290,12 +290,6 @@ func initDiv() {
                         }
                     }
                     vector.SetCol(vec, div.{.LTYP}IntegerDiv(lvs, rvs, rs))
-                    if lv.Ref == 0 {
-                        process.Put(proc, lv)
-                    }
-                    if rv.Ref == 0 {
-                        process.Put(proc, rv)
-                    }
                     return vec, nil
                 }
                 sels := process.GetSels(proc)

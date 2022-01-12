@@ -32,8 +32,48 @@ func initCast() {
             LeftType:   types.LEFT_TYPE_OID,
             RightType:  types.RIGHT_TYPE_OID,
             ReturnType: types.RETURN_TYPE_OID,
-            Fn: func(lv, _ *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
-                return lv, nil
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                if lv.Ref == 0 {
+                    return lv, nil
+                }
+                rtl := {.RETURN_TYPE_LEN}
+                lvs := lv.Col.([]L_GO_TYPE)
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(lvs)]
+                copy(rs, lvs)
+                nulls.Set(vec.Nsp, lv.Nsp)
+                vector.SetCol(vec, rs)
+                return vec, nil
+            },
+        },
+    {{end}}
+
+    // left and right is same type, and is date and datetime
+    {{range .SameType2}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                if lv.Ref == 0 {
+                    return lv, nil
+                }
+                rtl := {.RETURN_TYPE_LEN}
+                lvs := lv.Col.([]types.{.LTYP})
+                vec, err := process.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(lvs)]
+                copy(rs, lvs)
+                nulls.Set(vec.Nsp, lv.Nsp)
+                vector.SetCol(vec, rs)
+                return vec, nil
             },
         },
     {{end}}
@@ -141,19 +181,30 @@ func initCast() {
             RightType:  types.RIGHT_TYPE_OID,
             ReturnType: types.RETURN_TYPE_OID,
             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
-                lv.Typ = rv.Typ
-                return lv, nil
+                if lv.Ref == 0 {
+                    lv.Typ = rv.Typ
+                    return lv, nil
+                }
+                lvs := lv.Col.(*types.Bytes)
+                col := &types.Bytes{
+                    Data:    make([]byte, 0, len(lvs.Data)),
+                    Offsets: make([]uint32, 0, len(lvs.Offsets)),
+                    Lengths: make([]uint32, 0, len(lvs.Lengths)),
+                }
+                copy(col.Data, lvs.Data)
+                copy(col.Offsets, lvs.Offsets)
+                copy(col.Lengths, lvs.Lengths)
+                if err := proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
+                    return nil, err
+                }
+                vec := vector.New(rv.Typ)
+                vec.Data = col.Data
+                nulls.Set(vec.Nsp, lv.Nsp)
+                vector.SetCol(vec, col)
+                return vec, nil
             },
         },
     {{end}}
-		{
-			LeftType:   types.T_date,
-			RightType:  types.T_date,
-			ReturnType: types.T_date,
-			Fn: func(lv, _ *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
-				return lv, nil
-			},
-		},
 
 		{
 			LeftType:   types.T_varchar,
@@ -182,15 +233,6 @@ func initCast() {
 				return vec, nil
 			},
 		},
-
-        {
-            LeftType:   types.T_datetime,
-            RightType:  types.T_datetime,
-            ReturnType: types.T_datetime,
-            Fn: func(lv, _ *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
-                return lv, nil
-            },
-        },
 
         {
             LeftType:   types.T_varchar,

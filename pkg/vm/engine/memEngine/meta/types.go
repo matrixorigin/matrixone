@@ -7,4 +7,5 @@ type Metadata struct {
 	Rows  int64
 	Name  string
 	Attrs []engine.Attribute
+	Index []engine.IndexTableDef
 }

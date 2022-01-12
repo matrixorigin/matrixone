@@ -33,7 +33,12 @@ func (d *database) Create(_ uint64, name string, defs []engine.TableDef) error {
 	var md meta.Metadata
 
 	for _, def := range defs {
-		md.Attrs = append(md.Attrs, def.(*engine.AttributeDef).Attr)
+		switch d := def.(type) {
+		case *engine.AttributeDef:
+			md.Attrs = append(md.Attrs, d.Attr)
+		case *engine.IndexTableDef:
+			md.Index = append(md.Index, engine.IndexTableDef{Typ: d.Typ, ColNames: d.ColNames, Name: d.Name})
+		}
 	}
 	data, err := encoding.Encode(md)
 	if err != nil {
