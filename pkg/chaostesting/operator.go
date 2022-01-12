@@ -21,16 +21,16 @@ import (
 )
 
 type Operator struct {
-	Finally any
+	Finally func()
 
-	BeforeDo any
-	AfterDo  any
+	BeforeDo func()
+	AfterDo  func()
 
-	BeforeClose any
-	AfterClose  any
+	BeforeClose func()
+	AfterClose  func()
 
-	BeforeReport any
-	AfterReport  any
+	BeforeReport func()
+	AfterReport  func()
 }
 
 type Operators []Operator
@@ -39,7 +39,7 @@ var _ dscope.Reducer = Operators{}
 
 func (c Operators) IsReducer() {}
 
-func (o Operators) parallelDo(scope dscope.Scope, getFn func(op Operator) any) error {
+func (o Operators) parallelDo(scope dscope.Scope, getFn func(op Operator) func()) error {
 	wg := new(sync.WaitGroup)
 	errCh := make(chan error, 1)
 	for _, op := range o {
@@ -58,7 +58,7 @@ func (o Operators) parallelDo(scope dscope.Scope, getFn func(op Operator) any) e
 					}
 				}()
 				defer he(&err)
-				scope.Call(fn)
+				fn()
 			}()
 		}
 	}

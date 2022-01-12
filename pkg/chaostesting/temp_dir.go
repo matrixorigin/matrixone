@@ -24,7 +24,7 @@ func (_ Def) TempDir() (
 	dir TempDir,
 	cleanup Cleanup,
 ) {
-	d, err := os.MkdirTemp(os.TempDir(), "")
+	d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
 	ce(err)
 	dir = TempDir(d)
 	return dir, func() {

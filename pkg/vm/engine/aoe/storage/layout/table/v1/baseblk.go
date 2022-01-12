@@ -67,9 +67,9 @@ func (blk *baseBlock) GetFsManager() base.IManager         { return blk.host.Get
 func (blk *baseBlock) GetSegmentFile() base.ISegmentFile   { return blk.host.GetSegmentFile() }
 
 func (blk *baseBlock) GetIndexHolder() *index.BlockIndexHolder {
-	if blk.indexholder != nil {
-		blk.indexholder.Ref()
-	}
+	//if blk.indexholder != nil {
+	//	blk.indexholder.Ref()
+	//}
 	return blk.indexholder
 }
 

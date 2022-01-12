@@ -73,6 +73,9 @@ func (_ Def) PorcupineReport(
 	get GetPorcupineOps,
 	newChecker fz.NewPorcupineChecker,
 	testDataDir fz.TestDataDir,
+	clear fz.ClearTestDataFile,
+	getReport fz.GetReport,
+	write fz.WriteTestDataFile,
 ) fz.Operators {
 
 	return fz.Operators{
@@ -87,16 +90,12 @@ func (_ Def) PorcupineReport(
 
 		// write log to file
 		fz.Operator{
-			AfterReport: func(
-				getReport fz.GetReport,
-				write fz.WriteTestDataFile,
-			) {
 
-				//var report fz.PorcupineReport
-				//if !getReport(&report) {
-				//	// no error
-				//	return
-				//}
+			BeforeDo: func() {
+				ce(clear("porcupine", "log"))
+			},
+
+			AfterReport: func() {
 
 				f, err, done := write("porcupine", "log")
 				ce(err)

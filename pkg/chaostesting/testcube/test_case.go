@@ -16,18 +16,17 @@ package main
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
-	"github.com/reusee/e4"
 )
 
 type TestCase struct {
+	ID         uuid.UUID
 	ConfigPath string
 	LastRunAt  time.Time
 	ModifiedAt time.Time
@@ -40,30 +39,24 @@ type GetTestCases func(args []string) TestCases
 func (_ Def) GetTestCases(
 	testDataDir fz.TestDataDir,
 	testDataFilePath fz.TestDataFilePath,
+	globTestDataFiles fz.GlobTestDataFiles,
+	pathToID fz.TestDataFilePathToUUID,
 ) GetTestCases {
 
 	return func(args []string) (cases TestCases) {
 
 		if len(args) == 0 {
 			// run all
-			ce(filepath.WalkDir(string(testDataDir), func(path string, entry fs.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if entry.IsDir() {
-					return nil
-				}
-				if !strings.HasSuffix(path, "-config.xml") {
-					return nil
-				}
-				info, err := entry.Info()
+			configPaths, err := globTestDataFiles("config", "xml")
+			ce(err)
+			for _, configPath := range configPaths {
+				id, err := pathToID(configPath)
 				ce(err)
 				cases = append(cases, &TestCase{
-					ConfigPath: path,
-					ModifiedAt: info.ModTime(),
+					ID:         id,
+					ConfigPath: configPath,
 				})
-				return nil
-			}), e4.Ignore(os.ErrNotExist))
+			}
 
 		} else {
 			// run some
@@ -75,7 +68,10 @@ func (_ Def) GetTestCases(
 					path = filepath.Join(string(testDataDir), path+"-config.xml")
 				}
 				ce(err)
+				id, err := pathToID(path)
+				ce(err)
 				cases = append(cases, &TestCase{
+					ID:         id,
 					ConfigPath: path,
 				})
 			}
@@ -84,7 +80,7 @@ func (_ Def) GetTestCases(
 		// get last run time and modified time
 		for _, c := range cases {
 			if c.LastRunAt.IsZero() {
-				stat, err := os.Stat(testDataFilePath("cube", "log"))
+				stat, err := os.Stat(testDataFilePath(c.ID, "cube", "log"))
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}
@@ -92,7 +88,7 @@ func (_ Def) GetTestCases(
 				c.LastRunAt = stat.ModTime()
 			}
 			if c.ModifiedAt.IsZero() {
-				stat, err := os.Stat(testDataFilePath("config", "xml"))
+				stat, err := os.Stat(testDataFilePath(c.ID, "config", "xml"))
 				if errors.Is(err, os.ErrNotExist) {
 					continue
 				}

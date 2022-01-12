@@ -16,10 +16,13 @@ package fz
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/google/uuid"
+	"github.com/reusee/e4"
 )
 
 type TestDataDir string
@@ -39,6 +42,7 @@ func (_ Def) TestDataDir() (dir TestDataDir) {
 }
 
 type TestDataFilePath func(
+	id uuid.UUID,
 	category string,
 	extension string,
 ) string
@@ -49,12 +53,13 @@ func (_ Def) TestDataFilePath(
 ) TestDataFilePath {
 	outputDir := string(dir)
 	return func(
+		id uuid.UUID,
 		category string,
 		extension string,
 	) string {
 		return filepath.Join(
 			outputDir,
-			id.String()+"-"+category+"."+extension,
+			id.String()+"."+category+"."+extension,
 		)
 	}
 }
@@ -94,7 +99,7 @@ func (_ Def) WriteTestDataFile(
 				return err
 			}
 
-			name := getFilePath(category, extension)
+			name := getFilePath(id, category, extension)
 			if err := os.Rename(file.Name(), name); err != nil {
 				return err
 			}
@@ -102,6 +107,82 @@ func (_ Def) WriteTestDataFile(
 			return nil
 		}
 
+		return
+	}
+}
+
+type ClearTestDataFile func(
+	category string,
+	extension string,
+) (
+	err error,
+)
+
+func (_ Def) ClearTestDataFile(
+	getFilePath TestDataFilePath,
+	id uuid.UUID,
+) ClearTestDataFile {
+	return func(
+		category string,
+		extension string,
+	) (
+		err error,
+	) {
+		return we.With(
+			e4.Ignore(os.ErrNotExist),
+		)(os.Remove(getFilePath(id, category, extension)))
+	}
+}
+
+type GlobTestDataFiles func(
+	category string,
+	extension string,
+) (
+	paths []string,
+	err error,
+)
+
+func (_ Def) GlobTestDataFiles(
+	testDataDir TestDataDir,
+) GlobTestDataFiles {
+	dir := string(testDataDir)
+	return func(
+		category string,
+		extension string,
+	) (
+		paths []string,
+		err error,
+	) {
+		return filepath.Glob(
+			filepath.Join(
+				dir,
+				"*."+category+"."+extension,
+			),
+		)
+	}
+}
+
+type TestDataFilePathToUUID func(
+	path string,
+) (
+	id uuid.UUID,
+	err error,
+)
+
+func (_ Def) TestDataFilePathToUUID() TestDataFilePathToUUID {
+	return func(
+		path string,
+	) (
+		id uuid.UUID,
+		err error,
+	) {
+		base := filepath.Base(path)
+		idStr, _, ok := strings.Cut(base, ".")
+		if !ok {
+			err = fmt.Errorf("bad path: %s", path)
+			return
+		}
+		id, err = uuid.Parse(idStr)
 		return
 	}
 }

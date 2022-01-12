@@ -60,22 +60,22 @@ func (_ Def) Execute(
 		defer he(&err)
 
 		defer func() {
-			ce(ops.parallelDo(scope, func(op Operator) any {
+			ce(ops.parallelDo(scope, func(op Operator) func() {
 				return op.Finally
 			}))
 		}()
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.BeforeDo
 		}))
 
 		ce(doAction(nextThreadID(), mainAction.Action))
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.AfterDo
 		}))
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.BeforeClose
 		}))
 
@@ -83,11 +83,11 @@ func (_ Def) Execute(
 			ce(closeNode(NodeID(i)))
 		}
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.AfterClose
 		}))
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.BeforeReport
 		}))
 
@@ -96,13 +96,9 @@ func (_ Def) Execute(
 			pt("%s\n", report)
 		}
 
-		ce(ops.parallelDo(scope, func(op Operator) any {
+		ce(ops.parallelDo(scope, func(op Operator) func() {
 			return op.AfterReport
 		}))
-
-		if len(reports) > 0 {
-			return fmt.Errorf("failure reported")
-		}
 
 		return
 	}

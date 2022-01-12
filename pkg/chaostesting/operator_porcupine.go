@@ -32,6 +32,8 @@ type NewPorcupineChecker func(
 func (_ Def) NewPorcupineChecker(
 	genVisual PorcupineAlwaysGenerateVisualization,
 	write WriteTestDataFile,
+	clear ClearTestDataFile,
+	report AddReport,
 ) NewPorcupineChecker {
 
 	return func(
@@ -43,9 +45,11 @@ func (_ Def) NewPorcupineChecker(
 
 		return Operator{
 
-			AfterClose: func(
-				report AddReport,
-			) {
+			BeforeDo: func() {
+				ce(clear("porcupine", "html"))
+			},
+
+			AfterClose: func() {
 
 				if getOps != nil {
 					res, info := porcupine.CheckOperationsVerbose(model, getOps(), timeout)
