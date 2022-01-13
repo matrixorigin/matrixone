@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"time"
 )
 
 func (a *aoeReader) NewFilter() engine.Filter {
@@ -21,9 +23,10 @@ func (a *aoeReader) NewSparseFilter() engine.SparseFilter {
 
 func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
 	if a.blocks == nil || len(a.blocks) == 0 {
+		logutil.Infof("dequeue latency: %d ", a.latency)
 		return nil, nil
 	}
-
+	now := time.Now()
 	if len(a.cds) == 0 {
 		a.cds = make([]*bytes.Buffer, len(attrs))
 		a.dds = make([]*bytes.Buffer, len(attrs))
@@ -50,5 +53,6 @@ func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		bat.Zs[i] = 1
 	}
 	a.blocks = a.blocks[1:]
+	a.latency += time.Since(now).Milliseconds()
 	return bat, nil
 }

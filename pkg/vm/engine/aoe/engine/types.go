@@ -40,6 +40,7 @@ type aoeReader struct {
 	cds    []*bytes.Buffer
 	dds    []*bytes.Buffer
 	blocks []aoe.Block
+	latency int64
 }
 
 type database struct {
