@@ -105,28 +105,30 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
+			storeId := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
-			logutil.Debugf("ClientAddr is %v, shardId is %d", addr, tbl.ShardId)
+			logutil.Debugf("ClientAddr: %v, shardId: %d, storeId: %d", addr, tbl.ShardId, storeId)
 			if !Exist(r.nodes, addr) {
 				r.nodes = append(r.nodes, engine.Node{
-					Id:   addr,
+					Id:   string(codec.Uint642Bytes(storeId)),
 					Addr: addr,
 				})
 			}
 			for _, id := range ids.Ids {
-				if addr != db.catalog.Driver.RaftStore().GetConfig().ClientAddr {
+				if storeId != db.catalog.Driver.RaftStore().Meta().ID {
 					continue
 				}
-				logutil.Debugf("shardId is %d, segment is %d", tbl.ShardId, id)
+				logutil.Debugf("shardId: %d, segment: %d, Id: %d",
+					tbl.ShardId, id, db.catalog.Driver.RaftStore().Meta().ID)
 				r.segments = append(r.segments, SegmentInfo{
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
 					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
 					TabletId: string(codec.Uint642Bytes(tbl.ShardId)),
 					Node: engine.Node{
-						Id:   addr,
+						Id:   string(codec.Uint642Bytes(storeId)),
 						Addr: addr,
 					},
 				})
