@@ -24,11 +24,11 @@ func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error
 		a.prv.use = false
 	}
 	tim := time.Now()
-	bat := a.reader.GetBatch(refCount, attrs)
+	bat := a.reader.GetBatch(refCount, attrs, a.workerid)
 	a.dequeue += time.Since(tim).Milliseconds()
 	a.prv = bat
 	if bat == nil {
-		logutil.Infof("dequeue latency: %d ", a.dequeue)
+		logutil.Infof("dequeue latency: %d, workerid: %d", a.dequeue, a.workerid)
 		return nil, nil
 	}
 	return bat.bat, nil

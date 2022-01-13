@@ -8,39 +8,52 @@ func (s *store) SetBlocks(blocks []aoe.Block){
 	s.blocks = blocks
 }
 
-func (s *store) GetBatch(refCount []uint64, attrs []string) *batData {
+func (s *store) GetBatch(refCount []uint64, attrs []string, id int32) *batData {
 	if !s.start {
-		s.mu.Lock()
+		s.mutex.Lock()
 		if s.start {
-			s.mu.Unlock()
+			s.mutex.Unlock()
 			goto GET
 		}
 		s.start = true
-		s.mu.Unlock()
+		s.mutex.Unlock()
 		s.ReadStart(refCount, attrs)
 	}
 GET:
-	bat, ok := <-s.rhs
+	bat, ok := <-s.rhs[id]
 	if !ok {
 		return nil
 	}
 	return bat
 }
 
-func (s *store) SetBatch(bat *batData){
-	s.rhs <- bat
+func (s *store) SetBatch(bat *batData, id int32){
+	s.rhs[id] <- bat
+}
+
+func (s *store) CloseRHS(id int32){
+	s.SetBatch(nil, id)
+	close(s.rhs[id])
+
 }
 
 func (s *store) ReadStart(refCount []uint64, attrs []string) {
-	num := 4
+	if len(s.blocks) == 0 {
+		for idx := range s.rhs {
+			s.SetBatch(nil, int32(idx))
+			close(s.rhs[idx])
+		}
+		return
+	}
+	num := s.iodepth
 	mod := len(s.blocks) / num
 	if mod == 0 {
 		mod = 1
 	}
 	workers := make([]worker, 0)
-	for i := 0; i < num; i++ {
+	var i int
+	for i = 0; i < num; i++ {
 		if i == num-1 || i == len(s.blocks)-1 {
-
 			wk := worker{
 				blocks: s.blocks[i*mod:],
 				id:		int32(i),
@@ -56,24 +69,14 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 		}
 		workers = append(workers, wk)
 	}
-	if len(workers) == 0 {
-		s.SetBatch(nil)
-		close(s.rhs)
-		return
+	i++
+	if i < num {
+		for j := i; j < num; j++ {
+			s.SetBatch(nil, int32(j))
+			close(s.rhs[j])
+		}
 	}
-	s.workers = len(workers)
 	for j := 0; j < len(workers); j++{
 		go workers[j].Start(refCount, attrs)
-	}
-}
-
-func (s *store) RemoveWorker(id int32) {
-	if s.workers < 1 {
-		panic("workers error")
-	}
-	s.workers--
-	if s.workers == 0 {
-		s.SetBatch(nil)
-		close(s.rhs)
 	}
 }

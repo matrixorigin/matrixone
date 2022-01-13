@@ -39,19 +39,21 @@ type SegmentInfo struct {
 
 type aoeReader struct {
 	reader *store
-	id 		int
+	id 		int32
 	prv 	*batData
 	dequeue int64
+	workerid int32
 }
 
 type store struct {
 	rel	   		*relation
 	readers 	[]engine.Reader
-	rhs    		chan *batData
+	rhs    		[]chan *batData
 	blocks 		[]aoe.Block
-	workers		int
-	start    	bool
-	mu      sync.RWMutex
+	start 		bool
+	mutex 		sync.RWMutex
+	iodepth		int
+
 }
 
 type batData struct {
@@ -68,8 +70,9 @@ type worker struct {
 	batDatas   	[]*batData
 	blocks 		[]aoe.Block
 	storeReader *store
-	enqueue 	int64
-	allocTime   int64
+	enqueue      int64
+	allocLatency int64
+	readLatency  int64
 }
 
 type AoeSparseFilter struct {
