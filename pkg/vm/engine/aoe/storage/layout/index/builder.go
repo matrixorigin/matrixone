@@ -22,19 +22,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/index/bsi"
 )
 
-func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, startPos int) (bsi.BitSlicedIndex, error) {
+func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, startPos uint64) (bsi.BitSlicedIndex, error) {
 	switch t.Oid {
 	case types.T_int8:
-		bsiIdx := NewNumericBsiIndex(t, 8, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 8, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int8)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -42,16 +42,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_int16:
-		bsiIdx := NewNumericBsiIndex(t, 16, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 16, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int16)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -59,16 +59,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_int32:
-		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 32, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int32)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -76,16 +76,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_int64:
-		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 64, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]int64)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -93,16 +93,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_uint8:
-		bsiIdx := NewNumericBsiIndex(t, 8, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 8, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint8)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -110,16 +110,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_uint16:
-		bsiIdx := NewNumericBsiIndex(t, 16, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 16, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint16)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -127,16 +127,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_uint32:
-		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 32, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint32)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -144,16 +144,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_uint64:
-		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 64, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]uint64)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -161,16 +161,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_float32:
-		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 32, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]float32)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -178,16 +178,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_float64:
-		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 64, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]float64)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), val); err != nil {
+				if err := bsiIdx.Set(row, val); err != nil {
 					return nil, err
 				}
 				row++
@@ -195,16 +195,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_datetime:
-		bsiIdx := NewNumericBsiIndex(t, 64, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 64, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]types.Datetime)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
+				if err := bsiIdx.Set(row, int64(val)); err != nil {
 					return nil, err
 				}
 				row++
@@ -212,16 +212,16 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_date:
-		bsiIdx := NewNumericBsiIndex(t, 32, colIdx)
+		bsiIdx := NewNumericBsiIndex(t, 32, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.([]types.Date)
 			for _, val := range column {
-				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+				if nulls.Contains(part.Nsp, row-startPos) {
 					row++
 					continue
 				}
-				if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
+				if err := bsiIdx.Set(row, int32(val)); err != nil {
 					return nil, err
 				}
 				row++
@@ -229,22 +229,24 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		}
 		return bsiIdx, nil
 	case types.T_char:
-		bsiIdx := NewStringBsiIndex(t, colIdx)
+		bsiIdx := NewStringBsiIndex(t, colIdx, startPos)
 		row := startPos
 		for _, part := range data {
 			column := part.Col.(*types.Bytes)
 			for i := 0; i < len(column.Lengths); i++ {
-					if nulls.Contains(part.Nsp, uint64(row-startPos)) {
+					if nulls.Contains(part.Nsp, row-startPos) {
 						row++
 						continue
 					}
 					val := column.Get(int64(i))
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
+					if err := bsiIdx.Set(row, val); err != nil {
 						return nil, err
 					}
 					row++
 			}
 		}
+		//buff, _ := bsiIdx.Marshal()
+		//logutil.Infof("....... %d %d", len(buff), startPos)
 		return bsiIdx, nil
 	default:
 		panic("unsupported type")

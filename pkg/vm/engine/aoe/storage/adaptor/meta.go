@@ -88,7 +88,17 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 		for _, col := range indexInfo.Columns {
 			cols = append(cols, int(col))
 		}
-		tp:=metadata.ZoneMap
+		var tp metadata.IndexT
+		switch indexInfo.Type {
+		case aoe.ZoneMap:
+			tp = metadata.ZoneMap
+		case aoe.NumBsi:
+			tp = metadata.NumBsi
+		case aoe.FixStrBsi:
+			tp = metadata.FixStrBsi
+		default:
+			panic("unsupported index type")
+		}
 		// if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
 		if _, err = indice.MakeIndex(indexInfo.Name, tp, cols...); err != nil {
 			panic(err)
@@ -99,7 +109,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 }
 
 func IndiceInfoToIndiceSchema(info *aoe.IndexInfo) *db.IndexSchema {
-	columns := make([]int, len(info.Columns))
+	columns := make([]int, 0, len(info.Columns))
 	for _, col := range info.Columns {
 		columns = append(columns, int(col))
 	}

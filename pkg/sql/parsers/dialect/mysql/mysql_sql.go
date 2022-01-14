@@ -9713,7 +9713,7 @@ yydefault:
 					Family:       tree.StringFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+					Oid:          uint32(defines.MYSQL_TYPE_STRING),
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}
@@ -11114,7 +11114,7 @@ yydefault:
 					Family:       tree.StringFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+					Oid:          uint32(defines.MYSQL_TYPE_STRING),
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}

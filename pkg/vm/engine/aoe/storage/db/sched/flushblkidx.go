@@ -87,7 +87,7 @@ func (e *flushBlockIndexEvent) Execute() error {
 			panic("logic error")
 		}
 		nodes = append(nodes, vec.MNode)
-		startPos := int(schema.BlockMaxRows * uint64(meta.Idx))
+		startPos := schema.BlockMaxRows * uint64(meta.Idx)
 		bsi, err := index.BuildBitSlicedIndex([]*vector.Vector{&vec.Vector}, schema.ColDefs[colIdx].Type, int16(colIdx), startPos)
 		if err != nil {
 			panic(err)

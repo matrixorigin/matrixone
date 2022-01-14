@@ -96,7 +96,7 @@ func TestStrBsi(t *testing.T) {
 		Width: 8,
 	}
 	col := int16(20)
-	bsiIdx := NewStringBsiIndex(tp, col)
+	bsiIdx := NewStringBsiIndex(tp, col, 0)
 	xs := [][]byte{
 		[]byte("asdf"), []byte("a"), []byte("asd"), []byte("as"), []byte("bat"), []byte("basket"), []byte("asd"), []byte("a"),
 	}
@@ -117,7 +117,7 @@ func TestStrBsi(t *testing.T) {
 	buf, err := bsiIdx.Marshal()
 	assert.Nil(t, err)
 
-	bsiIdx2 := NewStringBsiIndex(tp, 0)
+	bsiIdx2 := NewStringBsiIndex(tp, 0, 0)
 	err = bsiIdx2.Unmarshal(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, col, bsiIdx2.Col)
@@ -171,7 +171,7 @@ func TestNumBsi(t *testing.T) {
 	}
 	bitSize := 30
 	col := int16(10)
-	bsiIdx := NewNumericBsiIndex(tp, bitSize, col)
+	bsiIdx := NewNumericBsiIndex(tp, bitSize, col, 0)
 
 	xs := []int32{
 		10, 3, -7, 9, 0, 1, 9, -8, 2, -1, 12, -35435, 6545654, 2332, 2,
@@ -194,7 +194,7 @@ func TestNumBsi(t *testing.T) {
 	buf, err := bsiIdx.Marshal()
 	assert.Nil(t, err)
 
-	bsiIdx2 := NewNumericBsiIndex(tp, 0, 0)
+	bsiIdx2 := NewNumericBsiIndex(tp, 0, 0, 0)
 	err = bsiIdx2.Unmarshal(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, col, bsiIdx2.Col)

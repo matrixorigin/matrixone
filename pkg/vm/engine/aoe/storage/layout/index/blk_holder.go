@@ -119,11 +119,20 @@ func (holder *BlockIndexHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 				continue
 			}
 		}
+		if index.IndexFile().RefCount() == 0 {
+			if err := node.Close(); err != nil {
+				return err
+			}
+			continue
+		}
+		index.IndexFile().Ref()
 		err = index.Eval(ctx)
 		if err != nil {
 			node.Close()
+			index.IndexFile().Unref()
 			return err
 		}
+		index.IndexFile().Unref()
 		node.Close()
 	}
 	return nil
@@ -214,6 +223,7 @@ func (holder *BlockIndexHolder) DropIndex(filename string) {
 					break
 				}
 			}
+			holder.self.colIndices[int(col)] = idxes
 			node.VFile.Unref()
 			delete(holder.self.fileHelper, staleName)
 			delete(holder.self.loadedVersion, int(col))
@@ -274,6 +284,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 					break
 				}
 			}
+			holder.self.colIndices[int(col)] = idxes
 			node.VFile.Unref()
 			delete(holder.self.fileHelper, staleName)
 			logutil.Infof("[BLK] dropping stale index implicitly | version-%d", v)

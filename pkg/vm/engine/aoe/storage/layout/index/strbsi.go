@@ -16,6 +16,7 @@ package index
 
 import (
 	"bytes"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
@@ -37,14 +38,16 @@ type StringBsiIndex struct {
 	File        common.IVFile
 	UseCompress bool
 	FreeFunc    buf.MemoryFreeFunc
+	Offset uint64
 }
 
-func NewStringBsiIndex(t types.Type, colIdx int16) *StringBsiIndex {
+func NewStringBsiIndex(t types.Type, colIdx int16, startPos uint64) *StringBsiIndex {
 	bsiIdx := getStringBsi(t)
 	return &StringBsiIndex{
 		T:         t,
 		Col:       colIdx,
 		StringBSI: *bsiIdx,
+		Offset: startPos,
 	}
 }
 
@@ -177,6 +180,8 @@ func (i *StringBsiIndex) Unmarshal(data []byte) error {
 	buf = buf[2:]
 	i.T = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
+	i.Offset = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
 	return i.StringBSI.Unmarshal(buf)
 }
 
@@ -184,10 +189,282 @@ func (i *StringBsiIndex) Marshal() ([]byte, error) {
 	var bw bytes.Buffer
 	bw.Write(encoding.EncodeInt16(i.Col))
 	bw.Write(encoding.EncodeType(i.T))
+	bw.Write(encoding.EncodeUint64(i.Offset))
 	indexBuf, err := i.StringBSI.Marshal()
 	if err != nil {
 		return nil, err
 	}
 	bw.Write(indexBuf)
 	return bw.Bytes(), nil
+}
+
+func (i *StringBsiIndex) Get(k uint64) (interface{}, bool) {
+	k = k - i.Offset
+	return i.StringBSI.Get(k)
+}
+
+func (i *StringBsiIndex) Set(k uint64, e interface{}) error {
+	k = k - i.Offset
+	return i.StringBSI.Set(k, e)
+}
+
+func (i *StringBsiIndex) Eq(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Eq(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) Ne(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Ne(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) Lt(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Lt(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) Le(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Le(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) Gt(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Gt(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) Ge(e interface{}, filter *roaring.Bitmap) (*roaring.Bitmap, error) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res, err := i.StringBSI.Ge(e, filter)
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res, nil
+}
+
+func (i *StringBsiIndex) NotNull(filter *roaring.Bitmap) *roaring.Bitmap {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	res := i.StringBSI.NotNull(filter)
+	if res != nil {
+		arr := res.ToArray()
+		out := roaring.NewBitmap()
+		for _, n := range arr {
+			out.Add(n + uint32(i.Offset))
+		}
+		res = out
+	}
+	return res
+}
+
+func (i *StringBsiIndex) Count(filter *roaring.Bitmap) uint64 {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	return i.StringBSI.Count(filter)
+}
+
+func (i *StringBsiIndex) NullCount(filter *roaring.Bitmap) uint64 {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	return i.StringBSI.NullCount(filter)
+}
+
+func (i *StringBsiIndex) Min(filter *roaring.Bitmap) (interface{}, uint64) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	return i.StringBSI.Min(filter)
+}
+
+func (i *StringBsiIndex) Max(filter *roaring.Bitmap) (interface{}, uint64) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	return i.StringBSI.Max(filter)
+}
+
+func (i *StringBsiIndex) Sum(filter *roaring.Bitmap) (interface{}, uint64) {
+	if filter != nil {
+		arr := filter.ToArray()
+		in := roaring.NewBitmap()
+		for _, n := range arr {
+			if uint64(n) < i.Offset {
+				continue
+			}
+			in.Add(n - uint32(i.Offset))
+		}
+		filter = in
+	}
+	return i.StringBSI.Sum(filter)
 }

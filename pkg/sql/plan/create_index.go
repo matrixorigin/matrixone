@@ -28,7 +28,7 @@ var (
 	errIndexTypeNotSupported = errors.New(errno.FeatureNotSupported, "unsupported index type")
 
 	// err for index support
-	errBsiUnsupported = errors.New(errno.FeatureNotSupported, "BSI index not support type char/varchar now")
+	errBsiUnsupported = errors.New(errno.FeatureNotSupported, "BSI index not support type VARCHAR now")
 )
 
 func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) error {
@@ -138,7 +138,7 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 // bsiSupport returns error if bsi index not support this data type
 func bsiSupport(t types.Type) error {
 	switch t.Oid {
-	case types.T_char, types.T_varchar:
+	case types.T_varchar:
 		return errBsiUnsupported
 	}
 	return nil

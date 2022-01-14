@@ -4067,7 +4067,7 @@ cast_type:
 		        Family: tree.StringFamily,
                 FamilyString: $1,
 		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+		        Oid:    uint32(defines.MYSQL_TYPE_STRING),
                 DisplayWith: $2,
 	        },
         }
@@ -5137,7 +5137,7 @@ char_type:
 		        Family: tree.StringFamily,
                 FamilyString: $1,
 		        Locale: &locale,
-		        Oid:    uint32(defines.MYSQL_TYPE_VARCHAR),
+		        Oid:    uint32(defines.MYSQL_TYPE_STRING),
                 DisplayWith: $2,
 	        },
         }

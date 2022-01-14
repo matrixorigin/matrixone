@@ -537,7 +537,6 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	if idxInfo.Type == aoe.Invalid {
 		return ErrInvalidIndexType
 	}
-	//TODO
 	for _, idx := range idxInfo.ColumnNames {
 		columnExist := false
 		for _, col := range tbl.Columns {
@@ -546,7 +545,9 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 				idxInfo.Columns = append(idxInfo.Columns, col.Id)
 				if idxInfo.Type == aoe.Bsi {
 					if col.Type.Oid == types.T_char || col.Type.Oid == types.T_varchar {
-						return ErrInvalidIndexType
+						idxInfo.Type = aoe.FixStrBsi
+					} else {
+						idxInfo.Type = aoe.NumBsi
 					}
 				}
 			}
@@ -554,9 +555,6 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 		if !columnExist {
 			return ErrColumnNotExist
 		}
-	}
-	if idxInfo.Type == aoe.Bsi {
-		idxInfo.Type = aoe.NumBsi
 	}
 	shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.Id), 0)
 	if err != nil {

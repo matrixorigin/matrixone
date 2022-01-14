@@ -810,6 +810,36 @@ func TestBuildIndex(t *testing.T) {
 	time.Sleep(waitTime)
 	t.Log(inst.IndexBufMgr.String())
 
+	indexNames := []string{"idx-1"}
+	ctx := &DropIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		IndexNames:    indexNames,
+	}
+	assert.Nil(t, inst.DropIndex(ctx))
+
+	indice = metadata.NewIndexSchema()
+	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	ctx1 := &CreateIndexCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Table:         tblMeta.Schema.Name,
+		Indices:       indice,
+	}
+	assert.Nil(t, inst.CreateIndex(ctx1))
+
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+				inst.Append(appendCtx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(waitTime)
+
 	dropCtx := CreateTableMutationCtx(database, gen, schema.Name)
 	_, err = inst.DropTable(dropCtx)
 	assert.Nil(t, err)
