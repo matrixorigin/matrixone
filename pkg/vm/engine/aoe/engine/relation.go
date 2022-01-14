@@ -130,7 +130,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 
 func (r *relation) NewReader(num int) []engine.Reader {
 	readStore := &store{
-		iodepth: 4,
+		iodepth: num,
 		start: false,
 		readers: make([]engine.Reader, num),
 	}
@@ -160,7 +160,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(i / mod)}
 	}
 	for i := 0; i < readStore.iodepth; i++ {
-		readStore.rhs[i] = make(chan *batData, 2 * mod)
+		readStore.rhs[i] = make(chan *batData, 64)
 	}
 	return readStore.readers
 }
