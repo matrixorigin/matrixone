@@ -5,10 +5,12 @@ go 1.18
 require (
 	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
+	github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82
 	github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	github.com/reusee/starlarkutil v0.0.0-20211219090033-2a5093890e47
+	github.com/vishvananda/netlink v1.1.0
 	go.starlark.net v0.0.0-20211203141949-70c0e40ae128
 	go.uber.org/zap v1.18.1
 )
@@ -16,9 +18,9 @@ require (
 require (
 	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c // indirect
 	github.com/emicklei/dot v0.16.0 // indirect
-	github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82 // indirect
 	github.com/mattn/go-colorable v0.1.2 // indirect
 	github.com/mattn/go-isatty v0.0.9 // indirect
+	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
 )
 
 require (
@@ -59,7 +61,7 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lni/goutils v1.3.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f
+	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

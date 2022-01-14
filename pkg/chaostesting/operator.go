@@ -67,3 +67,7 @@ func (o Operators) parallelDo(scope dscope.Scope, getFn func(op Operator) func()
 	}
 	return nil
 }
+
+func (_ Def) Operators() Operators {
+	return Operators{}
+}

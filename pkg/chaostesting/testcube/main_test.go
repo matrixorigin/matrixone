@@ -23,7 +23,11 @@ import (
 
 func TestRun(t *testing.T) {
 	defer he(nil, e4.TestingFatal(t))
-	NewScope().Call(func(
+	NewScope().Fork(
+		func() fz.IsTesting {
+			return true
+		},
+	).Call(func(
 		execute fz.Execute,
 	) {
 		ce(execute())

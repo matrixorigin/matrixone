@@ -12,17 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
-import "github.com/matrixorigin/matrixone/pkg/chaostesting"
+type IsTesting bool
 
-func (_ Def) Operators() fz.Operators {
-
-	//TODO more cube metrics
-
-	return fz.Operators{
-		//fz.SaveConfig("config.xml"),
-		//fz.SaveCPUProfile("cpu.profile"),
-		//fz.SaveAllocsProfile("allocs.profile"),
-	}
+func (_ Def) IsTesting() IsTesting {
+	return false
 }
