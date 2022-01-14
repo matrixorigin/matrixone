@@ -46,6 +46,7 @@ const (
 	TempDirName  = "temp"
 	DataDirName  = "data"
 	MetaDirName  = "meta"
+	IndexDirName = "index"
 )
 
 func MakeSpillDir(dirname string) string {
@@ -62,6 +63,10 @@ func MakeDataDir(dirname string) string {
 
 func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, MetaDirName)
+}
+
+func MakeIndexDir(dirname string) string {
+	return path.Join(dirname, IndexDirName)
 }
 
 func MakeTBlockFileName(dirname, name string, isTmp bool) string {

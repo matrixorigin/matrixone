@@ -92,11 +92,11 @@ func (e *flushSegIndexEvent) Execute() error {
 		}
 		version := e.Segment.GetIndexHolder().AllocateVersion(colIdx)
 		filename := common.MakeBitSlicedIndexFileName(version, meta.Table.Id, meta.Id, uint16(colIdx))
-		filename = filepath.Join(dir, filename)
+		filename = filepath.Join(filepath.Join(dir, "index"), filename)
 		if err := index.DefaultRWHelper.FlushBitSlicedIndex(bsi.(index.Index), filename); err != nil {
 			panic(err)
 		}
-		logutil.Infof("[SEG] BSI Flushed, type %d | %s", bsi.(index.Index).Type(), filename)
+		logutil.Debugf("[SEG] BSI Flushed, type %d | %s", bsi.(index.Index).Type(), filename)
 		wg.Add(1)
 		go func() {
 			e.Segment.GetIndexHolder().LoadIndex(e.Segment.GetSegmentFile(), filename)

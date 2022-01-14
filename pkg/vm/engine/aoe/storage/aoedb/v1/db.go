@@ -277,7 +277,7 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 				if holder.HolderType() == base.SORTED_SEG {
 					currVersion := holder.FetchCurrentVersion(col, 0)
 					bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
-					fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+					fullname := filepath.Join(filepath.Join(d.Dir, "data/index"), bn)
 					holder.DropIndex(fullname)
 				} else if holder.HolderType() == base.UNSORTED_SEG {
 					for _, blkId := range seg.BlockIds() {
@@ -287,7 +287,7 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 						}
 						currVersion := holder.FetchCurrentVersion(col, blkId)
 						bn := common.MakeBlockBitSlicedIndexFileName(currVersion, tblId, segId, blkId, col)
-						fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
+						fullname := filepath.Join(filepath.Join(d.Dir, "data/index"), bn)
 						holder.DropIndex(fullname)
 					}
 				} else {

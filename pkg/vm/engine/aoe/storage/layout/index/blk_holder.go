@@ -228,7 +228,7 @@ func (holder *BlockIndexHolder) DropIndex(filename string) {
 			delete(holder.self.fileHelper, staleName)
 			delete(holder.self.loadedVersion, int(col))
 			holder.self.droppedVersion[int(col)] = version
-			logutil.Infof("[BLK] dropping newest index explicitly | version-%d", version)
+			logutil.Debugf("[BLK] dropping newest index explicitly | version-%d", version)
 			return
 		}
 	} else {
@@ -260,7 +260,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 			if err := os.Remove(filename); err != nil {
 				panic(err)
 			}
-			logutil.Infof("[BLK] detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
+			logutil.Debugf("[BLK] detect stale index, version: %d, already dropped v-%d, file: %s", version, dropped, filepath.Base(filename))
 			return
 		}
 	}
@@ -287,7 +287,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 			holder.self.colIndices[int(col)] = idxes
 			node.VFile.Unref()
 			delete(holder.self.fileHelper, staleName)
-			logutil.Infof("[BLK] dropping stale index implicitly | version-%d", v)
+			logutil.Debugf("[BLK] dropping stale index implicitly | version-%d", v)
 			isLatest = true
 		} else {
 			// stale index, but not allocate resource yet, simply remove physical file
@@ -295,7 +295,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 			if err := os.Remove(filename); err != nil {
 				panic(err)
 			}
-			logutil.Infof("[BLK] loading stale index | %s received, but v-%d already loaded", filename, v)
+			logutil.Debugf("[BLK] loading stale index | %s received, but v-%d already loaded", filename, v)
 		}
 	}
 	if isLatest {
@@ -333,7 +333,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
 		// holder.self.indexNodes = append(holder.self.indexNodes, node)
 		holder.self.fileHelper[filepath.Base(filename)] = node
-		logutil.Infof("[BLK] BSI load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
+		logutil.Debugf("[BLK] BSI load successfully, current indices count for column %d: %d | %s", col, len(holder.self.colIndices[col]), holder.ID.SegmentString())
 		return
 	}
 }

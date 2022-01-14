@@ -16,6 +16,7 @@ package db
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -127,5 +128,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Opts.GC.Acceptor.Accept(gcreqs.NewCatalogCompactionRequest(db.Store.Catalog, db.Opts.MetaCleanerCfg.Interval))
 	os.RemoveAll(db.GetTempDir())
 	os.MkdirAll(db.GetTempDir(), os.FileMode(0755))
+
+	os.MkdirAll(common.MakeIndexDir(filepath.Join(db.Dir, "data")), os.FileMode(0755))
 	return db, err
 }
