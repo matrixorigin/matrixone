@@ -66,6 +66,7 @@ type batData struct {
 
 type worker struct {
 	id 			int32
+	bufferCount int
 	zs     		[]int64
 	batDatas   	[]*batData
 	blocks 		[]aoe.Block

@@ -12,11 +12,10 @@ func (w *worker) ID() int32 {
 }
 
 func (w *worker) Alloc(attrs []string) *batData{
-	num := 2
 	if len(w.batDatas) == 0 {
 		tim := time.Now()
-		w.batDatas = make([]*batData, num)
-		for i := 0; i < num; i++ {
+		w.batDatas = make([]*batData, w.bufferCount)
+		for i := 0; i < w.bufferCount; i++ {
 			cds := make([]*bytes.Buffer, len(attrs))
 			dds := make([]*bytes.Buffer, len(attrs))
 			for a := range attrs {
@@ -34,14 +33,12 @@ func (w *worker) Alloc(attrs []string) *batData{
 		logutil.Infof("workerId: %d, make latency: %d", w.id, time.Since(tim).Milliseconds())
 	}
 	for {
-		t := time.Now()
 		for j := range w.batDatas {
 			if w.batDatas[j] == nil {
 				logutil.Infof("batDatas is nil")
 			}
 			if !w.batDatas[j].use {
 				w.batDatas[j].use = true
-				w.allocLatency += time.Since(t).Microseconds()
 				return w.batDatas[j]
 			}
 		}
@@ -50,12 +47,13 @@ func (w *worker) Alloc(attrs []string) *batData{
 }
 
 func (w *worker) Start(refCount []uint64, attrs []string)  {
-
 	for i :=0; i < len(w.blocks); i++ {
 		if i < len(w.blocks) - 1 {
 			w.blocks[i+1].Prefetch(attrs)
 		}
+		t := time.Now()
 		data := w.Alloc(attrs)
+		w.allocLatency += time.Since(t).Milliseconds()
 		now := time.Now()
 		bat, err := w.blocks[i].Read(refCount, attrs, data.cds, data.dds)
 		w.readLatency += time.Since(now).Milliseconds()

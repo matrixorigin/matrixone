@@ -77,6 +77,7 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 		}
 	}
 	for j := 0; j < len(workers); j++{
+		workers[j].bufferCount = len(s.readers) / len(workers) * 2
 		go workers[j].Start(refCount, attrs)
 	}
 }
