@@ -20,7 +20,6 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/lni/vfs"
 	"github.com/matrixorigin/matrixcube/aware"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -29,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/storage/kv/mem"
+	"github.com/matrixorigin/matrixcube/vfs"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
@@ -38,6 +38,7 @@ func (_ Def2) Nodes(
 	numNodes fz.NumNodes,
 	logger fz.Logger,
 	listenHost ListenHost,
+	randPort RandPort,
 ) (nodes fz.Nodes) {
 
 	host := string(listenHost)
@@ -49,11 +50,13 @@ func (_ Def2) Nodes(
 
 	for nodeID, conf := range configs {
 
-		node := &Node{}
+		node := &Node{
+			Cond: sync.NewCond(new(sync.Mutex)),
+		}
 
 		node.Logger = logger
 
-		fs := vfs.Default
+		fs := vfs.NewMemFS()
 		conf.FS = fs
 
 		conf.RaftAddr = net.JoinHostPort(host, randPort())
@@ -69,22 +72,21 @@ func (_ Def2) Nodes(
 		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
 		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, randPort())
 
+		// pebble
+		//kvStorage, err := pebble.NewStorage(
+		//	fs.PathJoin(string(tempDir), fmt.Sprintf("storage-%d", nodeID)),
+		//	logger,
+		//	&crdbpebble.Options{},
+		//)
+		//ce(err)
+
+		// memory
+		kvStorage := mem.NewStorage()
+		base := kv.NewBaseStorage(kvStorage, fs)
+		dataStorage := kv.NewKVDataStorage(base, simple.NewSimpleKVExecutor(kvStorage))
+		node.DataStorage = dataStorage
+
 		conf.Storage = func() config.StorageConfig {
-
-			// pebble
-			//kvStorage, err := pebble.NewStorage(
-			//	fs.PathJoin(string(tempDir), fmt.Sprintf("storage-%d", nodeID)),
-			//	logger,
-			//	&crdbpebble.Options{},
-			//)
-			//ce(err)
-
-			// memory
-			kvStorage := mem.NewStorage()
-
-			base := kv.NewBaseStorage(kvStorage, fs)
-			dataStorage := kv.NewKVDataStorage(base, simple.NewSimpleKVExecutor(kvStorage))
-
 			return config.StorageConfig{
 				DataStorageFactory: func(group uint64) storage.DataStorage {
 					return dataStorage
@@ -95,15 +97,13 @@ func (_ Def2) Nodes(
 			}
 		}()
 
-		cond := sync.NewCond(new(sync.Mutex))
-		var created, isLeader, isFollower bool
 		conf.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 			return &shardStateAware{
 				created: func(shard meta.Shard) {
-					cond.L.Lock()
-					created = true
-					cond.L.Unlock()
-					cond.Broadcast()
+					node.Cond.L.Lock()
+					node.Created = true
+					node.Cond.L.Unlock()
+					node.Cond.Broadcast()
 				},
 				updated: func(shard meta.Shard) {
 				},
@@ -112,38 +112,40 @@ func (_ Def2) Nodes(
 				destroyed: func(shard meta.Shard) {
 				},
 				becomeLeader: func(shard meta.Shard) {
-					cond.L.Lock()
-					isLeader = true
-					isFollower = false
-					cond.L.Unlock()
-					cond.Broadcast()
+					node.Cond.L.Lock()
+					node.IsLeader = true
+					node.IsFollower = false
+					node.Cond.L.Unlock()
+					node.Cond.Broadcast()
 				},
 				becomeFollower: func(shard meta.Shard) {
-					cond.L.Lock()
-					isLeader = false
-					isFollower = true
-					cond.L.Unlock()
-					cond.Broadcast()
+					node.Cond.L.Lock()
+					node.IsLeader = false
+					node.IsFollower = true
+					node.Cond.L.Unlock()
+					node.Cond.Broadcast()
 				},
 				snapshotApplied: func(shard meta.Shard) {
 				},
 			}
 		}
 
+		node.Config = conf
+
 		store := raftstore.NewStore(conf)
 		store.Start()
 		if nodeID == 0 {
-			cond.L.Lock()
-			for !isLeader || !created {
-				cond.Wait()
+			node.Cond.L.Lock()
+			for !node.IsLeader || !node.Created {
+				node.Cond.Wait()
 			}
-			cond.L.Unlock()
+			node.Cond.L.Unlock()
 		} else {
-			cond.L.Lock()
-			for !isFollower {
-				cond.Wait()
+			node.Cond.L.Lock()
+			for !node.IsFollower {
+				node.Cond.Wait()
 			}
-			cond.L.Unlock()
+			node.Cond.L.Unlock()
 		}
 		node.RaftStore = store
 

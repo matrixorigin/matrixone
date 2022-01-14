@@ -15,46 +15,53 @@
 package fz
 
 import (
+	"errors"
 	"fmt"
-	"reflect"
+	"os"
+	"path/filepath"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
-type AddReport func(value any)
+type Report struct {
+	Kind string
+	Desc string
+}
 
-type GetReport func(target any) bool
+type AddReport func(...Report)
 
-type GetReports func() []any
+type GetReports func(kind string) []Report
+
+type GetAllReports func() []Report
 
 func (_ Def) Report() (
 	add AddReport,
-	getAll GetReports,
-	get GetReport,
+	getAll GetAllReports,
+	get GetReports,
 ) {
 
-	var reports []any
+	var reports []Report
 	var l sync.Mutex
 
-	add = func(report any) {
+	add = func(rs ...Report) {
 		l.Lock()
 		defer l.Unlock()
-		reports = append(reports, report)
+		reports = append(reports, rs...)
 	}
 
-	getAll = func() []any {
+	getAll = func() []Report {
 		l.Lock()
 		defer l.Unlock()
 		return reports
 	}
 
-	get = func(target any) (found bool) {
-		t := reflect.TypeOf(target).Elem()
+	get = func(kind string) (res []Report) {
 		l.Lock()
 		defer l.Unlock()
 		for _, report := range reports {
-			if reflect.TypeOf(report) == t {
-				reflect.ValueOf(target).Elem().Set(reflect.ValueOf(report))
-				found = true
+			if report.Kind == kind {
+				res = append(res, report)
 			}
 		}
 		return
@@ -63,31 +70,81 @@ func (_ Def) Report() (
 	return
 }
 
-func (_ Def) ReportFiles(
-	clear ClearTestDataFile,
-	get GetReports,
-	write WriteTestDataFile,
-) Operators {
-	return Operators{
-		{
+type processReports func() error
 
-			BeforeDo: func() {
-				ce(clear("report", "log"))
-			},
+func (_ Def) ProcessReports(
+	clearFile ClearTestDataFile,
+	getReports GetAllReports,
+	writeFile WriteTestDataFile,
+	testDataDir TestDataDir,
+	id uuid.UUID,
+	testDataFilePath TestDataFilePath,
+	logger Logger,
+) processReports {
+	return func() (err error) {
+		defer he(&err)
+		defer func() {
+			logger.Info("ProcessReports done")
+		}()
 
-			BeforeReport: func() {
-				reports := get()
-				if len(reports) == 0 {
-					return
-				}
-				file, err, done := write("report", "log")
+		// clear old files
+		ce(clearFile("report", "log"))
+		byKindDir := filepath.Join(
+			string(testDataDir),
+			"reports-by-kind",
+		)
+		paths, err := filepath.Glob(filepath.Join(
+			byKindDir,
+			"*",
+			id.String()+"*",
+		))
+		ce(err)
+		for _, path := range paths {
+			ce(os.Remove(path))
+		}
+
+		reports := getReports()
+
+		if len(reports) > 0 {
+
+			// write report log
+			file, err, done := writeFile("report", "log")
+			ce(err)
+			for _, report := range reports {
+				pt("%s\n", report)
+				_, err := file.WriteString(fmt.Sprintf("%s\n\n", report))
 				ce(err)
-				for _, report := range reports {
-					_, err := file.WriteString(fmt.Sprintf("%s\n\n", report))
-					ce(err)
+			}
+			ce(done())
+
+			// by kind
+			for _, report := range reports {
+				dir := filepath.Join(
+					byKindDir,
+					report.Kind,
+				)
+				_, err := os.Stat(dir)
+				if errors.Is(err, os.ErrNotExist) {
+					err = nil
+					ce(os.MkdirAll(dir, 0755))
 				}
-				ce(done())
-			},
-		},
+				ce(err)
+				reportLogPath := testDataFilePath(id, "report", "log")
+				ce(os.Symlink(
+					filepath.Join(
+						"..",
+						"..",
+						filepath.Base(reportLogPath),
+					),
+					filepath.Join(
+						dir,
+						filepath.Base(reportLogPath),
+					),
+				))
+			}
+
+		}
+
+		return
 	}
 }

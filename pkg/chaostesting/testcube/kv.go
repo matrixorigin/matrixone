@@ -47,44 +47,56 @@ func (_ Def) NewKV() NewKV {
 			Result chan []byte
 			Error  chan error
 		}
-		reqInfos := make(map[uuid.UUID]*ReqInfo)
+
 		reqInfosLock := new(sync.Mutex)
+		var reqInfos map[uuid.UUID]*ReqInfo
+		var proxy raftstore.ShardsProxy
 
-		shardsProxy := node.RaftStore.GetShardsProxy()
-		shardsProxy.SetCallback(
-
-			func(resp rpc.Response) {
-				reqInfosLock.Lock()
-				defer reqInfosLock.Unlock()
-				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(resp.ID))]
-				if !ok {
-					panic("req not found")
-				}
-				info.Result <- resp.Value
-			},
-
-			func(reqID []byte, err error) {
-				reqInfosLock.Lock()
-				defer reqInfosLock.Unlock()
-				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(reqID))]
-				if !ok {
-					panic("req not found")
-				}
-				info.Error <- we(err)
-			},
-		)
-
-		shardsProxy.SetRetryController(RetryFunc(func(id []byte) (req rpc.Request, retry bool) {
-			reqInfosLock.Lock()
-			defer reqInfosLock.Unlock()
-			info, ok := reqInfos[uuid.UUID(*(*[16]byte)(id))]
-			if !ok {
-				panic("req not found")
+		// after node restarted, shard proxy need to be updated
+		// this function must be called with reqInfosLock being held
+		check := func() {
+			curProxy := node.RaftStore.GetShardsProxy()
+			if curProxy == proxy {
+				return
 			}
-			req = info.Req
-			retry = true
-			return
-		}))
+			proxy = curProxy
+			reqInfos = make(map[uuid.UUID]*ReqInfo)
+
+			proxy.SetCallback(
+
+				func(resp rpc.Response) {
+					reqInfosLock.Lock()
+					defer reqInfosLock.Unlock()
+					info, ok := reqInfos[uuid.UUID(*(*[16]byte)(resp.ID))]
+					if !ok {
+						panic("req not found")
+					}
+					info.Result <- resp.Value
+				},
+
+				func(reqID []byte, err error) {
+					reqInfosLock.Lock()
+					defer reqInfosLock.Unlock()
+					info, ok := reqInfos[uuid.UUID(*(*[16]byte)(reqID))]
+					if !ok {
+						panic("req not found")
+					}
+					info.Error <- we(err)
+				},
+			)
+
+			proxy.SetRetryController(RetryFunc(func(id []byte) (req rpc.Request, retry bool) {
+				reqInfosLock.Lock()
+				defer reqInfosLock.Unlock()
+				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(id))]
+				if !ok {
+					panic("req not found")
+				}
+				req = info.Req
+				retry = true
+				return
+			}))
+		}
 
 		return &KV{
 
@@ -102,9 +114,9 @@ func (_ Def) NewKV() NewKV {
 				valueBuf := new(bytes.Buffer)
 				ce(sb.Copy(sb.Marshal(value), sb.Encode(valueBuf)))
 				req.Cmd = valueBuf.Bytes()
-				req.StopAt = time.Now().Add(timeout).Unix()
 
 				reqInfosLock.Lock()
+				check()
 				resultChan := make(chan []byte, 1)
 				errChan := make(chan error, 1)
 				reqInfos[id] = &ReqInfo{
@@ -119,7 +131,8 @@ func (_ Def) NewKV() NewKV {
 				}()
 
 				for {
-					err = node.RaftStore.GetShardsProxy().Dispatch(req)
+					req.StopAt = time.Now().Add(timeout).Unix()
+					err = proxy.Dispatch(req)
 					if err != nil {
 						var tryAgain *raftstore.ErrTryAgain
 						if errors.As(err, &tryAgain) {
@@ -154,9 +167,9 @@ func (_ Def) NewKV() NewKV {
 				keyBuf := new(bytes.Buffer)
 				ce(sb.Copy(sb.Marshal(key), sb.Encode(keyBuf)))
 				req.Key = keyBuf.Bytes()
-				req.StopAt = time.Now().Add(timeout).Unix()
 
 				reqInfosLock.Lock()
+				check()
 				resultChan := make(chan []byte, 1)
 				errChan := make(chan error, 1)
 				reqInfos[id] = &ReqInfo{
@@ -171,7 +184,8 @@ func (_ Def) NewKV() NewKV {
 				}()
 
 				for {
-					err = node.RaftStore.GetShardsProxy().Dispatch(req)
+					req.StopAt = time.Now().Add(timeout).Unix()
+					err = proxy.Dispatch(req)
 					if err != nil {
 						var tryAgain *raftstore.ErrTryAgain
 						if errors.As(err, &tryAgain) {

@@ -18,8 +18,10 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/reusee/dscope"
+	"github.com/reusee/e4"
 )
 
 type (
@@ -43,6 +45,12 @@ func (_ Def) NextThreadID() NextThreadID {
 	}
 }
 
+type ExecuteTimeout time.Duration
+
+func (_ Def) ExecuteTimeout() ExecuteTimeout {
+	return ExecuteTimeout(time.Minute * 5)
+}
+
 type Execute func() error
 
 func (_ Def) Execute(
@@ -52,53 +60,74 @@ func (_ Def) Execute(
 	ops Operators,
 	doAction doAction,
 	scope dscope.Scope,
-	getReports GetReports,
 	nextThreadID NextThreadID,
 	closeNode CloseNode,
+	processReports processReports,
+	logger Logger,
+	timeout ExecuteTimeout,
 ) Execute {
-	return func() (err error) {
-		defer he(&err)
 
-		defer func() {
-			ce(ops.parallelDo(scope, func(op Operator) func() {
-				return op.Finally
+	return func() (err error) {
+		done := make(chan struct{})
+		go func() {
+			defer func() {
+				close(done)
+			}()
+
+			defer he(&err, e4.Do(func() {
+				for i := range nodes {
+					ce(closeNode(NodeID(i)))
+				}
 			}))
+
+			// clean-ups
+			defer func() {
+				ce(ops.parallelDo(scope, func(op Operator) func() {
+					return op.Finally
+				}))
+				logger.Info("Operator.Finally done")
+			}()
+
+			// action
+
+			ce(ops.parallelDo(scope, func(op Operator) func() {
+				return op.BeforeDo
+			}))
+			logger.Info("Operator.BeforeDo done")
+
+			ce(doAction(nextThreadID(), mainAction.Action))
+
+			ce(ops.parallelDo(scope, func(op Operator) func() {
+				return op.AfterDo
+			}))
+			logger.Info("Operator.AfterDo done")
+
+			// close nodes
+
+			ce(ops.parallelDo(scope, func(op Operator) func() {
+				return op.BeforeClose
+			}))
+			logger.Info("Operator.BeforeClose done")
+
+			for i := range nodes {
+				ce(closeNode(NodeID(i)))
+			}
+
+			ce(ops.parallelDo(scope, func(op Operator) func() {
+				return op.AfterClose
+			}))
+			logger.Info("Operator.AfterClose done")
+
+			// report
+			ce(processReports())
+
 		}()
 
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.BeforeDo
-		}))
-
-		ce(doAction(nextThreadID(), mainAction.Action))
-
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.AfterDo
-		}))
-
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.BeforeClose
-		}))
-
-		for i := range nodes {
-			ce(closeNode(NodeID(i)))
+		select {
+		case <-done:
+		case <-time.After(time.Duration(timeout)):
+			return fmt.Errorf("execute timeout")
 		}
-
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.AfterClose
-		}))
-
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.BeforeReport
-		}))
-
-		reports := getReports()
-		for _, report := range reports {
-			pt("%s\n", report)
-		}
-
-		ce(ops.parallelDo(scope, func(op Operator) func() {
-			return op.AfterReport
-		}))
 
 		return
 	}

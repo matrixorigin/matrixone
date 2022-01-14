@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"os"
 	"runtime"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/matrixorigin/matrixcube/config"
@@ -85,20 +84,10 @@ func (_ Def) CmdRun(
 		// run
 		scope.Call(func(
 			execute fz.Execute,
-			logger fz.Logger,
 			cleanup fz.Cleanup,
 		) {
 			defer cleanup()
-			done := make(chan struct{})
-			go func() {
-				ce(execute())
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(time.Minute * 5):
-				logger.Error("test timeout")
-			}
+			ce(execute())
 		})
 
 		return

@@ -28,9 +28,6 @@ type Operator struct {
 
 	BeforeClose func()
 	AfterClose  func()
-
-	BeforeReport func()
-	AfterReport  func()
 }
 
 type Operators []Operator

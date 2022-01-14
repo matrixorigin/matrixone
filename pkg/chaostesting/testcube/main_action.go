@@ -77,16 +77,22 @@ func (_ Def2) MainAction(
 
 		seq := fz.RandSeq(makers(int(i)), num)
 
-		// ActionStopNode
+		// node stop or restart
 		if numStopInserted < maxNumStop {
-			if rand.Intn(10) == 0 {
+			if r := rand.Intn(10); r <= 1 {
 				numStopInserted++
 				pos := rand.Intn(len(seq.Actions) + 1)
 				var newActions []fz.Action
 				newActions = append(newActions, seq.Actions[:pos]...)
-				newActions = append(newActions, ActionStopNode{
-					NodeID: fz.NodeID(i),
-				})
+				if r == 0 {
+					newActions = append(newActions, ActionStopNode{
+						NodeID: fz.NodeID(i),
+					})
+				} else if r == 1 {
+					newActions = append(newActions, ActionRestartNode{
+						NodeID: fz.NodeID(i),
+					})
+				}
 				newActions = append(newActions, seq.Actions[pos:]...)
 				seq.Actions = newActions
 			}
