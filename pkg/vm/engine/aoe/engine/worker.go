@@ -73,7 +73,7 @@ func (w *worker) Start(refCount []uint64, attrs []string)  {
 		w.storeReader.SetBatch(data, w.id)
 		w.enqueue += time.Since(enqueue).Microseconds()
 	}
-	logutil.Infof("workerId: %d, alloc latency: %d us, enqueue latency: %d us, read latency: %d ms",
+	logutil.Infof("workerId: %d, alloc latency: %d ms, enqueue latency: %d us, read latency: %d ms",
 		w.id, w.allocLatency, w.enqueue, w.readLatency)
 	w.storeReader.SetBatch(nil, w.id)
 	close(w.storeReader.rhs[w.id])
