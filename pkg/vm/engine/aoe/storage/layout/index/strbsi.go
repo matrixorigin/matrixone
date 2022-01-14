@@ -54,7 +54,7 @@ func NewStringBsiIndex(t types.Type, colIdx int16, startPos uint64) *StringBsiIn
 func getStringBsi(t types.Type) *bsi.StringBSI {
 	var bsiIdx bsi.BitSlicedIndex
 	switch t.Oid {
-	case types.T_char:
+	case types.T_char, types.T_varchar:
 		// upper layer use `Width` to represent the maximum
 		// number of characters, which is equal to our bsi
 		// `charSize`

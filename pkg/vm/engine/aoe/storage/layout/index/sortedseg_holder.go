@@ -533,6 +533,7 @@ func (holder *sortedSegmentHolder) DropIndex(filename string) {
 						break
 					}
 				}
+				holder.self.colIndices[int(col)] = idxes
 				node.VFile.Unref()
 				delete(holder.self.fileHelper, staleName)
 				delete(holder.self.loadedVersion, int(col))
@@ -611,6 +612,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 						break
 					}
 				}
+				holder.self.colIndices[int(col)] = idxes
 				node.VFile.Unref()
 				delete(holder.self.fileHelper, staleName)
 				logutil.Infof("[SEG] dropping stale index implicitly | version-%d", v)

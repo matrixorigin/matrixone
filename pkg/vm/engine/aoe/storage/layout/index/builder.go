@@ -228,7 +228,7 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 			}
 		}
 		return bsiIdx, nil
-	case types.T_char:
+	case types.T_char, types.T_varchar:
 		bsiIdx := NewStringBsiIndex(t, colIdx, startPos)
 		row := startPos
 		for _, part := range data {

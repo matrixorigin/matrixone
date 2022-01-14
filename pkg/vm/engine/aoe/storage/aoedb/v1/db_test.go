@@ -751,9 +751,10 @@ func TestBuildIndex(t *testing.T) {
 	}
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
-	schema := metadata.MockSchema(2)
+	schema := metadata.MockSchema(14)
 	indice := metadata.NewIndexSchema()
 	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	indice.MakeIndex("idx-2", metadata.FixStrBsi, 12, 13)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -798,9 +799,11 @@ func TestBuildIndex(t *testing.T) {
 		spf := segment.NewSparseFilter()
 		f := segment.NewFilter()
 		sumr := segment.NewSummarizer()
-		t.Log(spf.Eq("mock_0", int32(1)))
+		t.Log(spf.Eq("mock_0", int8(1)))
 		t.Log(f == nil)
 		t.Log(sumr.Count("mock_1", nil))
+		t.Log(sumr.Count("mock_12", nil))
+		t.Log(sumr.Count("mock_13", nil))
 		//t.Log(spf.Eq("mock_0", int32(1)))
 		//t.Log(f.Eq("mock_0", int32(-1)))
 		//t.Log(sumr.Count("mock_0", nil))
