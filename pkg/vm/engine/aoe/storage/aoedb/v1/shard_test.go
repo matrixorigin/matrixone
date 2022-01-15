@@ -328,6 +328,7 @@ func TestShard2(t *testing.T) {
 		testutils.WaitExpect(800, func() bool {
 			return shard.gen.Get() == shard.getSafeId()
 		})
+		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
 	}
 	dbCompacts := 0
 	tblCompacts := 0
