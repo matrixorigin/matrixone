@@ -22,28 +22,28 @@ import (
 
 func CompareInterface(a, b interface{}) int64 {
 	if av, ok := a.(int8); ok {
-		return int64(av - b.(int8))
+		return int64(av) - int64(b.(int8))
 	}
 	if av, ok := a.(int16); ok {
-		return int64(av - b.(int16))
+		return int64(av) - int64(b.(int16))
 	}
 	if av, ok := a.(int32); ok {
-		return int64(av - b.(int32))
+		return int64(av) - int64(b.(int32))
 	}
 	if av, ok := a.(int64); ok {
-		return av - b.(int64)
+		return int64(av) - int64(b.(int64))
 	}
 	if av, ok := a.(uint8); ok {
-		return int64(av - b.(uint8))
+		return int64(av) - int64(b.(uint8))
 	}
 	if av, ok := a.(uint16); ok {
-		return int64(av - b.(uint16))
+		return int64(av) - int64(b.(uint16))
 	}
 	if av, ok := a.(uint32); ok {
-		return int64(av - b.(uint32))
+		return int64(av) - int64(b.(uint32))
 	}
 	if av, ok := a.(uint64); ok {
-		return int64(av - b.(uint64))
+		return int64(av) - int64(b.(uint64))
 	}
 	if av, ok := a.(float32); ok {
 		return int64(av - b.(float32))

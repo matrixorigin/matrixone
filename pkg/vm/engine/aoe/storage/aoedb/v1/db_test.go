@@ -1354,6 +1354,165 @@ func decodeBlockIds(ids []string) []string {
 	return res
 }
 
+func TestFilterCorrectnessOnLargeData(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, database := initTestDB3(t)
+	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(20000)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(40)
+
+	schema := metadata.MockSchemaAll(14)
+	indice := metadata.NewIndexSchema()
+	indice.MakeIndex("idx-0", metadata.NumBsi, 0)
+	indice.MakeIndex("idx-1", metadata.FixStrBsi, 13)
+	indice.MakeIndex("idx-2", metadata.NumBsi, 9)
+	indice.MakeIndex("idx-3", metadata.FixStrBsi, 12)
+	createCtx := &CreateTableCtx{
+		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+		Schema:        schema,
+		Indice:        indice,
+	}
+	tblMeta, err := inst.CreateTable(createCtx)
+	assert.Nil(t, err)
+	assert.NotNil(t, tblMeta)
+	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+	for i := 0; i < 14; i++ {
+		vec := baseCk.Vecs[i]
+		for j := 0; j < int(rows); j+= 2 {
+			nulls.Add(vec.Nsp, uint64(j))
+		}
+	}
+	appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+	for i := 0; i < int(blkCnt-1); i++ {
+		assert.Nil(t, inst.Append(appendCtx))
+	}
+	baseCk = mock.MockBatch(tblMeta.Schema.Types(), rows/2+1)
+	for i := 0; i < 14; i++ {
+		vec := baseCk.Vecs[i]
+		for j := 0; j < int(rows); j+= 2 {
+			nulls.Add(vec.Nsp, uint64(j))
+		}
+	}
+	appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
+	assert.Nil(t, inst.Append(appendCtx))
+	time.Sleep(100 * time.Millisecond)
+
+	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
+	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segId)
+	//t.Logf("%+v", seg.GetIndexHolder())
+	segment := &db.Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	//sparseFilter := segment.NewSparseFilter()
+	summarizer := segment.NewSummarizer()
+	filter := segment.NewFilter()
+
+	cntGt0 := uint64(0)
+	cntNotNull := uint64(0)
+	cntLt0 := uint64(0)
+	cntLen1 := uint64(0)
+	cntNull := uint64(0)
+	cntZero := uint64(0)
+	sumV := int64(0)
+	maxV := int8(0)
+	minV := int8(0)
+	nullMap := roaring.NewBitmap()
+	blkIds := segment.Blocks()
+	for k, id := range blkIds {
+		blk := segment.Block(id)
+		buf1, buf2 := bytes.NewBuffer(make([]byte, 0)), bytes.NewBuffer(make([]byte, 0))
+		bat, _ := blk.Read([]uint64{0}, []string{"mock_0"}, []*bytes.Buffer{buf1}, []*bytes.Buffer{buf2})
+		col := bat.Vecs[0].Col.([]int8)
+		null := bat.Vecs[0].Nsp
+		for i, num := range col {
+			if nulls.Contains(null, uint64(i)) {
+				cntNull++
+				nullMap.Add(uint64(k) * inst.Store.Catalog.Cfg.BlockMaxRows + uint64(i))
+				continue
+			}
+			if num == 0 {
+				cntZero++
+			}
+			if num > maxV {
+				maxV = num
+			}
+			if num < minV {
+				minV = num
+			}
+			sumV += int64(num)
+			cntNotNull++
+			if num > 0 {
+				cntGt0++
+			}
+			if num < 0 {
+				cntLt0++
+			}
+			if num <= -1 {
+				cntLen1++
+			}
+		}
+	}
+
+	res, _ := filter.Gt("mock_0", int8(0))
+	assert.Equal(t, cntGt0, res.GetCardinality())
+	res, _ = filter.Lt("mock_0", int8(0))
+	assert.Equal(t, cntLt0, res.GetCardinality())
+	res, _ = filter.Le("mock_0", int8(-1))
+	assert.Equal(t, cntLen1, res.GetCardinality())
+	res, _ = filter.Ge("mock_0", int8(-128))
+	assert.Equal(t, cntNotNull, res.GetCardinality())
+	res, _ = filter.Eq("mock_0", int8(0))
+	assert.Equal(t, cntZero, res.GetCardinality())
+	res, _ = filter.Ne("mock_0", int8(0))
+	assert.Equal(t, cntNotNull - cntZero, res.GetCardinality())
+
+
+	ans, _ := summarizer.Count("mock_0", nil)
+	assert.Equal(t, cntNotNull, ans)
+	cloned := nullMap.Clone()
+	ans, _ = summarizer.Count("mock_0", cloned)
+	assert.Equal(t, uint64(0), ans)
+	cloned = nullMap.Clone()
+	cloned.Add(uint64(9999999))
+	cloned.Add(uint64(1))
+	ans, _ = summarizer.NullCount("mock_0", cloned)
+	assert.Equal(t, cntNull, ans)
+	ans, _ = summarizer.NullCount("mock_0", nil)
+	assert.Equal(t, cntNull, ans)
+	sum, cnt, _ := summarizer.Sum("mock_0", nullMap)
+	assert.Equal(t, sum, int64(0))
+	assert.Equal(t, cnt, uint64(0))
+	sum, cnt, _ = summarizer.Sum("mock_0", nil)
+	assert.Equal(t, sum, sumV)
+	assert.Equal(t, cnt, cntNotNull)
+	cloned = nullMap.Clone()
+	cloned.Add(1)
+	max, _ := summarizer.Max("mock_0", cloned)
+	assert.Equal(t, max, int8(-128))
+	cloned = nullMap.Clone()
+	cloned.Add(9841)
+	max, _ = summarizer.Max("mock_0", cloned)
+	assert.Equal(t, max, int8(1))
+	max, _ = summarizer.Max("mock_0", nil)
+	assert.Equal(t, max, maxV)
+	cloned = nullMap.Clone()
+	cloned.Add(1)
+	min, _ := summarizer.Min("mock_0", cloned)
+	assert.Equal(t, min, int8(-128))
+	cloned = nullMap.Clone()
+	cloned.Add(9841)
+	min, _ = summarizer.Min("mock_0", cloned)
+	assert.Equal(t, min, int8(1))
+	min, _ = summarizer.Min("mock_0", nil)
+	assert.Equal(t, min, minV)
+
+	inst.Close()
+}
+
 func TestFilterUnclosedSegment(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)

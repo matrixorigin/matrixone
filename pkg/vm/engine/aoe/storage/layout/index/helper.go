@@ -168,6 +168,6 @@ func (h *RWHelper) FlushBitSlicedIndex(idx Index, filename string) error {
 	if err = binary.Write(f, binary.BigEndian, buf); err != nil {
 		return err
 	}
-	logutil.Infof("Flush BSI file | %s", f.Name())
+	logutil.Debugf("Flush BSI file | %s", f.Name())
 	return f.Close()
 }

@@ -410,17 +410,27 @@ func (holder *BlockIndexHolder) NullCount(colIdx int, maxRows uint64, filter *ro
 				continue
 			}
 			internal.IndexFile().Ref()
+			var start uint64
+			if tmp1, ok := node.DataNode.(*NumericBsiIndex); ok {
+				start = tmp1.Offset
+			} else if tmp2, ok := node.DataNode.(*StringBsiIndex); ok {
+				start = tmp2.Offset
+			} else {
+				panic("unexpected error")
+			}
+			startPos := start
+			endPos := startPos + maxRows
 			bm := roaring2.NewBitmap()
+			temp := roaring2.NewBitmap()
+			bm.AddRange(startPos, endPos)
 			if filter != nil {
 				arr := filter.ToArray()
 				for _, v := range arr {
-					bm.Add(uint32(v))
+					temp.Add(uint32(v))
 				}
-			} else {
-				bm = nil
+				bm.And(temp)
 			}
-			count := index.Count(bm)
-			count = maxRows - count
+			count := index.NullCount(bm)
 			err := node.Close()
 			if err != nil {
 				internal.IndexFile().Unref()

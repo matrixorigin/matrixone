@@ -83,12 +83,14 @@ func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint
 	if colIdx == -1 {
 		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
+	var maxRows uint64
 	if s.segment.Data.GetType() == base.SORTED_SEG {
 		return s.segment.Data.GetIndexHolder().NullCount(colIdx, 0, filter)
 	} else {
 		transientPart := uint64(0)
 		for _, blkId := range s.segment.Data.BlockIds() {
 			blk := s.segment.Data.WeakRefBlock(blkId)
+			maxRows = blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 			if blk.GetType() == base.TRANSIENT_BLK {
 				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				endPos := startPos + blk.GetRowCount()
@@ -101,23 +103,24 @@ func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint
 					ranger.Clear()
 					for _, e := range arr {
 						if e >= endPos && e < maximum {
-							filter.Remove(e)
+							//filter.Remove(e)
 							continue
 						}
 						ranger.Add(e - startPos)
-						filter.Remove(e)
+						//filter.Remove(e)
 					}
+				} else {
+					ranger.Clear()
+					ranger.AddRange(0, maxRows)
 				}
 				transientPart += blk.NullCount(colIdx, ranger)
 			}
 		}
 		holder := s.segment.Data.GetIndexHolder()
-		total := filter.GetCardinality()
-		normalCount, err := holder.Count(colIdx, filter)
+		normalPart, err := holder.NullCount(colIdx, maxRows, filter)
 		if err != nil {
 			return 0, err
 		}
-		normalPart := total - normalCount
 		return normalPart + transientPart, nil
 	}
 }
@@ -140,16 +143,22 @@ func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{
 			if blk.GetType() == base.TRANSIENT_BLK {
 				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				endPos := startPos + blk.GetRowCount()
-				ranger := roaring.NewBitmap()
-				ranger.AddRange(startPos, endPos)
-				filter.And(ranger)
-				arr := filter.ToArray()
-				ranger.Clear()
-				for _, e := range arr {
-					ranger.Add(e - startPos)
+				var ranger *roaring.Bitmap
+				if filter != nil {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(startPos, endPos)
+					ranger.And(filter)
+					arr := ranger.ToArray()
+					ranger.Clear()
+					for _, e := range arr {
+						ranger.Add(e - startPos)
+					}
+				} else {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(0, endPos - startPos)
 				}
 				tmax := blk.Max(colIdx, ranger)
-				if common.CompareInterface(tmax, max) > 0 {
+				if tmax != nil && common.CompareInterface(tmax, max) > 0 {
 					max = tmax
 				}
 			}
@@ -176,16 +185,22 @@ func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{
 			if blk.GetType() == base.TRANSIENT_BLK {
 				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				endPos := startPos + blk.GetRowCount()
-				ranger := roaring.NewBitmap()
-				ranger.AddRange(startPos, endPos)
-				filter.And(ranger)
-				arr := filter.ToArray()
-				ranger.Clear()
-				for _, e := range arr {
-					ranger.Add(e - startPos)
+				var ranger *roaring.Bitmap
+				if filter != nil {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(startPos, endPos)
+					ranger.And(filter)
+					arr := ranger.ToArray()
+					ranger.Clear()
+					for _, e := range arr {
+						ranger.Add(e - startPos)
+					}
+				} else {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(0, endPos - startPos)
 				}
 				tmin := blk.Min(colIdx, ranger)
-				if common.CompareInterface(min, tmin) > 0 {
+				if tmin != nil && common.CompareInterface(min, tmin) > 0 {
 					min = tmin
 				}
 			}
@@ -213,13 +228,19 @@ func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uin
 			if blk.GetType() == base.TRANSIENT_BLK {
 				startPos := uint64(blk.GetMeta().Idx) * blk.GetMeta().Segment.Table.Schema.BlockMaxRows
 				endPos := startPos + blk.GetRowCount()
-				ranger := roaring.NewBitmap()
-				ranger.AddRange(startPos, endPos)
-				filter.And(ranger)
-				arr := filter.ToArray()
-				ranger.Clear()
-				for _, e := range arr {
-					ranger.Add(e - startPos)
+				var ranger *roaring.Bitmap
+				if filter != nil {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(startPos, endPos)
+					ranger.And(filter)
+					arr := ranger.ToArray()
+					ranger.Clear()
+					for _, e := range arr {
+						ranger.Add(e - startPos)
+					}
+				} else {
+					ranger = roaring.NewBitmap()
+					ranger.AddRange(0, endPos - startPos)
 				}
 				deltasum, deltacnt := blk.Sum(colIdx, ranger)
 				sum += deltasum
