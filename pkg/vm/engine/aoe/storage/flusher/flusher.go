@@ -127,6 +127,12 @@ func (f *driver) OnStats(stats interface{}) {
 	f.EnqueueRecevied(stats)
 }
 
+func (f *driver) ShardCnt() int {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return len(f.shards)
+}
+
 func (f *driver) ShardCreated(id uint64) {
 	ctx := &shardCreatedCtx{id: id}
 	f.EnqueueRecevied(ctx)
