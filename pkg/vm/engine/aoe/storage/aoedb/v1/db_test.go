@@ -751,7 +751,7 @@ func TestBuildIndex(t *testing.T) {
 	}
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
-	schema := metadata.MockSchema(14)
+	schema := metadata.MockSchemaAll(14)
 	indice := metadata.NewIndexSchema()
 	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
 	indice.MakeIndex("idx-2", metadata.FixStrBsi, 12, 13)
@@ -1417,6 +1417,7 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	cntLen1 := uint64(0)
 	cntNull := uint64(0)
 	cntZero := uint64(0)
+	cntBtw0And50 := uint64(0)
 	sumV := int64(0)
 	maxV := int8(0)
 	minV := int8(0)
@@ -1433,6 +1434,9 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 				cntNull++
 				nullMap.Add(uint64(k) * inst.Store.Catalog.Cfg.BlockMaxRows + uint64(i))
 				continue
+			}
+			if num >= 0 && num <= 50 {
+				cntBtw0And50++
 			}
 			if num == 0 {
 				cntZero++
@@ -1469,6 +1473,8 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	assert.Equal(t, cntZero, res.GetCardinality())
 	res, _ = filter.Ne("mock_0", int8(0))
 	assert.Equal(t, cntNotNull - cntZero, res.GetCardinality())
+	res, _ = filter.Btw("mock_0", int8(0), int8(50))
+	assert.Equal(t, cntBtw0And50, res.GetCardinality())
 
 
 	ans, _ := summarizer.Count("mock_0", nil)
@@ -1493,6 +1499,9 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	cloned.Add(1)
 	max, _ := summarizer.Max("mock_0", cloned)
 	assert.Equal(t, max, int8(-128))
+	cloned = nullMap.Clone()
+	max, _ = summarizer.Max("mock_0", cloned)
+	assert.Nil(t, max)
 	cloned = nullMap.Clone()
 	cloned.Add(9841)
 	max, _ = summarizer.Max("mock_0", cloned)
