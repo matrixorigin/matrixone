@@ -20,6 +20,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -428,6 +429,11 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	if err != nil {
 		panic(fmt.Sprintf("err: %s", err))
 	}
+	indexFiles, err := ioutil.ReadDir(filepath.Join(fs.dataDir, "index"))
+	if err != nil {
+		panic(err)
+	}
+	dataFiles = append(dataFiles, indexFiles...)
 
 	for _, database := range catalog.Databases {
 		for _, tbl := range database.TableSet {
@@ -450,6 +456,9 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	}
 
 	for _, file := range dataFiles {
+		if file.IsDir() {
+			continue
+		}
 		fs.addDataFile(file.Name())
 	}
 	for _, file := range dataFiles {
@@ -632,14 +641,14 @@ func (h *replayHandle) addIndexFile(fname string) {
 			v, _, _, _, _ := common.ParseBitSlicedIndexFileNameToInfo(fn)
 			if version > v {
 				h.others = append(h.others, bf.name)
-				h.addBSI(*id, path.Join(h.dataDir, fname))
+				h.addBSI(*id, path.Join(filepath.Join(h.dataDir, "index"), fname))
 				logutil.Infof("detect stale index file | %s", bf.name)
 			} else {
-				h.others = append(h.others, path.Join(h.dataDir, fname))
+				h.others = append(h.others, path.Join(filepath.Join(h.dataDir, "index"), fname))
 				logutil.Infof("detect stale index file | %s", fname)
 			}
 		} else {
-			h.addBSI(*id, path.Join(h.dataDir, fname))
+			h.addBSI(*id, path.Join(filepath.Join(h.dataDir, "index"), fname))
 		}
 		return
 	}

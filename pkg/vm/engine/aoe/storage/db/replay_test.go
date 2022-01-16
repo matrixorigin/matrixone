@@ -58,6 +58,8 @@ func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string
 func initDataAndMetaDir(dir string) {
 	dataDir := common.MakeDataDir(dir)
 	os.MkdirAll(dataDir, os.ModePerm)
+	indexDir := common.MakeIndexDir(dataDir)
+	os.MkdirAll(indexDir, os.ModePerm)
 	metaDir := common.MakeMetaDir(dir)
 	os.MkdirAll(metaDir, os.ModePerm)
 }
