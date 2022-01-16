@@ -1396,7 +1396,7 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	}
 	appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
 	assert.Nil(t, inst.Append(appendCtx))
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1000 * time.Millisecond)
 
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
@@ -1472,6 +1472,7 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	res, _ = filter.Eq("mock_0", int8(0))
 	assert.Equal(t, cntZero, res.GetCardinality())
 	res, _ = filter.Ne("mock_0", int8(0))
+	t.Logf("%x %x", cntNotNull - cntZero, res.GetCardinality())
 	assert.Equal(t, cntNotNull - cntZero, res.GetCardinality())
 	res, _ = filter.Btw("mock_0", int8(0), int8(50))
 	assert.Equal(t, cntBtw0And50, res.GetCardinality())
