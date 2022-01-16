@@ -15,8 +15,9 @@
 package sched
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -322,6 +323,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
 		event.Segment.Unref()
+		event.Rollback("Rollback-TableNotExist")
 		return
 	}
 	logutil.Infof(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.Id)
