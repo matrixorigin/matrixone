@@ -1396,12 +1396,15 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	}
 	appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
 	assert.Nil(t, inst.Append(appendCtx))
-	time.Sleep(1000 * time.Millisecond)
 
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
 	seg := tblData.WeakRefSegment(segId)
+	testutils.WaitExpect(5000, func() bool {
+		// zone map: 14 * 3 + bsi: 4 * 3 = total: 54
+		return seg.GetIndexHolder().IndicesCount() == 54
+	})
 	//t.Logf("%+v", seg.GetIndexHolder())
 	segment := &db.Segment{
 		Data: seg,

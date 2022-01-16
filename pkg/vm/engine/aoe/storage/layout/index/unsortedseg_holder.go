@@ -266,7 +266,13 @@ func (holder *unsortedSegmentHolder) FetchCurrentVersion(col uint16, blkId uint6
 
 // IndicesCount is not supported in unsortedSegmentHolder
 func (holder *unsortedSegmentHolder) IndicesCount() int {
-	panic("unsupported")
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	cnt := 0
+	for _, blk := range holder.tree.blockHolders {
+		cnt += blk.IndicesCount()
+	}
+	return cnt
 }
 
 // DropIndex is not supported in unsortedSegmentHolder
