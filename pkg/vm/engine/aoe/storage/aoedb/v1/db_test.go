@@ -1021,7 +1021,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	// dropped explicitly, but some indices are still in use, so when those
 	// query finished, they would unref index and once the ref count reaches
 	// 0 the index file would be removed.
-	holder.DropIndex(filepath.Join(inst.Dir, "data/1_1_1_1.bsi"))
+	holder.DropIndex(filepath.Join(inst.Dir, "data/index/1_1_1_1.bsi"))
 	wg.Wait()
 
 	// test continuously load new index, check if stale versions are GCed correctly
@@ -1043,7 +1043,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 
-	infos, err := ioutil.ReadDir(filepath.Join(inst.Dir, "data"))
+	infos, err := ioutil.ReadDir(filepath.Join(inst.Dir, "data/index"))
 	assert.Nil(t, err)
 	versions := make([]uint64, 0)
 	for _, info := range infos {
@@ -1073,7 +1073,7 @@ func TestManyLoadAndDrop(t *testing.T) {
 	}
 
 	dropper := func(i uint64) {
-		filename := filepath.Join(inst.Dir, fmt.Sprintf("data/%d_1_3_1.bsi", i))
+		filename := filepath.Join(inst.Dir, fmt.Sprintf("data/index/%d_1_3_1.bsi", i))
 		holder.DropIndex(filename)
 		wg.Done()
 	}
@@ -3110,7 +3110,7 @@ func TestCreateAndDropIndex(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 
-	dataPath := filepath.Join(inst.Dir, "data")
+	dataPath := filepath.Join(inst.Dir, "data/index")
 	infos, err := ioutil.ReadDir(dataPath)
 	assert.Nil(t, err)
 	for _, info := range infos {
