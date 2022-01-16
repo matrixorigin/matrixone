@@ -16,10 +16,11 @@ package dataio
 
 import (
 	"errors"
+	"os"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"os"
 )
 
 type EmbedIndexFile struct {
@@ -36,7 +37,7 @@ type EmbedBlockIndexFile struct {
 type IndexFile struct {
 	os.File
 	common.RefHelper
-	ID common.ID
+	ID   common.ID
 	Meta *base.IndexMeta
 	Info *fileStat
 }
@@ -72,10 +73,10 @@ func newEmbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.In
 
 func newIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
 	f := &IndexFile{
-		File:      *file,
-		ID:        *id,
-		Meta:      meta,
-		Info:      &fileStat{
+		File: *file,
+		ID:   *id,
+		Meta: meta,
+		Info: &fileStat{
 			size:  int64(meta.Ptr.Len),
 			osize: int64(meta.Ptr.Len),
 		},
@@ -136,7 +137,7 @@ func (f *EmbedIndexFile) Ref() {
 }
 
 func (f *EmbedIndexFile) Unref() {
-	f.SegmentFile.Ref()
+	f.SegmentFile.Unref()
 }
 
 func (f *EmbedIndexFile) RefCount() int64 {

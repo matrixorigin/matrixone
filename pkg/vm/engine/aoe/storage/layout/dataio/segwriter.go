@@ -17,12 +17,14 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/iterator/iface"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/iterator/iface"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -52,17 +54,20 @@ const (
 
 const Version uint64 = 1
 
+type FileDestoryer = func(string) error
+
 //  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
 // SegmentWriter writes block data into the created segment file
 // when flushSegEvent(.blk count == SegmentMaxBlocks) is triggered.
 type SegmentWriter struct {
 	// data is the data of the block file,
 	// SegmentWriter does not read from the block file
-	data         iface.BlockIterator
-	meta         *metadata.Segment
-	dir          string
-	size         int64
-	fileHandle   *os.File
+	data       iface.BlockIterator
+	meta       *metadata.Segment
+	dir        string
+	size       int64
+	fileHandle *os.File
+	destoryer  FileDestoryer
 	//preprocessor func([]*batch.Batch, *metadata.Segment) error
 
 	// fileGetter is createFile()，use dir&TableID&SegmentID to
@@ -71,10 +76,10 @@ type SegmentWriter struct {
 
 	// fileCommiter is commitFile()，rename file name after
 	// flusher is completed
-	fileCommiter func(string) error
+	fileCommiter func(string) (string, error)
 	//indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
-	flusher     func(*os.File, iface.BlockIterator, *metadata.Segment) error
-	preExecutor func()
+	flusher      func(*os.File, iface.BlockIterator, *metadata.Segment) error
+	preExecutor  func()
 	postExecutor func()
 }
 
@@ -106,6 +111,10 @@ func (sw *SegmentWriter) SetFileGetter(f func(string, *metadata.Segment) (*os.Fi
 	sw.fileGetter = f
 }
 
+func (sw *SegmentWriter) GetDestoryer() FileDestoryer {
+	return sw.destoryer
+}
+
 //func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
 //	sw.indexFlusher = f
 //}
@@ -119,13 +128,13 @@ func (sw *SegmentWriter) SetFlusher(f func(*os.File, iface.BlockIterator, *metad
 //	return err
 //}
 
-func (sw *SegmentWriter) commitFile(fname string) error {
+func (sw *SegmentWriter) commitFile(fname string) (string, error) {
 	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
-		return err
+		return name, err
 	}
 	err = os.Rename(fname, name)
-	return err
+	return name, err
 }
 
 func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.File, error) {
@@ -201,7 +210,12 @@ func (sw *SegmentWriter) Execute() error {
 	w.Close()
 	stat, _ := os.Stat(filename)
 	sw.size = stat.Size()
-	return sw.fileCommiter(filename)
+	name, err := sw.fileCommiter(filename)
+	sw.destoryer = func(reason string) error {
+		logutil.Infof("SegmentFile | \"%s\" | Removed | Reason: \"%s\"", name, reason)
+		return os.Remove(name)
+	}
+	return err
 }
 
 func (sw *SegmentWriter) GetSize() int64 {
@@ -402,7 +416,7 @@ func flush(w *os.File, iter iface.BlockIterator, meta *metadata.Segment) error {
 
 func preprocessColumn(column []*vector.Vector, sortedIdx *[]uint16, isPrimary bool) error {
 	if isPrimary {
-		*sortedIdx = make([]uint16, vector.Length(column[0]) * len(column))
+		*sortedIdx = make([]uint16, vector.Length(column[0])*len(column))
 		if err := mergesort.MergeSortedColumn(column, sortedIdx); err != nil {
 			return err
 		}
