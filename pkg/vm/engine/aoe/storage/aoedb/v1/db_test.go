@@ -1358,7 +1358,7 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(20000)
-	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(40)
+	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
 
 	schema := metadata.MockSchemaAll(14)
 	indice := metadata.NewIndexSchema()
@@ -1472,7 +1472,6 @@ func TestFilterCorrectnessOnLargeData(t *testing.T) {
 	res, _ = filter.Eq("mock_0", int8(0))
 	assert.Equal(t, cntZero, res.GetCardinality())
 	res, _ = filter.Ne("mock_0", int8(0))
-	t.Logf("%x %x", cntNotNull - cntZero, res.GetCardinality())
 	assert.Equal(t, cntNotNull - cntZero, res.GetCardinality())
 	res, _ = filter.Btw("mock_0", int8(0), int8(50))
 	assert.Equal(t, cntBtw0And50, res.GetCardinality())
