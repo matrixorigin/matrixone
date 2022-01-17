@@ -14,6 +14,25 @@
 
 package floor
 
+/* floor package provides floor function for all numeric types(uint8, uint16, uint32, uint64, int8, int16, int32, int64, float32, float64).
+	Floor returns the largest round number that is less than or equal to x. 
+	example:
+		floor(12, -1) ----> 10
+		floor(12) ----> 12
+		floor(-12, -1) ----> -20
+		floor(-12, 1) ----> -12
+		floor(12.345) ----> 12
+		floor(12.345, 1) ----> 12.3
+		floor(-12.345, 1) ----> -12.4
+		floor(-12.345, -1) ----> -20
+		floor(-12.345) ----> -13
+	floor function takes one or two parameters as its argument, and the second argument must be a constant.
+	floor(x, N)
+	floor(x) == floor(x, 0)
+	N < 0, N zeroes in front of decimal point
+	N >= 0, floor to the Nth placeholder after decimal point
+*/
+
 import (
 	"math"
 )
@@ -31,14 +50,14 @@ var (
 	floorFloat64 func([]float64, []float64, int64) []float64
 )
 
-var maxUint8digits = digits(math.MaxUint8)
-var maxUint16digits = digits(math.MaxUint16)
-var maxUint32digits = digits(math.MaxUint32)
-var maxUint64digits = digits(math.MaxUint64) // 20
-var maxInt8digits = digits(math.MaxInt8)
-var maxInt16digits = digits(math.MaxInt16)
-var maxInt32digits = digits(math.MaxInt32)
-var maxInt64digits = digits(math.MaxInt64) // 19
+var MaxUint8digits = digits(math.MaxUint8)
+var MaxUint16digits = digits(math.MaxUint16)
+var MaxUint32digits = digits(math.MaxUint32)
+var MaxUint64digits = digits(math.MaxUint64) // 20
+var MaxInt8digits = digits(math.MaxInt8)
+var MaxInt16digits = digits(math.MaxInt16)
+var MaxInt32digits = digits(math.MaxInt32)
+var MaxInt64digits = digits(math.MaxInt64) // 19
 
 func digits(value uint64) int64 {
 	digits := int64(0)
@@ -50,7 +69,7 @@ func digits(value uint64) int64 {
 }
 
 // scaleTable is a lookup array for digits
-var scaleTable = [...]uint64{
+var ScaleTable = [...]uint64{
 	1,
 	10,
 	100,
@@ -96,11 +115,11 @@ func floorUint8Pure(xs, rs []uint8, digits int64) []uint8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := uint8(scaleTable[-digits])
+		scale := uint8(ScaleTable[-digits])
 		for i := range xs {
 			rs[i] = xs[i] / scale * scale
 		}
-	case digits <= -maxUint8digits:
+	case digits <= -MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -116,12 +135,12 @@ func floorUint16Pure(xs, rs []uint16, digits int64) []uint16 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxUint16digits:
-		scale := uint16(scaleTable[-digits])
+	case digits > -MaxUint16digits:
+		scale := uint16(ScaleTable[-digits])
 		for i := range xs {
 			rs[i] = xs[i] / scale * scale
 		}
-	case digits <= -maxUint16digits:
+	case digits <= -MaxUint16digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -137,12 +156,12 @@ func floorUint32Pure(xs, rs []uint32, digits int64) []uint32 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxUint32digits:
-		scale := uint32(scaleTable[-digits])
+	case digits > -MaxUint32digits:
+		scale := uint32(ScaleTable[-digits])
 		for i := range xs {
 			rs[i] = xs[i] / scale * scale
 		}
-	case digits <= maxUint32digits:
+	case digits <= MaxUint32digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -158,12 +177,12 @@ func floorUint64Pure(xs, rs []uint64, digits int64) []uint64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxUint64digits:
-		scale := uint64(scaleTable[-digits])
+	case digits > -MaxUint64digits:
+		scale := uint64(ScaleTable[-digits])
 		for i := range xs {
 			rs[i] = xs[i] / scale * scale
 		}
-	case digits <= -maxUint64digits:
+	case digits <= -MaxUint64digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -180,7 +199,7 @@ func floorInt8Pure(xs, rs []int8, digits int64) []int8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := int8(scaleTable[-digits])
+		scale := int8(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i]
 			if value < 0 {
@@ -188,7 +207,7 @@ func floorInt8Pure(xs, rs []int8, digits int64) []int8 {
 			}
 			rs[i] = value / scale * scale
 		}
-	case digits <= -maxInt8digits:
+	case digits <= -MaxInt8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -204,8 +223,8 @@ func floorInt16Pure(xs, rs []int16, digits int64) []int16 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxInt16digits:
-		scale := int16(scaleTable[-digits])
+	case digits > -MaxInt16digits:
+		scale := int16(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i]
 			if value < 0 {
@@ -213,7 +232,7 @@ func floorInt16Pure(xs, rs []int16, digits int64) []int16 {
 			}
 			rs[i] = value / scale * scale
 		}
-	case digits <= -maxInt16digits:
+	case digits <= -MaxInt16digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -229,8 +248,8 @@ func floorInt32Pure(xs, rs []int32, digits int64) []int32 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxInt32digits:
-		scale := int32(scaleTable[-digits])
+	case digits > -MaxInt32digits:
+		scale := int32(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i]
 			if value < 0 {
@@ -238,7 +257,7 @@ func floorInt32Pure(xs, rs []int32, digits int64) []int32 {
 			}
 			rs[i] = value / scale * scale
 		}
-	case digits <= -maxInt32digits:
+	case digits <= -MaxInt32digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -254,8 +273,8 @@ func floorInt64Pure(xs, rs []int64, digits int64) []int64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxInt64digits:
-		scale := int64(scaleTable[-digits])
+	case digits > -MaxInt64digits:
+		scale := int64(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i]
 			if value < 0 {
@@ -263,7 +282,7 @@ func floorInt64Pure(xs, rs []int64, digits int64) []int64 {
 			}
 			rs[i] = value / scale * scale
 		}
-	case digits <= -maxInt64digits:
+	case digits <= -MaxInt64digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -281,13 +300,13 @@ func floorFloat32Pure(xs, rs []float32, digits int64) []float32 {
 			rs[i] = float32(math.Floor(float64(xs[i])))
 		}
 	} else if digits > 0 {
-		scale := float32(scaleTable[digits])
+		scale := float32(ScaleTable[digits])
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = float32(math.Floor(float64(value))) / scale
 		}
 	} else {
-		scale := float32(scaleTable[-digits])
+		scale := float32(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i] / scale
 			rs[i] = float32(math.Floor(float64(value))) * scale
@@ -306,13 +325,13 @@ func floorFloat64Pure(xs, rs []float64, digits int64) []float64 {
 			rs[i] = math.Floor(xs[i])
 		}
 	} else if digits > 0 {
-		scale := float64(scaleTable[digits])
+		scale := float64(ScaleTable[digits])
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = math.Floor(value) / scale
 		}
 	} else {
-		scale := float64(scaleTable[-digits])
+		scale := float64(ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i] / scale
 			rs[i] = math.Floor(value) * scale

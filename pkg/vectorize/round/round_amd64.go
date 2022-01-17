@@ -15,46 +15,46 @@
 //go:build amd64
 // +build amd64
 
-package floor
+package round
 
 import (
 	"golang.org/x/sys/cpu"
 )
 
-func float32FloorAvx2Asm(xs, rs []float32, scale float32)
-func float32FloorAvx2AsmZero(xs, rs []float32)
-func float64FloorAvx2Asm(xs, rs []float64, scale float64)
-func float64FloorAvx2AsmZero(xs, rs []float64)
+func float32RoundAvx2Asm(xs, rs []float32, scale float32)
+func float32RoundAvx2AsmZero(xs, rs []float32)
+func float64RoundAvx2Asm(xs, rs []float64, scale float64)
+func float64RoundAvx2AsmZero(xs, rs []float64)
 
 func init() {
 	if cpu.X86.HasAVX2 {
-		floorFloat32 = floorFloat32Avx2
-		floorFloat64 = floorFloat64Avx2
+		roundFloat32 = roundFloat32Avx2
+		roundFloat64 = roundFloat64Avx2
 	}
 }
 
-func floorFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
+func roundFloat32Avx2(xs []float32, rs []float32, digits int64) []float32 {
 	if digits == 0 {
-		float32FloorAvx2AsmZero(xs, rs)
+		float32RoundAvx2AsmZero(xs, rs)
 	} else if digits > 0 {
-		scale := float32(ScaleTable[digits])
-		float32FloorAvx2Asm(xs, rs, scale)
+		scale := float32(scaleTable[digits])
+		float32RoundAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float32(ScaleTable[-digits])
-		float32FloorAvx2Asm(xs, rs, 1/scale)
+		scale := float32(scaleTable[-digits])
+		float32RoundAvx2Asm(xs, rs, 1/scale)
 	}
 	return rs
 }
 
-func floorFloat64Avx2(xs []float64, rs []float64, digits int64) []float64 {
+func roundFloat64Avx2(xs []float64, rs []float64, digits int64) []float64 {
 	if digits == 0 {
-		float64FloorAvx2AsmZero(xs, rs)
+		float64RoundAvx2AsmZero(xs, rs)
 	} else if digits > 0 {
-		scale := float64(ScaleTable[digits])
-		float64FloorAvx2Asm(xs, rs, scale)
+		scale := float64(scaleTable[digits])
+		float64RoundAvx2Asm(xs, rs, scale)
 	} else {
-		scale := float64(ScaleTable[-digits])
-		float64FloorAvx2Asm(xs, rs, 1/scale)
+		scale := float64(scaleTable[-digits])
+		float64RoundAvx2Asm(xs, rs, 1/scale)
 	}
 	return rs
 }
