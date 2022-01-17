@@ -185,7 +185,7 @@ float32FloorZeroDone:
 float32FloorZeroDone1:
 	CMPQ    DX, $0x00000000
 	JL      float32FloorZeroDone2
-	VROUNDPS    $0x09, (AX), X1
+	VROUNDSS    $0x09, (AX), X1, X1
 	VMOVSS X1, (CX)
 	ADDQ    $0x00000004, AX
 	ADDQ    $0x00000004, CX
@@ -381,7 +381,7 @@ float64FloorZeroDone:
 float64FloorZeroDone1:
 	CMPQ    DX, $0x00000000
 	JL      float64FloorZeroDone2
-	VROUNDPD    $0x09, (AX), X1
+	VROUNDSD    $0x09, (AX), X1, X1
 	VMOVSD X1, (CX)
 	ADDQ    $0x00000008, AX
 	ADDQ    $0x00000008, CX

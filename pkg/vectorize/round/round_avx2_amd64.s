@@ -175,7 +175,7 @@ float32RoundZeroTailLoop:
 float32RoundZeroDone:
 	CMPQ    DX, $0x00000004
 	JL      float32RoundZeroDone1
-	VROUNDPS    $0x08, (AX), X1
+	VROUNDSS    $0x08, (AX), X1, X1
 	VMOVUPS X1, (CX)
 	ADDQ    $0x00000010, AX
 	ADDQ    $0x00000010, CX
@@ -381,7 +381,7 @@ float64RoundZeroDone:
 float64RoundZeroDone1:
 	CMPQ    DX, $0x00000000
 	JL      float64RoundZeroDone2
-	VROUNDPD    $0x08, (AX), X1
+	VROUNDSD    $0x08, (AX), X1, X1
 	VMOVSD X1, (CX)
 	ADDQ    $0x00000008, AX
 	ADDQ    $0x00000008, CX
