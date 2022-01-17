@@ -28,25 +28,24 @@ func (w *worker) Alloc(attrs []string) *batData{
 				dds: dds,
 				use: false,
 				workerid: w.id,
+				id: int8(i),
+			}
+		}
+		for j := range w.batDatas {
+			if !w.batDatas[j].use {
+				w.storeReader.PutBuffer(w.batDatas[j], w.id)
 			}
 		}
 		logutil.Infof("workerId: %d, make latency: %d", w.id, time.Since(tim).Milliseconds())
 	}
 	for {
-		for j := range w.batDatas {
-			if w.batDatas[j] == nil {
-				logutil.Infof("batDatas is nil")
-			}
-			if !w.batDatas[j].use {
-				w.batDatas[j].use = true
-				return w.batDatas[j]
-			}
-		}
-		time.Sleep(time.Microsecond * 500)
+		bat := w.storeReader.GetBuffer(w.id)
+		return bat
 	}
 }
 
 func (w *worker) Start(refCount []uint64, attrs []string)  {
+	logutil.Infof("w.blocks is %d, attrs is %d， workerid is %d", len(w.blocks), len(attrs), w.id)
 	for i :=0; i < len(w.blocks); i++ {
 		if i < len(w.blocks) - 1 {
 			w.blocks[i+1].Prefetch(attrs)

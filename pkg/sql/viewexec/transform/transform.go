@@ -159,6 +159,9 @@ func (ctr *Container) processFreeVars(proc *process.Process, arg *Argument) (boo
 			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 		}
+		if proc.Reg.InputBatch != nil{
+			fmt.Printf("++++length: %v\n", batch.Length(proc.Reg.InputBatch))
+		}
 		return true, nil
 	}
 	if err := preprocess(proc, arg); err != nil {

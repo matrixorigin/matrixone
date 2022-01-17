@@ -135,6 +135,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 		readers: make([]engine.Reader, num),
 	}
 	readStore.rhs = make([]chan *batData, readStore.iodepth)
+	readStore.chs = make([]chan *batData, readStore.iodepth)
 	var i int
 	logutil.Infof("segments is %d", len(r.segments))
 	if len(r.segments) == 0 {
@@ -160,7 +161,8 @@ func (r *relation) NewReader(num int) []engine.Reader {
 		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(i / mod)}
 	}
 	for i := 0; i < readStore.iodepth; i++ {
-		readStore.rhs[i] = make(chan *batData, 64)
+		readStore.rhs[i] = make(chan *batData, 4)
+		readStore.chs[i] = make(chan *batData, 4)
 	}
 	return readStore.readers
 }

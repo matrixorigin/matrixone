@@ -42,6 +42,7 @@ type aoeReader struct {
 	id 		int32
 	prv 	*batData
 	dequeue int64
+	enqueue int64
 	workerid int32
 }
 
@@ -49,6 +50,7 @@ type store struct {
 	rel	   		*relation
 	readers 	[]engine.Reader
 	rhs    		[]chan *batData
+	chs    		[]chan *batData
 	blocks 		[]aoe.Block
 	start 		bool
 	mutex 		sync.RWMutex
@@ -62,6 +64,7 @@ type batData struct {
 	dds    		[]*bytes.Buffer
 	use         bool
 	workerid    int32
+	id			int8
 }
 
 type worker struct {
