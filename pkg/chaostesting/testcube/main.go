@@ -16,8 +16,12 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"runtime/pprof"
+	"time"
 
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -27,7 +31,25 @@ func main() {
 	NewScope().Call(func(
 		cmds Commands,
 		cleanup fz.Cleanup,
+		enableCPUProfile EnableCPUProfile,
+		httpServerAddr HTTPServerAddr,
 	) {
+
+		// cpu profile
+		if enableCPUProfile {
+			f, err := os.Create(fmt.Sprintf("cpu-profile-%s", time.Now().Format("2006-01-02_15-04-05")))
+			ce(err)
+			ce(pprof.StartCPUProfile(f))
+			defer func() {
+				pprof.StopCPUProfile()
+				ce(f.Close())
+			}()
+		}
+
+		// http server
+		if httpServerAddr != "" {
+			go http.ListenAndServe(string(httpServerAddr), nil)
+		}
 
 		printCommands := func() {
 			pt("available commands:")

@@ -28,10 +28,14 @@ type Logger = *zap.Logger
 func (_ Def) Logger(
 	testDataFilePath TestDataFilePath,
 	id UUID,
+	isTesting IsTesting,
 ) Logger {
 
 	logFilePath := testDataFilePath(id, "cube", "log")
 	ce(os.Truncate(logFilePath, 0), e4.Ignore(os.ErrNotExist))
+	if isTesting {
+		logFilePath = "stdout"
+	}
 
 	cfg := zap.NewProductionConfig()
 	cfg.Level = zap.NewAtomicLevel()

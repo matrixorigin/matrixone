@@ -39,6 +39,9 @@ func (_ Def) CmdRun(
 ) Commands {
 
 	runOne := func(configPath string) (err error) {
+
+		pt("START %s\n", configPath)
+
 		defer func() {
 
 			if p := recover(); p != nil {
@@ -94,6 +97,7 @@ func (_ Def) CmdRun(
 	}
 
 	return Commands{
+		// run test cases in single process
 		"run": func(args []string) {
 
 			sem := make(chan struct{}, parallel)

@@ -54,7 +54,7 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 			Labels: [][]string{
 				{"node", fmt.Sprintf("%d", i)},
 			},
-			Capacity:           512 * 1024 * 1024 * 1024 * 1024,
+			Capacity:           1 * 1024 * 1024 * 1024,
 			UseMemoryAsStorage: false,
 			ShardGroups:        uint64(3),
 

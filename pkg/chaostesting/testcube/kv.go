@@ -69,7 +69,7 @@ func (_ Def) NewKV() NewKV {
 					defer reqInfosLock.Unlock()
 					info, ok := reqInfos[uuid.UUID(*(*[16]byte)(resp.ID))]
 					if !ok {
-						panic("req not found")
+						return
 					}
 					info.Result <- resp.Value
 				},
@@ -79,7 +79,7 @@ func (_ Def) NewKV() NewKV {
 					defer reqInfosLock.Unlock()
 					info, ok := reqInfos[uuid.UUID(*(*[16]byte)(reqID))]
 					if !ok {
-						panic("req not found")
+						return
 					}
 					info.Error <- we(err)
 				},
@@ -90,7 +90,7 @@ func (_ Def) NewKV() NewKV {
 				defer reqInfosLock.Unlock()
 				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(id))]
 				if !ok {
-					panic("req not found")
+					return
 				}
 				req = info.Req
 				retry = true

@@ -17,7 +17,9 @@ package main
 import (
 	"errors"
 	"os"
+	"time"
 
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/starlarkutil"
 	"go.starlark.net/starlark"
 )
@@ -42,16 +44,12 @@ func loadScript() (
 		src,
 		starlark.StringDict{
 
-			"parallel": starlarkutil.MakeFunc("parallel", func(n int) {
-				defs = append(defs, func() Parallel {
-					return Parallel(n)
-				})
+			"parallel": starlarkutil.MakeFunc("parallel", func(n Parallel) {
+				defs = append(defs, &n)
 			}),
 
 			"listen_host": starlarkutil.MakeFunc("listen_host", func(host ListenHost) {
-				defs = append(defs, func() ListenHost {
-					return host
-				})
+				defs = append(defs, &host)
 			}),
 
 			"port_range": starlarkutil.MakeFunc("port_range", func(lower int64, upper int64) {
@@ -61,9 +59,30 @@ func loadScript() (
 			}),
 
 			"timeout_report_threshold": starlarkutil.MakeFunc("timeout_report_threshold", func(n TimeoutReportThreshold) {
-				defs = append(defs, func() TimeoutReportThreshold {
-					return n
-				})
+				defs = append(defs, &n)
+			}),
+
+			"execute_timeout": starlarkutil.MakeFunc("execute_timeout", func(t fz.ExecuteTimeout) {
+				defs = append(defs, &t)
+			}),
+
+			"hour":        starlark.MakeUint64(uint64(time.Hour)),
+			"minute":      starlark.MakeUint64(uint64(time.Minute)),
+			"second":      starlark.MakeUint64(uint64(time.Second)),
+			"millisecond": starlark.MakeUint64(uint64(time.Millisecond)),
+			"microsecond": starlark.MakeUint64(uint64(time.Microsecond)),
+			"nanosecond":  starlark.MakeUint64(uint64(time.Nanosecond)),
+
+			"enable_cpu_profile": starlarkutil.MakeFunc("enable_cpu_profile", func(enable EnableCPUProfile) {
+				defs = append(defs, &enable)
+			}),
+
+			"http_server_addr": starlarkutil.MakeFunc("http_server_addr", func(addr HTTPServerAddr) {
+				defs = append(defs, &addr)
+			}),
+
+			"use_dummy_interface": starlarkutil.MakeFunc("use_dummy_interface", func(use UseDummyInterface) {
+				defs = append(defs, &use)
 			}),
 
 			//

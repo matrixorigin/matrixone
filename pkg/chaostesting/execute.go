@@ -48,7 +48,7 @@ func (_ Def) NextThreadID() NextThreadID {
 type ExecuteTimeout time.Duration
 
 func (_ Def) ExecuteTimeout() ExecuteTimeout {
-	return ExecuteTimeout(time.Minute * 5)
+	return ExecuteTimeout(time.Minute * 10)
 }
 
 type Execute func() error
