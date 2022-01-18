@@ -199,12 +199,14 @@ func TestAOEEngine(t *testing.T) {
 		err = tb.Write(4, ibat)
 		require.NoError(t, err)
 		totalRows += blockRows
-		tb, err = db.Relation(mockTbl.Name)
-		require.Nil(t, err)
-		rows := tb.Rows()
-		require.Equal(t, totalRows, int(rows))
 	}
 
+	tb.Close()
+	
+	tb, err = db.Relation(mockTbl.Name)
+	require.Nil(t, err)
+	rows := tb.Rows()
+	require.Equal(t, totalRows, int(rows))
 	tb.Close()
 
 	tb = &relation{}
@@ -213,20 +215,9 @@ func TestAOEEngine(t *testing.T) {
 
 	//test relation
 	tb, err = db.Relation(mockTbl.Name)
-	rows := tb.Rows()
-	require.Equal(t, totalRows, int(rows))
 	require.Equal(t, 1, len(tb.Nodes()))
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
-
-	rows1 := tb.Rows()
-	err = tb.Write(4, ibat)
-	require.Nil(t, err)
-
-	tb, err = db.Relation(mockTbl.Name)
-	require.Nil(t, err)
-	rows = tb.Rows()
-	require.Equal(t, int64(rows1+blockRows), int64(rows))
 
 	var vattrs []vengine.Attribute
 	tdefs := tb.TableDefs()
