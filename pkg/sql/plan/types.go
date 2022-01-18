@@ -114,7 +114,7 @@ type CreateTable struct {
 
 type CreateIndex struct {
 	IfNotExistFlag bool
-	HasExist	   bool // if true, means this index has existed.
+	HasExist       bool // if true, means this index has existed.
 	Id             string
 	Relation       engine.Relation
 	Defs           []engine.TableDef
@@ -163,8 +163,8 @@ type ShowCreateTable struct {
 
 type ShowCreateDatabase struct {
 	IfNotExistFlag bool
-	Id 			string
-	E  			engine.Engine
+	Id             string
+	E              engine.Engine
 }
 
 type Insert struct {
@@ -274,10 +274,11 @@ func (rel *Relation) ExistAggregations(names []string) bool {
 }
 
 func (rel *Relation) AddRestrict(e extend.Extend) {
-	rel.RestrictConds = append(rel.RestrictConds, e)
+	rel.RestrictConds = append(rel.RestrictConds, pruneExtendAttribute(e))
 }
 
 func (rel *Relation) AddProjection(e *ProjectionExtend) {
+	e.E = pruneExtendAttribute(e.E)
 	rel.ProjectionExtends = append(rel.ProjectionExtends, e)
 }
 
