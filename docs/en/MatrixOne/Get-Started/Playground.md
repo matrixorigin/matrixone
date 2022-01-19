@@ -1,7 +1,7 @@
 # **Playground**
 [MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) allow you to try SQL statements and explore features of MatrixOne instantly from your web browser with interactive tutorials.  
  
-* If you have some questions about SQL, you can also see [SQL Reference](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md).  
+* For docs on our SQL commands, you can see [SQL Reference](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md).  
 * For tutorials about **SSB** test, you can see [Tutorial](../Get-Started/Tutorial/SSB-test-with-matrixone.md).
 
 ## **Limitations**
@@ -20,12 +20,12 @@ You can only operate in **read-only** mode in MatixOrigin Playground，so DDL co
 
 * **max_result_rows**=2000  
 ## **Examples**
-[**Click here to turn to Playground**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)  
-In Playground, You can follow different tutorials and pick one in the list box, and now the supported tutorials are shown below:  
 
-* **Star Schema Benchmark（SSB） Test**
+In Playground, You can follow different interactive tutorials and pick one in the list box, and now the supported tutorials are shown below:  
 
-We will use **SSB** as an example to show you the overall operation process of **Playground**.  
+* [**SSB Test with MatrixOne**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) 
+     
+We will use **SSB Test** as an example to show you the overall operation process of Playground.  
 ### ** Test Preperations**  
 
 This tutorial walks you through the most popular **Star Schema Benchmark（SSB）**Test SQL statements with MatrixOne. To better experience MatrixOne features and performance, test queries in this tutorial will run without filters.  

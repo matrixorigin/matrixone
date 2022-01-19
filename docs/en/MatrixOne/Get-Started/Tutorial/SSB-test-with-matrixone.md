@@ -6,7 +6,7 @@ In v0.1.0, only single table can work in MatrixOne. The following contents can b
 
 ## **Before you begin**
 
-Make sure you have already [installed MatrixOne](install-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
+Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
   
 
 ## **1. Compile dbgen**

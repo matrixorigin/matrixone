@@ -2,7 +2,7 @@
 
 ## **Before you begin**
 
-Make sure you have already [installed MatrixOne](install-matrixone.md).
+Make sure you have already [installed MatrixOne](install-standalone-matrixone.md).
 
 ## **1. Install MySQL client**
    
