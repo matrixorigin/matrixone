@@ -29,3 +29,7 @@ Create a database.
 
 > CREATE DATABASE test04 CHARACTER SET=utf8 collate=utf8_general_ci ENCRYPTION='N';
 ```
+
+## **Constraints**
+
+Only `UTF-8` CHARACTER SET is supported for now. 
