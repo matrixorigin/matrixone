@@ -83,11 +83,11 @@ var (
 )
 
 var (
-	GoVersion    string = ""
-	BranchName   string = ""
-	LastCommitId string = ""
-	BuildTime    string = ""
-	MoVersion    string = "v0.1.0"
+	GoVersion    = ""
+	BranchName   = ""
+	LastCommitId = ""
+	BuildTime    = ""
+	MoVersion    = ""
 )
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
@@ -143,11 +143,11 @@ func main() {
 	// if the argument passed in is "--version", return version info and exit
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("MatrixOne build info:")
-		fmt.Printf("The golang version used to build this binary is: %s\n", GoVersion)
-		fmt.Printf("The git branch name is: %s\n", BranchName)
-		fmt.Printf("Last git commit ID: %s\n", LastCommitId)
-		fmt.Printf("The Buildtime is: %s\n", BuildTime)
-		fmt.Printf("Current Matrixone version: %s\n", MoVersion)
+		fmt.Printf("  The golang version used to build this binary: %s\n", GoVersion)
+		fmt.Printf("  Git branch name: %s\n", BranchName)
+		fmt.Printf("  Last git commit ID: %s\n", LastCommitId)
+		fmt.Printf("  Buildtime: %s\n", BuildTime)
+		fmt.Printf("  Current Matrixone version: %s\n", MoVersion)
 		os.Exit(0)
 	}
 
@@ -258,9 +258,9 @@ func main() {
 
 	addr := cfg.CubeConfig.AdvertiseClientAddr
 	if len(addr) != 0 {
-		logutil.Infof("compile init address from cube AdvertiseClientAddr %s",addr)
-	}else{
-		logutil.Infof("compile init address from cube ClientAddr %s",cfg.CubeConfig.ClientAddr)
+		logutil.Infof("compile init address from cube AdvertiseClientAddr %s", addr)
+	} else {
+		logutil.Infof("compile init address from cube ClientAddr %s", cfg.CubeConfig.ClientAddr)
 		addr = cfg.CubeConfig.ClientAddr
 	}
 
