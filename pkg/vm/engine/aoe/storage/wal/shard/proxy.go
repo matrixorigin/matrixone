@@ -27,9 +27,10 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
 
+// A offset recorder for (IndexId.Id + IndexId.Offset) level
 type sliceEntry struct {
 	idx  *SliceIndex
-	mask *roaring64.Bitmap
+	mask *roaring64.Bitmap // a set of SliceInfo.Offset
 }
 
 func newSliceEntry(idx *SliceIndex) *sliceEntry {
@@ -39,6 +40,7 @@ func newSliceEntry(idx *SliceIndex) *sliceEntry {
 	}
 }
 
+// Committed returns true if all SliceInfo.Offset of a SliceIndex have been seen.
 func (s *sliceEntry) Committed() bool {
 	return uint32(s.mask.GetCardinality()) == s.idx.Info.Size
 }
@@ -58,10 +60,11 @@ func (s *sliceEntry) String() string {
 	return fmt.Sprintf("%d-%s", s.idx.Id.Offset, s.mask.String())
 }
 
+// A offset recorder for (IndexId.Id) level
 type commitEntry struct {
 	idx    *SliceIndex
-	mask   *roaring64.Bitmap
-	slices map[uint32]*sliceEntry
+	mask   *roaring64.Bitmap      // a set of IndexId.Offset
+	slices map[uint32]*sliceEntry // IndexId.Offset -> sliceEntry.
 }
 
 func (n *commitEntry) Repr() string {
@@ -79,33 +82,36 @@ func (n *commitEntry) String() string {
 	return s
 }
 
+func (n *commitEntry) getSliceEntryFor(idx *SliceIndex) *sliceEntry {
+	if n.slices == nil {
+		n.slices = make(map[uint32]*sliceEntry)
+	}
+	slice := n.slices[idx.Id.Offset]
+	if slice == nil {
+		slice = newSliceEntry(idx)
+		n.slices[idx.Id.Offset] = slice
+	}
+	return slice
+}
+
 func (n *commitEntry) Commit(idx *SliceIndex) {
 	if idx.IsSlice() {
-		if n.slices == nil {
-			n.slices = make(map[uint32]*sliceEntry)
-		}
-		slice := n.slices[idx.Id.Offset]
-		if slice == nil {
-			slice = newSliceEntry(idx)
-			n.slices[idx.Id.Offset] = slice
-		}
-		slice.Commit(idx.Info.Offset)
+		n.getSliceEntryFor(idx).Commit(idx.Info.Offset)
 	} else {
 		n.mask.Add(uint64(idx.Id.Offset))
 	}
 }
 
+// Committed returns true if all IndexId.Offset have been committed
 func (n *commitEntry) Committed() bool {
 	if uint32(n.mask.GetCardinality()) == n.idx.Id.Size {
 		return true
 	}
 	updated := false
-	if n.slices != nil {
-		for offset, slice := range n.slices {
-			if slice.Committed() {
-				n.mask.Add(uint64(offset))
-				updated = true
-			}
+	for offset, slice := range n.slices {
+		if slice.Committed() {
+			n.mask.Add(uint64(offset))
+			updated = true
 		}
 	}
 	if updated {
@@ -137,7 +143,6 @@ type proxy struct {
 	lastIndex  uint64
 	safeId     uint64
 	lastSafeId uint64
-	pending    uint64
 	indice     map[uint64]*commitEntry
 	idAlloctor *common.IdAlloctor
 }
@@ -206,6 +211,7 @@ func (p *proxy) GetLastId() uint64 {
 	return p.lastIndex
 }
 
+// LogIndex will add the index to the pending set until Checkpoint is called
 func (p *proxy) LogIndex(index *Index) {
 	if p.idAlloctor != nil {
 		index.Id.Id = p.idAlloctor.Alloc()
@@ -230,6 +236,7 @@ func (p *proxy) AppendBatchIndice(bat *SliceIndice) {
 	p.batches = append(p.batches, bat)
 }
 
+// Checkpoint tries to check all committed indices and increase safe_id
 func (p *proxy) Checkpoint() {
 	now := time.Now()
 	p.alumu.Lock()
