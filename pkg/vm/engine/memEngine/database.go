@@ -8,7 +8,8 @@ import (
 )
 
 func (d *database) Relations() []string {
-	return nil
+	names, _ := d.db.Range()
+	return names
 }
 
 func (d *database) Relation(name string) (engine.Relation, error) {

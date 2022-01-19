@@ -98,7 +98,11 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 			suffix := expr[1:]
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] == n && bytes.Compare(suffix, s.Get(int64(i))) == 0 {
+				temp := s.Get(int64(i))
+				if len(temp) > 0 {
+					temp = temp[1:]
+				}
+				if s.Lengths[i] == n && bytes.Compare(suffix, temp) == 0 {
 					rs[count] = int64(i)
 					count++
 				}
@@ -148,7 +152,11 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 			suffix := expr[1 : n-1]
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] > 0 && bytes.HasSuffix(s.Get(int64(i)), suffix) {
+				temp := s.Get(int64(i))
+				if len(temp) > 0 {
+					temp = temp[:len(temp)-1]
+				}
+				if s.Lengths[i] > 0 && bytes.HasSuffix(temp, suffix) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -158,7 +166,11 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 			prefix := expr[1 : n-1]
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] > 0 && bytes.HasPrefix(s.Get(int64(i)), prefix) {
+				temp := s.Get(int64(i))
+				if len(temp) > 0 {
+					temp = temp[1:]
+				}
+				if s.Lengths[i] > 0 && bytes.HasPrefix(temp, prefix) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -310,8 +322,12 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 
 func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
 	var cFlag int8 // case flag for like
-	var reg *regexp.Regexp
-	var err error
+
+	reg, err := regexp.Compile(convert(expr))
+	if err != nil {
+		return nil, err
+	}
+
 	n := len(expr) // expr length
 	count := 0
 	nullsIter := nulls.Iterator()
@@ -334,10 +350,6 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 		cFlag = 4
 	default:
 		cFlag = 5
-		reg, err = regexp.Compile(convert(expr))
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	for i, j := 0, len(s.Offsets); i < j; i++ {
@@ -409,7 +421,11 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 					}
 				case c0 == '_' && c1 == '%':
 					prefix := expr[1 : n-1]
-					if len(p) > 0 && bytes.HasPrefix(p[1:], prefix) {
+					temp := s.Get(int64(i))
+					if len(temp) > 0 {
+						temp = temp[1:]
+					}
+					if s.Lengths[i] > 0 && bytes.HasPrefix(temp, prefix) {
 						rs[count] = int64(i)
 						count++
 					}

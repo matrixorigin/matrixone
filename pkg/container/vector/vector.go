@@ -828,7 +828,8 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		if err != nil {
 			return err
 		}
-		v.Col = shuffle.DateShuffle(vs, sels)
+		ws := encoding.DecodeDateSlice(data)
+		v.Col = shuffle.DateShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_datetime:
@@ -837,7 +838,8 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		if err != nil {
 			return err
 		}
-		v.Col = shuffle.DatetimeShuffle(vs, sels)
+		ws := encoding.DecodeDatetimeSlice(data)
+		v.Col = shuffle.DatetimeShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	default:
@@ -2399,4 +2401,371 @@ func (v *Vector) String() string {
 		}
 	}
 	return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
+}
+
+// GetColumnData get whole column from a vector
+func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []string) error {
+	const nullStr = "null"
+	typ := v.Typ
+	rows := len(rs)
+	allData := !nulls.Any(v.Nsp)
+	ifSel := len(selectIndexs) != 0
+
+	switch typ.Oid {
+	case types.T_int8:
+		vs := v.Col.([]int8)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_int16:
+		vs := v.Col.([]int16)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_int32:
+		vs := v.Col.([]int32)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_int64:
+		vs := v.Col.([]int64)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_uint8:
+		vs := v.Col.([]uint8)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_uint16:
+		vs := v.Col.([]uint16)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_uint32:
+		vs := v.Col.([]uint32)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_uint64:
+		vs := v.Col.([]uint64)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_float32:
+		vs := v.Col.([]float32)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%f", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%f", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_float64:
+		vs := v.Col.([]float64)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%f", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%f", vs[index])
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_char, types.T_varchar:
+		vs := v.Col.(*types.Bytes)
+		var i int64
+		for i = 0; i < int64(rows); i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = selectIndexs[i]
+			}
+			if allData {
+				rs[i] = string(vs.Get(index))
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = string(vs.Get(index))
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%s", vs[index].String())
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%s", vs[index].String())
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%s", vs[index].String())
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%s", vs[index].String())
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	default:
+		return errors.New(fmt.Sprintf("unexpect type %v for function vector.GetColumnData", typ))
+	}
+	return nil
 }

@@ -34,8 +34,8 @@ var (
 
 	decimalShuffle func([]types.Decimal, []int64) []types.Decimal
 
-	dateShuffle     func([]types.Date, []int64) []types.Date
-	datetimeShuffle func([]types.Datetime, []int64) []types.Datetime
+	dateShuffle     func([]types.Date, []types.Date, []int64) []types.Date
+	datetimeShuffle func([]types.Datetime, []types.Datetime, []int64) []types.Datetime
 
 	tupleShuffle func([][]interface{}, [][]interface{}, []int64) [][]interface{}
 
@@ -110,12 +110,12 @@ func DecimalShuffle(vs []types.Decimal, sels []int64) []types.Decimal {
 	return decimalShuffle(vs, sels)
 }
 
-func DateShuffle(vs []types.Date, sels []int64) []types.Date {
-	return dateShuffle(vs, sels)
+func DateShuffle(vs []types.Date, ws []types.Date, sels []int64) []types.Date {
+	return dateShuffle(vs, ws, sels)
 }
 
-func DatetimeShuffle(vs []types.Datetime, sels []int64) []types.Datetime {
-	return datetimeShuffle(vs, sels)
+func DatetimeShuffle(vs []types.Datetime, ws []types.Datetime, sels []int64) []types.Datetime {
+	return datetimeShuffle(vs, ws, sels)
 }
 
 func TupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
@@ -213,17 +213,19 @@ func decimalShufflePure(vs []types.Decimal, sels []int64) []types.Decimal {
 	return vs[:len(sels)]
 }
 
-func dateShufflePure(vs []types.Date, sels []int64) []types.Date {
+func dateShufflePure(vs []types.Date, ws []types.Date, sels []int64) []types.Date {
 	for i, sel := range sels {
-		vs[i] = vs[sel]
+		ws[i] = vs[sel]
 	}
+	copy(vs, ws)
 	return vs[:len(sels)]
 }
 
-func datetimeShufflePure(vs []types.Datetime, sels []int64) []types.Datetime {
+func datetimeShufflePure(vs []types.Datetime, ws []types.Datetime, sels []int64) []types.Datetime {
 	for i, sel := range sels {
-		vs[i] = vs[sel]
+		ws[i] = vs[sel]
 	}
+	copy(vs, ws)
 	return vs[:len(sels)]
 }
 

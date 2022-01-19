@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -86,6 +87,8 @@ func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, 
 			return b.prunePlus(n)
 		case overload.Minus:
 			return b.pruneMinus(n)
+		case overload.Like:
+			return b.pruneLike(n)
 		}
 	}
 	return e, nil
@@ -106,7 +109,7 @@ func (b *build) pruneConditionNot(e *extend.UnaryExtend) (extend.Extend, error) 
 		return ext, nil
 	}
 	// split not extends
-	ext = splitNot(ext)
+	ext = logicInverse(ext)
 	return ext, nil
 }
 
@@ -158,17 +161,18 @@ func (b *build) pruneProjectionNot(e *extend.UnaryExtend) (extend.Extend, error)
 	return v, nil
 }
 
-// splitNot will split a not extend
-// eg: split not (a == 0) to a != 0
-func splitNot(e extend.Extend) extend.Extend {
+// logicInverse will do logic inversion work for a not extend
+// For example: split not (a == 0) to a != 0,
+// And e will never be `not -1` because we converted it into `-1 != 0` while astRewrite
+func logicInverse(e extend.Extend) extend.Extend {
 	switch v := e.(type) {
 	case *extend.ParenExtend:
-		return &extend.ParenExtend{E: splitNot(v.E)}
+		return &extend.ParenExtend{E: logicInverse(v.E)}
 	case *extend.BinaryExtend:
 		return splitNotBinary(v)
 	case *extend.UnaryExtend:
 		if v.Op == overload.Not {
-			return splitNot(v.E)
+			return logicInverse(v.E)
 		}
 	}
 	return e
@@ -177,21 +181,21 @@ func splitNot(e extend.Extend) extend.Extend {
 func splitNotBinary(e *extend.BinaryExtend) extend.Extend {
 	switch e.Op {
 	case overload.And:
-		return &extend.BinaryExtend{Op: overload.Or, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.Or, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.Or:
-		return &extend.BinaryExtend{Op: overload.And, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.And, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.EQ:
-		return &extend.BinaryExtend{Op: overload.NE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.NE, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.GE:
-		return &extend.BinaryExtend{Op: overload.LE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.LT, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.GT:
-		return &extend.BinaryExtend{Op: overload.LT, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.LE, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.LE:
-		return &extend.BinaryExtend{Op: overload.GE, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.GT, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.LT:
-		return &extend.BinaryExtend{Op: overload.GT, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.GE, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	case overload.NE:
-		return &extend.BinaryExtend{Op: overload.EQ, Left: splitNot(e.Left), Right: splitNot(e.Right)}
+		return &extend.BinaryExtend{Op: overload.EQ, Left: logicInverse(e.Left), Right: logicInverse(e.Right)}
 	}
 	return e
 }
@@ -335,9 +339,9 @@ func (b *build) pruneAnd(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		}
 		if lv {
-			return le, nil
+			return e.Right, nil
 		}
-		return e.Right, nil
+		return le, nil
 	}
 	return e, nil
 }
@@ -1556,6 +1560,35 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
+	}
+	return e, nil
+}
+
+func (b *build) pruneLike(e *extend.BinaryExtend) (extend.Extend, error) {
+	le, lok := e.Left.(*extend.ValueExtend)
+	re, rok := e.Right.(*extend.ValueExtend)
+	if !lok || !rok {
+		return e, nil
+	}
+
+	vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
+	vec.Ref = 1
+
+	if !le.V.Typ.Eq(re.V.Typ) || (le.V.Typ.Oid != types.T_char && le.V.Typ.Oid != types.T_varchar) {
+		return nil, errors.New(errno.FeatureNotSupported, "operator LIKE only support for varchar and char")
+	}
+	switch {
+	case lok && rok:
+		k, err := like.PureLikePure(le.V.Col.(*types.Bytes).Data, re.V.Col.(*types.Bytes).Data, make([]int64, 1))
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			vector.SetCol(vec, []int64{1})
+		} else {
+			vector.SetCol(vec, []int64{0})
+		}
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return e, nil
 }
