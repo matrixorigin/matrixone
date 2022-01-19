@@ -21,6 +21,12 @@ enable_cpu_profile(False)
 # address for http server, mainly for net/http/pprof
 #http_server_addr("localhost:8889")
 
-# use dummy network interface to isolate, linux only
-use_dummy_interface(False)
+# enable runtime/trace. trace files will be written to testdata/[uuid]-runtiime.trace
+enable_runtime_trace(True)
+
+# network model
+# localhost: use localhost
+# dummy: use linux dummy interface
+# tun: use TUN interface
+network_model("tun")
 

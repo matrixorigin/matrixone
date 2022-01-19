@@ -15,80 +15,46 @@
 package main
 
 import (
-	"errors"
-	"os"
-	"time"
-
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/starlarkutil"
-	"go.starlark.net/starlark"
 )
 
-func loadScript() (
-	defs []any,
-	err error,
-) {
-	defer he(&err)
+func (_ Def) ScriptBuiltins(
+	add fz.AddScriptDef,
+) fz.ScriptBuiltins {
+	return fz.ScriptBuiltins{
+		"parallel": starlarkutil.MakeFunc("parallel", func(n Parallel) {
+			add(&n)
+		}),
 
-	const scriptFileName = "script.py"
+		"listen_host": starlarkutil.MakeFunc("listen_host", func(host ListenHost) {
+			add(&host)
+		}),
 
-	src, err := os.ReadFile(scriptFileName)
-	if errors.Is(err, os.ErrNotExist) {
-		return
+		"port_range": starlarkutil.MakeFunc("port_range", func(lower int64, upper int64) {
+			add(func() PortRange {
+				return PortRange{lower, upper}
+			})
+		}),
+
+		"timeout_report_threshold": starlarkutil.MakeFunc("timeout_report_threshold", func(n TimeoutReportThreshold) {
+			add(&n)
+		}),
+
+		"enable_cpu_profile": starlarkutil.MakeFunc("enable_cpu_profile", func(enable EnableCPUProfile) {
+			add(&enable)
+		}),
+
+		"http_server_addr": starlarkutil.MakeFunc("http_server_addr", func(addr HTTPServerAddr) {
+			add(&addr)
+		}),
+
+		"enable_runtime_trace": starlarkutil.MakeFunc("enable_runtime_trace", func(enable EnableRuntimeTrace) {
+			add(&enable)
+		}),
+
+		"network_model": starlarkutil.MakeFunc("network_model", func(model NetworkModel) {
+			add(&model)
+		}),
 	}
-	ce(err)
-
-	_, err = starlark.ExecFile(
-		new(starlark.Thread),
-		scriptFileName,
-		src,
-		starlark.StringDict{
-
-			"parallel": starlarkutil.MakeFunc("parallel", func(n Parallel) {
-				defs = append(defs, &n)
-			}),
-
-			"listen_host": starlarkutil.MakeFunc("listen_host", func(host ListenHost) {
-				defs = append(defs, &host)
-			}),
-
-			"port_range": starlarkutil.MakeFunc("port_range", func(lower int64, upper int64) {
-				defs = append(defs, func() PortRange {
-					return PortRange{lower, upper}
-				})
-			}),
-
-			"timeout_report_threshold": starlarkutil.MakeFunc("timeout_report_threshold", func(n TimeoutReportThreshold) {
-				defs = append(defs, &n)
-			}),
-
-			"execute_timeout": starlarkutil.MakeFunc("execute_timeout", func(t fz.ExecuteTimeout) {
-				defs = append(defs, &t)
-			}),
-
-			"hour":        starlark.MakeUint64(uint64(time.Hour)),
-			"minute":      starlark.MakeUint64(uint64(time.Minute)),
-			"second":      starlark.MakeUint64(uint64(time.Second)),
-			"millisecond": starlark.MakeUint64(uint64(time.Millisecond)),
-			"microsecond": starlark.MakeUint64(uint64(time.Microsecond)),
-			"nanosecond":  starlark.MakeUint64(uint64(time.Nanosecond)),
-
-			"enable_cpu_profile": starlarkutil.MakeFunc("enable_cpu_profile", func(enable EnableCPUProfile) {
-				defs = append(defs, &enable)
-			}),
-
-			"http_server_addr": starlarkutil.MakeFunc("http_server_addr", func(addr HTTPServerAddr) {
-				defs = append(defs, &addr)
-			}),
-
-			"use_dummy_interface": starlarkutil.MakeFunc("use_dummy_interface", func(use UseDummyInterface) {
-				defs = append(defs, &use)
-			}),
-
-			//
-		},
-	)
-	ce(err)
-
-	return
 }

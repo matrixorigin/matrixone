@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"runtime/trace"
 	"time"
 
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
@@ -28,59 +29,74 @@ import (
 
 func main() {
 
-	NewScope().Call(func(
-		cmds Commands,
-		cleanup fz.Cleanup,
-		enableCPUProfile EnableCPUProfile,
-		httpServerAddr HTTPServerAddr,
-	) {
+	scope := NewScope()
 
-		// cpu profile
-		if enableCPUProfile {
-			f, err := os.Create(fmt.Sprintf("cpu-profile-%s", time.Now().Format("2006-01-02_15-04-05")))
-			ce(err)
-			ce(pprof.StartCPUProfile(f))
-			defer func() {
-				pprof.StopCPUProfile()
-				ce(f.Close())
-			}()
-		}
+	var write fz.WriteTestDataFile
+	var clear fz.ClearTestDataFile
+	scope.Assign(&write, &clear)
 
-		// http server
-		if httpServerAddr != "" {
-			go http.ListenAndServe(string(httpServerAddr), nil)
-		}
+	clear("runtime", "trace")
+	var enableRuntimeTrace EnableRuntimeTrace
+	scope.Assign(&enableRuntimeTrace)
+	if enableRuntimeTrace {
+		file, err, done := write("runtime", "trace")
+		ce(err)
+		defer done()
+		ce(trace.Start(file))
+		defer trace.Stop()
+	}
 
-		printCommands := func() {
-			pt("available commands:")
-			for name := range cmds {
-				pt(" %s", name)
-			}
-			pt("\n")
-		}
-
-		if len(os.Args) < 2 {
-			printCommands()
-			return
-		}
-
-		cmd := os.Args[1]
-		fn, ok := cmds[cmd]
-		if !ok {
-			pt("no such command\n")
-			printCommands()
-			return
-		}
-
-		ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
-
-		go func() {
-			fn(os.Args[2:])
-			cancel()
+	var enableCPUProfile EnableCPUProfile
+	scope.Assign(&enableCPUProfile)
+	if enableCPUProfile {
+		f, err := os.Create(fmt.Sprintf("cpu-profile-%s", time.Now().Format("2006-01-02_15-04-05")))
+		ce(err)
+		ce(pprof.StartCPUProfile(f))
+		defer func() {
+			pprof.StopCPUProfile()
+			ce(f.Close())
 		}()
+	}
 
-		<-ctx.Done()
-		cleanup()
+	var httpServerAddr HTTPServerAddr
+	scope.Assign(&httpServerAddr)
+	if httpServerAddr != "" {
+		go http.ListenAndServe(string(httpServerAddr), nil)
+	}
 
-	})
+	var cmds Commands
+	scope.Assign(&cmds)
+	printCommands := func() {
+		pt("available commands:")
+		for name := range cmds {
+			pt(" %s", name)
+		}
+		pt("\n")
+	}
+	if len(os.Args) < 2 {
+		printCommands()
+		return
+	}
+
+	cmd := os.Args[1]
+	fn, ok := cmds[cmd]
+	if !ok {
+		pt("no such command\n")
+		printCommands()
+		return
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
+
+	go func() {
+		fn(os.Args[2:])
+		cancel()
+	}()
+
+	<-ctx.Done()
+
+	var cleanup fz.Cleanup
+	scope.Assign(&cleanup)
+	cleanup()
+
 }

@@ -12,28 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
-import (
-	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
-	"github.com/reusee/dscope"
-)
+import "github.com/reusee/pr"
 
-type Def struct{}
+type RootWaitTree struct {
+	*pr.WaitTree
+}
 
-type Def2 struct{}
-
-func NewScope() Scope {
-	scope := fz.NewScope(dscope.Methods(new(Def))...)
-	scope = scope.Fork(dscope.Methods(new(Def2))...)
-
-	var load fz.LoadScript
-	scope.Assign(&load)
-	defs, err := load()
-	ce(err)
-	if len(defs) > 0 {
-		scope = scope.Fork(defs...)
+func (_ Def) RootWaitTree() (
+	wt RootWaitTree,
+	cleanup Cleanup,
+) {
+	wt = RootWaitTree{
+		WaitTree: pr.NewRootWaitTree(),
 	}
-
-	return scope
+	cleanup = func() {
+		wt.Cancel()
+		wt.Wait()
+	}
+	return
 }
