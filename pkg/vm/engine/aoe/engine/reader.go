@@ -20,18 +20,19 @@ func (a *aoeReader) NewSparseFilter() engine.SparseFilter {
 }
 
 func (a *aoeReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
-	if a.prv != nil {
-		//a.prv.use = false
-		enqueue := time.Now()
-		a.reader.PutBuffer(a.prv, a.workerid)
-		a.enqueue += time.Since(enqueue).Milliseconds()
+	if a.reader == nil {
+		return nil, nil
 	}
 	dequeue := time.Now()
 	bat := a.reader.GetBatch(refCount, attrs, a.workerid)
 	a.dequeue += time.Since(dequeue).Milliseconds()
+	if a.prv != nil && bat != nil{
+		enqueue := time.Now()
+		a.reader.PutBuffer(a.prv, a.workerid)
+		a.enqueue += time.Since(enqueue).Milliseconds()
+	}
 	a.prv = bat
 	if bat == nil {
-		close(a.reader.chs[a.workerid])
 		logutil.Infof("readerid: %d, dequeue latency: %d, enqueue latency: %d , workerid: %d",
 			a.id, a.dequeue, a.enqueue, a.workerid)
 		return nil, nil

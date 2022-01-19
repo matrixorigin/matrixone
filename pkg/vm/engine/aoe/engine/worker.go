@@ -11,7 +11,7 @@ func (w *worker) ID() int32 {
 	return w.id
 }
 
-func (w *worker) Alloc(attrs []string) *batData{
+func (w *worker) alloc(attrs []string) *batData{
 	if len(w.batDatas) == 0 {
 		tim := time.Now()
 		w.batDatas = make([]*batData, w.bufferCount)
@@ -45,13 +45,12 @@ func (w *worker) Alloc(attrs []string) *batData{
 }
 
 func (w *worker) Start(refCount []uint64, attrs []string)  {
-	logutil.Infof("w.blocks is %d, attrs is %d， workerid is %d", len(w.blocks), len(attrs), w.id)
 	for i :=0; i < len(w.blocks); i++ {
 		if i < len(w.blocks) - 1 {
 			w.blocks[i+1].Prefetch(attrs)
 		}
 		t := time.Now()
-		data := w.Alloc(attrs)
+		data := w.alloc(attrs)
 		w.allocLatency += time.Since(t).Milliseconds()
 		now := time.Now()
 		bat, err := w.blocks[i].Read(refCount, attrs, data.cds, data.dds)
@@ -75,5 +74,5 @@ func (w *worker) Start(refCount []uint64, attrs []string)  {
 	logutil.Infof("workerId: %d, alloc latency: %d ms, enqueue latency: %d us, read latency: %d ms",
 		w.id, w.allocLatency, w.enqueue, w.readLatency)
 	w.storeReader.SetBatch(nil, w.id)
-	close(w.storeReader.rhs[w.id])
+	w.storeReader.CloseRhs(w.id)
 }

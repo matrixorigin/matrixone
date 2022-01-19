@@ -43,11 +43,20 @@ func (s *store) PutBuffer(bat *batData, id int32){
 	s.chs[id] <- bat
 }
 
+func (s *store) CloseRhs(id int32)  {
+	close(s.rhs[id])
+}
+
+func (s *store) CloseChs(id int32)  {
+	close(s.chs[id])
+}
+
 func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	if len(s.blocks) == 0 {
 		for idx := range s.rhs {
 			s.SetBatch(nil, int32(idx))
-			close(s.rhs[idx])
+			s.CloseRhs(int32(idx))
+			s.CloseChs(int32(idx))
 		}
 		return
 	}
@@ -79,11 +88,12 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	if i < num {
 		for j := i; j < num; j++ {
 			s.SetBatch(nil, int32(j))
-			close(s.rhs[j])
+			s.CloseRhs(int32(j))
+			s.CloseChs(int32(j))
 		}
 	}
 	for j := 0; j < len(workers); j++{
-		workers[j].bufferCount = len(s.readers) / len(workers) * 2
+		workers[j].bufferCount = len(s.readers) / len(workers) * 4
 		go workers[j].Start(refCount, attrs)
 	}
 }
