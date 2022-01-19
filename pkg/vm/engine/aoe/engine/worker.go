@@ -2,16 +2,17 @@ package engine
 
 import (
 	"bytes"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"time"
 )
 
 func (w *worker) ID() int32 {
 	return w.id
 }
 
-func (w *worker) alloc(attrs []string) *batData{
+func (w *worker) alloc(attrs []string) *batData {
 	if len(w.batDatas) == 0 {
 		tim := time.Now()
 		w.batDatas = make([]*batData, w.bufferCount)
@@ -23,12 +24,12 @@ func (w *worker) alloc(attrs []string) *batData{
 				dds[a] = bytes.NewBuffer(make([]byte, 1<<20))
 			}
 			w.batDatas[i] = &batData{
-				bat: nil,
-				cds: cds,
-				dds: dds,
-				use: false,
+				bat:      nil,
+				cds:      cds,
+				dds:      dds,
+				use:      false,
 				workerid: w.id,
-				id: int8(i),
+				id:       int8(i),
 			}
 		}
 		for j := range w.batDatas {
@@ -44,9 +45,9 @@ func (w *worker) alloc(attrs []string) *batData{
 	}
 }
 
-func (w *worker) Start(refCount []uint64, attrs []string)  {
-	for i :=0; i < len(w.blocks); i++ {
-		if i < len(w.blocks) - 1 {
+func (w *worker) Start(refCount []uint64, attrs []string) {
+	for i := 0; i < len(w.blocks); i++ {
+		if i < len(w.blocks)-1 {
 			w.blocks[i+1].Prefetch(attrs)
 		}
 		t := time.Now()

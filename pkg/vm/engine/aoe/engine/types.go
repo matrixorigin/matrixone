@@ -16,12 +16,13 @@ package engine
 
 import (
 	"bytes"
+	"sync"
+
 	catalog3 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-	"sync"
 )
 
 // aoe engine
@@ -38,50 +39,49 @@ type SegmentInfo struct {
 }
 
 type aoeReader struct {
-	reader *store
-	id 		int32
-	prv 	*batData
-	dequeue int64
-	enqueue int64
+	reader   *store
+	id       int32
+	prv      *batData
+	dequeue  int64
+	enqueue  int64
 	workerid int32
 }
 
 type store struct {
-	rel	   		*relation
-	readers 	[]engine.Reader
-	rhs    		[]chan *batData
-	chs    		[]chan *batData
-	blocks 		[]aoe.Block
-	start 		bool
-	mutex 		sync.RWMutex
-	iodepth		int
-
+	rel     *relation
+	readers []engine.Reader
+	rhs     []chan *batData
+	chs     []chan *batData
+	blocks  []aoe.Block
+	start   bool
+	mutex   sync.RWMutex
+	iodepth int
 }
 
 type batData struct {
-	bat 		*batch.Batch
-	cds    		[]*bytes.Buffer
-	dds    		[]*bytes.Buffer
-	use         bool
-	workerid    int32
-	id			int8
+	bat      *batch.Batch
+	cds      []*bytes.Buffer
+	dds      []*bytes.Buffer
+	use      bool
+	workerid int32
+	id       int8
 }
 
 type worker struct {
-	id 			int32
-	bufferCount int
-	zs     		[]int64
-	batDatas   	[]*batData
-	blocks 		[]aoe.Block
-	storeReader *store
+	id           int32
+	bufferCount  int
+	zs           []int64
+	batDatas     []*batData
+	blocks       []aoe.Block
+	storeReader  *store
 	enqueue      int64
 	allocLatency int64
 	readLatency  int64
 }
 
 type AoeSparseFilter struct {
-	storeReader 		*store
-	reader 				*aoeReader
+	storeReader *store
+	reader      *aoeReader
 }
 
 type database struct {
@@ -95,8 +95,8 @@ type relation struct {
 	tbl      *aoe.TableInfo    //table of the tablets
 	catalog  *catalog3.Catalog //the catalog
 	nodes    engine.Nodes
-	segments []SegmentInfo           //segments of the table
-	tablets  []aoe.TabletInfo        //tablets of the table
+	segments []SegmentInfo              //segments of the table
+	tablets  []aoe.TabletInfo           //tablets of the table
 	mp       map[string]*aoedb.Relation //a map of each tablet and its relation
-	reader	 *store
+	reader   *store
 }

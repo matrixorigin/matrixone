@@ -18,16 +18,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math/rand"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 //Close closes the relation. It closes all relations of the tablet in the aoe store.
@@ -94,13 +96,13 @@ func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
-	idxInfo:= helper.IndexDefs(r.pid,r.tbl.Id,nil,defs)
+func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
+	idxInfo := helper.IndexDefs(r.pid, r.tbl.Id, nil, defs)
 	//TODO
-	return r.catalog.CreateIndex(epoch,idxInfo[0])
+	return r.catalog.CreateIndex(epoch, idxInfo[0])
 }
-func (r *relation) DropIndex(epoch uint64, name string) error{
-	return r.catalog.DropIndex(epoch,r.tbl.Id,r.tbl.SchemaId,name)
+func (r *relation) DropIndex(epoch uint64, name string) error {
+	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
 }
 
 func (r *relation) Rows() int64 {
@@ -131,7 +133,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 func (r *relation) NewReader(num int) []engine.Reader {
 	readStore := &store{
 		iodepth: num / 4,
-		start: false,
+		start:   false,
 		readers: make([]engine.Reader, num),
 	}
 	readStore.rhs = make([]chan *batData, readStore.iodepth)
@@ -162,10 +164,9 @@ func (r *relation) NewReader(num int) []engine.Reader {
 	}
 	for i := 0; i < readStore.iodepth; i++ {
 		readStore.rhs[i] = make(chan *batData,
-			len(readStore.readers) / readStore.iodepth * 4)
+			len(readStore.readers)/readStore.iodepth*4)
 		readStore.chs[i] = make(chan *batData,
-			len(readStore.readers) / readStore.iodepth * 4)
+			len(readStore.readers)/readStore.iodepth*4)
 	}
 	return readStore.readers
 }
-

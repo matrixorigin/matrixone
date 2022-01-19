@@ -4,7 +4,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 )
 
-func (s *store) SetBlocks(blocks []aoe.Block){
+func (s *store) SetBlocks(blocks []aoe.Block) {
 	s.blocks = blocks
 }
 
@@ -27,11 +27,11 @@ GET:
 	return bat
 }
 
-func (s *store) SetBatch(bat *batData, id int32){
+func (s *store) SetBatch(bat *batData, id int32) {
 	s.rhs[id] <- bat
 }
 
-func (s *store) GetBuffer(id int32) *batData{
+func (s *store) GetBuffer(id int32) *batData {
 	bat, ok := <-s.chs[id]
 	if !ok {
 		return nil
@@ -39,15 +39,15 @@ func (s *store) GetBuffer(id int32) *batData{
 	return bat
 }
 
-func (s *store) PutBuffer(bat *batData, id int32){
+func (s *store) PutBuffer(bat *batData, id int32) {
 	s.chs[id] <- bat
 }
 
-func (s *store) CloseRhs(id int32)  {
+func (s *store) CloseRhs(id int32) {
 	close(s.rhs[id])
 }
 
-func (s *store) CloseChs(id int32)  {
+func (s *store) CloseChs(id int32) {
 	close(s.chs[id])
 }
 
@@ -70,16 +70,16 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	for i = 0; i < num; i++ {
 		if i == num-1 || i == len(s.blocks)-1 {
 			wk := worker{
-				blocks: s.blocks[i*mod:],
-				id:		int32(i),
+				blocks:      s.blocks[i*mod:],
+				id:          int32(i),
 				storeReader: s,
 			}
 			workers = append(workers, wk)
 			break
 		}
 		wk := worker{
-			blocks: s.blocks[i*mod : (i+1)*mod],
-			id:		int32(i),
+			blocks:      s.blocks[i*mod : (i+1)*mod],
+			id:          int32(i),
 			storeReader: s,
 		}
 		workers = append(workers, wk)
@@ -92,7 +92,7 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 			s.CloseChs(int32(j))
 		}
 	}
-	for j := 0; j < len(workers); j++{
+	for j := 0; j < len(workers); j++ {
 		workers[j].bufferCount = len(s.readers) / len(workers) * 4
 		go workers[j].Start(refCount, attrs)
 	}

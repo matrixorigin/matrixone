@@ -15,13 +15,14 @@
 package engine
 
 import (
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"strings"
-	"time"
 )
 
 func New(c *catalog.Catalog) *aoeEngine {
