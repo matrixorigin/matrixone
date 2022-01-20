@@ -16,7 +16,7 @@ In order to show the single-table query performance, we combine five tables into
 
 
 ## **Standalone node&Single table**
-We use standalone service to execute flat table(`lineorder_flat`) queries with MatrixOne, and compared the results with ClickHouse(可能需要遮掩名字) in the same configuration.  
+We use standalone service to execute flat table(`lineorder_flat`) queries with MatrixOne, and compared the results with ClickHouse in the same configuration.  
 The table `lineorder_flat` has 600 million rows data and takes up 220 GB of space.  
 
 !!! info 

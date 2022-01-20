@@ -14,7 +14,7 @@ With MatrixOne v0.2.0, we follow the [Tutorial](../Get-Started/Tutorial/NYC-test
     The following server was used:
     AMD EPYC™ Rome CPU 2.6GHz/3.3GHz, 16 physical cores total, 32 GiB Memory.
 
-|  Query ID  | MatrixOne 0.2.0   |  ClickHouse v21.11.4.14 | Starrocks v1.19.3
+|  Query ID  | MatrixOne 0.2.0   |  ClickHouse v21.11.4.14 | Starrocks v1.19.3<br>(Only 30M unique data)
 |  :----:  | :----:  |  :----:  |:----:
 | Q1 | 8.37|5.99 |2.58	
 | Q2 | 2.67|4.13 |2.18
