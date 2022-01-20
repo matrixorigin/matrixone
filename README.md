@@ -4,7 +4,7 @@
 
 ## What is MatrixOne?
 
-MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that supports transactional, analytical, and streaming workload with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogeneous infrastructures.
+MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that supports transactional, analytical, and streaming workloads with a simplified and distributed database engine, across multiple data centers, clouds, edges and other heterogeneous infrastructures.
 
 ## **Key Features** 
 ### **Hyper-converged Engine**
