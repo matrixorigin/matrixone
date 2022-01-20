@@ -33,3 +33,13 @@ func (a *KV) Get(k string, buf *bytes.Buffer) ([]byte, error) {
 	copy(data, v)
 	return data, nil
 }
+
+func (a *KV) Range() ([]string, [][]byte) {
+	names := make([]string, 0, len(a.mp))
+	datas := make([][]byte, 0, len(a.mp))
+	for k, v := range a.mp {
+		names = append(names, k)
+		datas = append(datas, v)
+	}
+	return names, datas
+}

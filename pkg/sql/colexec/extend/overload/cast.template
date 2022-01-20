@@ -187,9 +187,9 @@ func initCast() {
                 }
                 lvs := lv.Col.(*types.Bytes)
                 col := &types.Bytes{
-                    Data:    make([]byte, 0, len(lvs.Data)),
-                    Offsets: make([]uint32, 0, len(lvs.Offsets)),
-                    Lengths: make([]uint32, 0, len(lvs.Lengths)),
+                    Data:    make([]byte, len(lvs.Data)),
+                    Offsets: make([]uint32, len(lvs.Offsets)),
+                    Lengths: make([]uint32, len(lvs.Lengths)),
                 }
                 copy(col.Data, lvs.Data)
                 copy(col.Offsets, lvs.Offsets)

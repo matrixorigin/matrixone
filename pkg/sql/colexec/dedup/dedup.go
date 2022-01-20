@@ -84,6 +84,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				} else {
 					size = 128
 				}
+			case types.T_date:
+				size += 4
+			case types.T_datetime:
+				size += 8
 			}
 		}
 		n.ctr.keyOffs = make([]uint32, UnitLimit)

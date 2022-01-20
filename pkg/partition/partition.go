@@ -97,11 +97,59 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
+	case types.T_date:
+		var n bool
+		var v types.Date
+
+		vs := vec.Col.([]types.Date)
+		if nulls.Any(vec.Nsp) {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else {
+					diffs[i] = diffs[i] || (v != vs[sel])
+				}
+				v = w
+				n = isNull
+			}
+			break
+		}
+		for i, sel := range sels {
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
+			v = w
+		}
 	case types.T_int64:
 		var n bool
 		var v int64
 
 		vs := vec.Col.([]int64)
+		if nulls.Any(vec.Nsp) {
+			for i, sel := range sels {
+				w := vs[sel]
+				isNull := nulls.Contains(vec.Nsp, uint64(sel))
+				if n != isNull {
+					diffs[i] = true
+				} else {
+					diffs[i] = diffs[i] || (v != vs[sel])
+				}
+				v = w
+				n = isNull
+			}
+			break
+		}
+		for i, sel := range sels {
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
+			v = w
+		}
+	case types.T_datetime:
+		var n bool
+		var v types.Datetime
+
+		vs := vec.Col.([]types.Datetime)
 		if nulls.Any(vec.Nsp) {
 			for i, sel := range sels {
 				w := vs[sel]

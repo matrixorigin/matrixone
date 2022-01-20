@@ -39,6 +39,7 @@ import (
 	duint64s "github.com/matrixorigin/matrixone/pkg/sort/desc/uint64s"
 	duint8s "github.com/matrixorigin/matrixone/pkg/sort/desc/uint8s"
 	dvarchar "github.com/matrixorigin/matrixone/pkg/sort/desc/varchar"
+	"unsafe"
 )
 
 func Sort(desc bool, os []int64, vec *vector.Vector) {
@@ -61,11 +62,25 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		} else {
 			int32s.Sort(vec.Col.([]int32), os)
 		}
+	case types.T_date:
+		vs := vec.Col.([]types.Date)
+		if desc {
+			dint32s.Sort(*(*[]int32)(unsafe.Pointer(&vs)), os)
+		} else {
+			int32s.Sort(*(*[]int32)(unsafe.Pointer(&vs)), os)
+		}
 	case types.T_int64:
 		if desc {
 			dint64s.Sort(vec.Col.([]int64), os)
 		} else {
 			int64s.Sort(vec.Col.([]int64), os)
+		}
+	case types.T_datetime:
+		vs := vec.Col.([]types.Datetime)
+		if desc {
+			dint64s.Sort(*(*[]int64)(unsafe.Pointer(&vs)), os)
+		} else {
+			int64s.Sort(*(*[]int64)(unsafe.Pointer(&vs)), os)
 		}
 	case types.T_uint8:
 		if desc {

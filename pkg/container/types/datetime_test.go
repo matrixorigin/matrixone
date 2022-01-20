@@ -66,3 +66,82 @@ func TestDatetime(t *testing.T) {
 	fmt.Println(dt.ToDate().Calendar(true))
 	fmt.Println(dt.Clock())
 }
+
+func TestParseDatetime(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    string
+		want    string
+		wantErr bool
+	}{
+		// 1. yyyy-mm-dd hh:mm:ss(.msec)
+		{
+			name: "yyyy-mm-dd hh:mm:ss",
+			args: "1987-08-25 00:00:00",
+			want: "1987-08-25 00:00:00",
+		},
+		{
+			name: "yyyy-mm-dd hh:mm:ss.sec",
+			args: "1987-08-25 00:00:00.1",
+			want: "1987-08-25 00:00:00",
+		},
+		// 2. yyyymmddhhmmss(.msec)
+		{
+			name: "yyyymmddhhmmss",
+			args: "19870825000000",
+			want: "1987-08-25 00:00:00",
+		},
+		{
+			name: "yyyymmddhhmmss.sec",
+			args: "19870825000000.5",
+			want: "1987-08-25 00:00:00",
+		},
+		// 3. out of range
+		{
+			name: "out of range 1",
+			args: "1987-13-12 00:00:00",
+			wantErr: true,
+		},
+		{
+			name: "out of range 2",
+			args: "1987-11-31 00:00:00",
+			wantErr: true,
+		},
+		{
+			name: "out of range 3",
+			args: "1987-08-25 24:00:00",
+			wantErr: true,
+		},
+		{
+			name: "out of range 4",
+			args: "1987-13-12 23:60:00",
+			wantErr: true,
+		},
+		{
+			name: "out of range 5",
+			args: "1987-13-12 23:59:60",
+			wantErr: true,
+		},
+		// 4. wrong format
+		{
+			name: "wrong format",
+			args: "1987-12-12 11:20:3",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseDatetime(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ParseDatetime() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if err != nil && tt.wantErr {
+				return
+			}
+			if got.String() != tt.want {
+				t.Errorf("ParseDatetime() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
