@@ -28,6 +28,12 @@ import (
 // aoe engine
 type aoeEngine struct {
 	catalog *catalog3.Catalog
+	config *EngineConfig
+}
+
+type EngineConfig struct {
+	ReaderBufferCount uint64 `toml:"reader_buffer_count"` //the number of shards allocated in initiation
+	QueueMaxReaderCount          uint64 `toml:"queue_max_reader_count"`           //the max number of shards
 }
 
 type SegmentInfo struct {
@@ -88,6 +94,7 @@ type database struct {
 	id      uint64            //id of the database
 	typ     int               //type of the database
 	catalog *catalog3.Catalog //the catalog of the aoeEngine
+	cfg *EngineConfig
 }
 
 type relation struct {
@@ -99,4 +106,5 @@ type relation struct {
 	tablets  []aoe.TabletInfo           //tablets of the table
 	mp       map[string]*aoedb.Relation //a map of each tablet and its relation
 	reader   *store
+	cfg *EngineConfig
 }

@@ -93,6 +93,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
 		mp:      make(map[string]*adb.Relation),
+		cfg: db.cfg,
 	}
 	r.tablets = tablets
 	ldb := db.catalog.Driver.AOEStore()

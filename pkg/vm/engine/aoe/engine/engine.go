@@ -25,12 +25,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func New(c *catalog.Catalog) *aoeEngine {
+func New(c *catalog.Catalog, cfg *EngineConfig) *aoeEngine {
+	if cfg.ReaderBufferCount == 0 {
+		cfg.ReaderBufferCount = 4
+	}
+
+	if cfg.QueueMaxReaderCount == 0 {
+		cfg.QueueMaxReaderCount = 4
+	}
 	//1. Parse config
 	//2. New Storage
 	//3. New Catalog
 	return &aoeEngine{
 		catalog: c,
+		config: cfg,
 	}
 }
 
@@ -106,5 +114,6 @@ func (e *aoeEngine) Database(name string) (engine.Database, error) {
 		id:      db.Id,
 		typ:     db.Type,
 		catalog: e.catalog,
+		cfg: e.config,
 	}, nil
 }
