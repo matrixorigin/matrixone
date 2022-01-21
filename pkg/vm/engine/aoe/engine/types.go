@@ -69,7 +69,6 @@ type batData struct {
 	cds      []*bytes.Buffer
 	dds      []*bytes.Buffer
 	use      bool
-	workerid int32
 	id       int8
 }
 

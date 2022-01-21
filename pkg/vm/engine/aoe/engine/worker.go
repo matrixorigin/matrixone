@@ -28,7 +28,6 @@ func (w *worker) alloc(attrs []string) *batData {
 				cds:      cds,
 				dds:      dds,
 				use:      false,
-				workerid: w.id,
 				id:       int8(i),
 			}
 		}
