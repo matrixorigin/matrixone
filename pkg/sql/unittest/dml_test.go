@@ -260,7 +260,10 @@ func TestCAQ(t *testing.T) {
 			},
 		}},
 
-		{sql: "select store_area, sum(incomes) from store join input on store.store_id = input.store_id group by store_area;", res: executeResult{
+		{sql: "select store_area, sum(incomes) from " +
+			"store join input on store.store_id = input.store_id " +
+			"group by store_area;",
+			res: executeResult{
 			attr: []string{"store_area", "sum(incomes)"},
 			data: [][]string{
 				{"shanghai", "77500.000000"},
@@ -269,7 +272,10 @@ func TestCAQ(t *testing.T) {
 			},
 		}},
 
-		{sql: "select store_area, store_type, sum(incomes) from store join input on store.store_id = input.store_id group by store_area, store_type;", res: executeResult{
+		{sql: "select store_area, store_type, sum(incomes) from " +
+			"store join input on store.store_id = input.store_id " +
+			"group by store_area, store_type;",
+			res: executeResult{
 			attr: []string{"store_area", "store_type", "sum(incomes)"},
 			data: [][]string{
 				{"shanghai", "0", "77500.000000"},
@@ -278,7 +284,10 @@ func TestCAQ(t *testing.T) {
 			},
 		}},
 
-		//{sql: "select store_area, store_type, item_id, sum(incomes) from store join input on store.store_id = input.store_id group by store_area, store_type, item_id;", res: executeResult{
+		//{sql: "select store_area, store_type, item_id, sum(incomes) from " +
+		//	"store join input on store.store_id = input.store_id " +
+		//	"group by store_area, store_type, item_id;",
+		//	res: executeResult{
 		//	attr: []string{"store_area", "store_type", "item_id", "sum(incomes)"},
 		//	data: [][]string{
 		//		{"shanghai", "0", "100", "2500"},
@@ -289,14 +298,80 @@ func TestCAQ(t *testing.T) {
 		//		{"shenzhen", "1", "105", "0.000000"},
 		//	},
 		//}, com: "this will cause panic, and return `no possible`"},
+
+		{sql: "select store_type, max(output_incomes) from" +
+			" store join output on store.store_id = output.store_id" +
+			" join house on house.item_id = output.item_id" +
+			" group by store_type;",
+			res: executeResult{
+			attr: []string{"store_type", "max(output_incomes)"},
+			data: [][]string{
+				{"0", "500.000000"},
+				{"1", "10.000000"},
+			},
+		}},
+
+		{sql: "select store_type, max(output_incomes) from " +
+			"store join output on store.store_id = output.store_id" +
+			" join house on house.item_id = output.item_id " +
+			"where store.store_id < 2 " +
+			"group by store_type;",
+			res: executeResult{
+			attr: []string{"store_type", "max(output_incomes)"},
+			data: [][]string{
+				{"0", "20.000000"},
+			},
+		}},
+
+		{sql: "select store_type, max(output_incomes) from " +
+			"store join output on store.store_id = output.store_id " +
+			"join house on house.item_id = output.item_id " +
+			"group by store_type " +
+			"having store_type < 1",
+			res: executeResult{
+			attr: []string{"store_type", "max(output_incomes)"},
+			data: [][]string{
+				{"0", "500.000000"},
+			},
+		}},
+
+		{sql: "select store_id from store join input on store.store_id = input.store_id;", err: "[42701]Column 'store_id' is ambiguous"},
 	}
 	test(t, testCases)
 }
 
 func TestAQ(t *testing.T) {
+	testCases := []testCase{
+		{sql: "create table in_out (name varchar(40), age int unsigned, incomes int, expenses int);"},
+		{sql: "insert into in_out values ('a', 20, 2500, 1300), ('b', 25, 5000, 800), ('c', 15, 0, 700), ('d', 50, 12000, 1000), ('e', 37, 22000, 7000);"},
 
-}
+		{sql: "select count(name) from in_out;", res: executeResult{
+			attr: []string{"count(name)"},
+			data: [][]string{
+				{"5"},
+			},
+		}},
 
-func TestQ(t *testing.T) {
+		{sql: "select count(*) from in_out;", res: executeResult{
+			attr: []string{"count(*)"},
+			data: [][]string{
+				{"5"},
+			},
+		}},
 
+		{sql: "select max(incomes), min(expenses) from in_out;", res: executeResult{
+			attr: []string{"max(incomes)", "min(expenses)"},
+			data: [][]string{
+				{"22000", "700"},
+			},
+		}},
+
+		{sql: "select min(incomes), max(expenses) from in_out;", res: executeResult{
+			attr: []string{"min(incomes)", "max(expenses)"},
+			data: [][]string{
+				{"0", "7000"},
+			},
+		}},
+	}
+	test(t, testCases)
 }

@@ -245,8 +245,137 @@ func TestOrderOperator(t *testing.T) {
 }
 
 func TestTopOperator(t *testing.T) {
-	// SQL Server support top n
-	// but Mysql use limit n to instead of it
+	testCases := []testCase{
+		{sql: "create table top_table1 (i1 tinyint, i2 smallint, i3 int, i4 bigint);"},
+		{sql: "create table top_table2 (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
+		{sql: "create table top_table3 (f1 float, f2 double);"},
+		{sql: "create table top_table4 (d1 date, d2 datetime);"},
+		{sql: "create table top_table5 (c1 char(10), c2 varchar(20));"},
+
+		{sql: "insert into top_table1 values (1, 2, 3, 4), (2, 3, 4, 1), (3, 4, 1, 2), (4, 1, 2, 3);"},
+		{sql: "insert into top_table2 values (1, 2, 3, 4), (2, 3, 4, 1), (3, 4, 1, 2), (4, 1, 2, 3);"},
+		{sql: "insert into top_table3 values (1, 2), (2, 3), (3, 1);"},
+		{sql: "insert into top_table4 values ('2020-01-01', '2020-01-01 08:00:00'), ('2021-01-01', '2021-01-01 08:00:00');"},
+		{sql: "insert into top_table5 values ('a', 'b'), ('b', 'c'), ('c' , 'b'), ('d', 'a');"},
+
+		{sql: "select * from top_table1 order by i1 limit 2;", res: executeResult{
+			data: [][]string{
+				{"1", "2", "3", "4"},
+				{"2", "3", "4", "1"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i1 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"4", "1", "2", "3"},
+				{"3", "4", "1", "2"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i2 limit 2;", res: executeResult{
+			data: [][]string{
+				{"4", "1", "2", "3"},
+				{"1", "2", "3", "4"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i2 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"3", "4", "1", "2"},
+				{"2", "3", "4", "1"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i3 limit 2;", res: executeResult{
+			data: [][]string{
+				{"3", "4", "1", "2"}, {"4", "1", "2", "3"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i3 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"2", "3", "4", "1"}, {"1", "2", "3", "4"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i4 limit 2;", res: executeResult{
+			data: [][]string{
+				{"2", "3", "4", "1"}, {"3", "4", "1", "2"},
+			},
+		}},
+		{sql: "select * from top_table1 order by i4 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"1", "2", "3", "4"}, {"4", "1", "2", "3"},
+			},
+		}},
+
+		{sql: "select u1 from top_table2 order by u1 limit 2;", res: executeResult{
+			data: [][]string{
+				{"1"}, {"2"},
+			},
+		}},
+		{sql: "select u2 from top_table2 order by u2 limit 2;", res: executeResult{
+			data: [][]string{
+				{"1"}, {"2"},
+			},
+		}},
+		{sql: "select u3 from top_table2 order by u3 limit 2;", res: executeResult{
+			data: [][]string{
+				{"1"}, {"2"},
+			},
+		}},
+		{sql: "select u4 from top_table2 order by u4 limit 2;", res: executeResult{
+			data: [][]string{
+				{"1"}, {"2"},
+			},
+		}},
+		{sql: "select u1 from top_table2 order by u1 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"4"}, {"3"},
+			},
+		}},
+		{sql: "select u2 from top_table2 order by u2 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"4"}, {"3"},
+			},
+		}},
+		{sql: "select u3 from top_table2 order by u3 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"4"}, {"3"},
+			},
+		}},
+		{sql: "select u4 from top_table2 order by u4 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"4"}, {"3"},
+			},
+		}},
+		{sql: "select f1 from top_table3 order by f1 limit 3;", res: executeResult{
+			data: [][]string{
+				{"1.000000"}, {"2.000000"}, {"3.000000"},
+			},
+		}},
+		{sql: "select f2 from top_table3 order by f2 limit 3;", res: executeResult{
+			data: [][]string{
+				{"1.000000"}, {"2.000000"}, {"3.000000"},
+			},
+		}},
+		{sql: "select f1 from top_table3 order by f1 desc limit 3;", res: executeResult{
+			data: [][]string{
+				{"3.000000"}, {"2.000000"}, {"1.000000"},
+			},
+		}},
+		{sql: "select f2 from top_table3 order by f2 desc limit 3;", res: executeResult{
+			data: [][]string{
+				{"3.000000"}, {"2.000000"}, {"1.000000"},
+			},
+		}},
+
+		{sql: "select d1 from top_table4 order by d1 limit 2;", res: executeResult{
+			data: [][]string{
+				{"2020-01-01"}, {"2021-01-01"},
+			},
+		}},
+		{sql: "select d2 from top_table4 order by d2 desc limit 2;", res: executeResult{
+			data: [][]string{
+				{"2021-01-01 08:00:00"}, {"2020-01-01 08:00:00"},
+			},
+		}},
+	}
+	test(t, testCases)
 }
 
 func TestProjectionOperator(t *testing.T) {
@@ -376,6 +505,13 @@ func TestProjectionOperator(t *testing.T) {
 				{"2"}, {"2"}, {"-2"}, {"null"},
 			},
 		}},
+		{sql: "select p_table4.d1 as alias1, p_table4.d2 as alias2 from p_table4;", res: executeResult{
+			data: [][]string{
+				{"2015-12-12", "2013-01-01 15:15:15"},
+				{"2015-12-12", "2013-01-01 15:15:15"},
+				{"null", "null"},
+			},
+		}, com: "issue 1617"},
 		{sql: "select *, i5 from p_table1;", err: "[42000]Column 'i5' doesn't exist"},
 		{sql: "select i5 from p_table1;", err: "[42000]Column 'i5' doesn't exist"},
 	}
