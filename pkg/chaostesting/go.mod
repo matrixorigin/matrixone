@@ -5,7 +5,8 @@ go 1.18
 require (
 	github.com/fatih/color v1.7.0
 	github.com/google/uuid v1.3.0
-	github.com/matrixorigin/matrixcube v0.2.1-0.20220120034431-cb8580414c11
+	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220112183258-f57e95bda82d
+	github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c
 	github.com/reusee/dscope v0.0.0-20220119032332-45ce3e0474b3
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
