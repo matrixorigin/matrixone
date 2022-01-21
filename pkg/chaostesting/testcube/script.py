@@ -21,7 +21,7 @@ enable_cpu_profile(False)
 # address for http server, mainly for net/http/pprof
 #http_server_addr("localhost:8889")
 
-# enable runtime/trace. trace files will be written to testdata/[uuid]-runtiime.trace
+# enable runtime/trace. trace files will be written to testdata/[uuid].runtiime.trace
 enable_runtime_trace(True)
 
 # network model
@@ -29,4 +29,9 @@ enable_runtime_trace(True)
 # dummy: use linux dummy interface
 # tun: use TUN interface
 network_model("tun")
+
+# temp dir model
+# os: use os.TempDir()
+# fuse: use in-memory fuse fs
+temp_dir_model("os")
 

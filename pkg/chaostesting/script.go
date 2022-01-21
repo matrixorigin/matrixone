@@ -82,6 +82,10 @@ func (_ Def) ScriptBuiltins(
 		"microsecond": starlark.MakeUint64(uint64(time.Microsecond)),
 		"nanosecond":  starlark.MakeUint64(uint64(time.Nanosecond)),
 
+		"temp_dir_model": starlarkutil.MakeFunc("temp_dir_model", func(model TempDirModel) {
+			add(&model)
+		}),
+
 		//
 	}
 }

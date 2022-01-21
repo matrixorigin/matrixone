@@ -22,15 +22,34 @@ type TempDir string
 
 func (_ Def) TempDir(
 	logger Logger,
+	model TempDirModel,
 ) (
 	dir TempDir,
 	cleanup Cleanup,
 ) {
-	d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
-	ce(err)
-	dir = TempDir(d)
-	return dir, func() {
-		logger.Info("remove temp dir")
-		os.RemoveAll(d)
+
+	switch model {
+
+	case "os":
+		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+		ce(err)
+		dir = TempDir(d)
+
+		cleanup = func() {
+			logger.Info("remove temp dir")
+			os.RemoveAll(d)
+		}
+
+	case "fuse":
+		//TODO
+
 	}
+
+	return
+}
+
+type TempDirModel string
+
+func (_ Def) TempDirModel() TempDirModel {
+	return "os"
 }
