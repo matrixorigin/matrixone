@@ -320,8 +320,8 @@ github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czP
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251 h1:BW05o8Fa/VS7QMKYEOtQ69Qy2mZXzfZWeprn7MnRMzo=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824030015-8e8fdd5cd251/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
-github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82 h1:FZ0Ad+EexWbUNQQEx1iztNLg/r+uDXAlutAZbzxgA3I=
-github.com/matrixorigin/matrixcube v0.2.1-0.20220113035639-cc502639bb82/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220120034431-cb8580414c11 h1:/k5CNPVOg8DMsoHjg5tYty1uzFOl4+CxZE/AE9b7VK8=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220120034431-cb8580414c11/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
 github.com/mattn/go-colorable v0.1.2 h1:/bC9yWikZXAL9uJdulbSfyVNIR3n3trXl+v8+1sx8mU=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=
@@ -409,8 +409,8 @@ github.com/prometheus/tsdb v0.7.1/go.mod h1:qhTCs0VvXwvX/y3TZrWD7rabWM+ijKTux40T
 github.com/rainycape/unidecode v0.0.0-20150907023854-cb7f23ec59be/go.mod h1:MIDFMn7db1kT65GmV94GzpX9Qdi7N/pQlwb+AN8wh+Q=
 github.com/reusee/dscope v0.0.0-20210406042911-7228063ab887/go.mod h1:VKlvkUcHsW9T2FVIA/oGFDlk3hBKZUICZVb1DewhbX4=
 github.com/reusee/dscope v0.0.0-20210927163816-996990a3ac8a/go.mod h1:tTsasuEX+yrz/+3Ldde74CT9thEbH1Rwwjgulrs8kbc=
-github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11 h1:J4thRSsDU/bRAjRxefOBfe21BwtHejjsyEJwIH4vzKE=
-github.com/reusee/dscope v0.0.0-20220108183820-13ad9cd1ee11/go.mod h1:13kE69aor4wIlGDzqL5XiItnb460aokFRKVn9UEJ7dA=
+github.com/reusee/dscope v0.0.0-20220119032332-45ce3e0474b3 h1:R1FPZgLerBVUGohrqyBFcTxv1LR1dlwWdjtBC7YyVhc=
+github.com/reusee/dscope v0.0.0-20220119032332-45ce3e0474b3/go.mod h1:13kE69aor4wIlGDzqL5XiItnb460aokFRKVn9UEJ7dA=
 github.com/reusee/e4 v0.0.0-20210220140921-dc464f80154d/go.mod h1:Zfo0mBaNabtnbCtT4+HG9734x9G1VDT3Dwrqhp4wMfE=
 github.com/reusee/e4 v0.0.0-20210402104900-6d2655a0545c/go.mod h1:Zfo0mBaNabtnbCtT4+HG9734x9G1VDT3Dwrqhp4wMfE=
 github.com/reusee/e4 v0.0.0-20210710045002-e0d2a4069a09/go.mod h1:tn7INLQH/YwWai6I0MV227/HgZgagrroPgzfUTLV8No=
@@ -459,6 +459,8 @@ github.com/smartystreets/goconvey v1.6.4/go.mod h1:syvi0/a8iFYH4r/RixwvyeAJjdLS9
 github.com/soheilhy/cmux v0.1.4/go.mod h1:IM3LyeVVIOuxMH7sFAkER9+bJ4dT7Ms6E4xg4kGIyLM=
 github.com/soheilhy/cmux v0.1.5 h1:jjzc5WVemNEDTLwv9tlmemhC73tI08BNOIGwBOo10Js=
 github.com/soheilhy/cmux v0.1.5/go.mod h1:T7TcVDs9LWfQgPlPsdngu6I6QIoyIFZDDC6sNE1GqG0=
+github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8 h1:TG/diQgUe0pntT/2D9tmUCz4VNwm9MfrtPr0SU2qSX8=
+github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8/go.mod h1:P5HUIBuIWKbyjl083/loAegFkfbFNx5i2qEP4CNbm7E=
 github.com/spaolacci/murmur3 v0.0.0-20180118202830-f09979ecbc72/go.mod h1:JwIasOWyU6f++ZhiEuf87xNszmSA2myDM2Kzu9HwQUA=
 github.com/spf13/afero v1.1.2/go.mod h1:j4pytiNVoe2o6bmDsKpLACNPDBIoEAkihy7loJ1B0CQ=
 github.com/spf13/cast v1.3.0/go.mod h1:Qx5cxh0v+4UWYiBimWS+eyWzqEqokIECu5etghLkUJE=

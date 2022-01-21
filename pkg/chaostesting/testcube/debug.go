@@ -29,3 +29,9 @@ type HTTPServerAddr string
 func (_ Def) HTTPServerAddr() HTTPServerAddr {
 	return ""
 }
+
+type EnableRuntimeTrace bool
+
+func (_ Def) EnableRuntimeTrace() EnableRuntimeTrace {
+	return false
+}

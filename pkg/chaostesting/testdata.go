@@ -34,7 +34,7 @@ func (_ Def) TestDataDir() (dir TestDataDir) {
 	_, err := os.Stat(string(dir))
 	if errors.Is(err, os.ErrNotExist) {
 		err = nil
-		ce(os.Mkdir(string(dir), 0755))
+		ce(os.Mkdir(string(dir), 0777))
 	}
 	ce(err)
 
@@ -93,6 +93,7 @@ func (_ Def) WriteTestDataFile(
 
 		file, err = os.CreateTemp(outputDir, "*.tmp")
 		ce(err)
+		ce(file.Chmod(0666))
 
 		done = func() error {
 			if err := file.Close(); err != nil {

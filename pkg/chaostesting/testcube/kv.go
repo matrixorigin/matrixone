@@ -17,12 +17,14 @@ package main
 import (
 	"bytes"
 	"errors"
+	"runtime/trace"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/pb/rpc"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/util/uuid"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/sb"
 )
 
@@ -38,7 +40,9 @@ const (
 
 type NewKV func(node *Node) *KV
 
-func (_ Def) NewKV() NewKV {
+func (_ Def) NewKV(
+	wt fz.RootWaitTree,
+) NewKV {
 
 	return func(node *Node) *KV {
 
@@ -103,6 +107,10 @@ func (_ Def) NewKV() NewKV {
 			Set: func(key any, value any, timeout time.Duration) (err error) {
 				defer he(&err)
 
+				ctx, task := trace.NewTask(wt.Ctx, "kv set")
+				defer task.End()
+				trace.Logf(ctx, "kv", "set %v -> %v", key, value)
+
 				req := rpc.Request{}
 				id := uuid.NewV4()
 				req.ID = id.Bytes()
@@ -158,6 +166,10 @@ func (_ Def) NewKV() NewKV {
 
 			Get: func(key any, target any, timeout time.Duration) (ok bool, err error) {
 				defer he(&err)
+
+				ctx, task := trace.NewTask(wt.Ctx, "kv get")
+				defer task.End()
+				trace.Logf(ctx, "kv", "get %v", key)
 
 				req := rpc.Request{}
 				id := uuid.NewV4()

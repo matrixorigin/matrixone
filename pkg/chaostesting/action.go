@@ -22,8 +22,6 @@ import (
 type Action interface {
 }
 
-//TODO weighted action maker
-
 type ActionMaker = func() Action
 
 type MainAction struct {
