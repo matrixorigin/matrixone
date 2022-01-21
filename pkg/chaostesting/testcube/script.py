@@ -33,5 +33,5 @@ network_model("tun")
 # temp dir model
 # os: use os.TempDir()
 # fuse: use in-memory fuse fs
-temp_dir_model("os")
+temp_dir_model("fuse")
 
