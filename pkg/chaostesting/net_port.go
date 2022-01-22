@@ -15,35 +15,38 @@
 package fz
 
 import (
-	"context"
-	"os"
-	"os/signal"
-
-	"github.com/reusee/pr"
+	"strconv"
+	"sync/atomic"
 )
 
-type RootWaitTree struct {
-	*pr.WaitTree
+type PortRange [2]uint16
+
+func (_ Def) PortRange() PortRange {
+	return PortRange{20000, 50000}
 }
 
-func (_ Def) RootWaitTree() (
-	wt RootWaitTree,
-	cleanup Cleanup,
+type GetPort func() uint16
+
+type GetPortStr func() string
+
+var nextPort uint32
+
+func (_ Def) GetPort(
+	portRange PortRange,
+) (
+	get GetPort,
+	getStr GetPortStr,
 ) {
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
-	wt = RootWaitTree{
-		WaitTree: pr.NewRootWaitTree(
-			pr.BackgroundCtx(func() context.Context {
-				return ctx
-			}),
-		),
+	lower := uint16(portRange[0])
+	mod := uint16(portRange[1] - portRange[0])
+
+	get = func() uint16 {
+		return lower + uint16(atomic.AddUint32(&nextPort, 1))%mod
 	}
 
-	cleanup = func() {
-		cancel()
-		wt.Cancel()
-		wt.Wait()
+	getStr = func() string {
+		return strconv.Itoa(int(get()))
 	}
 
 	return

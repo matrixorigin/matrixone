@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/google/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
@@ -36,7 +37,11 @@ func (_ Def) CmdExec(
 
 			execOne := func(c *TestCase) {
 
+				t0 := time.Now()
 				pt("RUN %v\n", c.ID)
+				defer func() {
+					pt("DONE %v in %v\n", c.ID, time.Since(t0))
+				}()
 
 				// read configs
 				content, err := os.ReadFile(c.ConfigPath)
@@ -45,7 +50,15 @@ func (_ Def) CmdExec(
 				ce(err)
 
 				// run
-				NewScope().Fork(defs...).Call(func(
+				NewScope().Fork(defs...).Fork(
+
+					// configs
+					func(
+						parallel Parallel,
+					) fz.ExecuteTimeout {
+						return fz.ExecuteTimeout(time.Minute * time.Duration(parallel))
+					},
+				).Call(func(
 					writeFile fz.WriteTestDataFile,
 					clearFile fz.ClearTestDataFile,
 					filePath fz.TestDataFilePath,

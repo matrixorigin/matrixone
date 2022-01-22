@@ -86,6 +86,20 @@ func (_ Def) ScriptBuiltins(
 			add(&model)
 		}),
 
+		"network_model": starlarkutil.MakeFunc("network_model", func(model NetworkModel) {
+			add(&model)
+		}),
+
+		"port_range": starlarkutil.MakeFunc("port_range", func(lower uint16, upper uint16) {
+			add(func() PortRange {
+				return PortRange{lower, upper}
+			})
+		}),
+
+		"debug_9p": starlarkutil.MakeFunc("debug_9p", func(debug Debug9P) {
+			add(&debug)
+		}),
+
 		//
 	}
 }

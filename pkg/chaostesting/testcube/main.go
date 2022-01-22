@@ -15,15 +15,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"os"
-	"os/signal"
 	"runtime/pprof"
 	"runtime/trace"
 	"time"
 
+	"github.com/felixge/fgprof"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
@@ -64,6 +63,18 @@ func main() {
 		go http.ListenAndServe(string(httpServerAddr), nil)
 	}
 
+	var enableFGProfile EnableFGProfile
+	scope.Assign(&enableFGProfile)
+	if enableFGProfile {
+		f, err := os.Create(fmt.Sprintf("fg-profile-%s", time.Now().Format("2006-01-02_15-04-05")))
+		ce(err)
+		end := fgprof.Start(f, "pprof")
+		defer func() {
+			ce(end())
+			ce(f.Close())
+		}()
+	}
+
 	var cmds Commands
 	scope.Assign(&cmds)
 	printCommands := func() {
@@ -86,14 +97,14 @@ func main() {
 		return
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
-
 	go func() {
 		fn(os.Args[2:])
-		cancel()
 	}()
 
-	<-ctx.Done()
+	var wt fz.RootWaitTree
+	scope.Assign(&wt)
+	<-wt.Ctx.Done()
+	wt.Wait()
 
 	var cleanup fz.Cleanup
 	scope.Assign(&cleanup)

@@ -15,36 +15,23 @@
 package fz
 
 import (
-	"context"
-	"os"
-	"os/signal"
-
-	"github.com/reusee/pr"
+	"testing"
 )
 
-type RootWaitTree struct {
-	*pr.WaitTree
-}
+func Test9P(t *testing.T) {
+	NewScope().Fork(func() TempDirModel {
+		return "9p"
+	}, func() IsTesting {
+		return true
+	}, func() NetworkModel {
+		return "tun"
+	}).Call(func(
+		dir TempDir,
+		cleanup Cleanup,
+	) {
+		defer cleanup()
 
-func (_ Def) RootWaitTree() (
-	wt RootWaitTree,
-	cleanup Cleanup,
-) {
+		testFS(t, string(dir))
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
-	wt = RootWaitTree{
-		WaitTree: pr.NewRootWaitTree(
-			pr.BackgroundCtx(func() context.Context {
-				return ctx
-			}),
-		),
-	}
-
-	cleanup = func() {
-		cancel()
-		wt.Cancel()
-		wt.Wait()
-	}
-
-	return
+	})
 }

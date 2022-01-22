@@ -35,3 +35,9 @@ type EnableRuntimeTrace bool
 func (_ Def) EnableRuntimeTrace() EnableRuntimeTrace {
 	return false
 }
+
+type EnableFGProfile bool
+
+func (_ Def) EnableFGProfile() EnableFGProfile {
+	return false
+}
