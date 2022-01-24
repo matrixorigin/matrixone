@@ -42,7 +42,7 @@ build: cmd/db-server/$(wildcard *.go)
 debug: cmd/db-server/$(wildcard *.go)
 	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary for debug])
-	go get github.com/matrixorigin/matrixcube
+	# go get github.com/matrixorigin/matrixcube
 	go mod tidy
 	go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 

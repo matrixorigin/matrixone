@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/BurntSushi/toml v0.4.1
 	github.com/RoaringBitmap/roaring v0.9.4
+	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
@@ -14,12 +15,13 @@ require (
 	github.com/golang/mock v1.3.1
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
-	github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1
+	github.com/matrixorigin/matrixcube v0.2.0
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/prashantv/gostub v1.1.0
 	github.com/sirupsen/logrus v1.8.1
+	github.com/smartystreets/assertions v1.2.0
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
@@ -42,6 +44,7 @@ require (
 	github.com/coreos/go-semver v0.3.0 // indirect
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/dustin/go-humanize v1.0.0 // indirect
 	github.com/form3tech-oss/jwt-go v3.2.3+incompatible // indirect
@@ -79,7 +82,6 @@ require (
 	github.com/prometheus/procfs v0.6.0 // indirect
 	github.com/rogpeppe/go-internal v1.6.1 // indirect
 	github.com/shirou/gopsutil/v3 v3.21.10 // indirect
-	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/soheilhy/cmux v0.1.5 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/tklauser/go-sysconf v0.3.9 // indirect

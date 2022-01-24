@@ -12,33 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package transformer
+package approxcd
 
-const (
-	Sum = iota
-	Avg
-	Max
-	Min
-	Count
-	StarCount
-	ApproxCountDistinct
+import (
+	hll "github.com/axiomhq/hyperloglog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var TransformerNames = [...]string{
-	Sum:                 "sum",
-	Avg:                 "avg",
-	Max:                 "max",
-	Min:                 "min",
-	Count:               "count",
-	StarCount:           "starcount",
-	ApproxCountDistinct: "approx_count_distinct",
-}
-
-var TransformerNamesMap map[string]int
-
-type Transformer struct {
-	Op    int
-	Ref   int
-	Name  string
-	Alias string
+type ApproxCountDistinctRing struct {
+	Typ types.Type
+	Sk  *hll.Sketch
 }

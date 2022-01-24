@@ -17,7 +17,9 @@ package transformer
 import (
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
@@ -57,10 +59,10 @@ func ReturnType(op int, typ types.T) types.T {
 		return typ
 	case Sum:
 		return sumReturnTypes[typ]
-	case Count:
+	case Count, StarCount:
 		return types.T_int64
-	case StarCount:
-		return types.T_int64
+	case ApproxCountDistinct:
+		return types.T_uint64
 	}
 	return 0
 }
@@ -79,6 +81,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return count.NewCount(typ), nil
 	case StarCount:
 		return starcount.NewCount(typ), nil
+	case ApproxCountDistinct:
+		return approxcd.NewApproxCountDistinct(typ), nil
 	}
 	return nil, nil
 }

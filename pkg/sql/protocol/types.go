@@ -38,6 +38,7 @@ const (
 	AvgRing
 	CountRing
 	StarCountRing
+	ApproxCountDistinctRing
 	// Max
 	MaxInt8Ring
 	MaxInt32Ring
@@ -81,7 +82,7 @@ type OffsetArgument struct {
 }
 
 type LimitArgument struct {
-	Seen   uint64
+	Seen  uint64
 	Limit uint64
 }
 
@@ -132,14 +133,14 @@ type Transformer struct {
 
 type TransformArgument struct {
 	IsNull      bool
-	Typ			int
-	IsMerge 	bool
-	FreeVars 	[]string
+	Typ         int
+	IsMerge     bool
+	FreeVars    []string
 	HasRestrict bool
-	Restrict 	RestrictArgument
+	Restrict    RestrictArgument
 	HasProj     bool
-	Projection 	ProjectionArgument
-	BoundVars 	[]Transformer
+	Projection  ProjectionArgument
+	BoundVars   []Transformer
 }
 
 func TransferTransformArg(arg *transform.Argument) TransformArgument {
@@ -158,7 +159,7 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		hasProjection = true
 		pa = ProjectionArgument{
 			Rs: arg.Projection.Rs,
-			As:	arg.Projection.As,
+			As: arg.Projection.As,
 		}
 	}
 	var bv []Transformer
@@ -172,19 +173,19 @@ func TransferTransformArg(arg *transform.Argument) TransformArgument {
 		}
 	}
 	return TransformArgument{
-		IsNull: false,
-		Typ: arg.Typ,
-		IsMerge: arg.IsMerge,
-		FreeVars: arg.FreeVars,
+		IsNull:      false,
+		Typ:         arg.Typ,
+		IsMerge:     arg.IsMerge,
+		FreeVars:    arg.FreeVars,
 		HasRestrict: hasRestrict,
-		Restrict: ra,
-		HasProj: hasProjection,
-		Projection: pa,
-		BoundVars: bv,
+		Restrict:    ra,
+		HasProj:     hasProjection,
+		Projection:  pa,
+		BoundVars:   bv,
 	}
 }
 
-func UntransferTransformArg(arg TransformArgument) *transform.Argument{
+func UntransferTransformArg(arg TransformArgument) *transform.Argument {
 	if arg.IsNull {
 		return nil
 	}
@@ -212,24 +213,24 @@ func UntransferTransformArg(arg TransformArgument) *transform.Argument{
 		}
 	}
 	return &transform.Argument{
-		Typ: arg.Typ,
-		IsMerge: arg.IsMerge,
-		FreeVars: arg.FreeVars,
-		Restrict: ra,
+		Typ:        arg.Typ,
+		IsMerge:    arg.IsMerge,
+		FreeVars:   arg.FreeVars,
+		Restrict:   ra,
 		Projection: pa,
-		BoundVars: bv,
+		BoundVars:  bv,
 	}
 }
 
 type TimesArgument struct {
 	IsBare   bool
-	R	     string
+	R        string
 	Rvars    []string
 	Ss       []string
 	Svars    []string
 	FreeVars []string
 	VarsMap  map[string]int
-	Arg		 TransformArgument
+	Arg      TransformArgument
 }
 
 type UntransformArgument struct {
@@ -246,14 +247,14 @@ type Source struct {
 }
 
 type Node struct {
-	Id	  string
-	Addr  string
+	Id   string
+	Addr string
 }
 
 type Scope struct {
-	Magic 	  		int
-	DataSource      Source
-	PreScopes 		[]Scope
-	NodeInfo 		Node
-	Ins		  		vm.Instructions
+	Magic      int
+	DataSource Source
+	PreScopes  []Scope
+	NodeInfo   Node
+	Ins        vm.Instructions
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
@@ -1076,6 +1077,16 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *approxcd.ApproxCountDistinctRing:
+		buf.WriteByte(ApproxCountDistinctRing)
+		sk_buf, err := v.Sk.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(sk_buf))))
+		buf.Write(sk_buf)
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *max.Int8Ring:
 		buf.WriteByte(MaxInt8Ring)
 		// Ns
@@ -1653,6 +1664,20 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		return r, data, nil
+	case ApproxCountDistinctRing:
+		data = data[1:]
+		r := approxcd.NewApproxCountDistinct(types.Type{})
+		// hll sketch
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := r.Sk.UnmarshalBinary(data[:n]); err != nil {
+			return nil, data, err
+		}
+		data = data[n:]
+		// Typ
+		r.Typ = encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
 		return r, data, nil
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
@@ -2399,6 +2424,22 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		return r, data, nil
+	case ApproxCountDistinctRing:
+		// For ApproxCountDistinctRing, there is no differences between Decode and DecodeWithProcess,
+		// because NewApproxCountDistinct allocates memory anyway for now
+		data = data[1:]
+		r := approxcd.NewApproxCountDistinct(types.Type{})
+		// hll sketch
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := r.Sk.UnmarshalBinary(data[:n]); err != nil {
+			return nil, data, err
+		}
+		data = data[n:]
+		// Typ
+		r.Typ = encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
 		return r, data, nil
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
