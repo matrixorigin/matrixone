@@ -29,7 +29,7 @@ jobs:
             ${{ runner.os }}-buildx
     
       # - name: Login to Dockerhub
-      #   uses: docker/login-action@v1
+      #   uses:  docker/login-action@v1
       #   with: 
       #     username: ${{ secrets.DOCKERHUB_USERNAME }}
       #     password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -46,7 +46,7 @@ jobs:
       - name: Build the docker-compose stack
         run: docker-compose -f ./optools/test/docker-compose.yaml up -d
 
-      - name: Check node0 log
+      - name: Check Cluster log
         run: docker logs node0
 
       - name: Check running containers
