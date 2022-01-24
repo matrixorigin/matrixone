@@ -111,6 +111,36 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 		if !isLogicalBinaryOp(t.Op) {
 			return tree.NewComparisonExpr(tree.NOT_EQUAL, t, tree.NewNumVal(constant.MakeInt64(0), "0", false))
 		}
+		// rewrite in operator
+		// where a in (1, 2)		----> where a = 1 or a = 2
+		// where a not in (1, 2)	----> where a != 1 and a != 2
+	case *tree.ComparisonExpr:
+		if t.Op == tree.IN {
+			if tuple, ok := t.Right.(*tree.Tuple); ok {
+				if len(tuple.Exprs) == 1 {
+					return tree.NewComparisonExpr(tree.EQUAL, t.Left, tuple.Exprs[0])
+				} else {
+					left := tree.NewComparisonExpr(tree.EQUAL, t.Left, tuple.Exprs[0])
+					right := tree.NewComparisonExpr(tree.IN, t.Left, &tree.Tuple{
+						Exprs: tuple.Exprs[1:],
+					})
+					return tree.NewOrExpr(left, rewriteFilterCondition(right))
+				}
+			}
+		}
+		if t.Op == tree.NOT_IN {
+			if tuple, ok := t.Right.(*tree.Tuple); ok {
+				if len(tuple.Exprs) == 1 {
+					return tree.NewComparisonExpr(tree.NOT_EQUAL, t.Left, tuple.Exprs[0])
+				} else {
+					left := tree.NewComparisonExpr(tree.NOT_EQUAL, t.Left, tuple.Exprs[0])
+					right := tree.NewComparisonExpr(tree.NOT_IN, t.Left, &tree.Tuple{
+						Exprs: tuple.Exprs[1:],
+					})
+					return tree.NewAndExpr(left, rewriteFilterCondition(right))
+				}
+			}
+		}
 	}
 	return expr
 }
