@@ -17,7 +17,7 @@ services:
     volumes:
       - $PWD/optools/test/config0/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    tty: true
+    # tty: true
     networks:
       monet:
         ipv4_address: 172.19.0.2
@@ -38,7 +38,7 @@ services:
     volumes:
       - $PWD/optools/test/config1/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    tty: true
+    # tty: true
     networks:
       monet:
         ipv4_address: 172.19.0.3
@@ -59,22 +59,11 @@ services:
     volumes:
       - $PWD/optools/test/config2/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    tty: true
+    # tty: true   
     networks:
       monet:
         ipv4_address: 172.19.0.4
 
-  test:
-    container_name: test
-    image: wanglei1995/mysql-tester:latest
-    command:  >
-      sh -c "sleep 20s &&
-            /usr/local/bin/dumb-init /mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111"
-    tty: true
-    networks:
-      monet:
-        ipv4_address: 172.19.0.5
-       
 networks:
   monet:
     driver: bridge
