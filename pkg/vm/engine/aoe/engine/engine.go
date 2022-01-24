@@ -15,21 +15,30 @@
 package engine
 
 import (
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"strings"
-	"time"
 )
 
-func New(c *catalog.Catalog) *aoeEngine {
+func New(c *catalog.Catalog, cfg *EngineConfig) *aoeEngine {
+	if cfg.ReaderBufferCount == 0 {
+		cfg.ReaderBufferCount = 4
+	}
+
+	if cfg.QueueMaxReaderCount == 0 {
+		cfg.QueueMaxReaderCount = 4
+	}
 	//1. Parse config
 	//2. New Storage
 	//3. New Catalog
 	return &aoeEngine{
 		catalog: c,
+		config: cfg,
 	}
 }
 
@@ -105,5 +114,6 @@ func (e *aoeEngine) Database(name string) (engine.Database, error) {
 		id:      db.Id,
 		typ:     db.Type,
 		catalog: e.catalog,
+		cfg: e.config,
 	}, nil
 }

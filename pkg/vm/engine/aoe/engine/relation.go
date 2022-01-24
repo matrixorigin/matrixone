@@ -18,16 +18,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"math/rand"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
+
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 //Close closes the relation. It closes all relations of the tablet in the aoe store.
@@ -137,45 +139,44 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 }
 
 func (r *relation) NewReader(num int) []engine.Reader {
-	readers := make([]engine.Reader, num)
+	iodepth := num / int(r.cfg.QueueMaxReaderCount)
+	if num % int(r.cfg.QueueMaxReaderCount) > 0 {
+		iodepth++
+	}
+	readStore := &store{
+		iodepth: iodepth,
+		start:   false,
+		readers: make([]engine.Reader, num),
+		rel:     r,
+	}
+	readStore.rhs = make([]chan *batData, readStore.iodepth)
+	readStore.chs = make([]chan *batData, readStore.iodepth)
 	var i int
 	logutil.Infof("segments is %d", len(r.segments))
 	if len(r.segments) == 0 {
 		for i = 0; i < num; i++ {
-			readers[i] = &aoeReader{blocks: nil}
+			readStore.readers[i] = &aoeReader{reader: nil}
 		}
-		return readers
+		return readStore.readers
 	}
-	blockNum := 0
 	blocks := make([]aoe.Block, 0)
 	for _, sid := range r.segments {
 		segment := r.Segment(sid)
 		ids := segment.Blocks()
-		blockNum += len(ids)
 		for _, id := range ids {
 			blocks = append(blocks, segment.Block(id))
 		}
 	}
-	mod := blockNum / num
-	if mod == 0 {
-		mod = 1
+	readStore.SetBlocks(blocks)
+	for i := 0; i < num; i++ {
+		workerid := i / int(r.cfg.QueueMaxReaderCount)
+		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid)}
 	}
-	for i = 0; i < num; i++ {
-		if i == num-1 || i == blockNum-1 {
-			readers[i] = &aoeReader{
-				blocks: blocks[i*mod:],
-			}
-			break
-		}
-		readers[i] = &aoeReader{
-			blocks: blocks[i*mod : (i+1)*mod],
-		}
+	for i := 0; i < readStore.iodepth; i++ {
+		readStore.rhs[i] = make(chan *batData,
+			int(r.cfg.QueueMaxReaderCount)*int(r.cfg.ReaderBufferCount))
+		readStore.chs[i] = make(chan *batData,
+			int(r.cfg.QueueMaxReaderCount)*int(r.cfg.ReaderBufferCount))
 	}
-	i++
-	if i < num {
-		for j := i; j < num; j++ {
-			readers[j] = &aoeReader{blocks: nil}
-		}
-	}
-	return readers
+	return readStore.readers
 }
