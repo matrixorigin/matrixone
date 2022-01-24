@@ -1,0 +1,157 @@
+rootpassword = ""
+dumpdatabase = "default"
+port = 6001
+host = "0.0.0.0"
+sendRow = false
+dumpEnv = false
+hostMmuLimitation = 1099511627776
+guestMmuLimitation = 1099511627776
+mempoolMaxSize = 1099511627776
+mempoolFactor = 8
+processLimitationSize = 42949672960
+processLimitationBatchRows = 42949672960
+processLimitationBatchSize = 0
+processLimitationPartitionRows = 42949672960
+countOfRowsPerSendingToClient = 1000
+periodOfEpochTimer = 5
+periodOfPersistence = 20
+periodOfDDLDeleteTimer = 20
+timeoutOfHeartbeat = 20
+rejectWhenHeartbeatFromPDLeaderIsTimeout = false
+enableEpochLogging = false
+recordTimeElapsedOfSqlRequest = true
+nodeID = 0
+storePath = "./store"
+lengthOfQueryPrinted = 50
+batchSizeInLoadData = 40000
+loadDataConcurrencyCount = 16
+cubeLogLevel = "debug"
+enableProfileGetDataFromPipeline = false
+maxBytesInOutbufToFlush = 1024
+cubeMaxEntriesBytes = 314572800
+pre-allocated-group-num = 20
+max-group-num           = 0
+level = "debug" 
+format = "console"
+filename = "" 
+max-size = 512
+max-days = 0
+max-backups = 1
+addr-raft = "0.0.0.0:10000"
+addr-advertise-raft = "172.19.0.2:10000"
+addr-client = "0.0.0.0:20000"
+addr-advertise-client = "172.19.0.2:20000"
+dir-deploy = ""
+version = ""
+githash = ""
+capacity = 0
+use-memory-as-storage = false
+shard-groups = 2
+[replication]
+max-peer-down-time = "30m"
+shard-split-check-duration = "30s"
+shard-state-check-duration = "1m"
+compact-log-check-duration = "60s"
+disable-shard-split = false
+allow-remove-leader = false
+shard-capacity-bytes = "96MB"
+shard-split-check-bytes = "64MB"
+
+[snapshot]
+max-concurrency-snap-chunks = 8
+snap-chunk-size = "4MB"
+
+[raft]
+enable-pre-vote = true
+tick-interval = "1s"
+heartbeat-ticks = 2
+election-timeout-ticks = 10
+max-size-per-msg = 0
+max-inflight-msgs = 512
+max-entry-bytes = 314572800
+send-raft-batch-size = 64
+[raft.raft-log]
+disable-sync = false
+compact-duration = "30s"
+compact-threshold = 256
+max-allow-transfer-lag = 2
+ForceCompactCount = 0
+ForceCompactBytes = 0
+CompactProtectLag = 0
+
+[worker]
+raft-apply-worker = 32
+raft-msg-worker = 8
+raft-event-worker = 32
+
+
+[prophet]
+name = "node0"
+rpc-addr = "0.0.0.0:30000"
+rpc-advertise-addr = "172.19.0.2:30000"
+rpc-timeout = "10s"
+storage-node = true
+external-etcd = ["", "", ""]
+
+[prophet.embed-etcd]
+client-urls = "http://0.0.0.0:40000"
+peer-urls = "http://0.0.0.0:50000"
+advertise-client-urls = "http://172.19.0.2:40000"
+advertise-peer-urls = "http://172.19.0.2:50000"
+initial-cluster = "node0=http://node0:50000,node1=http://node1:50000,node2=http://node2:50000"
+
+[prophet.schedule]
+max-snapshot-count = 1
+max-pending-peer-count = 16
+max-merge-resource-size = 0
+max-merge-resource-keys = 0
+split-merge-interval = "0s"
+enable-one-way-merge = false
+enable-cross-table-merge = false
+patrol-resource-interval = "100ms"
+max-container-down-time = "30m"
+leader-schedule-limit = 4
+leader-schedule-policy = "count"
+resource-schedule-limit = 2048
+replica-schedule-limit = 64
+merge-schedule-limit = 0
+hot-resource-schedule-limit = 4
+hot-resource-cache-hits-threshold = 3
+tolerant-size-ratio = 0.0
+low-space-ratio = 0.8
+high-space-ratio = 0.7
+resource-score-formula-version = ""
+scheduler-max-waiting-operator = 5
+enable-remove-down-replica = true
+enable-replace-offline-replica = true
+enable-make-up-replica = true
+enable-remove-extra-replica = true
+enable-location-replacement = true
+enable-debug-metrics = false
+enable-joint-consensus = true
+container-limit-mode = ""
+
+[prophet.replication]
+max-replicas = 1
+strictly-match-label = true
+enable-placement-rules = true
+isolation-level = "rack"
+
+[metric]
+addr = ""
+interval = 0
+job = ""
+instance = ""
+
+[meta.conf]
+block-max-rows = 160000
+segment-max-blocks = 40
+
+[scheduler-cfg]
+block-writers = 8
+segment-writers = 4
+
+[cache-cfg]
+index-cache-size = 134217728        # 128M
+insert-cache-size = 4294967296      # 4G
+data-cache-size = 4294967296        # 4G

@@ -7,12 +7,12 @@ y.go
 .vscode
 *.iml
 tags
+system_vars_config.toml
 coverage.txt
 vendor/
 gen_config
 main
 mo-server
-*.toml
 cube*/
 store/
 pkg/catalog/test/
