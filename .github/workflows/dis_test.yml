@@ -37,7 +37,8 @@ jobs:
       - name: Build and Push Image
         uses: docker/build-push-action@v2
         with:
-          context: ./optools/image_builder
+          context: .
+          file: optools/test/Dockerfile 
           push: false
           tags: matrixorigin/matrixone:test
           cache-from: type=local,src=/tmp/.buildx-cache
@@ -50,7 +51,7 @@ jobs:
         run: docker logs node0
 
       - name: Check running containers
-        run: docker ps -a 
+        run: docker ps -a
 
       - name: Run test suite
         run: docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
