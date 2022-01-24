@@ -93,7 +93,7 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 		}
 	}
 	for j := 0; j < len(workers); j++ {
-		workers[j].bufferCount = len(s.readers) / len(workers) * int(s.rel.cfg.ReaderBufferCount)
+		workers[j].bufferCount = len(s.readers) / s.iodepth * int(s.rel.cfg.ReaderBufferCount)
 		go workers[j].Start(refCount, attrs)
 	}
 }
