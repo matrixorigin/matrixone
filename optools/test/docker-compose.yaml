@@ -4,8 +4,8 @@ services:
   node0:
     container_name: node0
     build:
-      context: .
-      dockerfile: optools/test/Dockerfile
+      context: ../../
+      dockerfile: ./optools/test/Dockerfile
     ports:
       - "10000"
       - "20000"
@@ -25,8 +25,8 @@ services:
   node1:
     container_name: node1
     build:
-      context: .
-      dockerfile: optools/test/Dockerfile
+      context: ../../
+      dockerfile: ./optools/test/Dockerfile
     ports:
       - "10000"
       - "20000"
@@ -46,8 +46,8 @@ services:
   node2:
     container_name: node2
     build:
-      context: .
-      dockerfile: optools/test/Dockerfile
+      context: ../../
+      dockerfile: ./optools/test/Dockerfile
     ports:
       - "40000"
       - "50000"
