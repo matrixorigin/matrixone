@@ -63,6 +63,14 @@ services:
     networks:
       monet:
         ipv4_address: 172.19.0.4
+
+  test:
+    container_name: test
+    image: wanglei1995/mysql-tester:latest
+    command:  >
+      sh -c "sleep 20s &&
+            /usr/local/bin/dumb-init /mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111"
+       
 networks:
   monet:
     driver: bridge

@@ -45,16 +45,13 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
         
       - name: Build the docker-compose stack
-        run: docker-compose -f ./optools/test/docker-compose.yaml up -d
-
-      - name: Check Cluster log
-        run: docker logs node0
+        run: docker-compose -f ./optools/test/docker-compose.yaml up -d && docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
 
       - name: Check running containers
         run: docker ps -a
 
-      - name: Run test suite
-        run: docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
+      # - name: Run test suite
+      #   run: docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
 
       - name: Move cache
         run: |
