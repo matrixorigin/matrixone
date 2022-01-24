@@ -139,8 +139,12 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 }
 
 func (r *relation) NewReader(num int) []engine.Reader {
+	iodepth := num / int(r.cfg.QueueMaxReaderCount)
+	if iodepth == 0 {
+		iodepth = 1
+	}
 	readStore := &store{
-		iodepth: num / int(r.cfg.QueueMaxReaderCount),
+		iodepth: iodepth,
 		start:   false,
 		readers: make([]engine.Reader, num),
 		rel:     r,
