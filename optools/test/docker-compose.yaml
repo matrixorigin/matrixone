@@ -3,7 +3,9 @@ version: '3.9'
 services:
   node0:
     container_name: node0
-    image: matrixorigin/matrixone:test
+    build:
+      context: .
+      dockerfile: optools/test/Dockerfile
     ports:
       - "10000"
       - "20000"
@@ -22,7 +24,9 @@ services:
 
   node1:
     container_name: node1
-    image: matrixorigin/matrixone:test
+    build:
+      context: .
+      dockerfile: optools/test/Dockerfile
     ports:
       - "10000"
       - "20000"
@@ -41,7 +45,9 @@ services:
 
   node2:
     container_name: node2
-    image: matrixorigin/matrixone:test
+    build:
+      context: .
+      dockerfile: optools/test/Dockerfile
     ports:
       - "40000"
       - "50000"
