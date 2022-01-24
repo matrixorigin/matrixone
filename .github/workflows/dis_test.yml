@@ -25,7 +25,7 @@ jobs:
         with: 
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-buildx-${{ github.sha }}
-          restore-key: |
+          restore-keys: |
             ${{ runner.os }}-buildx
     
       # - name: Login to Dockerhub
