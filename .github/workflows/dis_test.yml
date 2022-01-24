@@ -50,8 +50,8 @@ jobs:
       - name: Check running containers
         run: docker ps -a
 
-      # - name: Run test suite
-      #   run: docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
+      - name: Run test suite
+        run: docker run -it --rm --name mysql-tester --network docker-compose_monet wanglei1995/mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111
 
       - name: Move cache
         run: |
