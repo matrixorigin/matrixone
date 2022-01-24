@@ -32,8 +32,8 @@ type aoeEngine struct {
 }
 
 type EngineConfig struct {
-	ReaderBufferCount   uint64 `toml:"reader_buffer_count"`    //the number of shards allocated in initiation
-	QueueMaxReaderCount uint64 `toml:"queue_max_reader_count"` //the max number of shards
+	ReaderBufferCount   uint64 `toml:"reader_buffer_count"`    // The number of buffers allocated by each reader
+	QueueMaxReaderCount uint64 `toml:"queue_max_reader_count"` // The number of readers allocated per queue
 }
 
 type SegmentInfo struct {
