@@ -70,6 +70,10 @@ services:
     command:  >
       sh -c "sleep 20s &&
             /usr/local/bin/dumb-init /mysql-tester -host 172.19.0.2  -port 6001 -user dump -passwd 111"
+    tty: true
+    networks:
+      monet:
+        ipv4_address: 172.19.0.5
        
 networks:
   monet:
