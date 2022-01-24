@@ -17,7 +17,7 @@ services:
     volumes:
       - $PWD/optools/test/config0/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    # tty: true
+    tty: true
     networks:
       monet:
         ipv4_address: 172.19.0.2
@@ -38,7 +38,7 @@ services:
     volumes:
       - $PWD/optools/test/config1/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    # tty: true
+    tty: true
     networks:
       monet:
         ipv4_address: 172.19.0.3
@@ -59,7 +59,7 @@ services:
     volumes:
       - $PWD/optools/test/config2/config.toml:/opt/matrixone/system_vars_config.toml:ro
     restart: on-failure
-    # tty: true   
+    tty: true    
     networks:
       monet:
         ipv4_address: 172.19.0.4
