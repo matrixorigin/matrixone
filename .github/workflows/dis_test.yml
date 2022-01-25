@@ -54,7 +54,7 @@ jobs:
         run:  docker network list
   
       - name: Run test suite
-        run: docker run --tty --rm --name mysql-tester --network test_monet wanglei1995/mysql-tester -host 0.0.0.0  -port 6001 -user dump -passwd 111
+        run: docker run --tty --rm --name mysql-tester --network test_monet wanglei1995/mysql-tester -host 172.19.0.2 -port 6001 -user dump -passwd 111
 
       - name: Move cache
         run: |

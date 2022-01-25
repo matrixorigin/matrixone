@@ -63,6 +63,7 @@ services:
     networks:
       monet:
         ipv4_address: 172.19.0.4
+
 networks:
   monet:
     driver: bridge
