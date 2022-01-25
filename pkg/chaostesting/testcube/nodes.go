@@ -37,15 +37,15 @@ func (_ Def2) Nodes(
 	tempDir fz.TempDir,
 	numNodes fz.NumNodes,
 	logger fz.Logger,
-	listenHost ListenHost,
-	randPort RandPort,
+	netHost fz.NetworkHost,
+	getPort fz.GetPortStr,
 ) (nodes fz.Nodes) {
 
-	host := string(listenHost)
+	host := string(netHost)
 
 	var endpoints []string
 	for i := fz.NumNodes(0); i < numNodes; i++ {
-		endpoints = append(endpoints, "http://"+net.JoinHostPort(host, randPort()))
+		endpoints = append(endpoints, "http://"+net.JoinHostPort(host, getPort()))
 	}
 
 	for nodeID, conf := range configs {
@@ -59,18 +59,18 @@ func (_ Def2) Nodes(
 		fs := vfs.NewMemFS()
 		conf.FS = fs
 
-		conf.RaftAddr = net.JoinHostPort(host, randPort())
-		conf.ClientAddr = net.JoinHostPort(host, randPort())
+		conf.RaftAddr = net.JoinHostPort(host, getPort())
+		conf.ClientAddr = net.JoinHostPort(host, getPort())
 		conf.DataPath = filepath.Join(string(tempDir), fmt.Sprintf("data-%d", nodeID))
 		conf.Logger = logger
 
 		conf.Prophet.DataDir = filepath.Join(string(tempDir), fmt.Sprintf("prophet-%d", nodeID))
-		conf.Prophet.RPCAddr = net.JoinHostPort(host, randPort())
+		conf.Prophet.RPCAddr = net.JoinHostPort(host, getPort())
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]
 		}
 		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
-		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, randPort())
+		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, getPort())
 
 		// pebble
 		//kvStorage, err := pebble.NewStorage(

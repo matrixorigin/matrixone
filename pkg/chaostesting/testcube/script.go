@@ -27,16 +27,6 @@ func (_ Def) ScriptBuiltins(
 			add(&n)
 		}),
 
-		"listen_host": starlarkutil.MakeFunc("listen_host", func(host ListenHost) {
-			add(&host)
-		}),
-
-		"port_range": starlarkutil.MakeFunc("port_range", func(lower int64, upper int64) {
-			add(func() PortRange {
-				return PortRange{lower, upper}
-			})
-		}),
-
 		"timeout_report_threshold": starlarkutil.MakeFunc("timeout_report_threshold", func(n TimeoutReportThreshold) {
 			add(&n)
 		}),
@@ -53,8 +43,8 @@ func (_ Def) ScriptBuiltins(
 			add(&enable)
 		}),
 
-		"network_model": starlarkutil.MakeFunc("network_model", func(model NetworkModel) {
-			add(&model)
+		"enable_fg_profile": starlarkutil.MakeFunc("enable_fg_profile", func(enable EnableFGProfile) {
+			add(&enable)
 		}),
 	}
 }

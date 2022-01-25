@@ -24,7 +24,8 @@ type TempDir string
 func (_ Def) TempDir(
 	logger Logger,
 	model TempDirModel,
-	setup SetupFuse,
+	setupFuse SetupFuse,
+	setup9P Setup9P,
 ) (
 	dir TempDir,
 	cleanup Cleanup,
@@ -44,7 +45,19 @@ func (_ Def) TempDir(
 	case "fuse":
 		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
 		ce(err)
-		err, end := setup(d)
+		err, end := setupFuse(d)
+		ce(err)
+
+		dir = TempDir(d)
+		cleanup = func() {
+			ce(end())
+			ce(os.RemoveAll(d))
+		}
+
+	case "9p":
+		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+		ce(err)
+		err, end := setup9P(d)
 		ce(err)
 
 		dir = TempDir(d)

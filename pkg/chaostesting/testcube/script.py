@@ -1,10 +1,5 @@
 # number of parallel test cases running in `run` command
-parallel(2)
-
-# host address for cube to listen on
-# this setting overwrites the use_dummy_interface setting
-#listen_host("192.168.168.168")
-#listen_host("localhost")
+parallel(1)
 
 # port range for cube to use
 port_range(40000, 50000)
@@ -33,5 +28,12 @@ network_model("tun")
 # temp dir model
 # os: use os.TempDir()
 # fuse: use in-memory fuse fs
-temp_dir_model("fuse")
+# 9p: use 9p fs
+temp_dir_model("9p")
+
+# enable fgprof github.com/felixge/fgprof
+enable_fg_profile(False)
+
+# enable 9p debugging
+debug_9p(True)
 

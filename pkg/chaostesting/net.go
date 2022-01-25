@@ -12,45 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package fz
 
 import (
 	"encoding/binary"
 	"math/rand"
 	"net"
 	"runtime"
-	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/google/uuid"
-	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/songgao/water"
 	"github.com/vishvananda/netlink"
 )
-
-type PortRange [2]int64
-
-func (_ Def) PortRange() PortRange {
-	return PortRange{20000, 50000}
-}
-
-type RandPort func() string
-
-var nextPort int64
-
-func (_ Def) RandPort(
-	portRange PortRange,
-) RandPort {
-	lower := int64(portRange[0])
-	mod := int64(portRange[1] - portRange[0])
-	return func() (ret string) {
-		return strconv.FormatInt(
-			lower+atomic.AddInt64(&nextPort, 1)%mod,
-			10,
-		)
-	}
-}
 
 type NetworkModel string
 
@@ -58,21 +32,21 @@ func (_ Def) NetworkModel() NetworkModel {
 	return "localhost"
 }
 
-type ListenHost string
+type NetworkHost string
 
-func (_ Def) ListenHost(
+func (_ Def) NetworkHost(
 	id uuid.UUID,
 	model NetworkModel,
-	wt fz.RootWaitTree,
+	wt RootWaitTree,
 ) (
-	host ListenHost,
-	cleanup fz.Cleanup,
+	host NetworkHost,
+	cleanup Cleanup,
 ) {
 
 	switch model {
 
 	case "localhost":
-		host = "localhost"
+		host = "127.0.0.1"
 
 	case "dummy":
 		// linux only
@@ -104,7 +78,7 @@ func (_ Def) ListenHost(
 		ce(err)
 		ce(netlink.AddrAdd(link, addr))
 
-		host = ListenHost(ip.String())
+		host = NetworkHost(ip.String())
 
 		cleanup = func() {
 			ce(netlink.LinkDel(link))
@@ -153,7 +127,7 @@ func (_ Def) ListenHost(
 			}
 		})
 
-		host = ListenHost(ip.String())
+		host = NetworkHost(ip.String())
 
 	default:
 		panic("unknown network model")
