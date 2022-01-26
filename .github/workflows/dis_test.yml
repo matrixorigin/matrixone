@@ -37,9 +37,11 @@ jobs:
           context: .
           file: optools/test/Dockerfile
           push: false
+          load: true
           tags: matrixorigin/matrixone:dt
+          builder: ${{ steps.buildx.outputs.name }}
           cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache-new
+          cache-to: type=local,dest=/tmp/.buildx-cache
         
       - name: Build the docker-compose stack
         env:
