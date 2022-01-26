@@ -47,7 +47,7 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-        run: docker-compose -f ./optools/test/docker-compose.yaml up  --no-build
+        run: docker-compose -f ./optools/test/docker-compose.yaml up -d --no-build
 
       - name: Check running containers
         run: docker ps -a
