@@ -225,7 +225,7 @@ func init() {
 				if err != nil {
 					return nil, err
 				}
-				results := encoding.DecodeFloat32Slice(resultVector.Data)
+				results := encoding.DecodeFloat32Slice(resultVector.Data)   // decode the vector's data to float32 type
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)                         // the new vector's nulls are the same as the original vector
