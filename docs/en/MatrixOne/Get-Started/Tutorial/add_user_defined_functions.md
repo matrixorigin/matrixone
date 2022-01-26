@@ -7,7 +7,7 @@ In this guide, we use the function abs(get the absolute value) as an example.
 
 Step 1: register function
 
-In MatrixOne, we don't distinguish between operators and functions. In our code repository, the file pkg/builtin/types.go register builtin functions as operators and we assign each operator a distinct integer number. To add a new function abs, add a new const Abs in the const declaration.
+MatrixOne doesn't distinguish between operators and functions. In our code repository, the file pkg/builtin/types.go register builtin functions as operators and we assign each operator a distinct integer number. To add a new function abs, add a new const Abs in the const declaration.
 
 ```go
 const (
