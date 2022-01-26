@@ -11,6 +11,7 @@ on:
 jobs: 
   build:
     runs-on: ubuntu-latest
+    name: Matrixone distributed testing
     timeout-minutes: 30
 
     steps:
@@ -36,7 +37,7 @@ jobs:
           context: .
           file: optools/test/Dockerfile
           push: false
-          tags: matrixorigin/matrixone:test
+          tags: matrixorigin/matrixone:dt
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
         
@@ -44,7 +45,7 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-        run: docker-compose -f ./optools/test/docker-compose.yaml up -d
+        run: docker-compose -f ./optools/test/docker-compose.yaml up  --no-build
 
       - name: Check running containers
         run: docker ps -a

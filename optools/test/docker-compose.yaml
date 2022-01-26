@@ -6,6 +6,7 @@ services:
     build:
       context: ../../
       dockerfile: ./optools/test/Dockerfile
+    image: matrixorigin/matrixone:dt
     ports:
       - "10000"
       - "20000"
@@ -28,6 +29,7 @@ services:
     build:
       context: ../../
       dockerfile: ./optools/test/Dockerfile
+    image: matrixorigin/matrixone:dt
     ports:
       - "10000"
       - "20000"
@@ -50,6 +52,7 @@ services:
     build:
       context: ../../
       dockerfile: ./optools/test/Dockerfile
+    image: matrixorigin/matrixone:dt
     ports:
       - "40000"
       - "50000"
