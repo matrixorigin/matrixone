@@ -21,8 +21,6 @@ const (
 
 In the directory pkg/builtin/unary, create a new go file abs.go.
 
-This abs.go file will handle function name registration, declare all the  parameters this function accepts, the different return types when given different parameters, the stringification method for this function, the and the function calling
-
 This abs.go file has the following functionalities:
 
  	1. function name registration
