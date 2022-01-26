@@ -262,7 +262,7 @@ func init() {
 Step 2: Implement Abs function
 
 In MatrixOne, We put all of our builtin function definition code in the vectorize directory, to implement abs functions, first we need to create a subdirectory abs in this vectorize directory.
-
+In this fresh abs directory, create a file abs.go, the file where our abs function implementation code goes.
 For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruction to compute the absolute value and hence boost our function's performance, to differentiate function implementations for different cpu architectures,  we declare our pure go version of abs function this way:
 
 ```go
