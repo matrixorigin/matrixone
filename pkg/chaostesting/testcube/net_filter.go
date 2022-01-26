@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fz
+package main
 
 import (
-	"testing"
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
 
-func Test9P(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "9p"
-	}, func() IsTesting {
-		return true
-	}, func() NetworkModel {
-		return "tun"
-	}, func() Debug9P {
-		return false
-	}).Call(func(
-		dir TempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
+func (_ Def2) FilterPacket() fz.FilterPacket {
+	return func(packet []byte) []byte {
 
-		testFS(t, string(dir))
+		var ip4 layers.IPv4
+		var eth layers.Ethernet
+		parser := gopacket.NewDecodingLayerParser(layers.LayerTypeEthernet, &eth, &ip4)
+		var decoded []gopacket.LayerType
+		ce(parser.DecodeLayers(packet, &decoded))
+		for _, layerType := range decoded {
+			switch layerType {
+			case layers.LayerTypeIPv4:
+				pt("%+v\n", ip4)
+			}
+		}
 
-	})
+		return packet
+	}
 }

@@ -5,14 +5,17 @@ go 1.18
 require (
 	github.com/fatih/color v1.7.0
 	github.com/felixge/fgprof v0.9.2
+	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.3.0
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220112183258-f57e95bda82d
+	github.com/hugelgupf/p9 v0.2.0
 	github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c
 	github.com/reusee/dscope v0.0.0-20220119032332-45ce3e0474b3
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20211229022642-c56103cb09e8
 	github.com/reusee/starlarkutil v0.0.0-20211219090033-2a5093890e47
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
+	github.com/u-root/uio v0.0.0-20210528114334-82958018845c
 	github.com/vishvananda/netlink v1.1.0
 	go.starlark.net v0.0.0-20211203141949-70c0e40ae128
 	go.uber.org/zap v1.18.1
@@ -22,10 +25,8 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c // indirect
 	github.com/emicklei/dot v0.16.0 // indirect
 	github.com/google/pprof v0.0.0-20211214055906-6f57359322fd // indirect
-	github.com/hugelgupf/p9 v0.2.0 // indirect
 	github.com/mattn/go-colorable v0.1.2 // indirect
 	github.com/mattn/go-isatty v0.0.9 // indirect
-	github.com/u-root/uio v0.0.0-20210528114334-82958018845c // indirect
 	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
 )
 

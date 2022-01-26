@@ -69,43 +69,75 @@ func (_ Def2) MainAction(
 		}
 	}
 
-	// parallel client actions
-	var action fz.ParallelAction
-	numStopInserted := 0
-	maxNumStop := int(numNodes - (numNodes/2 + 1))
+	var nodeActions fz.ParallelAction
+
+	numFaults := 0
+	maxFaults := int(numNodes - (numNodes/2 + 1))
 	for i := fz.NumNodes(0); i < numNodes; i++ {
 
 		seq := fz.RandSeq(makers(int(i)), num)
-
-		// node stop or restart
-		if numStopInserted < maxNumStop {
-			if r := rand.Intn(10); r <= 1 {
-				numStopInserted++
-				pos := rand.Intn(len(seq.Actions) + 1)
-				var newActions []fz.Action
-				newActions = append(newActions, seq.Actions[:pos]...)
-				if r == 0 {
-					newActions = append(newActions, ActionStopNode{
-						NodeID: fz.NodeID(i),
-					})
-				} else if r == 1 {
-					newActions = append(newActions, ActionRestartNode{
-						NodeID: fz.NodeID(i),
-					})
-				}
-				newActions = append(newActions, seq.Actions[pos:]...)
-				seq.Actions = newActions
-			}
+		randomInsert := func(action fz.Action) {
+			numFaults++
+			pos := rand.Intn(len(seq.Actions) + 1)
+			var newActions []fz.Action
+			newActions = append(newActions, seq.Actions[:pos]...)
+			newActions = append(newActions, action)
+			newActions = append(newActions, seq.Actions[pos:]...)
+			seq.Actions = newActions
 		}
 
-		action.Actions = append(
-			action.Actions,
+		// node stop or restart
+		if numFaults < maxFaults {
+			switch r := rand.Intn(10); r {
+
+			case 0:
+				// stop
+				randomInsert(ActionStopNode{
+					NodeID: fz.NodeID(i),
+				})
+
+			case 1:
+				// restart
+				randomInsert(ActionRestartNode{
+					NodeID: fz.NodeID(i),
+				})
+
+			case 2:
+				// network
+				mutations := []func(action *ActionBlockNetwork){
+					func(action *ActionBlockNetwork) {
+						action.BlockInbound = true
+					},
+					func(action *ActionBlockNetwork) {
+						action.BlockOutbound = true
+					},
+					func(action *ActionBlockNetwork) {
+						action.BlockInboundNodes = append(action.BlockInboundNodes,
+							fz.NodeID(rand.Intn(int(numNodes))))
+					},
+					func(action *ActionBlockNetwork) {
+						action.BlockOutboundNodes = append(action.BlockOutboundNodes,
+							fz.NodeID(rand.Intn(int(numNodes))))
+					},
+				}
+				action := ActionBlockNetwork{}
+				for i := 0; i < 1+rand.Intn(2); i++ {
+					mutations[rand.Intn(len(mutations))](&action)
+				}
+				randomInsert(action)
+
+			}
+
+		}
+
+		nodeActions.Actions = append(
+			nodeActions.Actions,
 			seq,
 		)
 	}
 
 	return fz.MainAction{
-		Action: action,
+		Action: nodeActions,
 	}
 
 }

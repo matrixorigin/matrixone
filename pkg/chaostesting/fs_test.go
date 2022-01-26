@@ -20,13 +20,17 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
+	"testing/fstest"
 )
 
 func testFS(
 	t *testing.T,
 	dir string,
 ) {
+
+	fstest.TestFS(os.DirFS(dir))
 
 	test := func(path string) {
 		f, err := os.Create(path)
@@ -106,5 +110,12 @@ func testFS(
 	if len(paths) == 0 {
 		t.Fatal()
 	}
+
+	f, err := os.Create(filepath.Join(dir, "lock"))
+	ce(err)
+	defer f.Close()
+	fd := f.Fd()
+	ce(syscall.Flock(int(fd), syscall.LOCK_NB|syscall.LOCK_EX))
+	ce(syscall.Flock(int(fd), syscall.LOCK_UN))
 
 }

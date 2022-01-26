@@ -128,6 +128,10 @@ func (_ Def2) Do(
 			defer unlock()
 			return restartNode(fz.NodeID(action.NodeID))
 
+		case ActionBlockNetwork:
+			//TODO
+			return nil
+
 		default:
 			panic(fmt.Errorf("unknown action: %#v", action))
 

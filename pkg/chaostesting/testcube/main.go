@@ -97,14 +97,7 @@ func main() {
 		return
 	}
 
-	go func() {
-		fn(os.Args[2:])
-	}()
-
-	var wt fz.RootWaitTree
-	scope.Assign(&wt)
-	<-wt.Ctx.Done()
-	wt.Wait()
+	fn(os.Args[2:])
 
 	var cleanup fz.Cleanup
 	scope.Assign(&cleanup)

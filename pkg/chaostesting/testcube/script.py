@@ -23,17 +23,28 @@ enable_runtime_trace(True)
 # localhost: use localhost
 # dummy: use linux dummy interface
 # tun: use TUN interface
-network_model("tun")
+def set_network_model():
+    if os == 'linux':
+        network_model("tun")
+    else:
+        network_model("localhost")
+set_network_model()
 
 # temp dir model
 # os: use os.TempDir()
 # fuse: use in-memory fuse fs
 # 9p: use 9p fs
-temp_dir_model("9p")
+def set_temp_dir_mode():
+    if os == 'linux':
+        temp_dir_model("9p")
+    else:
+        temp_dir_model('os')
+
+set_temp_dir_mode()
 
 # enable fgprof github.com/felixge/fgprof
 enable_fg_profile(False)
 
 # enable 9p debugging
-debug_9p(True)
+debug_9p(False)
 
