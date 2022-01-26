@@ -30,7 +30,8 @@ RUN apk add --no-cache bash
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-server /mo-server
 COPY --from=builder /usr/local/bin/dumb-init /usr/local/bin/dumb-init
 COPY /optools/test/config.toml /system_vars_config.toml
-COPY --chmod=755 /optools/test/entrypoint.sh /entrypoint.sh
+COPY /optools/test/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 WORKDIR /
 
