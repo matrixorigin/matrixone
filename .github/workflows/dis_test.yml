@@ -37,16 +37,17 @@ jobs:
           context: .
           file: optools/test/Dockerfile
           push: false
+          load: true
           tags: matrixorigin/matrixone:dt
           builder: ${{ steps.buildx.outputs.name }}
           cache-from: type=local,src=/tmp/.buildx-cache
-          cache-to: type=local,dest=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
         
       - name: Build the docker-compose stack
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-        run: docker-compose -f ./optools/test/docker-compose.yaml up -d 
+        run: docker-compose -f ./optools/test/docker-compose.yaml up -d --no-build
 
       - name: Check running containers
         run: docker ps -a
