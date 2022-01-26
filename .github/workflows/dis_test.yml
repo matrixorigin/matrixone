@@ -45,7 +45,7 @@ jobs:
           cache-to: type=local,dest=/tmp/.buildx-cache-new
         
       - name: Build the docker-compose stack
-        run: docker-compose -f ./optools/test/docker-compose.yaml up -d
+        run: COMPOSE_DOCKER_CLI_BUILD=1 docker-compose -f ./optools/test/docker-compose.yaml up -d
 
       - name: Check running containers
         run: docker ps -a

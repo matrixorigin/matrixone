@@ -445,8 +445,6 @@ storage-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
 # If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's peer-urls.
 external-etcd = ["", "", ""]
-# If prophet cluster have 3 nodes (also prophet cluster should have 3 nodes at least), lease should be 3. external-etcd should config nodes advertise-client-urls.
-lease = 3
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting
 [prophet.embed-etcd]
