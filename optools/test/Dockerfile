@@ -13,7 +13,6 @@ RUN wget -O /usr/local/bin/dumb-init https://github.com/Yelp/dumb-init/releases/
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
-
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
 RUN go env -w GOPROXY=https://goproxy.cn,direct && go env -w GO111MODULE=on
