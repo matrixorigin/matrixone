@@ -14,8 +14,9 @@ services:
       - "40000"
       - "50000"
       - "6001:6001"
-    volumes:
-      - $PWD/optools/test/config0/config.toml:/opt/matrixone/system_vars_config.toml:ro
+    environment:
+      NAME: node0
+      HOST: 172.19.0.2
     restart: on-failure
     tty: true
     networks:
@@ -35,8 +36,9 @@ services:
       - "40000"
       - "50000"
       - "6002:6001"
-    volumes:
-      - $PWD/optools/test/config1/config.toml:/opt/matrixone/system_vars_config.toml:ro
+    environment:
+      NAME: node1
+      HOST: 172.19.0.3
     restart: on-failure
     tty: true
     networks:
@@ -56,8 +58,9 @@ services:
       - "20000"
       - "30000"
       - "6003:6001"
-    volumes:
-      - $PWD/optools/test/config2/config.toml:/opt/matrixone/system_vars_config.toml:ro
+    environment:
+      NAME: node2
+      HOST: 172.19.0.4
     restart: on-failure
     tty: true    
     networks:
