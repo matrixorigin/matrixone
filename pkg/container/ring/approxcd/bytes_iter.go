@@ -26,7 +26,10 @@ import (
 type bytesIter interface {
 	// NextBytes is reserved for outer loop case, not used for now
 	NextBytes() ([]byte, bool)
+	// For each []byte, call the passed function
 	Foreach(func([]byte))
+	// zero-based index, return nil if null
+	Nth(int64) []byte
 }
 
 type fixedBytes struct {
@@ -72,6 +75,14 @@ func (b *fixedBytes) Foreach(f func([]byte)) {
 	}
 }
 
+func (b *fixedBytes) Nth(i int64) []byte {
+	if nulls.Contains(b.nsp, uint64(i)) {
+		return nil
+	}
+	s, e := i*int64(b.stride), (i+1)*int64(b.stride)
+	return b.data[s:e]
+}
+
 type varBytes struct {
 	data       *types.Bytes
 	nsp        *nulls.Nulls
@@ -113,6 +124,13 @@ func (b *varBytes) Foreach(f func([]byte)) {
 			f(b.data.Get(int64(b.i)))
 		}
 	}
+}
+
+func (b *varBytes) Nth(i int64) []byte {
+	if nulls.Contains(b.nsp, uint64(i)) {
+		return nil
+	}
+	return b.data.Get(i)
 }
 
 func newBytesIterSolo(vec *vector.Vector) bytesIter {

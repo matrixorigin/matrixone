@@ -775,6 +775,9 @@ func TestRing(t *testing.T) {
 	sk.Insert([]byte{0, 0, 0, 1})
 	sk.Insert([]byte{0, 1, 0, 1})
 	sk.Insert([]byte{0, 1, 2, 1})
+	sk2 := hyperloglog.New()
+	sk2.Insert([]byte{4, 0, 0, 1})
+	sk2.Insert([]byte{0, 1, 0, 1})
 	ringArray := []ring.Ring{
 		&avg.AvgRing{
 			Ns:  []int64{123123123, 123123908950, 9089374534},
@@ -792,7 +795,8 @@ func TestRing(t *testing.T) {
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&approxcd.ApproxCountDistinctRing{
-			Sk:  sk,
+			Vs:  []uint64{3, 2, 0},
+			Sk:  []*hyperloglog.Sketch{sk, sk2, hyperloglog.New()},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Int8Ring{
@@ -1000,9 +1004,24 @@ func TestRing(t *testing.T) {
 			}
 		case *approxcd.ApproxCountDistinctRing:
 			oriRing := r.(*approxcd.ApproxCountDistinctRing)
-			if expect, got := oriRing.Sk.Estimate(), ExpectRing.Sk.Estimate(); expect != got {
-				t.Errorf("Decode ring failed. \nExpected/Got:\n%v\n%v", expect, got)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
 			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
+			for i, sk := range oriRing.Sk {
+				if expect, got := sk.Estimate(), ExpectRing.Sk[i].Estimate(); expect != got {
+					t.Errorf("Decode ring failed. \nExpected/Got:\n%v\n%v", expect, got)
+				}
+			}
+
 		case *max.Int8Ring:
 			oriRing := r.(*max.Int8Ring)
 			// Da

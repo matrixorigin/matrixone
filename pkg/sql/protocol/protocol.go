@@ -1079,14 +1079,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		return nil
 	case *approxcd.ApproxCountDistinctRing:
 		buf.WriteByte(ApproxCountDistinctRing)
-		sk_buf, err := v.Sk.MarshalBinary()
-		if err != nil {
-			return err
-		}
-		buf.Write(encoding.EncodeUint32(uint32(len(sk_buf))))
-		buf.Write(sk_buf)
-		buf.Write(encoding.EncodeType(v.Typ))
-		return nil
+		return v.Marshal(buf)
 	case *max.Int8Ring:
 		buf.WriteByte(MaxInt8Ring)
 		// Ns
@@ -1668,17 +1661,8 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 	case ApproxCountDistinctRing:
 		data = data[1:]
 		r := approxcd.NewApproxCountDistinct(types.Type{})
-		// hll sketch
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := r.Sk.UnmarshalBinary(data[:n]); err != nil {
-			return nil, data, err
-		}
-		data = data[n:]
-		// Typ
-		r.Typ = encoding.DecodeType(data[:encoding.TypeSize])
-		data = data[encoding.TypeSize:]
-		return r, data, nil
+		data, err := r.Unmarshal(data)
+		return r, data, err
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
 		data = data[1:]
@@ -2426,21 +2410,10 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		r.Typ = typ
 		return r, data, nil
 	case ApproxCountDistinctRing:
-		// For ApproxCountDistinctRing, there is no differences between Decode and DecodeWithProcess,
-		// because NewApproxCountDistinct allocates memory anyway for now
 		data = data[1:]
 		r := approxcd.NewApproxCountDistinct(types.Type{})
-		// hll sketch
-		n := encoding.DecodeUint32(data[:4])
-		data = data[4:]
-		if err := r.Sk.UnmarshalBinary(data[:n]); err != nil {
-			return nil, data, err
-		}
-		data = data[n:]
-		// Typ
-		r.Typ = encoding.DecodeType(data[:encoding.TypeSize])
-		data = data[encoding.TypeSize:]
-		return r, data, nil
+		data, err := r.UnmarshalWithProc(data, proc)
+		return r, data, err
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
 		data = data[1:]
