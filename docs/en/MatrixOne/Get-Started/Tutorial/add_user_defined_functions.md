@@ -262,8 +262,8 @@ func init() {
 Step 2: Implement Abs function
 
 In MatrixOne, We put all of our builtin function definition code in the vectorize directory, to implement abs functions, first we need to create a subdirectory abs in this vectorize directory.
-In this fresh abs directory, create a file abs.go, the file where our abs function implementation code goes.
-For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruction to compute the absolute value and hence boost our function's performance, to differentiate function implementations for different cpu architectures,  we declare our pure go version of abs function this way:
+In this fresh abs directory, create a file abs.go, the place where our abs function implementation code goes.
+For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruction to compute the absolute value and hence boost our function's performance, to differentiate function implementations for different cpu architectures, we declare our pure go version of abs function this way:
 
 ```go
 package abs
@@ -321,10 +321,31 @@ func absFloat64Pure(xs, rs []float64) []float64 {
 }
 ```
 
-Here we go. Now we can take our abs function for a little spin.
+Here we go. Now we can fire up MatrixOne and take our abs function for a little spin.
 
-![image info](abs_function.png)
+```sql
+mysql> create table abs_test_table(a float, b double);
+Query OK, 0 rows affected (0.44 sec)
 
+mysql> insert into abs_test_table values(12.34, -43.21);
+Query OK, 1 row affected (0.08 sec)
+
+mysql> insert into abs_test_table values(-12.34, 43.21);
+Query OK, 1 row affected (0.02 sec)
+
+mysql> insert into abs_test_table values(2.718, -3.14);
+Query OK, 1 row affected (0.02 sec)
+
+mysql> select a, b, abs(a), abs(b) from abs_test_table;
++----------+----------+---------+---------+
+| a        | b        | abs(a)  | abs(b)  |
++----------+----------+---------+---------+
+|  12.3400 | -43.2100 | 12.3400 | 43.2100 |
+| -12.3400 |  43.2100 | 12.3400 | 43.2100 |
+|   2.7180 |  -3.1400 |  2.7180 |  3.1400 |
++----------+----------+---------+---------+
+3 rows in set (0.01 sec)
+```
 Bingo!
 
 ##### add binary and variadic functions for MatrixOne:
