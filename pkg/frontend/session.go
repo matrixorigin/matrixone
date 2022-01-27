@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -39,6 +40,10 @@ type Session struct {
 	sessionVars config.SystemVariables
 
 	Pu *config.ParameterUnit
+
+	ep *tree.ExportParam
+
+	closeRef *CloseExportData
 }
 
 func NewSession(proto Protocol,pdHook *PDCallbackImpl,
@@ -49,6 +54,11 @@ func NewSession(proto Protocol,pdHook *PDCallbackImpl,
 		GuestMmu: gm,
 		Mempool: mp,
 		Pu: PU,
+		ep: &tree.ExportParam{
+			Outfile: false,
+			Fields: &tree.Fields{},
+			Lines: &tree.Lines{},
+		},
 	}
 }
 

@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"runtime/pprof"
@@ -54,6 +55,9 @@ type MysqlCmdExecutor struct {
 
 	//for load data closing
 	loadDataClose *CloseLoadData
+
+	//for export data closing
+	exportDataClose *CloseExportData
 
 	ses *Session
 
@@ -95,17 +99,21 @@ type outputQueue struct {
 	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
+	ep *tree.ExportParam
+	file *os.File
+	writer *bufio.Writer
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
 }
 
-func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64) *outputQueue {
+func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam) *outputQueue {
 	return &outputQueue{
 		proto:  proto,
 		mrs:    mrs,
 		rowIdx: 0,
 		length: length,
+		ep: ep,
 	}
 }
 
@@ -146,11 +154,18 @@ func (o *outputQueue) flush() error {
 	if o.rowIdx <= 0 {
 		return nil
 	}
-	//send group of row
-	if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
-		//return err
-		logutil.Errorf("flush error %v \n", err)
-		return err
+	if o.ep.Outfile {
+		if err := exportDataToCSVFile(o); err != nil {
+			logutil.Errorf("export to csv file error %v \n", err)
+			return err
+		}
+	} else {
+		//send group of row
+		if err := o.proto.SendResultSetTextBatchRowSpeedup(o.mrs, o.rowIdx); err != nil {
+			//return err
+			logutil.Errorf("flush error %v \n", err)
+			return err
+		}
 	}
 	o.rowIdx = 0
 	return nil
@@ -181,6 +196,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	logutil.Infof("goid %d \n", goID)
 	enableProfile := ses.Pu.SV.GetEnableProfileGetDataFromPipeline()
+	enableProfile = true
+
 
 	var cpuf *os.File = nil
 	if enableProfile {
@@ -208,8 +225,16 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 	allocateOutBufferTime := time.Since(begin3)
 
-	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet))
+	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep)
 	oq.reset()
+
+	oq.ep.DefaultBufSize = ses.Pu.SV.GetExportDataDefaultFlushSize()
+	initExportFileParam(oq)
+	if oq.ep.Outfile {
+		if err := openNewFile(oq); err != nil {
+			return err
+		}
+	}
 
 	row2colTime := time.Duration(0)
 
@@ -221,6 +246,15 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		pprof.StartCPUProfile(cpuf)
 	}
 	for j := 0; j < n; j++ { //row index
+		if oq.ep.Outfile {
+			select {
+				case <- ses.closeRef.stopLoadData: {
+					return nil
+				}
+				default:{}
+			}
+		}
+
 		if bat.Zs[j] <= 0 {
 			continue
 		}
@@ -428,6 +462,14 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
+
+	if oq.ep.Outfile {
+		err = oq.writer.Flush()
+		if err != nil {
+			return err
+		}
+	}
+	
 
 	if enableProfile {
 		pprof.StopCPUProfile()
@@ -917,6 +959,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 		switch st := stmt.(type) {
 		case *tree.Select:
+			if st.Ep != nil {
+				mce.exportDataClose = NewCloseExportData()
+				ses.ep = st.Ep
+				ses.closeRef = mce.exportDataClose
+			}
 			if sc, ok := st.Select.(*tree.SelectClause); ok {
 				if len(sc.Exprs) == 1 {
 					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
@@ -1087,6 +1134,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Start pipeline
 				Producing the data row and sending the data row
 			*/
+			
 			if er := cw.Run(epoch); er != nil {
 				return er
 			}
@@ -1256,6 +1304,9 @@ func (mce *MysqlCmdExecutor) Close() {
 	if mce.loadDataClose != nil {
 		//logutil.Infof("close process load data")
 		mce.loadDataClose.Close()
+	} 
+	if mce.exportDataClose != nil {
+		mce.exportDataClose.Close()
 	}
 }
 

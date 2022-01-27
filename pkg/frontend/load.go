@@ -215,6 +215,27 @@ func (cld *CloseLoadData) Close() {
 	})
 }
 
+type CloseExportData struct {
+	stopLoadData chan interface{}
+	onceClose    sync.Once
+}
+
+func NewCloseExportData() *CloseExportData {
+	return &CloseExportData{
+		stopLoadData: make(chan interface{}),
+	}
+}
+
+func (cld *CloseExportData) Open() {
+}
+
+func (cld *CloseExportData) Close() {
+	cld.onceClose.Do(func() {
+		close(cld.stopLoadData)
+	})
+}
+
+
 func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	wait_a := time.Now()
 	defer func() {
