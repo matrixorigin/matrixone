@@ -13,3 +13,19 @@
 // limitations under the License.
 
 package binary
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+)
+
+type argsAndRet struct {
+	args []types.T
+	ret  types.T
+}
+
+func getBinOpReturnType(op int, e0, e1 extend.Extend) types.T {
+	lt, rt := e0.ReturnType(), e1.ReturnType()
+	return overload.GetBinOpReturnType(op, lt, rt)
+}

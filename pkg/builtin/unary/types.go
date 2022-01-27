@@ -13,3 +13,19 @@
 // limitations under the License.
 
 package unary
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+)
+
+type argsAndRet struct {
+	args []types.T
+	ret  types.T
+}
+
+func getUnaryReturnType(op int, e extend.Extend) types.T {
+	returnType := e.ReturnType()
+	return overload.GetUnaryOpReturnType(op, returnType)
+}
