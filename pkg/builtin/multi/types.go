@@ -20,6 +20,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 )
 
+type argsAndRet struct {
+	args []types.T
+	ret  types.T
+}
+
 func getMultiReturnType(op int, es []extend.Extend) types.T {
 	ts := make([]types.T, len(es))
 	for i := range ts {
