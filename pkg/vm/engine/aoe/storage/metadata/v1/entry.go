@@ -17,7 +17,7 @@ package metadata
 import (
 	"encoding/json"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
@@ -36,11 +36,28 @@ type dbReplaceLogEntry struct {
 	Replacer      []*Database       `json:"replacer"`
 }
 
-// type catalogLogEntry struct {
-// 	Range    *common.Range `json:"range"`
-// 	Catalog  *Catalog      `json:"catalog"`
-// 	LogRange *LogRange     `json:"logrange"`
-// }
+type segmentCheckpoint struct {
+	Blocks     []*blockLogEntry
+	NeedReplay bool
+	LogEntry   segmentLogEntry
+}
+
+type tableCheckpoint struct {
+	Segments   []*segmentCheckpoint
+	NeedReplay bool
+	LogEntry   tableLogEntry
+}
+
+type databaseCheckpoint struct {
+	Tables     map[string]*tableCheckpoint
+	NeedReplay bool
+	LogEntry   databaseLogEntry
+}
+
+type catalogLogEntry struct {
+	Databases map[string]*databaseCheckpoint
+	Range     *common.Range
+}
 
 func newDatabaseLogEntry(shardId, index uint64) *databaseLogEntry {
 	logRange := new(LogRange)

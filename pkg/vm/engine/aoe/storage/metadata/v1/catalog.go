@@ -494,15 +494,12 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 }
 
 func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
-	// entry := logstore.NewAsyncBaseEntry()
 	catalog.RLock()
 	entry := catalog.ToLogEntry(logstore.ETCheckpoint)
 	catalog.RUnlock()
 	if err := catalog.Store.AppendEntry(entry); err != nil {
 		panic(err)
 	}
-	logutil.Infof("range is %v", entry.GetAuxilaryInfo().(*common.Range))
-	//?
 	ret, err := catalog.EnqueueCheckpoint(entry)
 	if err != nil {
 		return nil, err
@@ -529,29 +526,6 @@ func (catalog *Catalog) PString(level PPLevel, depth int) string {
 
 func (catalog *Catalog) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, catalog)
-}
-
-type segmentCheckpoint struct {
-	Blocks     []*blockLogEntry
-	NeedReplay bool
-	LogEntry   segmentLogEntry
-}
-
-type tableCheckpoint struct {
-	Segments   []*segmentCheckpoint
-	NeedReplay bool
-	LogEntry   tableLogEntry
-}
-
-type databaseCheckpoint struct {
-	Tables     map[string]*tableCheckpoint
-	NeedReplay bool
-	LogEntry   databaseLogEntry
-}
-
-type catalogLogEntry struct {
-	Databases map[string]*databaseCheckpoint
-	Range     *common.Range
 }
 
 func (entry *catalogLogEntry) Unmarshal(buf []byte) error {
@@ -597,7 +571,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 		catalogCkp.Databases[database.Name] = databaseCkp
 		logutil.Infof("name is %v, need replay is %v, logentry is %v", database.Name, databaseCkp.NeedReplay, databaseCkp.LogEntry)
 	}
-	catalogCkp.Range = &common.Range{Left: catalog.GetCheckpointId(), Right: catalog.nextCommitId}
+	catalogCkp.Range = &common.Range{Left: previousCheckpointId+1, Right: catalog.nextCommitId}
 	return catalogCkp
 }
 

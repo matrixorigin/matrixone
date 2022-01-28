@@ -138,7 +138,7 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 		return err
 	}
 	if r != nil {
-		if  !r.LT(entry.commitId) {
+		if !r.LT(entry.commitId) {
 			return nil
 		}
 	}
@@ -173,9 +173,6 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 		err = catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETTransaction:
 		err = cache.onReplayTxn(entry.txnStore)
-	// case logstore.ETCheckpoint:
-	// 	logutil.Infof("misuxi replayer")
-	// 	err = catalog.onReplayCheckpoint(entry.catalogEntry)
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
 	}
