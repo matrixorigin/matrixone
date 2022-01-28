@@ -452,7 +452,8 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 
 		//if replay the database
 		if databaseEntry.NeedReplay {
-			err := catalog.onReplayDatabaseCheckpoint(&databaseEntry.LogEntry)
+			err := catalog.onReplayDatabaseCheckpoint(
+				&databaseEntry.LogEntry)
 			if err != nil {
 				return err
 			}
@@ -481,7 +482,8 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 
 	for _, databaseEntry := range entry.Databases {
 		if databaseEntry.NeedReplay {
-			err := catalog.onReplayDatabaseCheckpoint(&databaseEntry.LogEntry)
+			err := catalog.onReplayDatabaseCheckpoint(
+				&databaseEntry.LogEntry)
 			if err != nil {
 				return err
 			}
@@ -582,7 +584,8 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 			segIdx := blk.Segment.Table.IdIndex[segId]
 			segmentCkp := catalogCkp.
 				Databases[blk.Segment.Table.Database.Name].
-				Tables[blk.Segment.Table.Schema.Name].Segments[segIdx]
+				Tables[blk.Segment.Table.Schema.Name].
+				Segments[segIdx]
 			segmentCkp.Blocks = append(segmentCkp.Blocks, blkEntry)
 		}
 		return nil
