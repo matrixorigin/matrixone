@@ -125,7 +125,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Eq(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -136,7 +138,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Ne(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -147,7 +151,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Lt(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -158,7 +164,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Le(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -169,7 +177,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Gt(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -180,7 +190,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Ge(filter.attr, filter.param1)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -191,7 +203,9 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Btw(filter.attr, filter.param1, filter.param2)
 			for _, id := range ids {
-				blocks = append(blocks, segment.Block(id))
+				if  blockExist(s.blocks, id){
+					blocks = append(blocks, segment.Block(id))
+				}
 			}
 		}
 		s.SetBlocks(blocks)
@@ -199,4 +213,14 @@ func (s *store) sparseFilter(filter *filterContext)  {
 	default:
 		panic("No Support")
 	}
+}
+
+func blockExist(blocks []aoe.Block, iter string) bool {
+	exist := false
+	for _, block := range blocks {
+		if block.ID() == iter {
+			exist = true
+		}
+	}
+	return exist
 }
