@@ -7,6 +7,7 @@ For instructions to reproduce the SSB test results listed here, see [SSB Test wi
 
 In v0.2.0, both single table and multiple tables can work in MatrixOne, and we compared results of MatrixOne with other similar database products. Through the clear comparison of the bar chart, you will see that MatrixOne has an obvious advantage in the query processing time.
 
+Recommended server specification: x86 CPU with 16 cores and 64GB memory, with CentOS 7+ OS.
 
 !!! note  "<font size=4>note</font>"
     <font size=3>The following test results are the average of the three tests in seconds.</font>  
