@@ -498,7 +498,7 @@ func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
 	catalog.RLock()
 	entry := catalog.ToLogEntry(logstore.ETCheckpoint)
 	catalog.RUnlock()
-	if err := catalog.Store.AppendEntry(entry); err != nil {
+	if err := catalog.Store.Checkpoint(entry); err != nil {
 		panic(err)
 	}
 	ret, err := catalog.EnqueueCheckpoint(entry)

@@ -619,9 +619,9 @@ func TestCompact(t *testing.T) {
 		wg.Add(1)
 		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
 	}
-	wg.Wait()
-	
+
 	catalog.Checkpoint()
+	wg.Wait()
 
 	getSegmentedIdWorker.Stop()
 	logutil.Infof(catalog.PString(PPL0, 0))
