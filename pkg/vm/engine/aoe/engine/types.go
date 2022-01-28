@@ -44,6 +44,13 @@ type SegmentInfo struct {
 	Node     engine.Node
 }
 
+type filterContext struct {
+	filterType int32
+	attr       string
+	param1 	 interface{}
+	param2   interface{}
+}
+
 type aoeReader struct {
 	reader   *store
 	id       int32
@@ -51,6 +58,7 @@ type aoeReader struct {
 	dequeue  int64
 	enqueue  int64
 	workerid int32
+	filter   []filterContext
 }
 
 type store struct {

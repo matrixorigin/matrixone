@@ -170,7 +170,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 	readStore.SetBlocks(blocks)
 	for i := 0; i < num; i++ {
 		workerid := i / int(r.cfg.QueueMaxReaderCount)
-		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid)}
+		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid), filter: make([]filterContext, 0)}
 	}
 	for i := 0; i < readStore.iodepth; i++ {
 		readStore.rhs[i] = make(chan *batData,

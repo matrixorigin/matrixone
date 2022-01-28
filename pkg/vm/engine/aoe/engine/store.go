@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 )
 
@@ -22,7 +23,7 @@ func (s *store) SetBlocks(blocks []aoe.Block) {
 	s.blocks = blocks
 }
 
-func (s *store) GetBatch(refCount []uint64, attrs []string, id int32) *batData {
+func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *batData {
 	if !s.start {
 		s.mutex.Lock()
 		if s.start {
@@ -31,10 +32,11 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, id int32) *batData {
 		}
 		s.start = true
 		s.mutex.Unlock()
+		logutil.Infof("filter is %v", reader.filter)
 		s.ReadStart(refCount, attrs)
 	}
 GET:
-	bat, ok := <-s.rhs[id]
+	bat, ok := <-s.rhs[reader.workerid]
 	if !ok {
 		return nil
 	}

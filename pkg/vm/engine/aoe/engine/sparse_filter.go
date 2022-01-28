@@ -14,16 +14,87 @@
 
 package engine
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+const (
+	FileterNone = iota
+	FileterEq
+	FileterNe
+	FileterLt
+	FileterLe
+	FileterGt
+	FileterGe
+	FileterBtw
 )
 
 func NewAoeSparseFilter(s *store, reader *aoeReader) *AoeSparseFilter {
 	return &AoeSparseFilter{reader: reader, storeReader: s}
 }
 
-func (f *AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
+func (a AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterEq,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Ne(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterNe,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Lt(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterLt,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Le(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterLe,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Gt(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterGt,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Ge(s string, i interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterGe,
+		param1: i,
+		param2: nil,
+	})
+	return a.reader, nil
+}
+
+func (a AoeSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Reader, error) {
+	a.reader.filter = append(a.reader.filter, filterContext{
+		filterType: FileterBtw,
+		param1: i,
+		param2: i2,
+	})
+	return a.reader, nil
+}
+
+/*func (f *AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
 	blocks := make([]aoe.Block, 0)
 	for _, sid := range f.storeReader.rel.segments {
 		segment := f.storeReader.rel.Segment(sid)
@@ -112,4 +183,4 @@ func (f *AoeSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.R
 	}
 	f.storeReader.SetBlocks(blocks)
 	return f.reader, nil
-}
+}*/
