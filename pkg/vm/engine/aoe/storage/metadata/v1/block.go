@@ -326,7 +326,6 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 func (e *Block) toLogEntry() *blockLogEntry {
 	return &blockLogEntry{
 		BaseEntry:  e.BaseEntry,
-		Catalog:    e.Segment.Table.Database.Catalog,
 		DatabaseId: e.Segment.Table.Database.Id,
 		TableId:    e.Segment.Table.Id,
 		SegmentId:  e.Segment.Id,

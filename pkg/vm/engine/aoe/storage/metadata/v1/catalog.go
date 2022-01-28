@@ -421,11 +421,11 @@ func (catalog *Catalog) onCheckpoint(items ...interface{}) {
 	// TODO
 }
 func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
-	logutil.Infof("onReplayCheckpoint")
 	for _, database := range catalog.Databases {
 		databaseEntry, ok := entry.Databases[database.Name]
 		if !ok {
-			//todo delete database
+			database.CommitInfo.Op = OpHardDelete
+			database.CommitInfo.CommitId = entry.Range.Right
 			continue
 		}
 		if databaseEntry.NeedReplay {
@@ -437,7 +437,8 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		for _, table := range database.TableSet {
 			tableEntry, ok := databaseEntry.Tables[table.Schema.Name]
 			if !ok {
-				//todo delete table
+				table.CommitInfo.Op = OpHardDelete
+				table.CommitInfo.CommitId = entry.Range.Right
 				continue
 			}
 			if tableEntry.NeedReplay {
@@ -532,7 +533,6 @@ func (entry *catalogLogEntry) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, entry)
 }
 func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
-	logutil.Infof("ToCatalogLogEntry")
 	catalogCkp := &catalogLogEntry{}
 	catalogCkp.Databases = map[string]*databaseCheckpoint{}
 	previousCheckpointId := catalog.GetCheckpointId()
@@ -542,7 +542,6 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 		if database.CommitInfo.CommitId > previousCheckpointId {
 			databaseCkp.NeedReplay = true
 			databaseCkp.LogEntry = database.ToDatabaseLogEntry()
-			logutil.Infof("name is %v, need replay is %v, logentry is %v", database.Name, databaseCkp.NeedReplay, databaseCkp.LogEntry)
 		}
 		for _, table := range database.TableSet {
 			tableCkp := &tableCheckpoint{}
@@ -569,9 +568,8 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 			databaseCkp.Tables[table.Schema.Name] = tableCkp
 		}
 		catalogCkp.Databases[database.Name] = databaseCkp
-		logutil.Infof("name is %v, need replay is %v, logentry is %v", database.Name, databaseCkp.NeedReplay, databaseCkp.LogEntry)
 	}
-	catalogCkp.Range = &common.Range{Left: previousCheckpointId+1, Right: catalog.nextCommitId}
+	catalogCkp.Range = &common.Range{Left: previousCheckpointId + 1, Right: catalog.nextCommitId}
 	return catalogCkp
 }
 
@@ -832,7 +830,6 @@ func (catalog *Catalog) onReplayTableCheckpoint(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl, ok := db.TableSet[entry.Table.Id]
 	if ok {
-		logutil.Infof("tbl is %v",tbl)
 		return tbl.onCommit(entry.CommitInfo)
 	}
 	tbl = NewEmptyTableEntry(db)
@@ -936,10 +933,10 @@ func (catalog *Catalog) onReplayDatabaseCheckpoint(entry *databaseLogEntry) erro
 	}
 	catalog.TryUpdateDatabaseId(entry.BaseEntry.Id)
 	db = NewEmptyDatabase(catalog)
-	db.Name=entry.Database.Name
-	db.BaseEntry.Id=entry.BaseEntry.Id
-	db.CommitInfo.TranId=entry.CommitInfo.TranId
-	db.CommitInfo.LogIndex=entry.CommitInfo.LogIndex
+	db.Name = entry.Database.Name
+	db.BaseEntry.Id = entry.BaseEntry.Id
+	db.CommitInfo.TranId = entry.CommitInfo.TranId
+	db.CommitInfo.LogIndex = entry.CommitInfo.LogIndex
 	db.BaseEntry = entry.BaseEntry
 	db.Name = entry.Database.Name
 	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)

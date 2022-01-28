@@ -453,11 +453,12 @@ func (e *Table) String() string {
 
 func (e *Table) ToTableLogEntry() tableLogEntry {
 	entry := tableLogEntry{
-		Table:      e,
+		Table:      &Table{BaseEntry: e.BaseEntry, Schema: e.Schema},
 		DatabaseId: e.Database.Id,
 	}
 	return entry
 }
+
 // Not safe
 // Usually it is used during creating a table. We need to commit the new table entry
 // to the store.
