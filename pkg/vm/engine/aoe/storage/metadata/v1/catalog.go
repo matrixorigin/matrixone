@@ -536,39 +536,56 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	catalogCkp := &catalogLogEntry{}
 	catalogCkp.Databases = map[string]*databaseCheckpoint{}
 	previousCheckpointId := catalog.GetCheckpointId()
-	for _, database := range catalog.Databases {
+
+	processor := new(LoopProcessor)
+
+	processor.DatabaseFn = func(db *Database) error {
 		databaseCkp := &databaseCheckpoint{}
 		databaseCkp.Tables = make(map[string]*tableCheckpoint)
-		if database.CommitInfo.CommitId > previousCheckpointId {
+		if db.CommitInfo.CommitId > previousCheckpointId {
 			databaseCkp.NeedReplay = true
-			databaseCkp.LogEntry = database.ToDatabaseLogEntry()
+			databaseCkp.LogEntry = db.ToDatabaseLogEntry()
 		}
-		for _, table := range database.TableSet {
-			tableCkp := &tableCheckpoint{}
-			tableCkp.Segments = make([]*segmentCheckpoint, 0)
-			if table.CommitInfo.CommitId > previousCheckpointId {
-				tableCkp.NeedReplay = true
-				tableCkp.LogEntry = table.ToTableLogEntry()
-			}
-			for _, segment := range table.SegmentSet {
-				segmentCkp := &segmentCheckpoint{}
-				segmentCkp.Blocks = make([]*blockLogEntry, 0)
-				if segment.CommitInfo.CommitId > previousCheckpointId {
-					segmentCkp.NeedReplay = true
-					segmentCkp.LogEntry = *segment.toLogEntry()
-				}
-				for _, block := range segment.BlockSet {
-					if block.CommitInfo.CommitId > previousCheckpointId {
-						blkEntry := block.toLogEntry()
-						segmentCkp.Blocks = append(segmentCkp.Blocks, blkEntry)
-					}
-				}
-				tableCkp.Segments = append(tableCkp.Segments, segmentCkp)
-			}
-			databaseCkp.Tables[table.Schema.Name] = tableCkp
-		}
-		catalogCkp.Databases[database.Name] = databaseCkp
+		catalogCkp.Databases[db.Name] = databaseCkp
+		return nil
 	}
+
+	processor.TableFn = func(tb *Table) error {
+		tableCkp := &tableCheckpoint{}
+		tableCkp.Segments = make([]*segmentCheckpoint, 0)
+		if tb.CommitInfo.CommitId > previousCheckpointId {
+			tableCkp.NeedReplay = true
+			tableCkp.LogEntry = tb.ToTableLogEntry()
+		}
+		catalogCkp.Databases[tb.Database.Name].Tables[tb.Schema.Name] = tableCkp
+		return nil
+	}
+
+	processor.SegmentFn = func(seg *Segment) error {
+		segmentCkp := &segmentCheckpoint{}
+		segmentCkp.Blocks = make([]*blockLogEntry, 0)
+		if seg.CommitInfo.CommitId > previousCheckpointId {
+			segmentCkp.NeedReplay = true
+			segmentCkp.LogEntry = *seg.toLogEntry()
+		}
+		tableCkp := catalogCkp.Databases[seg.Table.Database.Name].Tables[seg.Table.Schema.Name]
+		tableCkp.Segments = append(tableCkp.Segments, segmentCkp)
+		return nil
+	}
+
+	processor.BlockFn = func(blk *Block) error {
+		if blk.CommitInfo.CommitId > previousCheckpointId {
+			blkEntry := blk.toLogEntry()
+			segId:=blk.Segment.Id
+			segIdx:=blk.Segment.Table.IdIndex[segId]
+			segmentCkp := catalogCkp.Databases[blk.Segment.Table.Database.Name].Tables[blk.Segment.Table.Schema.Name].Segments[segIdx]
+			segmentCkp.Blocks = append(segmentCkp.Blocks, blkEntry)
+		}
+		return nil
+	}
+	
+	catalog.RecurLoopLocked(processor)
+	
 	catalogCkp.Range = &common.Range{Left: previousCheckpointId + 1, Right: catalog.nextCommitId}
 	return catalogCkp
 }

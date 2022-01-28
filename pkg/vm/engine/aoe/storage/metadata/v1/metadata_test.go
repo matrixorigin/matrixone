@@ -629,7 +629,7 @@ func TestCompact(t *testing.T) {
 	catalog.Close()
 	catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
-	logutil.Infof(catalog.PString(PPL0, 0))
+	// logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v",catalog.Sequence)
 	catalog.Close()
 }
