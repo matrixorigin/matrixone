@@ -33,6 +33,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -811,6 +812,27 @@ func (mce *MysqlCmdExecutor) handleShowVariables(_ *tree.ShowVariables) error {
 	return err
 }
 
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
+	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
+	// IMO, this approach is simple and future-proof
+	// Alas, this rewriting processing could have been handled in rewrite module,
+	// but in `handleAnalyzeStmt`, it can be easily managed by cron jobs in the future
+	ctx := tree.NewFmtCtx(dialect.MYSQL)
+	ctx.WriteString("select ")
+	for i, ident := range stmt.Cols {
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString("approx_count_distinct(")
+		ctx.WriteString(string(ident))
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" from ")
+	stmt.Table.Format(ctx)
+	sql := ctx.String()
+	return mce.doComQuery(sql)
+}
+
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
 }
@@ -1018,6 +1040,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if err != nil {
 				return err
 			}
+		case *tree.AnalyzeStmt:
+			selfHandle = true
+			if err = mce.handleAnalyzeStmt(st); err != nil {
+				return err
+			}
+
 		}
 
 		if selfHandle {
@@ -1036,7 +1064,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
-		switch stmt.(type) {
+		// cw.Compile might rewrite sql, here we fetch the latest version
+		switch cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,

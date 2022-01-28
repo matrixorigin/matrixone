@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -35,8 +34,6 @@ func New(db string, sql string, e engine.Engine) *build {
 }
 
 func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
-	stmt = rewrite.Rewrite(stmt)
-	stmt = rewrite.AstRewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		qry := &Query{
