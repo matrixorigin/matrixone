@@ -451,6 +451,13 @@ func (e *Table) String() string {
 	return string(buf)
 }
 
+func (e *Table) ToTableLogEntry() tableLogEntry {
+	entry := tableLogEntry{
+		Table:      e,
+		DatabaseId: e.Database.Id,
+	}
+	return entry
+}
 // Not safe
 // Usually it is used during creating a table. We need to commit the new table entry
 // to the store.

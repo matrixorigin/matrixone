@@ -736,6 +736,12 @@ func (db *Database) String() string {
 	return string(buf)
 }
 
+func (db *Database) ToDatabaseLogEntry() databaseLogEntry{
+	return databaseLogEntry{
+		BaseEntry: db.BaseEntry,
+		Database: &Database{Name: db.Name},
+	}
+}
 // Not safe
 // Usually it is used during creating a table. We need to commit the new table entry
 // to the store.

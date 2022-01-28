@@ -131,8 +131,14 @@ func (cache *replayCache) onReplayTxn(store *TxnStore) error {
 }
 
 func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog, r *common.Range) error {
+	switch entry.typ{
+	case logstore.ETCheckpoint:
+		catalog.Sequence.TryUpdateCommitId(entry.catalogEntry.Range.Right)
+		err := catalog.onReplayCheckpoint(entry.catalogEntry)
+		return err
+	}
 	if r != nil {
-		if !r.LT(entry.commitId) {
+		if  !r.LT(entry.commitId) {
 			return nil
 		}
 	}
@@ -167,7 +173,9 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 		err = catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETTransaction:
 		err = cache.onReplayTxn(entry.txnStore)
-	case logstore.ETCheckpoint:
+	// case logstore.ETCheckpoint:
+	// 	logutil.Infof("misuxi replayer")
+	// 	err = catalog.onReplayCheckpoint(entry.catalogEntry)
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
 	}
@@ -472,14 +480,13 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 			commitId: GetCommitIdFromLogEntry(entry),
 		})
 	case logstore.ETCheckpoint:
-		// TODO
-		// c := &catalogLogEntry{}
-		// c.Unmarshal(entry.GetPayload())
-		// observer.OnReplayCheckpoint(*c.Range)
-		// replayer.cache.Append(&replayEntry{
-		// 	typ:          logstore.ETCheckpoint,
-		// 	catalogEntry: c,
-		// })
+		c := &catalogLogEntry{}
+		c.Unmarshal(entry.GetPayload())
+		observer.OnReplayCheckpoint(*c.Range)
+		replayer.cache.Append(&replayEntry{
+			typ:          logstore.ETCheckpoint,
+			catalogEntry: c,
+		})
 	case logstore.ETFlush:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))

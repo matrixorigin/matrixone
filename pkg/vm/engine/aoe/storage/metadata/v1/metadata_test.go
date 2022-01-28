@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
@@ -574,7 +575,64 @@ func TestReplay(t *testing.T) {
 
 	catalog.Close()
 }
+func TestCompact(t *testing.T) {
+	dir := initTestEnv(t)
 
+	hbInterval := time.Duration(4) * time.Millisecond
+	if invariants.RaceEnabled {
+		hbInterval *= 3
+	}
+
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
+	dbName := "db1"
+	db, _ := catalog.SimpleCreateDatabase(dbName, idx)
+
+	ws := 5
+	createBlkWorker, _ := ants.NewPool(ws)
+	upgradeSegWorker, _ := ants.NewPool(4)
+
+	getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
+	getSegmentedIdWorker.Start()
+
+	var wg sync.WaitGroup
+
+	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+
+	for i := 0; i < ws; i++ {
+		wg.Add(1)
+		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+	}
+	wg.Wait()
+	// t.Log(catalog.PString(PPL0, 0))
+
+	catalog.Checkpoint()
+	
+	for i := 0; i < ws; i++ {
+		wg.Add(1)
+		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+	}
+	wg.Wait()
+	
+	catalog.Checkpoint()
+
+	getSegmentedIdWorker.Stop()
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v",catalog.Sequence)
+	catalog.Close()
+	catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+	// logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v",catalog.Sequence)
+	catalog.Close()
+}
 func TestAppliedIndex(t *testing.T) {
 	dir := initTestEnv(t)
 	blkRows, segBlks := uint64(10), uint64(2)
