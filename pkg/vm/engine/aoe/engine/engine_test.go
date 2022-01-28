@@ -245,7 +245,6 @@ func TestAOEEngine(t *testing.T) {
 	for _, reader := range readers {
 		fileter := reader.NewSparseFilter()
 		reader,_ = fileter.Eq("mock_0", "start")
-		reader,_ = fileter.Btw("mock_0", "start", "end")
 		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
 
 		require.NoError(t, err)

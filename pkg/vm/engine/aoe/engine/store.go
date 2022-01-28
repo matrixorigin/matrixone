@@ -33,6 +33,9 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		s.start = true
 		s.mutex.Unlock()
 		logutil.Infof("filter is %v", reader.filter)
+		for _, filter := range reader.filter{
+			s.sparseFilter(&filter)
+		}
 		s.ReadStart(refCount, attrs)
 	}
 GET:
@@ -111,5 +114,89 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	for j := 0; j < len(workers); j++ {
 		workers[j].bufferCount = len(s.readers) / s.iodepth * int(s.rel.cfg.ReaderBufferCount)
 		go workers[j].Start(refCount, attrs)
+	}
+}
+
+func (s *store) sparseFilter(filter *filterContext)  {
+	switch filter.filterType {
+	case FileterEq:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Eq(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterNe:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Ne(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterLt:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Lt(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterLe:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Le(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterGt:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Gt(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterGe:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Ge(filter.attr, filter.param1)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	case FileterBtw:
+		blocks := make([]aoe.Block, 0)
+		for _, sid := range s.rel.segments {
+			segment := s.rel.Segment(sid)
+			ids, _ := segment.NewSparseFilter().Btw(filter.attr, filter.param1, filter.param2)
+			for _, id := range ids {
+				blocks = append(blocks, segment.Block(id))
+			}
+		}
+		s.SetBlocks(blocks)
+		break
+	default:
+		panic("No Support")
 	}
 }
