@@ -420,54 +420,63 @@ func (catalog *Catalog) GetCheckpointId() uint64 {
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
 	// TODO
 }
-func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
-	for _, database := range catalog.Databases {
-		databaseEntry, ok := entry.Databases[database.Name]
-		if !ok {
-			database.CommitInfo.Op = OpHardDelete
-			database.CommitInfo.CommitId = entry.Range.Right
-			continue
+func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
+	if entry.NeedReplay {
+		catalog.onReplayTableCheckpoint(&entry.LogEntry)
+	}
+	for _, segmentEntry := range entry.Segments {
+		if segmentEntry.NeedReplay {
+			catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
 		}
+		for _, blockEntry := range segmentEntry.Blocks {
+			catalog.onReplayBlockCheckpoint(blockEntry)
+		}
+	}
+	return nil
+}
+
+func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
+	catalogProcessor := new(LoopProcessor)
+
+	var currentDatabaseEntry *databaseCheckpoint
+
+	catalogProcessor.DatabaseFn = func(db *Database) error {
+		databaseEntry, ok := entry.Databases[db.Name]
+
+		//delete the database if its checkpoint entry doesn't exist
+		if !ok {
+			db.CommitInfo.Op = OpHardDelete
+			db.CommitInfo.CommitId = entry.Range.Right
+			return nil
+		}
+
+		//if replay the database
 		if databaseEntry.NeedReplay {
 			err := catalog.onReplayDatabaseCheckpoint(&databaseEntry.LogEntry)
 			if err != nil {
 				return err
 			}
 		}
-		for _, table := range database.TableSet {
-			tableEntry, ok := databaseEntry.Tables[table.Schema.Name]
-			if !ok {
-				table.CommitInfo.Op = OpHardDelete
-				table.CommitInfo.CommitId = entry.Range.Right
-				continue
-			}
-			if tableEntry.NeedReplay {
-				catalog.onReplayTableCheckpoint(&tableEntry.LogEntry)
-			}
-			for _, segmentEntry := range tableEntry.Segments {
-				if segmentEntry.NeedReplay {
-					catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
-				}
-				for _, blockEntry := range segmentEntry.Blocks {
-					catalog.onReplayBlockCheckpoint(blockEntry)
-				}
-			}
-			delete(databaseEntry.Tables, table.Schema.Name)
-		}
+
+		//replay the tables in the database
+		currentDatabaseEntry = databaseEntry
+		db.LoopLocked(catalogProcessor)
 		for _, tableEntry := range databaseEntry.Tables {
-			if tableEntry.NeedReplay {
-				catalog.onReplayTableCheckpoint(&tableEntry.LogEntry)
-			}
-			for _, segmentEntry := range tableEntry.Segments {
-				if segmentEntry.NeedReplay {
-					catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
-				}
-				for _, blockEntry := range segmentEntry.Blocks {
-					catalog.onReplayBlockCheckpoint(blockEntry)
-				}
-			}
+			catalog.onReplayTableEntry(tableEntry)
 		}
-		delete(entry.Databases, database.Name)
+		delete(entry.Databases, db.Name)
+		return nil
+	}
+
+	catalogProcessor.TableFn = func(tb *Table) error {
+		tableEntry, ok := currentDatabaseEntry.Tables[tb.Schema.Name]
+		if !ok {
+			tb.CommitInfo.Op = OpHardDelete
+			tb.CommitInfo.CommitId = entry.Range.Right
+			return nil
+		}
+		catalog.onReplayTableEntry(tableEntry)
+		return nil
 	}
 
 	for _, databaseEntry := range entry.Databases {
@@ -478,17 +487,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			}
 		}
 		for _, tableEntry := range databaseEntry.Tables {
-			if tableEntry.NeedReplay {
-				catalog.onReplayTableCheckpoint(&tableEntry.LogEntry)
-			}
-			for _, segmentEntry := range tableEntry.Segments {
-				if segmentEntry.NeedReplay {
-					catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
-				}
-				for _, blockEntry := range segmentEntry.Blocks {
-					catalog.onReplayBlockCheckpoint(blockEntry)
-				}
-			}
+			catalog.onReplayTableEntry(tableEntry)
 		}
 	}
 	return nil
@@ -532,6 +531,7 @@ func (catalog *Catalog) Unmarshal(buf []byte) error {
 func (entry *catalogLogEntry) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, entry)
 }
+
 func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	catalogCkp := &catalogLogEntry{}
 	catalogCkp.Databases = map[string]*databaseCheckpoint{}
@@ -557,7 +557,8 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 			tableCkp.NeedReplay = true
 			tableCkp.LogEntry = tb.ToTableLogEntry()
 		}
-		catalogCkp.Databases[tb.Database.Name].Tables[tb.Schema.Name] = tableCkp
+		catalogCkp.Databases[tb.Database.Name].
+			Tables[tb.Schema.Name] = tableCkp
 		return nil
 	}
 
@@ -568,7 +569,8 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 			segmentCkp.NeedReplay = true
 			segmentCkp.LogEntry = *seg.toLogEntry()
 		}
-		tableCkp := catalogCkp.Databases[seg.Table.Database.Name].Tables[seg.Table.Schema.Name]
+		tableCkp := catalogCkp.Databases[seg.Table.Database.Name].
+			Tables[seg.Table.Schema.Name]
 		tableCkp.Segments = append(tableCkp.Segments, segmentCkp)
 		return nil
 	}
@@ -576,17 +578,20 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.BlockFn = func(blk *Block) error {
 		if blk.CommitInfo.CommitId > previousCheckpointId {
 			blkEntry := blk.toLogEntry()
-			segId:=blk.Segment.Id
-			segIdx:=blk.Segment.Table.IdIndex[segId]
-			segmentCkp := catalogCkp.Databases[blk.Segment.Table.Database.Name].Tables[blk.Segment.Table.Schema.Name].Segments[segIdx]
+			segId := blk.Segment.Id
+			segIdx := blk.Segment.Table.IdIndex[segId]
+			segmentCkp := catalogCkp.
+				Databases[blk.Segment.Table.Database.Name].
+				Tables[blk.Segment.Table.Schema.Name].Segments[segIdx]
 			segmentCkp.Blocks = append(segmentCkp.Blocks, blkEntry)
 		}
 		return nil
 	}
-	
+
 	catalog.RecurLoopLocked(processor)
-	
-	catalogCkp.Range = &common.Range{Left: previousCheckpointId + 1, Right: catalog.nextCommitId}
+
+	catalogCkp.Range = &common.Range{Left: previousCheckpointId + 1,
+		Right: catalog.nextCommitId}
 	return catalogCkp
 }
 

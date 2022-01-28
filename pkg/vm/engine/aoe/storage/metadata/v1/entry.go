@@ -58,7 +58,6 @@ type catalogLogEntry struct {
 	Databases map[string]*databaseCheckpoint
 	Range     *common.Range
 }
-
 func newDatabaseLogEntry(shardId, index uint64) *databaseLogEntry {
 	logRange := new(LogRange)
 	logRange.ShardId = shardId
