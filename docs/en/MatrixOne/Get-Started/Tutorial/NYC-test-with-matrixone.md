@@ -1,4 +1,4 @@
-# **Complete a NYC Test with MatrixOne**
+# **Complete a NTC Test with MatrixOne**
 
 **New York City (NTC) Taxi** data set captures detailed information on billions of individual taxi trips in New York City, including pick-up and drop-off dates/times, pick-up and drop-off locations, trip distances, itemized fares, rate types, payment types, and driver-reported passenger counts(Most of the raw data comes from the NYC Taxi & Limousine Commission).  
 
