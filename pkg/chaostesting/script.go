@@ -17,6 +17,7 @@ package fz
 import (
 	"errors"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/reusee/dscope"
@@ -99,6 +100,8 @@ func (_ Def) ScriptBuiltins(
 		"debug_9p": starlarkutil.MakeFunc("debug_9p", func(debug Debug9P) {
 			add(&debug)
 		}),
+
+		"os": starlark.String(runtime.GOOS),
 
 		//
 	}

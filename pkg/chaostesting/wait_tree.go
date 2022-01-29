@@ -15,10 +15,6 @@
 package fz
 
 import (
-	"context"
-	"os"
-	"os/signal"
-
 	"github.com/reusee/pr"
 )
 
@@ -31,17 +27,17 @@ func (_ Def) RootWaitTree() (
 	cleanup Cleanup,
 ) {
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
+	//ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
 	wt = RootWaitTree{
 		WaitTree: pr.NewRootWaitTree(
-			pr.BackgroundCtx(func() context.Context {
-				return ctx
-			}),
+		//pr.BackgroundCtx(func() context.Context {
+		//	return ctx
+		//}),
 		),
 	}
 
 	cleanup = func() {
-		cancel()
+		//cancel()
 		wt.Cancel()
 		wt.Wait()
 	}

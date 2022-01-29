@@ -14,26 +14,19 @@
 
 package fz
 
-import (
-	"testing"
-)
+import "os/exec"
 
-func Test9P(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "9p"
-	}, func() IsTesting {
-		return true
-	}, func() NetworkModel {
-		return "tun"
-	}, func() Debug9P {
-		return false
-	}).Call(func(
-		dir TempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
-
-		testFS(t, string(dir))
-
-	})
+func mount(target string, mountPoint string, fsType string, options string) error {
+	output, err := exec.Command(
+		"mount",
+		"-t", "9p",
+		"-o", options,
+		target,
+		mountPoint,
+	).CombinedOutput()
+	if err != nil {
+		pt("%s\n", output)
+		return err
+	}
+	return nil
 }

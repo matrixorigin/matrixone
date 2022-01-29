@@ -38,6 +38,7 @@ func (_ Def) NetworkHost(
 	id uuid.UUID,
 	model NetworkModel,
 	wt RootWaitTree,
+	filter FilterPacket,
 ) (
 	host NetworkHost,
 	cleanup Cleanup,
@@ -92,6 +93,10 @@ func (_ Def) NetworkHost(
 			},
 		})
 		ce(err)
+		wt.Go(func() {
+			<-wt.Ctx.Done()
+			ce(dev.Close())
+		})
 
 		link, err := netlink.LinkByName(dev.Name())
 		ce(err)
@@ -107,22 +112,22 @@ func (_ Def) NetworkHost(
 		const mtu = 1234
 		err = netlink.LinkSetMTU(link, mtu)
 		ce(err)
-		err = netlink.SetPromiscOn(link)
-		ce(err)
 
 		wt.Go(func() {
 			buf := make([]byte, mtu+123)
 			for {
-				_, err := dev.Read(buf)
+				n, err := dev.Read(buf)
 				if err != nil {
 					return
 				}
 
-				//TODO packet manipulation
+				packet := filter(buf[:n])
 
-				_, err = dev.Write(buf)
-				if err != nil {
-					return
+				if len(packet) > 0 {
+					_, err = dev.Write(packet)
+					if err != nil {
+						return
+					}
 				}
 			}
 		})

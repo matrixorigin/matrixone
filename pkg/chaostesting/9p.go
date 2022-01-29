@@ -23,7 +23,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"syscall"
 	"time"
 
@@ -51,7 +50,7 @@ func (_ Def) Setup9P(
 		end func() error,
 	) {
 
-		port := getPort()
+		port := getPort(math.MaxInt)
 		addr := net.JoinHostPort(string(host), port)
 		config := net.ListenConfig{}
 		ln, err := config.Listen(wt.Ctx, "tcp", addr)
@@ -78,23 +77,9 @@ func (_ Def) Setup9P(
 		t0 := time.Now()
 		for {
 
-			options := fmt.Sprintf("trans=tcp,port=%s,version=9p2000.L", port)
+			options := fmt.Sprintf("trans=tcp,port=%s,version=9p2000.L,cache=mmap", port)
 
-			err := syscall.Mount(
-				string(host),
-				mountPoint,
-				"9p",
-				0,
-				options,
-			)
-
-			//output, err := exec.Command(
-			//	"mount",
-			//	"-t", "9p",
-			//	"-o", options,
-			//	string(host),
-			//	mountPoint,
-			//).CombinedOutput()
+			err := mount(string(host), mountPoint, "9p", options)
 
 			if err == nil {
 				break
@@ -145,8 +130,6 @@ func (p *p9Attacher) Attach() (p9.File, error) {
 }
 
 type p9File struct {
-	sync.Mutex
-
 	id      uint64
 	version uint32
 	mode    p9.FileMode
@@ -204,9 +187,7 @@ func (h *p9Handle) Renamed(parent p9.File, newName string) {
 
 func (h *p9Handle) Walk(names []string) ([]p9.QID, p9.File, error) {
 	if len(names) == 0 {
-		h.file.Lock()
 		h.file.atime = time.Now()
-		defer h.file.Unlock()
 		return []p9.QID{
 			h.file.qid(),
 		}, h.clone(), nil
@@ -217,17 +198,13 @@ func (h *p9Handle) Walk(names []string) ([]p9.QID, p9.File, error) {
 	for len(names) > 0 {
 		name := names[0]
 		names = names[1:]
-		curFile.Lock()
 		curFile.atime = time.Now()
 		sub := curFile.find(name)
-		curFile.Unlock()
 		if sub == nil {
 			return qids, nil, os.ErrNotExist
 		}
-		sub.Lock()
 		sub.atime = time.Now()
 		qids = append(qids, sub.qid())
-		sub.Unlock()
 		curFile = sub
 	}
 
@@ -254,16 +231,15 @@ func (h *p9Handle) StatFS() (p9.FSStat, error) {
 }
 
 func (h *p9Handle) Open(mode p9.OpenFlags) (p9.QID, uint32, error) {
-	h.file.Lock()
 	h.file.atime = time.Now()
-	defer h.file.Unlock()
 	return h.file.qid(), h.file.version, nil
 }
 
 func (h *p9Handle) ReadAt(buf []byte, offset int64) (int, error) {
-	h.file.Lock()
+	if len(buf) == 0 {
+		return 0, nil
+	}
 	h.file.atime = time.Now()
-	defer h.file.Unlock()
 	n := copy(buf, h.file.content[offset:])
 	if n < len(buf) {
 		return n, io.EOF
@@ -297,16 +273,12 @@ func (f *p9File) attr() p9.Attr {
 }
 
 func (h *p9Handle) GetAttr(req p9.AttrMask) (p9.QID, p9.AttrMask, p9.Attr, error) {
-	h.file.Lock()
 	h.file.atime = time.Now()
-	defer h.file.Unlock()
 	return h.file.qid(), req, h.file.attr(), nil
 }
 
 func (h *p9Handle) SetAttr(mask p9.SetAttrMask, attr p9.SetAttr) error {
-	h.file.Lock()
 	h.file.mtime = time.Now()
-	defer h.file.Unlock()
 	if mask.Permissions {
 		h.file.mode = h.file.mode.FileType() | attr.Permissions
 	}
@@ -329,9 +301,7 @@ func (h *p9Handle) FSync() error {
 }
 
 func (h *p9Handle) WriteAt(data []byte, offset int64) (int, error) {
-	h.file.Lock()
 	h.file.mtime = time.Now()
-	defer h.file.Unlock()
 	if l := int(offset) + len(data); l > len(h.file.content) {
 		newContent := make([]byte, l)
 		copy(newContent, h.file.content)
@@ -342,9 +312,6 @@ func (h *p9Handle) WriteAt(data []byte, offset int64) (int, error) {
 }
 
 func (h *p9Handle) Create(name string, mode p9.OpenFlags, permissions p9.FileMode, uid p9.UID, gid p9.GID) (p9.File, p9.QID, uint32, error) {
-	h.file.Lock()
-	defer h.file.Unlock()
-
 	if sub := h.file.find(name); sub != nil {
 		return &p9Handle{
 			path: filepath.Join(h.path, name),
@@ -367,9 +334,6 @@ func (h *p9Handle) Create(name string, mode p9.OpenFlags, permissions p9.FileMod
 }
 
 func (h *p9Handle) Mkdir(name string, permissions p9.FileMode, uid p9.UID, gid p9.GID) (p9.QID, error) {
-	h.file.Lock()
-	defer h.file.Unlock()
-
 	if sub := h.file.find(name); sub != nil {
 		return p9.QID{}, os.ErrExist
 	}
@@ -384,9 +348,6 @@ func (h *p9Handle) Mkdir(name string, permissions p9.FileMode, uid p9.UID, gid p
 }
 
 func (h *p9Handle) Symlink(oldName string, newName string, _ p9.UID, _ p9.GID) (p9.QID, error) {
-	h.file.Lock()
-	defer h.file.Unlock()
-
 	if sub := h.file.find(newName); sub != nil {
 		return p9.QID{}, os.ErrExist
 	}
@@ -403,9 +364,7 @@ func (h *p9Handle) Symlink(oldName string, newName string, _ p9.UID, _ p9.GID) (
 
 func (h *p9Handle) Link(target p9.File, newName string) error {
 	targetHandle := target.(*p9Handle)
-	targetHandle.file.Lock()
 	targetHandle.file.set(newName, h.file)
-	targetHandle.file.Unlock()
 	return nil
 }
 
@@ -414,34 +373,25 @@ func (h *p9Handle) Mknod(name string, mode p9.FileMode, major uint32, minor uint
 }
 
 func (h *p9Handle) RenameAt(oldName string, newDir p9.File, newName string) error {
-	h.file.Lock()
 	sub := h.file.find(oldName)
 	if sub == nil {
-		h.file.Unlock()
 		return os.ErrNotExist
 	}
 	h.file.mtime = time.Now()
 	h.file.del(oldName)
-	h.file.Unlock()
 	newHandle := newDir.(*p9Handle)
-	newHandle.file.Lock()
 	newHandle.file.mtime = time.Now()
 	newHandle.file.set(newName, sub)
-	newHandle.file.Unlock()
 	return nil
 }
 
 func (h *p9Handle) UnlinkAt(name string, flags uint32) error {
-	h.file.Lock()
 	h.file.mtime = time.Now()
-	defer h.file.Unlock()
 	h.file.del(name)
 	return nil
 }
 
 func (h *p9Handle) Readdir(offset uint64, count uint32) (ret p9.Dirents, err error) {
-	h.file.Lock()
-	defer h.file.Unlock()
 	c := int(count)
 	for i := int(offset); i < len(h.file.subs); i++ {
 		if len(ret) >= c {
@@ -449,14 +399,12 @@ func (h *p9Handle) Readdir(offset uint64, count uint32) (ret p9.Dirents, err err
 		}
 		entry := h.file.subs[i]
 		file := entry.file
-		file.Lock()
 		ret = append(ret, p9.Dirent{
 			QID:    file.qid(),
 			Offset: offset + uint64(i),
 			Type:   file.mode.QIDType(),
 			Name:   entry.name,
 		})
-		file.Unlock()
 	}
 	if len(ret) < c {
 		return ret, io.EOF
@@ -465,8 +413,6 @@ func (h *p9Handle) Readdir(offset uint64, count uint32) (ret p9.Dirents, err err
 }
 
 func (h *p9Handle) Readlink() (string, error) {
-	h.file.Lock()
-	defer h.file.Unlock()
 	return h.file.symlink, nil
 }
 

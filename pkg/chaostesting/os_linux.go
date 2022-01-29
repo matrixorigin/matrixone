@@ -15,25 +15,15 @@
 package fz
 
 import (
-	"testing"
+	"syscall"
 )
 
-func Test9P(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "9p"
-	}, func() IsTesting {
-		return true
-	}, func() NetworkModel {
-		return "tun"
-	}, func() Debug9P {
-		return false
-	}).Call(func(
-		dir TempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
-
-		testFS(t, string(dir))
-
-	})
+func mount(target string, mountPoint string, fsType string, options string) error {
+	return syscall.Mount(
+		target,
+		mountPoint,
+		fsType,
+		0,
+		options,
+	)
 }

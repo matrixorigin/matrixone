@@ -16,6 +16,7 @@ package fz
 
 import (
 	"strconv"
+	"sync"
 	"sync/atomic"
 )
 
@@ -25,14 +26,15 @@ func (_ Def) PortRange() PortRange {
 	return PortRange{20000, 50000}
 }
 
-type GetPort func() uint16
+type GetPort func(nodeID NodeID) uint16
 
-type GetPortStr func() string
+type GetPortStr func(nodeID NodeID) string
 
 var nextPort uint32
 
 func (_ Def) GetPort(
 	portRange PortRange,
+	infos PortInfos,
 ) (
 	get GetPort,
 	getStr GetPortStr,
@@ -41,13 +43,34 @@ func (_ Def) GetPort(
 	lower := uint16(portRange[0])
 	mod := uint16(portRange[1] - portRange[0])
 
-	get = func() uint16 {
-		return lower + uint16(atomic.AddUint32(&nextPort, 1))%mod
+	get = func(nodeID NodeID) uint16 {
+		port := lower + uint16(atomic.AddUint32(&nextPort, 1))%mod
+		info := &PortInfo{
+			Port:   port,
+			NodeID: nodeID,
+		}
+		infos.Store(port, info)
+		return port
 	}
 
-	getStr = func() string {
-		return strconv.Itoa(int(get()))
+	getStr = func(nodeID NodeID) string {
+		return strconv.Itoa(int(get(nodeID)))
 	}
 
 	return
+}
+
+type PortInfo struct {
+	Port   uint16
+	NodeID NodeID
+}
+
+type PortInfos struct {
+	*sync.Map
+}
+
+func (_ Def) PortInfos() PortInfos {
+	return PortInfos{
+		Map: new(sync.Map),
+	}
 }

@@ -14,26 +14,10 @@
 
 package fz
 
-import (
-	"testing"
-)
+type FilterPacket func(packet []byte) []byte
 
-func Test9P(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "9p"
-	}, func() IsTesting {
-		return true
-	}, func() NetworkModel {
-		return "tun"
-	}, func() Debug9P {
-		return false
-	}).Call(func(
-		dir TempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
-
-		testFS(t, string(dir))
-
-	})
+func (_ Def) FilterPacket() FilterPacket {
+	return func(packet []byte) []byte {
+		return packet
+	}
 }
