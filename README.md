@@ -8,7 +8,7 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 
 ## **Key Features** 
 ### **Hyper-converged Engine**
-* **Monolitic Engine**
+* **Monolithic Engine**
   
      A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.
 
