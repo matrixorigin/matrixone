@@ -420,6 +420,7 @@ func (catalog *Catalog) GetCheckpointId() uint64 {
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
 	// TODO
 }
+
 func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
 	if entry.NeedReplay {
 		catalog.onReplayTableCheckpoint(&entry.LogEntry)
@@ -445,8 +446,9 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 
 		//delete the database if its checkpoint entry doesn't exist
 		if !ok {
-			db.CommitInfo.Op = OpHardDelete
-			db.CommitInfo.CommitId = entry.Range.Right
+			// db.CommitInfo.Op = OpHardDelete
+			// db.CommitInfo.CommitId = entry.Range.Right
+			catalog.unregisterDatabaseLocked(db)
 			return nil
 		}
 
@@ -538,13 +540,19 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	catalogCkp := &catalogLogEntry{}
 	catalogCkp.Databases = map[string]*databaseCheckpoint{}
 	previousCheckpointId := catalog.GetCheckpointId()
+	commitId := catalog.Store.GetSyncedId()
 
 	processor := new(LoopProcessor)
+
+	interval := &common.Range{
+		Left:  previousCheckpointId + 1,
+		Right: commitId,
+	}
 
 	processor.DatabaseFn = func(db *Database) error {
 		databaseCkp := &databaseCheckpoint{}
 		databaseCkp.Tables = make(map[string]*tableCheckpoint)
-		if db.CommitInfo.CommitId > previousCheckpointId {
+		if interval.ClosedIn(db.CommitInfo.CommitId) {
 			databaseCkp.NeedReplay = true
 			databaseCkp.LogEntry = db.ToDatabaseLogEntry()
 		}
@@ -555,7 +563,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.TableFn = func(tb *Table) error {
 		tableCkp := &tableCheckpoint{}
 		tableCkp.Segments = make([]*segmentCheckpoint, 0)
-		if tb.CommitInfo.CommitId > previousCheckpointId {
+		if interval.ClosedIn(tb.CommitInfo.CommitId) {
 			tableCkp.NeedReplay = true
 			tableCkp.LogEntry = tb.ToTableLogEntry()
 		}
@@ -567,7 +575,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.SegmentFn = func(seg *Segment) error {
 		segmentCkp := &segmentCheckpoint{}
 		segmentCkp.Blocks = make([]*blockLogEntry, 0)
-		if seg.CommitInfo.CommitId > previousCheckpointId {
+		if interval.ClosedIn(seg.CommitInfo.CommitId) {
 			segmentCkp.NeedReplay = true
 			segmentCkp.LogEntry = *seg.toLogEntry()
 		}
@@ -578,7 +586,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	}
 
 	processor.BlockFn = func(blk *Block) error {
-		if blk.CommitInfo.CommitId > previousCheckpointId {
+		if interval.ClosedIn(blk.CommitInfo.CommitId) {
 			blkEntry := blk.toLogEntry()
 			segId := blk.Segment.Id
 			segIdx := blk.Segment.Table.IdIndex[segId]

@@ -635,7 +635,6 @@ func TestCompact(t *testing.T) {
 }
 //delete table
 //delete db
-//loopprocesser
 
 func TestAppliedIndex(t *testing.T) {
 	dir := initTestEnv(t)
