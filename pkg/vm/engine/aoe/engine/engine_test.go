@@ -205,6 +205,7 @@ func TestAOEEngine(t *testing.T) {
 	}
 
 	tb.Close()
+	time.Sleep(1 * time.Second)
 
 	tb, err = db.Relation(mockTbl.Name)
 	require.Nil(t, err)
@@ -244,11 +245,11 @@ func TestAOEEngine(t *testing.T) {
 	readers := tb.NewReader(6)
 	for _, reader := range readers {
 		fileter := reader.NewSparseFilter()
-		reader,_ = fileter.Eq("mock_0", "start")
-		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
-
-		require.NoError(t, err)
-		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"})
+		reader,_ = fileter.Eq("mock_0", int32(0))
+		bat, err := reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
+		if bat != nil {
+			fmt.Printf("bat is %v", bat.Vecs[0].Col.([]int32)[0])
+		}
 		require.NoError(t, err)
 	}
 	num := tb.NewReader(15)
