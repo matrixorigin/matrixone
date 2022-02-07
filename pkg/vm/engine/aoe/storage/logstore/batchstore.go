@@ -17,7 +17,6 @@ package logstore
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 )
 
@@ -51,7 +50,6 @@ func NewBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, err
 
 func (s *batchStore) Checkpoint(entry Entry) error {
 	_, err := s.flushQueue.Enqueue(entry)
-	s.SetCheckpointId(entry.GetAuxilaryInfo().(*common.Range).Right)
 	return err
 }
 
