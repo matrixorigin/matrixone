@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -26,10 +27,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	workerBase "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
 var (
 	DefaultCheckpointDelta = uint64(10000)
+	DefaultCheckpointInterval = time.Minute
 )
 
 var (
@@ -67,6 +71,7 @@ type Catalog struct {
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
 	nameNodes       map[string]*nodeList `json:"-"`
+	checkpointer	workerBase.IHeartbeater
 
 	Databases map[uint64]*Database `json:"dbs"`
 }
@@ -96,9 +101,23 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
+	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
+		catalog:   catalog,
+	})
 	return catalog
 }
-
+type catalogCheckpointer struct{
+	catalog *Catalog
+}
+func (c *catalogCheckpointer)OnExec(){
+	previousCheckpointId := c.catalog.GetCheckpointId()
+	commitId := c.catalog.Store.GetSyncedId()
+	if commitId < previousCheckpointId+DefaultCheckpointDelta{
+		return
+	}
+	c.catalog.Checkpoint()
+}
+func (c *catalogCheckpointer)OnStopped(){}
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
