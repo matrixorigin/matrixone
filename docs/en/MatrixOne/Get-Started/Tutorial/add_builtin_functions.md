@@ -1,5 +1,5 @@
 
-### A little primer for add user defined functions
+### A little primer for adding builtin functions
 
 ##### add unary functions:
 
