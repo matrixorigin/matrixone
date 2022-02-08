@@ -587,7 +587,10 @@ func TestCompact(t *testing.T) {
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
 	cfg.RotationFileMaxSize = 100 * int(common.K)
-	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	catalog, _ := OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+	// catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
 	gen := shard.NewMockIndexAllocator()
@@ -609,29 +612,46 @@ func TestCompact(t *testing.T) {
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
 		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+		wg.Wait()
 	}
-	wg.Wait()
 	// t.Log(catalog.PString(PPL0, 0))
 
 	catalog.Checkpoint()
-	
+
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
 		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+		wg.Wait()
 	}
-	wg.Wait()
+
+	catalog.Checkpoint()
+
+	for i := 0; i < ws; i++ {
+		wg.Add(1)
+		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+		wg.Wait()
+	}
+
 	catalog.Checkpoint()
 
 	getSegmentedIdWorker.Stop()
 	logutil.Infof(catalog.PString(PPL0, 0))
-	logutil.Infof("sequence number is %v",catalog.Sequence)
+	logutil.Infof("sequence number is %v", catalog.Sequence)
+	logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
-	catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
+	time.Sleep(time.Second * 2)
+	logutil.Infof("new catalog************")
+	driver, _ = logstore.NewBatchStore(dir, "driver", nil)
+	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
-	// logutil.Infof(catalog.PString(PPL0, 0))
-	logutil.Infof("sequence number is %v",catalog.Sequence)
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v", catalog.Sequence)
+	logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
 }
+
 //delete table
 //delete db
 

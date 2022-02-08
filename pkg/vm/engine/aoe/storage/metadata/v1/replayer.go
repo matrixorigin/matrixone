@@ -480,6 +480,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		c := &catalogLogEntry{}
 		c.Unmarshal(entry.GetPayload())
 		observer.OnReplayCheckpoint(*c.Range)
+		for shardid,id := range c.SafeIds{
+			safeId:=shard.SafeId{ShardId: shardid, Id: id}
+			replayer.cache.OnShardSafeId(safeId)
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:          logstore.ETCheckpoint,
 			catalogEntry: c,

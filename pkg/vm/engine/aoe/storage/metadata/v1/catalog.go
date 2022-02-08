@@ -32,7 +32,7 @@ import (
 )
 
 var (
-	DefaultCheckpointDelta = uint64(10000)
+	DefaultCheckpointDelta    = uint64(10000)
 	DefaultCheckpointInterval = time.Minute
 )
 
@@ -71,7 +71,7 @@ type Catalog struct {
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
 	nameNodes       map[string]*nodeList `json:"-"`
-	checkpointer	workerBase.IHeartbeater
+	checkpointer    workerBase.IHeartbeater
 
 	Databases map[uint64]*Database `json:"dbs"`
 }
@@ -102,22 +102,26 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-		catalog:   catalog,
+		catalog: catalog,
 	})
 	return catalog
 }
-type catalogCheckpointer struct{
+
+type catalogCheckpointer struct {
 	catalog *Catalog
 }
-func (c *catalogCheckpointer)OnExec(){
+
+func (c *catalogCheckpointer) OnExec() {
 	previousCheckpointId := c.catalog.GetCheckpointId()
 	commitId := c.catalog.Store.GetSyncedId()
-	if commitId < previousCheckpointId+DefaultCheckpointDelta{
+	if commitId < previousCheckpointId+DefaultCheckpointDelta {
 		return
 	}
 	c.catalog.Checkpoint()
+	c.catalog.onCheckpoint()
 }
-func (c *catalogCheckpointer)OnStopped(){}
+func (c *catalogCheckpointer) OnStopped() {}
+
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
@@ -145,7 +149,7 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-		catalog:   catalog,
+		catalog: catalog,
 	})
 	return catalog
 }
@@ -442,7 +446,7 @@ func (catalog *Catalog) GetCheckpointId() uint64 {
 }
 
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
-	// TODO
+	catalog.Store.TryCompact()
 }
 
 func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
@@ -562,6 +566,9 @@ func (entry *catalogLogEntry) Unmarshal(buf []byte) error {
 
 func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	catalogCkp := &catalogLogEntry{}
+	if catalog.IndexWal != nil {
+		catalogCkp.SafeIds = catalog.IndexWal.GetAllShardCheckpointId()
+	}
 	catalogCkp.Databases = map[string]*databaseCheckpoint{}
 	previousCheckpointId := catalog.GetCheckpointId()
 	commitId := catalog.Store.GetSyncedId()

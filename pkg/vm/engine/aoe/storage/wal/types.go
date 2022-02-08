@@ -43,6 +43,7 @@ type Wal interface {
 type ShardAwareWal interface {
 	Wal
 	InitShard(uint64, uint64) error
+	GetAllShardCheckpointId() map[uint64]uint64
 	GetShardCheckpointId(uint64) uint64
 	GetShardCurrSeqNum(uint64) uint64
 	GetShardPendingCnt(uint64) int
