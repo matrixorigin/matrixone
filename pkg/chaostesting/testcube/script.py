@@ -1,11 +1,15 @@
 # number of parallel test cases running in `run` command
-parallel(1)
+parallel(4)
 
 # port range for cube to use
 port_range(40000, 50000)
 
 # threshold for timeout reporting
 timeout_report_threshold(1)
+
+# during this period, retry a get/set action if timeout occur
+# after a node restart, timeouts are highly possible
+retry_timeout(second * 15)
 
 # timeout of single test case
 execute_timeout(15 * minute)
@@ -34,13 +38,13 @@ set_network_model()
 # os: use os.TempDir()
 # fuse: use in-memory fuse fs
 # 9p: use 9p fs
-def set_temp_dir_mode():
-    if os == 'linux':
-        temp_dir_model("9p")
-    else:
-        temp_dir_model('os')
-
-set_temp_dir_mode()
+#def set_temp_dir_mode():
+#    if os == 'linux':
+#        temp_dir_model("9p")
+#    else:
+#        temp_dir_model('os')
+#set_temp_dir_mode()
+temp_dir_model('os')
 
 # enable fgprof github.com/felixge/fgprof
 enable_fg_profile(False)

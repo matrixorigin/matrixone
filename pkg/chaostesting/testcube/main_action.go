@@ -106,21 +106,31 @@ func (_ Def2) MainAction(
 				// network
 				mutations := []func(action *ActionBlockNetwork){
 					func(action *ActionBlockNetwork) {
-						action.BlockInbound = true
+						// block all inbound
+						for inbound := fz.NodeID(0); inbound < fz.NodeID(numNodes); inbound++ {
+							action.BlockInboundNodes = append(action.BlockInboundNodes, inbound)
+						}
 					},
 					func(action *ActionBlockNetwork) {
-						action.BlockOutbound = true
+						// block all outbound
+						for outbound := fz.NodeID(0); outbound < fz.NodeID(numNodes); outbound++ {
+							action.BlockOutboundNodes = append(action.BlockOutboundNodes, outbound)
+						}
 					},
 					func(action *ActionBlockNetwork) {
+						// block random inbound
 						action.BlockInboundNodes = append(action.BlockInboundNodes,
 							fz.NodeID(rand.Intn(int(numNodes))))
 					},
 					func(action *ActionBlockNetwork) {
+						// block random outbound
 						action.BlockOutboundNodes = append(action.BlockOutboundNodes,
 							fz.NodeID(rand.Intn(int(numNodes))))
 					},
 				}
-				action := ActionBlockNetwork{}
+				action := ActionBlockNetwork{
+					NodeID: fz.NodeID(i),
+				}
 				for i := 0; i < 1+rand.Intn(2); i++ {
 					mutations[rand.Intn(len(mutations))](&action)
 				}

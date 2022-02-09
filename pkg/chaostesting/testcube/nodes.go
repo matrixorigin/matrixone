@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/storage/kv/mem"
+	"github.com/matrixorigin/matrixcube/transport"
 	"github.com/matrixorigin/matrixcube/vfs"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -39,6 +40,7 @@ func (_ Def2) Nodes(
 	logger fz.Logger,
 	netHost fz.NetworkHost,
 	getPort fz.GetPortStr,
+	newInterceptableTransport NewInterceptableTransport,
 ) (nodes fz.Nodes) {
 
 	host := string(netHost)
@@ -131,6 +133,10 @@ func (_ Def2) Nodes(
 				snapshotApplied: func(shard meta.Shard) {
 				},
 			}
+		}
+
+		conf.Customize.CustomWrapNewTransport = func(t transport.Trans) transport.Trans {
+			return newInterceptableTransport(t, nodes)
 		}
 
 		node.Config = conf
