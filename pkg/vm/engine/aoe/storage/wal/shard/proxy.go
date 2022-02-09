@@ -192,7 +192,7 @@ func (p *proxy) logIndexLocked(index *Index) {
 	if index.Id.Id > p.lastIndex+uint64(1) {
 		p.stopmask.AddRange(p.lastIndex+uint64(1), index.Id.Id)
 	} else if index.Id.Id < p.lastIndex {
-		panic(fmt.Sprintf("logic error: lastIndex-%d, currIndex-%d", p.lastIndex, index.Id.Id))
+		panic(fmt.Sprintf("logic error: S-%v lastIndex-%d, currIndex-%d", index.ShardId, p.lastIndex, index.Id.Id))
 	}
 	p.lastIndex = index.Id.Id
 }

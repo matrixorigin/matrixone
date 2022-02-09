@@ -580,6 +580,7 @@ func TestReplay(t *testing.T) {
 func TestCompact(t *testing.T) {
 	dir := initTestEnv(t)
 	dbcount := 5
+	deletedDbCount := 2
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -589,7 +590,7 @@ func TestCompact(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 100 * int(common.K)
+	cfg.RotationFileMaxSize = 50 * int(common.K)
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -608,6 +609,8 @@ func TestCompact(t *testing.T) {
 		idx := gen.Next(uint64(i))
 		dbName := "db" + strconv.Itoa(i)
 		db, _ := catalog.SimpleCreateDatabase(dbName, idx)
+		db.Wal.SyncLog(idx)
+		db.Wal.Checkpoint(idx)
 		dbs = append(dbs, db)
 		getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
 		getSegmentedIdWorker.Start()
@@ -631,9 +634,14 @@ func TestCompact(t *testing.T) {
 
 	catalog.Checkpoint()
 
-	catalog.SimpleDropDatabaseByName(dbs[0].Name, gen.Next(dbs[0].GetShardId()))
-	db, _ := catalog.SimpleCreateDatabase(dbs[0].Name, gen.Next(0))
-	dbs[0] = db
+	for i := 0; i < deletedDbCount; i++ {
+		catalog.SimpleDropDatabaseByName(dbs[i].Name, gen.Next(dbs[i].GetShardId()))
+		idx := gen.Next(0)
+		db, _ := catalog.SimpleCreateDatabase(dbs[i].Name, idx)
+		db.Wal.SyncLog(idx)
+		db.Wal.Checkpoint(idx)
+		dbs[i] = db
+	}
 
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
