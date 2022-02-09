@@ -49,13 +49,13 @@ type tableCheckpoint struct {
 }
 
 type databaseCheckpoint struct {
-	Tables     map[string]*tableCheckpoint
+	Tables     map[uint64]*tableCheckpoint
 	NeedReplay bool
 	LogEntry   databaseLogEntry
 }
 
 type catalogLogEntry struct {
-	Databases map[string]*databaseCheckpoint
+	Databases map[uint64]*databaseCheckpoint
 	SafeIds   map[uint64]uint64
 	Range     *common.Range
 }

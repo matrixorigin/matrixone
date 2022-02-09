@@ -654,7 +654,7 @@ func TestCompact(t *testing.T) {
 	}
 
 	// time.Sleep(time.Second * 2)
-	logutil.Infof(catalog.PString(3, 0))
+	logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
@@ -665,7 +665,7 @@ func TestCompact(t *testing.T) {
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
-	logutil.Infof(catalog.PString(3, 0))
+	logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
