@@ -118,7 +118,6 @@ func (c *catalogCheckpointer) OnExec() {
 		return
 	}
 	c.catalog.Checkpoint()
-	c.catalog.onCheckpoint()
 }
 func (c *catalogCheckpointer) OnStopped() {}
 

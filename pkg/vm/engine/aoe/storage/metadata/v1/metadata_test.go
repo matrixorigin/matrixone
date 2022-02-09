@@ -586,8 +586,13 @@ func TestCompact(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 100 * int(common.K)
-	driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+	cfg.RotationFileMaxSize = 50 * int(common.K)
+
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ := OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 	// catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
@@ -638,10 +643,10 @@ func TestCompact(t *testing.T) {
 	logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	logutil.Infof("safe id is %v", catalog.IndexWal.String())
-	catalog.Close()
 	time.Sleep(time.Second * 2)
-	logutil.Infof("new catalog************")
-	driver, _ = logstore.NewBatchStore(dir, "driver", nil)
+	catalog.Close()
+	logutil.Infof("new catalog\n************\n")
+	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", nil)
 	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
