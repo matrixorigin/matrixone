@@ -221,7 +221,11 @@ func (catalog *Catalog) Start() {
 func (catalog *Catalog) Close() error {
 	catalog.checkpointer.Stop()
 	catalog.Stop()
-	catalog.Store.Close()
+	if catalog.IndexWal!= nil{
+		catalog.IndexWal.Close()
+	} else {
+		catalog.Store.Close()
+	} 
 	logutil.Infof("[AOE] Safe synced id %d", catalog.GetSafeCommitId())
 	logutil.Infof("[AOE] Safe checkpointed id %d", catalog.GetCheckpointId())
 	return nil

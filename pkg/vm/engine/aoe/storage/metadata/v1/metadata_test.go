@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -577,6 +579,7 @@ func TestReplay(t *testing.T) {
 }
 func TestCompact(t *testing.T) {
 	dir := initTestEnv(t)
+	dbcount := 5
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -586,7 +589,7 @@ func TestCompact(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 50 * int(common.K)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -599,16 +602,21 @@ func TestCompact(t *testing.T) {
 	catalog.Start()
 
 	gen := shard.NewMockIndexAllocator()
-	idx := gen.Next(0)
-	dbName := "db1"
-	db, _ := catalog.SimpleCreateDatabase(dbName, idx)
+	dbs := make([]*Database, 0, dbcount)
+	getSegmentedIdWorkers := make([]base.IHeartbeater, 0, dbcount)
+	for i := 0; i < dbcount; i++ {
+		idx := gen.Next(uint64(i))
+		dbName := "db" + strconv.Itoa(i)
+		db, _ := catalog.SimpleCreateDatabase(dbName, idx)
+		dbs = append(dbs, db)
+		getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
+		getSegmentedIdWorker.Start()
+		getSegmentedIdWorkers = append(getSegmentedIdWorkers, getSegmentedIdWorker)
+	}
 
-	ws := 5
+	ws := dbcount
 	createBlkWorker, _ := ants.NewPool(ws)
 	upgradeSegWorker, _ := ants.NewPool(4)
-
-	getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
-	getSegmentedIdWorker.Start()
 
 	var wg sync.WaitGroup
 
@@ -616,42 +624,48 @@ func TestCompact(t *testing.T) {
 
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
-		wg.Wait()
+		createBlkWorker.Submit(createBlock(t, 1, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
 	}
+	wg.Wait()
 	// t.Log(catalog.PString(PPL0, 0))
 
 	catalog.Checkpoint()
 
+	catalog.SimpleDropDatabaseByName(dbs[0].Name, gen.Next(dbs[0].GetShardId()))
+	db, _ := catalog.SimpleCreateDatabase(dbs[0].Name, gen.Next(0))
+	dbs[0] = db
+
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
-		wg.Wait()
+		createBlkWorker.Submit(createBlock(t, 1, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
 	}
+	wg.Wait()
 
 	catalog.Checkpoint()
 
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
-		wg.Wait()
+		createBlkWorker.Submit(createBlock(t, 1, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+	}
+	wg.Wait()
+
+	for _, worker := range getSegmentedIdWorkers {
+		worker.Stop()
 	}
 
-	catalog.Checkpoint()
-
-	getSegmentedIdWorker.Stop()
-	logutil.Infof(catalog.PString(PPL0, 0))
+	// time.Sleep(time.Second * 2)
+	logutil.Infof(catalog.PString(3, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	logutil.Infof("safe id is %v", catalog.IndexWal.String())
-	time.Sleep(time.Second * 2)
 	catalog.Close()
-	logutil.Infof("new catalog\n************\n")
-	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", nil)
+
+	logutil.Infof("\n\n******new catalog******\n")
+	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
-	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof(catalog.PString(3, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
@@ -1501,6 +1515,7 @@ func TestIndice(t *testing.T) {
 	t.Log(catalog.PString(PPL0, 0))
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
 	assert.Equal(t, "idx-1", table.GetIndexSchema().Indice[0].Name)
+	catalog.Start()
 
 	catalog.Close()
 }

@@ -33,6 +33,7 @@ import (
 
 var (
 	DefaultSuffix string = ".rot"
+	DefaultRotationFileMaxSize = 100 * int(common.M)
 )
 
 func MakeVersionFile(prefix, suffix string, version uint64) string {
@@ -71,7 +72,9 @@ type Rotational struct {
 
 func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {
 	if checker == nil {
-		checker = &noRotationChecker{}
+		checker = &MaxSizeRotationChecker{
+			MaxSize: DefaultRotationFileMaxSize,
+		}
 	}
 	if observer == nil {
 		observer = defaultObserver
