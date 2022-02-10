@@ -15,12 +15,17 @@
 package fz
 
 import (
-	"constraints"
 	"fmt"
 	"math/rand"
 )
 
-func RandBetween[T constraints.Integer, T2 constraints.Integer](target *T, lower T2, upper T2) {
+type number interface {
+  ~int | ~int8 | ~int16 | ~int32 | ~int64 |
+  ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+  ~float32 | ~float64
+}
+
+func RandBetween[T number, T2 number](target *T, lower T2, upper T2) {
 	if lower == upper {
 		*target = T(lower)
 		return

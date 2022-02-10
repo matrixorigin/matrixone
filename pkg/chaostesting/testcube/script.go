@@ -46,5 +46,9 @@ func (_ Def) ScriptBuiltins(
 		"enable_fg_profile": starlarkutil.MakeFunc("enable_fg_profile", func(enable EnableFGProfile) {
 			add(&enable)
 		}),
+
+		"retry_timeout": starlarkutil.MakeFunc("retry_timeout", func(timeout RetryTimeout) {
+			add(&timeout)
+		}),
 	}
 }

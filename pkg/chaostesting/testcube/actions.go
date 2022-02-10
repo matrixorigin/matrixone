@@ -50,8 +50,7 @@ type ActionCrashNode struct {
 }
 
 type ActionBlockNetwork struct {
-	BlockInbound       bool        `xml:",attr"`
-	BlockOutbound      bool        `xml:",attr"`
+	NodeID             fz.NodeID   `xml:",attr"`
 	BlockInboundNodes  []fz.NodeID `xml:"BlockInboundNode"`
 	BlockOutboundNodes []fz.NodeID `xml:"BlockOutboundNode"`
 }

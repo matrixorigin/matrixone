@@ -32,6 +32,8 @@ func (_ Def2) Do(
 	closeNode fz.CloseNode,
 	restartNode RestartNode,
 	timeoutCounter TimeoutCounter,
+	retryTimeout RetryTimeout,
+	block BlockNetwork,
 ) fz.Do {
 
 	var kvs []*KV
@@ -76,9 +78,15 @@ func (_ Def2) Do(
 			wait()
 			return log(
 				func() (int, any, any, error) {
+					t0 := time.Now()
+				do:
 					if err := kvs[action.ClientID].Set(action.Key, action.Value, time.Minute*10); err != nil {
 						if errors.Is(err, raftstore.ErrTimeout) {
 							// timeout
+							if time.Since(t0) < time.Duration(retryTimeout) {
+								time.Sleep(time.Millisecond * 200)
+								goto do
+							}
 							atomic.AddInt64(timeoutCounter, 1)
 							return int(threadID), [2]any{"set", action.Key}, fz.KVResultTimeout, nil
 						}
@@ -97,11 +105,17 @@ func (_ Def2) Do(
 			wait()
 			return log(
 				func() (int, any, any, error) {
+					t0 := time.Now()
+				do:
 					var res int
 					ok, err := kvs[action.ClientID].Get(action.Key, &res, time.Minute*10)
 					if err != nil {
 						if errors.Is(err, raftstore.ErrTimeout) {
 							// timeout
+							if time.Since(t0) < time.Duration(retryTimeout) {
+								time.Sleep(time.Millisecond * 200)
+								goto do
+							}
 							atomic.AddInt64(timeoutCounter, 1)
 							return int(threadID), [2]any{"get", action.Key}, fz.KVResultTimeout, nil
 						}
@@ -129,7 +143,12 @@ func (_ Def2) Do(
 			return restartNode(fz.NodeID(action.NodeID))
 
 		case ActionBlockNetwork:
-			//TODO
+			for _, inbound := range action.BlockInboundNodes {
+				block(inbound, action.NodeID)
+			}
+			for _, outbound := range action.BlockOutboundNodes {
+				block(action.NodeID, outbound)
+			}
 			return nil
 
 		default:
@@ -170,4 +189,10 @@ func (_ Def) ReportTimeout(
 			},
 		},
 	}
+}
+
+type RetryTimeout time.Duration
+
+func (_ Def) RetryTimeout() RetryTimeout {
+	return RetryTimeout(time.Second * 15)
 }
