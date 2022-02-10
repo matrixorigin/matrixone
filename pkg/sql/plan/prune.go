@@ -354,7 +354,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 		if isZero(re) {
 			return nil, ErrDivByZero
 		}
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -405,7 +405,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 		}
 		return div(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -567,7 +567,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -615,7 +615,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return mul(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -669,7 +669,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -717,7 +717,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return plus(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -771,7 +771,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -819,7 +819,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return minus(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -873,7 +873,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -928,7 +928,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Eq(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -989,7 +989,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -1044,7 +1044,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Ne(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -1105,7 +1105,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -1160,7 +1160,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Lt(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -1221,7 +1221,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -1276,7 +1276,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Le(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -1337,7 +1337,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -1392,7 +1392,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Gt(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
@@ -1453,7 +1453,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 	re, rok := e.Right.(*extend.ValueExtend)
 	switch {
 	case !lok && rok:
-		switch e.Left.ReturnType() {
+		switch e.Right.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(re); err != nil {
 				return nil, err
@@ -1508,7 +1508,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 	case lok && rok:
 		return Ge(le, re)
 	case lok && !rok:
-		switch e.Right.ReturnType() {
+		switch e.Left.ReturnType() {
 		case types.T_int8:
 			if err := toInt8(le); err != nil {
 				return nil, err
