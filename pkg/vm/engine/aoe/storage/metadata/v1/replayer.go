@@ -214,7 +214,7 @@ type catalogReplayer struct {
 	replayed int
 	offset   int64
 	cache    *replayCache
-	version uint64
+	version  uint64
 }
 
 func newCatalogReplayer() *catalogReplayer {
@@ -280,9 +280,9 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
-	if replayer.version!= r.Version{
-		replayer.offset=0
-		replayer.version=r.Version
+	if replayer.version != r.Version {
+		replayer.offset = 0
+		replayer.version = r.Version
 	}
 	if r.Size == replayer.offset {
 		// Have read to the end of the file.

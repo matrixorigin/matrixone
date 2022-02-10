@@ -221,11 +221,11 @@ func (catalog *Catalog) Start() {
 func (catalog *Catalog) Close() error {
 	catalog.checkpointer.Stop()
 	catalog.Stop()
-	if catalog.IndexWal!= nil{
+	if catalog.IndexWal != nil {
 		catalog.IndexWal.Close()
 	} else {
 		catalog.Store.Close()
-	} 
+	}
 	logutil.Infof("[AOE] Safe synced id %d", catalog.GetSafeCommitId())
 	logutil.Infof("[AOE] Safe checkpointed id %d", catalog.GetCheckpointId())
 	return nil
@@ -510,6 +510,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			return nil
 		}
 		catalog.onReplayTableEntry(tableEntry)
+		delete(currentDatabaseEntry.Tables, tb.Id)
 		return nil
 	}
 	catalog.LoopLocked(catalogProcessor)
@@ -898,7 +899,7 @@ func (catalog *Catalog) onReplayTableCheckpoint(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl, ok := db.TableSet[entry.Table.Id]
 	if ok {
-		return tbl.onCommit(entry.CommitInfo)
+		return tbl.onCommit(entry.Table.CommitInfo)
 	}
 	tbl = NewEmptyTableEntry(db)
 	tbl.BaseEntry = entry.Table.BaseEntry
