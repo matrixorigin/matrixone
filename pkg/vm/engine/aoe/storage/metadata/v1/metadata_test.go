@@ -581,10 +581,10 @@ func TestCompact(t *testing.T) {
 	dir := initTestEnv(t)
 	totaldbcount := 5
 	droppedDbCount := 2
-	// deletedDbCount := 1
+	deletedDbCount := 1
 	tableCountPerTurn := 3
 	droppedTableCount := 2
-	// deletedTableCount := 1
+	deletedTableCount := 1
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -644,6 +644,12 @@ func TestCompact(t *testing.T) {
 		db.Wal.SyncLog(idx)
 		catalog.SimpleDropDatabaseByName(db.Name, idx)
 		db.Wal.Checkpoint(idx)
+		if i < deletedDbCount {
+			testutils.WaitExpect(100, func() bool {
+				return db.UncheckpointedCnt() == 0
+			})
+			catalog.SimpleHardDeleteDatabase(db.Id)
+		}
 
 		db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
 		idx = gen.Next(db.GetShardId())
@@ -662,14 +668,18 @@ func TestCompact(t *testing.T) {
 		db := dbs[i]
 		tables := db.SimpleGetTableNames()
 		for j := 0; j < droppedTableCount; j++ {
+			tb := db.SimpleGetTableByName(tables[j])
 			idx := gen.Next(db.GetShardId())
 			db.Wal.SyncLog(idx)
 			db.SimpleDropTableByName(tables[j], idx)
 			db.Wal.Checkpoint(idx)
+			if j < deletedTableCount {
+				db.SimpleHardDeleteTable(tb.Id)
+			}
 
 		}
 	}
-
+	catalog.Compact(nil, nil)
 	catalog.Checkpoint()
 
 	for i := 0; i < ws; i++ {
@@ -693,7 +703,6 @@ func TestCompact(t *testing.T) {
 	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
-	logutil.Infof("lalala")
 	catalog.Start()
 	logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
@@ -701,8 +710,8 @@ func TestCompact(t *testing.T) {
 	catalog.Close()
 }
 
-//delete table
-//delete db
+//catalog compact & gc
+//random ckp
 
 func TestAppliedIndex(t *testing.T) {
 	dir := initTestEnv(t)
