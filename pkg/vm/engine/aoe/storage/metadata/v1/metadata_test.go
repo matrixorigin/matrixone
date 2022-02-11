@@ -577,7 +577,7 @@ func TestReplay(t *testing.T) {
 
 	catalog.Close()
 }
-func TestCompact(t *testing.T) {
+func TestCheckpoint(t *testing.T) {
 	dir := initTestEnv(t)
 	totaldbcount := 5
 	droppedDbCount := 2
@@ -585,18 +585,20 @@ func TestCompact(t *testing.T) {
 	tableCountPerTurn := 3
 	droppedTableCount := 2
 	deletedTableCount := 1
-	catalogCheckpointIntervel := time.Second
-	testduration := time.Second * 5
+	catalogCheckpointIntervel := 100 * time.Millisecond
+	testduration := 250 * time.Millisecond
+	versionFileSize := 100 * int(common.K)
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
 		hbInterval *= 3
 	}
 
+	// open catalog
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 500 * int(common.K)
+	cfg.RotationFileMaxSize = versionFileSize
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -605,9 +607,9 @@ func TestCompact(t *testing.T) {
 	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ := OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
-	// catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
+	//create databases
 	gen := shard.NewMockIndexAllocator()
 	dbs := make([]*Database, 0, totaldbcount)
 	getSegmentedIdWorkers := make([]base.IHeartbeater, 0, totaldbcount)
@@ -633,6 +635,7 @@ func TestCompact(t *testing.T) {
 
 	stopChenal := make(chan interface{})
 
+	// do checkpoint 
 	go func() {
 		for {
 			select {
@@ -645,6 +648,12 @@ func TestCompact(t *testing.T) {
 		}
 	}()
 
+	// create table, segments and blocks
+	// drop, hard delete and create databases, total number remains the same
+	// create table, segments and blocks
+	// drop, hard delete and create tables
+	// compact
+	// create tables, segments and blocks
 	go func() {
 
 		for {
@@ -652,6 +661,8 @@ func TestCompact(t *testing.T) {
 			case <-stopChenal:
 				return
 			default:
+
+				// create table, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
 					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
@@ -659,34 +670,37 @@ func TestCompact(t *testing.T) {
 				wg.Wait()
 				// t.Log(catalog.PString(PPL0, 0))
 
-				// catalog.Checkpoint()
-
+				// drop, hard delete and create databases
 				for i := 0; i < droppedDbCount; i++ {
 					db := dbs[i]
+					//drop
 					idx := gen.Next(db.GetShardId())
 					db.Wal.SyncLog(idx)
 					catalog.SimpleDropDatabaseByName(db.Name, idx)
 					db.Wal.Checkpoint(idx)
+					//hard delete
 					if i < deletedDbCount {
 						testutils.WaitExpect(100, func() bool {
 							return db.UncheckpointedCnt() == 0
 						})
 						catalog.SimpleHardDeleteDatabase(db.Id)
 					}
-
+					//create databases
 					db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
 					idx = gen.Next(db.GetShardId())
 					db.Wal.SyncLog(idx)
 					db.Wal.Checkpoint(idx)
 					dbs[i] = db
 				}
-
+				
+				// create table, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
 					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
 				}
 				wg.Wait()
 
+				// drop, hard delete and create tables
 				for i := 0; i < ws; i++ {
 					db := dbs[i]
 					tables := db.SimpleGetTableNames()
@@ -700,19 +714,23 @@ func TestCompact(t *testing.T) {
 							}
 							k++
 						}
+						//drop tables 
 						idx := gen.Next(db.GetShardId())
 						db.Wal.SyncLog(idx)
 						db.SimpleDropTableByName(tables[j+k], idx)
 						db.Wal.Checkpoint(idx)
+						//hard delete the table
 						if j < deletedTableCount {
 							db.SimpleHardDeleteTable(tb.Id)
 						}
-
 					}
 				}
-				catalog.Compact(nil, nil)
-				// catalog.Checkpoint()
 
+				// compact
+				catalog.Compact(nil, nil)
+
+				
+				// create tables, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
 					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
@@ -724,28 +742,28 @@ func TestCompact(t *testing.T) {
 	}()
 
 	time.Sleep(testduration)
-
 	close(stopChenal)
 
 	for _, worker := range getSegmentedIdWorkers {
 		worker.Stop()
 	}
 
-	// time.Sleep(time.Second * 2)
-	logutil.Infof(catalog.PString(PPL0, 0))
-	logutil.Infof("sequence number is %v", catalog.Sequence)
-	logutil.Infof("safe id is %v", catalog.IndexWal.String())
+	// logutil.Infof(catalog.PString(PPL0, 0))
+	// logutil.Infof("sequence number is %v", catalog.Sequence)
+	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
 
 	logutil.Infof("\n\n******new catalog******\n")
+
+	// open and relay the catalog
 	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
-	// catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
+
 	catalog.Start()
-	logutil.Infof(catalog.PString(PPL0, 0))
-	logutil.Infof("sequence number is %v", catalog.Sequence)
-	logutil.Infof("safe id is %v", catalog.IndexWal.String())
+	// logutil.Infof(catalog.PString(PPL0, 0))
+	// logutil.Infof("sequence number is %v", catalog.Sequence)
+	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
 }
 
