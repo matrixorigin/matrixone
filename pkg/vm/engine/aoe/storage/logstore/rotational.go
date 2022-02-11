@@ -72,9 +72,10 @@ type Rotational struct {
 
 func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {
 	if checker == nil {
-		checker = &MaxSizeRotationChecker{
-			MaxSize: DefaultRotationFileMaxSize,
-		}
+		checker = &noRotationChecker{}
+		// checker = &MaxSizeRotationChecker{
+		// 	MaxSize: DefaultRotationFileMaxSize,
+		// }
 	}
 	if observer == nil {
 		observer = defaultObserver

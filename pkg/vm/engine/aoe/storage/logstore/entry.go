@@ -230,6 +230,7 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) 
 	if auxilary == nil {
 		return n1 + n2, nil
 	}
+
 	if e.Meta.IsCheckpoint() {
 		r := auxilary.(*common.Range)
 		w.ApplyCheckpoint(*r)

@@ -596,7 +596,7 @@ func TestCompact(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 100 * int(common.M)
+	cfg.RotationFileMaxSize = 500 * int(common.K)
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{

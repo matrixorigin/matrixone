@@ -85,8 +85,6 @@ func (s *batchStore) Close() error {
 		return nil
 	}
 	s.flushQueue.Stop()
-	s.file.Sync()
-	s.file.Close()
 	s.wg.Wait()
 	return nil
 }

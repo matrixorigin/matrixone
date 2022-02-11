@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-	worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
-	workerBase "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	// worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	// workerBase "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
 var (
@@ -72,7 +72,7 @@ type Catalog struct {
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
 	nameNodes       map[string]*nodeList `json:"-"`
-	checkpointer    workerBase.IHeartbeater
+	// checkpointer    workerBase.IHeartbeater
 
 	Databases map[uint64]*Database `json:"dbs"`
 }
@@ -102,9 +102,9 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
-	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-		catalog: catalog,
-	})
+	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
+	// 	catalog: catalog,
+	// })
 	return catalog
 }
 
@@ -148,9 +148,9 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
-	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-		catalog: catalog,
-	})
+	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
+	// 	catalog: catalog,
+	// })
 	return catalog
 }
 
@@ -214,13 +214,13 @@ func (catalog *Catalog) DebugCheckReplayedState() {
 }
 
 func (catalog *Catalog) Start() {
-	catalog.checkpointer.Start()
+	// catalog.checkpointer.Start()
 	catalog.Store.Start()
 	catalog.StateMachine.Start()
 }
 
 func (catalog *Catalog) Close() error {
-	catalog.checkpointer.Stop()
+	// catalog.checkpointer.Stop()
 	catalog.Stop()
 	if catalog.IndexWal != nil {
 		catalog.IndexWal.Close()
