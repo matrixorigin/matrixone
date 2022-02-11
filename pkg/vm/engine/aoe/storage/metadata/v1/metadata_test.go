@@ -606,7 +606,8 @@ func TestCheckpoint(t *testing.T) {
 	}
 	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
-	catalog, _ := OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+	catalog, _ := OpenCatalogWithDriver(
+		new(sync.RWMutex), cfg, driver, indexWal)
 	catalog.Start()
 
 	//create databases
@@ -620,9 +621,11 @@ func TestCheckpoint(t *testing.T) {
 		db.Wal.SyncLog(idx)
 		db.Wal.Checkpoint(idx)
 		dbs = append(dbs, db)
-		getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{db: db, t: t})
+		getSegmentedIdWorker := ops.NewHeartBeater(
+			hbInterval, &mockGetSegmentedHB{db: db, t: t})
 		getSegmentedIdWorker.Start()
-		getSegmentedIdWorkers = append(getSegmentedIdWorkers, getSegmentedIdWorker)
+		getSegmentedIdWorkers = append(
+			getSegmentedIdWorkers, getSegmentedIdWorker)
 	}
 
 	ws := totaldbcount
@@ -649,7 +652,8 @@ func TestCheckpoint(t *testing.T) {
 	}()
 
 	// create table, segments and blocks
-	// drop, hard delete and create databases, total number remains the same
+	// drop, hard delete and create databases, 
+	// the number of the database remains the same
 	// create table, segments and blocks
 	// drop, hard delete and create tables
 	// compact

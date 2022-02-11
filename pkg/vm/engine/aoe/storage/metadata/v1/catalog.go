@@ -459,7 +459,8 @@ func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
 	}
 	for _, segmentEntry := range entry.Segments {
 		if segmentEntry.NeedReplay {
-			err := catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
+			err := catalog.onReplaySegmentCheckpoint(
+				&segmentEntry.LogEntry)
 			if err != nil {
 				panic(ReplayFailedErr)
 			}
@@ -657,7 +658,8 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 				Databases[blk.Segment.Table.Database.Id].
 				Tables[blk.Segment.Table.Id].
 				Segments[segIdx]
-			segmentCkp.Blocks = append(segmentCkp.Blocks, blkEntry)
+			segmentCkp.Blocks = append(
+				segmentCkp.Blocks, blkEntry)
 		}
 		return nil
 	}
@@ -1060,7 +1062,8 @@ func (catalog *Catalog) onReplayDatabaseCheckpoint(entry *databaseLogEntry) erro
 	db.CommitInfo.LogIndex = entry.CommitInfo.LogIndex
 	db.BaseEntry = entry.BaseEntry
 	db.Name = entry.Database.Name
-	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)
+	db.ShardWal = wal.NewWalShard(
+		db.BaseEntry.GetShardId(), catalog.IndexWal)
 	catalog.TryUpdateDatabaseId(db.Id)
 	err := catalog.onReplayNewDatabase(db)
 	if err != nil {
