@@ -751,9 +751,10 @@ func TestCheckpoint(t *testing.T) {
 	for _, worker := range getSegmentedIdWorkers {
 		worker.Stop()
 	}
-
-	// logutil.Infof(catalog.PString(PPL0, 0))
-	// logutil.Infof("sequence number is %v", catalog.Sequence)
+	
+	time.Sleep(time.Second)
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v", catalog.Sequence)
 	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
 
@@ -765,8 +766,8 @@ func TestCheckpoint(t *testing.T) {
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 
 	catalog.Start()
-	// logutil.Infof(catalog.PString(PPL0, 0))
-	// logutil.Infof("sequence number is %v", catalog.Sequence)
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v", catalog.Sequence)
 	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
 	catalog.Close()
 }
