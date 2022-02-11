@@ -238,10 +238,10 @@ func initCastRulesForBinaryOps() {
 		ops := []int{Plus, Minus, Mult}
 		for _, op := range ops {
 			{
-				// cast to int64 op int64 : +, -, * between int and uint
+				// for Plus, Minus, and Multiply operators between int and uint types, cast both sides to uint64 before operation
 				targetType := []types.Type{
-					{Oid: types.T_int64, Size: 8},
-					{Oid: types.T_int64, Size: 8},
+					{Oid: types.T_uint64, Size: 8},
+					{Oid: types.T_uint64, Size: 8},
 				}
 				for _, l := range ints {
 					for _, r := range uints {
@@ -255,7 +255,7 @@ func initCastRulesForBinaryOps() {
 			{
 				/*
 					cast to float64 op float64:
-					1. +, -, * between int and uint
+					1. +, -, * between int and float
 					2. +, -, * between uint and float
 				*/
 				targetType := []types.Type{
@@ -285,13 +285,16 @@ func initCastRulesForBinaryOps() {
 	{
 		{
 			/*
-				cast to float64 / float64 (integerDiv will return int64):
+				cast to float64 / float64 (integerDiv will return int64 as result):
 				1. div between int and int
 				2. div between uint and uint
 				3. div between int and uint
 				4. div between int and float
 				5. div between uint and float
 				6. div between float32 and float64
+				7. integerDiv between int and int
+				8. integerDiv between uint and uint
+				9. integerDiv between int and uint
 			*/
 			targetType := []types.Type{
 				{Oid: types.T_float64, Size: 8},
