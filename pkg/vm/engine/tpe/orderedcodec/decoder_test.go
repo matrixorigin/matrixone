@@ -16,7 +16,9 @@ package orderedcodec
 
 import (
 	"bytes"
+	"github.com/smartystreets/assertions/should"
 	"github.com/smartystreets/goconvey/convey"
+	"math"
 	"testing"
 )
 
@@ -66,5 +68,100 @@ func TestOrderedDecoder_IsNull(t *testing.T) {
 		convey.So(bytes.Equal(d,kases[3][1:]),convey.ShouldBeTrue)
 		convey.So(di.value,convey.ShouldBeNil)
 		convey.So(di.valueType,convey.ShouldEqual,VALUE_TYPE_NULL)
+	})
+}
+
+func TestOrderedDecoder_DecodeUint64(t *testing.T) {
+	type args struct {
+		want uint64
+		value []byte
+	}
+	convey.Convey("decodeUint64",t, func() {
+		od := &OrderedDecoder{}
+
+		kases := []args{
+			{0, []byte{136}},
+			{1, []byte{137}},
+			{encodingPrefixForSplit, []byte{245}},
+			{encodingPrefixForSplit+1, []byte{246,110}},
+			{0xff,[]byte{246,255}},
+			{0xff+1,[]byte{247,1,0}},
+			{0xffff,[]byte{247,255,255}},
+			{0xffff+1,[]byte{248,1,0,0}},
+			{0xffffff,[]byte{248,255,255,255}},
+			{0xffffff+1,[]byte{249,1,0,0,0}},
+			{0xffffffff,[]byte{249,255,255,255,255}},
+			{0xffffffff+1,[]byte{250,1,0,0,0,0}},
+			{0xffffffffff,[]byte{250,255,255,255,255,255}},
+			{0xffffffffff+1,[]byte{251,1,0,0,0,0,0}},
+			{0xffffffffffff,[]byte{251,255,255,255,255,255,255}},
+			{0xffffffffffff+1,[]byte{252,1,0,0,0,0,0,0}},
+			{0xffffffffffffff,[]byte{252,255,255,255,255,255,255,255}},
+			{0xffffffffffffff+1,[]byte{253,1,0,0,0,0,0,0,0}},
+			{math.MaxUint64-1,[]byte{253,255,255,255,255,255,255,255,254}},
+			{math.MaxUint64,[]byte{253,255,255,255,255,255,255,255,255}},
+		}
+
+		for _, kase := range kases {
+			d,di, _ := od.DecodeUint64(kase.value)
+			convey.So(d,convey.ShouldBeEmpty)
+			convey.So(di.value,convey.ShouldEqual,kase.want)
+		}
+	})
+
+	convey.Convey("decodeUint64",t, func() {
+		od := &OrderedDecoder{}
+
+		d,di,e := od.DecodeUint64(nil)
+		convey.So(e,convey.ShouldBeError)
+		convey.So(d,convey.ShouldBeNil)
+		convey.So(di,convey.ShouldBeNil)
+
+		d,di,e = od.DecodeUint64([]byte{254})
+		convey.So(e,convey.ShouldBeError)
+		convey.So(d,convey.ShouldBeNil)
+		convey.So(di,convey.ShouldBeNil)
+
+		d,di,e = od.DecodeUint64([]byte{255})
+		convey.So(e,convey.ShouldBeError)
+		convey.So(d,convey.ShouldBeNil)
+		convey.So(di,convey.ShouldBeNil)
+
+		d,di,e = od.DecodeUint64([]byte{253})
+		convey.So(e,convey.ShouldBeError)
+		convey.So(d,convey.ShouldBeNil)
+		convey.So(di,convey.ShouldBeNil)
+	})
+}
+
+func TestOrderedDecoder_DecodeBytes(t *testing.T) {
+	type args struct {
+		want []byte
+		value []byte
+	}
+
+	convey.Convey("encodeBytes",t, func() {
+		od := &OrderedDecoder{}
+
+		tag := encodingPrefixForBytes
+		fb := byteEscapedToFirstByte
+		sb := byteEscapedToSecondByte
+		btbe := byteToBeEscaped
+		bfbe := byteForBytesEnding
+
+		kases := []args{
+			{[]byte{0},[]byte{tag,fb,sb,btbe,bfbe}},
+			{[]byte{0,1},[]byte{tag,fb,sb,1,btbe,bfbe}},
+			{[]byte{0xff,0,1},[]byte{tag,0xff,fb,sb,1,btbe,bfbe}},
+			{[]byte{0,0},[]byte{tag,fb,sb,fb,sb,btbe,bfbe}},
+			{[]byte{0,0,0},[]byte{tag,fb,sb,fb,sb,fb,sb,btbe,bfbe}},
+			{[]byte("matrix"),[]byte{tag,'m','a','t','r','i','x',btbe,bfbe}},
+		}
+		for _, kase := range kases {
+			d,di,e := od.DecodeBytes(kase.value)
+			convey.So(e,convey.ShouldBeNil)
+			convey.So(d,convey.ShouldBeEmpty)
+			convey.So(di.value,should.Resemble,kase.want)
+		}
 	})
 }

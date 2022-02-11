@@ -20,4 +20,28 @@ const (
 
 	//marker
 	notNullEncoding = 1
+
+	maxLengthOfInetegerEncoding = 8
+
+	encodingPrefixForBytes byte = 18
+
+	encodingPrefixForBytesDesc = encodingPrefixForBytes + 1
+
+	//for integer minimum
+	encodingPrefixForIntegerMinimum = 128
+
+	//136
+	encodingPrefixForIntegerZero = encodingPrefixForIntegerMinimum + maxLengthOfInetegerEncoding
+
+	//109
+	encodingPrefixForSplit = encodingPrefixForIntMax - encodingPrefixForIntegerZero - maxLengthOfInetegerEncoding
+
+	//for integer maximum
+	encodingPrefixForIntMax = 253
+
+	//not null descending
+	notNullEncodingForDesc = 254
+
+	//null descending
+	nullEncodingForDesc = 255
 )
