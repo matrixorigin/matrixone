@@ -192,17 +192,17 @@ func TestMinusOperator(t *testing.T) {
 		{sql: "select u2 - u1, u2 - u2, u2 - u3, u2 - u4, u2 - 2, 3 - u2 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u2 - u1", "u2 - u2", "u2 - u3", "u2 - u4", "u2 - 2", "3 - u2"},
-			data: [][]string{[]string{"30", "0", "4294966996", "18446744073709548316", "31", "-30"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{[]string{"30", "0", "4294966996", "18446744073709548316", "31", "18446744073709551586"}, []string{"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 - u1, u3 - u2, u3 - u3, u3 - u4, u3 - 2, 3 - u3 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u3 - u1", "u3 - u2", "u3 - u3", "u3 - u4", "u3 - 2", "3 - u3"},
-			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "-330"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "18446744073709551286"}, []string{"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 - u1, u4 - u2, u4 - u3, u4 - u4, u4 - 2, 3 - u4 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u4 - u1", "u4 - u2", "u4 - u3", "u4 - u4", "u4 - 2", "3 - u4"},
-			data: [][]string{{"3330", "3300", "3000", "0", "3331", "-3330"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"3330", "3300", "3000", "0", "3331", "18446744073709548286"}, []string{"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select f11 - f12, f21 - f22 from ffs2;", res: executeResult{
