@@ -51,10 +51,11 @@ type replayEntry struct {
 }
 
 type replayCache struct {
-	replayer   *catalogReplayer
-	entries    []*replayEntry
-	checkpoint *catalogLogEntry
-	safeIds    map[uint64]uint64
+	replayer          *catalogReplayer
+	checkpointEntries []*replayEntry
+	entries           []*replayEntry
+	checkpoint        *catalogLogEntry
+	safeIds           map[uint64]uint64
 }
 
 func newReplayCache(replayer *catalogReplayer) *replayCache {
@@ -73,10 +74,12 @@ func (cache *replayCache) OnShardSafeId(id shard.SafeId) {
 }
 
 func (cache *replayCache) Append(entry *replayEntry) {
-	cache.entries = append(cache.entries, entry)
 	if entry.typ == logstore.ETCheckpoint {
 		cache.checkpoint = entry.catalogEntry
+		cache.checkpointEntries = append(cache.checkpointEntries, entry)
+		return
 	}
+	cache.entries = append(cache.entries, entry)
 }
 
 func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
@@ -198,6 +201,11 @@ func (cache *replayCache) Apply() error {
 		// if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
 		// 	return err
 		// }
+		for _, entry := range cache.checkpointEntries{
+			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
+				return err
+			}
+		}
 		for _, entry := range cache.entries {
 			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
 				return err

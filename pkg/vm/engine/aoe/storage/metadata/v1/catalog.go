@@ -50,6 +50,7 @@ var (
 	IdempotenceErr         = errors.New("aoe: idempotence error")
 	DupIndexErr            = errors.New("aoe: dup index")
 	IndexNotFoundErr       = errors.New("aoe: index not found")
+	ReplayFailedErr           = errors.New("aoe: replay failed")
 )
 
 type CatalogCfg struct {
@@ -458,10 +459,16 @@ func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
 	}
 	for _, segmentEntry := range entry.Segments {
 		if segmentEntry.NeedReplay {
-			catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
+			err := catalog.onReplaySegmentCheckpoint(&segmentEntry.LogEntry)
+			if err != nil {
+				panic(ReplayFailedErr)
+			}
 		}
 		for _, blockEntry := range segmentEntry.Blocks {
-			catalog.onReplayBlockCheckpoint(blockEntry)
+			err := catalog.onReplayBlockCheckpoint(blockEntry)
+			if err != nil {
+				panic(ReplayFailedErr)
+			}
 		}
 	}
 	return nil
@@ -479,7 +486,10 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		if !ok {
 			// db.CommitInfo.Op = OpHardDelete
 			// db.CommitInfo.CommitId = entry.Range.Right
-			catalog.unregisterDatabaseLocked(db)
+			err := catalog.unregisterDatabaseLocked(db)
+			if err != nil {
+				panic(ReplayFailedErr)
+			}
 			return nil
 		}
 
@@ -488,7 +498,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			err := catalog.onReplayDatabaseCheckpoint(
 				&databaseEntry.LogEntry)
 			if err != nil {
-				return err
+				panic(ReplayFailedErr)
 			}
 		}
 
@@ -496,7 +506,10 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		currentDatabaseEntry = databaseEntry
 		db.LoopLocked(catalogProcessor)
 		for _, tableEntry := range databaseEntry.Tables {
-			catalog.onReplayTableEntry(tableEntry)
+			err := catalog.onReplayTableEntry(tableEntry)
+			if err != nil {
+				panic(ReplayFailedErr)
+			}
 		}
 		delete(entry.Databases, db.Id)
 		return nil
@@ -509,7 +522,10 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			tb.CommitInfo.CommitId = entry.Range.Right
 			return nil
 		}
-		catalog.onReplayTableEntry(tableEntry)
+		err := catalog.onReplayTableEntry(tableEntry)
+		if err != nil {
+			panic(ReplayFailedErr)
+		}
 		delete(currentDatabaseEntry.Tables, tb.Id)
 		return nil
 	}
@@ -520,11 +536,14 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			err := catalog.onReplayDatabaseCheckpoint(
 				&databaseEntry.LogEntry)
 			if err != nil {
-				return err
+				panic(ReplayFailedErr)
 			}
 		}
 		for _, tableEntry := range databaseEntry.Tables {
-			catalog.onReplayTableEntry(tableEntry)
+			err := catalog.onReplayTableEntry(tableEntry)
+			if err != nil {
+				panic(ReplayFailedErr)
+			}
 		}
 	}
 	return nil
@@ -580,17 +599,22 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 
 	processor := new(LoopProcessor)
 
-	interval := &common.Range{
+	catalogCkp.Range = &common.Range{
 		Left:  previousCheckpointId + 1,
 		Right: commitId,
+	}
+
+	check := func(info *CommitInfo) bool {
+		return catalogCkp.Range.ClosedIn(info.CommitId)
 	}
 
 	processor.DatabaseFn = func(db *Database) error {
 		databaseCkp := &databaseCheckpoint{}
 		databaseCkp.Tables = make(map[uint64]*tableCheckpoint)
-		if interval.ClosedIn(db.CommitInfo.CommitId) {
+		info := db.CommitInfo.ChooseCommitInfo(check)
+		if info != nil {
 			databaseCkp.NeedReplay = true
-			databaseCkp.LogEntry = db.ToDatabaseLogEntry()
+			databaseCkp.LogEntry = db.ToDatabaseLogEntry(info)
 		}
 		catalogCkp.Databases[db.Id] = databaseCkp
 		return nil
@@ -599,9 +623,10 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.TableFn = func(tb *Table) error {
 		tableCkp := &tableCheckpoint{}
 		tableCkp.Segments = make([]*segmentCheckpoint, 0)
-		if interval.ClosedIn(tb.CommitInfo.CommitId) {
+		info := tb.CommitInfo.ChooseCommitInfo(check)
+		if info != nil {
 			tableCkp.NeedReplay = true
-			tableCkp.LogEntry = tb.ToTableLogEntry()
+			tableCkp.LogEntry = tb.ToTableLogEntry(info)
 		}
 		catalogCkp.Databases[tb.Database.Id].
 			Tables[tb.Id] = tableCkp
@@ -611,9 +636,10 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.SegmentFn = func(seg *Segment) error {
 		segmentCkp := &segmentCheckpoint{}
 		segmentCkp.Blocks = make([]*blockLogEntry, 0)
-		if interval.ClosedIn(seg.CommitInfo.CommitId) {
+		info := seg.CommitInfo.ChooseCommitInfo(check)
+		if info != nil {
 			segmentCkp.NeedReplay = true
-			segmentCkp.LogEntry = *seg.toLogEntry()
+			segmentCkp.LogEntry = *seg.toLogEntry(info)
 		}
 		tableCkp := catalogCkp.Databases[seg.Table.Database.Id].
 			Tables[seg.Table.Id]
@@ -622,8 +648,9 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	}
 
 	processor.BlockFn = func(blk *Block) error {
-		if interval.ClosedIn(blk.CommitInfo.CommitId) {
-			blkEntry := blk.toLogEntry()
+		info := blk.CommitInfo.ChooseCommitInfo(check)
+		if info != nil {
+			blkEntry := blk.toLogEntry(info)
 			segId := blk.Segment.Id
 			segIdx := blk.Segment.Table.IdIndex[segId]
 			segmentCkp := catalogCkp.
@@ -637,8 +664,6 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 
 	catalog.RecurLoopLocked(processor)
 
-	catalogCkp.Range = &common.Range{Left: previousCheckpointId + 1,
-		Right: catalog.nextCommitId}
 	return catalogCkp
 }
 
@@ -881,6 +906,33 @@ func (catalog *Catalog) onNewDatabase(db *Database) error {
 	return nil
 }
 
+func (catalog *Catalog) onReplayNewDatabase(db *Database) error {
+	nn := catalog.nameNodes[db.Name]
+	if nn != nil {
+		e := nn.GetDatabase()
+		if !e.IsDeletedLocked() {
+			if db.IsDeletedLocked() {
+				catalog.Databases[db.Id] = db
+				nn.DeleteNode(e.Id)
+				nn.CreateNode(db.Id)
+				nn.CreateNode(e.Id)
+				return nil
+			}
+			return DuplicateErr
+		}
+		catalog.Databases[db.Id] = db
+		nn.CreateNode(db.Id)
+	} else {
+		catalog.Databases[db.Id] = db
+
+		nn := newNodeList(catalog, &catalog.nodesMu, db.Name)
+		catalog.nameNodes[db.Name] = nn
+
+		nn.CreateNode(db.Id)
+	}
+	return nil
+}
+
 func (catalog *Catalog) onReplayCreateTable(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl := NewEmptyTableEntry(db)
@@ -905,7 +957,7 @@ func (catalog *Catalog) onReplayTableCheckpoint(entry *tableLogEntry) error {
 	tbl.BaseEntry = entry.Table.BaseEntry
 	tbl.Schema = entry.Table.Schema
 	catalog.TryUpdateTableId(tbl.Id)
-	return db.onNewTable(tbl)
+	return db.onReplayNewTable(tbl)
 }
 
 func (catalog *Catalog) onReplayCreateSegment(entry *segmentLogEntry) error {
@@ -1010,7 +1062,11 @@ func (catalog *Catalog) onReplayDatabaseCheckpoint(entry *databaseLogEntry) erro
 	db.Name = entry.Database.Name
 	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)
 	catalog.TryUpdateDatabaseId(db.Id)
-	return catalog.onNewDatabase(db)
+	err := catalog.onReplayNewDatabase(db)
+	if err != nil {
+		panic(ReplayFailedErr)
+	}
+	return nil
 }
 
 func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSplit bool) error {

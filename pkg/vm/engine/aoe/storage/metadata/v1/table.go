@@ -451,9 +451,9 @@ func (e *Table) String() string {
 	return string(buf)
 }
 
-func (e *Table) ToTableLogEntry() tableLogEntry {
+func (e *Table) ToTableLogEntry(info *CommitInfo) tableLogEntry {
 	entry := tableLogEntry{
-		Table:      &Table{BaseEntry: e.BaseEntry, Schema: e.Schema},
+		Table:      &Table{BaseEntry: &BaseEntry{Id: e.Id, CommitInfo: info}, Schema: e.Schema},
 		DatabaseId: e.Database.Id,
 	}
 	return entry

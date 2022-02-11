@@ -585,6 +585,8 @@ func TestCompact(t *testing.T) {
 	tableCountPerTurn := 3
 	droppedTableCount := 2
 	deletedTableCount := 1
+	catalogCheckpointIntervel := time.Second
+	testduration := time.Second * 5
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -594,7 +596,7 @@ func TestCompact(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 100 * int(common.K)
+	cfg.RotationFileMaxSize = 100 * int(common.M)
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -629,64 +631,101 @@ func TestCompact(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	for i := 0; i < ws; i++ {
-		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
-	}
-	wg.Wait()
-	// t.Log(catalog.PString(PPL0, 0))
+	stopChenal := make(chan interface{})
 
-	catalog.Checkpoint()
-
-	for i := 0; i < droppedDbCount; i++ {
-		db := dbs[i]
-		idx := gen.Next(db.GetShardId())
-		db.Wal.SyncLog(idx)
-		catalog.SimpleDropDatabaseByName(db.Name, idx)
-		db.Wal.Checkpoint(idx)
-		if i < deletedDbCount {
-			testutils.WaitExpect(100, func() bool {
-				return db.UncheckpointedCnt() == 0
-			})
-			catalog.SimpleHardDeleteDatabase(db.Id)
-		}
-
-		db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
-		idx = gen.Next(db.GetShardId())
-		db.Wal.SyncLog(idx)
-		db.Wal.Checkpoint(idx)
-		dbs[i] = db
-	}
-
-	for i := 0; i < ws; i++ {
-		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
-	}
-	wg.Wait()
-
-	for i := 0; i < ws; i++ {
-		db := dbs[i]
-		tables := db.SimpleGetTableNames()
-		for j := 0; j < droppedTableCount; j++ {
-			tb := db.SimpleGetTableByName(tables[j])
-			idx := gen.Next(db.GetShardId())
-			db.Wal.SyncLog(idx)
-			db.SimpleDropTableByName(tables[j], idx)
-			db.Wal.Checkpoint(idx)
-			if j < deletedTableCount {
-				db.SimpleHardDeleteTable(tb.Id)
+	go func() {
+		for {
+			select {
+			case <-stopChenal:
+				return
+			default:
+				time.Sleep(catalogCheckpointIntervel)
+				catalog.Checkpoint()
 			}
-
 		}
-	}
-	catalog.Compact(nil, nil)
-	catalog.Checkpoint()
+	}()
 
-	for i := 0; i < ws; i++ {
-		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
-	}
-	wg.Wait()
+	go func() {
+
+		for {
+			select {
+			case <-stopChenal:
+				return
+			default:
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+				// t.Log(catalog.PString(PPL0, 0))
+
+				// catalog.Checkpoint()
+
+				for i := 0; i < droppedDbCount; i++ {
+					db := dbs[i]
+					idx := gen.Next(db.GetShardId())
+					db.Wal.SyncLog(idx)
+					catalog.SimpleDropDatabaseByName(db.Name, idx)
+					db.Wal.Checkpoint(idx)
+					if i < deletedDbCount {
+						testutils.WaitExpect(100, func() bool {
+							return db.UncheckpointedCnt() == 0
+						})
+						catalog.SimpleHardDeleteDatabase(db.Id)
+					}
+
+					db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
+					idx = gen.Next(db.GetShardId())
+					db.Wal.SyncLog(idx)
+					db.Wal.Checkpoint(idx)
+					dbs[i] = db
+				}
+
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+
+				for i := 0; i < ws; i++ {
+					db := dbs[i]
+					tables := db.SimpleGetTableNames()
+					for j := 0; j < droppedTableCount; j++ {
+						var tb *Table
+						k := 0
+						for {
+							tb = db.SimpleGetTableByName(tables[j+k])
+							if tb != nil {
+								break
+							}
+							k++
+						}
+						idx := gen.Next(db.GetShardId())
+						db.Wal.SyncLog(idx)
+						db.SimpleDropTableByName(tables[j+k], idx)
+						db.Wal.Checkpoint(idx)
+						if j < deletedTableCount {
+							db.SimpleHardDeleteTable(tb.Id)
+						}
+
+					}
+				}
+				catalog.Compact(nil, nil)
+				// catalog.Checkpoint()
+
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+
+			}
+		}
+	}()
+
+	time.Sleep(testduration)
+
+	close(stopChenal)
 
 	for _, worker := range getSegmentedIdWorkers {
 		worker.Stop()
