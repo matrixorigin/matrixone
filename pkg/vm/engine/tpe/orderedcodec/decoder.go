@@ -130,3 +130,18 @@ func (od *OrderedDecoder) decodeBytes(data []byte,value []byte)([]byte,*DecodedI
 	}
 	return nil, nil, errorDonotComeHere
 }
+
+func (od *OrderedDecoder) DecodeString(data []byte)([]byte,*DecodedItem,error) {
+	data2,di,err := od.DecodeBytes(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	di.ValueType = VALUE_TYPE_STRING
+	bt := di.Value.([]byte)
+	di.Value = string(bt)
+	return data2,di,err
+}
+
+func NewOrderedDecoder() *OrderedDecoder {
+	return &OrderedDecoder{}
+}

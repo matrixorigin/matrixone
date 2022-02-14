@@ -14,6 +14,8 @@
 
 package tuplecodec
 
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+
 type TupleKey []byte
 type TupleValue []byte
 
@@ -24,6 +26,7 @@ type Range struct {
 }
 
 type TupleKeyEncoder struct {
+	oe *orderedcodec.OrderedEncoder
 	tenantPrefix *TupleKey
 }
 
@@ -33,5 +36,28 @@ type EncodedItem struct {
 }
 
 type TupleKeyDecoder struct {
+	od *orderedcodec.OrderedDecoder
 	tenantPrefix *TupleKey
+}
+
+type TupleCodecHandler struct {
+	tke *TupleKeyEncoder
+	tkd *TupleKeyDecoder
+}
+
+func NewTupleCodecHandler(tenantID uint64) *TupleCodecHandler {
+	tch := &TupleCodecHandler{
+		tke: NewTupleKeyEncoder(tenantID),
+		tkd: NewTupleKeyDecoder(tenantID),
+	}
+	tch.tkd.tenantPrefix = tch.tke.tenantPrefix
+	return tch
+}
+
+func (tch *TupleCodecHandler) GetEncoder() *TupleKeyEncoder {
+	return tch.tke
+}
+
+func (tch *TupleCodecHandler) GetDecoder() *TupleKeyDecoder  {
+	return tch.tkd
 }

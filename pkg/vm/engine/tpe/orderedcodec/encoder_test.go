@@ -111,3 +111,33 @@ func TestOrderedEncoder_EncodeBytes(t *testing.T) {
 		}
 	})
 }
+
+func TestOrderedEncoder_EncodeString(t *testing.T) {
+	type args struct {
+		value string
+		want []byte
+	}
+
+	convey.Convey("encodeBytes",t, func() {
+		oe := &OrderedEncoder{}
+
+		tag := encodingPrefixForBytes
+		fb := byteEscapedToFirstByte
+		sb := byteEscapedToSecondByte
+		btbe := byteToBeEscaped
+		bfbe := byteForBytesEnding
+
+		kases := []args{
+			{"\x00",[]byte{tag,fb,sb,btbe,bfbe}},
+			{"\x00\x01",[]byte{tag,fb,sb,1,btbe,bfbe}},
+			{"\xff\x00\x01",[]byte{tag,0xff,fb,sb,1,btbe,bfbe}},
+			{"\x00\x00",[]byte{tag,fb,sb,fb,sb,btbe,bfbe}},
+			{"\x00\x00\x00",[]byte{tag,fb,sb,fb,sb,fb,sb,btbe,bfbe}},
+			{"matrix",[]byte{tag,'m','a','t','r','i','x',btbe,bfbe}},
+		}
+		for _, kase := range kases {
+			d,_ := oe.EncodeString(nil,kase.value)
+			convey.So(d,should.Resemble,kase.want)
+		}
+	})
+}

@@ -60,14 +60,14 @@ func TestOrderedDecoder_IsNull(t *testing.T) {
 		d,di,e = od.IsNull(kases[2])
 		convey.So(e,convey.ShouldBeNil)
 		convey.So(bytes.Equal(d,kases[2][1:]),convey.ShouldBeTrue)
-		convey.So(di.value,convey.ShouldBeNil)
-		convey.So(di.valueType,convey.ShouldEqual,VALUE_TYPE_NULL)
+		convey.So(di.Value,convey.ShouldBeNil)
+		convey.So(di.ValueType,convey.ShouldEqual,VALUE_TYPE_NULL)
 
 		d,di,e = od.IsNull(kases[3])
 		convey.So(e,convey.ShouldBeNil)
 		convey.So(bytes.Equal(d,kases[3][1:]),convey.ShouldBeTrue)
-		convey.So(di.value,convey.ShouldBeNil)
-		convey.So(di.valueType,convey.ShouldEqual,VALUE_TYPE_NULL)
+		convey.So(di.Value,convey.ShouldBeNil)
+		convey.So(di.ValueType,convey.ShouldEqual,VALUE_TYPE_NULL)
 	})
 }
 
@@ -105,7 +105,7 @@ func TestOrderedDecoder_DecodeUint64(t *testing.T) {
 		for _, kase := range kases {
 			d,di, _ := od.DecodeUint64(kase.value)
 			convey.So(d,convey.ShouldBeEmpty)
-			convey.So(di.value,convey.ShouldEqual,kase.want)
+			convey.So(di.Value,convey.ShouldEqual,kase.want)
 		}
 	})
 
@@ -161,7 +161,39 @@ func TestOrderedDecoder_DecodeBytes(t *testing.T) {
 			d,di,e := od.DecodeBytes(kase.value)
 			convey.So(e,convey.ShouldBeNil)
 			convey.So(d,convey.ShouldBeEmpty)
-			convey.So(di.value,should.Resemble,kase.want)
+			convey.So(di.Value,should.Resemble,kase.want)
+		}
+	})
+}
+
+func TestOrderedDecoder_DecodeString(t *testing.T) {
+	type args struct {
+		want string
+		value []byte
+	}
+
+	convey.Convey("encodeBytes",t, func() {
+		od := &OrderedDecoder{}
+
+		tag := encodingPrefixForBytes
+		fb := byteEscapedToFirstByte
+		sb := byteEscapedToSecondByte
+		btbe := byteToBeEscaped
+		bfbe := byteForBytesEnding
+
+		kases := []args{
+			{"\x00",[]byte{tag,fb,sb,btbe,bfbe}},
+			{"\x00\x01",[]byte{tag,fb,sb,1,btbe,bfbe}},
+			{"\xff\x00\x01",[]byte{tag,0xff,fb,sb,1,btbe,bfbe}},
+			{"\x00\x00",[]byte{tag,fb,sb,fb,sb,btbe,bfbe}},
+			{"\x00\x00\x00",[]byte{tag,fb,sb,fb,sb,fb,sb,btbe,bfbe}},
+			{"matrix",[]byte{tag,'m','a','t','r','i','x',btbe,bfbe}},
+		}
+		for _, kase := range kases {
+			d,di,e := od.DecodeString(kase.value)
+			convey.So(e,convey.ShouldBeNil)
+			convey.So(d,convey.ShouldBeEmpty)
+			convey.So(di.Value,should.Resemble,kase.want)
 		}
 	})
 }
