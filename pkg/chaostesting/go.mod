@@ -10,7 +10,7 @@ require (
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220112183258-f57e95bda82d
 	github.com/hugelgupf/p9 v0.2.0
 	github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c
-	github.com/reusee/dscope v0.0.0-20220207090324-461122b77aff
+	github.com/reusee/dscope v0.0.0-20220214071500-aeb731ef45cc
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20220208031045-2aad8080739f
 	github.com/reusee/starlarkutil v0.0.0-20211219090033-2a5093890e47

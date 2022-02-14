@@ -86,10 +86,12 @@ func (_ Def) NetworkHost(
 		}
 
 	case "tun":
+		name := id.String()
+		name = name[len(name)-15:]
 		dev, err := water.New(water.Config{
 			DeviceType: water.TUN,
 			PlatformSpecificParams: water.PlatformSpecificParams{
-				Name: id.String(),
+				Name: name,
 			},
 		})
 		ce(err)
