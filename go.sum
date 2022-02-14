@@ -387,8 +387,8 @@ github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czP
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7CQEsRxL8+/sAPW23uIqpwR+M8Aje81AH6w3/ZkxQw=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
-github.com/matrixorigin/matrixcube v0.2.0 h1:T2X33WsImXvSRke3IYq5LU6HlUH/+2pGuNMQRGR+RcI=
-github.com/matrixorigin/matrixcube v0.2.0/go.mod h1:Q36DFaha0+4iWb4iv+fMxROclQBlVz4bP+jQDOkUgcw=
+github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1 h1:RPvEO1nex1PYH/Jww/JGEQkcpy6aXywWF6Xbkakr03U=
+github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1/go.mod h1:Q36DFaha0+4iWb4iv+fMxROclQBlVz4bP+jQDOkUgcw=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
