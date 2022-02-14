@@ -122,3 +122,12 @@ func (oe *OrderedEncoder) encodeBytes(data []byte,value []byte)([]byte,*EncodedI
 	}
 	return append(data, value...), nil
 }
+
+// EncodeString encods the string into bytes with escaping and appends them to the buffer.
+func (oe *OrderedEncoder) EncodeString(data []byte,value string)([]byte,*EncodedItem) {
+	return oe.EncodeBytes(data,[]byte(value))
+}
+
+func NewOrderedEncoder()*OrderedEncoder {
+	return &OrderedEncoder{}
+}

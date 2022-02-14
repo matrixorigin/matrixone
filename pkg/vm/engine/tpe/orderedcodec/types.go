@@ -33,22 +33,48 @@ const (
 	VALUE_TYPE_NULL ValueType = 0x1
 	VALUE_TYPE_UINT64 ValueType = 0x2
 	VALUE_TYPE_BYTES ValueType = 0x3
+	VALUE_TYPE_STRING ValueType = 0x4
+)
+
+type SectionType int
+const (
+	SECTION_TYPE_TABLEID SectionType = 0x0
+	SECTION_TYPE_INDEXID SectionType = 0x1
+	SECTION_TYPE_PRIMARYKEYFIELD SectionType = 0x2
+	SECTION_TYPE_SECONDARYKEYFIELD SectionType = 0x3
+	SECTION_TYPE_IMPLICITFIELD SectionType = 0x4
+	SECTION_TYPE_COMPOSITEFIELD SectionType = 0x5
+	SECTION_TYPE_STOREFIELD SectionType = 0x6
+	SECTION_TYPE_COLUMNGROUP SectionType = 0x7
+	SECTION_TYPE_DATABASEID SectionType = 0x8
 )
 
 type DecodedItem struct {
-	value    interface{}
-	valueType ValueType // int,uint,uint64,...,float
-	sectionType int //belongs to which section
-	offsetInUndecodedKey int    //the position in undecoded bytes
-	bytesCountInUndecodedKey int //the count of bytes in undecoded bytes
+	Value                    interface{}
+	ValueType                ValueType // int,uint,uint64,...,float
+	SectionType              SectionType      //belongs to which section
+	OffsetInUndecodedKey     int       //the position in undecoded bytes
+	BytesCountInUndecodedKey int       //the count of bytes in undecoded bytes
 }
 
-func NewDecodeItem(v interface{}, vt ValueType, st int,oiu int,bciu int) *DecodedItem {
+func (di *DecodedItem) IsValueType(vt ValueType) bool {
+	return di.ValueType == vt
+}
+
+func (di *DecodedItem) IsSectionType(st SectionType) bool {
+	return di.SectionType == st
+}
+
+func (di *DecodedItem) SetSectionType(st SectionType) {
+	di.SectionType = st
+}
+
+func NewDecodeItem(v interface{}, vt ValueType, st SectionType,oiu int,bciu int) *DecodedItem {
 	return &DecodedItem{
-		value:                    v,
-		valueType:                vt,
-		sectionType:              st,
-		offsetInUndecodedKey:     oiu,
-		bytesCountInUndecodedKey: bciu,
+		Value:                    v,
+		ValueType:                vt,
+		SectionType:              st,
+		OffsetInUndecodedKey:     oiu,
+		BytesCountInUndecodedKey: bciu,
 	}
 }
