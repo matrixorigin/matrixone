@@ -442,11 +442,10 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 				attrs = append(attrs, ColDef.Name)
 			}
 			rel.Data.GetBlockFactory()
-			if len(rel.Meta.SegmentSet) < 1 {
-				logutil.Infof("continue 1")
+			ids := rel.SegmentIds()
+			if len(ids.Ids) < 1 {
 				continue
 			}
-			ids := rel.SegmentIds()
 			seg := rel.Segment(ids.Ids[len(ids.Ids)-1])
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1])
