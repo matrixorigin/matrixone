@@ -15,6 +15,11 @@
 package tuplecodec
 
 import (
+	"bytes"
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
 	"github.com/smartystreets/goconvey/convey"
 	"math"
 	"testing"
@@ -133,6 +138,56 @@ func TestTupleKeyDecoder_DecodeIndexPrefix(t *testing.T) {
 			convey.So(dis[0].Value.(uint64), convey.ShouldEqual, kase.value)
 			convey.So(dis[1].Value.(uint64), convey.ShouldEqual, kase.value)
 			convey.So(dis[2].Value.(uint64), convey.ShouldEqual, kase.value)
+		}
+	})
+}
+
+func TestTupleKeyDecoder_DecodePrimaryIndexKey(t *testing.T) {
+	type args struct {
+		id uint32
+		value interface{}
+		valueType orderedcodec.ValueType
+		want []byte
+	}
+
+	convey.Convey("decode primary index key 1",t, func() {
+		tch := NewTupleCodecHandler(SystemTenantID)
+		tke := tch.GetEncoder()
+		tkd := tch.GetDecoder()
+
+		kases := []args{
+			{0,uint64(0),orderedcodec.VALUE_TYPE_UINT64,[]byte{136}},
+			{1,"abc",orderedcodec.VALUE_TYPE_STRING,[]byte{18,'a','b','c',0,1,}},
+			{2,[]byte{1,2,3},orderedcodec.VALUE_TYPE_BYTES,[]byte{18,1,2,3,0,1,}},
+		}
+
+		id := descriptor.IndexDesc{ID: PrimaryIndexID}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tuple := mock_tuplecodec.NewMockTuple(ctrl)
+		want := []byte{}
+		for _, kase := range kases {
+			id.Attributes = append(id.Attributes,
+				descriptor.IndexDesc_Attribute{ID: kase.id,Type: kase.valueType})
+			tuple.EXPECT().GetValue(uint32(kase.id)).Return(kase.value,nil)
+			want = append(want,kase.want...)
+		}
+
+		key, _, err := tke.EncodePrimaryIndexKey(nil,&id,0,tuple)
+		convey.So(err,convey.ShouldBeNil)
+		convey.So(bytes.Equal(key,want),convey.ShouldBeTrue)
+
+		rest, dis, err := tkd.DecodePrimaryIndexKey(key,&id)
+		convey.So(err,convey.ShouldBeNil)
+		convey.So(rest,convey.ShouldBeEmpty)
+		for i, kase := range kases {
+			if  kase.valueType == orderedcodec.VALUE_TYPE_BYTES {
+				convey.So(dis[i].Value,convey.ShouldResemble,kase.value)
+			}else{
+				convey.So(dis[i].Value,convey.ShouldEqual,kase.value)
+			}
 		}
 	})
 }

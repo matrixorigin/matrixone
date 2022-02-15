@@ -14,7 +14,10 @@
 
 package tuplecodec
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+)
 
 type TupleKey []byte
 type TupleValue []byte
@@ -28,11 +31,6 @@ type Range struct {
 type TupleKeyEncoder struct {
 	oe *orderedcodec.OrderedEncoder
 	tenantPrefix *TupleKey
-}
-
-type EncodedItem struct {
-	beginPos int
-	size int
 }
 
 type TupleKeyDecoder struct {
@@ -60,4 +58,34 @@ func (tch *TupleCodecHandler) GetEncoder() *TupleKeyEncoder {
 
 func (tch *TupleCodecHandler) GetDecoder() *TupleKeyDecoder  {
 	return tch.tkd
+}
+
+// Tuple denotes the row of the relation
+type Tuple interface {
+	GetAttributeCount() (uint32, error)
+
+	GetAttribute(colIdx uint32)(types.Type,string,error)
+
+	IsNull(colIdx uint32) (bool,error)
+
+	GetValue(colIdx uint32) (interface{},error)
+
+	GetInt(colIdx uint32)(int,error)
+
+	//others data type
+}
+
+const (
+	SERIAL_TYPE_NULL byte = 0
+	SERIAL_TYPE_UINT64 byte = 1
+	SERIAL_TYPE_STRING byte = 2
+	SERIAL_TYPE_BYTES byte = 3
+	SERIAL_TYPE_UNKNOWN byte = 255
+)
+
+//ValueSerializer for serializing the value
+type ValueSerializer interface {
+	SerializeValue(data []byte,value interface{})([]byte,*orderedcodec.EncodedItem,error)
+
+	DeserializeValue(data []byte)([]byte,*orderedcodec.DecodedItem,error)
 }

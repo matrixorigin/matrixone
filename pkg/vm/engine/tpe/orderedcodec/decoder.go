@@ -38,6 +38,14 @@ func (od *OrderedDecoder) DecodeKey(data []byte)([]byte, *DecodedItem,error){
 	if err == nil {
 		return dataAfterNull,decodeItem,nil
 	}
+	if (data[0] & encodingPrefixForIntegerMinimum) ==
+			encodingPrefixForIntegerMinimum {
+		return od.DecodeUint64(data)
+	}else if data[0] == encodingPrefixForBytes {
+		return od.DecodeBytes(data)
+	}else{
+		return nil, nil, errorDoNotComeHere
+	}
 	return nil, nil, nil
 }
 
@@ -128,9 +136,10 @@ func (od *OrderedDecoder) decodeBytes(data []byte,value []byte)([]byte,*DecodedI
 		value = append(value, byteToBeEscaped)
 		data = data[p+2:]
 	}
-	return nil, nil, errorDonotComeHere
+	return nil, nil, errorDoNotComeHere
 }
 
+// DecodeString decodes string from the encoded bytes
 func (od *OrderedDecoder) DecodeString(data []byte)([]byte,*DecodedItem,error) {
 	data2,di,err := od.DecodeBytes(data)
 	if err != nil {

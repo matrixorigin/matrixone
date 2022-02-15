@@ -17,6 +17,7 @@ package tuplecodec
 import (
 	"bytes"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )
 
@@ -95,4 +96,35 @@ func (tkd *TupleKeyDecoder) DecodeIndexPrefix(key TupleKey)(TupleKey,[] *ordered
 	di2.SetSectionType(orderedcodec.SECTION_TYPE_INDEXID)
 	di = append(di,di2)
 	return rest2,di,err2
+}
+
+// DecodePrimaryIndexKey decodes fields of the primary index and returns the rest.
+// The dbID,tableID and Index ID have been decoded.
+func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor.IndexDesc)(TupleKey,[] *orderedcodec.DecodedItem,error) {
+	if index.ID != PrimaryIndexID {
+		return nil,nil,errorPrimaryIndexIDIsNotOne
+	}
+
+	var retDis []*orderedcodec.DecodedItem
+	//needs attribute type
+	rest := key
+	for _,attr := range index.Attributes {
+		rest2, di, err := tkd.od.DecodeKey(rest)
+		if err != nil {
+			return nil, nil, err
+		}
+		if attr.Type == orderedcodec.VALUE_TYPE_STRING {
+			di.Value = string(di.Value.([]byte))
+			di.ValueType = attr.Type
+		}
+		retDis = append(retDis,di)
+		rest = rest2
+	}
+	return rest, retDis, nil
+}
+
+// DecodePrimaryIndexValue decodes the values of the primary index and return the rest.
+func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue,index *descriptor.IndexDesc,columnGroupID uint64)(TupleValue,[] *orderedcodec.DecodedItem,error) {
+	//TODO:add content
+	return nil, nil, nil
 }

@@ -16,4 +16,6 @@ package tuplecodec
 
 const (
 	SystemTenantID uint64 = 1
+
+	PrimaryIndexID uint32 = 1
 )

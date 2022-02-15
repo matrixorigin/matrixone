@@ -47,6 +47,7 @@ const (
 	SECTION_TYPE_STOREFIELD SectionType = 0x6
 	SECTION_TYPE_COLUMNGROUP SectionType = 0x7
 	SECTION_TYPE_DATABASEID SectionType = 0x8
+	SECTION_TYPE_VALUE SectionType = 0x9
 )
 
 type DecodedItem struct {
