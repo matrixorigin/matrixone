@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	errorDonotComeHere = errors.New("do not come here")
+	errorDoNotComeHere = errors.New("do not come here")
 )
 
 const (
@@ -38,6 +38,16 @@ const (
 func (oe *OrderedEncoder) EncodeKey(data []byte,value interface{})([]byte,*EncodedItem){
 	if value == nil {
 		return oe.EncodeNull(data)
+	}
+	switch v:=value.(type) {
+	case uint64:
+		return oe.EncodeUint64(data,v)
+	case []byte:
+		return oe.EncodeBytes(data,v)
+	case string:
+		return oe.EncodeString(data,v)
+	default:
+		panic(errorDoNotComeHere)
 	}
 	return nil, nil
 }
