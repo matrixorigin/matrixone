@@ -35,7 +35,7 @@ import (
 
 func (_ Def2) Nodes(
 	configs NodeConfigs,
-	tempDir fz.TempDir,
+	getTempDir fz.GetTempDir,
 	numNodes fz.NumNodes,
 	logger fz.Logger,
 	netHost fz.NetworkHost,
@@ -66,10 +66,10 @@ func (_ Def2) Nodes(
 
 		conf.RaftAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		conf.ClientAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
-		conf.DataPath = filepath.Join(string(tempDir), fmt.Sprintf("data-%d", nodeID))
+		conf.DataPath = filepath.Join(getTempDir(), fmt.Sprintf("data-%d", nodeID))
 		conf.Logger = logger
 
-		conf.Prophet.DataDir = filepath.Join(string(tempDir), fmt.Sprintf("prophet-%d", nodeID))
+		conf.Prophet.DataDir = filepath.Join(getTempDir(), fmt.Sprintf("prophet-%d", nodeID))
 		conf.Prophet.RPCAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]

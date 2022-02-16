@@ -17,9 +17,16 @@ package fz
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sync"
+	"time"
 )
 
-type TempDir string
+type GetTempDir func() string
+
+type CleanTempDir func(
+	threshold time.Duration,
+)
 
 func (_ Def) TempDir(
 	logger Logger,
@@ -27,49 +34,99 @@ func (_ Def) TempDir(
 	setupFuse SetupFuse,
 	setup9P Setup9P,
 ) (
-	dir TempDir,
+	get GetTempDir,
 	cleanup Cleanup,
+	cleanDir CleanTempDir,
 ) {
+
+	var once sync.Once
+	var dir string
+	var cleanFuncs []func()
+	cleanup = func() {
+		for _, fn := range cleanFuncs {
+			fn()
+		}
+	}
 
 	switch model {
 
 	case "os":
-		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
-		ce(err)
-		dir = TempDir(d)
-		cleanup = func() {
-			logger.Info("remove temp dir")
-			os.RemoveAll(d)
+
+		cleanDir = func(threshold time.Duration) {
+			dirs, err := filepath.Glob(filepath.Join(os.TempDir(), "testcube-*"))
+			ce(err)
+			for _, dir := range dirs {
+				stat, err := os.Stat(dir)
+				if err != nil {
+					continue
+				}
+				modTime := stat.ModTime()
+				// assuming no test can be running for longer than threshold
+				if time.Since(modTime) > threshold {
+					if err := os.RemoveAll(dir); err == nil {
+						pt("removed temp dir: %s\n", dir)
+					}
+				}
+			}
+		}
+
+		get = func() string {
+			once.Do(func() {
+				d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+				ce(err)
+				cleanFuncs = append(cleanFuncs, func() {
+					logger.Info("remove temp dir")
+					os.RemoveAll(dir)
+				})
+				dir = d
+			})
+			return dir
 		}
 
 	case "fuse":
-		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
-		ce(err)
-		err, end := setupFuse(d)
-		ce(err)
 
-		dir = TempDir(d)
-		cleanup = func() {
-			ce(end())
-			ce(os.RemoveAll(d))
+		get = func() string {
+			once.Do(func() {
+				d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+				ce(err)
+				err, end := setupFuse(d)
+				ce(err)
+				cleanFuncs = append(cleanFuncs, func() {
+					ce(end())
+					ce(os.RemoveAll(d))
+				})
+				dir = d
+			})
+			return dir
 		}
+
+		cleanDir = func(time.Duration) {}
 
 	case "9p":
-		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
-		ce(err)
-		err, end := setup9P(d)
-		ce(err)
 
-		dir = TempDir(d)
-		cleanup = func() {
-			ce(end())
-			ce(os.RemoveAll(d))
+		get = func() string {
+			once.Do(func() {
+				d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+				ce(err)
+				err, end := setup9P(d)
+				ce(err)
+				cleanFuncs = append(cleanFuncs, func() {
+					ce(end())
+					ce(os.RemoveAll(d))
+				})
+				dir = d
+			})
+			return dir
 		}
+
+		cleanDir = func(time.Duration) {}
 
 	default:
 		panic(fmt.Errorf("unknown model: %s", model))
 
 	}
+
+	cleanDir(time.Hour)
 
 	return
 }

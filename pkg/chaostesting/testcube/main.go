@@ -97,10 +97,10 @@ func main() {
 		return
 	}
 
-	fn(os.Args[2:])
-
 	var cleanup fz.Cleanup
 	scope.Assign(&cleanup)
-	cleanup()
+	defer cleanup()
+
+	fn(os.Args[2:])
 
 }
