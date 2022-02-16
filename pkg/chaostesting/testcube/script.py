@@ -27,12 +27,13 @@ enable_runtime_trace(True)
 # localhost: use localhost
 # dummy: use linux dummy interface
 # tun: use TUN interface
-def set_network_model():
-    if os == 'linux':
-        network_model("tun")
-    else:
-        network_model("localhost")
-set_network_model()
+#def set_network_model():
+#    if os == 'linux':
+#        network_model("tun")
+#    else:
+#        network_model("localhost")
+#set_network_model()
+network_model("localhost")
 
 # temp dir model
 # os: use os.TempDir()

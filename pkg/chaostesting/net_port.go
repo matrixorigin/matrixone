@@ -15,6 +15,7 @@
 package fz
 
 import (
+	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -26,9 +27,9 @@ func (_ Def) PortRange() PortRange {
 	return PortRange{20000, 50000}
 }
 
-type GetPort func(nodeID NodeID) uint16
+type GetPort func(nodeID NodeID, host string) uint16
 
-type GetPortStr func(nodeID NodeID) string
+type GetPortStr func(nodeID NodeID, host string) string
 
 var nextPort uint32
 
@@ -43,8 +44,15 @@ func (_ Def) GetPort(
 	lower := uint16(portRange[0])
 	mod := uint16(portRange[1] - portRange[0])
 
-	get = func(nodeID NodeID) uint16 {
-		port := lower + uint16(atomic.AddUint32(&nextPort, 1))%mod
+	get = func(nodeID NodeID, host string) uint16 {
+	gen:
+		port := lower + uint16(atomic.AddUint32(&nextPort, 5))%mod
+		// try listen
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
+		if err != nil {
+			goto gen
+		}
+		ce(ln.Close())
 		info := &PortInfo{
 			Port:   port,
 			NodeID: nodeID,
@@ -53,8 +61,8 @@ func (_ Def) GetPort(
 		return port
 	}
 
-	getStr = func(nodeID NodeID) string {
-		return strconv.Itoa(int(get(nodeID)))
+	getStr = func(nodeID NodeID, host string) string {
+		return strconv.Itoa(int(get(nodeID, host)))
 	}
 
 	return
