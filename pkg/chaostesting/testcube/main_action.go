@@ -104,6 +104,9 @@ func (_ Def2) MainAction(
 
 			case 2:
 				// network
+				if numNodes < 2 {
+					break
+				}
 				mutations := []func(action *ActionBlockNetwork){
 					func(action *ActionBlockNetwork) {
 						// block all inbound
@@ -119,13 +122,23 @@ func (_ Def2) MainAction(
 					},
 					func(action *ActionBlockNetwork) {
 						// block random inbound
+					r:
+						id := rand.Intn(int(numNodes))
+						if id == int(i) {
+							goto r
+						}
 						action.BlockInboundNodes = append(action.BlockInboundNodes,
-							fz.NodeID(rand.Intn(int(numNodes))))
+							fz.NodeID(id))
 					},
 					func(action *ActionBlockNetwork) {
 						// block random outbound
+					r:
+						id := rand.Intn(int(numNodes))
+						if id == int(i) {
+							goto r
+						}
 						action.BlockOutboundNodes = append(action.BlockOutboundNodes,
-							fz.NodeID(rand.Intn(int(numNodes))))
+							fz.NodeID(id))
 					},
 				}
 				action := ActionBlockNetwork{

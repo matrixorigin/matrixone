@@ -25,7 +25,7 @@ import (
 
 type NewInterceptableTransport func(
 	t transport.Trans,
-	nodes fz.Nodes,
+	nodes func() fz.Nodes,
 ) transport.Trans
 
 type BlockNetwork func(from, to fz.NodeID)
@@ -38,7 +38,7 @@ func (_ Def) NewInterceptableTransport() (
 	var l sync.Mutex
 	blocked := make(map[[2]fz.NodeID]bool)
 
-	newTransport = func(upstream transport.Trans, nodes fz.Nodes) transport.Trans {
+	newTransport = func(upstream transport.Trans, getNodes func() fz.Nodes) transport.Trans {
 
 		msgIsBlocked := func(msg meta.RaftMessage) bool {
 
@@ -46,6 +46,7 @@ func (_ Def) NewInterceptableTransport() (
 			toStoreID := msg.To.ContainerID
 			var fromNodeID fz.NodeID = -1
 			var toNodeID fz.NodeID = -1
+			nodes := getNodes()
 			for i, node := range nodes {
 				if node.(*Node).RaftStore.Meta().ID == fromStoreID {
 					fromNodeID = fz.NodeID(i)
@@ -55,10 +56,18 @@ func (_ Def) NewInterceptableTransport() (
 				}
 			}
 			if fromNodeID == -1 {
-				panic(fmt.Errorf("no such store: %v", fromStoreID))
+				if len(nodes) == 0 {
+					panic(fmt.Errorf("no such store: %v", fromStoreID))
+				} else {
+					return false
+				}
 			}
 			if toNodeID == -1 {
-				panic(fmt.Errorf("no such store: %v", toStoreID))
+				if len(nodes) == 0 {
+					panic(fmt.Errorf("no such store: %v", toStoreID))
+				} else {
+					return false
+				}
 			}
 
 			l.Lock()

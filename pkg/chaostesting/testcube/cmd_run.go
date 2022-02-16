@@ -21,6 +21,7 @@ import (
 	"runtime"
 
 	"github.com/fatih/color"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixcube/config"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/e4"
@@ -98,7 +99,47 @@ func (_ Def) CmdRun(
 
 	return Commands{
 		// run test cases in single process
+
 		"run": func(args []string) {
+
+			if len(args) > 0 {
+				for _, path := range args {
+					ce(runOne(path))
+				}
+				return
+			}
+
+			sem := make(chan struct{}, parallel)
+			for {
+				sem <- struct{}{}
+				go func() {
+					defer func() {
+						<-sem
+					}()
+
+					var configPath string
+
+					NewScope().Call(func(
+						write fz.WriteConfig,
+						id uuid.UUID,
+						writeFile fz.WriteTestDataFile,
+						filePath fz.TestDataFilePath,
+					) {
+						f, err, done := writeFile("config", "xml")
+						ce(err)
+						ce(write(f))
+						ce(done())
+						configPath = filePath(id, "config", "xml")
+					})
+
+					ce(runOne(configPath))
+
+				}()
+			}
+
+		},
+
+		"runall": func(args []string) {
 
 			sem := make(chan struct{}, parallel)
 			for _, run := range getCases(args) {

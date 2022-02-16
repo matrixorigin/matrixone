@@ -31,64 +31,99 @@ func (_ Def) CmdExec(
 	read fz.ReadConfig,
 ) Commands {
 
+	execOne := func(id uuid.UUID, configPath string) {
+
+		t0 := time.Now()
+		pt("RUN %v\n", id)
+		defer func() {
+			pt("DONE %v in %v\n", id, time.Since(t0))
+		}()
+
+		// read configs
+		content, err := os.ReadFile(configPath)
+		ce(err)
+		defs, err := read(bytes.NewReader(content))
+		ce(err)
+
+		// run
+		NewScope().Fork(defs...).Fork(
+
+			// configs
+			func(
+				parallel Parallel,
+			) fz.ExecuteTimeout {
+				return fz.ExecuteTimeout(time.Minute * time.Duration(parallel))
+			},
+		).Call(func(
+			writeFile fz.WriteTestDataFile,
+			clearFile fz.ClearTestDataFile,
+			filePath fz.TestDataFilePath,
+			id uuid.UUID,
+		) {
+
+			var err error
+			defer he(&err, e4.Do(func() {
+				pt("%s error: %s\n", id, err)
+			}))
+
+			ce(clearFile("exec", "output"))
+
+			cmd := exec.Command("testcube", "run", configPath)
+			output, err := cmd.CombinedOutput()
+
+			if err != nil {
+				f, err, done := writeFile("exec", "output")
+				ce(err)
+				_, err = f.Write(output)
+				ce(err)
+				ce(done())
+				pt("%s\n", filePath(id, "exec", "output"))
+				pt("%s\n", filePath(id, "cube", "log"))
+			}
+
+		})
+
+		return
+	}
+
 	return Commands{
 		// run test cases in distinct processes
+
 		"exec": func(args []string) {
 
-			execOne := func(c *TestCase) {
+			sem := make(chan struct{}, parallel)
+			for {
+				sem <- struct{}{}
+				go func() {
+					defer func() {
+						<-sem
+					}()
 
-				t0 := time.Now()
-				pt("RUN %v\n", c.ID)
-				defer func() {
-					pt("DONE %v in %v\n", c.ID, time.Since(t0))
-				}()
+					var configPath string
+					var id uuid.UUID
 
-				// read configs
-				content, err := os.ReadFile(c.ConfigPath)
-				ce(err)
-				defs, err := read(bytes.NewReader(content))
-				ce(err)
-
-				// run
-				NewScope().Fork(defs...).Fork(
-
-					// configs
-					func(
-						parallel Parallel,
-					) fz.ExecuteTimeout {
-						return fz.ExecuteTimeout(time.Minute * time.Duration(parallel))
-					},
-				).Call(func(
-					writeFile fz.WriteTestDataFile,
-					clearFile fz.ClearTestDataFile,
-					filePath fz.TestDataFilePath,
-					id uuid.UUID,
-				) {
-
-					var err error
-					defer he(&err, e4.Do(func() {
-						pt("%s error: %s\n", c.ID, err)
-					}))
-
-					ce(clearFile("exec", "output"))
-
-					cmd := exec.Command("testcube", "run", c.ConfigPath)
-					output, err := cmd.CombinedOutput()
-
-					if err != nil {
-						f, err, done := writeFile("exec", "output")
+					NewScope().Call(func(
+						write fz.WriteConfig,
+						_id uuid.UUID,
+						writeFile fz.WriteTestDataFile,
+						filePath fz.TestDataFilePath,
+					) {
+						f, err, done := writeFile("config", "xml")
 						ce(err)
-						_, err = f.Write(output)
-						ce(err)
+						ce(write(f))
 						ce(done())
-						pt("%s\n", filePath(id, "exec", "output"))
-						pt("%s\n", filePath(id, "cube", "log"))
-					}
+						configPath = filePath(_id, "config", "xml")
+						id = _id
+					})
 
-				})
+					execOne(id, configPath)
 
-				return
+				}()
 			}
+
+		},
+
+		"execall": func(args []string) {
 
 			sem := make(chan struct{}, parallel)
 			for _, c := range getCases(args) {
@@ -98,7 +133,7 @@ func (_ Def) CmdExec(
 					defer func() {
 						<-sem
 					}()
-					execOne(c)
+					execOne(c.ID, c.ConfigPath)
 				}()
 			}
 			for i := 0; i < cap(sem); i++ {

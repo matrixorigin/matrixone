@@ -136,7 +136,9 @@ func (_ Def2) Nodes(
 		}
 
 		conf.Customize.CustomWrapNewTransport = func(t transport.Trans) transport.Trans {
-			return newInterceptableTransport(t, nodes)
+			return newInterceptableTransport(t, func() fz.Nodes {
+				return nodes
+			})
 		}
 
 		node.Config = conf
