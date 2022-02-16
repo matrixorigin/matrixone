@@ -325,10 +325,21 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 
 func (e *Block) toLogEntry(info *CommitInfo) *blockLogEntry {
 	if info == nil {
-		info=e.CommitInfo
+		info = e.CommitInfo
 	}
 	return &blockLogEntry{
-		BaseEntry:  &BaseEntry{Id: e.Id, CommitInfo: info},
+		BaseEntry: &BaseEntry{
+			Id: e.Id,
+			CommitInfo: &CommitInfo{
+				CommitId:  info.CommitId,
+				TranId:    info.TranId,
+				Op:        info.Op,
+				Size:      info.Size,
+				LogIndex:  info.LogIndex,
+				PrevIndex: info.PrevIndex,
+				LogRange:  info.LogRange,
+				Indice:    info.Indice,
+			}},
 		Catalog:    e.Segment.Table.Database.Catalog,
 		DatabaseId: e.Segment.Table.Database.Id,
 		TableId:    e.Segment.Table.Id,

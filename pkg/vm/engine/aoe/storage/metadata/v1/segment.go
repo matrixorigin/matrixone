@@ -158,11 +158,22 @@ func (e *Segment) Marshal() ([]byte, error) {
 }
 
 func (e *Segment) toLogEntry(info *CommitInfo) *segmentLogEntry {
-	if info ==nil{
-		info=e.CommitInfo
+	if info == nil {
+		info = e.CommitInfo
 	}
 	return &segmentLogEntry{
-		BaseEntry:  &BaseEntry{Id: e.Id, CommitInfo: info},
+		BaseEntry: &BaseEntry{
+			Id: e.Id,
+			CommitInfo: &CommitInfo{
+				CommitId:  info.CommitId,
+				TranId:    info.TranId,
+				Op:        info.Op,
+				Size:      info.Size,
+				LogIndex:  info.LogIndex,
+				PrevIndex: info.PrevIndex,
+				LogRange:  info.LogRange,
+				Indice:    info.Indice,
+			}},
 		TableId:    e.Table.Id,
 		DatabaseId: e.Table.Database.Id,
 	}

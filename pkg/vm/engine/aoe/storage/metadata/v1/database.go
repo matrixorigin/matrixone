@@ -738,7 +738,18 @@ func (db *Database) String() string {
 
 func (db *Database) ToDatabaseLogEntry(info *CommitInfo) databaseLogEntry {
 	return databaseLogEntry{
-		BaseEntry: &BaseEntry{Id: db.Id, CommitInfo: info},
+		BaseEntry: &BaseEntry{
+			Id: db.Id, 
+			CommitInfo: &CommitInfo{
+				CommitId: info.CommitId,
+				TranId: info.TranId,
+				Op: info.Op,
+				Size: info.Size,
+				LogIndex: info.LogIndex,
+				PrevIndex: info.PrevIndex,
+				LogRange: info.LogRange,
+				Indice: info.Indice,
+			}},
 		Database:  &Database{Name: db.Name},
 	}
 }
