@@ -16,18 +16,22 @@ package compile
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/ftree"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/vtree"
 )
 
 // Compile compiles ast tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	e.stmt = rewrite.Rewrite(e.stmt)
+	e.stmt = rewrite.AstRewrite(e.stmt)
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err

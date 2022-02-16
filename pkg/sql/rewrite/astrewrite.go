@@ -15,8 +15,9 @@
 package rewrite
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"go/constant"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var logicalBinaryOps = map[tree.BinaryOp]struct{}{
@@ -50,7 +51,8 @@ var logicalComparisonOps = map[tree.ComparisonOp]struct{}{
 func AstRewrite(stmt tree.Statement) tree.Statement {
 	// rewrite all filter condition inside AST.
 	// rewrite select statement.
-	if st, ok := stmt.(*tree.Select); ok {
+	switch st := stmt.(type) {
+	case *tree.Select:
 		switch t := st.Select.(type) {
 		case *tree.UnionClause:
 			t.Left, t.Right = AstRewrite(t.Left), AstRewrite(t.Right)

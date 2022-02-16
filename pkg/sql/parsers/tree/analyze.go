@@ -12,33 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package transformer
+package tree
 
-const (
-	Sum = iota
-	Avg
-	Max
-	Min
-	Count
-	StarCount
-	ApproxCountDistinct
-)
-
-var TransformerNames = [...]string{
-	Sum:                 "sum",
-	Avg:                 "avg",
-	Max:                 "max",
-	Min:                 "min",
-	Count:               "count",
-	StarCount:           "starcount",
-	ApproxCountDistinct: "approx_count_distinct",
+//Use statement
+type AnalyzeStmt struct {
+	statementImpl
+	Table *TableName
+	Cols  IdentifierList
 }
 
-var TransformerNamesMap map[string]int
+func (node *AnalyzeStmt) Format(ctx *FmtCtx) {
+	ctx.WriteString("analyze table ")
+	node.Table.Format(ctx)
+	ctx.WriteString("(")
+	node.Cols.Format(ctx)
+	ctx.WriteString(")")
+}
 
-type Transformer struct {
-	Op    int
-	Ref   int
-	Name  string
-	Alias string
+func NewAnalyzeStmt(tbl *TableName, cols IdentifierList) *AnalyzeStmt {
+	return &AnalyzeStmt{Table: tbl, Cols: cols}
 }

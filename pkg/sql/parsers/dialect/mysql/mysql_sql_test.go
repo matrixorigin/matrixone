@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "create table t (a int, b char, key idx1 type zonemap (a, b))",
+		input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
 		output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
 	}
 )
@@ -56,29 +56,29 @@ var (
 		input  string
 		output string
 	}{{
-		input: "create table t (a int, b char, key idx1 type zonemap (a, b))",
+		input:  "create table t (a int, b char, key idx1 type zonemap (a, b))",
 		output: "create table t (a int, b char, index idx1 using zonemap (a, b))",
 	}, {
 		input: "create table t (a int, index idx1 using zonemap (a))",
 	}, {
 		input: "create table t (a int, index idx1 using bsi (a))",
 	}, {
-		input: "set @@sql_mode ='TRADITIONAL'",
+		input:  "set @@sql_mode ='TRADITIONAL'",
 		output: "set sql_mode = TRADITIONAL",
 	}, {
-		input: "set @@session.sql_mode ='TRADITIONAL'",
+		input:  "set @@session.sql_mode ='TRADITIONAL'",
 		output: "set sql_mode = TRADITIONAL",
 	}, {
-		input: "set session sql_mode ='TRADITIONAL'",
+		input:  "set session sql_mode ='TRADITIONAL'",
 		output: "set sql_mode = TRADITIONAL",
 	}, {
-		input: "select @session.tx_isolation",
+		input:  "select @session.tx_isolation",
 		output: "select @tx_isolation from dual",
 	}, {
-		input: "select @@session.tx_isolation",
+		input:  "select @@session.tx_isolation",
 		output: "select @@tx_isolation from dual",
 	}, {
-		input: "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
+		input:  "/* mysql-connector-java-8.0.27 (Revision: e920b979015ae7117d60d72bcc8f077a839cd791) */SHOW VARIABLES;",
 		output: "show variables",
 	}, {
 		input: "create index idx1 using bsi on A (a) ",
@@ -641,6 +641,9 @@ var (
 		output: "select 1 from dual",
 	}, {
 		input: "select $ from t",
+	}, {
+		input:  "analyze table part (a,b )",
+		output: "analyze table part(a, b)",
 	}}
 )
 

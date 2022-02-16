@@ -17,8 +17,12 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"testing"
+
+	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
@@ -47,13 +51,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestTransform(t *testing.T) {
 	var buf bytes.Buffer
 	ins := vm.Instruction{
-		Op: vm.Transform,
+		Op:  vm.Transform,
 		Arg: &transform.Argument{},
 	}
 	err := EncodeInstruction(ins, &buf)
@@ -74,7 +77,7 @@ func TestInstruction(t *testing.T) {
 			Op: vm.Top,
 			Arg: &top.Argument{
 				Limit: 123,
-				Fs: []top.Field{top.Field{Attr: "hello", Type: top.Ascending}},
+				Fs:    []top.Field{top.Field{Attr: "hello", Type: top.Ascending}},
 			},
 		},
 		vm.Instruction{
@@ -86,52 +89,51 @@ func TestInstruction(t *testing.T) {
 		vm.Instruction{
 			Op: vm.Limit,
 			Arg: &limit.Argument{
-				Seen: 12893792345,
+				Seen:  12893792345,
 				Limit: 89757435634,
 			},
 		},
 		vm.Instruction{
 			Op: vm.Times,
 			Arg: &times.Argument{
-				IsBare: false,
-				R: "vm times test",
-				Rvars: []string{"vm", "times", "test"},
-				Ss: []string{"decode", "ins", "buf"},
-				Svars: []string{"we", "consider", "foreach"},
-				VarsMap: map[string]int {"key1": 1111, "key2": 2222},
+				IsBare:  false,
+				R:       "vm times test",
+				Rvars:   []string{"vm", "times", "test"},
+				Ss:      []string{"decode", "ins", "buf"},
+				Svars:   []string{"we", "consider", "foreach"},
+				VarsMap: map[string]int{"key1": 1111, "key2": 2222},
 				Bats: []*batch.Batch{
 					&batch.Batch{
-						Ro: true,
+						Ro:       true,
 						SelsData: []byte("invocation"),
-						Sels: []int64{123, 98789, 3456456},
-						Attrs: []string{"the", "first", "loop"},
-						Zs: []int64{123, 98789, 3456456},
-						As: []string{"the", "first", "loop"},
-						Refs: []uint64{123, 98789, 3456456},
+						Sels:     []int64{123, 98789, 3456456},
+						Attrs:    []string{"the", "first", "loop"},
+						Zs:       []int64{123, 98789, 3456456},
+						As:       []string{"the", "first", "loop"},
+						Refs:     []uint64{123, 98789, 3456456},
 					},
 				},
 				Arg: &transform.Argument{
-					Typ: 12312312,
-					IsMerge: false,
+					Typ:      12312312,
+					IsMerge:  false,
 					FreeVars: []string{"vm", "times", "test"},
 					BoundVars: []transformer.Transformer{
 						transformer.Transformer{
-							Op: 1231,
-							Ref: 897897,
-							Name: "happening",
+							Op:    1231,
+							Ref:   897897,
+							Name:  "happening",
 							Alias: "method",
 						},
 					},
 				},
 			},
-
 		},
 		vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
 			Arg: &merge.Argument{},
 		},
 		vm.Instruction{
-			Op: vm.Dedup,
+			Op:  vm.Dedup,
 			Arg: &dedup.Argument{},
 		},
 		vm.Instruction{
@@ -146,17 +148,17 @@ func TestInstruction(t *testing.T) {
 			},
 		},
 		vm.Instruction{
-			Op: vm.Oplus,
+			Op:  vm.Oplus,
 			Arg: &oplus.Argument{Typ: 12312423},
 		},
 		vm.Instruction{
-			Op: vm.Output,
+			Op:  vm.Output,
 			Arg: &output.Argument{Attrs: []string{"the", "first", "loop"}},
 		},
 		vm.Instruction{
 			Op: vm.Offset,
 			Arg: &offset.Argument{
-				Seen: 1231245,
+				Seen:   1231245,
 				Offset: 65784654,
 			},
 		},
@@ -164,24 +166,24 @@ func TestInstruction(t *testing.T) {
 			Op: vm.Restrict,
 			Arg: &restrict.Argument{
 				Attrs: []string{"the", "first", "loop"},
-				E: &extend.StarExtend{},
+				E:     &extend.StarExtend{},
 			},
 		},
 		vm.Instruction{
-			Op: vm.Connector,
+			Op:  vm.Connector,
 			Arg: &connector.Argument{},
 		},
 		vm.Instruction{
 			Op: vm.Connector,
 			Arg: &transform.Argument{
-				Typ: 12312312,
-				IsMerge: false,
+				Typ:      12312312,
+				IsMerge:  false,
 				FreeVars: []string{"vm", "times", "test"},
 				BoundVars: []transformer.Transformer{
 					transformer.Transformer{
-						Op: 1231,
-						Ref: 897897,
-						Name: "happening",
+						Op:    1231,
+						Ref:   897897,
+						Name:  "happening",
 						Alias: "method",
 					},
 				},
@@ -201,7 +203,7 @@ func TestInstruction(t *testing.T) {
 			Op: vm.UnTransform,
 			Arg: &untransform.Argument{
 				FreeVars: []string{"the", "first", "loop"},
-				Type: 1231237,
+				Type:     1231237,
 			},
 		},
 	}
@@ -464,11 +466,11 @@ func TestExtend(t *testing.T) {
 	extendArray := []extend.Extend{
 		&extend.UnaryExtend{
 			Op: 123123,
-			E: &extend.ValueExtend{V: NewFloatVector(1.2)},
+			E:  &extend.ValueExtend{V: NewFloatVector(1.2)},
 		},
 		&extend.BinaryExtend{
-			Op: 574635,
-			Left: &extend.ValueExtend{V: NewFloatVector(1.2)},
+			Op:    574635,
+			Left:  &extend.ValueExtend{V: NewFloatVector(1.2)},
 			Right: &extend.FuncExtend{Name: "binary Extend"},
 		},
 		&extend.MultiExtend{
@@ -713,7 +715,7 @@ func NewDatetimeVector() *vector.Vector {
 }
 
 func TestVector(t *testing.T) {
-	vecArray := []*vector.Vector {
+	vecArray := []*vector.Vector{
 		NewInt8Vector(1),
 		NewInt16Vector(12),
 		NewInt32Vector(45),
@@ -769,145 +771,157 @@ func TestVector(t *testing.T) {
 }
 
 func TestRing(t *testing.T) {
+	sk := hyperloglog.New()
+	sk.Insert([]byte{0, 0, 0, 1})
+	sk.Insert([]byte{0, 1, 0, 1})
+	sk.Insert([]byte{0, 1, 2, 1})
+	sk2 := hyperloglog.New()
+	sk2.Insert([]byte{4, 0, 0, 1})
+	sk2.Insert([]byte{0, 1, 0, 1})
 	ringArray := []ring.Ring{
 		&avg.AvgRing{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []float64{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []float64{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&count.CountRing{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []int64{12312312, 34534345, 234123345345},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []int64{12312312, 34534345, 234123345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&starcount.CountRing{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []int64{12312312, 34534345, 234123345345},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []int64{12312312, 34534345, 234123345345},
+			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
+		&approxcd.ApproxCountDistinctRing{
+			Vs:  []uint64{3, 2, 0},
+			Sk:  []*hyperloglog.Sketch{sk, sk2, hyperloglog.New()},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Int8Ring{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []int8{6, 6, 8, 0},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []int8{6, 6, 8, 0},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Int16Ring{
-			Ns: []int64{567567, 123123908950, 9089374534},
-			Vs: []int16{62, 62, 8, 01},
+			Ns:  []int64{567567, 123123908950, 9089374534},
+			Vs:  []int16{62, 62, 8, 01},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Int32Ring{
-			Ns: []int64{789789, 123123908950, 9089374534},
-			Vs: []int32{612, 632, 81, 0423},
+			Ns:  []int64{789789, 123123908950, 9089374534},
+			Vs:  []int32{612, 632, 81, 0423},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Int64Ring{
-			Ns: []int64{178923123, 123123908950, 9089374534},
-			Vs: []int64{6123, 123126, 2323328, 02342342},
+			Ns:  []int64{178923123, 123123908950, 9089374534},
+			Vs:  []int64{6123, 123126, 2323328, 02342342},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.UInt8Ring{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []uint8{6, 6, 8, 0},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []uint8{6, 6, 8, 0},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.UInt16Ring{
-			Ns: []int64{45634564, 123123908950, 9089374534},
-			Vs: []uint16{6123, 1236, 8123, 12310},
+			Ns:  []int64{45634564, 123123908950, 9089374534},
+			Vs:  []uint16{6123, 1236, 8123, 12310},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.UInt32Ring{
-			Ns: []int64{56784567, 123123908950, 9089374534},
-			Vs: []uint32{6123, 3454346, 345348, 345340},
+			Ns:  []int64{56784567, 123123908950, 9089374534},
+			Vs:  []uint32{6123, 3454346, 345348, 345340},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.UInt64Ring{
-			Ns: []int64{8902345, 123123908950, 9089374534},
-			Vs: []uint64{6112323, 34542345346, 234, 23412312},
+			Ns:  []int64{8902345, 123123908950, 9089374534},
+			Vs:  []uint64{6112323, 34542345346, 234, 23412312},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Float32Ring{
-			Ns: []int64{3246457, 123123908950, 9089374534},
-			Vs: []float32{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{3246457, 123123908950, 9089374534},
+			Vs:  []float32{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.Float64Ring{
-			Ns: []int64{996674, 123123908950, 9089374534},
-			Vs: []float64{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{996674, 123123908950, 9089374534},
+			Vs:  []float64{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&max.StrRing{
-			Ns: []int64{1231245234, 123123123908950, 123},
-			Vs: [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
+			Ns:  []int64{1231245234, 123123123908950, 123},
+			Vs:  [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Int8Ring{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []int8{6, 6, 8, 0},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []int8{6, 6, 8, 0},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Int16Ring{
-			Ns: []int64{567567, 123123908950, 9089374534},
-			Vs: []int16{62, 62, 8, 01},
+			Ns:  []int64{567567, 123123908950, 9089374534},
+			Vs:  []int16{62, 62, 8, 01},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Int32Ring{
-			Ns: []int64{789789, 123123908950, 9089374534},
-			Vs: []int32{612, 632, 81, 0423},
+			Ns:  []int64{789789, 123123908950, 9089374534},
+			Vs:  []int32{612, 632, 81, 0423},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Int64Ring{
-			Ns: []int64{178923123, 123123908950, 9089374534},
-			Vs: []int64{6123, 123126, 2323328, 02342342},
+			Ns:  []int64{178923123, 123123908950, 9089374534},
+			Vs:  []int64{6123, 123126, 2323328, 02342342},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.UInt8Ring{
-			Ns: []int64{123123123, 123123908950, 9089374534},
-			Vs: []uint8{6, 6, 8, 0},
+			Ns:  []int64{123123123, 123123908950, 9089374534},
+			Vs:  []uint8{6, 6, 8, 0},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.UInt16Ring{
-			Ns: []int64{45634564, 123123908950, 9089374534},
-			Vs: []uint16{6123, 1236, 8123, 12310},
+			Ns:  []int64{45634564, 123123908950, 9089374534},
+			Vs:  []uint16{6123, 1236, 8123, 12310},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.UInt32Ring{
-			Ns: []int64{56784567, 123123908950, 9089374534},
-			Vs: []uint32{6123, 3454346, 345348, 345340},
+			Ns:  []int64{56784567, 123123908950, 9089374534},
+			Vs:  []uint32{6123, 3454346, 345348, 345340},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.UInt64Ring{
-			Ns: []int64{8902345, 123123908950, 9089374534},
-			Vs: []uint64{6112323, 34542345346, 234, 23412312},
+			Ns:  []int64{8902345, 123123908950, 9089374534},
+			Vs:  []uint64{6112323, 34542345346, 234, 23412312},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Float32Ring{
-			Ns: []int64{3246457, 123123908950, 9089374534},
-			Vs: []float32{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{3246457, 123123908950, 9089374534},
+			Vs:  []float32{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.Float64Ring{
-			Ns: []int64{996674, 123123908950, 9089374534},
-			Vs: []float64{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{996674, 123123908950, 9089374534},
+			Vs:  []float64{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&min.StrRing{
-			Ns: []int64{1231245234, 123123123908950, 123},
-			Vs: [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
+			Ns:  []int64{1231245234, 123123123908950, 123},
+			Vs:  [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&sum.IntRing{
-			Ns: []int64{178923123, 123123908950, 9089374534},
-			Vs: []int64{6123, 123126, 2323328, 02342342},
+			Ns:  []int64{178923123, 123123908950, 9089374534},
+			Vs:  []int64{6123, 123126, 2323328, 02342342},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&sum.UIntRing{
-			Ns: []int64{8902345, 123123908950, 9089374534},
-			Vs: []uint64{6112323, 34542345346, 234, 23412312},
+			Ns:  []int64{8902345, 123123908950, 9089374534},
+			Vs:  []uint64{6112323, 34542345346, 234, 23412312},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&sum.FloatRing{
-			Ns: []int64{996674, 123123908950, 9089374534},
-			Vs: []float64{123.123, 34534.345, 234123.345345},
+			Ns:  []int64{996674, 123123908950, 9089374534},
+			Vs:  []float64{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 	}
@@ -988,6 +1002,26 @@ func TestRing(t *testing.T) {
 					return
 				}
 			}
+		case *approxcd.ApproxCountDistinctRing:
+			oriRing := r.(*approxcd.ApproxCountDistinctRing)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
+			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
+			for i, sk := range oriRing.Sk {
+				if expect, got := sk.Estimate(), ExpectRing.Sk[i].Estimate(); expect != got {
+					t.Errorf("Decode ring failed. \nExpected/Got:\n%v\n%v", expect, got)
+				}
+			}
+
 		case *max.Int8Ring:
 			oriRing := r.(*max.Int8Ring)
 			// Da
@@ -1542,11 +1576,11 @@ func TestBatch(t *testing.T) {
 		}
 	}
 	// Vecs
-	if  resultBat.Vecs[0].Col.([]float64)[0] != bat.Vecs[0].Col.([]float64)[0] {
+	if resultBat.Vecs[0].Col.([]float64)[0] != bat.Vecs[0].Col.([]float64)[0] {
 		t.Errorf("Decode Batch.Vecs failed. \nExpected/Got:\n%v\n%v", bat.Vecs[0].Col.([]float64)[0], resultBat.Vecs[0].Col.([]float64)[0])
 		return
 	}
-	if  resultBat.Vecs[1].Col.([]float64)[0] != bat.Vecs[1].Col.([]float64)[0] {
+	if resultBat.Vecs[1].Col.([]float64)[0] != bat.Vecs[1].Col.([]float64)[0] {
 		t.Errorf("Decode Batch.Vecs failed. \nExpected/Got:\n%v\n%v", bat.Vecs[1].Col.([]float64)[0], resultBat.Vecs[1].Col.([]float64)[0])
 		return
 	}
