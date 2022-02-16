@@ -612,7 +612,9 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.DatabaseFn = func(db *Database) error {
 		databaseCkp := &databaseCheckpoint{}
 		databaseCkp.Tables = make(map[uint64]*tableCheckpoint)
+		db.RLock()
 		info := db.CommitInfo.ChooseCommitInfo(check)
+		db.RUnlock()
 		if info != nil {
 			databaseCkp.NeedReplay = true
 			databaseCkp.LogEntry = db.ToDatabaseLogEntry(info)
@@ -624,7 +626,9 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.TableFn = func(tb *Table) error {
 		tableCkp := &tableCheckpoint{}
 		tableCkp.Segments = make([]*segmentCheckpoint, 0)
+		tb.RLock()
 		info := tb.CommitInfo.ChooseCommitInfo(check)
+		tb.RUnlock()
 		if info != nil {
 			tableCkp.NeedReplay = true
 			tableCkp.LogEntry = tb.ToTableLogEntry(info)
@@ -637,7 +641,9 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	processor.SegmentFn = func(seg *Segment) error {
 		segmentCkp := &segmentCheckpoint{}
 		segmentCkp.Blocks = make([]*blockLogEntry, 0)
+		seg.RLock()
 		info := seg.CommitInfo.ChooseCommitInfo(check)
+		seg.RUnlock()
 		if info != nil {
 			segmentCkp.NeedReplay = true
 			segmentCkp.LogEntry = *seg.toLogEntry(info)
@@ -649,7 +655,9 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	}
 
 	processor.BlockFn = func(blk *Block) error {
+		blk.RLock()
 		info := blk.CommitInfo.ChooseCommitInfo(check)
+		blk.RUnlock()
 		if info != nil {
 			blkEntry := blk.toLogEntry(info)
 			segId := blk.Segment.Id

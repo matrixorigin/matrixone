@@ -579,15 +579,15 @@ func TestReplay(t *testing.T) {
 }
 func TestCheckpoint(t *testing.T) {
 	dir := initTestEnv(t)
-	totaldbcount := 5
-	droppedDbCount := 2
-	deletedDbCount := 1
-	tableCountPerTurn := 3
-	droppedTableCount := 2
-	deletedTableCount := 1
+	totaldbcount := 1
+	droppedDbCount := 0
+	deletedDbCount := 0
+	tableCountPerTurn := 1
+	droppedTableCount := 1
+	deletedTableCount := 0
 	catalogCheckpointIntervel := 100 * time.Millisecond
 	testduration := 250 * time.Millisecond
-	versionFileSize := 100 * int(common.K)
+	versionFileSize := 100 * int(common.M)
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
