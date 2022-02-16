@@ -119,10 +119,6 @@ func cleanup() {
 }
 
 func recreateDir(dir string) (err error) {
-	//err = os.RemoveAll(dir)
-	//if err != nil {
-	//	return err
-	//}
 	mask := syscall.Umask(0)
 	defer syscall.Umask(mask)
 	err = os.MkdirAll(dir, os.FileMode(0755))
