@@ -451,6 +451,27 @@ func (e *Table) String() string {
 	return string(buf)
 }
 
+func (e *Table) ToTableLogEntry(info *CommitInfo) tableLogEntry {
+	entry := tableLogEntry{
+		Table: &Table{
+			BaseEntry: &BaseEntry{
+				Id: e.Id, 
+				CommitInfo: &CommitInfo{
+					CommitId: info.CommitId,
+					TranId: info.TranId,
+					Op: info.Op,
+					Size: info.Size,
+					LogIndex: info.LogIndex,
+					PrevIndex: info.PrevIndex,
+					LogRange: info.LogRange,
+					Indice: info.Indice,
+				}},
+			Schema:    e.Schema},
+		DatabaseId: e.Database.Id,
+	}
+	return entry
+}
+
 // Not safe
 // Usually it is used during creating a table. We need to commit the new table entry
 // to the store.

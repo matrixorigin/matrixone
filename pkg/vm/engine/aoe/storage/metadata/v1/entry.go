@@ -36,10 +36,28 @@ type dbReplaceLogEntry struct {
 	Replacer      []*Database       `json:"replacer"`
 }
 
+type segmentCheckpoint struct {
+	Blocks     []*blockLogEntry
+	NeedReplay bool
+	LogEntry   segmentLogEntry
+}
+
+type tableCheckpoint struct {
+	Segments   []*segmentCheckpoint
+	NeedReplay bool
+	LogEntry   tableLogEntry
+}
+
+type databaseCheckpoint struct {
+	Tables     map[uint64]*tableCheckpoint
+	NeedReplay bool
+	LogEntry   databaseLogEntry
+}
+
 type catalogLogEntry struct {
-	Range    *common.Range `json:"range"`
-	Catalog  *Catalog      `json:"catalog"`
-	LogRange *LogRange     `json:"logrange"`
+	Databases map[uint64]*databaseCheckpoint
+	SafeIds   map[uint64]uint64
+	Range     *common.Range
 }
 
 func newDatabaseLogEntry(shardId, index uint64) *databaseLogEntry {

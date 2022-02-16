@@ -157,9 +157,23 @@ func (e *Segment) Marshal() ([]byte, error) {
 	return json.Marshal(e)
 }
 
-func (e *Segment) toLogEntry() *segmentLogEntry {
+func (e *Segment) toLogEntry(info *CommitInfo) *segmentLogEntry {
+	if info == nil {
+		info = e.CommitInfo
+	}
 	return &segmentLogEntry{
-		BaseEntry:  e.BaseEntry,
+		BaseEntry: &BaseEntry{
+			Id: e.Id,
+			CommitInfo: &CommitInfo{
+				CommitId:  info.CommitId,
+				TranId:    info.TranId,
+				Op:        info.Op,
+				Size:      info.Size,
+				LogIndex:  info.LogIndex,
+				PrevIndex: info.PrevIndex,
+				LogRange:  info.LogRange,
+				Indice:    info.Indice,
+			}},
 		TableId:    e.Table.Id,
 		DatabaseId: e.Table.Database.Id,
 	}
@@ -215,7 +229,7 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	entry := e.toLogEntry()
+	entry := e.toLogEntry(nil)
 	buf, _ := entry.Marshal()
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)

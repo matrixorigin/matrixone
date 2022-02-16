@@ -18,12 +18,14 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -130,8 +133,11 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
 				db.SyncLog(index)
+				info:=blk.GetCommit()
+				blk.Lock()
 				blk.SetIndexLocked(index.AsSlice())
-				blk.GetCommit().SetSize(mockBlockSize)
+				info.SetSize(mockBlockSize)
+				blk.Unlock()
 				err := blk.SimpleUpgrade(nil)
 				db.Checkpoint(index)
 				assert.Nil(t, err)
@@ -574,6 +580,206 @@ func TestReplay(t *testing.T) {
 
 	catalog.Close()
 }
+func TestCheckpoint(t *testing.T) {
+	dir := initTestEnv(t)
+	totaldbcount := 5
+	droppedDbCount := 2
+	deletedDbCount := 1
+	tableCountPerTurn := 3
+	droppedTableCount := 2
+	deletedTableCount := 1
+	catalogCheckpointIntervel := 100 * time.Millisecond
+	testduration := 250 * time.Millisecond
+	versionFileSize := 500 * int(common.K)
+
+	hbInterval := time.Duration(4) * time.Millisecond
+	if invariants.RaceEnabled {
+		hbInterval *= 3
+	}
+
+	// open catalog
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = versionFileSize
+
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
+	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	catalog, _ := OpenCatalogWithDriver(
+		new(sync.RWMutex), cfg, driver, indexWal)
+	catalog.Start()
+
+	//create databases
+	gen := shard.NewMockIndexAllocator()
+	dbs := make([]*Database, 0, totaldbcount)
+	getSegmentedIdWorkers := make([]base.IHeartbeater, 0, totaldbcount)
+	for i := 0; i < totaldbcount; i++ {
+		dbName := "db" + strconv.Itoa(i)
+		db, _ := catalog.SimpleCreateDatabase(dbName, nil)
+		idx := gen.Next(db.GetShardId())
+		db.Wal.SyncLog(idx)
+		db.Wal.Checkpoint(idx)
+		dbs = append(dbs, db)
+		getSegmentedIdWorker := ops.NewHeartBeater(
+			hbInterval, &mockGetSegmentedHB{db: db, t: t})
+		getSegmentedIdWorker.Start()
+		getSegmentedIdWorkers = append(
+			getSegmentedIdWorkers, getSegmentedIdWorker)
+	}
+
+	ws := totaldbcount
+	createBlkWorker, _ := ants.NewPool(ws)
+	upgradeSegWorker, _ := ants.NewPool(4)
+
+	var wg sync.WaitGroup
+
+	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+
+	stopChannel := make(chan int)
+
+	var wg2 sync.WaitGroup
+	// do checkpoint
+	wg2.Add(1)
+	go func() {
+		for {
+			select {
+			case <-stopChannel:
+				wg2.Done()
+				return
+			default:
+				time.Sleep(catalogCheckpointIntervel)
+				catalog.Checkpoint()
+			}
+		}
+	}()
+
+	// create table, segments and blocks
+	// drop, hard delete and create databases,
+	// the number of the database remains the same
+	// create table, segments and blocks
+	// drop, hard delete and create tables
+	// compact
+	// create tables, segments and blocks
+	wg2.Add(1)
+	go func() {
+
+		for {
+			select {
+			case <-stopChannel:
+				wg2.Done()
+				return
+			default:
+				// create table, segments and blocks
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+				// t.Log(catalog.PString(PPL0, 0))
+
+				// drop, hard delete and create databases
+				for i := 0; i < droppedDbCount; i++ {
+					db := dbs[i]
+					//drop
+					idx := gen.Next(db.GetShardId())
+					db.Wal.SyncLog(idx)
+					catalog.SimpleDropDatabaseByName(db.Name, idx)
+					db.Wal.Checkpoint(idx)
+					//hard delete
+					if i < deletedDbCount {
+						testutils.WaitExpect(100, func() bool {
+							return db.UncheckpointedCnt() == 0
+						})
+						catalog.SimpleHardDeleteDatabase(db.Id)
+					}
+					//create databases
+					db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
+					idx = gen.Next(db.GetShardId())
+					db.Wal.SyncLog(idx)
+					db.Wal.Checkpoint(idx)
+					dbs[i] = db
+				}
+
+				// create table, segments and blocks
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+
+				// drop, hard delete and create tables
+				for i := 0; i < ws; i++ {
+					db := dbs[i]
+					tables := db.SimpleGetTableNames()
+					for j := 0; j < droppedTableCount; j++ {
+						var tb *Table
+						k := 0
+						for {
+							tb = db.SimpleGetTableByName(tables[j+k])
+							if tb != nil {
+								break
+							}
+							k++
+						}
+						//drop tables
+						idx := gen.Next(db.GetShardId())
+						db.Wal.SyncLog(idx)
+						db.SimpleDropTableByName(tables[j+k], idx)
+						db.Wal.Checkpoint(idx)
+						//hard delete the table
+						if j < deletedTableCount {
+							db.SimpleHardDeleteTable(tb.Id)
+						}
+					}
+				}
+
+				// compact
+				catalog.Compact(nil, nil)
+
+				// create tables, segments and blocks
+				for i := 0; i < ws; i++ {
+					wg.Add(1)
+					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+				}
+				wg.Wait()
+
+			}
+		}
+	}()
+
+	time.Sleep(testduration)
+	close(stopChannel)
+
+	for _, worker := range getSegmentedIdWorkers {
+		worker.Stop()
+	}
+	wg2.Wait()
+
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v", catalog.Sequence)
+	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
+	catalog.Close()
+
+	logutil.Infof("\n\n******new catalog******\n")
+
+	// open and relay the catalog
+	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
+	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+
+	catalog.Start()
+	logutil.Infof(catalog.PString(PPL0, 0))
+	logutil.Infof("sequence number is %v", catalog.Sequence)
+	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
+	catalog.Close()
+}
+
+//catalog compact & gc
+//random ckp
 
 func TestAppliedIndex(t *testing.T) {
 	dir := initTestEnv(t)
@@ -1416,6 +1622,7 @@ func TestIndice(t *testing.T) {
 	t.Log(catalog.PString(PPL0, 0))
 	assert.Equal(t, 1, table.GetIndexSchema().IndiceNum())
 	assert.Equal(t, "idx-1", table.GetIndexSchema().Indice[0].Name)
+	catalog.Start()
 
 	catalog.Close()
 }

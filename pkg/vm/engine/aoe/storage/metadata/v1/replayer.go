@@ -51,10 +51,11 @@ type replayEntry struct {
 }
 
 type replayCache struct {
-	replayer   *catalogReplayer
-	entries    []*replayEntry
-	checkpoint *catalogLogEntry
-	safeIds    map[uint64]uint64
+	replayer          *catalogReplayer
+	checkpointEntries []*replayEntry
+	entries           []*replayEntry
+	checkpoint        *catalogLogEntry
+	safeIds           map[uint64]uint64
 }
 
 func newReplayCache(replayer *catalogReplayer) *replayCache {
@@ -73,10 +74,12 @@ func (cache *replayCache) OnShardSafeId(id shard.SafeId) {
 }
 
 func (cache *replayCache) Append(entry *replayEntry) {
-	cache.entries = append(cache.entries, entry)
 	if entry.typ == logstore.ETCheckpoint {
 		cache.checkpoint = entry.catalogEntry
+		cache.checkpointEntries = append(cache.checkpointEntries, entry)
+		return
 	}
+	cache.entries = append(cache.entries, entry)
 }
 
 func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
@@ -131,6 +134,12 @@ func (cache *replayCache) onReplayTxn(store *TxnStore) error {
 }
 
 func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog, r *common.Range) error {
+	switch entry.typ {
+	case logstore.ETCheckpoint:
+		catalog.Sequence.TryUpdateCommitId(entry.catalogEntry.Range.Right)
+		err := catalog.onReplayCheckpoint(entry.catalogEntry)
+		return err
+	}
 	if r != nil {
 		if !r.LT(entry.commitId) {
 			return nil
@@ -167,7 +176,6 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 		err = catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETTransaction:
 		err = cache.onReplayTxn(entry.txnStore)
-	case logstore.ETCheckpoint:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
 	}
@@ -193,6 +201,11 @@ func (cache *replayCache) Apply() error {
 		// if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
 		// 	return err
 		// }
+		for _, entry := range cache.checkpointEntries{
+			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
+				return err
+			}
+		}
 		for _, entry := range cache.entries {
 			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
 				return err
@@ -209,6 +222,7 @@ type catalogReplayer struct {
 	replayed int
 	offset   int64
 	cache    *replayCache
+	version  uint64
 }
 
 func newCatalogReplayer() *catalogReplayer {
@@ -274,6 +288,10 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
+	if replayer.version != r.Version {
+		replayer.offset = 0
+		replayer.version = r.Version
+	}
 	if r.Size == replayer.offset {
 		// Have read to the end of the file.
 		// No longer need additional overhead
@@ -284,14 +302,14 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logs
 	meta := entry.GetMeta()
 	metaSize, err := meta.ReadFrom(r)
 	if err != nil {
-		if !errors.Is(err, io.EOF){
+		if !errors.Is(err, io.EOF) {
 			return err
 		}
 		replayer.tryTruncate()
 		return err
 	}
 	if entry, n, err := defaultHandler(r, entry); err != nil {
-		if !errors.Is(err, io.EOF){
+		if !errors.Is(err, io.EOF) {
 			return err
 		}
 		// Only metadata is written
@@ -299,7 +317,7 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logs
 		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {
-			if r.Size == replayer.offset + int64(metaSize) + n{
+			if r.Size == replayer.offset+int64(metaSize)+n {
 				// Have read to the end of the file
 				replayer.tryTruncate()
 				return io.EOF
@@ -355,6 +373,9 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		case logstore.ETCheckpoint:
 		case logstore.ETFlush:
 			break
+		case logstore.ETInvalid:
+			logutil.Infof("get invalid entry")
+			return nil
 		default:
 			observer.OnReplayCommit(GetCommitIdFromLogEntry(entry))
 		}
@@ -472,14 +493,17 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 			commitId: GetCommitIdFromLogEntry(entry),
 		})
 	case logstore.ETCheckpoint:
-		// TODO
-		// c := &catalogLogEntry{}
-		// c.Unmarshal(entry.GetPayload())
-		// observer.OnReplayCheckpoint(*c.Range)
-		// replayer.cache.Append(&replayEntry{
-		// 	typ:          logstore.ETCheckpoint,
-		// 	catalogEntry: c,
-		// })
+		c := &catalogLogEntry{}
+		c.Unmarshal(entry.GetPayload())
+		observer.OnReplayCheckpoint(*c.Range)
+		for shardid, id := range c.SafeIds {
+			safeId := shard.SafeId{ShardId: shardid, Id: id}
+			replayer.cache.OnShardSafeId(safeId)
+		}
+		replayer.cache.Append(&replayEntry{
+			typ:          logstore.ETCheckpoint,
+			catalogEntry: c,
+		})
 	case logstore.ETFlush:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))

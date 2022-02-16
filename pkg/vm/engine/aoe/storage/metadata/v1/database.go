@@ -736,6 +736,24 @@ func (db *Database) String() string {
 	return string(buf)
 }
 
+func (db *Database) ToDatabaseLogEntry(info *CommitInfo) databaseLogEntry {
+	return databaseLogEntry{
+		BaseEntry: &BaseEntry{
+			Id: db.Id, 
+			CommitInfo: &CommitInfo{
+				CommitId: info.CommitId,
+				TranId: info.TranId,
+				Op: info.Op,
+				Size: info.Size,
+				LogIndex: info.LogIndex,
+				PrevIndex: info.PrevIndex,
+				LogRange: info.LogRange,
+				Indice: info.Indice,
+			}},
+		Database:  &Database{Name: db.Name},
+	}
+}
+
 // Not safe
 // Usually it is used during creating a table. We need to commit the new table entry
 // to the store.
@@ -874,6 +892,34 @@ func (db *Database) onNewTable(entry *Table) error {
 		e := nn.GetTable()
 		// Conflict checks all committed and uncommitted entries.
 		if !e.IsDeleted() {
+			return DuplicateErr
+		}
+		db.TableSet[entry.Id] = entry
+		nn.CreateNode(entry.Id)
+	} else {
+		db.TableSet[entry.Id] = entry
+
+		nn := newNodeList(db, &db.Catalog.nodesMu, entry.Schema.Name)
+		db.nameNodes[entry.Schema.Name] = nn
+
+		nn.CreateNode(entry.Id)
+	}
+	return nil
+}
+
+func (db *Database) onReplayNewTable(entry *Table) error {
+	nn := db.nameNodes[entry.Schema.Name]
+	if nn != nil {
+		e := nn.GetTable()
+		// Conflict checks all committed and uncommitted entries.
+		if !e.IsDeleted() {
+			if entry.IsDeleted(){
+				db.TableSet[entry.Id] = entry
+				nn.DeleteNode(e.Id)
+				nn.CreateNode(entry.Id)
+				nn.CreateNode(e.Id)
+				return nil
+			}
 			return DuplicateErr
 		}
 		db.TableSet[entry.Id] = entry
