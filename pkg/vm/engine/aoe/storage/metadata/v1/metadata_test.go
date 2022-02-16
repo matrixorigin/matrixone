@@ -133,8 +133,11 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
 				db.SyncLog(index)
+				info:=blk.GetCommit()
+				blk.Lock()
 				blk.SetIndexLocked(index.AsSlice())
-				blk.GetCommit().SetSize(mockBlockSize)
+				info.SetSize(mockBlockSize)
+				blk.Unlock()
 				err := blk.SimpleUpgrade(nil)
 				db.Checkpoint(index)
 				assert.Nil(t, err)
@@ -579,15 +582,15 @@ func TestReplay(t *testing.T) {
 }
 func TestCheckpoint(t *testing.T) {
 	dir := initTestEnv(t)
-	totaldbcount := 1
-	droppedDbCount := 0
-	deletedDbCount := 0
-	tableCountPerTurn := 1
-	droppedTableCount := 1
-	deletedTableCount := 0
+	totaldbcount := 5
+	droppedDbCount := 2
+	deletedDbCount := 1
+	tableCountPerTurn := 3
+	droppedTableCount := 2
+	deletedTableCount := 1
 	catalogCheckpointIntervel := 100 * time.Millisecond
 	testduration := 250 * time.Millisecond
-	versionFileSize := 100 * int(common.M)
+	versionFileSize := 500 * int(common.K)
 
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
@@ -636,13 +639,16 @@ func TestCheckpoint(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	stopChenal := make(chan interface{})
+	stopChannel := make(chan int)
 
-	// do checkpoint 
+	var wg2 sync.WaitGroup
+	// do checkpoint
+	wg2.Add(1)
 	go func() {
 		for {
 			select {
-			case <-stopChenal:
+			case <-stopChannel:
+				wg2.Done()
 				return
 			default:
 				time.Sleep(catalogCheckpointIntervel)
@@ -652,20 +658,21 @@ func TestCheckpoint(t *testing.T) {
 	}()
 
 	// create table, segments and blocks
-	// drop, hard delete and create databases, 
+	// drop, hard delete and create databases,
 	// the number of the database remains the same
 	// create table, segments and blocks
 	// drop, hard delete and create tables
 	// compact
 	// create tables, segments and blocks
+	wg2.Add(1)
 	go func() {
 
 		for {
 			select {
-			case <-stopChenal:
+			case <-stopChannel:
+				wg2.Done()
 				return
 			default:
-
 				// create table, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
@@ -696,7 +703,7 @@ func TestCheckpoint(t *testing.T) {
 					db.Wal.Checkpoint(idx)
 					dbs[i] = db
 				}
-				
+
 				// create table, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
@@ -718,7 +725,7 @@ func TestCheckpoint(t *testing.T) {
 							}
 							k++
 						}
-						//drop tables 
+						//drop tables
 						idx := gen.Next(db.GetShardId())
 						db.Wal.SyncLog(idx)
 						db.SimpleDropTableByName(tables[j+k], idx)
@@ -733,7 +740,6 @@ func TestCheckpoint(t *testing.T) {
 				// compact
 				catalog.Compact(nil, nil)
 
-				
 				// create tables, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
@@ -746,13 +752,13 @@ func TestCheckpoint(t *testing.T) {
 	}()
 
 	time.Sleep(testduration)
-	close(stopChenal)
+	close(stopChannel)
 
 	for _, worker := range getSegmentedIdWorkers {
 		worker.Stop()
 	}
-	
-	time.Sleep(time.Second)
+	wg2.Wait()
+
 	logutil.Infof(catalog.PString(PPL0, 0))
 	logutil.Infof("sequence number is %v", catalog.Sequence)
 	// logutil.Infof("safe id is %v", catalog.IndexWal.String())
