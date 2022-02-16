@@ -50,7 +50,7 @@ func (_ Def) Setup9P(
 		end func() error,
 	) {
 
-		port := getPort(math.MaxInt)
+		port := getPort(math.MaxInt, string(host))
 		addr := net.JoinHostPort(string(host), port)
 		config := net.ListenConfig{}
 		ln, err := config.Listen(wt.Ctx, "tcp", addr)
