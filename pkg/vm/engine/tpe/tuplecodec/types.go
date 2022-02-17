@@ -89,3 +89,7 @@ type ValueSerializer interface {
 
 	DeserializeValue(data []byte)([]byte,*orderedcodec.DecodedItem,error)
 }
+
+type DefaultValueSerializer struct {
+	ValueSerializer
+}
