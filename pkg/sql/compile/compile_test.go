@@ -28,6 +28,20 @@ import (
 )
 
 var querys = []string{
+	"CREATE DATABASE db;",
+	"CREATE DATABASE IF NOT EXISTS db;",
+	"CREATE TABLE table1(a int);",
+	"CREATE TABLE IF NOT EXISTS table1(a int);",
+	"CREATE INDEX idx on table1(a);",
+	// "DROP INDEX idx on table1;",
+	"SHOW DATABASES;",
+	"SHOW TABLES;",
+	"SHOW COLUMNS FROM table1;",
+	"SHOW CREATE TABLE table1;",
+	// "SHOW CREATE DATABASE db;",
+	"INSERT INTO table1 values(12);",
+	"DROP TABLE table1;",
+	"DROP DATABASE IF EXISTS db;",
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID;",
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID ORDER BY userID asc;",
 	"SELECT userID, SUM(score) FROM t1 GROUP BY userID ORDER BY userID desc;",
