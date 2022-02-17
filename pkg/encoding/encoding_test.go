@@ -16,9 +16,9 @@ package encoding
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 	"math/rand"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 )
 
@@ -43,11 +43,31 @@ func TestEncodeInt8(t *testing.T) {
 	}
 }
 
+func TestEncodeInt8Slice(t *testing.T) {
+	nums := []int8{math.MinInt8, math.MaxInt8, 0}
+	numsDecode := DecodeInt8Slice(EncodeInt8Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("Int8Slice Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeUint8(t *testing.T) {
 	nums := []uint8{math.MaxUint8, 0}
 	for _, num := range nums {
 		if DecodeUint8(EncodeUint8(num)) != num {
 			t.Fatalf("Uint8 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeUint8Slice(t *testing.T) {
+	nums := []uint8{math.MaxUint8, 0}
+	numsDecode := DecodeUint8Slice(EncodeUint8Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("Uint8Slice Encoding Error\n")
 		}
 	}
 }
@@ -61,11 +81,31 @@ func TestEncodeInt16(t *testing.T) {
 	}
 }
 
+func TestEncodeInt16Slice(t *testing.T) {
+	nums := []int16{math.MaxInt16, math.MaxInt16, 0}
+	numsDecode := DecodeInt16Slice(EncodeInt16Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("int16Slice Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeUint16(t *testing.T) {
 	nums := []uint16{math.MaxUint16, 0}
 	for _, num := range nums {
 		if DecodeUint16(EncodeUint16(num)) != num {
 			t.Fatalf("Uint16 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeUint16Slice(t *testing.T) {
+	nums := []uint16{math.MaxUint16, math.MaxUint16, 0}
+	numsDecode := DecodeUint16Slice(EncodeUint16Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("int16Slice Encoding Error\n")
 		}
 	}
 }
@@ -79,11 +119,31 @@ func TestEncodeInt32(t *testing.T) {
 	}
 }
 
+func TestEncodeInt32Slice(t *testing.T) {
+	nums := []int32{math.MaxInt32, math.MaxInt32, 0}
+	numsDecode := DecodeInt32Slice(EncodeInt32Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("int32Slice Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeUint32(t *testing.T) {
 	nums := []uint32{math.MaxUint32, 0}
 	for _, num := range nums {
 		if DecodeUint32(EncodeUint32(num)) != num {
 			t.Fatalf("Uint32 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeUint32Slice(t *testing.T) {
+	nums := []uint32{math.MaxUint32, math.MaxUint32, 0}
+	numsDecode := DecodeUint32Slice(EncodeUint32Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("uint32Slice Encoding Error\n")
 		}
 	}
 }
@@ -97,11 +157,31 @@ func TestEncodeInt64(t *testing.T) {
 	}
 }
 
+func TestEncodeInt64Slice(t *testing.T) {
+	nums := []int64{math.MaxInt64, math.MaxInt64, 0}
+	numsDecode := DecodeInt64Slice(EncodeInt64Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("int64Slice Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeUint64(t *testing.T) {
 	nums := []uint64{0, math.MaxUint64}
 	for _, num := range nums {
 		if DecodeUint64(EncodeUint64(num)) != num {
-			t.Fatalf("Int64 Encoding Error\n")
+			t.Fatalf("Uint64 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeUint64Slice(t *testing.T) {
+	nums := []uint64{math.MaxUint64, math.MaxUint64, 0}
+	numsDecode := DecodeUint64Slice(EncodeUint64Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("uint64Slice Encoding Error\n")
 		}
 	}
 }
@@ -115,11 +195,31 @@ func TestEncodeFloat32(t *testing.T) {
 	}
 }
 
+func TestEncodeFloat32Slice(t *testing.T) {
+	nums := []float32{math.MaxFloat32, math.SmallestNonzeroFloat32, -math.MaxFloat32, -math.SmallestNonzeroFloat32}
+	numsDecode := DecodeFloat32Slice(EncodeFloat32Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("Float32Slice Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeFloat64(t *testing.T) {
 	nums := []float64{math.MaxFloat64, math.SmallestNonzeroFloat64, -math.MaxFloat64, -math.SmallestNonzeroFloat64}
 	for _, num := range nums {
 		if DecodeFloat64(EncodeFloat64(num)) != num {
 			t.Fatalf("Float64 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeFloat64Slice(t *testing.T) {
+	nums := []float64{math.MaxFloat64, math.SmallestNonzeroFloat64, -math.MaxFloat64, -math.SmallestNonzeroFloat64}
+	numsDecode := DecodeFloat64Slice(EncodeFloat64Slice(nums))
+	for i, num := range nums {
+		if numsDecode[i] != num {
+			t.Fatalf("Float64Slice Encoding Error\n")
 		}
 	}
 }
@@ -133,11 +233,31 @@ func TestEncodeDate(t *testing.T) {
 	}
 }
 
+func TestEncodeDateSlice(t *testing.T) {
+	dates := []types.Date{0, math.MaxInt32}
+	datesDecode := DecodeDateSlice(EncodeDateSlice(dates))
+	for i, date := range dates {
+		if datesDecode[i] != date {
+			t.Fatalf("Date Encoding Error\n")
+		}
+	}
+}
+
 func TestEncodeDatetime(t *testing.T) {
 	nums := []types.Datetime{math.MinInt64, math.MaxInt64, 0}
 	for _, num := range nums {
 		if DecodeDatetime(EncodeDatetime(num)) != num {
 			t.Fatalf("Int64 Encoding Error\n")
+		}
+	}
+}
+
+func TestEncodeDatetimeSlice(t *testing.T) {
+	dateTimes := []types.Datetime{0, math.MaxInt64}
+	dateTimesDecode := DecodeDatetimeSlice(EncodeDatetimeSlice(dateTimes))
+	for i, date := range dateTimes {
+		if dateTimesDecode[i] != date {
+			t.Fatalf("Date Encoding Error\n")
 		}
 	}
 }
