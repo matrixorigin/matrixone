@@ -63,7 +63,7 @@ func TestCompare_Compare(t *testing.T) {
 	}
 	c.vs[1].Data = c.vs[1].Col.(*types.Bytes).Data
 	result = c.Compare(0, 1, 0, 0)
-	require.Equal(t, -1, result)
+	require.Equal(t, 1, result)
 	c.vs[1].Col = &types.Bytes{
 		Data:    []byte("aaaa"),
 		Offsets: []uint32{0, 1, 2, 3},
@@ -71,5 +71,5 @@ func TestCompare_Compare(t *testing.T) {
 	}
 	c.vs[1].Data = c.vs[1].Col.(*types.Bytes).Data
 	result = c.Compare(0, 1, 0, 0)
-	require.Equal(t, 1, result)
+	require.Equal(t, -1, result)
 }
