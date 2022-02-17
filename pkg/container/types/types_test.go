@@ -1,0 +1,42 @@
+package types
+
+import (
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestType_String(t *testing.T) {
+	myType := Type{Oid: T_int64, Size: 8}
+	require.Equal(t, "BIGINT", myType.String())
+}
+
+func TestType_Eq(t *testing.T) {
+	myType := Type{Oid: T_int64, Size: 8}
+	myType1 := Type{Oid: T_int64, Size: 8}
+	require.True(t, myType.Eq(myType1))
+}
+
+func TestT_ToType(t *testing.T) {
+	myT := T(1)
+	require.Equal(t, int32(1), myT.ToType().Size)
+	myT = T(2)
+	require.Equal(t, int32(2), myT.ToType().Size)
+	myT = T(3)
+	require.Equal(t, int32(4), myT.ToType().Size)
+}
+
+func TestT_String(t *testing.T) {
+	myT := T(1)
+	require.Equal(t, "TINYINT", myT.String())
+	myT = T(2)
+	require.Equal(t, "SMALLINT", myT.String())
+	myT = T(3)
+	require.Equal(t, "INT", myT.String())
+}
+
+func TestT_OidString(t *testing.T) {
+	myT := T(1)
+	require.Equal(t, "T_int8", myT.OidString())
+	myT = T(2)
+	require.Equal(t, "T_int16", myT.OidString())
+}
