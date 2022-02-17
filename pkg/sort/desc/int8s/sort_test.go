@@ -15,13 +15,14 @@
 package int8s
 
 import (
-	"fmt"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"math/rand"
 	"testing"
 )
 
 const (
-	Num   = 10
+	Num   = 50
 	Limit = 100
 )
 
@@ -39,12 +40,32 @@ func generate() ([]int8, []int64) {
 
 func TestSort(t *testing.T) {
 	vs, os := generate()
-	for i, o := range os {
-		fmt.Printf("[%v] = %v\n", i, vs[o])
+	Sort(vs, os)
+	for i := 1; i < len(os); i++ {
+		require.LessOrEqual(t, vs[os[i]], vs[os[i-1]])
 	}
-	Sort(vs, os[2:])
-	fmt.Printf("\n")
-	for i, o := range os {
-		fmt.Printf("[%v] = %v\n", i, vs[o])
+}
+
+func TestHeapSort(t *testing.T) {
+	vs, os := generate()
+	heapSort(vs, os, 0, len(vs))
+	for i := 1; i < len(os); i++ {
+		require.LessOrEqual(t, vs[os[i]], vs[os[i-1]])
 	}
+}
+
+func TestMedianOfThree(t *testing.T) {
+	vs, os := generate()
+	medianOfThree(vs, os, 0, 1, 2)
+	assert.True(t, (vs[os[0]] >= vs[os[1]] && vs[os[0]] <= vs[os[2]]) || (vs[os[0]] <= vs[os[1]] && vs[os[0]] >= vs[os[2]]))
+	medianOfThree(vs, os, 5, 6, 7)
+	assert.True(t, (vs[os[5]] >= vs[os[6]] && vs[os[5]] <= vs[os[7]]) || (vs[os[5]] <= vs[os[6]] && vs[os[5]] >= vs[os[7]]))
+}
+
+func TestSwapRange(t *testing.T) {
+	vs, os := generate()
+	osOriginal := make([]int64, len(os))
+	copy(osOriginal, os)
+	swapRange(vs, os, 0, 10, 10)
+	require.Equal(t, osOriginal[:10], os[10:20])
 }
