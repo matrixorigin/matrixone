@@ -456,16 +456,7 @@ func (e *Table) ToTableLogEntry(info *CommitInfo) tableLogEntry {
 		Table: &Table{
 			BaseEntry: &BaseEntry{
 				Id: e.Id, 
-				CommitInfo: &CommitInfo{
-					CommitId: info.CommitId,
-					TranId: info.TranId,
-					Op: info.Op,
-					Size: info.Size,
-					LogIndex: info.LogIndex,
-					PrevIndex: info.PrevIndex,
-					LogRange: info.LogRange,
-					Indice: info.Indice,
-				}},
+				CommitInfo: info.Clone()},
 			Schema:    e.Schema},
 		DatabaseId: e.Database.Id,
 	}
