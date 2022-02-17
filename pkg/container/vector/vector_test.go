@@ -15,7 +15,6 @@
 package vector
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -1002,26 +1001,30 @@ func TestUnionBatch(t *testing.T) {
 	require.Equal(t, []types.Datetime{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v12.Col.([]types.Datetime))
 }
 
-func TestVector_Show(t *testing.T) {
+func TestVector_String(t *testing.T) {
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	v0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2, 3, 4, 5, 6})
+	v0.Data = encoding.EncodeInt8Slice([]int8{0, 1, 2})
 	v0.Col = encoding.DecodeInt8Slice(v0.Data)
-	result, _ := v0.Show()
-	require.Equal(t, []byte{1, 29, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6}, result)
+	result := v0.String()
+	require.Equal(t, "[0 1 2]-&{<nil>}", result)
 
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
-	v1.Data = encoding.EncodeInt16Slice([]int16{3, 4, 5, 6})
+	v1.Data = encoding.EncodeInt16Slice([]int16{0, 1, 2})
 	v1.Col = encoding.DecodeInt16Slice(v1.Data)
-	result, _ = v1.Show()
-	fmt.Println(result)
-	require.Equal(t, []byte{2, 29, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 4, 0, 5, 0, 6, 0}, result)
+	result = v1.String()
+	require.Equal(t, "[0 1 2]-&{<nil>}", result)
 
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
-	v2.Data = encoding.EncodeInt32Slice([]int32{3, 4, 5, 6})
+	v2.Data = encoding.EncodeInt32Slice([]int32{0, 1, 2})
 	v2.Col = encoding.DecodeInt32Slice(v2.Data)
-	result, _ = v2.Show()
-	fmt.Println(result)
-	require.Equal(t, []byte{3, 28, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 0, 0, 0, 6, 0, 0, 0}, result)
+	result = v2.String()
+	require.Equal(t, "[0 1 2]-&{<nil>}", result)
+
+	v3 := New(types.Type{Oid: types.T(types.T_int64)})
+	v3.Data = encoding.EncodeInt64Slice([]int64{0, 1, 2})
+	v3.Col = encoding.DecodeInt64Slice(v3.Data)
+	result = v3.String()
+	require.Equal(t, "[0 1 2]-&{<nil>}", result)
 }
 
 /*
