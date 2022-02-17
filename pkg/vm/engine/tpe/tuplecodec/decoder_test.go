@@ -16,12 +16,15 @@ package tuplecodec
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/json"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
 	"github.com/smartystreets/goconvey/convey"
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -183,11 +186,64 @@ func TestTupleKeyDecoder_DecodePrimaryIndexKey(t *testing.T) {
 		convey.So(err,convey.ShouldBeNil)
 		convey.So(rest,convey.ShouldBeEmpty)
 		for i, kase := range kases {
-			if  kase.valueType == orderedcodec.VALUE_TYPE_BYTES {
-				convey.So(dis[i].Value,convey.ShouldResemble,kase.value)
-			}else{
-				convey.So(dis[i].Value,convey.ShouldEqual,kase.value)
-			}
+			convey.So(reflect.DeepEqual(dis[i].Value,kase.value),convey.ShouldBeTrue)
+		}
+	})
+}
+
+func TestTupleKeyDecoder_DecodePrimaryIndexValue(t *testing.T) {
+	type args struct {
+		id uint32
+		value interface{}
+		valueType byte
+		want []byte
+	}
+	convey.Convey("primary index value 1",t, func() {
+		tch := NewTupleCodecHandler(SystemTenantID)
+		tke := tch.GetEncoder()
+		tkd := tch.GetDecoder()
+
+		kases := []args{
+			{0,uint64(0),SERIAL_TYPE_UINT64,[]byte{}},
+			{1,"abc",SERIAL_TYPE_STRING,[]byte{}},
+			{2,[]byte{1,2,3},SERIAL_TYPE_BYTES,[]byte{}},
+			{3,nil,SERIAL_TYPE_NULL,[]byte{}},
+		}
+
+		id := descriptor.IndexDesc{ID: PrimaryIndexID}
+
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		tuple := mock_tuplecodec.NewMockTuple(ctrl)
+		serial := &DefaultValueSerializer{}
+
+		tuple.EXPECT().GetAttributeCount().Return(uint32(len(kases)),nil)
+		want := []byte{}
+		for _, kase := range kases {
+			id.Attributes = append(id.Attributes,
+				descriptor.IndexDesc_Attribute{ID: kase.id})
+			tuple.EXPECT().GetValue(uint32(kase.id)).Return(kase.value,nil)
+			m,err :=json.Marshal(kase.value)
+			convey.So(err,convey.ShouldBeNil)
+
+			//encode data len
+			var lbuf [binary.MaxVarintLen64]byte
+			bytesWritten := binary.PutVarint(lbuf[:], int64(len(m)))
+			want = append(want,kase.valueType)
+			want = append(want,lbuf[:bytesWritten]...)
+			want = append(want,m...)
+		}
+
+		key, _, err := tke.EncodePrimaryIndexValue(nil,&id,0,tuple,serial)
+		convey.So(err,convey.ShouldBeNil)
+		convey.So(bytes.Equal(key,want),convey.ShouldBeTrue)
+
+		rest, dis, err := tkd.DecodePrimaryIndexValue(key,&id,0,serial)
+		convey.So(err,convey.ShouldBeNil)
+		convey.So(rest,convey.ShouldBeEmpty)
+		for i, kase := range kases {
+			convey.So(reflect.DeepEqual(dis[i].Value,kase.value),convey.ShouldBeTrue)
 		}
 	})
 }

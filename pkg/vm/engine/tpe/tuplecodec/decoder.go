@@ -124,7 +124,17 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor
 }
 
 // DecodePrimaryIndexValue decodes the values of the primary index and return the rest.
-func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue,index *descriptor.IndexDesc,columnGroupID uint64)(TupleValue,[] *orderedcodec.DecodedItem,error) {
-	//TODO:add content
-	return nil, nil, nil
+// Now,it decodes all tuple.
+func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue,index *descriptor.IndexDesc,columnGroupID uint64,serializer ValueSerializer)(TupleValue,[] *orderedcodec.DecodedItem,error) {
+	rest := value
+	var retDis []*orderedcodec.DecodedItem
+	for len(rest) > 0 {
+		rest2, di, err := serializer.DeserializeValue(rest)
+		if err != nil {
+			return nil, nil, err
+		}
+		retDis = append(retDis,di)
+		rest = rest2
+	}
+	return rest, retDis, nil
 }

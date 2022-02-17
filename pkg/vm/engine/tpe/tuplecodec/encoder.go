@@ -145,9 +145,7 @@ func (tke *TupleKeyEncoder) EncodePrimaryIndexValue(prefix TupleValue,
 	return out, nil, nil
 }
 
-type DefaultValueSerializer struct {
-	ValueSerializer
-}
+
 
 //SerializeValue serializes the value with json
 func (dvs *DefaultValueSerializer) SerializeValue(data []byte,value interface{})([]byte,*orderedcodec.EncodedItem,error) {
