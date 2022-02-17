@@ -297,6 +297,7 @@ import (
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <exportParm> export_data_param_opt
+%type <statement> analyze_stmt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -490,6 +491,7 @@ stmt:
 |   explain_stmt
 |   show_stmt
 |   alter_stmt
+|   analyze_stmt
 |   update_stmt
 |   use_stmt
 |   transaction_stmt
@@ -1503,6 +1505,12 @@ explain_sym:
     EXPLAIN
 |   DESCRIBE
 |   DESC
+
+analyze_stmt:
+    ANALYZE TABLE table_name '(' column_list ')' 
+    {
+        $$ = tree.NewAnalyzeStmt($3, $5)
+    }
 
 alter_stmt:
     alter_user_stmt

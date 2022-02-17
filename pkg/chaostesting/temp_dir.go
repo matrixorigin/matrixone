@@ -15,6 +15,7 @@
 package fz
 
 import (
+	"fmt"
 	"os"
 )
 
@@ -23,6 +24,8 @@ type TempDir string
 func (_ Def) TempDir(
 	logger Logger,
 	model TempDirModel,
+	setupFuse SetupFuse,
+	setup9P Setup9P,
 ) (
 	dir TempDir,
 	cleanup Cleanup,
@@ -34,14 +37,37 @@ func (_ Def) TempDir(
 		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
 		ce(err)
 		dir = TempDir(d)
-
 		cleanup = func() {
 			logger.Info("remove temp dir")
 			os.RemoveAll(d)
 		}
 
 	case "fuse":
-		//TODO
+		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+		ce(err)
+		err, end := setupFuse(d)
+		ce(err)
+
+		dir = TempDir(d)
+		cleanup = func() {
+			ce(end())
+			ce(os.RemoveAll(d))
+		}
+
+	case "9p":
+		d, err := os.MkdirTemp(os.TempDir(), "testcube-*")
+		ce(err)
+		err, end := setup9P(d)
+		ce(err)
+
+		dir = TempDir(d)
+		cleanup = func() {
+			ce(end())
+			ce(os.RemoveAll(d))
+		}
+
+	default:
+		panic(fmt.Errorf("unknown model: %s", model))
 
 	}
 

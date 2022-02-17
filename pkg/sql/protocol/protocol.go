@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
@@ -1076,6 +1077,9 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *approxcd.ApproxCountDistinctRing:
+		buf.WriteByte(ApproxCountDistinctRing)
+		return v.Marshal(buf)
 	case *max.Int8Ring:
 		buf.WriteByte(MaxInt8Ring)
 		// Ns
@@ -1654,6 +1658,11 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case ApproxCountDistinctRing:
+		data = data[1:]
+		r := approxcd.NewApproxCountDistinct(types.Type{})
+		data, err := r.Unmarshal(data)
+		return r, data, err
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
 		data = data[1:]
@@ -2400,6 +2409,11 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case ApproxCountDistinctRing:
+		data = data[1:]
+		r := approxcd.NewApproxCountDistinct(types.Type{})
+		data, err := r.UnmarshalWithProc(data, proc)
+		return r, data, err
 	case MaxInt8Ring:
 		r := new(max.Int8Ring)
 		data = data[1:]

@@ -29,11 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type argsAndRet struct {
-	args []types.T
-	ret  types.T
-}
-
 var argsAndRets = []argsAndRet{
 	{[]types.T{types.T_uint8}, types.T_uint8},
 	{[]types.T{types.T_uint8, types.T_int64}, types.T_uint8},

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/storage/kv/mem"
+	"github.com/matrixorigin/matrixcube/transport"
 	"github.com/matrixorigin/matrixcube/vfs"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -37,15 +38,19 @@ func (_ Def2) Nodes(
 	tempDir fz.TempDir,
 	numNodes fz.NumNodes,
 	logger fz.Logger,
-	listenHost ListenHost,
-	randPort RandPort,
+	netHost fz.NetworkHost,
+	getPort fz.GetPortStr,
+	newInterceptableTransport NewInterceptableTransport,
 ) (nodes fz.Nodes) {
 
-	host := string(listenHost)
+	host := string(netHost)
 
 	var endpoints []string
 	for i := fz.NumNodes(0); i < numNodes; i++ {
-		endpoints = append(endpoints, "http://"+net.JoinHostPort(host, randPort()))
+		endpoints = append(
+			endpoints,
+			"http://"+net.JoinHostPort(host, getPort(fz.NodeID(i), host)),
+		)
 	}
 
 	for nodeID, conf := range configs {
@@ -59,18 +64,18 @@ func (_ Def2) Nodes(
 		fs := vfs.NewMemFS()
 		conf.FS = fs
 
-		conf.RaftAddr = net.JoinHostPort(host, randPort())
-		conf.ClientAddr = net.JoinHostPort(host, randPort())
+		conf.RaftAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
+		conf.ClientAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		conf.DataPath = filepath.Join(string(tempDir), fmt.Sprintf("data-%d", nodeID))
 		conf.Logger = logger
 
 		conf.Prophet.DataDir = filepath.Join(string(tempDir), fmt.Sprintf("prophet-%d", nodeID))
-		conf.Prophet.RPCAddr = net.JoinHostPort(host, randPort())
+		conf.Prophet.RPCAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		if nodeID > 0 {
 			conf.Prophet.EmbedEtcd.Join = endpoints[0]
 		}
 		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
-		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, randPort())
+		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 
 		// pebble
 		//kvStorage, err := pebble.NewStorage(
@@ -128,6 +133,12 @@ func (_ Def2) Nodes(
 				snapshotApplied: func(shard meta.Shard) {
 				},
 			}
+		}
+
+		conf.Customize.CustomWrapNewTransport = func(t transport.Trans) transport.Trans {
+			return newInterceptableTransport(t, func() fz.Nodes {
+				return nodes
+			})
 		}
 
 		node.Config = conf

@@ -8,7 +8,7 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
 
 ## **Key Features** 
 ### **Hyper-converged Engine**
-* **Monolitic Engine**
+* **Monolithic Engine**
   
      A monolithic database engine is designed to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc.
 
@@ -55,11 +55,11 @@ MatrixOne is a future-oriented hyper-converged cloud and edge native DBMS that s
   
      Poor business agility as a result of slow complex queries and redundant intermediate tables in current data warehousing solutions. MatrixOne  supports blazing fast experience even for star and snowflake schema queries, improving business agility by real-time analytics.
      
-* **An Solid OLTP-like OLAP Experience**
+* **A Solid OLTP-like OLAP Experience**
   
      Current data warehousing solutions have the following problems such as high latency and absence of immediate visibility for data updates. MatrixOne brings OLTP (Online Transactional Processing) level consistency and high availability to CRUD operations in OLAP (Online Analytical Processing).
 
-* **Seamless and Non-disruptive Scaling**
+* **Seamless and Non-disruptive Scalability**
   
      It is difficult to balance performance and scalability to achieve optimum price-performance ratio in current data warehousing solutions. MatrixOne's disaggregated storage and compute architecture makes it fully automated and efficient scale in/out and up/down without disrupting applications.
 

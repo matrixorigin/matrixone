@@ -34,6 +34,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -187,6 +188,7 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+	var exitFlag bool = false
 
 	if bat == nil {
 		return nil
@@ -196,7 +198,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	logutil.Infof("goid %d \n", goID)
 	enableProfile := ses.Pu.SV.GetEnableProfileGetDataFromPipeline()
-	enableProfile = true
 
 
 	var cpuf *os.File = nil
@@ -248,11 +249,15 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-				case <- ses.closeRef.stopLoadData: {
-					return nil
+				case <- ses.closeRef.stopExportData: {
+					exitFlag = true
+					break
 				}
 				default:{}
 			}
+		}
+		if exitFlag {
+			break
 		}
 
 		if bat.Zs[j] <= 0 {
@@ -464,8 +469,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 
 	if oq.ep.Outfile {
-		err = oq.writer.Flush()
-		if err != nil {
+		if err = oq.writer.Flush(); err != nil {
+			return err
+		}
+		if err = oq.file.Close(); err != nil {
 			return err
 		}
 	}
@@ -853,6 +860,27 @@ func (mce *MysqlCmdExecutor) handleShowVariables(_ *tree.ShowVariables) error {
 	return err
 }
 
+func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
+	// rewrite analyzeStmt to `select approx_count_distinct(col), .. from tbl`
+	// IMO, this approach is simple and future-proof
+	// Although this rewriting processing could have been handled in rewrite module,
+	// `handleAnalyzeStmt` can be easily managed by cron jobs in the future
+	ctx := tree.NewFmtCtx(dialect.MYSQL)
+	ctx.WriteString("select ")
+	for i, ident := range stmt.Cols {
+		if i > 0 {
+			ctx.WriteByte(',')
+		}
+		ctx.WriteString("approx_count_distinct(")
+		ctx.WriteString(string(ident))
+		ctx.WriteByte(')')
+	}
+	ctx.WriteString(" from ")
+	stmt.Table.Format(ctx)
+	sql := ctx.String()
+	return mce.doComQuery(sql)
+}
+
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
 }
@@ -1065,6 +1093,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if err != nil {
 				return err
 			}
+		case *tree.AnalyzeStmt:
+			selfHandle = true
+			if err = mce.handleAnalyzeStmt(st); err != nil {
+				return err
+			}
+
 		}
 
 		if selfHandle {
@@ -1083,7 +1117,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
-		switch stmt.(type) {
+		// cw.Compile might rewrite sql, here we fetch the latest version
+		switch cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,

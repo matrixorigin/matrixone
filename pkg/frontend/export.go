@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -13,6 +14,26 @@ import (
 )
 
 var OpenFile = os.OpenFile
+
+type CloseExportData struct {
+	stopExportData chan interface{}
+	onceClose    sync.Once
+}
+
+func NewCloseExportData() *CloseExportData {
+	return &CloseExportData{
+		stopExportData: make(chan interface{}),
+	}
+}
+
+func (cld *CloseExportData) Open() {
+}
+
+func (cld *CloseExportData) Close() {
+	cld.onceClose.Do(func() {
+		close(cld.stopExportData)
+	})
+}
 
 func initExportFileParam(oq *outputQueue) {
 	oq.ep.DefaultBufSize *= 1024 * 1024
@@ -39,7 +60,7 @@ var openNewFile = func(oq *outputQueue) error {
 	var err error
 	oq.ep.CurFileSize = 0
 	filePath := getExportFilePath(oq.ep.FilePath, oq.ep.FileCnt)
-	oq.file, err = OpenFile(filePath, os.O_RDWR | os.O_EXCL | os.O_CREATE, os.ModePerm)
+	oq.file, err = OpenFile(filePath, os.O_RDWR | os.O_EXCL | os.O_CREATE, 0o666)
 	if err != nil {
 		return err
 	}
@@ -142,8 +163,12 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 			if _, err := Seek(oq); err != nil {
 				return err
 			}
-			if _, err := Read(oq); err != nil {
-				return err
+			for {
+				if n, err := Read(oq); err != nil {
+					return err
+				} else if uint64(n) == oq.ep.LineSize {
+					break
+				}
 			}
 			if err := Truncate(oq); err != nil {
 				return err
@@ -164,8 +189,12 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 }
 
 var writeDataToCSVFile = func(oq *outputQueue, output []byte) error {
-	if _, err := Write(oq, output); err != nil {
-		return err
+	for {
+		if n, err := Write(oq, output); err != nil {
+			return err
+		} else if n == len(output) {
+			break
+		}
 	}
 	oq.ep.LineSize += uint64(len(output))
 	oq.ep.CurFileSize += uint64(len(output))

@@ -197,6 +197,18 @@ func (info *CommitInfo) GetSize() int64 {
 	return info.Size
 }
 
+func (info *CommitInfo) ChooseCommitInfo(check func(info *CommitInfo)bool) *CommitInfo {
+	var curr common.ISSLLNode
+	curr = info
+	for curr != nil{
+		if check(curr.(*CommitInfo)){
+			return curr.(*CommitInfo)
+		}
+		curr = curr.GetNext()
+	}
+	return nil
+}
+
 func (info *CommitInfo) PString(level PPLevel) string {
 	s := ""
 	if info.LogRange != nil {

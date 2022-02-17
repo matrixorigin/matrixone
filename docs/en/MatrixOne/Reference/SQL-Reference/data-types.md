@@ -34,7 +34,7 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 
 |  Data Type   | Size  | Resolution |  Min Value   | Max Value  | Precision |
 |  ----  | ----  |   ----  |  ----  | ----  |   ----  |
-| Date  | 2 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD |
+| Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD |
 | DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
 
 ## **Examples**

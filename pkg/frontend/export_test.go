@@ -141,7 +141,7 @@ func Test_writeToCSVFile(t *testing.T) {
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
-		stubs = gostub.StubFunc(&Read, 0, nil)
+		stubs = gostub.StubFunc(&Read, 1, nil)
 		defer stubs.Reset()
 
 		stubs = gostub.StubFunc(&Truncate, errors.New("Truncate error"))
@@ -191,7 +191,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 
 		convey.So(writeDataToCSVFile(oq, output), convey.ShouldNotBeNil)
 
-		stubs = gostub.StubFunc(&Write, 0, nil)
+		stubs = gostub.StubFunc(&Write, len(output), nil)
 		defer stubs.Reset()
 		convey.So(writeDataToCSVFile(oq, output), convey.ShouldBeNil)
 

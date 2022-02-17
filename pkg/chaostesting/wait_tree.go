@@ -14,7 +14,9 @@
 
 package fz
 
-import "github.com/reusee/pr"
+import (
+	"github.com/reusee/pr"
+)
 
 type RootWaitTree struct {
 	*pr.WaitTree
@@ -24,12 +26,21 @@ func (_ Def) RootWaitTree() (
 	wt RootWaitTree,
 	cleanup Cleanup,
 ) {
+
+	//ctx, cancel := signal.NotifyContext(context.Background(), os.Kill, os.Interrupt)
 	wt = RootWaitTree{
-		WaitTree: pr.NewRootWaitTree(),
+		WaitTree: pr.NewRootWaitTree(
+		//pr.BackgroundCtx(func() context.Context {
+		//	return ctx
+		//}),
+		),
 	}
+
 	cleanup = func() {
+		//cancel()
 		wt.Cancel()
 		wt.Wait()
 	}
+
 	return
 }

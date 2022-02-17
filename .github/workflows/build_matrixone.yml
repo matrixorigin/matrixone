@@ -12,9 +12,9 @@ on:
   workflow_dispatch:
 
   # Trigger workflow at 21:00 UTC to cover time-consuming tests
-  schedule:
+  # schedule:
     # * is a special character in YAML so you have to quote this string
-    - cron:  '00 21 * * *'
+    # - cron:  '00 21 * * *'
 
     
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.

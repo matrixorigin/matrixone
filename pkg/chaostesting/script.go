@@ -17,6 +17,7 @@ package fz
 import (
 	"errors"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/reusee/dscope"
@@ -85,6 +86,22 @@ func (_ Def) ScriptBuiltins(
 		"temp_dir_model": starlarkutil.MakeFunc("temp_dir_model", func(model TempDirModel) {
 			add(&model)
 		}),
+
+		"network_model": starlarkutil.MakeFunc("network_model", func(model NetworkModel) {
+			add(&model)
+		}),
+
+		"port_range": starlarkutil.MakeFunc("port_range", func(lower uint16, upper uint16) {
+			add(func() PortRange {
+				return PortRange{lower, upper}
+			})
+		}),
+
+		"debug_9p": starlarkutil.MakeFunc("debug_9p", func(debug Debug9P) {
+			add(&debug)
+		}),
+
+		"os": starlark.String(runtime.GOOS),
 
 		//
 	}

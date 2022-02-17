@@ -17,6 +17,8 @@ package engine
 import (
 	"bytes"
 	"fmt"
+	stdLog "log"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,15 +28,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"go.uber.org/zap/zapcore"
-	stdLog "log"
+
 	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"sync"
+
 	vengine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"sync"
 
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -129,7 +132,7 @@ func TestAOEEngine(t *testing.T) {
 		testTableDDL(t, catalogs)
 	}
 
-	aoeEngine := New(catalogs[0])
+	aoeEngine := New(catalogs[0], &EngineConfig{})
 
 	//test engine
 	n := aoeEngine.Node("")
@@ -202,7 +205,8 @@ func TestAOEEngine(t *testing.T) {
 	}
 
 	tb.Close()
-	
+	time.Sleep(1 * time.Second)
+
 	tb, err = db.Relation(mockTbl.Name)
 	require.Nil(t, err)
 	rows := tb.Rows()
@@ -215,7 +219,6 @@ func TestAOEEngine(t *testing.T) {
 
 	//test relation
 	tb, err = db.Relation(mockTbl.Name)
-	require.Equal(t, 1, len(tb.Nodes()))
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
@@ -241,10 +244,12 @@ func TestAOEEngine(t *testing.T) {
 
 	readers := tb.NewReader(6)
 	for _, reader := range readers {
-		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
-
-		require.NoError(t, err)
-		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"})
+		fileter := reader.NewSparseFilter()
+		reader,_ = fileter.Eq("mock_0", int32(0))
+		bat, err := reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
+		if bat != nil {
+			fmt.Printf("bat is %v", bat.Vecs[0].Col.([]int32)[0])
+		}
 		require.NoError(t, err)
 	}
 	num := tb.NewReader(15)
@@ -301,7 +306,7 @@ func doRestartEngine(t *testing.T) {
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	catalog := catalog2.NewCatalog(c.CubeDrivers[0])
-	aoeEngine := New(catalog)
+	aoeEngine := New(catalog, &EngineConfig{})
 
 	dbs := aoeEngine.Databases()
 	require.Equal(t, 1, len(dbs))

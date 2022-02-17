@@ -21,15 +21,17 @@ const (
 	Min
 	Count
 	StarCount
+	ApproxCountDistinct
 )
 
 var TransformerNames = [...]string{
-	Sum:       "sum",
-	Avg:       "avg",
-	Max:       "max",
-	Min:       "min",
-	Count:     "count",
-	StarCount: "starcount",
+	Sum:                 "sum",
+	Avg:                 "avg",
+	Max:                 "max",
+	Min:                 "min",
+	Count:               "count",
+	StarCount:           "starcount",
+	ApproxCountDistinct: "approx_count_distinct",
 }
 
 var TransformerNamesMap map[string]int

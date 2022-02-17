@@ -119,10 +119,6 @@ func cleanup() {
 }
 
 func recreateDir(dir string) (err error) {
-	//err = os.RemoveAll(dir)
-	//if err != nil {
-	//	return err
-	//}
 	mask := syscall.Umask(0)
 	defer syscall.Umask(mask)
 	err = os.MkdirAll(dir, os.FileMode(0755))
@@ -270,7 +266,13 @@ func main() {
 	c = catalog.NewCatalog(a)
 	config.ClusterCatalog = c
 	catalogListener.UpdateCatalog(c)
-	eng := aoeEngine.New(c)
+	cngineConfig := aoeEngine.EngineConfig{}
+	_, err = toml.DecodeFile(configFilePath, &cngineConfig)
+	if err != nil {
+		logutil.Infof("Decode cube config error:%v\n", err)
+		os.Exit(DecodeCubeConfigExit)
+	}
+	eng := aoeEngine.New(c, &cngineConfig)
 	pci.SetRemoveEpoch(removeEpoch)
 
 	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")

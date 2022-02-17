@@ -1480,6 +1480,35 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "select * from ccs where c1 != c1 and c2 != c2;", res: executeResult{
 			null: true,
 		}},
+		// test IN and NOT IN operator
+		{sql: "select * from iis where i4 in (1);", res: executeResult{
+			null: false,
+			data: [][]string{{"1", "null", "null", "1"}},
+		}},
+		{sql: "select * from iis where i4 in (1, 1111);", res: executeResult{
+			null: false,
+			data: [][]string{{"1", "11", "111", "1111"}, {"1", "null", "null", "1"}},
+		}},
+		{sql: "select * from iis where i4 not in (1);", res: executeResult{
+			null: false,
+			data: [][]string{{"1", "11", "111", "1111"}},
+		}},
+		{sql: "select * from ffs where f1 in (22.2);", res: executeResult{
+			null: false,
+			data: [][]string{{"22.200001", "222.222000"}},
+		}},
+		{sql: "select * from uus where u1 in (3);", res: executeResult{
+			null: false,
+			data: [][]string{{"3", "33", "333", "3333"}},
+		}},
+		{sql: "select * from ccs where c1 in ('kpi');", res: executeResult{
+			null: false,
+			data: [][]string{{"kpi", "b"}},
+		}},
+		{sql: "select * from ccs where c1 not in ('kpi');", res: executeResult{
+			null: false,
+			data: [][]string{{"c", "e"}},
+		}},
 	}
 	test(t, testCases)
 }
