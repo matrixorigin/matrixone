@@ -12,38 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vm
+package mergelimit
 
-const (
-	Top = iota
-	Plus
-	Limit
-	Times
-	Merge
-	Dedup
-	Order
-	Oplus
-	Output
-	Offset
-	Restrict
-	Connector
-	Transform
-	Projection
-	UnTransform
-
-	MergeDedup
-	MergeLimit
-	MergeOffset
-	MergeOrder
-	MergeTop
-)
-
-// Instruction contains relational algebra
-type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op int
-	// Arg contains the operand of this instruction.
-	Arg interface{}
+type container struct {
+	seen uint64
 }
 
-type Instructions []Instruction
+type Argument struct {
+	// Limit records the limit number of this operator
+	Limit uint64
+	// ctr stores the attributes needn't do Serialization work
+	ctr container
+}
