@@ -358,6 +358,16 @@ values = ["10", "1", "1000"]
 comment = "default printLog Interval is 10s."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "exportDataDefaultFlushSize"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1", "2", "4", "8"]
+comment = "export data to csv file default flush size"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
