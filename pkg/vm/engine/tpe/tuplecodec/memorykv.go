@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kv
+package tuplecodec
 
 import (
+	"bytes"
 	"errors"
 	"github.com/google/btree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 )
 
 var _ KVHandler = &MemoryKV{}
@@ -31,11 +31,11 @@ var (
 )
 
 type MemoryItem struct {
-	key tuplecodec.TupleKey
-	value tuplecodec.TupleValue
+	key   TupleKey
+	value TupleValue
 }
 
-func NewMemoryItem(key tuplecodec.TupleKey,value tuplecodec.TupleValue) *MemoryItem {
+func NewMemoryItem(key TupleKey,value TupleValue) *MemoryItem {
 	return &MemoryItem{
 		key:   key,
 		value: value,
@@ -65,7 +65,7 @@ func (m *MemoryKV) NextID(typ string) (uint64, error) {
 	panic("implement me")
 }
 
-func (m *MemoryKV) Set(key tuplecodec.TupleKey, value tuplecodec.TupleValue) error {
+func (m *MemoryKV) Set(key TupleKey, value TupleValue) error {
 	if key == nil {
 		return errorKeyIsNull
 	}
@@ -73,17 +73,17 @@ func (m *MemoryKV) Set(key tuplecodec.TupleKey, value tuplecodec.TupleValue) err
 	return nil
 }
 
-func (m *MemoryKV) SetBatch(keys []tuplecodec.TupleKey, values []tuplecodec.TupleValue) []error {
+func (m *MemoryKV) SetBatch(keys []TupleKey, values []TupleValue) []error {
 	var errs []error
 	kl := len(keys)
 	vl := len(values)
 	if kl != vl {
-		return append(errs,errorKeysCountNotEqualToValuesCount)
+		return append(errs, errorKeysCountNotEqualToValuesCount)
 	}
 
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
-			errs = append(errs,errorKeyIsNull)
+			errs = append(errs, errorKeyIsNull)
 		}else{
 			m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
 		}
@@ -91,7 +91,7 @@ func (m *MemoryKV) SetBatch(keys []tuplecodec.TupleKey, values []tuplecodec.Tupl
 	return errs
 }
 
-func (m *MemoryKV) DedupSet(key tuplecodec.TupleKey, value tuplecodec.TupleValue) error {
+func (m *MemoryKV) DedupSet(key TupleKey, value TupleValue) error {
 	if key == nil {
 		return errorKeyIsNull
 	}
@@ -102,23 +102,23 @@ func (m *MemoryKV) DedupSet(key tuplecodec.TupleKey, value tuplecodec.TupleValue
 	return nil
 }
 
-func (m *MemoryKV) DedupSetBatch(keys []tuplecodec.TupleKey, values []tuplecodec.TupleValue) []error {
+func (m *MemoryKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
 	var errs []error
 	kl := len(keys)
 	vl := len(values)
 	if kl != vl {
-		return append(errs,errorKeysCountNotEqualToValuesCount)
+		return append(errs, errorKeysCountNotEqualToValuesCount)
 	}
 
 	//check nils and duplication
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
-			errs = append(errs,errorKeyIsNull)
+			errs = append(errs, errorKeyIsNull)
 			continue
 		}
 
 		if m.container.Has(NewMemoryItem(keys[i],nil)) {
-			errs = append(errs,errorKeyExists)
+			errs = append(errs, errorKeyExists)
 			continue
 		}
 		m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
@@ -127,9 +127,9 @@ func (m *MemoryKV) DedupSetBatch(keys []tuplecodec.TupleKey, values []tuplecodec
 	return errs
 }
 
-func (m *MemoryKV) Get(key tuplecodec.TupleKey) (tuplecodec.TupleValue, error) {
+func (m *MemoryKV) Get(key TupleKey) (TupleValue, error) {
 	if key == nil {
-		return nil,errorKeyIsNull
+		return nil, errorKeyIsNull
 	}
 	item := m.container.Get(NewMemoryItem(key,nil))
 	if x,ok := item.(*MemoryItem) ; ok {
@@ -138,17 +138,17 @@ func (m *MemoryKV) Get(key tuplecodec.TupleKey) (tuplecodec.TupleValue, error) {
 	return nil, nil
 }
 
-func (m *MemoryKV) GetBatch(keys []tuplecodec.TupleKey) ([]tuplecodec.TupleValue, error) {
+func (m *MemoryKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
 	kl := len(keys)
 
 	//check nils
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
-			return nil,errorKeyIsNull
+			return nil, errorKeyIsNull
 		}
 	}
 
-	var values []tuplecodec.TupleValue
+	var values []TupleValue
 	for i := 0; i < kl; i++ {
 		item := m.container.Get(NewMemoryItem(keys[i],nil))
 		if x,ok := item.(*MemoryItem); ok {
@@ -160,8 +160,8 @@ func (m *MemoryKV) GetBatch(keys []tuplecodec.TupleKey) ([]tuplecodec.TupleValue
 	return values, nil
 }
 
-func (m *MemoryKV) GetRange(startKey tuplecodec.TupleKey, endKey tuplecodec.TupleKey) ([]tuplecodec.TupleValue, error) {
-	var values []tuplecodec.TupleValue
+func (m *MemoryKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error) {
+	var values []TupleValue
 	iter := func(i btree.Item) bool {
 		if x,ok := i.(*MemoryItem); ok {
 			values = append(values,x.value)
@@ -178,9 +178,9 @@ func (m *MemoryKV) GetRange(startKey tuplecodec.TupleKey, endKey tuplecodec.Tupl
 	return values, nil
 }
 
-func (m *MemoryKV) GetRangeWithLimit(startKey tuplecodec.TupleKey, limit uint64) ([]tuplecodec.TupleKey, []tuplecodec.TupleValue, error) {
-	var keys []tuplecodec.TupleKey
-	var values []tuplecodec.TupleValue
+func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
+	var keys []TupleKey
+	var values []TupleValue
 	cnt := uint64(0)
 	iter := func(i btree.Item) bool {
 		if cnt >= limit {
@@ -204,13 +204,13 @@ func (m *MemoryKV) GetRangeWithLimit(startKey tuplecodec.TupleKey, limit uint64)
 }
 
 
-func (m *MemoryKV) GetWithPrefix(prefix tuplecodec.TupleKey, limit uint64) ([]tuplecodec.TupleKey, []tuplecodec.TupleValue, error) {
+func (m *MemoryKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
 	if prefix == nil {
 		return nil, nil, errorPrefixIsNull
 	}
 
-	var keys []tuplecodec.TupleKey
-	var values []tuplecodec.TupleValue
+	var keys []TupleKey
+	var values []TupleValue
 	cnt := uint64(0)
 	iter := func(i btree.Item) bool {
 		if cnt >= limit {
@@ -218,6 +218,9 @@ func (m *MemoryKV) GetWithPrefix(prefix tuplecodec.TupleKey, limit uint64) ([]tu
 		}
 		cnt++
 		if x,ok := i.(*MemoryItem); ok {
+			if !bytes.HasPrefix(x.key,prefix[:prefixLen]) {
+				return false
+			}
 			keys = append(keys,x.key)
 			values = append(values,x.value)
 		}else{
@@ -231,10 +234,10 @@ func (m *MemoryKV) GetWithPrefix(prefix tuplecodec.TupleKey, limit uint64) ([]tu
 	return keys, values, nil
 }
 
-func (m *MemoryKV) GetShardsWithRange(startKey tuplecodec.TupleKey, endKey tuplecodec.TupleKey) (interface{}, error) {
+func (m *MemoryKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
 	panic("implement me")
 }
 
-func (m *MemoryKV) GetShardsWithPrefix(prefix tuplecodec.TupleKey) (interface{}, error) {
+func (m *MemoryKV) GetShardsWithPrefix(prefix TupleKey) (interface{}, error) {
 	panic("implement me")
 }

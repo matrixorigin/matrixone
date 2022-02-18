@@ -12,11 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kv
+package tuplecodec
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
 	"reflect"
 	"testing"
@@ -27,14 +26,14 @@ func TestMemoryKV_Set(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
+			key   TupleKey
+			value TupleValue
 		}
 
 		genkv := func(a,b string) args {
 			return args{
-				tuplecodec.TupleKey(a),
-				tuplecodec.TupleValue(b),
+				TupleKey(a),
+				TupleValue(b),
 				}
 		}
 
@@ -61,14 +60,14 @@ func TestMemoryKV_SetBatch(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
+			key   TupleKey
+			value TupleValue
 		}
 
 		genkv := func(a,b string) args {
 			return args{
-				tuplecodec.TupleKey(a),
-				tuplecodec.TupleValue(b),
+				TupleKey(a),
+				TupleValue(b),
 			}
 		}
 
@@ -79,15 +78,15 @@ func TestMemoryKV_SetBatch(t *testing.T) {
 			genkv("c","c"),
 		}
 
-		want := []tuplecodec.TupleValue {
+		want := []TupleValue{
 			genkv("a","b").value,
 			genkv("b","b").value,
 			genkv("c","c").value,
 			genkv("c","c").value,
 		}
 
-		var keys []tuplecodec.TupleKey
-		var values []tuplecodec.TupleValue
+		var keys []TupleKey
+		var values []TupleValue
 		for _, kase := range kases {
 			keys = append(keys,kase.key)
 			values = append(values,kase.value)
@@ -113,15 +112,15 @@ func TestMemoryKV_DedupSet(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
-			want bool
+			key   TupleKey
+			value TupleValue
+			want  bool
 		}
 
 		genkv := func(a,b string,c bool) args {
 			return args{
-				tuplecodec.TupleKey(a),
-				tuplecodec.TupleValue(b),
+				TupleKey(a),
+				TupleValue(b),
 				c,
 			}
 		}
@@ -153,15 +152,15 @@ func TestMemoryKV_DedupSetBatch(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
-			want bool
+			key   TupleKey
+			value TupleValue
+			want  bool
 		}
 
 		genkv := func(a,b string,w bool) args {
 			return args{
-				tuplecodec.TupleKey(a),
-				tuplecodec.TupleValue(b),
+				TupleKey(a),
+				TupleValue(b),
 				w,
 			}
 		}
@@ -173,15 +172,15 @@ func TestMemoryKV_DedupSetBatch(t *testing.T) {
 			genkv("c","c",false),
 		}
 
-		want := []tuplecodec.TupleValue {
+		want := []TupleValue{
 			genkv("a","b",true).value,
 			genkv("b","b",true).value,
 			genkv("c","b",true).value,
 			genkv("c","b",true).value,
 		}
 
-		var keys []tuplecodec.TupleKey
-		var values []tuplecodec.TupleValue
+		var keys []TupleKey
+		var values []TupleValue
 		for _, kase := range kases {
 			keys = append(keys,kase.key)
 			values = append(values,kase.value)
@@ -211,14 +210,14 @@ func TestMemoryKV_GetRange(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
+			key   TupleKey
+			value TupleValue
 		}
 
 		genkv := func(a,b string) args {
 			return args{
-				tuplecodec.TupleKey(a),
-				tuplecodec.TupleValue(b),
+				TupleKey(a),
+				TupleValue(b),
 			}
 		}
 
@@ -228,8 +227,8 @@ func TestMemoryKV_GetRange(t *testing.T) {
 			genkv("c","c"),
 		}
 
-		var keys []tuplecodec.TupleKey
-		var values []tuplecodec.TupleValue
+		var keys []TupleKey
+		var values []TupleValue
 		for _, kase := range kases {
 			keys = append(keys,kase.key)
 			values = append(values,kase.value)
@@ -241,34 +240,34 @@ func TestMemoryKV_GetRange(t *testing.T) {
 		}
 
 		type args2 struct {
-			start tuplecodec.TupleKey
-			end tuplecodec.TupleKey
-			want []tuplecodec.TupleValue
+			start TupleKey
+			end   TupleKey
+			want  []TupleValue
 		}
 
-		gen := func(a,b string,w ...tuplecodec.TupleValue) args2 {
+		gen := func(a,b string,w ...TupleValue) args2 {
 			return args2{
-				start: tuplecodec.TupleKey(a),
-				end:   tuplecodec.TupleKey(b),
+				start: TupleKey(a),
+				end:   TupleKey(b),
 				want:  w,
 			}
 		}
 
 		kases2 := []args2{
 			gen("a","c",
-				tuplecodec.TupleValue("a"),
-				tuplecodec.TupleValue("b"),
-				tuplecodec.TupleValue("c")),
+				TupleValue("a"),
+				TupleValue("b"),
+				TupleValue("c")),
 			gen("a","b",
-				tuplecodec.TupleValue("a"),
-				tuplecodec.TupleValue("b")),
+				TupleValue("a"),
+				TupleValue("b")),
 			gen("a","a"),
 			gen("b","c",
-				tuplecodec.TupleValue("b"),
-				tuplecodec.TupleValue("c")),
+				TupleValue("b"),
+				TupleValue("c")),
 			gen("b","e",
-				tuplecodec.TupleValue("b"),
-				tuplecodec.TupleValue("c")),
+				TupleValue("b"),
+				TupleValue("c")),
 		}
 
 		for _, k2 := range kases2 {
@@ -294,14 +293,14 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
+			key   TupleKey
+			value TupleValue
 		}
 
 		var kases []args
 		for i := 0 ; i < cnt; i++ {
-			key := tuplecodec.TupleKey(prefix + fmt.Sprintf("%20d",i))
-			value := tuplecodec.TupleValue(fmt.Sprintf("v%d",i))
+			key := TupleKey(prefix + fmt.Sprintf("%20d",i))
+			value := TupleValue(fmt.Sprintf("v%d",i))
 
 			kases = append(kases,args{
 				key:   key,
@@ -311,7 +310,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetRangeWithLimit(tuplecodec.TupleKey(prefix),uint64(cnt))
+		_, values, err := kv.GetRangeWithLimit(TupleKey(prefix),uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -319,7 +318,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 		}
 
 		step := 10
-		last := tuplecodec.TupleKey(prefix)
+		last := TupleKey(prefix)
 		for i := 0; i < cnt; i += step {
 			keys, values, err := kv.GetRangeWithLimit(last, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
@@ -328,7 +327,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = tuplecodec.SuccessorOfKey(keys[len(keys) - 1])
+			last = SuccessorOfKey(keys[len(keys) - 1])
 		}
 	})
 }
@@ -336,19 +335,19 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 func TestMemoryKV_GetWithPrefix(t *testing.T) {
 	convey.Convey("get with prefix",t, func() {
 		prefix := "abc"
-		cnt := 100
+		cnt := 20
 
 		kv := NewMemoryKV()
 
 		type args struct {
-			key tuplecodec.TupleKey
-			value tuplecodec.TupleValue
+			key   TupleKey
+			value TupleValue
 		}
 
 		var kases []args
 		for i := 0 ; i < cnt; i++ {
-			key := tuplecodec.TupleKey(prefix + fmt.Sprintf("%20d",i))
-			value := tuplecodec.TupleValue(fmt.Sprintf("v%d",i))
+			key := TupleKey(prefix + fmt.Sprintf("%20d",i))
+			value := TupleValue(fmt.Sprintf("v%d",i))
 
 			kases = append(kases,args{
 				key:   key,
@@ -358,7 +357,7 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetWithPrefix(tuplecodec.TupleKey(prefix),uint64(cnt))
+		_, values, err := kv.GetWithPrefix(TupleKey(prefix), 0, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -366,16 +365,16 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 		}
 
 		step := 10
-		last := tuplecodec.TupleKey(prefix)
+		last := TupleKey(prefix)
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetWithPrefix(last, uint64(step))
+			keys, values, err := kv.GetWithPrefix(last, 0, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = tuplecodec.SuccessorOfKey(keys[len(keys) - 1])
+			last = SuccessorOfKey(keys[len(keys) - 1])
 		}
 	})
 }

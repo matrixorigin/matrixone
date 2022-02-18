@@ -12,44 +12,43 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package kv
-
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+package tuplecodec
 
 type KVHandler interface {
 	// NextID gets the next id of the type
 	NextID(typ string) (uint64,error)
 
 	// Set writes the key-value (overwrite)
-	Set(key tuplecodec.TupleKey,value tuplecodec.TupleValue) error
+	Set(key TupleKey,value TupleValue) error
 
 	// SetBatch writes the batch of key-value (overwrite)
-	SetBatch(keys []tuplecodec.TupleKey,values []tuplecodec.TupleValue) []error
+	SetBatch(keys []TupleKey,values []TupleValue) []error
 
 	// DedupSet writes the key-value. It will fail if the key exists
-	DedupSet(key tuplecodec.TupleKey, value tuplecodec.TupleValue) error
+	DedupSet(key TupleKey, value TupleValue) error
 
 	// DedupSetBatch writes the batch of keys-values. It will fail if there is one key exists
-	DedupSetBatch(keys []tuplecodec.TupleKey, values []tuplecodec.TupleValue) []error
+	DedupSetBatch(keys []TupleKey, values []TupleValue) []error
 
 	// Get gets the value of the key
-	Get(key tuplecodec.TupleKey)(tuplecodec.TupleValue, error)
+	Get(key TupleKey)(TupleValue, error)
 
 	// GetBatch gets the values of the keys
-	GetBatch(keys []tuplecodec.TupleKey)([]tuplecodec.TupleValue, error)
+	GetBatch(keys []TupleKey)([]TupleValue, error)
 
 	// GetRange gets the values among the range [startKey,endKey).
-	GetRange(startKey tuplecodec.TupleKey, endKey tuplecodec.TupleKey) ([]tuplecodec.TupleValue, error)
+	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
 
 	// GetRange gets the values from the startKey with limit
-	GetRangeWithLimit(startKey tuplecodec.TupleKey, limit uint64) ([]tuplecodec.TupleKey,[]tuplecodec.TupleValue, error)
+	GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey,[]TupleValue, error)
 
 	// GetWithPrefix gets the values of the prefix with limit
-	GetWithPrefix(prefix tuplecodec.TupleKey, limit uint64) ([]tuplecodec.TupleKey, []tuplecodec.TupleValue, error)
+	// The prefixLen denotes the prefix[:prefixLen] is the real prefix
+	GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
-	GetShardsWithRange(startKey tuplecodec.TupleKey, endKey tuplecodec.TupleKey) (interface{}, error)
+	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)
 
 	// GetShardsWithPrefix get the shards that holds the keys with prefix
-	GetShardsWithPrefix(prefix tuplecodec.TupleKey) (interface{}, error)
+	GetShardsWithPrefix(prefix TupleKey) (interface{}, error)
 }

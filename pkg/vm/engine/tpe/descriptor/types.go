@@ -14,7 +14,149 @@
 
 package descriptor
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+)
+
+type DatabaseDesc struct {
+	ID uint32 `json:"ID,string"`
+
+	Name string `json:"name"`
+
+	Update_time int64 `json:"update_time"`
+
+	Create_epoch uint64	`json:"create_epoch,string"`
+
+	Is_deleted bool `json:"is_deleted,string"`
+
+	Drop_epoch uint64 `json:"drop_epoch,string"`
+}
+
+type RelationDesc struct {
+	ID uint32 `json:"ID,string"`
+
+	Name string `json:"name"`
+
+	Update_time int64 `json:"update_time"`
+
+	Next_attribute_id uint32 `json:"next_attribute_id,string"`
+
+	Attributes []AttributeDesc `json:"attributes"`
+
+	IDependsOnRelations []uint32 `json:"i_depends_on_relations,string"`
+
+	RelationsDependsOnMe []DependsOnDesc `json:"relations_depends_on_me"`
+
+	Next_attribute_group_id uint32 `json:"next_attribute_group_id,string"`
+
+	AttributeGroups []AttributeGroupDesc `json:"attribute_groups"`
+
+	Primary_index IndexDesc `json:"primary_index"`
+
+	Next_index_id uint32 `json:"next_index_id,string"`
+
+	Indexes []IndexDesc `json:"indexes"`
+
+	Create_sql string `json:"create_sql"`
+
+	Create_time int64 `json:"create_time"`
+
+	Drop_time int64 `json:"drop_time"`
+
+	Create_epoch uint64 `json:"create_epoch,string"`
+
+	Is_deleted bool `json:"is_deleted,string"`
+
+	Drop_epoch uint64 `json:"drop_epoch,string"`
+
+	//for epochgc
+	Max_access_epoch uint64 `json:"max_access_epoch,string"`
+
+	Table_options []TableOptionDesc `json:"table_options"`
+
+	Partition_options []PartitionOptionDesc `json:"partition_options"`
+}
+
+type TableOptionDesc struct {
+	Kind int `json:"kind,string"`
+
+	Value string `json:"value"`
+
+	Name string `json:"name"`
+}
+
+type PartitionOptionDesc struct {
+	Algo string `json:"algo"`
+}
+
+type DependsOnDesc struct {
+	ID uint32 `json:"ID,string"`
+
+	AttributeID []uint32 `json:"attribute_id,string"`
+}
+
+type AttributeDesc struct {
+	ID uint32 `json:"id,string"`
+
+	Name string `json:"name"`
+
+	Ttype orderedcodec.ValueType `json:"type,string"`
+
+	Is_null bool `json:"is_null,string"`
+
+	Default_value string `json:"default_value"`
+
+	Is_hidden bool `json:"is_hidden,string"`
+
+	Is_auto_increment bool `json:"is_auto_increment,string"`
+
+	Is_unique bool `json:"is_unique,string"`
+
+	Is_primarykey bool `json:"is_primarykey,string"`
+
+	Comment string `json:"comment"`
+
+	References []ReferenceDesc `json:"references"`
+
+	Constrains []ConstrainDesc `json:"constrains"`
+}
+
+type ReferenceDesc struct {
+	Table_name string `json:"table_name"`
+
+	Key_parts []ReferenceDesc_KeyPart `json:"key_parts"`
+}
+
+type ReferenceDesc_KeyPart struct {
+	Column_name string `json:"column_name"`
+
+	Length int `json:"length,string"`
+
+	Direction int `json:"direction,string"`
+
+	//expr ast
+}
+
+type ConstrainDesc struct {
+	Symbol string `json:"symbol"`
+
+	//Expr ast
+}
+
+type AttributeGroupDesc struct {
+	ID uint32 `json:"id,string"`
+
+	Attributes []AttributeGroupDesc_Attribute `json:"attributes"`
+}
+
+type AttributeGroupDesc_Attribute struct {
+	Name string `json:"name"`
+
+	//serial number of the attribute in the relation
+	ID uint32 `json:"id,string"`
+
+	Type orderedcodec.ValueType `json:"type,string"`
+}
 
 type IndexDirectionType int
 const (
@@ -28,7 +170,7 @@ type IndexDesc struct {
 	ID uint32 `json:"ID,string"`
 
 	//unique index or not
-	Is_unique bool `json:"is_unique"`
+	Is_unique bool `json:"is_unique,string"`
 
 	//components of the index
 	Attributes []IndexDesc_Attribute `json:"attributes"`
@@ -59,4 +201,25 @@ type IndexDesc_Attribute struct {
 	ID uint32 `json:"id,string"`
 
 	Type orderedcodec.ValueType `json:"type,string"`
+}
+
+// DescriptorHandler loads and updates the descriptors
+type DescriptorHandler interface {
+
+	//LoadRelationDescByName gets the descriptor of the table by the name of the table
+	LoadRelationDescByName(parentID uint64, name string)(*RelationDesc,error)
+
+	LoadRelationDescByID(tableID uint64)(*RelationDesc,error)
+
+	StoreRelationDescByName(parentID uint64, name string,table *RelationDesc) error
+
+	StoreRelationDescByID(tableID uint64,table *RelationDesc) error
+
+	LoadDatabaseDescByName(parentID uint64, name string)(*DatabaseDesc,error)
+
+	LoadDatabaseDescByID(dbID uint64)(*DatabaseDesc,error)
+
+	StoreDatabaseDescByName(parentID uint64, name string,db *DatabaseDesc) error
+
+	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
 }
