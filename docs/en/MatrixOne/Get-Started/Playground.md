@@ -1,12 +1,12 @@
 # **Playground**
-[MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) allow you to try SQL statements and explore features of MatrixOne instantly from your web browser with interactive tutorials.  
+[MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) allows you to try SQL statements and explore features of MatrixOne instantly from your web browser with interactive tutorials.  
  
 * For docs about our SQL commands, you can see [SQL Reference](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md).  
 * For tutorials about **SSB** test, you can see [Tutorial](../Get-Started/Tutorial/SSB-test-with-matrixone.md).
 
 ## **Limitations**
 
-You can only operate in **read-only** mode in MatixOrigin Playground，so DDL commands and part of DML commands which may change the data are not available. The detail limitations are shown below:
+You can only operate in **read-only** mode in MatixOrigin Playground, so DDL commands and part of DML commands which may change the data are not available. The detailed limitations are shown below:
 
 * **DDL** commands are not available:  
 ```create/drop table``` , ```truncate``` , ```update``` , ```set``` ,```use```  
@@ -21,7 +21,7 @@ You can only operate in **read-only** mode in MatixOrigin Playground，so DDL co
 * **max_result_rows**=2000  
 ## **Examples**
 
-In Playground, You can follow different interactive tutorials and pick one in the list box, and now the supported tutorials are shown below:  
+In Playground, you can follow different interactive tutorials and pick one in the list box, and now the supported tutorials are shown below:  
 
 * [**SSB Test with MatrixOne**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) 
      
