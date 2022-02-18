@@ -149,11 +149,11 @@ import (
     varExpr *tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
-    strs []string
 	assignments []*tree.Assignment
 	assignment *tree.Assignment
     properties []tree.Property
     property tree.Property
+    exportParm *tree.ExportParam
 }
 
 %token LEX_ERROR
@@ -276,7 +276,7 @@ import (
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 // Insert
-%token <str> ROW
+%token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
 %token <str> UNUSED
 
@@ -297,6 +297,7 @@ import (
 %type <statement> revoke_stmt grant_stmt
 %type <statement> load_data_stmt
 %type <statement> analyze_stmt
+%type <exportParm> export_data_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -325,7 +326,7 @@ import (
 %type <tableOptions> table_option_list_opt table_option_list
 %type <str> charset_name storage_opt collate_name column_format storage_media
 %type <rowFormatType> row_format_options
-%type <int64Val> field_length_opt
+%type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
 %type <referenceOptionType> ref_opt on_delete on_update
 %type <referenceOnRecord> on_delete_update_opt on_delete_update
@@ -346,7 +347,7 @@ import (
 %type <funcExpr> function_call_aggregate
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values
+%type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -427,7 +428,7 @@ import (
 
 %type <lengthOpt> length_opt length_option_opt length
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
-%type <unsignedOpt> unsigned_opt
+%type <unsignedOpt> unsigned_opt header_opt
 %type <zeroFillOpt> zero_fill_opt
 %type <boolVal> global_scope exists_opt distinct_opt temporary_opt
 %type <item> pwd_expire clear_pwd_opt
@@ -441,10 +442,10 @@ import (
 
 %type <boolVal> local_opt
 %type <duplicateKey> duplicate_opt
-%type <fields> load_fields field_item
+%type <fields> load_fields field_item export_fields
 %type <fieldsList> field_item_list
 %type <str> field_terminator starting_opt lines_terminated_opt
-%type <lines> load_lines
+%type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
 %type <varExpr> user_variable variable system_variable
 %type <loadColumn> columns_or_variable
@@ -2060,25 +2061,153 @@ into_table_name:
         $$ = $1
     }
 
+export_data_param_opt:
+    {
+        $$ = nil
+    }
+|   INTO OUTFILE STRING export_fields export_lines_opt header_opt max_file_size_opt force_quote_opt
+    {
+        $$ = &tree.ExportParam{
+            Outfile:    true,
+            FilePath :  $3,
+            Fields:     $4,
+            Lines:      $5,
+            Header:     $6,
+            MaxFileSize:uint64($7)*1024,
+            ForceQuote: $8,
+        }
+    }
+
+export_fields:
+    {
+        $$ = &tree.Fields{
+            Terminated: ",",
+            EnclosedBy: '"',
+        }
+    }
+|   FIELDS TERMINATED BY STRING
+    {
+        $$ = &tree.Fields{
+            Terminated: $4,
+            EnclosedBy: '"',
+        }
+    }
+|   FIELDS TERMINATED BY STRING ENCLOSED BY field_terminator
+    {
+        str := $7
+        if str != "\\" && len(str) > 1 {
+            yylex.Error("export1 error field terminator")
+            return 1
+        }
+        var b byte
+        if len(str) != 0 {
+           b = byte(str[0])
+        } else {
+           b = 0
+        }
+        $$ = &tree.Fields{
+            Terminated: $4,
+            EnclosedBy: b,
+        }
+    }
+|   FIELDS ENCLOSED BY field_terminator
+    {
+        str := $4
+        if str != "\\" && len(str) > 1 {
+            yylex.Error("export2 error field terminator")
+            return 1
+        }
+        var b byte
+        if len(str) != 0 {
+           b = byte(str[0])
+        } else {
+           b = 0
+        }
+        $$ = &tree.Fields{
+            Terminated: ",",
+            EnclosedBy: b,
+        }
+    }
+
+export_lines_opt:
+    {
+        $$ = &tree.Lines{
+            TerminatedBy: "\n",
+        }
+    }
+|   LINES lines_terminated_opt
+    {
+        $$ = &tree.Lines{
+            TerminatedBy: $2,
+        }
+    }
+
+header_opt:
+    {
+        $$ = true
+    }
+|   HEADER STRING
+    {
+        str := strings.ToLower($2)
+        if str == "true" {
+            $$ = true
+        } else if str == "false" {
+            $$ = false
+        } else {
+            yylex.Error("error header flag")
+            return 1
+        }
+    }
+
+max_file_size_opt:
+    {
+        $$ = 0
+    }
+|   MAX_FILE_SIZE INTEGRAL
+    {
+        $$ = $2.(int64)
+    }
+
+force_quote_opt:
+    {
+        $$ = []string{}
+    }
+|   FORCE_QUOTE '(' force_quote_list ')'
+    {
+        $$ = $3
+    }
+
+
+force_quote_list:
+    ident
+    {
+        $$ = make([]string, 0, 4)
+        $$ = append($$, $1)
+    }
+|   force_quote_list ',' ident
+    {
+        $$ = append($1, $3)
+    }
+
 select_stmt:
     select_no_parens
-|   select_with_parens
+|   select_with_parens export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1}
+        $$ = &tree.Select{Select: $1, Ep: $2}
     }
 
 select_no_parens:
-    simple_select order_by_opt limit_opt // select_lock_opt
+    simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3}
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
     }
-|   select_with_parens order_by_clause
+|   select_with_parens order_by_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2}
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Ep: $3}
     }
-|   select_with_parens order_by_opt limit_clause
+|   select_with_parens order_by_opt limit_clause export_data_param_opt
     {
-        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3}
+        $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
     }
 
 limit_opt:
@@ -5611,6 +5740,7 @@ reserved_keyword:
 |   FULLTEXT
 |   FOREIGN
 |	ROW
+|   OUTFILE
 
 non_reserved_keyword:
     AGAINST
@@ -5766,6 +5896,9 @@ non_reserved_keyword:
 |   ZEROFILL
 |   YEAR
 |	TYPE
+|   HEADER
+|   MAX_FILE_SIZE
+|   FORCE_QUOTE
 
 not_keyword:
     ADDDATE

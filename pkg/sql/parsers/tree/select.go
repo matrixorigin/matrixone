@@ -29,6 +29,7 @@ type Select struct {
 	Select  SelectStatement
 	OrderBy OrderBy
 	Limit   *Limit
+	Ep *ExportParam
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
@@ -40,6 +41,10 @@ func (node *Select) Format(ctx *FmtCtx) {
 	if node.Limit != nil {
 		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
+	}
+	if node.Ep != nil {
+		ctx.WriteByte(' ')
+		node.Ep.Format(ctx)
 	}
 }
 

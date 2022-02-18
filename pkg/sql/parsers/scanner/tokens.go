@@ -42,6 +42,10 @@ func initTokens(dialectType dialect.DialectType) {
 		ESCAPED = MYSQL_ESCAPED
 		LOAD = MYSQL_LOAD
 		INFILE = MYSQL_INFILE
+		OUTFILE = MYSQL_OUTFILE
+		HEADER = MYSQL_HEADER
+		MAX_FILE_SIZE = MYSQL_MAX_FILE_SIZE
+		FORCE_QUOTE = MYSQL_FORCE_QUOTE
 		AVG = MYSQL_AVG
 		ADDDATE = MYSQL_ADDDATE
 		COUNT = MYSQL_COUNT
@@ -684,7 +688,10 @@ func initTokens(dialectType dialect.DialectType) {
 		"order":                    ORDER,
 		"out":                      UNUSED,
 		"outer":                    OUTER,
-		"outfile":                  UNUSED,
+		"outfile":                  OUTFILE,
+		"header":					HEADER,
+		"max_file_size":			MAX_FILE_SIZE,
+		"force_quote":				FORCE_QUOTE,
 		"parser":                   PARSER,
 		"partition":                PARTITION,
 		"partitions":               PARTITIONS,
@@ -1243,6 +1250,10 @@ var (
 	AVG                      int
 	LOAD                     int
 	INFILE                   int
+	OUTFILE					 int
+	HEADER					 int
+	MAX_FILE_SIZE			 int
+	FORCE_QUOTE				 int
 	STARTING                 int
 	LINES                    int
 	UNUSED                   int

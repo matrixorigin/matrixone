@@ -285,5 +285,66 @@ type LoadColumn interface {
 	NodeFormatter
 }
 
+type ExportParam struct {
+	// outfile flag
+	Outfile bool
+	// filename path
+	FilePath string
+	// Fields
+	Fields *Fields
+	// Lines
+	Lines *Lines
+	// fileSize
+	MaxFileSize uint64
+	// curFileSize
+	CurFileSize uint64
+	Rows uint64
+	FileCnt uint
+	// header flag
+	Header bool
+	ForceQuote []string
+	ColumnFlag []bool
+	Symbol []string
+
+	// default flush size
+	DefaultBufSize int64
+	OutputStr []byte
+	LineSize uint64
+}
+
+func (ep *ExportParam) Format(ctx *FmtCtx) {
+	if ep.FilePath == "" {
+		return
+	}
+	ctx.WriteString("into outfile " + ep.FilePath)
+	if ep.Fields != nil {
+		ctx.WriteByte(' ')
+		ep.Fields.Format(ctx)
+	}
+	if ep.Lines != nil {
+		ctx.WriteByte(' ')
+		ep.Lines.Format(ctx)
+	}
+	ctx.WriteString(" header ")
+	if ep.Header {
+		ctx.WriteString("true")
+	} else {
+		ctx.WriteString("false")
+	}
+	if ep.MaxFileSize != 0 {
+		ctx.WriteString(" max_file_size ")
+		ctx.WriteString(strconv.FormatUint(ep.MaxFileSize, 10))
+	}
+	if len(ep.ForceQuote) > 0 {
+		ctx.WriteString(" force_quote")
+		prefix := " "
+		for i := 0; i < len(ep.ForceQuote); i++ {
+			ctx.WriteString(prefix)
+			ctx.WriteString(ep.ForceQuote[i])
+			prefix = ", "
+		}
+	}
+}
+
 var _ LoadColumn = &UnresolvedName{}
 var _ LoadColumn = &VarExpr{}
