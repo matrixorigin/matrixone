@@ -4,6 +4,7 @@ bin/
 y.go
 *.output
 **/.DS_Store
+**/cover.out
 .vscode
 *.iml
 tags
