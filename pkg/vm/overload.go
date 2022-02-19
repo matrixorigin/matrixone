@@ -20,12 +20,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/splice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
@@ -52,7 +56,11 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Projection:  projection.String,
 	UnTransform: untransform.String,
 
-	Splice: splice.String,
+	MergeDedup: mergededup.String,
+	MergeLimit: mergelimit.String,
+	MergeOffset: mergeoffset.String,
+	MergeOrder: mergeorder.String,
+	MergeTop: mergetop.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
@@ -72,7 +80,11 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Projection:  projection.Prepare,
 	UnTransform: untransform.Prepare,
 
-	Splice: splice.Prepare,
+	MergeDedup: mergededup.Prepare,
+	MergeLimit: mergelimit.Prepare,
+	MergeOffset: mergeoffset.Prepare,
+	MergeOrder: mergeorder.Prepare,
+	MergeTop: mergetop.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
@@ -92,5 +104,9 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Projection:  projection.Call,
 	UnTransform: untransform.Call,
 
-	Splice: splice.Call,
+	MergeDedup: mergededup.Call,
+	MergeLimit: mergelimit.Call,
+	MergeOffset: mergeoffset.Call,
+	MergeOrder: mergeorder.Call,
+	MergeTop: mergetop.Call,
 }

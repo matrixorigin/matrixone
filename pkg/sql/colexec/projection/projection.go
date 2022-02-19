@@ -67,6 +67,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				proc.Reg.InputBatch = &batch.Batch{}
 				return false, err
 			}
+			reuse := false
+			for k := 0; k < len(bat.Vecs); k++ {
+				if rbat.Vecs[i] == bat.Vecs[k] {
+					reuse = true
+					break
+				}
+			}
+			if reuse {
+				continue
+			}
 		}
 		rbat.Vecs[i].Ref = n.Rs[i]
 	}
@@ -74,8 +84,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		batch.Cow(bat)
 	}
 	for i := range rbat.Vecs {
-		bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
-		bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
+			bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
+			bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
 	}
 	for _, e := range n.Es {
 		batch.Reduce(bat, e.Attributes(), proc.Mp)

@@ -12,10 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package splice
+package mergeoffset
 
-import "github.com/matrixorigin/matrixone/pkg/container/batch"
+type container struct {
+	seen uint64
+}
 
 type Argument struct {
-	bat *batch.Batch
+	// Offset records the offset number of mergeOffset operator
+	Offset uint64
+	// ctr contains the attributes needn't do serialization work
+	ctr container
 }
