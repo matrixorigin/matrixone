@@ -14,7 +14,7 @@ Contributions to MatrixOne fall into the following categories.
 2. Fork the repository on GitHub.
 3. Clone your fork to your local machine with `git clone git@github.com:<yourname>/matrixone.git`.
 4. Create a branch with `git checkout -b topic-branch`, the branch name is up to you.
-5. Commit changes to your own branch locally, add necessary unit tests, and record your changes in [CHANGELOG.md](https://github.com/matrixorigin/matrixone/blob/main/CHANGELOG.md) with issue numbers and descriptions.
+5. Commit changes to your own branch locally, add necessary unit tests.
 6. Run static code analysis with `make sca`.   
 7. Run tests with `make ut` and `make bvt`, make sure all the tests passed.
 8. Go back to GitHub, and submit a pull request so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
