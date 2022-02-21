@@ -209,11 +209,14 @@ type DescriptorHandler interface {
 	//LoadRelationDescByName gets the descriptor of the table by the name of the table
 	LoadRelationDescByName(parentID uint64, name string)(*RelationDesc,error)
 
-	LoadRelationDescByID(tableID uint64)(*RelationDesc,error)
+	//LoadRelationDescByID gets the descriptor of the table by the tableid
+	LoadRelationDescByID(parentID uint64, tableID uint64) (*RelationDesc, error)
 
-	StoreRelationDescByName(parentID uint64, name string,table *RelationDesc) error
+	//StoreRelationDescByName first get the descriptor of the table by name, then save the descriptor.
+	StoreRelationDescByName(parentID uint64, name string,tableDesc *RelationDesc) error
 
-	StoreRelationDescByID(tableID uint64,table *RelationDesc) error
+	//StoreRelationDescByID save the descriptor
+	StoreRelationDescByID(parentID uint64, tableID uint64, table *RelationDesc) error
 
 	LoadDatabaseDescByName(parentID uint64, name string)(*DatabaseDesc,error)
 

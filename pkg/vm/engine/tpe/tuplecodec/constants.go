@@ -28,6 +28,10 @@ const (
 	//holding the schema of the table
 	InternalDescriptorTableID uint64 = 0
 
+	InternalDescriptorTableID_parentID_ID = 0
+	InternalDescriptorTableID_id_ID = 1
+	InternalDescriptorTableID_name_ID = 2
+	InternalDescriptorTableID_desc_ID = 3
 	PrimaryIndexID uint32 = 1
 )
 
