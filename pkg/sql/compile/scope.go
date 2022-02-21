@@ -18,6 +18,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"math"
 	"net"
 	"runtime"
@@ -547,11 +555,24 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	return nil
 }
 
+// RunQ will build a multi-layer merging structure according to the scope, and finally run it.
+// For an example, if the input scope is
+//		[transform -> order -> push]
+// and we assume that there are 4 Cores at the node, we will convert it to be
+//		[transform -> order -> push]  - -
+//										-
+//										  -
+//		[transform -> order -> push]  - - - - - > [mergeOrder -> push] - - - - - - - - > [mergeOrder -> push]
+//																			 - -
+//																		   -
+//		[transform -> order -> push]  - -								  -
+//										-								 -
+//										  -								-
+//		[transform -> order -> push]  - - - - - > [mergeOrder -> push] -
 func (s *Scope) RunQ(e engine.Engine) error {
-	var rd engine.Reader
-
-	ss := make([]*Scope, 1)
-	{ // get table reader
+	var rds []engine.Reader
+	cpuNum := runtime.NumCPU()
+	{
 		db, err := e.Database(s.DataSource.SchemaName)
 		if err != nil {
 			return err
@@ -561,14 +582,16 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-		rd = rel.NewReader(1)[0]
+		rds = rel.NewReader(cpuNum)
 	}
+
+	ss := make([]*Scope, cpuNum)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
-	{
-		ss[0] = &Scope{
+	for i := 0; i < cpuNum; i++ {
+		ss[i] = &Scope{
 			Magic: Normal,
 			DataSource: &Source{
-				R:            rd,
+				R:            rds[i],
 				IsMerge:      s.DataSource.IsMerge,
 				SchemaName:   s.DataSource.SchemaName,
 				RelationName: s.DataSource.RelationName,
@@ -576,7 +599,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 				Attributes:   s.DataSource.Attributes,
 			},
 		}
-		ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
 			Op: vm.Transform,
 			Arg: &transform.Argument{
 				Typ:        arg.Typ,
@@ -587,32 +610,105 @@ func (s *Scope) RunQ(e engine.Engine) error {
 				BoundVars:  arg.BoundVars,
 			},
 		})
-
-		ss[0].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
-		ss[0].Proc.Id = s.Proc.Id
-		ss[0].Proc.Lim = s.Proc.Lim
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
 	}
+
+	opTyp := s.Instructions[len(s.Instructions)-2].Op  // push-down operator's type
+	opArg := s.Instructions[len(s.Instructions)-2].Arg // push-down operator's argument
+	switch opTyp {
+	case vm.Order:
+		t := opArg.(*order.Argument)
+		s.Instructions = append(s.Instructions[0:len(s.Instructions)-2], s.Instructions[len(s.Instructions)-1:]...)
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.MergeOrder,
+			Arg: &mergeorder.Argument{Fields: t.Fs},
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op:  vm.Order,
+				Arg: &order.Argument{Fs: t.Fs},
+			})
+		}
+		for len(ss) > 3 {
+			ss = newMergeOrderScope(ss, &mergeorder.Argument{Fields: t.Fs}, s.Proc)
+		}
+	case vm.Dedup:
+		s.Instructions = append(s.Instructions[0:len(s.Instructions)-2], s.Instructions[len(s.Instructions)-1:]...)
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.MergeDedup,
+			Arg: &mergededup.Argument{},
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op:  vm.Dedup,
+				Arg: &dedup.Argument{},
+			})
+		}
+		for len(ss) > 3 {
+			ss = newMergeDedupScope(ss, s.Proc)
+		}
+	case vm.Top:
+		t := opArg.(*top.Argument)
+		s.Instructions = append(s.Instructions[0:len(s.Instructions)-2], s.Instructions[len(s.Instructions)-1:]...)
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.MergeTop,
+			Arg: &mergetop.Argument{Fields: t.Fs, Limit: t.Limit},
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op:  vm.Top,
+				Arg: &top.Argument{Limit: t.Limit, Fs: t.Fs},
+			})
+		}
+		for len(ss) > 3 {
+			ss = newMergeTopScope(ss, &mergetop.Argument{Fields: t.Fs, Limit: t.Limit}, s.Proc)
+		}
+	case vm.Limit:
+		t := opArg.(*limit.Argument)
+		s.Instructions = append(s.Instructions[0:len(s.Instructions)-2], s.Instructions[len(s.Instructions)-1:]...)
+		s.Instructions[0] = vm.Instruction{
+			Op:  vm.MergeLimit,
+			Arg: &mergelimit.Argument{Limit: t.Limit},
+		}
+		for i := range ss {
+			ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+				Op:  vm.Limit,
+				Arg: &limit.Argument{Limit: t.Limit},
+			})
+		}
+		for len(ss) > 3 {
+			ss = newMergeLimitScope(ss, t.Limit, s.Proc)
+		}
+	default:
+		s.Instructions[0] = vm.Instruction{
+			Op: vm.Merge,
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	s.Magic = Merge
 	s.PreScopes = ss
-	s.Instructions[0] = vm.Instruction{
-		Op: vm.Merge,
-	}
 	s.Proc.Cancel = cancel
-	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
-	s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
-		Ctx: ctx,
-		Ch:  make(chan *batch.Batch, 1),
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
 	}
-
-	ss[0].Instructions = append(ss[0].Instructions, vm.Instruction{
-		Op: vm.Connector,
-		Arg: &connector.Argument{
-			Mmu: s.Proc.Mp.Gm,
-			Reg: s.Proc.Reg.MergeReceivers[0],
-		},
-	})
-
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: s.Proc.Mp.Gm,
+				Reg: s.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
 	return s.MergeRun(e)
 }
 
@@ -903,6 +999,217 @@ func newMergeScope(ss []*Scope, typ int, proc *process.Process) []*Scope {
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Plus,
 			Arg: &plus.Argument{Typ: typ},
+		})
+		{
+			m := len(rs[i].PreScopes)
+			ctx, cancel := context.WithCancel(context.Background())
+			rs[i].Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Id = proc.Id
+			rs[i].Proc.Lim = proc.Lim
+			rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, m)
+			{
+				for j := 0; j < m; j++ {
+					rs[i].Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
+						Ctx: ctx,
+						Ch:  make(chan *batch.Batch, 1),
+					}
+				}
+			}
+			for j := 0; j < m; j++ {
+				ss[i*step+j].Instructions = append(ss[i*step+j].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs[i].Proc.Mp.Gm,
+						Reg: rs[i].Proc.Reg.MergeReceivers[j],
+					},
+				})
+			}
+		}
+	}
+	return rs
+}
+
+func newMergeOrderScope(ss []*Scope, arg *mergeorder.Argument, proc *process.Process) []*Scope {
+	step := int(math.Log2(float64(len(ss))))
+	n := len(ss) / step
+	rs := make([]*Scope, n)
+
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step:],
+				Magic:     Merge,
+			}
+		} else {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step : (i+1)*step],
+				Magic:     Merge,
+			}
+		}
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.MergeOrder,
+			Arg: &mergeorder.Argument{Fields: arg.Fields},
+		})
+		{
+			m := len(rs[i].PreScopes)
+			ctx, cancel := context.WithCancel(context.Background())
+			rs[i].Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Id = proc.Id
+			rs[i].Proc.Lim = proc.Lim
+			rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, m)
+			{
+				for j := 0; j < m; j++ {
+					rs[i].Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
+						Ctx: ctx,
+						Ch:  make(chan *batch.Batch, 1),
+					}
+				}
+			}
+			for j := 0; j < m; j++ {
+				ss[i*step+j].Instructions = append(ss[i*step+j].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs[i].Proc.Mp.Gm,
+						Reg: rs[i].Proc.Reg.MergeReceivers[j],
+					},
+				})
+			}
+		}
+	}
+	return rs
+}
+
+func newMergeLimitScope(ss []*Scope, limit uint64, proc *process.Process) []*Scope {
+	step := int(math.Log2(float64(len(ss))))
+	n := len(ss) / step
+	rs := make([]*Scope, n)
+
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step:],
+				Magic:     Merge,
+			}
+		} else {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step : (i+1)*step],
+				Magic:     Merge,
+			}
+		}
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.MergeLimit,
+			Arg: &mergelimit.Argument{Limit: limit},
+		})
+		{
+			m := len(rs[i].PreScopes)
+			ctx, cancel := context.WithCancel(context.Background())
+			rs[i].Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Id = proc.Id
+			rs[i].Proc.Lim = proc.Lim
+			rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, m)
+			{
+				for j := 0; j < m; j++ {
+					rs[i].Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
+						Ctx: ctx,
+						Ch:  make(chan *batch.Batch, 1),
+					}
+				}
+			}
+			for j := 0; j < m; j++ {
+				ss[i*step+j].Instructions = append(ss[i*step+j].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs[i].Proc.Mp.Gm,
+						Reg: rs[i].Proc.Reg.MergeReceivers[j],
+					},
+				})
+			}
+		}
+	}
+	return rs
+}
+
+func newMergeTopScope(ss []*Scope, arg *mergetop.Argument, proc *process.Process) []*Scope {
+	step := int(math.Log2(float64(len(ss))))
+	n := len(ss) / step
+	rs := make([]*Scope, n)
+
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step:],
+				Magic:     Merge,
+			}
+		} else {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step : (i+1)*step],
+				Magic:     Merge,
+			}
+		}
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op: vm.MergeTop,
+			Arg: &mergetop.Argument{
+				Fields: arg.Fields,
+				Limit:  arg.Limit,
+			},
+		})
+		{
+			m := len(rs[i].PreScopes)
+			ctx, cancel := context.WithCancel(context.Background())
+			rs[i].Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Cancel = cancel
+			rs[i].Proc.Id = proc.Id
+			rs[i].Proc.Lim = proc.Lim
+			rs[i].Proc.Reg.MergeReceivers = make([]*process.WaitRegister, m)
+			{
+				for j := 0; j < m; j++ {
+					rs[i].Proc.Reg.MergeReceivers[j] = &process.WaitRegister{
+						Ctx: ctx,
+						Ch:  make(chan *batch.Batch, 1),
+					}
+				}
+			}
+			for j := 0; j < m; j++ {
+				ss[i*step+j].Instructions = append(ss[i*step+j].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs[i].Proc.Mp.Gm,
+						Reg: rs[i].Proc.Reg.MergeReceivers[j],
+					},
+				})
+			}
+		}
+	}
+	return rs
+}
+
+func newMergeDedupScope(ss []*Scope, proc *process.Process) []*Scope {
+	step := int(math.Log2(float64(len(ss))))
+	n := len(ss) / step
+	rs := make([]*Scope, n)
+
+	for i := 0; i < n; i++ {
+		if i == n-1 {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step:],
+				Magic:     Merge,
+			}
+		} else {
+			rs[i] = &Scope{
+				PreScopes: ss[i*step : (i+1)*step],
+				Magic:     Merge,
+			}
+		}
+		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
+			Op:  vm.MergeDedup,
+			Arg: &mergededup.Argument{},
 		})
 		{
 			m := len(rs[i].PreScopes)
