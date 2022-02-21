@@ -30,6 +30,8 @@ type DatabaseDesc struct {
 	Is_deleted bool `json:"is_deleted,string"`
 
 	Drop_epoch uint64 `json:"drop_epoch,string"`
+
+	Max_access_epoch        uint64                `json:"max_access_epoch,string"`
 }
 
 type RelationDesc struct {
@@ -222,7 +224,7 @@ type DescriptorHandler interface {
 
 	LoadDatabaseDescByID(dbID uint64)(*DatabaseDesc,error)
 
-	StoreDatabaseDescByName(parentID uint64, name string,db *DatabaseDesc) error
+	StoreDatabaseDescByName(name string, db *DatabaseDesc) error
 
 	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
 }

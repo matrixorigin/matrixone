@@ -36,6 +36,14 @@ const (
 )
 
 var (
+	internalDatabaseDesc = &descriptor.DatabaseDesc{
+		ID:           uint32(InternalDatabaseID),
+		Name:         "system",
+		Update_time:  0,
+		Create_epoch: 0,
+		Is_deleted:   false,
+		Drop_epoch:   0,
+	}
 	internalDescriptorTableDesc = &descriptor.RelationDesc{
 		ID: uint32(InternalDescriptorTableID),
 		Name:                    "descriptor",
