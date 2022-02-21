@@ -28,10 +28,22 @@ const (
 	//holding the schema of the table
 	InternalDescriptorTableID uint64 = 0
 
+	InternalDescriptorTableID_parentID_ID = 0
+	InternalDescriptorTableID_id_ID = 1
+	InternalDescriptorTableID_name_ID = 2
+	InternalDescriptorTableID_desc_ID = 3
 	PrimaryIndexID uint32 = 1
 )
 
 var (
+	internalDatabaseDesc = &descriptor.DatabaseDesc{
+		ID:           uint32(InternalDatabaseID),
+		Name:         "system",
+		Update_time:  0,
+		Create_epoch: 0,
+		Is_deleted:   false,
+		Drop_epoch:   0,
+	}
 	internalDescriptorTableDesc = &descriptor.RelationDesc{
 		ID: uint32(InternalDescriptorTableID),
 		Name:                    "descriptor",

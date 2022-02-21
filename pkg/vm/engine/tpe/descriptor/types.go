@@ -30,6 +30,8 @@ type DatabaseDesc struct {
 	Is_deleted bool `json:"is_deleted,string"`
 
 	Drop_epoch uint64 `json:"drop_epoch,string"`
+
+	Max_access_epoch        uint64                `json:"max_access_epoch,string"`
 }
 
 type RelationDesc struct {
@@ -209,17 +211,20 @@ type DescriptorHandler interface {
 	//LoadRelationDescByName gets the descriptor of the table by the name of the table
 	LoadRelationDescByName(parentID uint64, name string)(*RelationDesc,error)
 
-	LoadRelationDescByID(tableID uint64)(*RelationDesc,error)
+	//LoadRelationDescByID gets the descriptor of the table by the tableid
+	LoadRelationDescByID(parentID uint64, tableID uint64) (*RelationDesc, error)
 
-	StoreRelationDescByName(parentID uint64, name string,table *RelationDesc) error
+	//StoreRelationDescByName first get the descriptor of the table by name, then save the descriptor.
+	StoreRelationDescByName(parentID uint64, name string,tableDesc *RelationDesc) error
 
-	StoreRelationDescByID(tableID uint64,table *RelationDesc) error
+	//StoreRelationDescByID save the descriptor
+	StoreRelationDescByID(parentID uint64, tableID uint64, table *RelationDesc) error
 
-	LoadDatabaseDescByName(parentID uint64, name string)(*DatabaseDesc,error)
+	LoadDatabaseDescByName(name string) (*DatabaseDesc, error)
 
 	LoadDatabaseDescByID(dbID uint64)(*DatabaseDesc,error)
 
-	StoreDatabaseDescByName(parentID uint64, name string,db *DatabaseDesc) error
+	StoreDatabaseDescByName(name string, db *DatabaseDesc) error
 
 	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
 }
