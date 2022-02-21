@@ -218,7 +218,7 @@ type DescriptorHandler interface {
 	//StoreRelationDescByID save the descriptor
 	StoreRelationDescByID(parentID uint64, tableID uint64, table *RelationDesc) error
 
-	LoadDatabaseDescByName(parentID uint64, name string)(*DatabaseDesc,error)
+	LoadDatabaseDescByName(name string) (*DatabaseDesc, error)
 
 	LoadDatabaseDescByID(dbID uint64)(*DatabaseDesc,error)
 
