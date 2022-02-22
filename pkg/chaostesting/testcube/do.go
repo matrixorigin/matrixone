@@ -169,7 +169,7 @@ func (_ Def) TimeoutCounter() TimeoutCounter {
 type TimeoutReportThreshold int64
 
 func (_ Def) TimeoutReportThreshold() TimeoutReportThreshold {
-	return 5
+	return 10
 }
 
 func (_ Def) ReportTimeout(
