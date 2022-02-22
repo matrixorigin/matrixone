@@ -330,16 +330,7 @@ func (e *Block) toLogEntry(info *CommitInfo) *blockLogEntry {
 	return &blockLogEntry{
 		BaseEntry: &BaseEntry{
 			Id: e.Id,
-			CommitInfo: &CommitInfo{
-				CommitId:  info.CommitId,
-				TranId:    info.TranId,
-				Op:        info.Op,
-				Size:      info.Size,
-				LogIndex:  info.LogIndex,
-				PrevIndex: info.PrevIndex,
-				LogRange:  info.LogRange,
-				Indice:    info.Indice,
-			}},
+			CommitInfo: info.Clone()},
 		Catalog:    e.Segment.Table.Database.Catalog,
 		DatabaseId: e.Segment.Table.Database.Id,
 		TableId:    e.Segment.Table.Id,

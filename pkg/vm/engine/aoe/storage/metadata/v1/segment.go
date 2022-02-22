@@ -164,16 +164,7 @@ func (e *Segment) toLogEntry(info *CommitInfo) *segmentLogEntry {
 	return &segmentLogEntry{
 		BaseEntry: &BaseEntry{
 			Id: e.Id,
-			CommitInfo: &CommitInfo{
-				CommitId:  info.CommitId,
-				TranId:    info.TranId,
-				Op:        info.Op,
-				Size:      info.Size,
-				LogIndex:  info.LogIndex,
-				PrevIndex: info.PrevIndex,
-				LogRange:  info.LogRange,
-				Indice:    info.Indice,
-			}},
+			CommitInfo: info.Clone()},
 		TableId:    e.Table.Id,
 		DatabaseId: e.Table.Database.Id,
 	}
