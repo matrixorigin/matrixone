@@ -22,7 +22,8 @@ func init() {
 	fz.RegisterAction(ActionStopNode{})
 	fz.RegisterAction(ActionRestartNode{})
 	fz.RegisterAction(ActionCrashNode{})
-	fz.RegisterAction(ActionBlockNetwork{})
+	fz.RegisterAction(ActionIsolateNode{})
+	fz.RegisterAction(ActionFullyIsolateNode{})
 }
 
 type ActionSet struct {
@@ -44,13 +45,15 @@ type ActionRestartNode struct {
 	NodeID fz.NodeID `xml:",attr"`
 }
 
-//TODO
 type ActionCrashNode struct {
 	NodeID fz.NodeID `xml:",attr"`
 }
 
-type ActionBlockNetwork struct {
-	NodeID             fz.NodeID   `xml:",attr"`
-	BlockInboundNodes  []fz.NodeID `xml:"BlockInboundNode"`
-	BlockOutboundNodes []fz.NodeID `xml:"BlockOutboundNode"`
+type ActionIsolateNode struct {
+	NodeID  fz.NodeID   `xml:",attr"`
+	Between []fz.NodeID `xml:"Between"`
+}
+
+type ActionFullyIsolateNode struct {
+	NodeID fz.NodeID `xml:",attr"`
 }

@@ -17,8 +17,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/google/uuid"
@@ -39,21 +41,21 @@ func (_ Def) CmdRun(
 	parallel Parallel,
 ) Commands {
 
-	runOne := func(configPath string) (err error) {
+	errPanic := fmt.Errorf("panic")
 
-		pt("START %s\n", configPath)
+	_run := func(configPath string) (err error) {
 
 		defer func() {
 
-			if p := recover(); p != nil {
-				color.Red("PANIC %s", configPath)
-				panic(p)
+			if err != nil {
+				return
 			}
 
-			if err == nil {
-				color.Green("OK %s", configPath)
-			} else {
-				color.Red("FAILED %s", configPath)
+			if p := recover(); p != nil {
+				err = we.With(
+					e4.Info("%v", p),
+				)(errPanic)
+				return
 			}
 
 		}()
@@ -97,6 +99,36 @@ func (_ Def) CmdRun(
 		return
 	}
 
+	numRetry := 0
+
+	run := func(configPath string, retry int) (err error) {
+		retried := false
+		for {
+			t0 := time.Now()
+			if retried {
+				pt("RETRY %s\n", configPath)
+			} else {
+				pt("START %s\n", configPath)
+			}
+			err := _run(configPath)
+			if err == nil {
+				if retried {
+					color.Green("RETRY OK %s, %v", configPath, time.Since(t0))
+				} else {
+					color.Green("OK %s, %v", configPath, time.Since(t0))
+				}
+				return nil
+			}
+			//if !errors.Is(err, errPanic) || retry == 0 {
+			if retry == 0 {
+				color.Red("FAILED %s, %v", configPath, time.Since(t0))
+				return err
+			}
+			retry--
+			retried = true
+		}
+	}
+
 	return Commands{
 		// run test cases in single process
 
@@ -104,7 +136,7 @@ func (_ Def) CmdRun(
 
 			if len(args) > 0 {
 				for _, path := range args {
-					ce(runOne(path))
+					ce(run(path, numRetry))
 				}
 				return
 			}
@@ -132,7 +164,7 @@ func (_ Def) CmdRun(
 						configPath = filePath(id, "config", "xml")
 					})
 
-					ce(runOne(configPath))
+					ce(run(configPath, numRetry))
 
 				}()
 			}
@@ -142,14 +174,14 @@ func (_ Def) CmdRun(
 		"runall": func(args []string) {
 
 			sem := make(chan struct{}, parallel)
-			for _, run := range getCases(args) {
-				run := run
+			for _, kase := range getCases(args) {
+				kase := kase
 				sem <- struct{}{}
 				go func() {
 					defer func() {
 						<-sem
 					}()
-					ce(runOne(run.ConfigPath))
+					ce(run(kase.ConfigPath, numRetry))
 				}()
 			}
 			for i := 0; i < cap(sem); i++ {

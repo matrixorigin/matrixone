@@ -15,13 +15,23 @@
 package main
 
 import (
+	"fmt"
+
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"github.com/reusee/starlarkutil"
 )
 
 func (_ Def) ScriptBuiltins(
 	add fz.AddScriptDef,
+
+	makeActionStopNode makeActionStopNode,
+	makeActionRestartNode makeActionRestartNode,
+	makeActionIsolateNode makeActionIsolateNode,
+	makeActionCrashNode makeActionCrashNode,
+	makeActionFullyIsolateNode makeActionFullyIsolateNode,
+
 ) fz.ScriptBuiltins {
+
 	return fz.ScriptBuiltins{
 		"parallel": starlarkutil.MakeFunc("parallel", func(n Parallel) {
 			add(&n)
@@ -49,6 +59,35 @@ func (_ Def) ScriptBuiltins(
 
 		"retry_timeout": starlarkutil.MakeFunc("retry_timeout", func(timeout RetryTimeout) {
 			add(&timeout)
+		}),
+
+		"faults": starlarkutil.MakeFunc("faults", func(names ...string) {
+			var makers FaultActionMakers
+
+			for _, name := range names {
+				switch name {
+
+				case "stop":
+					makers = append(makers, makeActionStopNode)
+
+				case "restart":
+					makers = append(makers, makeActionRestartNode)
+
+				case "isolate":
+					makers = append(makers, makeActionIsolateNode)
+
+				case "crash":
+					makers = append(makers, makeActionCrashNode)
+
+				case "fully-isolate":
+					makers = append(makers, makeActionFullyIsolateNode)
+
+				default:
+					panic(fmt.Errorf("no such fault: %s", name))
+				}
+			}
+
+			add(&makers)
 		}),
 	}
 }

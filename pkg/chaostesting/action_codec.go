@@ -40,7 +40,7 @@ var ErrActionNotRegistered = errors.New("action not registered")
 func unmarshalAction(d *xml.Decoder, start *xml.StartElement, target *Action) (err error) {
 
 	if start == nil {
-		token, err := nextTokenSkipCharData(d)
+		token, err := nextRelevantToken(d)
 		if err != nil {
 			return we(err)
 		}

@@ -65,7 +65,7 @@ func (s *ParallelAction) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (e
 	defer he(&err)
 
 	for {
-		token, err := nextTokenSkipCharData(d)
+		token, err := nextRelevantToken(d)
 		if err != nil {
 			return we(err)
 		}
