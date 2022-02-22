@@ -33,6 +33,12 @@ const (
 	InternalDescriptorTableID_name_ID = 2
 	InternalDescriptorTableID_desc_ID = 3
 	PrimaryIndexID uint32 = 1
+
+	//holding the epochgced table
+	InternalAsyncGCTableID uint64 = 1
+
+	//user table id offset
+	UserTableIDOffset uint64 = 3
 )
 
 var (
@@ -119,6 +125,89 @@ var (
 		Next_index_id:           2,
 		Indexes:                 nil,
 		Create_sql:              "hard code",
+		Create_time:             0,
+		Drop_time:               0,
+		Create_epoch:            0,
+		Is_deleted:              false,
+		Drop_epoch:              0,
+		Max_access_epoch:        0,
+		Table_options:           nil,
+		Partition_options:       nil,
+	}
+
+	internalAsyncGCTableDesc = &descriptor.RelationDesc{
+		ID:                      uint32(InternalAsyncGCTableID),
+		Name:                    "asyngc",
+		Update_time:             0,
+		Next_attribute_id:       0,
+		Attributes:              []descriptor.AttributeDesc{
+			{
+				ID:                0,
+				Name:              "epoch",
+				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				Is_null:           false,
+				Default_value:     "",
+				Is_hidden:         false,
+				Is_auto_increment: false,
+				Is_unique:         false,
+				Is_primarykey:     true,
+				Comment:           "epoch when the delete happens",
+				References:        nil,
+				Constrains:        nil,
+			},
+			{
+				ID:                1,
+				Name:              "dbID",
+				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				Is_null:           false,
+				Default_value:     "",
+				Is_hidden:         false,
+				Is_auto_increment: false,
+				Is_unique:         false,
+				Is_primarykey:     false,
+				Comment:           "the dbID that the table belongs to",
+				References:        nil,
+				Constrains:        nil,
+			},
+			{
+				ID:                2,
+				Name:              "tableID",
+				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				Is_null:           false,
+				Default_value:     "the tableID to be dropped",
+				Is_hidden:         false,
+				Is_auto_increment: false,
+				Is_unique:         false,
+				Is_primarykey:     false,
+				Comment:           "",
+				References:        nil,
+				Constrains:        nil,
+			},
+		},
+		IDependsOnRelations:     nil,
+		RelationsDependsOnMe:    nil,
+		Next_attribute_group_id: 0,
+		AttributeGroups:         nil,
+		Primary_index:           descriptor.IndexDesc{
+			Name:                 "primary",
+			ID:                   PrimaryIndexID,
+			Is_unique:            true,
+			Attributes:           []descriptor.IndexDesc_Attribute{
+				{
+					Name:      "epoch",
+					ID:        0,
+					Type:      orderedcodec.VALUE_TYPE_UINT64,
+				},
+			},
+			Impilict_attributes:  nil,
+			Composite_attributes: nil,
+			Store_attributes:     nil,
+			Key_encoding_type:    0,
+			Value_encoding_type:  0,
+		},
+		Next_index_id:           0,
+		Indexes:                 nil,
+		Create_sql:              "",
 		Create_time:             0,
 		Drop_time:               0,
 		Create_epoch:            0,

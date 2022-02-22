@@ -21,6 +21,19 @@ import (
 	"testing"
 )
 
+func TestMemoryKV_NextID(t *testing.T) {
+	convey.Convey("next id",t, func() {
+		kv := NewMemoryKV()
+
+		typ := "xxxxx"
+		for i := 0; i < 100; i++ {
+			id, err := kv.NextID(typ)
+			convey.So(err,convey.ShouldBeNil)
+			convey.So(id,convey.ShouldEqual,uint64(i)+UserTableIDOffset)
+		}
+	})
+}
+
 func TestMemoryKV_Set(t *testing.T) {
 	convey.Convey("set",t, func() {
 		kv := NewMemoryKV()
