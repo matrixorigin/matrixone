@@ -1,7 +1,7 @@
 # **NYC Test Performance**
 
 ## **Overview**
-With MatrixOne v0.2.0, we follow the [Tutorial](../Get-Started/Tutorial/NYC-test-with-matrixone.md) to execute **NYC Taxi** test with a standalone serve, and compare the results with that of other products, which shows the performance of MatrixOne in query processing time.  
+With MatrixOne v0.2.0, we follow the [Tutorial](../Get-Started/Tutorial/NYC-test-with-matrixone.md) to execute **NYC Taxi** test with a standalone server, and compare the results with that of other products, which shows the performance of MatrixOne in query processing time.  
 
 
 !!! note  "<font size=4>note</font>"
