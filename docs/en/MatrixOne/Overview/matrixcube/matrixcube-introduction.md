@@ -69,7 +69,7 @@ Learn more about [How do the `Shard Proxy` and `Global Routing` work?](matrixcub
 
 ### **Strong Consistency** 
 
-MatrixCube provides a strong consistency. It is guaranted that after any successful data write, the reading afterwards will get the latest value, no matter from which store.
+MatrixCube provides a strong consistency. It is guaranteed that after any successful data write, the reading afterwards will get the latest value, no matter from which store.
 
 ### **Fault Tolerance**
 
