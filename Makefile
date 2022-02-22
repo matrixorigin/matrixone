@@ -8,8 +8,8 @@ BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
 MO_Version=$(shell git describe --abbrev=0 --tags)
-TARGET_OS ?= $(shell echo $(UNAME_S) | awk '{print tolower($0)}')
-TARGET_ARCH ?= $(shell arch | awk '{ sub(/x86_64/,"amd64"); print $0 }')
+TARGET_OS ?= $(shell echo $(UNAME_S) | awk '{print tolower($$0)}')
+TARGET_ARCH ?= $(shell arch | awk '{ sub(/x86_64/,"amd64"); print $$0 }')
 
 # generate files generated from .template and needs to delete when clean
 GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
