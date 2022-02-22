@@ -71,7 +71,7 @@ func (b *build) buildTable(tbl *tree.TableName, qry *Query) (string, error) {
 	if _, ok := qry.RelsMap[r.Alias]; ok {
 		return "", errors.New(errno.DuplicateTable, fmt.Sprintf("Not unique table/alias: '%s'", r.Alias))
 	}
-	attrs, attrsMap, err := b.getSchemaInfo(r.Schema, r.Name)
+	attrs, attrsMap, err := b.getAttributeInfo(r.Schema, r.Name)
 	if err != nil {
 		return "", err
 	}
@@ -136,7 +136,7 @@ func (b *build) renameRelation(old, new string, qry *Query) error {
 	return nil
 }
 
-func (b *build) getSchemaInfo(schema string, name string) ([]string, map[string]*Attribute, error) {
+func (b *build) getAttributeInfo(schema string, name string) ([]string, map[string]*Attribute, error) {
 	var attrs []string
 
 	db, err := b.e.Database(schema)

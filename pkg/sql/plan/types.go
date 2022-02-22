@@ -77,6 +77,7 @@ type Field struct {
 }
 
 type JoinCondition struct {
+	// join condition is R.Rattr = S.Sattr
 	R     string
 	S     string
 	Rattr string

@@ -68,11 +68,13 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		return false, err
 	}
 	for {
+		// read data from storage engine
 		if bat, err = r.Read(p.refCnts, p.attrs); err != nil {
 			return false, err
 		}
+		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
-		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed
 			return end, err
 		}
 	}
