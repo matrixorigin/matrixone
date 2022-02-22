@@ -32,6 +32,8 @@ type DatabaseDesc struct {
 	Drop_epoch uint64 `json:"drop_epoch,string"`
 
 	Max_access_epoch        uint64                `json:"max_access_epoch,string"`
+
+	Typ int `json:"typ,string"`
 }
 
 type RelationDesc struct {
@@ -227,4 +229,12 @@ type DescriptorHandler interface {
 	StoreDatabaseDescByName(name string, db *DatabaseDesc) error
 
 	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
+
+	MakePrefixWithOneExtraID(dbID uint64, tableID uint64, indexID uint64, extraID uint64) ([]byte, *orderedcodec.EncodedItem)
+
+	SetCallBackCtx(callbackCtx interface{})
+
+	GetValuesWithPrefix(parentID uint64, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error)
+
+	UnmarshalRelationDesc(data []byte) (*RelationDesc,error)
 }

@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/google/btree"
@@ -30,6 +31,7 @@ var (
 	errorPrefixIsNull = errors.New("the prefix is null")
 	errorKeysCountNotEqualToValuesCount = errors.New("the count of keys is not equal to the count of values")
 	errorKeyExists = errors.New("key exists")
+	errorIsNotMemoryItem = errors.New("it is not the memory item")
 )
 
 type MemoryItem struct {
@@ -67,7 +69,24 @@ func NewMemoryKV() *MemoryKV {
 func (m *MemoryKV) NextID(typ string) (uint64, error) {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
-	panic("implement me")
+	value := m.container.Get(NewMemoryItem(TupleKey(typ),nil))
+	var buf [8]byte
+	var nextID uint64
+	if value != nil {
+		//add id + 1
+		if x,ok := value.(*MemoryItem); ok {
+			nextID = binary.BigEndian.Uint64(x.value)
+		}else{
+			return 0, errorIsNotMemoryItem
+		}
+	}else{
+		//id = 3, return 2
+		nextID = UserTableIDOffset
+	}
+	binary.BigEndian.PutUint64(buf[:],nextID+1)
+	x := NewMemoryItem(TupleKey(typ),buf[:])
+	m.container.ReplaceOrInsert(x)
+	return nextID, nil
 }
 
 func (m *MemoryKV) Set(key TupleKey, value TupleValue) error {
