@@ -55,7 +55,6 @@ func (b *build) buildSelect(stmt *tree.Select, qry *Query) error {
 }
 
 func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree.OrderBy, fetch *tree.Limit, qry *Query) error {
-
 	switch stmt := stmt.(type) {
 	case *tree.ParenSelect:
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("%T in buildSelectStmtWithoutParens", stmt))
@@ -84,22 +83,32 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, qry *Query) error {
 		return errors.New(errno.SQLStatementNotYetComplete, "need from clause")
 	}
 	qry.Distinct = stmt.Distinct
+
+	// get table and attributes' information
 	if err := b.buildFrom(stmt.From.Tables, qry); err != nil {
 		return err
 	}
+
+	// strip and push down join condition and filter condition, update reference count of related attributes
 	if stmt.Where != nil {
 		if err := b.buildWhere(stmt.Where, qry); err != nil {
 			return err
 		}
 	}
+
+	// conduct legality checks for projection attributes, and compute reference count of them
 	if err := b.buildProjection(stmt.Exprs, qry); err != nil {
 		return err
 	}
+
+	// conduct legality checks for grouping attributes, and update projection's reference count
 	if len(stmt.GroupBy) > 0 {
 		if err := b.buildGroupBy(stmt.GroupBy, qry); err != nil {
 			return err
 		}
 	}
+
+	// get having condition, update query's filter conditions
 	if stmt.Having != nil {
 		if err := b.buildHaving(stmt.Having, qry); err != nil {
 			return err

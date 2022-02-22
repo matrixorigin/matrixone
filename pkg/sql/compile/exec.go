@@ -30,12 +30,16 @@ import (
 // Compile compiles ast tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	// do ast rewrite work
 	e.stmt = rewrite.Rewrite(e.stmt)
 	e.stmt = rewrite.AstRewrite(e.stmt)
+
+	// do semantic analysis and build plan for ast
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err
 	}
+
 	{
 		attrs := pn.ResultColumns()
 		cols := make([]*Col, len(attrs))
@@ -50,6 +54,8 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	e.u = u
 	e.e = e.c.e
 	e.fill = fill
+
+	// build scope for ast
 	s, err := e.compileScope(pn)
 	if err != nil {
 		return err
@@ -159,11 +165,11 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
-func (e *Exec) IncreaseAffectedRows(n uint64) {
+func (e *Exec) increaseAffectedRows(n uint64) {
 	e.affectRows += n
 }
 
-func (e *Exec) SetAffectedRows(n uint64) {
+func (e *Exec) setAffectedRows(n uint64) {
 	e.affectRows = n
 }
 
@@ -175,9 +181,11 @@ func (e *Exec) Run(ts uint64) error {
 	if e.scope == nil {
 		return nil
 	}
+	// only for test
 	fmt.Printf("+++++++++\n")
 	Print(nil, []*Scope{e.scope})
 	fmt.Printf("+++++++++\n")
+
 	switch e.scope.Magic {
 	case Normal:
 		return e.scope.Run(e.c.e)
@@ -192,7 +200,7 @@ func (e *Exec) Run(ts uint64) error {
 		if err != nil {
 			return err
 		}
-		e.SetAffectedRows(affectedRows)
+		e.setAffectedRows(affectedRows)
 		return nil
 	case CreateDatabase:
 		return e.scope.CreateDatabase(ts)

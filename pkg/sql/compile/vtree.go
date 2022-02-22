@@ -51,7 +51,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 			fvarsMap[fvar] = 0
 		}
 	}
-	isB := vt.IsBare()
+	isB := vt.IsBare() // if true, it is a query without aggregate functions
 	d := depth(vt.Views)
 	switch {
 	case d == 0 && isB:
@@ -169,6 +169,7 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 	return rs, nil
 }
 
+// compileCAQ builds the scope which sql is a query with both aggregate functions and join operators.
 func (e *Exec) compileCAQ(freeVars []string, vs []*vtree.View, varsMap, fvarsMap map[string]int) (*Scope, error) {
 	var ss []*Scope
 
@@ -289,7 +290,7 @@ func (e *Exec) compileTimes(v *vtree.View, children []*Scope, arg *times.Argumen
 	return rs, nil
 }
 
-// compileQ builds the Scope for a simple query (query without any joins and aggregate functions)
+// compileQ builds the scope which sql is a query for single table and without any aggregate functions
 // In this function, we push down an operator like order, deduplicate, transform, limit or top.
 // And do merge work for them at the top scope
 // There is an example:
@@ -341,7 +342,8 @@ func (e *Exec) compileQ(vt *vtree.ViewTree, v *vtree.View) (*Scope, error) {
 	ins = append(ins, vm.Instruction{Arg: v.Arg, Op: vm.Transform})
 	switch {
 	case vt.Order != nil && vt.Dedup != nil:
-		// this case should push down a new operator, and we push down the order operator temporarily
+		// TODO: this case should push down a new operator to do both order and deduplication,
+		//   and we push down the order operator temporarily
 		ins = append(ins, vm.Instruction{Arg: vt.Order, Op: vm.Order})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op: vm.MergeOrder,
@@ -498,6 +500,7 @@ func (e *Exec) compileQ(vt *vtree.ViewTree, v *vtree.View) (*Scope, error) {
 	return rs, nil
 }
 
+// compileAQ builds the scope which sql is a query for single table with aggregate functions.
 func (e *Exec) compileAQ(v *vtree.View) (*Scope, error) {
 	var ins vm.Instructions
 
