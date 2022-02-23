@@ -192,7 +192,7 @@ func initMult() {
                     for i := range rs {
                         rs[i] = RETURN_GO_TYPE(rvs[i])
                     }
-                    vector.SetCol(vec, mul.{.RETTYP}MulScalar(RETURN_GO_TYPE(rvs[0]), rs, rs))
+                    vector.SetCol(vec, mul.{.RETTYP}MulScalar(RETURN_GO_TYPE(lvs[0]), rs, rs))
                     if rv.Ref == 0 {
                         process.Put(proc, rv)
                     }

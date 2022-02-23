@@ -322,7 +322,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int8},
-				Right: &extend.ValueExtend{V: testutil.MakeInt8Vector([]int8{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
 			},
 		},
 		{
@@ -338,23 +338,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int16},
-				Right: &extend.ValueExtend{V: testutil.MakeInt16Vector([]int16{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
 			},
 		},
 		{
 			name:   "binary_eq_3",
-			fields: fields{},
-			args: args{
-				e: &extend.BinaryExtend{
-					Op:    overload.EQ,
-					Left:  &extend.Attribute{Name: "a", Type: types.T_int16},
-					Right: &extend.ValueExtend{V: testutil.MakeStringVector([]string{"abc"}, 0)},
-				},
-			},
-			wantErr: true,
-		},
-		{
-			name:   "binary_eq_4",
 			fields: fields{},
 			args: args{
 				e: &extend.BinaryExtend{
@@ -366,11 +354,11 @@ func Test_build_pruneExtend(t *testing.T) {
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_int32},
-				Right: &extend.ValueExtend{V: testutil.MakeInt32Vector([]int32{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
 			},
 		},
 		{
-			name:   "binary_eq_5",
+			name:   "binary_eq_4",
 			fields: fields{},
 			args: args{
 				e: &extend.BinaryExtend{
@@ -386,7 +374,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			},
 		},
 		{
-			name:   "binary_eq_6",
+			name:   "binary_eq_5",
 			fields: fields{},
 			args: args{
 				e: &extend.BinaryExtend{
@@ -398,55 +386,7 @@ func Test_build_pruneExtend(t *testing.T) {
 			want: &extend.BinaryExtend{
 				Op:    overload.EQ,
 				Left:  &extend.Attribute{Name: "a", Type: types.T_uint8},
-				Right: &extend.ValueExtend{V: testutil.MakeUint8Vector([]uint8{1}, 1)},
-			},
-		},
-		{
-			name:   "binary_eq_7",
-			fields: fields{},
-			args: args{
-				e: &extend.BinaryExtend{
-					Op:    overload.EQ,
-					Left:  &extend.Attribute{Name: "a", Type: types.T_uint16},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				},
-			},
-			want: &extend.BinaryExtend{
-				Op:    overload.EQ,
-				Left:  &extend.Attribute{Name: "a", Type: types.T_uint16},
-				Right: &extend.ValueExtend{V: testutil.MakeUint16Vector([]uint16{1}, 1)},
-			},
-		},
-		{
-			name:   "binary_eq_8",
-			fields: fields{},
-			args: args{
-				e: &extend.BinaryExtend{
-					Op:    overload.EQ,
-					Left:  &extend.Attribute{Name: "a", Type: types.T_uint32},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				},
-			},
-			want: &extend.BinaryExtend{
-				Op:    overload.EQ,
-				Left:  &extend.Attribute{Name: "a", Type: types.T_uint32},
-				Right: &extend.ValueExtend{V: testutil.MakeUint32Vector([]uint32{1}, 1)},
-			},
-		},
-		{
-			name:   "binary_eq_9",
-			fields: fields{},
-			args: args{
-				e: &extend.BinaryExtend{
-					Op:    overload.EQ,
-					Left:  &extend.Attribute{Name: "a", Type: types.T_uint64},
-					Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 0)},
-				},
-			},
-			want: &extend.BinaryExtend{
-				Op:    overload.EQ,
-				Left:  &extend.Attribute{Name: "a", Type: types.T_uint64},
-				Right: &extend.ValueExtend{V: testutil.MakeUint64Vector([]uint64{1}, 1)},
+				Right: &extend.ValueExtend{V: testutil.MakeInt64Vector([]int64{1}, 1)},
 			},
 		},
 

@@ -95,7 +95,7 @@ func TestPlusOperator(t *testing.T) {
 		{sql: "select f1 + 1.0, 1.0 + f1, f1 - 2.0, 2.0 - f1, f1 * 3.0, 3.0 * f1, f1 / 0.5, 0.5 / f1 from ffs;", res: executeResult{
 			null: false,
 			attr: []string{"f1 + 1", "1 + f1", "f1 - 2", "2 - f1", "f1 * 3", "3 * f1", "f1 / 0.5", "0.5 / f1"},
-			data: [][]string{{"23.200001", "23.200001", "20.200001", "-20.200001", "66.600006", "66.600006", "44.400002", "0.022523"}, {"null", "null", "null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"23.200001", "23.200001", "20.200001", "-20.200001", "66.600002", "66.600002", "44.400002", "0.022523"}, {"null", "null", "null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;", res: executeResult{
 			null: false,
@@ -192,12 +192,12 @@ func TestMinusOperator(t *testing.T) {
 		{sql: "select u2 - u1, u2 - u2, u2 - u3, u2 - u4, u2 - 2, 3 - u2 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u2 - u1", "u2 - u2", "u2 - u3", "u2 - u4", "u2 - 2", "3 - u2"},
-			data: [][]string{[]string{"30", "0", "4294966996", "18446744073709548316", "31", "65506"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{[]string{"30", "0", "4294966996", "18446744073709548316", "31", "18446744073709551586"}, []string{"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 - u1, u3 - u2, u3 - u3, u3 - u4, u3 - 2, 3 - u3 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u3 - u1", "u3 - u2", "u3 - u3", "u3 - u4", "u3 - 2", "3 - u3"},
-			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "4294966966"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "18446744073709551286"}, []string{"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 - u1, u4 - u2, u4 - u3, u4 - u4, u4 - 2, 3 - u4 from uus;", res: executeResult{
 			null: false,
@@ -1493,7 +1493,7 @@ func TestComparisonOperator(t *testing.T) {
 			null: false,
 			data: [][]string{{"1", "11", "111", "1111"}},
 		}},
-		{sql: "select * from ffs where f1 in (22.2);", res: executeResult{
+		{sql: "select * from ffs where f2 in (222.222);", res: executeResult{
 			null: false,
 			data: [][]string{{"22.200001", "222.222000"}},
 		}},

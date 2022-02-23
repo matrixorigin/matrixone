@@ -17,6 +17,7 @@ package eq
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -1265,10 +1266,21 @@ func float32EqNullableScalarSels(x float32, ys []float32, nulls *roaring.Bitmap,
 	return rs[:rsi]
 }
 
+const tolerance = .00001
+
+func float64Equal(x, y float64) bool {
+	diff := math.Abs(x - y)
+	mean := math.Abs(x + y)
+	if math.IsNaN(diff / mean) {
+		return true
+	}
+	return (diff / mean) < tolerance
+}
+
 func float64Eq(xs, ys []float64, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
-		if x == ys[i] {
+		if float64Equal(x, ys[i]) {
 			rs[rsi] = int64(i)
 			rsi++
 		}
@@ -1294,7 +1306,7 @@ func float64EqNullable(xs, ys []float64, nulls *roaring.Bitmap, rs []int64) []in
 			} else {
 				nextNull = -1
 			}
-		} else if x == ys[i] {
+		} else if float64Equal(x, ys[i]) {
 			rs[rsi] = int64(i)
 			rsi++
 		}
@@ -1305,7 +1317,7 @@ func float64EqNullable(xs, ys []float64, nulls *roaring.Bitmap, rs []int64) []in
 func float64EqSels(xs, ys []float64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if xs[sel] == ys[sel] {
+		if float64Equal(xs[sel], ys[sel]) {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1316,7 +1328,7 @@ func float64EqSels(xs, ys []float64, rs, sels []int64) []int64 {
 func float64EqNullableSels(xs, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] == ys[sel] {
+		if !nulls.Contains(uint64(sel)) && float64Equal(xs[sel], ys[sel]) {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1327,7 +1339,7 @@ func float64EqNullableSels(xs, ys []float64, nulls *roaring.Bitmap, rs, sels []i
 func float64EqScalar(x float64, ys []float64, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
-		if x == y {
+		if float64Equal(x, y) {
 			rs[rsi] = int64(i)
 			rsi++
 		}
@@ -1353,7 +1365,7 @@ func float64EqNullableScalar(x float64, ys []float64, nulls *roaring.Bitmap, rs 
 			} else {
 				nextNull = -1
 			}
-		} else if x == y {
+		} else if float64Equal(x, y) {
 			rs[rsi] = int64(i)
 			rsi++
 		}
@@ -1364,7 +1376,7 @@ func float64EqNullableScalar(x float64, ys []float64, nulls *roaring.Bitmap, rs 
 func float64EqScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if x == ys[sel] {
+		if float64Equal(x, ys[sel]) {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1375,7 +1387,7 @@ func float64EqScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
 func float64EqNullableScalarSels(x float64, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x == ys[sel] {
+		if !nulls.Contains(uint64(sel)) && float64Equal(x, ys[sel]) {
 			rs[rsi] = sel
 			rsi++
 		}
