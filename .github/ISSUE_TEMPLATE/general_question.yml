@@ -1,0 +1,25 @@
+name: General question
+description: Ask questions not covered above
+title: "[Question]: "
+labels: [kind/questions, needs-triage]
+assignees:
+  - m-schen
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the previous templates don't fit with what you'd like to report or ask, please use this general question template to file issue.
+  - type: markdown
+    attributes:
+      value: |
+        Before asking a question, make sure you have:
+        * Searched open and closed [GitHub issue](https://github.com/matrixorigin/matrixone/issues)
+        * Read the documentation:
+        * [MatrixOne Readme](https://github.com/matrixorigin/matrixone)
+        * [MatrixOne Doc](https://docs.matrixorigin.io)
+  - type: textarea
+    attributes:
+      label: Describe your problem
+      description: A clear and concise description of your problem.
+    validations:
+      required: true
