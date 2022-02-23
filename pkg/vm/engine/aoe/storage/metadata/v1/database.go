@@ -22,9 +22,9 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
@@ -155,6 +155,7 @@ func (db *Database) DebugCheckReplayedState() {
 	if db.blockListener == nil || db.segmentListener == nil || db.tableListener == nil {
 		panic("listener is missing")
 	}
+	logutil.Infof("%v",db.Catalog.Sequence)
 	if db.Catalog.TryUpdateCommitId(db.GetCommit().CommitId) {
 		panic("sequence error")
 	}
@@ -250,7 +251,7 @@ func (db *Database) View(index uint64) *databaseLogEntry {
 }
 
 func (db *Database) LatestView() *databaseLogEntry {
-	commitId := db.Catalog.Store.GetSyncedId()
+	commitId := db.Catalog.Store.GetSynced(CatalogEntryGroupName)
 	filter := new(Filter)
 	filter.tableFilter = newCommitFilter()
 	filter.tableFilter.AddChecker(createCommitIdChecker(commitId))
@@ -780,8 +781,8 @@ func (db *Database) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic(fmt.Sprintf("not supported: %d", eType))
 	}
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }

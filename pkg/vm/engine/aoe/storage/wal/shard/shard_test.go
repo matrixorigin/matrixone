@@ -21,9 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxinmeng1/logstore/pkg/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/panjf2000/ants/v2"
@@ -227,7 +228,7 @@ func TestShardProxy(t *testing.T) {
 
 func TestShardManager(t *testing.T) {
 	dir := initTestEnv(t)
-	driver, err := logstore.NewBatchStore(dir, "wal", nil)
+	driver, err := store.NewBaseStore(dir, "wal", nil)
 	assert.Nil(t, err)
 	mgr := NewManagerWithDriver(driver, true, wal.BrokerRole)
 	var wg sync.WaitGroup

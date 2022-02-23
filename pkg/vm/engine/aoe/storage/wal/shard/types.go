@@ -16,17 +16,18 @@ package shard
 
 import (
 	"encoding/binary"
-	"unsafe"
-
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"unsafe"
 )
 
 type Entry = wal.Entry
 
 type LogEntryType = logstore.EntryType
-type LogEntry = logstore.AsyncEntry
+type LogEntry = entry.Entry
 type LogEntryMeta = logstore.EntryMeta
+
 
 const (
 	SafeIdSize = int(unsafe.Sizeof(SafeId{}))
@@ -89,8 +90,8 @@ func (ids *SafeIds) Append(shardId, id uint64) {
 }
 
 func SafeIdToEntry(id SafeId) LogEntry {
-	entry := logstore.NewAsyncBaseEntry()
-	entry.Meta.SetType(ETShardWalSafeId)
+	entry := entry.GetBase()
+	entry.SetType(ETShardWalSafeId)
 	buf, _ := id.Marshal()
 	if err := entry.Unmarshal(buf); err != nil {
 		panic(err)
@@ -105,8 +106,8 @@ func EntryToSafeId(entry LogEntry) (id SafeId, err error) {
 }
 
 func SafeIdsToEntry(ids SafeIds) LogEntry {
-	entry := logstore.NewAsyncBaseEntry()
-	entry.Meta.SetType(ETShardWalCheckpoint)
+	entry := entry.GetBase()
+	entry.SetType(ETShardWalCheckpoint)
 	buf, _ := ids.Marshal()
 	if err := entry.Unmarshal(buf); err != nil {
 		panic(err)

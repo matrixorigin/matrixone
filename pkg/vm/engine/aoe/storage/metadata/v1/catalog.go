@@ -23,8 +23,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	logstoreCommon "github.com/jiangxinmeng1/logstore/pkg/common"
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
+	"github.com/jiangxinmeng1/logstore/pkg/sm"
+	"github.com/jiangxinmeng1/logstore/pkg/store"
+	moSm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	// worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -34,6 +38,7 @@ import (
 var (
 	DefaultCheckpointDelta    = uint64(10000)
 	DefaultCheckpointInterval = time.Minute
+	CatalogEntryGroupName     = "ctlg"
 )
 
 var (
@@ -50,7 +55,7 @@ var (
 	IdempotenceErr         = errors.New("aoe: idempotence error")
 	DupIndexErr            = errors.New("aoe: dup index")
 	IndexNotFoundErr       = errors.New("aoe: index not found")
-	ReplayFailedErr           = errors.New("aoe: replay failed")
+	ReplayFailedErr        = errors.New("aoe: replay failed")
 )
 
 type CatalogCfg struct {
@@ -61,17 +66,17 @@ type CatalogCfg struct {
 }
 
 type Catalog struct {
-	sm.ClosedState  `json:"-"`
-	sm.StateMachine `json:"-"`
-	*sync.RWMutex   `json:"-"`
-	Sequence        `json:"-"`
-	pipeline        *commitPipeline      `json:"-"`
-	Store           logstore.AwareStore  `json:"-"`
-	IndexWal        Wal                  `json:"-"`
-	Cfg             *CatalogCfg          `json:"-"`
-	nodesMu         sync.RWMutex         `json:"-"`
-	commitMu        sync.RWMutex         `json:"-"`
-	nameNodes       map[string]*nodeList `json:"-"`
+	logstoreCommon.ClosedState `json:"-"`
+	sm.StateMachine            `json:"-"`
+	*sync.RWMutex              `json:"-"`
+	Sequence                   `json:"-"`
+	pipeline                   *commitPipeline      `json:"-"`
+	Store                      store.Store          `json:"-"`
+	IndexWal                   Wal                  `json:"-"`
+	Cfg                        *CatalogCfg          `json:"-"`
+	nodesMu                    sync.RWMutex         `json:"-"`
+	commitMu                   sync.RWMutex         `json:"-"`
+	nameNodes                  map[string]*nodeList `json:"-"`
 	// checkpointer    workerBase.IHeartbeater
 
 	Databases map[uint64]*Database `json:"dbs"`
@@ -82,12 +87,12 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) (*Catalog, error) {
+func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store store.Store, indexWal wal.ShardAwareWal) (*Catalog, error) {
 	replayer := newCatalogReplayer()
 	return replayer.RebuildCatalogWithDriver(mu, cfg, store, indexWal)
 }
 
-func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store store.Store, indexWal wal.ShardAwareWal) *Catalog {
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -98,8 +103,8 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	}
 
 	wg := new(sync.WaitGroup)
-	rQueue := sm.NewSafeQueue(100000, 100, nil)
-	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
+	rQueue := moSm.NewSafeQueue(100000, 100, nil)
+	ckpQueue := moSm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
@@ -114,7 +119,7 @@ type catalogCheckpointer struct {
 
 func (c *catalogCheckpointer) OnExec() {
 	previousCheckpointId := c.catalog.GetCheckpointId()
-	commitId := c.catalog.Store.GetSyncedId()
+	commitId := c.catalog.Store.GetSynced(CatalogEntryGroupName)
 	if commitId < previousCheckpointId+DefaultCheckpointDelta {
 		return
 	}
@@ -124,8 +129,8 @@ func (c *catalogCheckpointer) OnStopped() {}
 
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
-		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
-		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
+		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(store.DefaultRotateCheckerMaxSize)))
+		cfg.RotationFileMaxSize = store.DefaultRotateCheckerMaxSize
 	}
 	catalog := &Catalog{
 		RWMutex:   mu,
@@ -134,18 +139,18 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		nameNodes: make(map[string]*nodeList),
 	}
 
-	rotationCfg := &logstore.RotationCfg{}
-	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+	rotationCfg := &store.StoreCfg{}
+	rotationCfg.RotateChecker = &store.MaxSizeRotateChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	store, err := logstore.NewBatchStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg)
+	store, err := store.NewBaseStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg)
 	if err != nil {
 		panic(err)
 	}
 	catalog.Store = store
 	wg := new(sync.WaitGroup)
-	rQueue := sm.NewSafeQueue(100000, 100, nil)
-	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
+	rQueue := moSm.NewSafeQueue(100000, 100, nil)
+	ckpQueue := moSm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
@@ -215,7 +220,7 @@ func (catalog *Catalog) DebugCheckReplayedState() {
 
 func (catalog *Catalog) Start() {
 	// catalog.checkpointer.Start()
-	catalog.Store.Start()
+	// catalog.Store.Start()
 	catalog.StateMachine.Start()
 }
 
@@ -379,9 +384,10 @@ func (catalog *Catalog) RecurLoopLocked(processor Processor) error {
 	return err
 }
 
-func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sync bool) error {
+func (catalog *Catalog) CommitLogEntry(entry entry.Entry, commitId uint64, sync bool) error {
 	var err error
-	entry.SetAuxilaryInfo(commitId)
+	entry.SetInfo(commitId)
+	logutil.Infof("append %v, %v",entry.GetType(),entry.GetInfo())
 	if err = catalog.Store.AppendEntry(entry); err != nil {
 		return err
 	}
@@ -403,38 +409,46 @@ func (catalog *Catalog) onCommitRequest(ctx interface{}, doCommit bool) error {
 	return err
 }
 
-func (catalog *Catalog) prepareCommitLog(entry IEntry, logEntry LogEntry) {
+func (catalog *Catalog) prepareCommitLog(e IEntry, logEntry entry.Entry) {
 	catalog.commitMu.Lock()
 	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
-	entry.Lock()
-	entry.CommitLocked(commitId)
-	entry.Unlock()
-	SetCommitIdToLogEntry(commitId, logEntry)
-	logEntry.SetAuxilaryInfo(commitId)
+	e.Lock()
+	e.CommitLocked(commitId)
+	e.Unlock()
+	info := &entry.CommitInfo{
+		Group: CatalogEntryGroupName,
+		CommitId: commitId,
+	}
+	logEntry.SetInfo(info)
+	logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
 }
 
-func (catalog *Catalog) prepareCommitEntry(entry IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
+func (catalog *Catalog) prepareCommitEntry(e IEntry, eType LogEntryType, locker sync.Locker) entry.Entry {
 	catalog.commitMu.Lock()
 	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
-	var logEntry LogEntry
+	var logEntry entry.Entry
 	if locker == nil {
-		entry.Lock()
-		entry.CommitLocked(commitId)
-		logEntry = entry.ToLogEntry(eType)
-		entry.Unlock()
+		e.Lock()
+		e.CommitLocked(commitId)
+		logEntry = e.ToLogEntry(eType)
+		e.Unlock()
 	} else {
-		entry.CommitLocked(commitId)
-		logEntry = entry.ToLogEntry(eType)
+		e.CommitLocked(commitId)
+		logEntry = e.ToLogEntry(eType)
 		locker.Unlock()
 		defer locker.Lock()
 	}
-	SetCommitIdToLogEntry(commitId, logEntry)
-	logEntry.SetAuxilaryInfo(commitId)
+	info := &entry.CommitInfo{
+		Group: CatalogEntryGroupName,
+		CommitId: commitId,
+	}
+	logEntry.SetInfo(info)
+	logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
@@ -442,15 +456,15 @@ func (catalog *Catalog) prepareCommitEntry(entry IEntry, eType LogEntryType, loc
 }
 
 func (catalog *Catalog) GetSafeCommitId() uint64 {
-	return catalog.Store.GetSyncedId()
+	return catalog.Store.GetSynced(CatalogEntryGroupName)
 }
 
 func (catalog *Catalog) GetCheckpointId() uint64 {
-	return catalog.Store.GetCheckpointId()
+	return catalog.Store.GetCheckpointed(CatalogEntryGroupName)
 }
 
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
-	catalog.Store.TryCompact()
+	catalog.Store.TryTruncate()
 }
 
 func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
@@ -550,18 +564,19 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
+func (catalog *Catalog) Checkpoint() (entry.Entry, error) {
 	catalog.RLock()
-	entry := catalog.ToLogEntry(logstore.ETCheckpoint)
+	e := catalog.ToLogEntry(entry.ETCheckpoint)
 	catalog.RUnlock()
-	if err := catalog.Store.Checkpoint(entry); err != nil {
+	logutil.Infof("append %v, %v",e.GetType(),e.GetInfo())
+	if err := catalog.Store.AppendEntry(e); err != nil {
 		panic(err)
 	}
-	ret, err := catalog.EnqueueCheckpoint(entry)
+	ret, err := catalog.EnqueueCheckpoint(e)
 	if err != nil {
 		return nil, err
 	}
-	return ret.(logstore.AsyncEntry), nil
+	return ret.(entry.Entry), nil
 }
 
 func (catalog *Catalog) PString(level PPLevel, depth int) string {
@@ -596,7 +611,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 	}
 	catalogCkp.Databases = map[uint64]*databaseCheckpoint{}
 	previousCheckpointId := catalog.GetCheckpointId()
-	commitId := catalog.Store.GetSyncedId()
+	commitId := catalog.Store.GetSynced(CatalogEntryGroupName)
 
 	processor := new(LoopProcessor)
 
@@ -604,6 +619,7 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 		Left:  previousCheckpointId + 1,
 		Right: commitId,
 	}
+	logutil.Infof("ctlg ckp %v", catalogCkp.Range)
 
 	check := func(info *CommitInfo) bool {
 		return catalogCkp.Range.ClosedIn(info.CommitId)
@@ -684,19 +700,26 @@ func (entry *catalogLogEntry) Marshal() ([]byte, error) {
 
 func (catalog *Catalog) CommitLocked(uint64) {}
 
-func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
+func (catalog *Catalog) ToLogEntry(eType LogEntryType) entry.Entry {
 	switch eType {
-	case logstore.ETCheckpoint:
+	case entry.ETCheckpoint:
 		break
 	default:
 		panic("not supported")
 	}
-	entry := catalog.ToCatalogLogEntry()
-	checkpointRange := entry.Range
-	buf, _ := entry.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.SetAuxilaryInfo(checkpointRange)
-	logEntry.Meta.SetType(eType)
+	e := catalog.ToCatalogLogEntry()
+	checkpointRange := &logstoreCommon.ClosedInterval{
+		Start: e.Range.Left,
+		End: e.Range.Right,
+	}
+	buf, _ := e.Marshal()
+	logEntry := entry.GetBase()
+	info:=&entry.CheckpointInfo{
+		Group: CatalogEntryGroupName,
+		Checkpoint: checkpointRange,
+	}
+	logEntry.SetInfo(info)
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }
@@ -855,7 +878,7 @@ func (catalog *Catalog) execSplit(rename RenameTableFactory, spec *ShardSplitSpe
 	return catalog.onCommitRequest(ctx, true)
 }
 
-func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {
+func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (entry.Entry, error) {
 	entry := newDbReplaceLogEntry()
 	db := ctx.spec.db
 	dbs := make(map[uint64]*Database)
@@ -1105,12 +1128,12 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSpli
 }
 
 func MockCatalogAndWal(dir string, blkRows, segBlks uint64) (*Catalog, Wal) {
-	driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+	driver, _ := store.NewBaseStore(dir, "driver", nil)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	return MockCatalog(dir, blkRows, segBlks, driver, indexWal), indexWal
 }
 
-func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
+func MockCatalog(dir string, blkRows, segBlks uint64, driver store.Store, indexWal wal.ShardAwareWal) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows

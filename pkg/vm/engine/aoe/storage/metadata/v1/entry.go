@@ -17,8 +17,8 @@ package metadata
 import (
 	"encoding/json"
 
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 type databaseLogEntry struct {
@@ -97,8 +97,8 @@ func (e *databaseLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := e.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }
@@ -158,8 +158,8 @@ func (e *dbReplaceLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := e.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }

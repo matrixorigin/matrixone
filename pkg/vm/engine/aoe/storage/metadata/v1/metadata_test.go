@@ -25,10 +25,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jiangxinmeng1/logstore/pkg/store"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -70,7 +71,7 @@ func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup 
 	var indexWal Wal
 	var err error
 	if hasWal {
-		driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+		driver, _ := store.NewBaseStore(dir, "driver", nil)
 		indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 		catalog, err = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 		if err != nil {
@@ -603,11 +604,11 @@ func TestCheckpoint(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
 	cfg.RotationFileMaxSize = versionFileSize
 
-	rotationCfg := &logstore.RotationCfg{}
-	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+	rotationCfg := &store.StoreCfg{}
+	rotationCfg.RotateChecker = &store.MaxSizeRotateChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
+	driver, _ := store.NewBaseStore(cfg.Dir, "driver", rotationCfg)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ := OpenCatalogWithDriver(
 		new(sync.RWMutex), cfg, driver, indexWal)
@@ -767,7 +768,7 @@ func TestCheckpoint(t *testing.T) {
 	logutil.Infof("\n\n******new catalog******\n")
 
 	// open and relay the catalog
-	driver, _ = logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
+	driver, _ = store.NewBaseStore(cfg.Dir, "driver", rotationCfg)
 	indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
 	catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
 

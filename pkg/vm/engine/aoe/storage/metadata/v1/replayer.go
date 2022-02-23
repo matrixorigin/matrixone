@@ -14,12 +14,15 @@
 package metadata
 
 import (
-	"bytes"
-	"errors"
+	// "bytes"
+	// "errors"
 	"fmt"
 	"io"
 	"sync"
 
+	// "github.com/jiangxinmeng1/logstore/pkg/entry"
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
+	"github.com/jiangxinmeng1/logstore/pkg/store"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
@@ -27,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
-type Store = logstore.Store
+type Store = store.Store
 
 func defaultHandler(r io.Reader, entry LogEntry) (LogEntry, int64, error) {
 	n, err := entry.ReadFrom(r)
@@ -83,7 +86,7 @@ func (cache *replayCache) Append(entry *replayEntry) {
 }
 
 func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
-	logType := entry.GetMeta().GetType()
+	logType := entry.GetType()
 	switch logType {
 	case ETCreateDatabase:
 		db := new(Database)
@@ -109,29 +112,29 @@ func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
 	return nil
 }
 
-func (cache *replayCache) onReplayTxn(store *TxnStore) error {
-	for _, buf := range store.Logs {
-		entry := logstore.NewAsyncBaseEntry()
-		defer entry.Free()
-		r := bytes.NewReader(buf)
-		meta := entry.GetMeta()
-		_, err := meta.ReadFrom(r)
-		if err != nil {
-			return err
-		}
-		if entry, n, err := defaultHandler(r, entry); err != nil {
-			return err
-		} else {
-			if n != int64(meta.PayloadSize()) {
-				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
-			}
-			if err = cache.onReplayTxnEntry(entry); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
+// func (cache *replayCache) onReplayTxn(store *TxnStore) error {
+// 	for _, buf := range store.Logs {
+// 		entry := logstore.NewAsyncBaseEntry()
+// 		defer entry.Free()
+// 		r := bytes.NewReader(buf)
+// 		meta := entry.GetMeta()
+// 		_, err := meta.ReadFrom(r)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		if entry, n, err := defaultHandler(r, entry); err != nil {
+// 			return err
+// 		} else {
+// 			if n != int64(meta.PayloadSize()) {
+// 				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+// 			}
+// 			if err = cache.onReplayTxnEntry(entry); err != nil {
+// 				return err
+// 			}
+// 		}
+// 	}
+// 	return nil
+// }
 
 func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog, r *common.Range) error {
 	switch entry.typ {
@@ -175,7 +178,7 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 	case ETUpgradeSegment:
 		err = catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETTransaction:
-		err = cache.onReplayTxn(entry.txnStore)
+		// err = cache.onReplayTxn(entry.txnStore)
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
 	}
@@ -191,31 +194,31 @@ func (cache *replayCache) applyNoCheckpoint() error {
 	return nil
 }
 
-func (cache *replayCache) Apply() error {
-	if cache.checkpoint == nil {
-		if err := cache.applyNoCheckpoint(); err != nil {
-			return err
-		}
-	} else {
-		// TODO
-		// if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
-		// 	return err
-		// }
-		for _, entry := range cache.checkpointEntries{
-			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
-				return err
-			}
-		}
-		for _, entry := range cache.entries {
-			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
-				return err
-			}
-		}
-		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
-	}
-	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
-	return nil
-}
+// func (cache *replayCache) Apply() error {
+// 	if cache.checkpoint == nil {
+// 		if err := cache.applyNoCheckpoint(); err != nil {
+// 			return err
+// 		}
+// 	} else {
+// 		// TODO
+// 		// if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
+// 		// 	return err
+// 		// }
+// 		for _, entry := range cache.checkpointEntries{
+// 			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
+// 				return err
+// 			}
+// 		}
+// 		for _, entry := range cache.entries {
+// 			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
+// 				return err
+// 			}
+// 		}
+// 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
+// 	}
+// 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
+// 	return nil
+// }
 
 type catalogReplayer struct {
 	catalog  *Catalog
@@ -259,7 +262,7 @@ func (replayer *catalogReplayer) restoreWal() {
 }
 
 func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
-	store logstore.AwareStore, indexWal wal.ShardAwareWal) (*Catalog, error) {
+	store store.Store, indexWal wal.ShardAwareWal) (*Catalog, error) {
 	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
@@ -267,7 +270,7 @@ func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg 
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
-	replayer.catalog.Store.TryCompact()
+	replayer.catalog.Store.TryTruncate()
 	replayer.cache = nil
 	logutil.Infof(replayer.catalog.PString(PPL0, 0))
 	return replayer.catalog, nil
@@ -281,76 +284,197 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
-	replayer.catalog.Store.TryCompact()
+	replayer.catalog.Store.TryTruncate()
 	replayer.cache = nil
 	logutil.Infof(replayer.catalog.PString(PPL0, 0))
 	return replayer.catalog, nil
 }
 
-func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
-	if replayer.version != r.Version {
-		replayer.offset = 0
-		replayer.version = r.Version
-	}
-	if r.Size == replayer.offset {
-		// Have read to the end of the file.
-		// No longer need additional overhead
-		return io.EOF
-	}
-	entry := logstore.NewAsyncBaseEntry()
-	defer entry.Free()
-	meta := entry.GetMeta()
-	metaSize, err := meta.ReadFrom(r)
-	if err != nil {
-		if !errors.Is(err, io.EOF) {
-			return err
-		}
-		replayer.tryTruncate()
-		return err
-	}
-	if entry, n, err := defaultHandler(r, entry); err != nil {
-		if !errors.Is(err, io.EOF) {
-			return err
-		}
-		// Only metadata is written
-		replayer.tryTruncate()
-		return err
-	} else {
-		if n != int64(meta.PayloadSize()) {
-			if r.Size == replayer.offset+int64(metaSize)+n {
-				// Have read to the end of the file
-				replayer.tryTruncate()
-				return io.EOF
-			} else {
-				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
-			}
-		}
-		if err = replayer.onReplayEntry(entry, observer); err != nil {
-			return err
-		}
-	}
-	replayer.offset += int64(meta.Size())
-	replayer.offset += int64(meta.PayloadSize())
-	replayer.replayed++
-	return nil
+// func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
+// 	if replayer.version != r.Version {
+// 		replayer.offset = 0
+// 		replayer.version = r.Version
+// 	}
+// 	if r.Size == replayer.offset {
+// 		// Have read to the end of the file.
+// 		// No longer need additional overhead
+// 		return io.EOF
+// 	}
+// 	entry := logstore.NewAsyncBaseEntry()
+// 	defer entry.Free()
+// 	meta := entry.GetMeta()
+// 	metaSize, err := meta.ReadFrom(r)
+// 	if err != nil {
+// 		if !errors.Is(err, io.EOF) {
+// 			return err
+// 		}
+// 		replayer.tryTruncate()
+// 		return err
+// 	}
+// 	if entry, n, err := defaultHandler(r, entry); err != nil {
+// 		if !errors.Is(err, io.EOF) {
+// 			return err
+// 		}
+// 		// Only metadata is written
+// 		replayer.tryTruncate()
+// 		return err
+// 	} else {
+// 		if n != int64(meta.PayloadSize()) {
+// 			if r.Size == replayer.offset+int64(metaSize)+n {
+// 				// Have read to the end of the file
+// 				replayer.tryTruncate()
+// 				return io.EOF
+// 			} else {
+// 				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+// 			}
+// 		}
+// 		if err = replayer.onReplayEntry(entry, observer); err != nil {
+// 			return err
+// 		}
+// 	}
+// 	replayer.offset += int64(meta.Size())
+// 	replayer.offset += int64(meta.PayloadSize())
+// 	replayer.replayed++
+// 	return nil
+// }
+
+func (replayer *catalogReplayer) Replay(s store.Store) error {
+	logutil.Infof("replay")
+	err := s.Replay(replayer.ApplyEntry)
+	logutil.Infof("replay, err is %v", err)
+	return err
+	// if err != nil {
+	// 	return err
+	// }
+	// logutil.Infof("Total %d entries replayed", replayer.replayed)
+	// return replayer.cache.Apply()
 }
 
-func (replayer *catalogReplayer) Replay(s Store) error {
-	err := s.ReplayVersions(replayer.doReplay)
-	if err != nil {
-		return err
+func (replayer *catalogReplayer) ApplyEntry(group string, commitId uint64, payload []byte, typ uint16) (err error) {
+	switch group {
+	case shard.WalGroupName:
+		switch typ {
+		case shard.ETShardWalSafeId:
+			safeId := &shard.SafeId{}
+			safeId.Unmarshal(payload)
+			replayer.cache.OnShardSafeId(*safeId)
+		}
+	case CatalogEntryGroupName:
+		catalog := replayer.catalog
+		catalog.Sequence.TryUpdateCommitId(commitId)
+		switch typ {
+		case entry.ETCheckpoint:
+			c := &catalogLogEntry{}
+			c.Unmarshal(payload)
+			catalog.Sequence.TryUpdateCommitId(c.Range.Right)
+			logutil.Infof("replay %v",c.Range)
+			err = catalog.onReplayCheckpoint(c)
+			// for shardid, id := range c.SafeIds {
+			// 	safeId := shard.SafeId{ShardId: shardid, Id: id}
+			// 	replayer.cache.OnShardSafeId(safeId)
+			// }
+		case ETCreateDatabase:
+			logutil.Infof("replay %v",commitId)
+			db := &Database{}
+			db.Unmarshal(payload)
+			db.CommitLocked(commitId)
+			catalog.Sequence.TryUpdateTableId(db.Id)
+			err = catalog.onReplayCreateDatabase(db)
+		case ETSoftDeleteDatabase:
+			logutil.Infof("replay %v",commitId)
+			db := &databaseLogEntry{}
+			db.Unmarshal(payload)
+			err = catalog.onReplaySoftDeleteDatabase(db)
+		case ETHardDeleteDatabase:
+			logutil.Infof("replay %v",commitId)
+			db := &databaseLogEntry{}
+			db.Unmarshal(payload)
+			err = catalog.onReplayHardDeleteDatabase(db)
+		case ETSplitDatabase:
+			logutil.Infof("replay %v",commitId)
+			replace := newDbReplaceLogEntry()
+			replace.Unmarshal(payload)
+			replace.commitId = commitId
+			err = catalog.onReplayReplaceDatabase(replace, true)
+		case ETReplaceDatabase:
+			logutil.Infof("replay %v",commitId)
+			replace := newDbReplaceLogEntry()
+			replace.Unmarshal(payload)
+			replace.commitId = commitId
+			err = catalog.onReplayReplaceDatabase(replace, false)
+		case ETCreateBlock:
+			logutil.Infof("replay %v",commitId)
+			blk := &blockLogEntry{}
+			blk.Unmarshal(payload)
+			blk.CommitLocked(commitId)
+			catalog.Sequence.TryUpdateBlockId(blk.Id)
+			err = catalog.onReplayCreateBlock(blk)
+		case ETUpgradeBlock:
+			logutil.Infof("replay %v",commitId)
+			blk := &blockLogEntry{}
+			blk.Unmarshal(payload)
+			err = catalog.onReplayUpgradeBlock(blk)
+		case ETCreateTable:
+			logutil.Infof("replay %v",commitId)
+			tbl := &tableLogEntry{}
+			tbl.Unmarshal(payload)
+			tbl.Table.CommitLocked(commitId)
+			catalog.Sequence.TryUpdateTableId(tbl.Table.Id)
+			err = catalog.onReplayCreateTable(tbl)
+		case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
+			logutil.Infof("replay %v",commitId)
+			tbl := &tableLogEntry{}
+			tbl.Unmarshal(payload)
+			err = catalog.onReplayTableOperation(tbl)
+		case ETCreateSegment:
+			logutil.Infof("replay %v",commitId)
+			seg := &segmentLogEntry{}
+			seg.Unmarshal(payload)
+			seg.CommitLocked(commitId)
+			catalog.Sequence.TryUpdateSegmentId(seg.Id)
+			err = catalog.onReplayCreateSegment(seg)
+		case ETUpgradeSegment:
+			logutil.Infof("replay %v",commitId)
+			seg := &segmentLogEntry{}
+			seg.Unmarshal(payload)
+			err = catalog.onReplayUpgradeSegment(seg)
+		case ETTransaction:
+			// txnStore := new(TxnStore)
+			// txnStore.Unmarshal(ent.GetPayload())
+			// for _, buf := range txnStore.Logs {
+			// 	entry := logstore.NewAsyncBaseEntry()
+			// 	defer entry.Free()
+			// 	r := bytes.NewReader(buf)
+			// 	meta := entry.GetMeta()
+			// 	_, err := meta.ReadFrom(r)
+			// 	if err != nil {
+			// 		return err
+			// 	}
+			// 	if entry, n, err := defaultHandler(r, entry); err != nil {
+			// 		return err
+			// 	} else {
+			// 		if n != int64(meta.PayloadSize()) {
+			// 			return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+			// 		}
+			// 		if err = cache.onReplayTxnEntry(entry); err != nil {
+			// 			return err
+			// 		}
+			// 	}
+			// }
+		default:
+			panic(fmt.Sprintf("unkown entry type: %d", typ))
+		}
 	}
-	logutil.Infof("Total %d entries replayed", replayer.replayed)
-	return replayer.cache.Apply()
+	return
 }
 
 func (replayer *catalogReplayer) GetOffset() int64 {
 	return replayer.offset
 }
 
-func (replayer *catalogReplayer) Truncate(s Store) error {
-	return s.Truncate(replayer.offset)
-}
+// func (replayer *catalogReplayer) Truncate(s Store) error {
+// 	return s.Truncate(replayer.offset)
+// }
 
 func (replayer *catalogReplayer) TotalEntries() int {
 	return replayer.replayed
@@ -365,155 +489,155 @@ func (replayer *catalogReplayer) RegisterEntryHandler(_ LogEntryType, _ logstore
 	return nil
 }
 
-func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore.ReplayObserver) error {
-	logType := entry.GetMeta().GetType()
-	if observer != nil {
-		switch logType {
-		case shard.ETShardWalSafeId:
-		case logstore.ETCheckpoint:
-		case logstore.ETFlush:
-			break
-		case logstore.ETInvalid:
-			logutil.Infof("get invalid entry")
-			return nil
-		default:
-			observer.OnReplayCommit(GetCommitIdFromLogEntry(entry))
-		}
-	}
-	switch logType {
-	case shard.ETShardWalSafeId:
-		safeId, _ := shard.EntryToSafeId(entry)
-		replayer.cache.OnShardSafeId(safeId)
-	case ETCreateBlock:
-		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		blk.CommitLocked(commitId)
-		replayer.cache.Append(&replayEntry{
-			typ:      ETCreateBlock,
-			blkEntry: blk,
-			commitId: commitId,
-		})
-	case ETUpgradeBlock:
-		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETUpgradeBlock,
-			blkEntry: blk,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETCreateDatabase:
-		db := &Database{}
-		db.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		db.CommitLocked(commitId)
-		replayer.cache.Append(&replayEntry{
-			typ:      ETCreateDatabase,
-			db:       db,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETSoftDeleteDatabase:
-		db := &databaseLogEntry{}
-		db.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETSoftDeleteDatabase,
-			dbEntry:  db,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETHardDeleteDatabase:
-		db := &databaseLogEntry{}
-		db.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETHardDeleteDatabase,
-			dbEntry:  db,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETSplitDatabase:
-		replace := newDbReplaceLogEntry()
-		replace.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		replace.commitId = commitId
-		replayer.cache.Append(&replayEntry{
-			typ:          ETReplaceDatabase,
-			replaceEntry: replace,
-			commitId:     GetCommitIdFromLogEntry(entry),
-		})
-	case ETReplaceDatabase:
-		replace := newDbReplaceLogEntry()
-		replace.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		replace.commitId = commitId
-		replayer.cache.Append(&replayEntry{
-			typ:          ETReplaceDatabase,
-			replaceEntry: replace,
-			commitId:     GetCommitIdFromLogEntry(entry),
-		})
-	case ETCreateTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		tbl.Table.CommitLocked(commitId)
-		replayer.cache.Append(&replayEntry{
-			typ:      ETCreateTable,
-			tblEntry: tbl,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      logType,
-			tblEntry: tbl,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETCreateSegment:
-		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
-		commitId := GetCommitIdFromLogEntry(entry)
-		seg.CommitLocked(commitId)
-		replayer.cache.Append(&replayEntry{
-			typ:      ETCreateSegment,
-			segEntry: seg,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETUpgradeSegment:
-		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETUpgradeSegment,
-			segEntry: seg,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case ETTransaction:
-		txnStore := new(TxnStore)
-		txnStore.Unmarshal(entry.GetPayload())
-		replayer.cache.Append(&replayEntry{
-			typ:      ETTransaction,
-			txnStore: txnStore,
-			commitId: GetCommitIdFromLogEntry(entry),
-		})
-	case logstore.ETCheckpoint:
-		c := &catalogLogEntry{}
-		c.Unmarshal(entry.GetPayload())
-		observer.OnReplayCheckpoint(*c.Range)
-		for shardid, id := range c.SafeIds {
-			safeId := shard.SafeId{ShardId: shardid, Id: id}
-			replayer.cache.OnShardSafeId(safeId)
-		}
-		replayer.cache.Append(&replayEntry{
-			typ:          logstore.ETCheckpoint,
-			catalogEntry: c,
-		})
-	case logstore.ETFlush:
-	default:
-		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))
-	}
-	return nil
-}
+// func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore.ReplayObserver) error {
+// 	logType := entry.GetType()
+// 	if observer != nil {
+// 		switch logType {
+// 		case shard.ETShardWalSafeId:
+// 		case logstore.ETCheckpoint:
+// 		case logstore.ETFlush:
+// 			break
+// 		case logstore.ETInvalid:
+// 			logutil.Infof("get invalid entry")
+// 			return nil
+// 		default:
+// 			observer.OnReplayCommit(GetCommitIdFromLogEntry(entry))
+// 		}
+// 	}
+// 	switch logType {
+// 	case shard.ETShardWalSafeId:
+// 		safeId, _ := shard.EntryToSafeId(entry)
+// 		replayer.cache.OnShardSafeId(safeId)
+// 	case ETCreateBlock:
+// 		blk := &blockLogEntry{}
+// 		blk.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		blk.CommitLocked(commitId)
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETCreateBlock,
+// 			blkEntry: blk,
+// 			commitId: commitId,
+// 		})
+// 	case ETUpgradeBlock:
+// 		blk := &blockLogEntry{}
+// 		blk.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETUpgradeBlock,
+// 			blkEntry: blk,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETCreateDatabase:
+// 		db := &Database{}
+// 		db.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		db.CommitLocked(commitId)
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETCreateDatabase,
+// 			db:       db,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETSoftDeleteDatabase:
+// 		db := &databaseLogEntry{}
+// 		db.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETSoftDeleteDatabase,
+// 			dbEntry:  db,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETHardDeleteDatabase:
+// 		db := &databaseLogEntry{}
+// 		db.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETHardDeleteDatabase,
+// 			dbEntry:  db,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETSplitDatabase:
+// 		replace := newDbReplaceLogEntry()
+// 		replace.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		replace.commitId = commitId
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:          ETReplaceDatabase,
+// 			replaceEntry: replace,
+// 			commitId:     GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETReplaceDatabase:
+// 		replace := newDbReplaceLogEntry()
+// 		replace.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		replace.commitId = commitId
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:          ETReplaceDatabase,
+// 			replaceEntry: replace,
+// 			commitId:     GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETCreateTable:
+// 		tbl := &tableLogEntry{}
+// 		tbl.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		tbl.Table.CommitLocked(commitId)
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETCreateTable,
+// 			tblEntry: tbl,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
+// 		tbl := &tableLogEntry{}
+// 		tbl.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      logType,
+// 			tblEntry: tbl,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETCreateSegment:
+// 		seg := &segmentLogEntry{}
+// 		seg.Unmarshal(entry.GetPayload())
+// 		commitId := GetCommitIdFromLogEntry(entry)
+// 		seg.CommitLocked(commitId)
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETCreateSegment,
+// 			segEntry: seg,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETUpgradeSegment:
+// 		seg := &segmentLogEntry{}
+// 		seg.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETUpgradeSegment,
+// 			segEntry: seg,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case ETTransaction:
+// 		txnStore := new(TxnStore)
+// 		txnStore.Unmarshal(entry.GetPayload())
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:      ETTransaction,
+// 			txnStore: txnStore,
+// 			commitId: GetCommitIdFromLogEntry(entry),
+// 		})
+// 	case logstore.ETCheckpoint:
+// 		c := &catalogLogEntry{}
+// 		c.Unmarshal(entry.GetPayload())
+// 		observer.OnReplayCheckpoint(*c.Range)
+// 		for shardid, id := range c.SafeIds {
+// 			safeId := shard.SafeId{ShardId: shardid, Id: id}
+// 			replayer.cache.OnShardSafeId(safeId)
+// 		}
+// 		replayer.cache.Append(&replayEntry{
+// 			typ:          logstore.ETCheckpoint,
+// 			catalogEntry: c,
+// 		})
+// 	case logstore.ETFlush:
+// 	default:
+// 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetType()))
+// 	}
+// 	return nil
+// }
 
-func (replayer *catalogReplayer) tryTruncate() {
-	err := replayer.Truncate(replayer.catalog.Store)
-	if err != nil {
-		panic(fmt.Sprintf("doReplay Truncate: %v", err.Error()))
-	}
-}
+// func (replayer *catalogReplayer) tryTruncate() {
+// 	err := replayer.Truncate(replayer.catalog.Store)
+// 	if err != nil {
+// 		panic(fmt.Sprintf("doReplay Truncate: %v", err.Error()))
+// 	}
+// }

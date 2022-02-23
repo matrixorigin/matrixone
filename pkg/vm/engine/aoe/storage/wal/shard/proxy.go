@@ -20,12 +20,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
+
+var WalGroupName = "wal"
 
 // A offset recorder for (IndexId.Id + IndexId.Offset) level
 type sliceEntry struct {
@@ -313,6 +316,13 @@ func (p *proxy) Checkpoint() {
 			ShardId: p.id,
 		}
 		logEntry := SafeIdToEntry(safeId)
+		commitId := p.mgr.logStoreCommitIdAllocator.Alloc()
+		info := &entry.CommitInfo{
+			Group: WalGroupName,
+			CommitId: commitId,
+		}
+		logEntry.SetInfo(info)
+		logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
 		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
 			panic(err)
 		}

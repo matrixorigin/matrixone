@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jiangxinmeng1/logstore/pkg/common"
+	"github.com/jiangxinmeng1/logstore/pkg/store"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -62,26 +64,28 @@ func (noop *noopWal) GetShardPendingCnt(shardId uint64) int                { ret
 type manager struct {
 	sm.ClosedState
 	sm.StateMachine
-	mu      sync.RWMutex
-	shards  map[uint64]*proxy
-	driver  logstore.AwareStore
-	own     bool
-	safemu  sync.RWMutex
-	safeids map[uint64]uint64
-	role    wal.Role
+	mu                        sync.RWMutex
+	shards                    map[uint64]*proxy
+	driver                    store.Store
+	own                       bool
+	safemu                    sync.RWMutex
+	safeids                   map[uint64]uint64
+	role                      wal.Role
+	logStoreCommitIdAllocator *common.IdAllocator
 }
 
 func NewManager(role wal.Role) *manager {
 	return NewManagerWithDriver(nil, false, role)
 }
 
-func NewManagerWithDriver(driver logstore.AwareStore, own bool, role wal.Role) *manager {
+func NewManagerWithDriver(driver store.Store, own bool, role wal.Role) *manager {
 	mgr := &manager{
-		own:     own,
-		role:    role,
-		driver:  driver,
-		shards:  make(map[uint64]*proxy),
-		safeids: make(map[uint64]uint64),
+		own:                       own,
+		role:                      role,
+		driver:                    driver,
+		shards:                    make(map[uint64]*proxy),
+		safeids:                   make(map[uint64]uint64),
+		logStoreCommitIdAllocator: &common.IdAllocator{},
 	}
 	wg := new(sync.WaitGroup)
 	// rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
@@ -89,9 +93,9 @@ func NewManagerWithDriver(driver logstore.AwareStore, own bool, role wal.Role) *
 	rQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onReceived)
 	ckpQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onSnippets)
 	mgr.StateMachine = sm.NewStateMachine(wg, mgr, rQueue, ckpQueue)
-	if own && driver != nil {
-		mgr.driver.Start()
-	}
+	// if own && driver != nil {
+	// mgr.driver.Start()
+	// }
 	mgr.Start()
 	return mgr
 }

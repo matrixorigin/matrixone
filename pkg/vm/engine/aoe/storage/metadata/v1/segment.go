@@ -19,8 +19,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 var (
@@ -220,10 +221,10 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	entry := e.toLogEntry(nil)
-	buf, _ := entry.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	ent := e.toLogEntry(nil)
+	buf, _ := ent.Marshal()
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }

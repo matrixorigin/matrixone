@@ -15,6 +15,7 @@ require (
 	github.com/golang/mock v1.3.1
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
+	github.com/jiangxinmeng1/logstore v0.0.0-20220223085940-dfa8cac098ae
 	github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6

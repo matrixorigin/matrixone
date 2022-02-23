@@ -18,7 +18,8 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 type TxnEntry LogEntry
@@ -34,7 +35,7 @@ func (store *TxnStore) Marshal() ([]byte, error) {
 	store.Logs = make([][]byte, len(store.entries))
 	for i, entry := range store.entries {
 		logEntry := entry.ToLogEntry(store.eTypes[i])
-		store.Logs[i], _ = logEntry.Marshal()
+		store.Logs[i] = logEntry.GetPayload()
 	}
 	return json.Marshal(store)
 }
@@ -59,8 +60,8 @@ func (store *TxnStore) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := store.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }

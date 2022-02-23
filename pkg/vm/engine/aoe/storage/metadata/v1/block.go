@@ -19,8 +19,9 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
@@ -291,7 +292,7 @@ func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	return err
 }
 
-func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
+func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (entry.Entry, error) {
 	e.Lock()
 	defer e.Unlock()
 	if e.GetCountLocked() != e.Segment.Table.Schema.BlockMaxRows {
@@ -385,10 +386,10 @@ func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	entry := e.toLogEntry(nil)
-	buf, _ := entry.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
+	ent := e.toLogEntry(nil)
+	buf, _ := ent.Marshal()
+	logEntry := entry.GetBase()
+	logEntry.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
 }
