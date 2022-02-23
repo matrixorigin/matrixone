@@ -75,6 +75,8 @@ type Tuple interface {
 	//others data type
 }
 
+type Tuples []Tuple
+
 const (
 	SERIAL_TYPE_NULL byte = 0
 	SERIAL_TYPE_UINT64 byte = 1

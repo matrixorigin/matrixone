@@ -33,5 +33,5 @@ type ComputationHandler interface {
 
 	ListTables(dbId uint64) ([]*descriptor.RelationDesc, error)
 
-	GetTable(name string) (*descriptor.RelationDesc, error)
+	GetTable(dbId uint64, name string) (*descriptor.RelationDesc, error)
 }
