@@ -17,6 +17,7 @@ package orderedcodec
 import (
 	"bytes"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
@@ -27,6 +28,7 @@ var (
 	errorIncompleteBytesWithZero = errors.New("bytes without zero - incomplete bytes")
 	errorIncompleteBytesWithSuffix = errors.New("bytes without suffix byte - incomplete bytes")
 	errorWrongEscapedBytes = errors.New("missing second byte of escaping")
+	errorUnmatchedValueType = errors.New("unmatched value type")
 )
 
 //DecodeKey decodes
@@ -153,4 +155,153 @@ func (od *OrderedDecoder) DecodeString(data []byte)([]byte,*DecodedItem,error) {
 
 func NewOrderedDecoder() *OrderedDecoder {
 	return &OrderedDecoder{}
+}
+
+func (di *DecodedItem) GetInt8() (int8,error) {
+	if di.ValueType != VALUE_TYPE_INT8 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(int8); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetInt16() (int16,error) {
+	if di.ValueType != VALUE_TYPE_INT16 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(int16); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetInt32() (int32,error) {
+	if di.ValueType != VALUE_TYPE_INT32 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(int32); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetInt64() (int64,error) {
+	if di.ValueType != VALUE_TYPE_INT64 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(int64); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetUint8() (uint8,error) {
+	if di.ValueType != VALUE_TYPE_UINT8 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(uint8); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetUint16() (uint16,error) {
+	if di.ValueType != VALUE_TYPE_UINT16 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(uint16); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetUint32() (uint32,error) {
+	if di.ValueType != VALUE_TYPE_UINT32 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(uint32); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetUint64() (uint64,error) {
+	if di.ValueType != VALUE_TYPE_UINT64 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(uint64); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetFloat32() (float32,error) {
+	if di.ValueType != VALUE_TYPE_FLOAT32 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(float32); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetFloat64() (float64,error) {
+	if di.ValueType != VALUE_TYPE_FLOAT64 {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(float64); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetBytes() ([]byte,error) {
+	if di.ValueType == VALUE_TYPE_BYTES {
+		if v,ok := di.Value.([]byte); !ok {
+			return nil, errorUnmatchedValueType
+		}else{
+			return v,nil
+		}
+	}else if di.ValueType == VALUE_TYPE_STRING {
+		if v, ok := di.Value.(string); !ok {
+			return nil, errorUnmatchedValueType
+		} else {
+			return []byte(v), nil
+		}
+	}
+	return nil, errorUnmatchedValueType
+}
+
+func (di *DecodedItem) GetDate() (types.Date,error) {
+	if di.ValueType != VALUE_TYPE_DATE {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(types.Date); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
+}
+
+func (di *DecodedItem) GetDatetime() (types.Datetime,error) {
+	if di.ValueType != VALUE_TYPE_DATETIME {
+		return 0, errorUnmatchedValueType
+	}
+	if v,ok := di.Value.(types.Datetime); !ok {
+		return 0, errorUnmatchedValueType
+	}else{
+		return v,nil
+	}
 }

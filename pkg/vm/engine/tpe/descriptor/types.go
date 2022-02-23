@@ -232,9 +232,5 @@ type DescriptorHandler interface {
 
 	MakePrefixWithOneExtraID(dbID uint64, tableID uint64, indexID uint64, extraID uint64) ([]byte, *orderedcodec.EncodedItem)
 
-	SetCallBackCtx(callbackCtx interface{})
-
-	GetValuesWithPrefix(parentID uint64, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error)
-
-	UnmarshalRelationDesc(data []byte) (*RelationDesc,error)
+	GetValuesWithPrefix(parentID uint64, callbackCtx interface{}, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error)
 }

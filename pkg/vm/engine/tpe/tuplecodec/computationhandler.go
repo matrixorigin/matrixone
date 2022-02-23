@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	"math"
 	"time"
 )
 
@@ -32,6 +33,7 @@ var (
 	errorTableExists = errors.New("table has exists")
 	errorTableDeletedAlready = errors.New("table is deleted already")
 	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc")
+	errorDatabaseDeletedAlready = errors.New("database is deleted already")
 )
 
 var _ computation.ComputationHandler = &ComputationHandlerImpl{}
@@ -115,15 +117,66 @@ func (chi *ComputationHandlerImpl) DropDatabase(epoch uint64, dbName string) err
 		}
 	}
 
+	//3. attatch tag
+	dbDesc.Is_deleted = true
+	dbDesc.Drop_epoch = epoch
+
+	//4. save the database desc
+	err = chi.dh.StoreDatabaseDescByID(uint64(dbDesc.ID),dbDesc)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (chi *ComputationHandlerImpl) GetDatabase(dbName string) (*descriptor.DatabaseDesc, error) {
-	panic("implement me")
+	//1. check database exists
+	dbDesc, err := chi.dh.LoadDatabaseDescByName(dbName)
+	if err != nil {
+		return nil,err
+	}
+
+	//2. check it is deleted
+	if dbDesc.Is_deleted {
+		return nil,errorDatabaseDeletedAlready
+	}
+
+	return dbDesc,nil
+}
+
+//callbackForGetDatabaseDesc extracts the databaseDesc
+func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
+	//get the name and the desc
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
+	descDI := dis[InternalDescriptorTableID_desc_ID]
+	if !(descDI.IsValueType(descAttr.Ttype)) {
+		return nil,errorTypeInValueNotEqualToTypeInAttribute
+	}
+
+	//deserialize the desc
+	if bytesInValue,ok := descDI.Value.([]byte); ok {
+		dbDesc, err := UnmarshalDatabaseDesc(bytesInValue)
+		if err != nil {
+			return nil, err
+		}
+		//skip deleted table
+		if dbDesc.Is_deleted {
+			return nil, nil
+		}
+		if out,ok2 := callbackCtx.(*[]*descriptor.DatabaseDesc) ; ok2 {
+			*out = append(*out, dbDesc)
+		}
+	}
+	return nil, nil
 }
 
 func (chi *ComputationHandlerImpl) ListDatabases() ([]*descriptor.DatabaseDesc, error) {
-	panic("implement me")
+	var dbDescs []*descriptor.DatabaseDesc
+	_, err := chi.dh.GetValuesWithPrefix(math.MaxUint64, &dbDescs, chi.callbackForGetDatabaseDesc)
+	if err != nil  && err != errorDoNotFindTheDesc{
+		return nil, err
+	}
+	return dbDescs,nil
 }
 
 func (chi *ComputationHandlerImpl) CreateTable(epoch, dbId uint64, tableDesc *descriptor.RelationDesc) (uint64, error) {
@@ -252,7 +305,7 @@ func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interfac
 
 	//deserialize the desc
 	if bytesInValue,ok := descDI.Value.([]byte); ok {
-		tableDesc, err := chi.dh.UnmarshalRelationDesc(bytesInValue)
+		tableDesc, err := UnmarshalRelationDesc(bytesInValue)
 		if err != nil {
 			return nil, err
 		}
@@ -282,9 +335,7 @@ func (chi *ComputationHandlerImpl) ListTables(dbId uint64) ([]*descriptor.Relati
 	//2. list tables
 	// tenantID,dbID,tableID,indexID + parentID(dbId here) + ID + Name + Bytes
 	var tableDescs []*descriptor.RelationDesc
-	chi.dh.SetCallBackCtx(&tableDescs)
-	_, err = chi.dh.GetValuesWithPrefix(dbId,
-		chi.callbackForGetTableDesc)
+	_, err = chi.dh.GetValuesWithPrefix(dbId, &tableDescs, chi.callbackForGetTableDesc)
 	if err != nil  && err != errorDoNotFindTheDesc{
 		return nil, err
 	}
@@ -292,6 +343,27 @@ func (chi *ComputationHandlerImpl) ListTables(dbId uint64) ([]*descriptor.Relati
 	return tableDescs,nil
 }
 
-func (chi *ComputationHandlerImpl) GetTable(name string) (*descriptor.RelationDesc, error) {
-	panic("implement me")
+func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descriptor.RelationDesc, error) {
+	//1. check database exists
+	dbDesc, err := chi.dh.LoadDatabaseDescByID(dbId)
+	if err != nil {
+		return nil, err
+	}
+
+	//check database
+	if uint64(dbDesc.ID) != dbId {
+		return nil, errorWrongDatabaseIDInDatabaseDesc
+	}
+
+	//2. Get the table
+	tableDesc, err := chi.dh.LoadRelationDescByName(dbId,name)
+	if err != nil {
+		return nil, err
+	}
+
+	//3. check the table is deleted
+	if tableDesc.Is_deleted {
+		return nil,errorTableDeletedAlready
+	}
+	return tableDesc,nil
 }
