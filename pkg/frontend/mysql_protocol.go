@@ -48,8 +48,9 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 // DefaultClientConnStatus default server status
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
+var ServerVersion = ""
+
 const (
-	serverVersion               = "0.1.0"
 	clientProtocolVersion uint8 = 10
 
 	/**
@@ -681,7 +682,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
 	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, serverVersion)
+	pos = mp.writeStringNUL(data, pos, ServerVersion)
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.connectionID)

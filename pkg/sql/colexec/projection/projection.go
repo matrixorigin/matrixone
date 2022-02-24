@@ -75,7 +75,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				}
 			}
 			if reuse {
-				continue
+				rbat.Vecs[i] = &vector.Vector{
+					Ref:  rbat.Vecs[i].Ref,
+					Or:   rbat.Vecs[i].Or,
+					Data: rbat.Vecs[i].Data,
+					Typ:  rbat.Vecs[i].Typ,
+					Col:  rbat.Vecs[i].Col,
+					Nsp:  rbat.Vecs[i].Nsp,
+				}
 			}
 		}
 		rbat.Vecs[i].Ref = n.Rs[i]
@@ -84,8 +91,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		batch.Cow(bat)
 	}
 	for i := range rbat.Vecs {
-			bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
-			bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
+		bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
+		bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
 	}
 	for _, e := range n.Es {
 		batch.Reduce(bat, e.Attributes(), proc.Mp)
