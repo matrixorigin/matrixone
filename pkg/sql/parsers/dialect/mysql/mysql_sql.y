@@ -2570,7 +2570,7 @@ straight_join:
 inner_join:
     JOIN
     {
-        $$ = ""
+        $$ = tree.JOIN_TYPE_INNER
     }
 |   INNER JOIN
     {

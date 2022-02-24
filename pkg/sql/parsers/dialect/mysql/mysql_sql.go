@@ -7469,7 +7469,7 @@ yydefault:
 		yyDollar = yyS[yypt-1 : yypt+1]
 //line mysql_sql.y:2572
 		{
-			yyVAL.str = ""
+			yyVAL.str = tree.JOIN_TYPE_INNER
 		}
 	case 392:
 		yyDollar = yyS[yypt-2 : yypt+1]
