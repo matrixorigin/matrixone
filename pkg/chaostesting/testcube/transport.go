@@ -79,14 +79,14 @@ func (_ Def) NewInterceptableTransport() (
 
 			send: func(msg meta.RaftMessage) bool {
 				if msgIsBlocked(msg) {
-					return true
+					return false
 				}
 				return upstream.Send(msg)
 			},
 
 			sendSnapshot: func(msg meta.RaftMessage) bool {
 				if msgIsBlocked(msg) {
-					return true
+					return false
 				}
 				return upstream.SendSnapshot(msg)
 			},

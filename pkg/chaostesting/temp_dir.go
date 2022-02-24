@@ -126,8 +126,6 @@ func (_ Def) TempDir(
 
 	}
 
-	cleanDir(time.Hour)
-
 	return
 }
 

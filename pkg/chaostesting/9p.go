@@ -38,7 +38,7 @@ type Setup9P func(
 )
 
 func (_ Def) Setup9P(
-	host NetworkHost,
+	getHost GetNetworkHost,
 	getPort GetPortStr,
 	wt RootWaitTree,
 	debug Debug9P,
@@ -50,8 +50,8 @@ func (_ Def) Setup9P(
 		end func() error,
 	) {
 
-		port := getPort(math.MaxInt, string(host))
-		addr := net.JoinHostPort(string(host), port)
+		port := getPort(math.MaxInt, getHost())
+		addr := net.JoinHostPort(getHost(), port)
 		config := net.ListenConfig{}
 		ln, err := config.Listen(wt.Ctx, "tcp", addr)
 		ce(err)
@@ -79,7 +79,7 @@ func (_ Def) Setup9P(
 
 			options := fmt.Sprintf("trans=tcp,port=%s,version=9p2000.L,cache=mmap", port)
 
-			err := mount(string(host), mountPoint, "9p", options)
+			err := mount(getHost(), mountPoint, "9p", options)
 
 			if err == nil {
 				break

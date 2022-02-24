@@ -1,8 +1,22 @@
 # number of parallel test cases running in `run` command
 parallel(4)
 
+# faults to inject
+faults(
+        # stop a node
+        "stop", 
+        # restart a node
+        "restart", 
+        # network isolate a node from random nodes
+        "isolate",
+        # crash a node
+        "crash",
+        # fully isolate a node
+        "fully-isolate",
+        )
+
 # port range for cube to use
-port_range(50000, 55000)
+port_range(20000, 30000)
 
 # threshold for timeout reporting
 timeout_report_threshold(10)
@@ -12,7 +26,7 @@ timeout_report_threshold(10)
 retry_timeout(second * 15)
 
 # timeout of single test case
-execute_timeout(15 * minute)
+execute_timeout(1 * minute)
 
 # enable cpu profile for whole program
 enable_cpu_profile(False)
@@ -33,7 +47,7 @@ enable_runtime_trace(True)
 #    else:
 #        network_model("localhost")
 #set_network_model()
-network_model("dummy")
+network_model("localhost")
 
 # temp dir model
 # os: use os.TempDir()

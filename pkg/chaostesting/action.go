@@ -35,7 +35,7 @@ func (_ Def) MainAction() (m MainAction) {
 var _ xml.Unmarshaler = new(MainAction)
 
 func (t *MainAction) UnmarshalXML(d *xml.Decoder, start xml.StartElement) (err error) {
-	token, err := nextTokenSkipCharData(d)
+	token, err := nextRelevantToken(d)
 	if err != nil {
 		return we(err)
 	}
