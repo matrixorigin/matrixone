@@ -48,6 +48,7 @@ type ShardAwareWal interface {
 	GetShardCurrSeqNum(uint64) uint64
 	GetShardPendingCnt(uint64) int
 	GetAllPendingEntries() []*shard.ItemsToCheckpointStat
+	SetLogstoreCommitId(uint64)
 }
 
 type ShardWal struct {

@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -778,13 +779,13 @@ func TestReplay11(t *testing.T) {
 	catalog.Close()
 }
 
-func TestReplay15(t *testing.T)  {
+func TestReplay15(t *testing.T) {
 	// Delete part of the data of the last entry
-	ReplayTruncate(3000, t)
+	ReplayTruncate(2290, t)
 	// Only keep the meta data of the last entry
-	ReplayTruncate(2970, t)
+	ReplayTruncate(2280, t)
 	// Only keep the first 8 bytes of the meta of the last entry
-	ReplayTruncate(2908, t)
+	ReplayTruncate(2270, t)
 }
 func ReplayTruncate(size int64, t *testing.T) {
 	dir := initTestEnv(t)
@@ -839,12 +840,15 @@ func ReplayTruncate(size int64, t *testing.T) {
 	sort.Slice(observer.removed, func(i, j int) bool {
 		return observer.removed[i] < observer.removed[j]
 	})
-	catalog.Store.Truncate(size)
+	err = catalog.Store.TryTruncate(size)
+	logutil.Infof("err is %v", err)
+	t.Log(catalog.PString(3,0))
 	catalog.Close()
 
 	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)
 	assert.Nil(t, err)
 	catalog.Start()
+	t.Log(catalog.PString(3,0))
 
 	observer = &replayObserver{
 		removed: make([]string, 0),

@@ -54,6 +54,7 @@ func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 	entry.SetDone()
 	return entry, nil
 }
+func (noop *noopWal) SetLogstoreCommitId(uint64)                           {}
 func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
 func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64           { return 0 }
 func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
@@ -152,7 +153,9 @@ func (mgr *manager) GetShardCurrSeqNum(shardId uint64) (id uint64) {
 	}
 	return
 }
-
+func (mgr *manager) SetLogstoreCommitId(id uint64) {
+	mgr.logStoreCommitIdAllocator.Set(id)
+}
 func (mgr *manager) GetShardCheckpointId(shardId uint64) uint64 {
 	s, err := mgr.GetShard(shardId)
 	if err != nil {

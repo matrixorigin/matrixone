@@ -244,6 +244,8 @@ func (replayer *catalogReplayer) restoreWal() {
 	if replayer.catalog.IndexWal == nil {
 		return
 	}
+	commitId := replayer.catalog.Store.GetSynced(shard.WalGroupName)
+	replayer.catalog.IndexWal.SetLogstoreCommitId(commitId)
 	for _, database := range replayer.catalog.Databases {
 		if database.IsHardDeletedLocked() {
 			continue
@@ -270,7 +272,7 @@ func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg 
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
-	replayer.catalog.Store.TryTruncate()
+	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	logutil.Infof(replayer.catalog.PString(PPL0, 0))
 	return replayer.catalog, nil
@@ -284,7 +286,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
-	replayer.catalog.Store.TryTruncate()
+	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	logutil.Infof(replayer.catalog.PString(PPL0, 0))
 	return replayer.catalog, nil
@@ -367,74 +369,74 @@ func (replayer *catalogReplayer) ApplyEntry(group string, commitId uint64, paylo
 			c := &catalogLogEntry{}
 			c.Unmarshal(payload)
 			catalog.Sequence.TryUpdateCommitId(c.Range.Right)
-			logutil.Infof("replay %v",c.Range)
+			logutil.Infof("replay %v", c.Range)
 			err = catalog.onReplayCheckpoint(c)
 			// for shardid, id := range c.SafeIds {
 			// 	safeId := shard.SafeId{ShardId: shardid, Id: id}
 			// 	replayer.cache.OnShardSafeId(safeId)
 			// }
 		case ETCreateDatabase:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			db := &Database{}
 			db.Unmarshal(payload)
 			db.CommitLocked(commitId)
 			catalog.Sequence.TryUpdateTableId(db.Id)
 			err = catalog.onReplayCreateDatabase(db)
 		case ETSoftDeleteDatabase:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			db := &databaseLogEntry{}
 			db.Unmarshal(payload)
 			err = catalog.onReplaySoftDeleteDatabase(db)
 		case ETHardDeleteDatabase:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			db := &databaseLogEntry{}
 			db.Unmarshal(payload)
 			err = catalog.onReplayHardDeleteDatabase(db)
 		case ETSplitDatabase:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			replace := newDbReplaceLogEntry()
 			replace.Unmarshal(payload)
 			replace.commitId = commitId
 			err = catalog.onReplayReplaceDatabase(replace, true)
 		case ETReplaceDatabase:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			replace := newDbReplaceLogEntry()
 			replace.Unmarshal(payload)
 			replace.commitId = commitId
 			err = catalog.onReplayReplaceDatabase(replace, false)
 		case ETCreateBlock:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			blk := &blockLogEntry{}
 			blk.Unmarshal(payload)
 			blk.CommitLocked(commitId)
 			catalog.Sequence.TryUpdateBlockId(blk.Id)
 			err = catalog.onReplayCreateBlock(blk)
 		case ETUpgradeBlock:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			blk := &blockLogEntry{}
 			blk.Unmarshal(payload)
 			err = catalog.onReplayUpgradeBlock(blk)
 		case ETCreateTable:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			tbl := &tableLogEntry{}
 			tbl.Unmarshal(payload)
 			tbl.Table.CommitLocked(commitId)
 			catalog.Sequence.TryUpdateTableId(tbl.Table.Id)
 			err = catalog.onReplayCreateTable(tbl)
 		case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			tbl := &tableLogEntry{}
 			tbl.Unmarshal(payload)
 			err = catalog.onReplayTableOperation(tbl)
 		case ETCreateSegment:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			seg := &segmentLogEntry{}
 			seg.Unmarshal(payload)
 			seg.CommitLocked(commitId)
 			catalog.Sequence.TryUpdateSegmentId(seg.Id)
 			err = catalog.onReplayCreateSegment(seg)
 		case ETUpgradeSegment:
-			logutil.Infof("replay %v",commitId)
+			logutil.Infof("replay %v", commitId)
 			seg := &segmentLogEntry{}
 			seg.Unmarshal(payload)
 			err = catalog.onReplayUpgradeSegment(seg)

@@ -464,7 +464,7 @@ func (catalog *Catalog) GetCheckpointId() uint64 {
 }
 
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
-	catalog.Store.TryTruncate()
+	catalog.Store.TryCompact()
 }
 
 func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {

@@ -581,6 +581,7 @@ func TestReplay(t *testing.T) {
 
 	catalog.Close()
 }
+
 func TestCheckpoint(t *testing.T) {
 	dir := initTestEnv(t)
 	totaldbcount := 5
