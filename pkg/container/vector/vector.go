@@ -1828,10 +1828,12 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	}
 
 	for i, j := 0, uint64(oldLen); i < len(flags); i++ {
-		if flags[i] > 0 && nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
-			nulls.Add(v.Nsp, j)
+		if flags[i] > 0 {
+			if nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
+				nulls.Add(v.Nsp, j)
+			}
+			j++
 		}
-		j++
 	}
 	return nil
 }
