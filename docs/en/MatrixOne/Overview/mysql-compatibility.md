@@ -59,7 +59,8 @@ MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 |   | Other types | Not supported now.  | 
 | Operatiors  | "+","-","*","/" | Same as MySQL.  | 
 |   | DIV, %, MOD | Not supported now.  | 
-|   | LIKE, IN | Not supported now.  | 
+|   | LIKE | Supported with constraints.  | 
+|   | IN | Supported for constant lists  | 
 |   | NOT, AND, &&,OR, "\|\|" | Same as MySQL.  | 
 |   | XOR | Not supported now.  | 
 |   | MAX, MIN, COUNT, AVG | Same as MySQL.  | 
