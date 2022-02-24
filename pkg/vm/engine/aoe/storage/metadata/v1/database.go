@@ -155,7 +155,6 @@ func (db *Database) DebugCheckReplayedState() {
 	if db.blockListener == nil || db.segmentListener == nil || db.tableListener == nil {
 		panic("listener is missing")
 	}
-	logutil.Infof("%v",db.Catalog.Sequence)
 	if db.Catalog.TryUpdateCommitId(db.GetCommit().CommitId) {
 		panic("sequence error")
 	}

@@ -780,11 +780,11 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay15(t *testing.T) {
 	// Delete part of the data of the last entry
-	ReplayTruncate(2290, t)
-	// Only keep the meta data of the last entry
 	ReplayTruncate(2280, t)
-	// Only keep the first 8 bytes of the meta of the last entry
+	// Only keep the meta data of the last entry
 	ReplayTruncate(2270, t)
+	// Only keep the first 8 bytes of the meta of the last entry
+	ReplayTruncate(2260, t)
 }
 func ReplayTruncate(size int64, t *testing.T) {
 	dir := initTestEnv(t)

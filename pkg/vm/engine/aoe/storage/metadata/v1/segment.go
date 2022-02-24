@@ -21,7 +21,6 @@ import (
 
 	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 var (

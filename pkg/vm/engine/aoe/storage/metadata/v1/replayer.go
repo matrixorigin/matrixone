@@ -14,10 +14,7 @@
 package metadata
 
 import (
-	// "bytes"
-	// "errors"
 	"fmt"
-	// "io"
 	"sync"
 
 	"github.com/jiangxinmeng1/logstore/pkg/entry"

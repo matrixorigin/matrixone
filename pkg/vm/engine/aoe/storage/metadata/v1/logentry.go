@@ -18,12 +18,10 @@ import (
 	"sync"
 
 	"github.com/jiangxinmeng1/logstore/pkg/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
-type LogEntryType = logstore.EntryType
+type LogEntryType = uint16
 type LogEntry = entry.Entry
-type LogEntryMeta = logstore.EntryMeta
 
 const (
 	ETCreateDatabase LogEntryType = iota + entry.ETCustomizedStart
@@ -55,12 +53,3 @@ type IEntry interface {
 	ToLogEntry(LogEntryType) LogEntry
 }
 
-// func SetCommitIdToLogEntry(commitId uint64, entry LogEntry) {
-// 	buf := entry.GetMeta().GetReservedBuf()[logstore.EntryTypeSize+logstore.EntrySizeSize : logstore.EntryTypeSize+logstore.EntrySizeSize+8]
-// 	binary.BigEndian.PutUint64(buf, commitId)
-// }
-
-// func GetCommitIdFromLogEntry(entry LogEntry) uint64 {
-// 	buf := entry.GetMeta().GetReservedBuf()[logstore.EntryTypeSize+logstore.EntrySizeSize : logstore.EntryTypeSize+logstore.EntrySizeSize+8]
-// 	return binary.BigEndian.Uint64(buf)
-// }

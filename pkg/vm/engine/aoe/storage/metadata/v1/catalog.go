@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	logstoreCommon "github.com/jiangxinmeng1/logstore/pkg/common"
 	"github.com/jiangxinmeng1/logstore/pkg/entry"
 	"github.com/jiangxinmeng1/logstore/pkg/sm"
@@ -32,8 +31,8 @@ import (
 	moSm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-	// worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
-	// workerBase "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	worker "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
+	workerBase "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
 var (
@@ -78,7 +77,7 @@ type Catalog struct {
 	nodesMu                    sync.RWMutex         `json:"-"`
 	commitMu                   sync.RWMutex         `json:"-"`
 	nameNodes                  map[string]*nodeList `json:"-"`
-	// checkpointer    workerBase.IHeartbeater
+	checkpointer               workerBase.IHeartbeater
 
 	Databases map[uint64]*Database `json:"dbs"`
 }
@@ -108,9 +107,9 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store store.Store, 
 	ckpQueue := moSm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
-	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-	// 	catalog: catalog,
-	// })
+	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
+		catalog: catalog,
+	})
 	return catalog
 }
 
@@ -154,9 +153,9 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	ckpQueue := moSm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
-	// catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
-	// 	catalog: catalog,
-	// })
+	catalog.checkpointer = worker.NewHeartBeater(DefaultCheckpointInterval, &catalogCheckpointer{
+		catalog: catalog,
+	})
 	return catalog
 }
 
@@ -220,13 +219,13 @@ func (catalog *Catalog) DebugCheckReplayedState() {
 }
 
 func (catalog *Catalog) Start() {
-	// catalog.checkpointer.Start()
+	catalog.checkpointer.Start()
 	// catalog.Store.Start()
 	catalog.StateMachine.Start()
 }
 
 func (catalog *Catalog) Close() error {
-	// catalog.checkpointer.Stop()
+	catalog.checkpointer.Stop()
 	catalog.Stop()
 	if catalog.IndexWal != nil {
 		catalog.IndexWal.Close()
@@ -421,7 +420,6 @@ func (catalog *Catalog) prepareCommitLog(e IEntry, logEntry LogEntry) {
 		CommitId: commitId,
 	}
 	logEntry.SetInfo(info)
-	logutil.Infof("append %v, %v", logEntry.GetType(), logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
@@ -448,7 +446,6 @@ func (catalog *Catalog) prepareCommitEntry(e IEntry, eType LogEntryType, locker 
 		CommitId: commitId,
 	}
 	logEntry.SetInfo(info)
-	logutil.Infof("append %v, %v", logEntry.GetType(), logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
@@ -568,7 +565,6 @@ func (catalog *Catalog) Checkpoint() (LogEntry, error) {
 	catalog.RLock()
 	e := catalog.ToLogEntry(entry.ETCheckpoint)
 	catalog.RUnlock()
-	logutil.Infof("append %v, %v", e.GetType(), e.GetInfo())
 	if err := catalog.Store.AppendEntry(e); err != nil {
 		panic(err)
 	}
