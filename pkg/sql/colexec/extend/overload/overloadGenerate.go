@@ -351,6 +351,7 @@ func GenerateDiv() error {
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
 		[]lrt{
+			{types.T_float32, types.T_float32, types.T_int64},
 			{types.T_float64, types.T_float64, types.T_int64},
 		},
 	}
