@@ -17,8 +17,8 @@ package metadata
 import (
 	"encoding/json"
 
+	"github.com/jiangxinmeng1/logstore/pkg/common"
 	"github.com/jiangxinmeng1/logstore/pkg/entry"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type databaseLogEntry struct {
@@ -57,7 +57,7 @@ type databaseCheckpoint struct {
 type catalogLogEntry struct {
 	Databases map[uint64]*databaseCheckpoint
 	SafeIds   map[uint64]uint64
-	Range     *common.Range
+	Ranges    map[string]*common.ClosedInterval
 }
 
 func newDatabaseLogEntry(shardId, index uint64) *databaseLogEntry {

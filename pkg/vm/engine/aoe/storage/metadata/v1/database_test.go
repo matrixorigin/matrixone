@@ -188,7 +188,6 @@ func TestDatabase3(t *testing.T) {
 	assert.Equal(t, 3, tblCnt)
 
 	t.Log(catalog.PString(PPL0, 0))
-	t.Log(catalog.Sequence)
 	indexWal.Close()
 	catalog.Close()
 	t.Log("----------")
@@ -199,7 +198,6 @@ func TestDatabase3(t *testing.T) {
 	tableDeleted = 0
 	dbCnt, tblCnt = 0, 0
 	catalog2.RecurLoopLocked(processor)
-	t.Log(catalog2.PString(0,0))
 	t.Log(indexWal.String())
 	t.Log(indexWal2.String())
 	assert.Equal(t, 0, dbDeleted)

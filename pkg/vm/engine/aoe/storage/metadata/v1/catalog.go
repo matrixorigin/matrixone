@@ -23,6 +23,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	logstoreCommon "github.com/jiangxinmeng1/logstore/pkg/common"
 	"github.com/jiangxinmeng1/logstore/pkg/entry"
@@ -387,7 +388,6 @@ func (catalog *Catalog) RecurLoopLocked(processor Processor) error {
 func (catalog *Catalog) CommitLogEntry(entry entry.Entry, commitId uint64, sync bool) error {
 	var err error
 	entry.SetInfo(commitId)
-	logutil.Infof("append %v, %v",entry.GetType(),entry.GetInfo())
 	if err = catalog.Store.AppendEntry(entry); err != nil {
 		return err
 	}
@@ -409,7 +409,7 @@ func (catalog *Catalog) onCommitRequest(ctx interface{}, doCommit bool) error {
 	return err
 }
 
-func (catalog *Catalog) prepareCommitLog(e IEntry, logEntry entry.Entry) {
+func (catalog *Catalog) prepareCommitLog(e IEntry, logEntry LogEntry) {
 	catalog.commitMu.Lock()
 	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
@@ -417,21 +417,21 @@ func (catalog *Catalog) prepareCommitLog(e IEntry, logEntry entry.Entry) {
 	e.CommitLocked(commitId)
 	e.Unlock()
 	info := &entry.CommitInfo{
-		Group: CatalogEntryGroupName,
+		Group:    CatalogEntryGroupName,
 		CommitId: commitId,
 	}
 	logEntry.SetInfo(info)
-	logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
+	logutil.Infof("append %v, %v", logEntry.GetType(), logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
 }
 
-func (catalog *Catalog) prepareCommitEntry(e IEntry, eType LogEntryType, locker sync.Locker) entry.Entry {
+func (catalog *Catalog) prepareCommitEntry(e IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
 	catalog.commitMu.Lock()
 	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
-	var logEntry entry.Entry
+	var logEntry LogEntry
 	if locker == nil {
 		e.Lock()
 		e.CommitLocked(commitId)
@@ -444,11 +444,11 @@ func (catalog *Catalog) prepareCommitEntry(e IEntry, eType LogEntryType, locker 
 		defer locker.Lock()
 	}
 	info := &entry.CommitInfo{
-		Group: CatalogEntryGroupName,
+		Group:    CatalogEntryGroupName,
 		CommitId: commitId,
 	}
 	logEntry.SetInfo(info)
-	logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
+	logutil.Infof("append %v, %v", logEntry.GetType(), logEntry.GetInfo())
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
@@ -534,7 +534,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		tableEntry, ok := currentDatabaseEntry.Tables[tb.Id]
 		if !ok {
 			tb.CommitInfo.Op = OpHardDelete
-			tb.CommitInfo.CommitId = entry.Range.Right
+			tb.CommitInfo.CommitId = entry.Ranges[CatalogEntryGroupName].End
 			return nil
 		}
 		err := catalog.onReplayTableEntry(tableEntry)
@@ -564,11 +564,11 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) Checkpoint() (entry.Entry, error) {
+func (catalog *Catalog) Checkpoint() (LogEntry, error) {
 	catalog.RLock()
 	e := catalog.ToLogEntry(entry.ETCheckpoint)
 	catalog.RUnlock()
-	logutil.Infof("append %v, %v",e.GetType(),e.GetInfo())
+	logutil.Infof("append %v, %v", e.GetType(), e.GetInfo())
 	if err := catalog.Store.AppendEntry(e); err != nil {
 		panic(err)
 	}
@@ -576,7 +576,7 @@ func (catalog *Catalog) Checkpoint() (entry.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ret.(entry.Entry), nil
+	return ret.(LogEntry), nil
 }
 
 func (catalog *Catalog) PString(level PPLevel, depth int) string {
@@ -605,24 +605,37 @@ func (entry *catalogLogEntry) Unmarshal(buf []byte) error {
 }
 
 func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
-	catalogCkp := &catalogLogEntry{}
+	catalogCkp := &catalogLogEntry{
+		Ranges: make(map[string]*logstoreCommon.ClosedInterval),
+	}
 	if catalog.IndexWal != nil {
 		catalogCkp.SafeIds = catalog.IndexWal.GetAllShardCheckpointId()
 	}
 	catalogCkp.Databases = map[uint64]*databaseCheckpoint{}
-	previousCheckpointId := catalog.GetCheckpointId()
-	commitId := catalog.Store.GetSynced(CatalogEntryGroupName)
+	ctlgpreviousCheckpointId := catalog.GetCheckpointId()
+	ctlgcommitId := catalog.Store.GetSynced(CatalogEntryGroupName)
+	walCommitId := catalog.Store.GetSynced(shard.WalGroupName)
 
 	processor := new(LoopProcessor)
 
-	catalogCkp.Range = &common.Range{
-		Left:  previousCheckpointId + 1,
-		Right: commitId,
+	ctlgRange := &logstoreCommon.ClosedInterval{
+		Start: ctlgpreviousCheckpointId + 1,
+		End:   ctlgcommitId,
 	}
-	logutil.Infof("ctlg ckp %v", catalogCkp.Range)
+	walRange := &logstoreCommon.ClosedInterval{
+		Start: 0,
+		End:   walCommitId,
+	}
+
+	catalogCkp.Ranges[CatalogEntryGroupName] = ctlgRange
+	catalogCkp.Ranges[shard.WalGroupName] = walRange
 
 	check := func(info *CommitInfo) bool {
-		return catalogCkp.Range.ClosedIn(info.CommitId)
+		return ctlgRange.Contains(
+			logstoreCommon.ClosedInterval{
+				Start: info.CommitId,
+				End:   info.CommitId,
+			})
 	}
 
 	processor.DatabaseFn = func(db *Database) error {
@@ -700,7 +713,7 @@ func (entry *catalogLogEntry) Marshal() ([]byte, error) {
 
 func (catalog *Catalog) CommitLocked(uint64) {}
 
-func (catalog *Catalog) ToLogEntry(eType LogEntryType) entry.Entry {
+func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case entry.ETCheckpoint:
 		break
@@ -708,15 +721,10 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) entry.Entry {
 		panic("not supported")
 	}
 	e := catalog.ToCatalogLogEntry()
-	checkpointRange := &logstoreCommon.ClosedInterval{
-		Start: e.Range.Left,
-		End: e.Range.Right,
-	}
 	buf, _ := e.Marshal()
 	logEntry := entry.GetBase()
-	info:=&entry.CheckpointInfo{
-		Group: CatalogEntryGroupName,
-		Checkpoint: checkpointRange,
+	info := &entry.CheckpointInfo{
+		CheckpointRanges: e.Ranges,
 	}
 	logEntry.SetInfo(info)
 	logEntry.SetType(eType)

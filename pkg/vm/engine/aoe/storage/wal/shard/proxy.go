@@ -322,7 +322,6 @@ func (p *proxy) Checkpoint() {
 			CommitId: commitId,
 		}
 		logEntry.SetInfo(info)
-		logutil.Infof("append %v, %v",logEntry.GetType(),logEntry.GetInfo())
 		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
 			panic(err)
 		}

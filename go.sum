@@ -361,6 +361,14 @@ github.com/jiangxinmeng1/logstore v0.0.0-20220224025333-e81591e8cf44 h1:8LCjVhTu
 github.com/jiangxinmeng1/logstore v0.0.0-20220224025333-e81591e8cf44/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
 github.com/jiangxinmeng1/logstore v0.0.0-20220224025644-5033c9503c2d h1:cPXjokL0eCHCY1wblZqb6KQpXfOJ5Mn/MvLHlm7nvqw=
 github.com/jiangxinmeng1/logstore v0.0.0-20220224025644-5033c9503c2d/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224055253-0d9bf141a9c9 h1:ciPnIcOBzkIuEVF0CDYwte+OfrM10UclY23f5O0AX6Q=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224055253-0d9bf141a9c9/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224062627-b3ae4840cc20 h1:Bu93rw+0rveSbaG/gQogp8t8IkOv03JiKcPyccQdedg=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224062627-b3ae4840cc20/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224063106-6a86c3222ebb h1:u8xYpAd0FfFjbdBeeH8LY7SHbRG9E3frZ8eg86IimvU=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224063106-6a86c3222ebb/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224063611-111a3f43629a h1:vurDKAkWGe7tThkAJmro6zdnKbX1fLqS16DHw4Ie8gM=
+github.com/jiangxinmeng1/logstore v0.0.0-20220224063611-111a3f43629a/go.mod h1:2++RsnAX/4ZkI8OrEQMmgH68gDIAV4eDpuDp/VXxYr8=
 github.com/jmespath/go-jmespath v0.0.0-20180206201540-c2b33e8439af/go.mod h1:Nht3zPeWKUH0NzdCt2Blrr5ys8VGpn0CEB0cQHVjt7k=
 github.com/jonboulle/clockwork v0.1.0/go.mod h1:Ii8DK3G1RaLaWxj9trq07+26W01tbo22gdxWY5EU2bo=
 github.com/jonboulle/clockwork v0.2.2 h1:UOGuzwb1PwsrDAObMuhUnj0p5ULPj8V/xJ7Kx9qUBdQ=

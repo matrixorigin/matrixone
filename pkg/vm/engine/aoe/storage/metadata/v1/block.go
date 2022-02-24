@@ -292,7 +292,7 @@ func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	return err
 }
 
-func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (entry.Entry, error) {
+func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	e.Lock()
 	defer e.Unlock()
 	if e.GetCountLocked() != e.Segment.Table.Schema.BlockMaxRows {
