@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -43,6 +44,14 @@ type ComputationHandlerImpl struct {
 	kv KVHandler
 	tch *TupleCodecHandler
 	serializer ValueSerializer
+}
+
+func (chi *ComputationHandlerImpl) Read(attrs []string) (*batch.Batch, error) {
+	panic("implement me")
+}
+
+func (chi *ComputationHandlerImpl) Write(bat *batch.Batch) error {
+	panic("implement me")
 }
 
 func NewComputationHandlerImpl(dh descriptor.DescriptorHandler,

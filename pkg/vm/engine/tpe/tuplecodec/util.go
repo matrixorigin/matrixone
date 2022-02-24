@@ -23,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"math/rand"
 	"strconv"
 )
@@ -359,4 +361,98 @@ func fillBatch(lines [][]string,batchData *batch.Batch) {
 			}
 		}
 	}
+}
+
+func TruncateBatch(bat *batch.Batch,batchSize, needLen int) {
+	if needLen >= batchSize {
+		return
+	}
+	for _, vec := range bat.Vecs {
+		//remove nulls.NUlls
+		for j := uint64(needLen); j < uint64(batchSize); j++ {
+			nulls.Del(vec.Nsp, j)
+		}
+		//remove row
+		switch vec.Typ.Oid {
+		case types.T_int8:
+			cols := vec.Col.([]int8)
+			vec.Col = cols[:needLen]
+		case types.T_int16:
+			cols := vec.Col.([]int16)
+			vec.Col = cols[:needLen]
+		case types.T_int32:
+			cols := vec.Col.([]int32)
+			vec.Col = cols[:needLen]
+		case types.T_int64:
+			cols := vec.Col.([]int64)
+			vec.Col = cols[:needLen]
+		case types.T_uint8:
+			cols := vec.Col.([]uint8)
+			vec.Col = cols[:needLen]
+		case types.T_uint16:
+			cols := vec.Col.([]uint16)
+			vec.Col = cols[:needLen]
+		case types.T_uint32:
+			cols := vec.Col.([]uint32)
+			vec.Col = cols[:needLen]
+		case types.T_uint64:
+			cols := vec.Col.([]uint64)
+			vec.Col = cols[:needLen]
+		case types.T_float32:
+			cols := vec.Col.([]float32)
+			vec.Col = cols[:needLen]
+		case types.T_float64:
+			cols := vec.Col.([]float64)
+			vec.Col = cols[:needLen]
+		case types.T_char, types.T_varchar: //bytes is different
+			vBytes := vec.Col.(*types.Bytes)
+			if len(vBytes.Offsets) > needLen {
+				vec.Col = vBytes.Window(0, needLen)
+			}
+		case types.T_date:
+			cols := vec.Col.([]types.Date)
+			vec.Col = cols[:needLen]
+		case types.T_datetime:
+			cols := vec.Col.([]types.Datetime)
+			vec.Col = cols[:needLen]
+		}
+	}
+}
+
+func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc)([]string,[]*engine.AttributeDef) {
+	var names []string
+	var defs []*engine.AttributeDef
+	for _, attr := range attrs {
+		names = append(names,attr.Name)
+		//make type
+		defs = append(defs,&engine.AttributeDef{Attr:engine.Attribute{
+			Name:    attr.Name,
+			Alg:     0,
+			Type:    TpeTypeToEngineType(attr.Ttype),
+			Default: engine.DefaultExpr{},
+		}})
+	}
+	return names,defs
+}
+
+func TpeTypeToEngineType(Ttype orderedcodec.ValueType) types.Type {
+	t := types.Type{}
+	switch Ttype {
+	case orderedcodec.VALUE_TYPE_UINT64      :  t.Oid = types.T_uint64
+	case orderedcodec.VALUE_TYPE_BYTES      :   t.Oid = types.T_char
+	case orderedcodec.VALUE_TYPE_STRING      :  t.Oid = types.T_char
+	case orderedcodec.VALUE_TYPE_INT8      :    t.Oid = types.T_int8
+	case orderedcodec.VALUE_TYPE_INT16      :   t.Oid = types.T_int16
+	case orderedcodec.VALUE_TYPE_INT32      :   t.Oid = types.T_int32
+	case orderedcodec.VALUE_TYPE_INT64      :   t.Oid = types.T_int64
+	case orderedcodec.VALUE_TYPE_UINT8      :   t.Oid = types.T_uint8
+	case orderedcodec.VALUE_TYPE_UINT16      :  t.Oid = types.T_uint16
+	case orderedcodec.VALUE_TYPE_UINT32      :  t.Oid = types.T_uint32
+	case orderedcodec.VALUE_TYPE_FLOAT32      : t.Oid = types.T_float32
+	case orderedcodec.VALUE_TYPE_FLOAT64      : t.Oid = types.T_float64
+	case orderedcodec.VALUE_TYPE_DATE      :    t.Oid = types.T_date
+	case orderedcodec.VALUE_TYPE_DATETIME      :t.Oid = types.T_datetime
+	}
+	t.Oid.ToType()
+	return t
 }
