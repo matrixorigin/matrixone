@@ -14,7 +14,6 @@ import (
 	"text/template"
 )
 
-
 // lrt is a structure to generate binary-operator files.
 type lrt struct {
 	LTYP types.T
@@ -25,7 +24,7 @@ type lrt struct {
 // tr is a structure to generate unary-operator files.
 type tr struct {
 	LTYP types.T
-	RET	  types.T
+	RET  types.T
 }
 
 var (
@@ -50,18 +49,17 @@ var (
 	}
 )
 
-
 // map of file name and its generate function.
 var filesAndFunctions map[string]func() error = map[string]func() error{
 	// binary operators.
-	"plus.go": 	GeneratePlus,
+	"plus.go":  GeneratePlus,
 	"minus.go": GenerateMinus,
-	"mult.go": 	GenerateMult,
-	"div.go":	GenerateDiv,
-	"mod.go":	GenerateMod,
-	"and.go": GenerateAnd,
-	"or.go": GenerateOr,
-	"like.go": GenerateLike,
+	"mult.go":  GenerateMult,
+	"div.go":   GenerateDiv,
+	"mod.go":   GenerateMod,
+	"and.go":   GenerateAnd,
+	"or.go":    GenerateOr,
+	"like.go":  GenerateLike,
 	// unary operators.
 	"unaryops.go": GenerateUnaryOperators,
 	// binary comparison operators.
@@ -212,7 +210,6 @@ func GenerateMinus() error {
 			{types.T_uint16, types.T_uint32, types.T_uint32},
 			{types.T_uint8, types.T_uint32, types.T_uint32},
 			{types.T_uint8, types.T_uint16, types.T_uint16},
-
 		},
 		[]lrt{ // high - low - high
 			{types.T_int64, types.T_int32, types.T_int64},
@@ -323,9 +320,11 @@ func GenerateDiv() error {
 	// Div between int and int, int and float, int and uint, and so on will do type conversion first.
 	// Rules is that :
 	// 		t / t 			  ==> 	float64 / float64
-	// 		t / float32		  ==>	float32 / float32
+	// 		t / float32		  ==>	float64 / float64
 	//		t / float64 	  ==> 	float64 / float64
 	// 		float32 / float64 ==> 	float64 / float64
+	// 		float32 / float32 ==> 	float32 / float32
+	// 		float64 / float64 ==> 	float64 / float64
 	// t contains all int type and uint type.
 
 	// read template file
@@ -342,12 +341,13 @@ func GenerateDiv() error {
 	}
 
 	type pts struct {
-		Div []lrt
+		Div        []lrt
 		IntegerDiv []lrt
 	}
 
 	var pTs = pts{
 		[]lrt{
+			{types.T_float32, types.T_float32, types.T_float32},
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
 		[]lrt{
@@ -398,12 +398,8 @@ func GenerateMod() error {
 			{types.T_float32, types.T_float32, types.T_float32},
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
-		[]lrt{
-
-		},
-		[]lrt{
-
-		},
+		[]lrt{},
+		[]lrt{},
 	}
 
 	file, err := os.OpenFile("mod.go", os.O_CREATE|os.O_WRONLY, 0755)
@@ -432,7 +428,7 @@ func GenerateUnaryOperators() error {
 
 	type pts struct {
 		Minus []tr
-		Not	  []tr
+		Not   []tr
 	}
 
 	var pTs pts = pts{
@@ -444,9 +440,9 @@ func GenerateUnaryOperators() error {
 			{types.T_float32, types.T_float32},
 			{types.T_float64, types.T_float64},
 		},
-		Not:   nil,
+		Not: nil,
 	}
-	for _, num := range numerics{
+	for _, num := range numerics {
 		if num == types.T_int8 { // this already implemented directly in the template
 			continue
 		}
@@ -522,12 +518,12 @@ func GenerateCast() error {
 	}
 
 	type pts struct {
-		SameType []lrt
-		SameType2 []lrt
+		SameType    []lrt
+		SameType2   []lrt
 		LeftToRight []lrt
-		Specials1	[]lrt // left type is T_char or T_varchar
-		Specials2	[]lrt // right type is T_char or T_varchar
-		Specials3	[]lrt // conversion between char and varchar
+		Specials1   []lrt // left type is T_char or T_varchar
+		Specials2   []lrt // right type is T_char or T_varchar
+		Specials3   []lrt // conversion between char and varchar
 	}
 
 	var pTs = pts{
@@ -591,7 +587,7 @@ func GenerateEqual() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{
@@ -630,7 +626,7 @@ func GenerateGreatEqual() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{
@@ -669,7 +665,7 @@ func GenerateGreatThan() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{
@@ -708,7 +704,7 @@ func GenerateLessEqual() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{
@@ -747,7 +743,7 @@ func GenerateLessThan() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{
@@ -786,7 +782,7 @@ func GenerateNotEqual() error {
 	}
 
 	type pts struct {
-		Numerics []lrt
+		Numerics  []lrt
 		CharTypes []lrt
 	}
 	var pTs = pts{

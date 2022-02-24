@@ -509,13 +509,16 @@ func initCastRulesForBinaryOps() {
 	{
 		{
 			/*
-				cast to float64 / float64 (integerDiv will return int64):
+				cast to float64 / float64 (for integerDiv, the result will be cast back to int64):
 				1. div between int and int
 				2. div between uint and uint
 				3. div between int and uint
 				4. div between int and float
 				5. div between uint and float
 				6. div between float32 and float64
+				7. integerDiv between int and int
+				8. integerDiv between uint and uint
+				9. integerDiv between int and uint
 			*/
 			targetType := []types.Type{
 				{Oid: types.T_float64, Size: 8},
@@ -545,28 +548,27 @@ func initCastRulesForBinaryOps() {
 						}...)
 					}
 				}
-				for _, l := range ints {
-					for _, r := range floats {
-						OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-							{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
-							{NumArgs: 2, sourceTypes: []types.T{r, l}, targetTypes: targetType},
-						}...)
-					}
-				}
-				for _, l := range uints {
-					for _, r := range floats {
-						OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-							{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
-							{NumArgs: 2, sourceTypes: []types.T{r, l}, targetTypes: targetType},
-						}...)
-					}
-				}
-				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-					{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_float32}, targetTypes: targetType},
-					{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_float64}, targetTypes: targetType},
-					{NumArgs: 2, sourceTypes: []types.T{types.T_float64, types.T_float32}, targetTypes: targetType},
-				}...)
 			}
+			for _, l := range ints {
+				for _, r := range floats {
+					OperatorCastRules[Div] = append(OperatorCastRules[Div], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{r, l}, targetTypes: targetType},
+					}...)
+				}
+			}
+			for _, l := range uints {
+				for _, r := range floats {
+					OperatorCastRules[Div] = append(OperatorCastRules[Div], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{l, r}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{r, l}, targetTypes: targetType},
+					}...)
+				}
+			}
+			OperatorCastRules[Div] = append(OperatorCastRules[Div], []castRule{
+				{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_float64}, targetTypes: targetType},
+				{NumArgs: 2, sourceTypes: []types.T{types.T_float64, types.T_float32}, targetTypes: targetType},
+			}...)
 		}
 	}
 	// Mod cast rule
