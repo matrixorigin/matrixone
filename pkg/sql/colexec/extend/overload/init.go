@@ -337,13 +337,13 @@ func initCastRulesForBinaryOps() {
 				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
 					{NumArgs: 2, sourceTypes: []types.T{types.T_int32, types.T_float32}, targetTypes: []types.Type{
 						{Oid: types.T_float64, Size: 8}, {Oid: types.T_float64, Size: 8}}},
-					{NumArgs: 2, sourceTypes: []types.T{types.T_uint64, types.T_int32}, targetTypes: []types.Type{
+					{NumArgs: 2, sourceTypes: []types.T{types.T_float32, types.T_int32}, targetTypes: []types.Type{
 						{Oid: types.T_float64, Size: 8}, {Oid: types.T_float64, Size: 8}}},
 				}...)
 				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
 					{NumArgs: 2, sourceTypes: []types.T{types.T_int32, types.T_float64}, targetTypes: []types.Type{
 						{Oid: types.T_float64, Size: 8}, {Oid: types.T_float64, Size: 8}}},
-					{NumArgs: 2, sourceTypes: []types.T{types.T_uint64, types.T_int32}, targetTypes: []types.Type{
+					{NumArgs: 2, sourceTypes: []types.T{types.T_float64, types.T_int32}, targetTypes: []types.Type{
 						{Oid: types.T_float64, Size: 8}, {Oid: types.T_float64, Size: 8}}},
 				}...)
 				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
