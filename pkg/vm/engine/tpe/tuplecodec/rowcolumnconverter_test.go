@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/smartystreets/goconvey/convey"
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -102,25 +103,24 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 			{types.T_float32,     orderedcodec.VALUE_TYPE_FLOAT32, float32(math.MaxFloat32),     },
 			{types.T_float64,     orderedcodec.VALUE_TYPE_FLOAT64, float64(math.MaxFloat64),     },
 			{types.T_char,        orderedcodec.VALUE_TYPE_BYTES,   []byte("abc"),                },
-			{types.T_varchar,     orderedcodec.VALUE_TYPE_STRING,  "abc",                        },
+			{types.T_varchar,     orderedcodec.VALUE_TYPE_BYTES,  []byte("abc"),                },
 			{types.T_date,        orderedcodec.VALUE_TYPE_DATE,    dateValue,                    },
 			{types.T_datetime,    orderedcodec.VALUE_TYPE_DATETIME,datetimeValue,                },
 		}
 
-		var types []types.T
+		var typs []types.T
 		for _, kase := range kases {
-			types = append(types,kase.typ)
+			typs = append(typs,kase.typ)
 		}
-		names,attrs := makeAttributes(types...)
+		names,attrs := makeAttributes(typs...)
 
 		cnt := 10
 
 		bat := makeBatch(cnt,names,attrs)
 
 		var iattrs []descriptor.IndexDesc_Attribute
-		var wantAttrIDs []int
 		var dis []*orderedcodec.DecodedItem
-
+		am := &AttributeMap{}
 		for i, kase := range kases {
 			iattrs = append(iattrs,descriptor.IndexDesc_Attribute{
 				Name:      names[i],
@@ -128,7 +128,8 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				ID: uint32(i),
 				Type:      kase.valueT,
 			})
-			wantAttrIDs = append(wantAttrIDs,i)
+
+			am.Append(i,i)
 
 			dis = append(dis,&orderedcodec.DecodedItem{
 				Value:                    kase.value,
@@ -145,12 +146,87 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 			err := rcc.FillBatchFromDecodedIndexKey(indexDesc,
 				0,
 				dis,
-				wantAttrIDs,
+				am,
 				bat,
 				i,
 			)
 			convey.So(err,convey.ShouldBeNil)
 		}
 
+		callbackForCheck := func(callbackCtx interface{}, tuple Tuple) error {
+			colcnt,_ := tuple.GetAttributeCount()
+			for i := uint32(0); i < colcnt; i++ {
+				v,_ := tuple.GetValue(i)
+				typ, _, _ := tuple.GetAttribute(i)
+				convey.So(typ.Oid,convey.ShouldEqual,kases[i].typ)
+				convey.So(reflect.DeepEqual(v,kases[i].value),convey.ShouldBeTrue)
+			}
+			return nil
+		}
+
+		ba := NewBatchAdapter(bat)
+		err := ba.ForEach(nil,callbackForCheck)
+		convey.So(err,convey.ShouldBeNil)
+
+		bat2 := makeBatch(cnt,names,attrs)
+		for i := 0; i < cnt; i++ {
+			err = rcc.FillBatchFromDecodedIndexValue(indexDesc,
+				0,
+				dis,
+				am,
+				bat2,
+				i,
+			)
+			convey.So(err,convey.ShouldBeNil)
+		}
+
+		ba2 := NewBatchAdapter(bat2)
+		err = ba2.ForEach(nil,callbackForCheck)
+		convey.So(err,convey.ShouldBeNil)
+
+		bat3 := makeBatch(cnt,names,attrs)
+		for i := 0; i < cnt; i++ {
+			am2 := &AttributeMap{
+				attributeID: am.attributeID[:4],
+				attributePosition: am.attributePosition[:4],
+			}
+			am3 := &AttributeMap{
+				attributeID: am.attributeID[4:],
+				attributePosition: am.attributePosition[4:],
+			}
+			err = rcc.FillBatchFromDecodedIndexKeyValue(indexDesc,
+				0,
+				dis,
+				dis,
+				am2,
+				am3,
+				bat3,
+				i,
+			)
+			convey.So(err,convey.ShouldBeNil)
+
+			am4 := &AttributeMap{
+				attributeID: am.attributeID[:5],
+				attributePosition: am.attributePosition[:5],
+			}
+			am5 := &AttributeMap{
+				attributeID: am.attributeID[4:],
+				attributePosition: am.attributePosition[4:],
+			}
+			err = rcc.FillBatchFromDecodedIndexKeyValue(indexDesc,
+				0,
+				dis,
+				dis,
+				am4,
+				am5,
+				bat3,
+				i,
+			)
+			convey.So(err,convey.ShouldBeError)
+		}
+
+		ba3 := NewBatchAdapter(bat3)
+		err = ba3.ForEach(nil,callbackForCheck)
+		convey.So(err,convey.ShouldBeNil)
 	})
 }

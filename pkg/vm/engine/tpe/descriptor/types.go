@@ -16,6 +16,7 @@ package descriptor
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	"sort"
 )
 
 type DatabaseDesc struct {
@@ -205,6 +206,30 @@ type IndexDesc_Attribute struct {
 	ID uint32 `json:"id,string"`
 
 	Type orderedcodec.ValueType `json:"type,string"`
+}
+
+func ExtractIndexAttributeIDsSorted(attrs []IndexDesc_Attribute) []uint32 {
+	ids := ExtractIndexAttributeIDs(attrs)
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) []uint32 {
+	var ids []uint32
+	for _, attr := range attrs {
+		ids = append(ids,attr.ID)
+	}
+	return ids
+}
+
+func ExtractIndexAttributeDescIDs(attrs []*AttributeDesc) []int {
+	var ids []int
+	for _, attr := range attrs {
+		ids = append(ids,int(attr.ID))
+	}
+	return ids
 }
 
 // DescriptorHandler loads and updates the descriptors

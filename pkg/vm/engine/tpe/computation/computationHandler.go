@@ -14,7 +14,10 @@
 
 package computation
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+)
 
 type ComputationHandler interface {
 	CreateDatabase(epoch uint64, dbName string, typ int) (uint64, error)
@@ -34,4 +37,8 @@ type ComputationHandler interface {
 	ListTables(dbId uint64) ([]*descriptor.RelationDesc, error)
 
 	GetTable(dbId uint64, name string) (*descriptor.RelationDesc, error)
+
+	Read(attrs []string) (*batch.Batch, error)
+
+	Write(bat *batch.Batch) error
 }

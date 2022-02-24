@@ -24,16 +24,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	"sort"
 )
 
 var (
 	errorColumnIndexIsInvalid = errors.New("column index is invalid")
 	errorAttributeCountNotEqual = errors.New("attribute count is not equal to the definition")
 	errorInvalidAttributeId = errors.New("attributeId is invalid")
+	errorUnsupportedType = errors.New("unsupported type")
+	errorDuplicateAttributeInKeyAttributeAndValueAttribute =errors.New("duplicate attribute in thye key attribute and the value attribute")
 )
 
 var _ RowColumnConverter = &RowColumnConverterImpl{}
 var _ Tuple = &TupleBatchImpl{}
+
+type AttributeMap struct {
+	attributeID []int
+	attributePosition []int
+}
+
+func (am *AttributeMap) Append(id,position int)  {
+	am.attributeID = append(am.attributeID,id)
+	am.attributePosition = append(am.attributePosition,position)
+}
+
+func (am *AttributeMap) Length() int {
+	return len(am.attributeID)
+}
+
+func (am *AttributeMap) Get(i int)(int,int)  {
+	return am.attributeID[i],am.attributePosition[i]
+}
 
 type RowColumnConverter interface {
 	GetTupleFromBatch(bat *batch.Batch,rowID int)(Tuple,error)
@@ -41,10 +62,25 @@ type RowColumnConverter interface {
 	GetTuplesFromBatch(bat *batch.Batch)(Tuples,error)
 
 	//FillBatchFromDecodedIndexKey fills the batch at row i with the data from the decoded key
-	//The attributes and the attributeID are the
+	//the attributeID are wanted attribute.
 	FillBatchFromDecodedIndexKey(index *descriptor.IndexDesc,
 		columnGroupID uint64,attributes [] *orderedcodec.DecodedItem,
-		attributeID []int,bat *batch.Batch,rowID int)(error)
+		am *AttributeMap,bat *batch.Batch,rowIndex int)(error)
+
+	//FillBatchFromDecodedIndexValue fills the batch at row i with the data from the decoded value
+	//the attributeID are wanted attribute.
+	FillBatchFromDecodedIndexValue(index *descriptor.IndexDesc,
+		columnGroupID uint64,attributes [] *orderedcodec.DecodedItem,
+		am *AttributeMap,bat *batch.Batch,rowIndex int)(error)
+
+	//FillBatchFromDecodedIndexKeyValue fills the batch at row i with the data from the decoded key and value
+	//the attributeID are wanted attribute.
+	FillBatchFromDecodedIndexKeyValue(index *descriptor.IndexDesc,
+		columnGroupID uint64,
+		keyAttributes [] *orderedcodec.DecodedItem,
+		valueAttributes [] *orderedcodec.DecodedItem,
+		amForKey *AttributeMap,amForValue *AttributeMap,
+		bat *batch.Batch,rowIndex int)(error)
 }
 
 type TupleBatchImpl struct {
@@ -98,26 +134,68 @@ func (tbi *TupleBatchImpl) GetInt(colIdx uint32) (int, error) {
 
 type RowColumnConverterImpl struct {}
 
+func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKeyValue(
+		index *descriptor.IndexDesc,
+		columnGroupID uint64,
+		keyAttributes []*orderedcodec.DecodedItem,
+		valueAttributes []*orderedcodec.DecodedItem,
+		amForKey *AttributeMap,amForValue *AttributeMap,
+		bat *batch.Batch,
+		rowIdx int) error {
+
+	//find duplicate attribute
+	valueAttributeID := make([]int,amForValue.Length())
+	copy(valueAttributeID,amForValue.attributePosition)
+	sort.Ints(valueAttributeID)
+	for i := 0; i < amForKey.Length(); i++ {
+		k,_ := amForKey.Get(i)
+		p := sort.SearchInts(valueAttributeID,k)
+		if p < len(valueAttributeID) && valueAttributeID[p] == k {
+			return errorDuplicateAttributeInKeyAttributeAndValueAttribute
+		}
+	}
+
+	err := tbi.FillBatchFromDecodedIndexKey(index,columnGroupID,
+		keyAttributes,amForKey,bat, rowIdx)
+	if err != nil {
+		return err
+	}
+
+	err = tbi.FillBatchFromDecodedIndexValue(index,columnGroupID,
+		valueAttributes,amForValue,bat, rowIdx)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexValue(
+		index *descriptor.IndexDesc,
+		columnGroupID uint64,
+		attributes []*orderedcodec.DecodedItem,
+		am *AttributeMap,
+		bat *batch.Batch,
+		rowIdx int) error {
+	return tbi.FillBatchFromDecodedIndexKey(index,columnGroupID,attributes,am,bat,rowIdx)
+}
+
 func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKey(
 		index *descriptor.IndexDesc,
 		columnGroupID uint64,
 		attributes []*orderedcodec.DecodedItem,
-		attributeID []int,
+		am *AttributeMap,
 		bat *batch.Batch,
 		rowIdx int) error {
-	if len(index.Attributes) != len(attributes) {
-		return errorAttributeCountNotEqual
-	}
 
-	for _, attrID := range attributeID {
-		if attrID < 0 || attrID >= len(attributes) ||
-				attrID >= len(index.Attributes){
+	for i := 0; i < am.Length(); i++ {
+		attrID,attriPos := am.Get(i)
+		if attrID < 0 || attrID >= len(attributes) {
 			return errorInvalidAttributeId
 		}
 
 		//attribute data
 		attr := attributes[attrID]
-		colIdx := attrID
+		colIdx := attriPos
 
 		isNullOrEmpty := attr.ValueType == orderedcodec.VALUE_TYPE_NULL
 
@@ -274,7 +352,7 @@ func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKey(
 				cols[rowIdx] = d
 			}
 		default:
-			panic("unsupported oid")
+			return errorUnsupportedType
 		}
 	}
 	return nil
