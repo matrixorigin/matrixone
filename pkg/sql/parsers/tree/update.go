@@ -14,7 +14,11 @@
 
 package tree
 
-import "strconv"
+import (
+	"bufio"
+	"os"
+	"strconv"
+)
 
 //update statement
 type Update struct {
@@ -286,6 +290,10 @@ type LoadColumn interface {
 }
 
 type ExportParam struct {
+	// file handler
+	File *os.File
+	// bufio.writer
+	Writer *bufio.Writer
 	// outfile flag
 	Outfile bool
 	// filename path

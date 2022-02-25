@@ -23,7 +23,7 @@ func Test_initExportFileParam(t *testing.T) {
 			Fields: &tree.Fields{},
 		},
 	}
-	initExportFileParam(oq)
+	initExportFileParam(oq.ep, oq.mrs)
 
 	col1 := new(MysqlColumn)
 	col1.SetName(colName1)
@@ -34,7 +34,7 @@ func Test_initExportFileParam(t *testing.T) {
 
 	oq.ep.ForceQuote = append(oq.ep.ForceQuote, colName1)
 	oq.mrs.Name2Index[colName1] = 0
-	initExportFileParam(oq)
+	initExportFileParam(oq.ep, oq.mrs)
 }
 
 func Test_openNewFile(t *testing.T) {
@@ -50,7 +50,7 @@ func Test_openNewFile(t *testing.T) {
 		}
 		stubs := gostub.StubFunc(&OpenFile, nil, errors.New("can not open file"))
 		defer stubs.Reset()
-		convey.So(openNewFile(oq), convey.ShouldNotBeNil)
+		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldNotBeNil)
 	})
 
 	convey.Convey("openNewFile succ", t, func() {
@@ -78,7 +78,7 @@ func Test_openNewFile(t *testing.T) {
 		stubs = gostub.StubFunc(&writeDataToCSVFile, nil)
 		defer stubs.Reset()
 
-		convey.So(openNewFile(oq), convey.ShouldBeNil)
+		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldBeNil)
 	})	
 }
 
@@ -114,8 +114,8 @@ func Test_writeToCSVFile(t *testing.T) {
 				Header: true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
+				Writer: &bufio.Writer{},
 			},
-			writer: &bufio.Writer{},
 		}
 		var output []byte = []byte{'1', '2'}
 		oq.ep.MaxFileSize = 1
@@ -182,18 +182,18 @@ func Test_writeDataToCSVFile(t *testing.T) {
 				Header: true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
+				Writer: &bufio.Writer{},
 			},
-			writer: &bufio.Writer{},
 		}
 		var output []byte = []byte{'1', '2'}
 		stubs := gostub.StubFunc(&Write, 0, errors.New("writeDataToCSVFile error"))
 		defer stubs.Reset()
 
-		convey.So(writeDataToCSVFile(oq, output), convey.ShouldNotBeNil)
+		convey.So(writeDataToCSVFile(oq.ep, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Write, len(output), nil)
 		defer stubs.Reset()
-		convey.So(writeDataToCSVFile(oq, output), convey.ShouldBeNil)
+		convey.So(writeDataToCSVFile(oq.ep, output), convey.ShouldBeNil)
 
 	})
 }
@@ -208,8 +208,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 				Header: true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
+				Writer: &bufio.Writer{},
 			},
-			writer: &bufio.Writer{},
 		}
 
 		var col []*MysqlColumn = []*MysqlColumn{
@@ -254,8 +254,8 @@ func Test_exportDataToCSVFile(t *testing.T) {
 				Header: true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
+				Writer: &bufio.Writer{},
 			},
-			writer: &bufio.Writer{},
 		}
 		var col []*MysqlColumn = []*MysqlColumn{
 			&MysqlColumn{},
