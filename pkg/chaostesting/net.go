@@ -15,11 +15,11 @@
 package fz
 
 import (
-	"encoding/binary"
 	"math/rand"
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/songgao/water"
@@ -32,7 +32,7 @@ func (_ Def) NetworkModel() NetworkModel {
 	return "localhost"
 }
 
-type NetworkHost string
+type GetNetworkHost func() string
 
 func (_ Def) NetworkHost(
 	id uuid.UUID,
@@ -40,101 +40,125 @@ func (_ Def) NetworkHost(
 	wt RootWaitTree,
 	filter FilterPacket,
 ) (
-	host NetworkHost,
+	get GetNetworkHost,
 	cleanup Cleanup,
 ) {
+
+	var once sync.Once
+	var host string
+	var cleanupFuncs []func()
+	cleanup = func() {
+		for _, fn := range cleanupFuncs {
+			fn()
+		}
+	}
 
 	switch model {
 
 	case "localhost":
-		host = "127.0.0.1"
+		get = func() string {
+			return "127.0.0.1"
+		}
 
 	case "dummy":
-		// linux only
-		if runtime.GOOS != "linux" {
-			host = "localhost"
-			break
-		}
 
-		linkAttrs := netlink.LinkAttrs{
-			MTU:    1234,
-			TxQLen: 256,
-			Name:   id.String()[:8],
-		}
-		link := &netlink.Dummy{
-			LinkAttrs: linkAttrs,
-		}
-		err := netlink.LinkAdd(link)
-		if err != nil {
-			if strings.Contains(err.Error(), "file exists") {
-				err = nil
+		get = func() string {
+			// linux only
+			if runtime.GOOS != "linux" {
+				return "localhost"
 			}
-		}
-		ce(err)
-		ce(netlink.LinkSetUp(link))
 
-		ip := make(net.IP, 4)
-		binary.LittleEndian.PutUint32(ip, uint32(rand.Int31()))
-		addr, err := netlink.ParseAddr(ip.String() + "/24")
-		ce(err)
-		ce(netlink.AddrAdd(link, addr))
+			once.Do(func() {
+				linkAttrs := netlink.LinkAttrs{
+					MTU:    1234,
+					TxQLen: 256,
+					Name:   "fz-" + id.String()[:8],
+				}
+				link := &netlink.Dummy{
+					LinkAttrs: linkAttrs,
+				}
+				err := netlink.LinkAdd(link)
+				if err != nil {
+					if strings.Contains(err.Error(), "file exists") {
+						err = nil
+					}
+				}
+				ce(err)
+				ce(netlink.LinkSetUp(link))
 
-		host = NetworkHost(ip.String())
+				ip := randomIP()
+				addr, err := netlink.ParseAddr(ip.String() + "/24")
+				ce(err)
+				ce(netlink.AddrAdd(link, addr))
 
-		cleanup = func() {
-			ce(netlink.LinkDel(link))
+				host = ip.String()
+
+				cleanupFuncs = append(cleanupFuncs, func() {
+					ce(netlink.LinkSetDown(link))
+					ce(netlink.LinkDel(link))
+				})
+			})
+
+			return host
 		}
 
 	case "tun":
-		name := id.String()
-		name = name[len(name)-15:]
-		dev, err := water.New(water.Config{
-			DeviceType: water.TUN,
-			PlatformSpecificParams: water.PlatformSpecificParams{
-				Name: name,
-			},
-		})
-		ce(err)
-		wt.Go(func() {
-			<-wt.Ctx.Done()
-			ce(dev.Close())
-		})
 
-		link, err := netlink.LinkByName(dev.Name())
-		ce(err)
-		err = netlink.LinkSetUp(link)
-		ce(err)
+		get = func() string {
 
-		ip := make(net.IP, 4)
-		binary.LittleEndian.PutUint32(ip, uint32(rand.Int31()))
-		addr, err := netlink.ParseAddr(ip.String() + "/24")
-		ce(err)
-		ce(netlink.AddrAdd(link, addr))
+			once.Do(func() {
+				name := id.String()
+				name = name[len(name)-15:]
+				dev, err := water.New(water.Config{
+					DeviceType: water.TUN,
+					PlatformSpecificParams: water.PlatformSpecificParams{
+						Name: name,
+					},
+				})
+				ce(err)
+				wt.Go(func() {
+					<-wt.Ctx.Done()
+					ce(dev.Close())
+				})
 
-		const mtu = 1234
-		err = netlink.LinkSetMTU(link, mtu)
-		ce(err)
+				link, err := netlink.LinkByName(dev.Name())
+				ce(err)
+				err = netlink.LinkSetUp(link)
+				ce(err)
 
-		wt.Go(func() {
-			buf := make([]byte, mtu+123)
-			for {
-				n, err := dev.Read(buf)
-				if err != nil {
-					return
-				}
+				ip := randomIP()
+				addr, err := netlink.ParseAddr(ip.String() + "/24")
+				ce(err)
+				ce(netlink.AddrAdd(link, addr))
 
-				packet := filter(buf[:n])
+				const mtu = 1234
+				err = netlink.LinkSetMTU(link, mtu)
+				ce(err)
 
-				if len(packet) > 0 {
-					_, err = dev.Write(packet)
-					if err != nil {
-						return
+				wt.Go(func() {
+					buf := make([]byte, mtu+123)
+					for {
+						n, err := dev.Read(buf)
+						if err != nil {
+							return
+						}
+
+						packet := filter(buf[:n])
+
+						if len(packet) > 0 {
+							_, err = dev.Write(packet)
+							if err != nil {
+								return
+							}
+						}
 					}
-				}
-			}
-		})
+				})
 
-		host = NetworkHost(ip.String())
+				host = ip.String()
+			})
+
+			return host
+		}
 
 	default:
 		panic("unknown network model")
@@ -142,4 +166,13 @@ func (_ Def) NetworkHost(
 	}
 
 	return
+}
+
+func randomIP() net.IP {
+	ip := make(net.IP, 4)
+	ip[0] = 192
+	ip[1] = 168
+	ip[2] = 100 + byte(rand.Intn(123))
+	ip[3] = 100 + byte(rand.Intn(123))
+	return ip
 }

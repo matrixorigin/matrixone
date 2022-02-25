@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// String range instructions and call each operator's string function to show a query plan
 func String(ins Instructions, buf *bytes.Buffer) {
 	for i, in := range ins {
 		if i > 0 {
@@ -28,7 +29,7 @@ func String(ins Instructions, buf *bytes.Buffer) {
 	}
 }
 
-// Prepare
+// Prepare range instructions and do init work for each operator's argument by calling its prepare function
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		if err := prepareFunc[in.Op](proc, in.Arg); err != nil {
@@ -47,7 +48,7 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 		if ok, err = execFunc[in.Op](proc, in.Arg); err != nil {
 			return ok || end, err
 		}
-		if ok {
+		if ok { // ok is true shows that at least one operator has done its work
 			end = true
 		}
 	}

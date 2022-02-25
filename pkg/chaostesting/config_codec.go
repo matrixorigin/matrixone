@@ -103,7 +103,7 @@ func (_ Def) ReadConfig(
 
 		for {
 
-			token, err := nextTokenSkipCharData(decoder)
+			token, err := nextRelevantToken(decoder)
 			if is(err, io.EOF) {
 				err = nil
 				break
@@ -129,4 +129,17 @@ func (_ Def) ReadConfig(
 
 		return
 	}
+}
+
+func nextRelevantToken(d *xml.Decoder) (xml.Token, error) {
+read:
+	token, err := d.Token()
+	if err != nil {
+		return nil, we(err)
+	}
+	switch token.(type) {
+	case xml.CharData, xml.Comment:
+		goto read
+	}
+	return token, nil
 }

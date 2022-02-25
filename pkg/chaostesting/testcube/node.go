@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage"
+	"github.com/matrixorigin/matrixcube/vfs"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 	"go.uber.org/zap"
 )
@@ -31,6 +32,7 @@ type Node struct {
 	Config      *config.Config
 	RaftStore   raftstore.Store
 	DataStorage storage.DataStorage
+	FS          vfs.FS
 
 	Cond       *sync.Cond
 	Created    bool

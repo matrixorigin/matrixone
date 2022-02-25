@@ -16,6 +16,7 @@ package descriptor
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	"sort"
 )
 
 type DatabaseDesc struct {
@@ -32,6 +33,8 @@ type DatabaseDesc struct {
 	Drop_epoch uint64 `json:"drop_epoch,string"`
 
 	Max_access_epoch        uint64                `json:"max_access_epoch,string"`
+
+	Typ int `json:"typ,string"`
 }
 
 type RelationDesc struct {
@@ -205,6 +208,30 @@ type IndexDesc_Attribute struct {
 	Type orderedcodec.ValueType `json:"type,string"`
 }
 
+func ExtractIndexAttributeIDsSorted(attrs []IndexDesc_Attribute) []uint32 {
+	ids := ExtractIndexAttributeIDs(attrs)
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+	return ids
+}
+
+func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) []uint32 {
+	var ids []uint32
+	for _, attr := range attrs {
+		ids = append(ids,attr.ID)
+	}
+	return ids
+}
+
+func ExtractIndexAttributeDescIDs(attrs []*AttributeDesc) []int {
+	var ids []int
+	for _, attr := range attrs {
+		ids = append(ids,int(attr.ID))
+	}
+	return ids
+}
+
 // DescriptorHandler loads and updates the descriptors
 type DescriptorHandler interface {
 
@@ -227,4 +254,8 @@ type DescriptorHandler interface {
 	StoreDatabaseDescByName(name string, db *DatabaseDesc) error
 
 	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
+
+	MakePrefixWithOneExtraID(dbID uint64, tableID uint64, indexID uint64, extraID uint64) ([]byte, *orderedcodec.EncodedItem)
+
+	GetValuesWithPrefix(parentID uint64, callbackCtx interface{}, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error)
 }

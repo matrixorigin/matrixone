@@ -185,7 +185,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
-	var exitFlag bool = false
 
 	if bat == nil {
 		return nil
@@ -238,14 +237,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if oq.ep.Outfile {
 			select {
 				case <- ses.closeRef.stopExportData: {
-					exitFlag = true
-					break
+					return nil
 				}
 				default:{}
 			}
-		}
-		if exitFlag {
-			break
 		}
 
 		if bat.Zs[j] <= 0 {
@@ -454,12 +449,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	err := oq.flush()
 	if err != nil {
 		return err
-	}
-
-	if oq.ep.Outfile {
-		if err = oq.ep.Writer.Flush(); err != nil {
-			return err
-		}
 	}
 
 	if enableProfile {
@@ -1164,6 +1153,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 			if ses.ep.Outfile {
+				if err = ses.ep.Writer.Flush(); err != nil {
+					return err
+				}
 				if err = ses.ep.File.Close(); err != nil {
 					return err
 				}

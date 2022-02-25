@@ -12,18 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fz
+package epoch
 
-import "encoding/xml"
+import "sync"
 
-func nextTokenSkipCharData(d *xml.Decoder) (xml.Token, error) {
-read:
-	token, err := d.Token()
-	if err != nil {
-		return nil, we(err)
-	}
-	if _, ok := token.(xml.CharData); ok {
-		goto read
-	}
-	return token, nil
+type EpochHandler struct {
+	epoch uint64
+	rwlock sync.RWMutex
+}
+
+func NewEpochHandler() *EpochHandler {
+	return &EpochHandler{}
+}
+
+func (eh *EpochHandler) SetEpoch(e uint64) {
+	eh.rwlock.Lock()
+	defer eh.rwlock.Unlock()
+	eh.epoch = e
+}
+
+func (eh *EpochHandler) GetEpoch() uint64{
+	eh.rwlock.RLock()
+	defer eh.rwlock.RUnlock()
+	return eh.epoch
+}
+
+func (eh *EpochHandler) RemoveDeletedTable(epoch uint64) (int, error) {
+	eh.rwlock.Lock()
+	defer eh.rwlock.Unlock()
+	//TODO:implement
+	return 0, nil
 }

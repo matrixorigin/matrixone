@@ -138,29 +138,8 @@ func (dhi *DescriptorHandlerImpl) marshalDatabaseDesc(desc *descriptor.DatabaseD
 	return marshal,nil
 }
 
-// unmarshalRelationDesc decodes the bytes into the relationDesc
-func (dhi *DescriptorHandlerImpl) unmarshalRelationDesc(data []byte) (*descriptor.RelationDesc,error) {
-	tableDesc := &descriptor.RelationDesc{}
-	err := json.Unmarshal(data, tableDesc)
-	if err != nil {
-		return nil, errorDecodeDescriptorFailed
-	}
-	return tableDesc,nil
-}
-
-// unmarshalDatabaseDesc decodes the bytes into the databaseDesc
-func (dhi *DescriptorHandlerImpl) unmarshalDatabaseDesc(data []byte) (*descriptor.DatabaseDesc,error) {
-	dbDesc := &descriptor.DatabaseDesc{}
-	err := json.Unmarshal(data, dbDesc)
-	if err != nil {
-		return nil, errorDecodeDescriptorFailed
-	}
-	return dbDesc,nil
-}
-
-// makePrefixWithParentID makes the prefix(tenantID,dbID,tableID,indexID,parentID)
-func (dhi *DescriptorHandlerImpl) makePrefixWithParentID(dbID uint64,
-		tableID uint64, indexID uint64, parentID uint64) (TupleKey, *orderedcodec.EncodedItem) {
+// MakePrefixWithParentID makes the prefix(tenantID,dbID,tableID,indexID,parentID)
+func (dhi *DescriptorHandlerImpl) MakePrefixWithOneExtraID(dbID uint64, tableID uint64, indexID uint64, extraID uint64) ([]byte, *orderedcodec.EncodedItem) {
 	tke := dhi.codecHandler.GetEncoder()
 
 	//make prefix
@@ -172,14 +151,14 @@ func (dhi *DescriptorHandlerImpl) makePrefixWithParentID(dbID uint64,
 		indexID)
 
 	// append parentID
-	prefix,_ = tke.oe.EncodeUint64(prefix,parentID)
+	prefix,_ = tke.oe.EncodeUint64(prefix, extraID)
 	return prefix,nil
 }
 
 // makePrefixWithParentIDAndTableID makes the prefix(tenantID,dbID,tableID,indexID,parentID,tableID)
 func (dhi *DescriptorHandlerImpl) makePrefixWithParentIDAndTableID(dbID uint64,
 		tableID uint64, indexID uint64, parentID uint64,ID uint64)(TupleKey, *orderedcodec.EncodedItem){
-	prefix,_ := dhi.makePrefixWithParentID(dbID,tableID,indexID,parentID)
+	prefix,_ := dhi.MakePrefixWithOneExtraID(dbID,tableID,indexID,parentID)
 
 	tke := dhi.codecHandler.GetEncoder()
 
@@ -189,7 +168,7 @@ func (dhi *DescriptorHandlerImpl) makePrefixWithParentIDAndTableID(dbID uint64,
 }
 
 // getValueByName gets the value for the key by the name
-func (dhi *DescriptorHandlerImpl) getValueByName(parentID uint64, name string) ([]byte,error) {
+func (dhi *DescriptorHandlerImpl) GetValuesWithPrefix(parentID uint64, callbackCtx interface{}, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error) {
 	/*
 		1,make prefix (tenantID,dbID,tableID,indexID,parentID)
 		2,get keys with the prefix
@@ -199,7 +178,7 @@ func (dhi *DescriptorHandlerImpl) getValueByName(parentID uint64, name string) (
 	//make prefix
 	var prefix TupleKey
 	// append parentID
-	prefix,_ = dhi.makePrefixWithParentID(InternalDatabaseID,
+	prefix,_ = dhi.MakePrefixWithOneExtraID(InternalDatabaseID,
 		InternalDescriptorTableID,
 		uint64(PrimaryIndexID),
 		parentID)
@@ -225,24 +204,14 @@ func (dhi *DescriptorHandlerImpl) getValueByName(parentID uint64, name string) (
 				return nil, err
 			}
 
-			//get the name and the desc
-			nameAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_name_ID]
-			descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-			nameDI := dis[InternalDescriptorTableID_name_ID]
-			descDI := dis[InternalDescriptorTableID_desc_ID]
-			if !(nameDI.IsValueType(nameAttr.Ttype) ||
-				descDI.IsValueType(descAttr.Ttype)) {
-				return nil,errorTypeInValueNotEqualToTypeInAttribute
+			//exec callback
+			bytesInValues,err := callback(callbackCtx,dis)
+			if err != nil {
+				return nil, err
 			}
 
-			if nameInValue,ok := nameDI.Value.(string); ok {
-				//check the name
-				if name == nameInValue {//get it
-					//deserialize the desc
-					if bytesInValue,ok2 := descDI.Value.([]byte); ok2 {
-						return bytesInValue,nil
-					}
-				}
+			if bytesInValues != nil {
+				return bytesInValues, nil
 			}
 		}
 
@@ -251,6 +220,36 @@ func (dhi *DescriptorHandlerImpl) getValueByName(parentID uint64, name string) (
 	}
 
 	return nil, errorDoNotFindTheDesc
+}
+
+//callbackForGetTableDescByName extracts the tabledesc by name
+func (dhi *DescriptorHandlerImpl) callbackForGetTableDescByName(callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
+	//get the name and the desc
+	nameAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_name_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
+	nameDI := dis[InternalDescriptorTableID_name_ID]
+	descDI := dis[InternalDescriptorTableID_desc_ID]
+	if !(nameDI.IsValueType(nameAttr.Ttype) ||
+		descDI.IsValueType(descAttr.Ttype)) {
+		return nil,errorTypeInValueNotEqualToTypeInAttribute
+	}
+
+	if nameInValue,ok := nameDI.Value.(string); ok {
+		name := callbackCtx.(string)
+		//check the name
+		if name == nameInValue {//get it
+			//deserialize the desc
+			if bytesInValue,ok2 := descDI.Value.([]byte); ok2 {
+				return bytesInValue,nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// getValueByName gets the value for the key by the name
+func (dhi *DescriptorHandlerImpl) getValueByName(parentID uint64, name string) ([]byte,error) {
+	return dhi.GetValuesWithPrefix(parentID, name, dhi.callbackForGetTableDescByName)
 }
 
 func (dhi *DescriptorHandlerImpl) LoadRelationDescByName(parentID uint64, name string) (*descriptor.RelationDesc, error) {
@@ -264,7 +263,7 @@ func (dhi *DescriptorHandlerImpl) LoadRelationDescByName(parentID uint64, name s
 	if err != nil {
 		return nil, err
 	}
-	desc, err := dhi.unmarshalRelationDesc(bytesInValue)
+	desc, err := UnmarshalRelationDesc(bytesInValue)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +299,7 @@ func (dhi *DescriptorHandlerImpl) LoadRelationDescByID(parentID uint64, tableID 
 
 	//deserialize the desc
 	if bytesInValue,ok := descDI.Value.([]byte); ok {
-		tableDesc,err := dhi.unmarshalRelationDesc(bytesInValue)
+		tableDesc,err := UnmarshalRelationDesc(bytesInValue)
 		if err != nil {
 			return nil, err
 		}
@@ -375,7 +374,7 @@ func (dhi *DescriptorHandlerImpl) LoadDatabaseDescByName(name string) (*descript
 	if err != nil {
 		return nil, err
 	}
-	desc, err := dhi.unmarshalDatabaseDesc(bytesInValue)
+	desc, err := UnmarshalDatabaseDesc(bytesInValue)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +410,7 @@ func (dhi *DescriptorHandlerImpl) LoadDatabaseDescByID(dbID uint64) (*descriptor
 
 	//deserialize the desc
 	if bytesInValue,ok := descDI.Value.([]byte); ok {
-		dbDesc,err := dhi.unmarshalDatabaseDesc(bytesInValue)
+		dbDesc,err := UnmarshalDatabaseDesc(bytesInValue)
 		if err != nil {
 			return nil, err
 		}
@@ -473,4 +472,24 @@ func (dhi *DescriptorHandlerImpl) StoreDatabaseDescByID(dbID uint64, dbDesc *des
 		return err
 	}
 	return nil
+}
+
+// UnmarshalRelationDesc decodes the bytes into the relationDesc
+func UnmarshalRelationDesc(data []byte) (*descriptor.RelationDesc,error) {
+	tableDesc := &descriptor.RelationDesc{}
+	err := json.Unmarshal(data, tableDesc)
+	if err != nil {
+		return nil, errorDecodeDescriptorFailed
+	}
+	return tableDesc,nil
+}
+
+// UnmarshalDatabaseDesc decodes the bytes into the databaseDesc
+func UnmarshalDatabaseDesc(data []byte) (*descriptor.DatabaseDesc,error) {
+	dbDesc := &descriptor.DatabaseDesc{}
+	err := json.Unmarshal(data, dbDesc)
+	if err != nil {
+		return nil, errorDecodeDescriptorFailed
+	}
+	return dbDesc,nil
 }

@@ -1726,26 +1726,19 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 			}
 			mheap.Free(m, v.Data)
 			v.Data = data
-			n = len(vs.Offsets)
-			vs.Data = data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
+			vs.Data = data[:n]
 		}
 
 		for i, flag := range flags {
 			if flag > 0 {
 				from := ws.Get(offset + int64(i))
 				vs.Lengths = append(vs.Lengths, uint32(len(from)))
-				{
-					n := len(vs.Offsets)
-					if n > 0 {
-						vs.Offsets = append(vs.Offsets, vs.Offsets[n-1]+vs.Lengths[n-1])
-					} else {
-						vs.Offsets = append(vs.Offsets, 0)
-					}
-				}
+				vs.Offsets = append(vs.Offsets, uint32(len(vs.Data)))
 				vs.Data = append(vs.Data, from...)
 			}
 		}
 		v.Col = vs
+
 	case types.T_date:
 		col := w.Col.([]types.Date)
 		if len(v.Data) == 0 {
@@ -1835,8 +1828,10 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 	}
 
 	for i, j := 0, uint64(oldLen); i < len(flags); i++ {
-		if flags[i] > 0 && nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
-			nulls.Add(v.Nsp, j)
+		if flags[i] > 0 {
+			if nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
+				nulls.Add(v.Nsp, j)
+			}
 			j++
 		}
 	}

@@ -22,6 +22,7 @@ import (
 
 func (_ Def2) MainAction(
 	numNodes fz.NumNodes,
+	faultMakers FaultActionMakers,
 ) fz.MainAction {
 
 	const num = 8
@@ -86,71 +87,13 @@ func (_ Def2) MainAction(
 			seq.Actions = newActions
 		}
 
-		// node stop or restart
 		if numFaults < maxFaults {
-			switch r := rand.Intn(10); r {
-
-			case 0:
-				// stop
-				randomInsert(ActionStopNode{
-					NodeID: fz.NodeID(i),
-				})
-
-			case 1:
-				// restart
-				randomInsert(ActionRestartNode{
-					NodeID: fz.NodeID(i),
-				})
-
-			case 2:
-				// network
-				if numNodes < 2 {
-					break
+			if rand.Intn(2) == 0 {
+				action := faultMakers[rand.Intn(len(faultMakers))](fz.NodeID(i))
+				if action != nil {
+					randomInsert(action)
 				}
-				mutations := []func(action *ActionBlockNetwork){
-					func(action *ActionBlockNetwork) {
-						// block all inbound
-						for inbound := fz.NodeID(0); inbound < fz.NodeID(numNodes); inbound++ {
-							action.BlockInboundNodes = append(action.BlockInboundNodes, inbound)
-						}
-					},
-					func(action *ActionBlockNetwork) {
-						// block all outbound
-						for outbound := fz.NodeID(0); outbound < fz.NodeID(numNodes); outbound++ {
-							action.BlockOutboundNodes = append(action.BlockOutboundNodes, outbound)
-						}
-					},
-					func(action *ActionBlockNetwork) {
-						// block random inbound
-					r:
-						id := rand.Intn(int(numNodes))
-						if id == int(i) {
-							goto r
-						}
-						action.BlockInboundNodes = append(action.BlockInboundNodes,
-							fz.NodeID(id))
-					},
-					func(action *ActionBlockNetwork) {
-						// block random outbound
-					r:
-						id := rand.Intn(int(numNodes))
-						if id == int(i) {
-							goto r
-						}
-						action.BlockOutboundNodes = append(action.BlockOutboundNodes,
-							fz.NodeID(id))
-					},
-				}
-				action := ActionBlockNetwork{
-					NodeID: fz.NodeID(i),
-				}
-				for i := 0; i < 1+rand.Intn(2); i++ {
-					mutations[rand.Intn(len(mutations))](&action)
-				}
-				randomInsert(action)
-
 			}
-
 		}
 
 		nodeActions.Actions = append(
@@ -163,4 +106,88 @@ func (_ Def2) MainAction(
 		Action: nodeActions,
 	}
 
+}
+
+type FaultActionMakers []func(id fz.NodeID) fz.Action
+
+func (_ Def) DefaultFaults(
+	makeActionStopNode makeActionStopNode,
+	makeActionRestartNode makeActionRestartNode,
+	makeActionIsolateNode makeActionIsolateNode,
+	makeActionCrashNode makeActionCrashNode,
+	makeActionFullyIsolateNode makeActionFullyIsolateNode,
+) FaultActionMakers {
+	return []func(id fz.NodeID) fz.Action{
+		makeActionStopNode,
+		makeActionRestartNode,
+		makeActionIsolateNode,
+		makeActionCrashNode,
+		makeActionFullyIsolateNode,
+	}
+}
+
+type (
+	makeActionStopNode         func(id fz.NodeID) fz.Action
+	makeActionRestartNode      func(id fz.NodeID) fz.Action
+	makeActionIsolateNode      func(id fz.NodeID) fz.Action
+	makeActionCrashNode        func(id fz.NodeID) fz.Action
+	makeActionFullyIsolateNode func(id fz.NodeID) fz.Action
+)
+
+func (_ Def) ActionMakers(
+	numNodes fz.NumNodes,
+) (
+	makeActionStopNode makeActionStopNode,
+	makeActionRestartNode makeActionRestartNode,
+	makeActionIsolateNode makeActionIsolateNode,
+	makeActionCrashNode makeActionCrashNode,
+	makeActionFullyIsolateNode makeActionFullyIsolateNode,
+) {
+
+	makeActionStopNode = func(id fz.NodeID) fz.Action {
+		return ActionStopNode{
+			NodeID: id,
+		}
+	}
+
+	makeActionRestartNode = func(id fz.NodeID) fz.Action {
+		return ActionRestartNode{
+			NodeID: id,
+		}
+	}
+
+	makeActionIsolateNode = func(id fz.NodeID) fz.Action {
+		if numNodes < 2 {
+			return nil
+		}
+		action := ActionIsolateNode{
+			NodeID: id,
+			Between: func() (nodes []fz.NodeID) {
+				for between := 0; between < int(numNodes); between++ {
+					if between == int(id) {
+						continue
+					}
+					if rand.Intn(2) == 0 {
+						nodes = append(nodes, fz.NodeID(between))
+					}
+				}
+				return nodes
+			}(),
+		}
+		return action
+	}
+
+	makeActionCrashNode = func(id fz.NodeID) fz.Action {
+		return ActionCrashNode{
+			NodeID: id,
+		}
+	}
+
+	makeActionFullyIsolateNode = func(id fz.NodeID) fz.Action {
+		return ActionFullyIsolateNode{
+			NodeID: id,
+		}
+	}
+
+	return
 }

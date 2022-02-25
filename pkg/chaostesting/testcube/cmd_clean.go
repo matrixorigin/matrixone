@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testkv
+package main
 
-import (
-	crand "crypto/rand"
-	"encoding/binary"
-	"math/rand"
-)
+import fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 
-func init() {
-	var seed int64
-	ce(binary.Read(crand.Reader, binary.BigEndian, &seed))
-	rand.Seed(seed)
+func (_ Def) CmdClean(
+	clean fz.CleanTempDir,
+) Commands {
+	return Commands{
+
+		// clean temp files
+		"clean": func(args []string) {
+			clean(0)
+		},
+	}
 }

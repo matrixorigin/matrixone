@@ -318,7 +318,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -337,7 +337,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -356,7 +356,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -375,7 +375,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -394,7 +394,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -413,7 +413,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -432,7 +432,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -451,7 +451,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -470,7 +470,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -489,7 +489,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -508,7 +508,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -527,7 +527,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -549,7 +549,7 @@ func (ctr *Container) processH8(fvars []string, bat *batch.Batch, proc *process.
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -619,7 +619,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -638,7 +638,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -657,7 +657,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -676,7 +676,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -695,7 +695,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -714,7 +714,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -733,7 +733,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -752,7 +752,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -771,7 +771,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -790,7 +790,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -809,7 +809,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -828,7 +828,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h24.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -850,7 +850,7 @@ func (ctr *Container) processH24(fvars []string, bat *batch.Batch, proc *process
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							data[k*24+int64(ctr.keyOffs[k])] = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -919,7 +919,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -938,7 +938,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -957,7 +957,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -976,7 +976,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -995,7 +995,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1014,7 +1014,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1033,7 +1033,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1052,7 +1052,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1071,7 +1071,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1090,7 +1090,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1109,7 +1109,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1128,7 +1128,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h32.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1150,7 +1150,7 @@ func (ctr *Container) processH32(fvars []string, bat *batch.Batch, proc *process
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							data[k*32+int64(ctr.keyOffs[k])] = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1219,7 +1219,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1238,7 +1238,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(1, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1257,7 +1257,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1276,7 +1276,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(2, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1295,7 +1295,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1314,7 +1314,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1333,7 +1333,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1352,7 +1352,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(4, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1371,7 +1371,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1390,7 +1390,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1409,7 +1409,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1428,7 +1428,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					add.Uint32AddScalar(8, ctr.keyOffs[:n], ctr.keyOffs[:n])
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h40.keys[k]), ctr.keyOffs[k])) = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1450,7 +1450,7 @@ func (ctr *Container) processH40(fvars []string, bat *batch.Batch, proc *process
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							data[k*40+int64(ctr.keyOffs[k])] = 1
 							ctr.keyOffs[k]++
 						} else {
@@ -1516,7 +1516,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1533,7 +1533,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1550,7 +1550,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1567,7 +1567,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1584,7 +1584,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1601,7 +1601,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1618,7 +1618,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1635,7 +1635,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1652,7 +1652,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1669,7 +1669,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1686,7 +1686,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1703,7 +1703,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))
@@ -1719,7 +1719,7 @@ func (ctr *Container) processHStr(fvars []string, bat *batch.Batch, proc *proces
 					}
 				} else {
 					for k := int64(0); k < n; k++ {
-						if vecs[j].Nsp.Np.Contains(uint64(k)) {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(1))
 						} else {
 							ctr.hstr.keys[k] = append(ctr.hstr.keys[k], byte(0))

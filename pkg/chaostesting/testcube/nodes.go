@@ -35,23 +35,17 @@ import (
 
 func (_ Def2) Nodes(
 	configs NodeConfigs,
-	tempDir fz.TempDir,
+	getTempDir fz.GetTempDir,
 	numNodes fz.NumNodes,
 	logger fz.Logger,
-	netHost fz.NetworkHost,
+	getHost fz.GetNetworkHost,
 	getPort fz.GetPortStr,
 	newInterceptableTransport NewInterceptableTransport,
 ) (nodes fz.Nodes) {
 
-	host := string(netHost)
+	host := getHost()
 
-	var endpoints []string
-	for i := fz.NumNodes(0); i < numNodes; i++ {
-		endpoints = append(
-			endpoints,
-			"http://"+net.JoinHostPort(host, getPort(fz.NodeID(i), host)),
-		)
-	}
+	var bootEndpoint string
 
 	for nodeID, conf := range configs {
 
@@ -63,18 +57,23 @@ func (_ Def2) Nodes(
 
 		fs := vfs.NewMemFS()
 		conf.FS = fs
+		node.FS = fs
 
 		conf.RaftAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		conf.ClientAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
-		conf.DataPath = filepath.Join(string(tempDir), fmt.Sprintf("data-%d", nodeID))
+		conf.DataPath = filepath.Join(getTempDir(), fmt.Sprintf("data-%d", nodeID))
 		conf.Logger = logger
 
-		conf.Prophet.DataDir = filepath.Join(string(tempDir), fmt.Sprintf("prophet-%d", nodeID))
+		conf.Prophet.DataDir = filepath.Join(getTempDir(), fmt.Sprintf("prophet-%d", nodeID))
 		conf.Prophet.RPCAddr = net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
-		if nodeID > 0 {
-			conf.Prophet.EmbedEtcd.Join = endpoints[0]
+		if nodeID == 0 {
+			bootEndpoint = "http://" + net.JoinHostPort(host, getPort(0, host))
+			conf.Prophet.EmbedEtcd.PeerUrls = bootEndpoint
+		} else {
+			conf.Prophet.EmbedEtcd.Join = bootEndpoint
+			conf.Prophet.EmbedEtcd.PeerUrls =
+				"http://" + net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 		}
-		conf.Prophet.EmbedEtcd.PeerUrls = endpoints[nodeID]
 		conf.Prophet.EmbedEtcd.ClientUrls = "http://" + net.JoinHostPort(host, getPort(fz.NodeID(nodeID), host))
 
 		// pebble
@@ -144,23 +143,34 @@ func (_ Def2) Nodes(
 		node.Config = conf
 
 		store := raftstore.NewStore(conf)
-		store.Start()
 		if nodeID == 0 {
+			// first node
+			store.Start()
 			node.Cond.L.Lock()
 			for !node.IsLeader || !node.Created {
 				node.Cond.Wait()
 			}
 			node.Cond.L.Unlock()
 		} else {
+			go func() {
+				store.Start()
+			}()
+		}
+		node.RaftStore = store
+
+		nodes = append(nodes, node)
+	}
+
+	// wait ready
+	for i, fzNode := range nodes {
+		if i > 0 {
+			node := fzNode.(*Node)
 			node.Cond.L.Lock()
 			for !node.IsFollower {
 				node.Cond.Wait()
 			}
 			node.Cond.L.Unlock()
 		}
-		node.RaftStore = store
-
-		nodes = append(nodes, node)
 	}
 
 	return

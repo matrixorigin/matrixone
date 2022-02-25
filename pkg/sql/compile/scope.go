@@ -133,7 +133,7 @@ func (s *Scope) DropTable(ts uint64) error {
 	return nil
 }
 
-// DropIndex do drop index word according to drop index plan
+// DropIndex do drop index work according to drop index plan
 func (s *Scope) DropIndex(ts uint64) error {
 	p, _ := s.Plan.(*plan.DropIndex)
 	if p.NotExisted && p.IfExistFlag {
@@ -146,7 +146,7 @@ func (s *Scope) DropIndex(ts uint64) error {
 
 // todo: show should get information from system table next day.
 
-// ShowDatabases will show all database names
+// ShowDatabases fill batch with all database names
 func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowDatabases)
 	attrs := p.ResultColumns()
@@ -185,7 +185,7 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 	return fill(u, bat)
 }
 
-// ShowTables will show all table names in a database
+// ShowTables fill batch with all table names in a database
 func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowTables)
 	attrs := p.ResultColumns()
@@ -230,7 +230,7 @@ type columnInfo struct {
 	dft  string // default value
 }
 
-// ShowColumns will show column information from a table
+// ShowColumns fill batch with column information of a table
 func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowColumns)
 	results := p.ResultColumns() // field, type, null, key, default, extra
@@ -309,6 +309,7 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 	return fill(u, bat)
 }
 
+// ShowCreateTable fill batch with definition of a table
 func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowCreateTable)
 	results := p.ResultColumns()
@@ -376,6 +377,7 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 	return fill(u, bat)
 }
 
+// ShowCreateDatabase fill batch with definition of a database
 func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowCreateDatabase)
 	if _, err := p.E.Database(p.Id); err != nil {
@@ -413,13 +415,14 @@ func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.
 	return fill(u, bat)
 }
 
-// Insert will insert a batch into relation and return affectedRow
+// Insert will insert a batch into relation and return numbers of affectedRow
 func (s *Scope) Insert(ts uint64) (uint64, error) {
 	p, _ := s.Plan.(*plan.Insert)
 	defer p.Relation.Close()
 	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
 }
 
+// Run read data from storage engine and run the instructions of scope.
 func (s *Scope) Run(e engine.Engine) error {
 	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
 	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
@@ -428,6 +431,7 @@ func (s *Scope) Run(e engine.Engine) error {
 	return nil
 }
 
+// MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(e engine.Engine) error {
 	var err error
 
@@ -466,6 +470,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	return err
 }
 
+// RemoteRun send the scope to a remote node (if target node is itself, it will call function ParallelRun) and run it.
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var buf bytes.Buffer
 
@@ -542,6 +547,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	return nil
 }
 
+// ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(e engine.Engine) error {
 	switch t := s.Instructions[0].Arg.(type) {
 	case *times.Argument:
@@ -555,20 +561,18 @@ func (s *Scope) ParallelRun(e engine.Engine) error {
 	return nil
 }
 
-// RunQ will build a multi-layer merging structure according to the scope, and finally run it.
+// RunQ run the scope which sql is a query for single table and without any aggregate functions
+// it will build a multi-layer merging structure according to the scope, and finally run it.
 // For an example, if the input scope is
 //		[transform -> order -> push]
 // and we assume that there are 4 Cores at the node, we will convert it to be
-//		[transform -> order -> push]  - -
-//										-
-//										  -
-//		[transform -> order -> push]  - - - - - > [mergeOrder -> push] - - - - - - - - > [mergeOrder -> push]
-//																			 - -
-//																		   -
-//		[transform -> order -> push]  - -								  -
-//										-								 -
-//										  -								-
-//		[transform -> order -> push]  - - - - - > [mergeOrder -> push] -
+//		s1: [transform -> order -> push]  - - > m1
+//		s2: [transform -> order -> push]  - - > m1
+//		s3: [transform -> order -> push]  - - > m2
+//		s4: [transform -> order -> push]  - - > m2
+//		m1 : [mergeOrder -> push] - -  > m3
+// 		m2 : [mergeOrder -> push] - -  > m3
+//		m3 : [mergeOrder -> push] - - > top scope
 func (s *Scope) RunQ(e engine.Engine) error {
 	var rds []engine.Reader
 	cpuNum := runtime.NumCPU()
@@ -712,6 +716,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 	return s.MergeRun(e)
 }
 
+// RunAQ run the scope which sql is a query for single table with aggregate functions
 func (s *Scope) RunAQ(e engine.Engine) error {
 	var rds []engine.Reader
 
@@ -789,6 +794,7 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 	return s.MergeRun(e)
 }
 
+// RunCAQ run the scope which sql is a query with both aggregate functions and join operators.
 func (s *Scope) RunCAQ(e engine.Engine) error {
 	var err error
 	var rds []engine.Reader
@@ -980,6 +986,8 @@ func (s *Scope) RunCAQ(e engine.Engine) error {
 	return rs.MergeRun(e)
 }
 
+// newMergeScope make a multi-layer merge structure, and return its top scope
+// the top scope will do merge work
 func newMergeScope(ss []*Scope, typ int, proc *process.Process) []*Scope {
 	step := int(math.Log2(float64(len(ss))))
 	n := len(ss) / step
@@ -1031,6 +1039,8 @@ func newMergeScope(ss []*Scope, typ int, proc *process.Process) []*Scope {
 	return rs
 }
 
+// newMergeOrderScope make a multi-layer merge structure, and return its top scope
+// the top scope will do mergeOrder work
 func newMergeOrderScope(ss []*Scope, arg *mergeorder.Argument, proc *process.Process) []*Scope {
 	step := int(math.Log2(float64(len(ss))))
 	n := len(ss) / step
@@ -1083,6 +1093,8 @@ func newMergeOrderScope(ss []*Scope, arg *mergeorder.Argument, proc *process.Pro
 	return rs
 }
 
+// newMergeLimitScope make a multi-layer merge structure, and return its top scope
+// the top scope will do mergeLimit work to get first n from its pre-scopes
 func newMergeLimitScope(ss []*Scope, limit uint64, proc *process.Process) []*Scope {
 	step := int(math.Log2(float64(len(ss))))
 	n := len(ss) / step
@@ -1135,6 +1147,8 @@ func newMergeLimitScope(ss []*Scope, limit uint64, proc *process.Process) []*Sco
 	return rs
 }
 
+// newMergeTopScope make a multi-layer merge structure, and return its top scope
+// the top scope will do mergeTop work to get top n from its pre-scopes
 func newMergeTopScope(ss []*Scope, arg *mergetop.Argument, proc *process.Process) []*Scope {
 	step := int(math.Log2(float64(len(ss))))
 	n := len(ss) / step
@@ -1190,6 +1204,8 @@ func newMergeTopScope(ss []*Scope, arg *mergetop.Argument, proc *process.Process
 	return rs
 }
 
+// newMergeDedupScope make a multi-layer merge structure, and return its top scope
+// the top scope will do merge-deduplication work
 func newMergeDedupScope(ss []*Scope, proc *process.Process) []*Scope {
 	step := int(math.Log2(float64(len(ss))))
 	n := len(ss) / step

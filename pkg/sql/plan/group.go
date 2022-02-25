@@ -65,14 +65,20 @@ func (b *build) buildGroupBy(exprs tree.GroupBy, qry *Query) error {
 					})
 					{
 						for _, attr := range attrs {
-							qry.getAttribute1(true, attr)
+							_, _, err = qry.getAttribute1(true, attr)
+							if err != nil {
+								return err
+							}
 						}
 					}
 				} else {
 					qry.RelsMap[rel].ProjectionExtends[i].Ref++
 				}
 			} else {
-				qry.getAttribute1(true, e.(*extend.Attribute).Name)
+				_, _, err = qry.getAttribute1(true, e.(*extend.Attribute).Name)
+				if err != nil {
+					return err
+				}
 			}
 			qry.FreeAttrs = append(qry.FreeAttrs, e.String())
 		}

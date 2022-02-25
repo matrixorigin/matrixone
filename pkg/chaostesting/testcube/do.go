@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pvfs "github.com/lni/vfs"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -34,6 +35,7 @@ func (_ Def2) Do(
 	timeoutCounter TimeoutCounter,
 	retryTimeout RetryTimeout,
 	block BlockNetwork,
+	numNodes fz.NumNodes,
 ) fz.Do {
 
 	var kvs []*KV
@@ -142,12 +144,37 @@ func (_ Def2) Do(
 			defer unlock()
 			return restartNode(fz.NodeID(action.NodeID))
 
-		case ActionBlockNetwork:
-			for _, inbound := range action.BlockInboundNodes {
-				block(inbound, action.NodeID)
+		case ActionIsolateNode:
+			for _, between := range action.Between {
+				block(action.NodeID, between)
+				block(between, action.NodeID)
 			}
-			for _, outbound := range action.BlockOutboundNodes {
-				block(action.NodeID, outbound)
+			return nil
+
+		case ActionCrashNode:
+			// network isolate
+			for between := 0; between < int(numNodes); between++ {
+				if between == int(action.NodeID) {
+					continue
+				}
+				block(action.NodeID, fz.NodeID(between))
+				block(fz.NodeID(between), action.NodeID)
+			}
+			// disable fsync
+			node := nodes[action.NodeID].(*Node)
+			node.FS.(*pvfs.MemFS).ResetToSyncedState()
+			// restart
+			lock()
+			defer unlock()
+			return restartNode(fz.NodeID(action.NodeID))
+
+		case ActionFullyIsolateNode:
+			for between := 0; between < int(numNodes); between++ {
+				if between == int(action.NodeID) {
+					continue
+				}
+				block(action.NodeID, fz.NodeID(between))
+				block(fz.NodeID(between), action.NodeID)
 			}
 			return nil
 
@@ -169,7 +196,7 @@ func (_ Def) TimeoutCounter() TimeoutCounter {
 type TimeoutReportThreshold int64
 
 func (_ Def) TimeoutReportThreshold() TimeoutReportThreshold {
-	return 5
+	return 10
 }
 
 func (_ Def) ReportTimeout(
