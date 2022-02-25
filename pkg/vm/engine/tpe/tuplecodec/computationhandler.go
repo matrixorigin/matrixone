@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"math"
 	"time"
@@ -44,25 +45,34 @@ type ComputationHandlerImpl struct {
 	kv KVHandler
 	tch *TupleCodecHandler
 	serializer ValueSerializer
+	indexHandler index.IndexHandler
 }
 
-func (chi *ComputationHandlerImpl) Read(attrs []string) (*batch.Batch, error) {
-	panic("implement me")
+func (chi *ComputationHandlerImpl) Read(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, []byte, int, error) {
+	var bat *batch.Batch
+	var err error
+	bat, _, prefix, prefixLen, err = chi.indexHandler.ReadFromIndex(dbDesc,tableDesc,indexDesc,attrs,prefix,prefixLen)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	return bat, prefix, prefixLen, nil
 }
 
-func (chi *ComputationHandlerImpl) Write(bat *batch.Batch) error {
-	panic("implement me")
+func (chi *ComputationHandlerImpl) Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error {
+	err := chi.indexHandler.WriteIntoIndex(dbDesc,tableDesc,indexDesc,attrs,bat)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler,
-		kv KVHandler,
-		tch *TupleCodecHandler,
-		serial ValueSerializer) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,
 		kv: kv,
 		tch: tch,
 		serializer: serial,
+		indexHandler: ih,
 	}
 }
 

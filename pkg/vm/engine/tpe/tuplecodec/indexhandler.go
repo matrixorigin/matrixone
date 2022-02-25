@@ -42,6 +42,22 @@ type IndexHandlerImpl struct {
 	rcc RowColumnConverter
 }
 
+func NewIndexHandlerImpl(tch *TupleCodecHandler,
+		db *descriptor.DatabaseDesc,
+		kv KVHandler,
+		kvLimit uint64,
+		serial ValueSerializer,
+		rcc RowColumnConverter) *IndexHandlerImpl {
+	return &IndexHandlerImpl{
+		tch:        tch,
+		dbDesc:     db,
+		kv:         kv,
+		kvLimit:    kvLimit,
+		serializer: serial,
+		rcc:        rcc,
+	}
+}
+
 func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, int, []byte, int, error) {
 	//check just need the index key
 	indexAttrIDs := descriptor.ExtractIndexAttributeIDsSorted(index.Attributes)
@@ -77,6 +93,7 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 
 	rowIndexForKey := 0
 	rowIndexForValue := 0
+	readFinished := false
 
 	//2.prefix read data from kv
 	//get keys with the prefix
@@ -88,6 +105,7 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 		}
 
 		if len(keys) == 0 {
+			readFinished = true
 			break
 		}
 
@@ -153,6 +171,15 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 
 	TruncateBatch(bat,int(ihi.kvLimit),rowIndexForKey)
 
+	if readFinished {
+		if rowIndexForKey == 0 {
+			//there are no data read in this call.
+			//it means there is no data any more.
+			//reset the batch to the null to notify the
+			//computation engine will not read data again.
+			bat = nil
+		}
+	}
 	return bat, rowIndexForKey, prefix, prefixLen, nil
 }
 
@@ -163,6 +190,8 @@ func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, bat
 func (ihi * IndexHandlerImpl) callbackForEncodeRowInBatch(callbackCtx interface{}, tuple Tuple) error {
 	callback := callbackCtx.(callbackPackage)
 	tke := ihi.tch.GetEncoder()
+
+	//TODO: add logic for implicit primary key
 
 	key, _, err := tke.EncodePrimaryIndexKey(callback.prefix,callback.index,0,tuple)
 	if err != nil {

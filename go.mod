@@ -15,6 +15,7 @@ require (
 	github.com/golang/mock v1.3.1
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
+	github.com/lni/goutils v1.3.0
 	github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
@@ -64,7 +65,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.0.3 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/lni/goutils v1.3.0 // indirect
 	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
