@@ -384,7 +384,7 @@ func (ba *BatchAdapter) ForEach(callbackCtx interface{},
 	tbi := NewTupleBatchImpl(ba.bat,row)
 
 	for j := 0; j < n; j++ { //row index
-		if ba.bat.Zs[j] <= 0 {
+		if len(ba.bat.Zs) != 0 && ba.bat.Zs[j] <= 0 {
 			continue
 		}
 
@@ -575,11 +575,13 @@ func (ba *BatchAdapter) ForEach(callbackCtx interface{},
 			return err
 		}
 
-		//get duplicate rows
-		for i := int64(0); i < ba.bat.Zs[j]-1; i++ {
-			err = callback(callbackCtx,tbi)
-			if err != nil {
-				return err
+		if len(ba.bat.Zs) != 0 {
+			//get duplicate rows
+			for i := int64(0); i < ba.bat.Zs[j]-1; i++ {
+				err = callback(callbackCtx,tbi)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}

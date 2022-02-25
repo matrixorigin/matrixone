@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
+	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 )
 
 const (
@@ -239,7 +240,9 @@ func main() {
 	}
 	cfg.ServerConfig = server.Cfg{}
 
-	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+	if !config.GlobalSystemVariables.GetDisablePCI() {
+		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+	}
 	cfg.CubeConfig.Logger = logutil.GetGlobalLogger()
 
 	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
@@ -273,7 +276,14 @@ func main() {
 		logutil.Infof("Decode cube config error:%v\n", err)
 		os.Exit(DecodeCubeConfigExit)
 	}
-	eng := aoeEngine.New(c, &cngineConfig)
+	var eng engine.Engine
+	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
+	if enableTpe {
+		eng = tpeEngine.NewTpeEngine(&tpeEngine.TpeConfig{})
+	}else{
+		eng = aoeEngine.New(c, &cngineConfig)
+	}
+
 	pci.SetRemoveEpoch(removeEpoch)
 
 	li := strings.LastIndex(cfg.CubeConfig.ClientAddr, ":")
