@@ -376,8 +376,17 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 	logutil.Debugf("split check, len split key is %v", len(splitKeys))
 
 	cubeSplitKeys := make([][]byte, 0)
-	for i := 0; i < len(splitKeys)-1; i++ {
-		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(shard.Start), i)))
+	var start []byte
+	if len(shard.Start) < len(shard.End) {
+		start = make([]byte, len(shard.End))
+		for i, b := range shard.Start {
+			start[i] = b
+		}
+	} else {
+		start = shard.Start
+	}
+	for i := 1; i < len(splitKeys); i++ {
+		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(start), i)))
 	}
 
 	splitctx := splitCtx{
