@@ -132,7 +132,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	packet, ok := msg.(*Packet)
 	protocol.sequenceId = uint8(packet.SequenceID + 1)
-	var seq = protocol.sequenceId
 	if !ok {
 		return errors.New("message is not Packet")
 	}
@@ -152,7 +151,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		}
 
 		protocol.sequenceId = uint8(packet.SequenceID + 1)
-		seq = protocol.sequenceId
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -175,7 +173,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	req := routine.protocol.GetRequest(payload)
-	req.seq = seq
 	routine.requestChan <- req
 
 	return nil

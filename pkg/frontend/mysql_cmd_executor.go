@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"runtime/pprof"
@@ -101,8 +100,6 @@ type outputQueue struct {
 	rowIdx uint64
 	length uint64
 	ep *tree.ExportParam
-	file *os.File
-	writer *bufio.Writer
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -227,14 +224,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	oq := NewOuputQueue(proto, mrs, uint64(countOfResultSet), ses.ep)
 	oq.reset()
-
-	oq.ep.DefaultBufSize = ses.Pu.SV.GetExportDataDefaultFlushSize()
-	initExportFileParam(oq)
-	if oq.ep.Outfile {
-		if err := openNewFile(oq); err != nil {
-			return err
-		}
-	}
 
 	row2colTime := time.Duration(0)
 
@@ -468,10 +457,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 
 	if oq.ep.Outfile {
-		if err = oq.writer.Flush(); err != nil {
-			return err
-		}
-		if err = oq.file.Close(); err != nil {
+		if err = oq.ep.Writer.Flush(); err != nil {
 			return err
 		}
 	}
@@ -1167,9 +1153,22 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				Step 2: Start pipeline
 				Producing the data row and sending the data row
 			*/
+			if ses.ep.Outfile {
+				ses.ep.DefaultBufSize = ses.Pu.SV.GetExportDataDefaultFlushSize()
+				initExportFileParam(ses.ep, ses.Mrs)
+				if err := openNewFile(ses.ep, ses.Mrs); err != nil {
+					return err
+				}
+			}
 			if er := cw.Run(epoch); er != nil {
 				return er
 			}
+			if ses.ep.Outfile {
+				if err = ses.ep.File.Close(); err != nil {
+					return err
+				}
+			}
+			
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
