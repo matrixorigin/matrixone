@@ -8,8 +8,8 @@ BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
 MO_Version=$(shell git describe --abbrev=0 --tags)
-TARGET_OS ?= $(shell echo $(UNAME_S) | awk '{print tolower($$0)}')
-TARGET_ARCH ?= $(shell arch | awk '{ sub(/x86_64/,"amd64"); print $$0 }')
+TARGET_OS ?=
+TARGET_ARCH ?=
 
 # generate files generated from .template and needs to delete when clean
 GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
@@ -33,10 +33,21 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 .PHONY: build
 build: cmd/db-server/$(wildcard *.go)
 	@go generate ./pkg/sql/colexec/extend/overload
+ifeq ($(TARGET_OS)$(TARGET_ARCH), )
 	$(info [Build binary])
+	@go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+else ifneq ($(TARGET_OS), )
+ifneq ($(TARGET_ARCH), )
+	$(info [Cross Build binary])
+	$(info $(TARGET_OS))
 	$(info $(TARGET_ARCH))
 	@CGO_ENABLED=1 GOOS=$(TARGET_OS) GOARCH=$(TARGET_ARCH) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
-
+else
+	$(info [Cross Build binary])
+	$(info $(TARGET_OS))
+	@CGO_ENABLED=1 GOOS=$(TARGET_OS) go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
+endif
+endif
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
