@@ -15,6 +15,8 @@
 package descriptor
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"sort"
 )
@@ -41,6 +43,8 @@ type RelationDesc struct {
 	ID uint32 `json:"ID,string"`
 
 	Name string `json:"name"`
+
+	Comment string `json:"comment"`
 
 	Update_time int64 `json:"update_time"`
 
@@ -106,6 +110,10 @@ type AttributeDesc struct {
 	Name string `json:"name"`
 
 	Ttype orderedcodec.ValueType `json:"type,string"`
+
+	TypesType types.Type `json:"types_type"`
+
+	Default engine.DefaultExpr `json:"default"`
 
 	Is_null bool `json:"is_null,string"`
 

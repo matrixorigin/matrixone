@@ -368,6 +368,26 @@ values = ["1", "2", "4", "8"]
 comment = "export data to csv file default flush size"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "disablePCI"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is false. Disable epochgc pci."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "enableTpe"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is false. Enable transactional processing engine."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
