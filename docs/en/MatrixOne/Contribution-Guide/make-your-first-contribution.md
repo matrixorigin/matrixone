@@ -67,7 +67,7 @@ Having completed your modification, you can add the files you just modified usin
 git add <filename>
 ```
 `<filename>` is the name of the file you just modified.
-And you can use following command to add all the files in current folder:
+And you can use following command to add all the files in the current folder:
 ```
 git add .
 ```
@@ -82,7 +82,7 @@ After committing your modification, you should push your local branch to GitHub 
 ```
 git push origin main:NEW_BRANCH
 ```
-`NEW_BRANCH` is the name of new branch you created and push to. Also you can replace it with other name you want.
+`NEW_BRANCH` is the name of new branch you created and push to. Also, you can replace it with another name you want.
 
 ### **Step 7 Create a pull request**
 Having pushed your changes, you can visit your folk at `https://github.com/$user/matrixone`, and click the **Compare & Pull Request** button to create a pull request in `NEW_BRANCH` for your modification to the MatrixOne repository. 

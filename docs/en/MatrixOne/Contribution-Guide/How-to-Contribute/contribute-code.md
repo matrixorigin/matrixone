@@ -1,6 +1,6 @@
 # **Contribute Code**
-MatrixOne is an open source project maintained, improved and extended by code contributors.  
-This document dcescribes the conventions about development workflow, some styles and templates you need while contributing code to MatrixOne. If you encounter any problem or find some mistakes in participating in contribution to MatrixOne, please [file an issue](https://github.com/matrixorigin/matrixone/issues) in github or contack us on other plaforms we support.
+MatrixOne is an open-source project maintained, improved, and extended by code contributors.  
+This document describes the conventions about development workflow, some styles and templates you need while contributing code to MatrixOne. If you encounter any problem or find some mistakes in participating in contribution to MatrixOne, please [file an issue](https://github.com/matrixorigin/matrixone/issues) in GitHub or contact us on other platforms we support.
 
 
 ## **Before Contributions**
@@ -8,7 +8,7 @@ Before you start developing, make sure you have read [Preparation](preparation.m
 
 
 ## **Get familiar with style** <a name="get-familiar-with-style"></a>
-It's nessarry to keep a consistent style for code, code comments, commit messages, and pull requests when contributing to MatrixOne. When you put together your pull request, we highly recommend you comply to the following style guides which make MatrixOne easy to review, maintain and develop.
+It's necessary to keep a consistent style for code, code comments, commit messages, and pull requests when contributing to MatrixOne. When you put together your pull request, we highly recommend you comply with the following style guides which make MatrixOne easy to review, maintain and develop.
 
 * **Code Style**  
 The coding style suggested by the Golang community is used in MatrixOne. See the [style doc](https://github.com/golang/go/wiki/CodeReviewComments) for details.
@@ -22,7 +22,7 @@ The coding style suggested by the Golang community is used in MatrixOne. See the
    See the [Commit Message & Pull Request Style](../Code-Style/code-comment-style.md) for details.
 
 ## **Workflow<c name="workflow"></c>**
-You can follow the workflow to operate development, and you can see [Make Your First Contribution](../make-your-first-contribution.md) if you are a newcomer and need more detailed instructions about worflow.  
+You can follow the workflow to operate development, and you can see [Make Your First Contribution](../make-your-first-contribution.md) if you are a newcomer and need more detailed instructions about workflow.  
 
 1. Fork the [MatrixOne repository](https://github.com/matrixorigin/matrixone) on GitHub.
 2. Clone your fork to your local machine with:  

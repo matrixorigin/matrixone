@@ -1,8 +1,8 @@
-# Types of Contributions
+# **Types of Contributions**
 
 Contributions to MatrixOne are not limited to writing code. What follows are different ways to participate in the MatrixOne project and engage with our vibrant open-source community:
 
-## Contribute Code
+## **Contribute Code**
 
 | Contribution type              | Description                                                  |
 | ------------------------------ | ------------------------------------------------------------ |
@@ -10,14 +10,14 @@ Contributions to MatrixOne are not limited to writing code. What follows are dif
 | Contribute code                | You can fix a bug for any outstanding [issues](https://github.com/matrixorigin/matrixone/issues) on GitHub, improve the code, or propose a design or implementation for a new MatrixOne feature. See [Contribute Code](contribute-code.md) for the contribution conventions and best practices. |
 | Review or approve pull requests | Review or approve pull requests for the MatrixOne project as a reviewer or maintainer. |
 
-## Contribute to MatrixOne Documentation
+## **Contribute to MatrixOne Documentation**
 
 | Contribution type                             | Description                                                  |
 | --------------------------------------------- | ------------------------------------------------------------ |
 | Report or fix a technical documentation issue | You can either click *edit the page* directly on the target page of MatrixOne, or [file an issue](https://github.com/matrixorigin/matrixone/issues/new/choose) on MatrixOne repository with detailed information, and, if possible, propose changes by [creating a pull request](https://github.com/matrixorigin/matrixone/pulls). |
 | Contribute a new piece of technical document  | Before contributing a full-length technical document, read [Contribution Documentation](contribute-documentation.md). |
 
-## Other Contributions
+## **Other Contributions**
 
 | Contribution type                                 | Description                                                  |
 | ------------------------------------------------- | ------------------------------------------------------------ |

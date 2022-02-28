@@ -1,7 +1,7 @@
 # **Preparation**
 Before contributing, it's necessary to make some preparations to learn more about MatrixOne and other revalant information, which can improve developing and reviewing efficiency.
 
-Thanks for understanding that English is used as a shared language in this repository. Maintainers do not use machine translation to avoid miscommunication due to error in translation. If description of issue / PR are written in non-English languages, those may be closed. If English is not your native language and you aren't sure about any of these, don't hesitate to ask for help in your pull request!
+Thanks for understanding that English is used as a shared language in this repository. Maintainers do not use machine translation to avoid miscommunication due to errors in translation. If descriptions of issue / PR are written in non-English languages, those may be closed. If English is not your native language and you aren't sure about any of these, don't hesitate to ask for help in your pull request!
 
 
 
@@ -77,7 +77,7 @@ export PATH=$PATH:$GOPATH/bin
  
 
 ### **Github & Git**
-MatrixOne is an open source project built on Github, providing project maintainers and contributors with a platform to work together. Thus in order to start working with MatrixOne repository you will need a **GitHub** account and learn basic **git** commands.   
+MatrixOne is an open-source project built on Github, providing project maintainers and contributors with a platform to work together. Thus in order to start working with MatrixOne repository, you will need a **GitHub** account and learn basic **git** commands.   
 If you don't have a Github account, please register at [https://github.com](https://github.com). In case you do not have [SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/about-ssh) keys, you should generate them and then upload them on GitHub. It is required for sending over your patches. It is also possible to use the same SSH keys that you use with any other SSH servers - probably you already have those.  
 For detailed information about Github, you can see [Github Docs](https://docs.github.com/en).  
 
