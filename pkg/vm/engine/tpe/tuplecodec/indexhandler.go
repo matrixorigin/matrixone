@@ -19,11 +19,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"sort"
 )
 
 var (
 	errorRowIndexDifferentInKeyAndValue = errors.New("the rowIndexForkey != rowIndexForValue")
+	errorWriteContextIsInvalid = errors.New("the write context is invalid")
 )
 
 var _ index.IndexHandler = &IndexHandlerImpl{}
@@ -89,7 +91,7 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 
 	//prepare the batch
 	names,attrdefs := ConvertAttributeDescIntoTypesType(attrs)
-	bat := makeBatch(int(ihi.kvLimit),names,attrdefs)
+	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
 
 	rowIndexForKey := 0
 	rowIndexForValue := 0
@@ -184,51 +186,136 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 }
 
 func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, bat *batch.Batch) error {
-	return ihi.WriteIntoIndex(ihi.dbDesc,table,&table.Primary_index,nil,bat)
+	return ihi.WriteIntoIndex(ihi.dbDesc, table, &table.Primary_index, nil, nil, bat)
+}
+
+//encodePrimaryIndexKey encodes the tuple into bytes.
+//The prefix has the tenantID,dbID,tableID,IndexID.
+func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(prefix TupleKey,
+	index *descriptor.IndexDesc,
+	columnGroupID uint64,writeCtx *WriteContext,
+	tuple Tuple)(TupleKey, *orderedcodec.EncodedItem,error) {
+	if index.ID != PrimaryIndexID {
+		return nil,nil,errorPrimaryIndexIDIsNotOne
+	}
+	tke := ihi.tch.GetEncoder()
+	/*
+		fields => bytes
+		1. Get fields value from tuple
+		2. Encoding fields
+	*/
+	//index attributes
+	key := prefix
+	var value interface{}
+	var err error
+	for _, attr := range index.Attributes {
+		writeState := writeCtx.AttributeStates[attr.ID]
+		//the logic for implicit primary key or default expr
+		if writeState.NeedGenerated {
+			if writeState.AttrDesc.Default.Exist {//default expr
+				if writeState.AttrDesc.Default.IsNull {
+					return nil, nil, errorPrimaryIndexAttributesHaveNull
+				}
+				value = writeState.AttrDesc.Default.Value
+			}else{
+				value = GetRowID(writeCtx.NodeID)
+			}
+		}else{
+			posInBatch := writeState.PositionInBatch
+			value, err = tuple.GetValue(uint32(posInBatch))
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+		//check if has the null
+		if value == nil {
+			return nil, nil, errorPrimaryIndexAttributesHaveNull
+		}
+
+		key,_ = tke.oe.EncodeKey(key,value)
+	}
+	return key, nil, nil
+}
+
+//EncodePrimaryIndexValue encodes the tuple into bytes
+func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(prefix TupleValue,
+	index *descriptor.IndexDesc,
+	columnGroupID uint64,
+	writeCtx * WriteContext,
+	tuple Tuple,
+	serializer ValueSerializer)(TupleValue, *orderedcodec.EncodedItem,error) {
+	if index.ID != PrimaryIndexID {
+		return nil,nil,errorPrimaryIndexIDIsNotOne
+	}
+	//fill value into the row from the tuple
+	//for i, state := range writeCtx.AttributeStates {
+		//TODO:implicit primary key
+	//}
+
+	//just encoding into the json
+	cnt, err := tuple.GetAttributeCount()
+	if err != nil {
+		return nil, nil, err
+	}
+	out := prefix
+	for i := uint32(0); i < cnt; i++ {
+		value, err := tuple.GetValue(i)
+		if err != nil {
+			return nil, nil, err
+		}
+		//serial value
+		serialized,_, err := serializer.SerializeValue(out,value)
+		if err != nil {
+			return nil, nil, err
+		}
+		out = serialized
+	}
+	return out, nil, nil
 }
 
 func (ihi * IndexHandlerImpl) callbackForEncodeRowInBatch(callbackCtx interface{}, tuple Tuple) error {
-	callback := callbackCtx.(callbackPackage)
-	tke := ihi.tch.GetEncoder()
+	writeCtx := callbackCtx.(*WriteContext)
 
-	//TODO: add logic for implicit primary key
-
-	key, _, err := tke.EncodePrimaryIndexKey(callback.prefix,callback.index,0,tuple)
+	key, _, err := ihi.encodePrimaryIndexKey(writeCtx.callback.prefix,
+		writeCtx.callback.index,0,writeCtx,tuple)
 	if err != nil {
 		return err
 	}
 
-	value, _, err := tke.EncodePrimaryIndexValue(nil, callback.index, 0, tuple, ihi.serializer)
+	value, _, err := ihi.encodePrimaryIndexValue(nil,
+		writeCtx.callback.index, 0, writeCtx,tuple, ihi.serializer)
 	if err != nil {
 		return err
 	}
 
 	//write key,value into the kv storage
-	err = ihi.kv.Set(key,value)
+	//failed if the key has existed
+	err = ihi.kv.DedupSet(key,value)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (ihi * IndexHandlerImpl) WriteIntoIndex(db *descriptor.DatabaseDesc,
-		table *descriptor.RelationDesc,
-		index *descriptor.IndexDesc,
-		attrs []descriptor.AttributeDesc,
-		bat *batch.Batch) error {
+func (ihi * IndexHandlerImpl) WriteIntoIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error {
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()
 	var prefix TupleKey
 	prefix,_ = tke.EncodeIndexPrefix(prefix, uint64(db.ID), uint64(table.ID), uint64(index.ID))
 
-	callback := callbackPackage{
+	indexWriteCtx,ok := writeCtx.(*WriteContext)
+	if !ok {
+		return errorWriteContextIsInvalid
+	}
+
+	indexWriteCtx.callback = callbackPackage{
 		index:  index,
 		prefix: prefix,
 	}
 
 	//2.encode every row in the batch
 	ba := NewBatchAdapter(bat)
-	err := ba.ForEach(callback, ihi.callbackForEncodeRowInBatch)
+	err := ba.ForEach(indexWriteCtx, ihi.callbackForEncodeRowInBatch)
 	if err != nil {
 		return err
 	}

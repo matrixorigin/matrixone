@@ -73,5 +73,5 @@ func (te * TpeEngine) Database(name string) (engine.Database, error) {
 }
 
 func (te * TpeEngine) Node(s string) *engine.NodeInfo {
-	panic("implement me")
+	return &engine.NodeInfo{Mcpu: 1}
 }

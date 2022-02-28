@@ -27,7 +27,7 @@ import (
 
 func TestBatchAdapter_ForEach(t *testing.T) {
 	convey.Convey("for each",t, func() {
-		names,attrs := makeAttributes(
+		names,attrs := MakeAttributes(
 			types.T_int8,
 			types.T_int16,
 			types.T_int32,
@@ -44,7 +44,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 
 		cnt := 10
 
-		bat := makeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt,names,attrs)
 
 		lines := randomLines(cnt,names,attrs)
 
@@ -112,11 +112,11 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		for _, kase := range kases {
 			typs = append(typs,kase.typ)
 		}
-		names,attrs := makeAttributes(typs...)
+		names,attrs := MakeAttributes(typs...)
 
 		cnt := 10
 
-		bat := makeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt,names,attrs)
 
 		var iattrs []descriptor.IndexDesc_Attribute
 		var dis []*orderedcodec.DecodedItem
@@ -168,7 +168,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		err := ba.ForEach(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
-		bat2 := makeBatch(cnt,names,attrs)
+		bat2 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
 			err = rcc.FillBatchFromDecodedIndexValue(indexDesc,
 				0,
@@ -184,7 +184,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		err = ba2.ForEach(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
-		bat3 := makeBatch(cnt,names,attrs)
+		bat3 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
 			am2 := &AttributeMap{
 				attributeID: am.attributeID[:4],

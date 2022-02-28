@@ -15,9 +15,18 @@
 package engine
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+)
+
+var (
+	errorBatchAttributeDoNotExistInTheRelation = errors.New("batch attribute do not exist in the relation")
+	errorNotHiddenPrimaryKey = errors.New("it is not hidden primary key")
+	errorDuplicateAttributeNameInBatch = errors.New("duplicate attribute name in the batch")
+	errorDoNotGetValidValueForTheAttribute = errors.New("can not get the value for the attribute")
 )
 
 func (trel * TpeRelation) Rows() int64 {
@@ -85,20 +94,66 @@ func (trel * TpeRelation) TableDefs() []engine.TableDef {
 }
 
 func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
+	//attribute set
+	attrSet := make(map[string]uint32)
+	for _, attr := range trel.desc.Attributes {
+		attrSet[attr.Name] = attr.ID
+	}
+
+	//check if the attribute in the batch exists in the relation or not.
 	var attrDescs []descriptor.AttributeDesc
-	for _, attr := range batch.Attrs {
-		for i2, tta := range trel.desc.Attributes {
-			if tta.Name == attr {
-				attrDescs = append(attrDescs,trel.desc.Attributes[i2])
-			}
+	batchAttrSet := make(map[string]int)
+	for posInBatch, batchAttrName := range batch.Attrs {
+		if _,ok := batchAttrSet[batchAttrName]; ok {
+			return errorDuplicateAttributeNameInBatch
+		}else{
+			batchAttrSet[batchAttrName] = posInBatch
+		}
+
+		if _,ok := attrSet[batchAttrName]; ok {
+			attrDescs = append(attrDescs,trel.desc.Attributes[posInBatch])
+		}else{
+			return errorBatchAttributeDoNotExistInTheRelation
 		}
 	}
 
-	if len(attrDescs) != len(batch.Attrs) {
-		return errorSomeAttributeNamesAreNotInAttributeDesc
+	//Ensure the position mapping from the attribute in the relation
+	//to the attribute in the batch.
+	//Then, it is convenient to get the right data from the batch
+	//in encoding and serialization.
+	writeStates := make([]tuplecodec.AttributeStateForWrite,len(trel.desc.Attributes))
+
+	//find the attributes not covered by the batch in the relation
+	for attrIdx, attrDesc := range trel.desc.Attributes {
+		writeStates[attrIdx].AttrDesc = attrDesc
+		writeStates[attrIdx].PositionInBatch = -1
+		writeStates[attrIdx].NeedGenerated = false
+		//attribute not in the batch
+		if posInBatch,exist := batchAttrSet[attrDesc.Name]; !exist {
+			//hidden primary key
+			if attrDesc.Is_hidden && attrDesc.Is_primarykey {
+				//it is hidden primary key
+				writeStates[attrIdx].PositionInBatch = -1
+				writeStates[attrIdx].NeedGenerated = true
+			}else if attrDesc.Default.Exist { //default expr
+				writeStates[attrIdx].PositionInBatch = -1
+				writeStates[attrIdx].NeedGenerated = true
+			}else{
+				return errorDoNotGetValidValueForTheAttribute
+			}
+		}else{
+			writeStates[attrIdx].PositionInBatch = posInBatch
+			writeStates[attrIdx].NeedGenerated = false
+		}
 	}
 
-	err := trel.computeHandler.Write(trel.dbDesc, trel.desc, &trel.desc.Primary_index, attrDescs, batch)
+	writeCtx := &tuplecodec.WriteContext{
+		BatchAttrs:      attrDescs,
+		AttributeStates: writeStates,
+		NodeID:          0,//now for test
+	}
+
+	err := trel.computeHandler.Write(trel.dbDesc, trel.desc, &trel.desc.Primary_index, attrDescs, writeCtx, batch)
 	if err != nil {
 		return err
 	}

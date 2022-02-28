@@ -16,14 +16,18 @@ package engine
 
 import (
 	"errors"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"time"
 )
 
 var (
 	errorUnsupportedTableDef = errors.New("unsupported tableDef")
+	errorDuplicatePrimaryKeyName = errors.New("duplicate primary key name")
+	errorDuplicateAttributeName = errors.New("duplicate attribute name")
 )
 
 func (td * TpeDatabase) Relations() []string {
@@ -66,13 +70,18 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 
 	tableDesc.Name = name
 
-	//get next id for the table
-	//TODO:
-
 	//list primary key name
 	var primaryKeys []string
+	dedupPKs := make(map[string]int8)
 	for _, def := range defs {
 		if pk, ok := def.(*engine.PrimaryIndexDef); ok {
+			for _, pkName := range pk.Names {
+				if _,exist := dedupPKs[pkName]; exist{
+					return errorDuplicatePrimaryKeyName
+				}else{
+					dedupPKs[pkName] = 1
+				}
+			}
 			primaryKeys = append(primaryKeys, pk.Names...)
 		}
 		if cmt,ok := def.(*engine.CommentDef); ok {
@@ -90,9 +99,10 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 	//tpe must need primary key
 	if len(primaryKeys) == 0 {
 		//add implicit primary key
+		pkFieldName := "rowid"+fmt.Sprintf("%d",time.Now().Unix())
 		pkAttrDesc := descriptor.AttributeDesc{
 			ID: uint32(columnIdx),
-			Name:              "rowid",
+			Name:              pkFieldName,
 			Ttype:             orderedcodec.VALUE_TYPE_UINT64,
 			Is_null:           false,
 			Default_value:     "",
@@ -108,9 +118,9 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 		tableDesc.Attributes = append(tableDesc.Attributes,pkAttrDesc)
 
 		indexDesc := descriptor.IndexDesc_Attribute{
-			Name:      "rowid",
+			Name:      pkAttrDesc.Name,
 			Direction: 0,
-			ID: uint32(columnIdx),
+			ID: pkAttrDesc.ID,
 			Type:      orderedcodec.VALUE_TYPE_UINT64,
 		}
 
@@ -119,14 +129,20 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 		columnIdx++
 	}
 
+	dedupAttrNames := make(map[string]int8)
 	for _, def := range defs {
 		if attr,ok := def.(*engine.AttributeDef); ok {
+			//attribute has exists?
+			if _,exist := dedupAttrNames[attr.Attr.Name]; exist {
+				return errorDuplicateAttributeName
+			}else{
+				dedupAttrNames[attr.Attr.Name] = 1
+			}
+
 			var isPrimaryKey bool = false
-			for _, pk := range primaryKeys {
-				if pk == attr.Attr.Name {
-					isPrimaryKey = true
-					break
-				}
+			//the attribute is the primary key
+			if _,exist := dedupPKs[attr.Attr.Name]; exist {
+				isPrimaryKey = true
 			}
 
 			attrDesc := descriptor.AttributeDesc{
