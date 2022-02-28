@@ -389,6 +389,8 @@ github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7C
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
 github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1 h1:RPvEO1nex1PYH/Jww/JGEQkcpy6aXywWF6Xbkakr03U=
 github.com/matrixorigin/matrixcube v0.0.0-20211230152817-79ca3b9ec6f1/go.mod h1:Q36DFaha0+4iWb4iv+fMxROclQBlVz4bP+jQDOkUgcw=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c h1:iEFnJRqCP6T9iJ8ezwnCSwoXaUHD3Man3PvMC4/vU8I=
+github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220224110646-df61c8926b70 h1:YWI5jthFkMa3BTZnVrfmxBNL3j60e+rtRPUSZKxVSnw=
 github.com/matrixorigin/matrixcube v0.2.1-0.20220224110646-df61c8926b70/go.mod h1:kgot/hPOIXuA6vIn0tWLy9Gvq3ndX5UAy9DMjhRY5dg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
