@@ -118,6 +118,10 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 }
 
 func exportRestrict(r engine.Reader, ins vm.Instructions) engine.Reader {
+	if ft := r.NewSparseFilter(); ft == nil {
+		return r
+	}
+
 	for i, in := range ins {
 		if in.Op == vm.Restrict {
 			arg := ins[i].Arg.(*restrict.Argument)
