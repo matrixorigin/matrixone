@@ -369,7 +369,7 @@ format = "console" # json, console.
 # log file config
 filename = "" # log file.
 max-size = 512 # maximum log file size.
-max-days = 0 # maximum log file days kept.
+max-days = 1 # maximum log file days kept.
 max-backups = 1 # maximum numbers of old log files to retain.
 
 # Cube Configs
