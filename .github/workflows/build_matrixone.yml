@@ -32,22 +32,22 @@ jobs:
         with:
           fetch-depth: '3'
 
-      - name: Detect non-ascii characters
-        run: |
-          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
-          if [[ -n $na_characters ]]; then
-            echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
-            printf '%s\n' "${na_characters[*]}"
-            exit 1
-          fi
+#       - name: Detect non-ascii characters
+#         run: |
+#           na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
+#           if [[ -n $na_characters ]]; then
+#             echo "Detected non-ascii characters in annotation or log info. Please refer to CONTRIBUTING.md."
+#             printf '%s\n' "${na_characters[*]}"
+#             exit 1
+#           fi
 
       - name: Build Configure
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
 
-      - name: Static Code Analysis
-        run: |
-          make sca 
+#       - name: Static Code Analysis
+#         run: |
+#           make sca 
 
       - name: Unit Testing
         run: |
@@ -57,18 +57,18 @@ jobs:
             make ut SKIP_TEST="race"
           fi
 
-      - name: Build Binary
-        run: |
-          make build
+#       - name: Build Binary
+#         run: |
+#           make build
 
-      - name: Build Verification Testing
-        run: |
-          make bvt 
+#       - name: Build Verification Testing
+#         run: |
+#           make bvt 
 
-      - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
-        with:
-          name: test_reports
-          path: |
-            ${{ github.workspace }}/coverage.html
-          retention-days: 7 
+#       - uses: actions/upload-artifact@v2
+#         if: ${{ always() }}
+#         with:
+#           name: test_reports
+#           path: |
+#             ${{ github.workspace }}/coverage.html
+#           retention-days: 7 
