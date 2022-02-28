@@ -141,7 +141,7 @@ func mergeSort(mp *mheap.Mheap, arg *Argument, b *batch.Batch) error {
 				break
 			}
 		}
-		if compareResult >= 0 { // Weight of item1 is bigger than or equal to item2
+		if compareResult <= 0 { // Weight of item1 is less than or equal to item2
 			for k := 0; k < len(result.Vecs); k++ {
 				err := vector.UnionOne(result.Vecs[k], bat1.Vecs[k], i, mp)
 				if err != nil {
@@ -181,7 +181,8 @@ func mergeSort(mp *mheap.Mheap, arg *Argument, b *batch.Batch) error {
 				return err
 			}
 		}
-		result.Zs = append(result.Zs, bat1.Zs[j:]...)
+		result.Zs = append(result.Zs, bat2.Zs[j:]...)
 	}
+	arg.ctr.bat = result
 	return nil
 }
