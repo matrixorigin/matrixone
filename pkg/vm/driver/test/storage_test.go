@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixcube/server"
-	// "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -50,7 +50,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
-	// "github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
+	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
