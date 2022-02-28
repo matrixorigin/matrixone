@@ -58,8 +58,8 @@ func (chi *ComputationHandlerImpl) Read(dbDesc *descriptor.DatabaseDesc, tableDe
 	return bat, prefix, prefixLen, nil
 }
 
-func (chi *ComputationHandlerImpl) Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error {
-	err := chi.indexHandler.WriteIntoIndex(dbDesc,tableDesc,indexDesc,attrs,bat)
+func (chi *ComputationHandlerImpl) Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error {
+	err := chi.indexHandler.WriteIntoIndex(dbDesc, tableDesc, indexDesc, attrs, writeCtx, bat)
 	if err != nil {
 		return err
 	}
@@ -385,4 +385,26 @@ func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descript
 		return nil,errorTableDeletedAlready
 	}
 	return tableDesc,nil
+}
+
+type AttributeStateForWrite struct {
+	PositionInBatch int
+
+	//true - the attribute value should be generated.
+	//false - the attribute value got from the batch.
+	NeedGenerated bool
+
+	AttrDesc descriptor.AttributeDesc
+}
+
+type WriteContext struct {
+	//write control for the attribute
+	AttributeStates []AttributeStateForWrite
+
+	//the attributes need to be written
+	BatchAttrs []descriptor.AttributeDesc
+
+	callback callbackPackage
+
+	NodeID uint64
 }

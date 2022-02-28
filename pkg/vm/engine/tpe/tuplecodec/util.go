@@ -27,9 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"math/rand"
 	"strconv"
+	"sync"
+	"time"
 )
 
-func makeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
+func MakeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
 	var names []string
 	var attrs []*engine.AttributeDef
 	var name string
@@ -86,8 +88,8 @@ func makeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
 	return names, attrs
 }
 
-//makeBatch allocates a batch for test
-func makeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *batch.Batch {
+//MakeBatch allocates a batch for test
+func MakeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *batch.Batch {
 	batchData := batch.New(true, attrName)
 
 	batchData.Zs = make([]int64,batchSize)
@@ -480,4 +482,32 @@ func EngineTypeToTpeType(t * types.Type) orderedcodec.ValueType {
 		panic("unsupported types.Type")
 	}
 	return vt
+}
+
+//for rowid
+var startTime int64 = time.Date(2022,1,1,0,0,0,0,time.UTC).UnixNano()
+
+const interval = uint64(10 * time.Microsecond)
+
+var rowID struct{
+	sync.Mutex
+	previous uint64
+}
+
+func GetRowID(nodeID uint64) uint64 {
+	nano := time.Now().UnixNano()
+	if nano < startTime {
+		nano = startTime
+	}
+
+	ts := uint64(nano - startTime) / interval
+
+	rowID.Lock()
+	if ts <= rowID.previous {
+		ts = rowID.previous+1
+	}
+	rowID.previous = ts
+	rowID.Unlock()
+
+	return (ts << 15) ^ nodeID
 }
