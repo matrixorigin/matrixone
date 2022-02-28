@@ -8,15 +8,15 @@ Thanks for understanding that English is used as a shared language in this repos
 
 ## **What is MatrixOne**
 ### Basic Information
-You can see [MatrixOne Introduction](./../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](./../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../Overview/matrixcube/natrixcube-introduction.md).
+You can see [MatrixOne Introduction](../../Overview/matrixone-introduction.md) for key features of MatrixOne, [MatrixOne Architecture](../../Overview/matrixone-architecture.md) for MatrixOne architecture and operational logic.  For our distributed framework, see [MatrixCube Tech Design](./../../Overview/matrixcube/natrixcube-introduction.md).
 
-Besides, you can browse [SQL Reference](./../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](./../Reference/Customer-Functions/year.md) to know more about our interactive details.
+Besides, you can browse [SQL Reference](../../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) and [Custom Functions](../../Reference/Customer-Functions/year.md) to know more about our interactive details.
 
 These introductions will help you go through you the key concepts and user details to understand the project. 
 
 
 ### Roadmap
-MatrixOne v0.2.0 has been released, you can see [Release Notes](./Release-Notes/v0.2.0.md) to know more information. 
+MatrixOne v0.2.0 has been released, you can see [Release Notes](../Release-Notes/v0.2.0.md) to know more information. 
 
 Currently, we are working at v0.3.0 and v0.4.0 releases, the job tasks of these releases are listed in the Github milestones [0.3.0](https://github.com/matrixorigin/matrixone/milestone/3) and [0.4.0](https://github.com/matrixorigin/matrixone/milestone/5).
 
@@ -27,9 +27,9 @@ For the long-term project roadmap, please refer to [MatrixOne roadmap](https://g
 
 Contributions to MatrixOne are not limited to writing code. What follows are different ways to participate in the MatrixOne project and engage with our vibrant open-source community. See [Types of Contributions](types-of-contributions.md) for more details.  
 
-* To report a bug or a problem with documentation, please file an [issue](https://github.com/matrixorigin/matrixone/issues/new/choose) providing the details of the problem. Don't forget to add a proper label for your issue, and follow the [issue templates](./Report-Issues.md#issue-templates).  
-* To propose a new feature, please file a [new feature request](https://github.com/matrixorigin/matrixone/issues/new/choose). Describe the intended feature and discuss the design and implementation with the team and community. Once the team agrees on the plan, you can follow the [Contribution Workflow](Contribute-Code.md#workflow) to implement it.  
-* To implement a feature or bug-fix for an existing outstanding issue, follow the [Contribution workflow](Contribute-Code.md#workflow). If you need more context on a particular issue, comment on the issue to let people know.
+* To report a bug or a problem with documentation, please file an [issue](https://github.com/matrixorigin/matrixone/issues/new/choose) providing the details of the problem. Don't forget to add a proper label for your issue, and follow the [issue templates](report-an-issue.md#issue-templates).  
+* To propose a new feature, please file a [new feature request](https://github.com/matrixorigin/matrixone/issues/new/choose). Describe the intended feature and discuss the design and implementation with the team and community. Once the team agrees on the plan, you can follow the [Contribution Workflow](contribute-code.md#workflow) to implement it.  
+* To implement a feature or bug-fix for an existing outstanding issue, follow the [Contribution workflow](contribute-code.md#workflow). If you need more context on a particular issue, comment on the issue to let people know.
 
 
 

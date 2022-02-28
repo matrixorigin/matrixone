@@ -36,7 +36,7 @@ There are some basic aspects to check when you review a pull request:
 * **Functionality**  
   The pull request should implement what the author intends to do, fit well in the existing code base, and resolve a real problem for users. Thus you should check whether or not the pull request achieve the intention and you could follow the discussions in the corresponding [GitHub issue](https://github.com/matrixorigin/matrixone/issues/new/choose).  
 * **Style**  
-  Code in the pull request should follow common programming [style](Contribute-Code.md#get-familiar-with-style). However, sometimes the existing code is inconsistent with the style guide, you should maintain consistency with the existing code or file a new issue to fix the existing code style first.
+  Code in the pull request should follow common programming [style](contribute-code.md#get-familiar-with-style). However, sometimes the existing code is inconsistent with the style guide, you should maintain consistency with the existing code or file a new issue to fix the existing code style first.
 * **Documentation**  
   If a pull request changes how users build, test, interact with, or release code, you must check whether it also updates the related documentation such as `README.md` and any generated reference docs. Similarly, if a pull request deletes or deprecates code, you must check whether or not the corresponding documentation should also be deleted.
 * **Performance**  

@@ -4,7 +4,7 @@ This document dcescribes the conventions about development workflow, some styles
 
 
 ## **Before Contributions**
-Before you start developing, make sure you have read [Preparation](Preparation.md) where you can follow the instructions to learn more about MatrixOne, development knowledge and how to set up the development environment.
+Before you start developing, make sure you have read [Preparation](preparation.md) where you can follow the instructions to learn more about MatrixOne, development knowledge and how to set up the development environment.
 
 
 ## **Get familiar with style** <a name="get-familiar-with-style"></a>
@@ -22,7 +22,7 @@ The coding style suggested by the Golang community is used in MatrixOne. See the
    See the [Commit Message & Pull Request Style](../Code-Style/code-comment-style.md) for details.
 
 ## **Workflow<c name="workflow"></c>**
-You can follow the workflow to operate development, and you can see [Make Your First Contribution](Make-Your-First-Contribution.md) if you are a newcomer and need more detailed instructions about worflow.  
+You can follow the workflow to operate development, and you can see [Make Your First Contribution](../make-your-first-contribution.md) if you are a newcomer and need more detailed instructions about worflow.  
 
 1. Fork the [MatrixOne repository](https://github.com/matrixorigin/matrixone) on GitHub.
 2. Clone your fork to your local machine with:  
