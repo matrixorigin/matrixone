@@ -206,7 +206,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 			s := raftstore.NewStore(c)
 			types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
 			for _, t := range types {
-				if v := cfg.Prophet.GetJobProcessor(t); v != nil {
+				if v := c.Prophet.GetJobProcessor(t); v != nil {
 					dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
 				}
 			}
