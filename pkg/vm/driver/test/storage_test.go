@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	// "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -50,7 +50,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
+	// "github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -382,108 +382,108 @@ func TestSnapshot(t *testing.T) {
 	stdLog.Printf("call stop")
 	c.Stop()
 }
-func TestSplit(t *testing.T) {
-	os.Remove(clusterDataPath)
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	ctlgListener := catalog.NewCatalogListener()
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
-			c.ClusterConfig.PreAllocatedGroupNum = 20
-			return c
-		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
-			opts := &storage.Options{}
-			mdCfg := &storage.MetaCfg{
-				SegmentMaxBlocks: blockCntPerSegment,
-				BlockMaxRows:     blockRows,
-			}
-			opts.CacheCfg = &storage.CacheCfg{
-				IndexCapacity:  blockRows * blockCntPerSegment * 80,
-				InsertCapacity: blockRows * uint64(colCnt) * 2000,
-				DataCapacity:   blockRows * uint64(colCnt) * 2000,
-			}
-			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
-				Interval: time.Duration(1) * time.Second,
-			}
-			opts.Meta.Conf = mdCfg
-			opts.EventListener = ctlgListener
-			return aoe3.NewStorageWithOptions(path, opts)
-		}),
-		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
-				cfg.Worker.RaftEventWorkers = 8
-				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(10000)
-				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
-				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
-			}),
-			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
-			raftstore.WithTestClusterDataPath(clusterDataPath)))
+// func TestSplit(t *testing.T) {
+// 	os.Remove(clusterDataPath)
+// 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+// 	ctlgListener := catalog.NewCatalogListener()
+// 	c := testutil.NewTestAOECluster(t,
+// 		func(node int) *config.Config {
+// 			c := &config.Config{}
+// 			c.ClusterConfig.PreAllocatedGroupNum = 20
+// 			return c
+// 		},
+// 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+// 			opts := &storage.Options{}
+// 			mdCfg := &storage.MetaCfg{
+// 				SegmentMaxBlocks: blockCntPerSegment,
+// 				BlockMaxRows:     blockRows,
+// 			}
+// 			opts.CacheCfg = &storage.CacheCfg{
+// 				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+// 				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+// 				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+// 			}
+// 			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
+// 				Interval: time.Duration(1) * time.Second,
+// 			}
+// 			opts.Meta.Conf = mdCfg
+// 			opts.EventListener = ctlgListener
+// 			return aoe3.NewStorageWithOptions(path, opts)
+// 		}),
+// 		testutil.WithTestAOEClusterUsePebble(),
+// 		testutil.WithTestAOEClusterRaftClusterOptions(
+// 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+// 				cfg.Worker.RaftEventWorkers = 8
+// 				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(10000)
+// 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
+// 				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
+// 			}),
+// 			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
+// 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
-	c.Start()
-	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
-		c.Stop()
-	}()
-	stdLog.Printf("drivers all started.")
-	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+// 	c.Start()
+// 	defer func() {
+// 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+// 		c.Stop()
+// 	}()
+// 	stdLog.Printf("drivers all started.")
+// 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
-	d0 := c.CubeDrivers[0]
-	catalog := catalog.NewCatalog(d0)
-	ctlgListener.UpdateCatalog(catalog)
+// 	d0 := c.CubeDrivers[0]
+// 	catalog := catalog.NewCatalog(d0)
+// 	ctlgListener.UpdateCatalog(catalog)
 
-	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
-	require.NoError(t, err)
-	tbl := MockTableInfo(0)
-	tid, err := catalog.CreateTable(0, dbid, *tbl)
-	require.NoError(t, err)
+// 	dbid, err := catalog.CreateDatabase(0, "split_test", 0)
+// 	require.NoError(t, err)
+// 	tbl := MockTableInfo(0)
+// 	tid, err := catalog.CreateTable(0, dbid, *tbl)
+// 	require.NoError(t, err)
 
-	sids, err := catalog.GetShardIDsByTid(tid)
-	logutil.Infof("sids is %v", sids)
+// 	sids, err := catalog.GetShardIDsByTid(tid)
+// 	logutil.Infof("sids is %v", sids)
 
-	totalRowsBeforeSplit := uint64(0)
-	logutil.Infof("split: start insert")
-	for i := 0; i < 40; i++ {
-		batch := MockBatch(tbl, i, 10000)
-		var buf bytes.Buffer
-		err = protocol.EncodeBatch(batch, &buf)
-		require.Nil(t, err)
-		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
-		if err == nil {
-			totalRowsBeforeSplit += 10000
-		}
-		time.Sleep(2 * time.Second)
-		if checkSplit(c.AOEStorages[0], sids[0]) {
-			break
-		}
-		if i == 39 {
-			t.Fatalf("failed to split")
-		}
-	}
-	//check ctlg
-	time.Sleep(3 * time.Second)
-	newsids, err := catalog.GetShardIDsByTid(tid)
-	logutil.Infof("newsids are %v", newsids)
-	for _, sid := range newsids {
-		require.NotEqual(t, sids[0], sid)
-	}
-	logutil.Infof("split: check ctlg finished")
-	//check data
-	batchesAfterSplit := make([]*batch.Batch, 0)
-	totalRowsAfterSplit := uint64(0)
-	for _, sid := range newsids {
-		batch, err := c.AOEStorages[0].ReadAll(sid, catalog.EncodeTabletName(sid, tid))
-		require.NoError(t, err)
-		batchesAfterSplit = append(batchesAfterSplit, batch...)
-		rows, _ := c.AOEStorages[0].TotalRows(sid)
-		totalRowsAfterSplit += rows
-	}
-	logutil.Infof("split: check data finished")
+// 	totalRowsBeforeSplit := uint64(0)
+// 	logutil.Infof("split: start insert")
+// 	for i := 0; i < 40; i++ {
+// 		batch := MockBatch(tbl, i, 10000)
+// 		var buf bytes.Buffer
+// 		err = protocol.EncodeBatch(batch, &buf)
+// 		require.Nil(t, err)
+// 		err = d0.Append(catalog.EncodeTabletName(sids[0], tid), sids[0], buf.Bytes())
+// 		if err == nil {
+// 			totalRowsBeforeSplit += 10000
+// 		}
+// 		time.Sleep(2 * time.Second)
+// 		if checkSplit(c.AOEStorages[0], sids[0]) {
+// 			break
+// 		}
+// 		if i == 39 {
+// 			t.Fatalf("failed to split")
+// 		}
+// 	}
+// 	//check ctlg
+// 	time.Sleep(3 * time.Second)
+// 	newsids, err := catalog.GetShardIDsByTid(tid)
+// 	logutil.Infof("newsids are %v", newsids)
+// 	for _, sid := range newsids {
+// 		require.NotEqual(t, sids[0], sid)
+// 	}
+// 	logutil.Infof("split: check ctlg finished")
+// 	//check data
+// 	batchesAfterSplit := make([]*batch.Batch, 0)
+// 	totalRowsAfterSplit := uint64(0)
+// 	for _, sid := range newsids {
+// 		batch, err := c.AOEStorages[0].ReadAll(sid, catalog.EncodeTabletName(sid, tid))
+// 		require.NoError(t, err)
+// 		batchesAfterSplit = append(batchesAfterSplit, batch...)
+// 		rows, _ := c.AOEStorages[0].TotalRows(sid)
+// 		totalRowsAfterSplit += rows
+// 	}
+// 	logutil.Infof("split: check data finished")
 
-	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit, totalRowsAfterSplit)
-	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
-}
+// 	logutil.Infof("total rows before %v after %v", totalRowsBeforeSplit, totalRowsAfterSplit)
+// 	require.Equal(t, totalRowsBeforeSplit, totalRowsAfterSplit)
+// }
 
 func checkSplit(s *aoe3.Storage, old uint64) bool {
 	dbName := aoedb.IdToNameFactory.Encode(old)
