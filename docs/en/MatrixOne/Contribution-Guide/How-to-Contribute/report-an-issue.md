@@ -89,5 +89,5 @@ If you'd like to work on the issue by yourself, you can comment `/assign` on the
 
 ## **Good First Issues**
 When you make the first contribution to MatrixOne, you can select one of the issues labeled [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) each of which is relative approachability for first-time contributors.
-For detailed suggestions you need when you make first contribution, you cen see [Make Your First Contribution](Make-Your-First-Contribution.md). 
+For detailed suggestions you need when you make first contribution, you cen see [Make Your First Contribution](make-your-first-contribution.md). 
 
