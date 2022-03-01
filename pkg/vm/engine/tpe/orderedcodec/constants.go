@@ -21,6 +21,14 @@ const (
 	//marker
 	notNullEncoding = 1
 
+	encodingfloatNaN = 2
+
+	encodingfloatNeg = 3
+
+	encodingfloatZero = 4
+
+	encodingfloatPos = 5
+
 	maxLengthOfInetegerEncoding = 8
 
 	encodingPrefixForBytes byte = 18

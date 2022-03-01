@@ -18,14 +18,16 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
+	"testing"
+
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
 	"github.com/smartystreets/assertions/should"
 	"github.com/smartystreets/goconvey/convey"
-	"reflect"
-	"testing"
 )
 
 func TestTupleKeyEncoder_EncodeTenantPrefix(t *testing.T) {
@@ -234,6 +236,18 @@ func TestDefaultValueSerializer_SerializeValue(t *testing.T) {
 			{uint64(0),SERIAL_TYPE_UINT64},
 			{"abc",SERIAL_TYPE_STRING},
 			{[]byte{1,2,3},SERIAL_TYPE_BYTES},
+			{true, SERIAL_TYPE_BOOL},
+			{int8(127), SERIAL_TYPE_INT8},
+			{int16(127), SERIAL_TYPE_INT16},
+			{int32(127), SERIAL_TYPE_INT32},
+			{int64(127), SERIAL_TYPE_INT64},
+			{uint8(127), SERIAL_TYPE_UINT8},
+			{uint16(127), SERIAL_TYPE_UINT16},
+			{uint32(127), SERIAL_TYPE_UINT32},
+			{float32(1.0), SERIAL_TYPE_FLOAT32},
+			{float64(1.0), SERIAL_TYPE_FLOAT64},
+			{types.Date(1), SERIAL_TYPE_DATE},
+			{types.Datetime(1), SERIAL_TYPE_DATETIME},
 		}
 
 		serial := &DefaultValueSerializer{}
@@ -269,6 +283,17 @@ func TestDefaultValueSerializer_DeserializeValue(t *testing.T) {
 			{uint64(0), byte(orderedcodec.VALUE_TYPE_UINT64)},
 			{"abc", byte(orderedcodec.VALUE_TYPE_STRING)},
 			{[]byte{1,2,3}, byte(orderedcodec.VALUE_TYPE_BYTES)},
+			{int8(1), byte(orderedcodec.VALUE_TYPE_INT8)},
+			{int16(2), byte(orderedcodec.VALUE_TYPE_INT16)},
+			{int32(3), byte(orderedcodec.VALUE_TYPE_INT32)},
+			{int64(4), byte(orderedcodec.VALUE_TYPE_INT64)},
+			{uint8(5), byte(orderedcodec.VALUE_TYPE_UINT8)},
+			{uint16(6), byte(orderedcodec.VALUE_TYPE_UINT16)},
+			{uint32(7), byte(orderedcodec.VALUE_TYPE_UINT32)},
+			{float32(1.0), byte(orderedcodec.VALUE_TYPE_FLOAT32)},
+			{float64(2.0), byte(orderedcodec.VALUE_TYPE_FLOAT64)},
+			{types.Date(8), byte(orderedcodec.VALUE_TYPE_DATE)},
+			{types.Datetime(9), byte(orderedcodec.VALUE_TYPE_DATETIME)},
 		}
 
 		serial := &DefaultValueSerializer{}
