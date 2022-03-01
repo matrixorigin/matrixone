@@ -1,0 +1,42 @@
+# This is a basic workflow to help you get started with Actions
+
+name: release
+
+on:
+  release:
+    types: [published]
+
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v1
+      - name: Use Golang
+        uses: actions/setup-go@v1
+        with:
+          go-version: "1.17"
+
+      - name: Build normal
+        run: |
+          make config
+          make build
+          zip mo-server-linux-amd64.zip mo-server system_vars_config.toml
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.2.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+
+      - name: Upload Release normal linux
+        uses: actions/upload-release-asset@v1.0.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: ./mo-server-linux-amd64.zip
+          asset_name: mo-server-${{ steps.get_release.outputs.tag_name }}-linux-amd64.zip
+          asset_content_type: application/zip

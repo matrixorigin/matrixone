@@ -1,0 +1,65 @@
+name: Test Distributed Verison Matrixone
+on:
+  pull_request:
+    types: 
+      - opened
+      - synchronize
+      - reopened
+    branches:
+      - main
+    
+jobs: 
+  build:
+    runs-on: ubuntu-latest
+    name: Matrixone distributed testing
+    timeout-minutes: 30
+
+    steps:
+      - name: Chekcout
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+        
+      - name: Cache Docker layers 
+        uses: actions/cache@v2
+        with: 
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx
+    
+      - name: Build and Push Image
+        uses: docker/build-push-action@v2
+        env:
+          DOCKER_BUILDKIT: 1
+        with:
+          context: .
+          file: optools/test/Dockerfile
+          push: false
+          load: true
+          tags: matrixorigin/matrixone:dt
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+        
+      - name: Build the docker-compose stack
+        env:
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+        run: docker-compose -f ./optools/test/docker-compose.yaml up -d --no-build
+
+      - name: Check running containers
+        run: docker ps -a
+
+      - name: Check container network
+        run:  docker network list
+  
+      - name: Run test suite
+        run: docker run --tty --rm --name mysql-tester --network test_monet wanglei1995/mysql-tester -host 172.19.0.2 -port 6001 -user dump -passwd 111
+
+      - name: Move cache
+        run: |
+          docker-compose -f ./optools/test/docker-compose.yaml down --remove-orphans
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache

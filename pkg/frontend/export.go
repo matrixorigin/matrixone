@@ -10,6 +10,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 var OpenFile = os.OpenFile
@@ -34,57 +35,57 @@ func (cld *CloseExportData) Close() {
 	})
 }
 
-func initExportFileParam(oq *outputQueue) {
-	oq.ep.DefaultBufSize *= 1024 * 1024
-	n := (int)(oq.mrs.GetColumnCount())
+func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
+	ep.DefaultBufSize *= 1024 * 1024
+	n := (int)(mrs.GetColumnCount())
 	if n <= 0 {
 		return
 	}
-	oq.ep.Symbol = make([]string, n)
+	ep.Symbol = make([]string, n)
 	for i := 0; i < n - 1; i++ {
-		oq.ep.Symbol[i] = oq.ep.Fields.Terminated
+		ep.Symbol[i] = ep.Fields.Terminated
 	}
-	oq.ep.Symbol[n - 1] = oq.ep.Lines.TerminatedBy
-	oq.ep.ColumnFlag = make([]bool, len(oq.mrs.Name2Index))
-	for i := 0; i < len(oq.ep.ForceQuote); i++ {
-		col, ok := oq.mrs.Name2Index[oq.ep.ForceQuote[i]]
+	ep.Symbol[n - 1] = ep.Lines.TerminatedBy
+	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
+	for i := 0; i < len(ep.ForceQuote); i++ {
+		col, ok := mrs.Name2Index[ep.ForceQuote[i]]
 		if ok {
-			oq.ep.ColumnFlag[col] = true
+			ep.ColumnFlag[col] = true
 		}
 	}
 }
 
-var openNewFile = func(oq *outputQueue) error {
-	lineSize := oq.ep.LineSize
+var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
+	lineSize := ep.LineSize
 	var err error
-	oq.ep.CurFileSize = 0
-	filePath := getExportFilePath(oq.ep.FilePath, oq.ep.FileCnt)
-	oq.file, err = OpenFile(filePath, os.O_RDWR | os.O_EXCL | os.O_CREATE, 0o666)
+	ep.CurFileSize = 0
+	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
+	ep.File, err = OpenFile(filePath, os.O_RDWR | os.O_EXCL | os.O_CREATE, 0o666)
 	if err != nil {
 		return err
 	}
-	oq.writer = bufio.NewWriterSize(oq.file, int(oq.ep.DefaultBufSize))
-	if oq.ep.Header {
+	ep.Writer = bufio.NewWriterSize(ep.File, int(ep.DefaultBufSize))
+	if ep.Header {
 		var header string
-		n := len(oq.mrs.Columns)
+		n := len(mrs.Columns)
 		if n == 0 {
 			return nil
 		}
 		for i := 0; i < n - 1; i++ {
-			header += oq.mrs.Columns[i].Name() + oq.ep.Fields.Terminated
+			header += mrs.Columns[i].Name() + ep.Fields.Terminated
 		}
-		header += oq.mrs.Columns[n - 1].Name() + oq.ep.Lines.TerminatedBy
-		if oq.ep.MaxFileSize != 0 && uint64(len(header)) >= oq.ep.MaxFileSize {
+		header += mrs.Columns[n - 1].Name() + ep.Lines.TerminatedBy
+		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
 			return errors.New("the header line size is over the maxFileSize")
 		}
-		if err := writeDataToCSVFile(oq, []byte(header)); err != nil {
+		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
 		}
 	}
 	if lineSize != 0 {
-		oq.ep.LineSize = 0
-		oq.ep.Rows = 0
-		if err := writeDataToCSVFile(oq, oq.ep.OutputStr); err != nil {
+		ep.LineSize = 0
+		ep.Rows = 0
+		if err := writeDataToCSVFile(ep, ep.OutputStr); err != nil {
 			return err
 		}
 	}
@@ -124,29 +125,29 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	return nil
 }
 
-var Flush = func(oq *outputQueue) error {
-	return oq.writer.Flush()
+var Flush = func(ep *tree.ExportParam) error {
+	return ep.Writer.Flush()
 }
 
-var Seek = func(oq *outputQueue) (int64, error) {
-	return oq.file.Seek(int64(oq.ep.CurFileSize - oq.ep.LineSize), io.SeekStart)
+var Seek = func(ep *tree.ExportParam) (int64, error) {
+	return ep.File.Seek(int64(ep.CurFileSize - ep.LineSize), io.SeekStart)
 }
 
-var Read = func(oq *outputQueue) (int, error) {
-	oq.ep.OutputStr = make([]byte, oq.ep.LineSize)
-	return oq.file.Read(oq.ep.OutputStr)
+var Read = func(ep *tree.ExportParam) (int, error) {
+	ep.OutputStr = make([]byte, ep.LineSize)
+	return ep.File.Read(ep.OutputStr)
 }
 
-var Truncate = func(oq *outputQueue) error {
-	return oq.file.Truncate(int64(oq.ep.CurFileSize - oq.ep.LineSize))
+var Truncate = func(ep *tree.ExportParam) error {
+	return ep.File.Truncate(int64(ep.CurFileSize - ep.LineSize))
 }
 
-var Close = func(oq *outputQueue) error {
-	return oq.file.Close()
+var Close = func(ep *tree.ExportParam) error {
+	return ep.File.Close()
 }
 
-var Write = func(oq *outputQueue, output []byte) (int, error) {
-	return oq.writer.Write(output)
+var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
+	return ep.Writer.Write(output)
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
@@ -155,48 +156,48 @@ func writeToCSVFile(oq *outputQueue, output []byte) error {
 			return errors.New("The OneLine size is over the maxFileSize")
 		}
 		oq.ep.FileCnt++
-		if err := Flush(oq); err != nil {
+		if err := Flush(oq.ep); err != nil {
 			return err
 		}
 		if oq.ep.LineSize != 0 {
-			if _, err := Seek(oq); err != nil {
+			if _, err := Seek(oq.ep); err != nil {
 				return err
 			}
 			for {
-				if n, err := Read(oq); err != nil {
+				if n, err := Read(oq.ep); err != nil {
 					return err
 				} else if uint64(n) == oq.ep.LineSize {
 					break
 				}
 			}
-			if err := Truncate(oq); err != nil {
+			if err := Truncate(oq.ep); err != nil {
 				return err
 			}
 		}
-		if err := Close(oq); err != nil {
+		if err := Close(oq.ep); err != nil {
 			return err
 		}
-		if err := openNewFile(oq); err != nil {
+		if err := openNewFile(oq.ep, oq.mrs); err != nil {
 			return err
 		}
 	}
 
-	if err := writeDataToCSVFile(oq, output); err != nil {
+	if err := writeDataToCSVFile(oq.ep, output); err != nil {
 		return err
 	}
 	return nil
 }
 
-var writeDataToCSVFile = func(oq *outputQueue, output []byte) error {
+var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 	for {
-		if n, err := Write(oq, output); err != nil {
+		if n, err := Write(ep, output); err != nil {
 			return err
 		} else if n == len(output) {
 			break
 		}
 	}
-	oq.ep.LineSize += uint64(len(output))
-	oq.ep.CurFileSize += uint64(len(output))
+	ep.LineSize += uint64(len(output))
+	ep.CurFileSize += uint64(len(output))
 	return nil
 }
 

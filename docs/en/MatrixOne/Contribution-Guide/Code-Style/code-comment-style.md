@@ -1,15 +1,15 @@
-# Code Comment Style
+# **Code Comment Style**
 
 This document describes the code comment style applied to MatrixOne style. When you are to commit, be sure to follow the style to write good code comments.
 
-## Why does a good comment matter?
+## **Why does a good comment matter?**
 
 - To speed up the reviewing process
 - To help maintain the code
 - To improve the API document readability
 - To improve the development efficiency of the whole team
 
-## Where/When to comment?
+## **Where/When to comment?**
 
 Write a comment where/when:
 
@@ -36,7 +36,7 @@ A comment is generally required for:
 - TODO
 - FIXME
 
-## How to comment?
+## **How to comment?**
 
 ### Format of a good comment
 

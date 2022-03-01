@@ -76,6 +76,13 @@ var (
 	Float64DivByScalar     func(float64, []float64, []float64) []float64
 	Float64DivByScalarSels func(float64, []float64, []float64, []int64) []float64
 
+	Float32IntegerDiv             func([]float32, []float32, []int64) []int64
+	Float32IntegerDivSels         func([]float32, []float32, []int64, []int64) []int64
+	Float32IntegerDivScalar       func(float32, []float32, []int64) []int64
+	Float32IntegerDivScalarSels   func(float32, []float32, []int64, []int64) []int64
+	Float32IntegerDivByScalar     func(float32, []float32, []int64) []int64
+	Float32IntegerDivByScalarSels func(float32, []float32, []int64, []int64) []int64
+
 	Float64IntegerDiv             func([]float64, []float64, []int64) []int64
 	Float64IntegerDivSels         func([]float64, []float64, []int64, []int64) []int64
 	Float64IntegerDivScalar       func(float64, []float64, []int64) []int64
@@ -145,6 +152,13 @@ func init() {
 	Float64DivScalarSels = float64DivScalarSels
 	Float64DivByScalar = float64DivByScalar
 	Float64DivByScalarSels = float64DivByScalarSels
+
+	Float32IntegerDiv = float32IntegerDiv
+	Float32IntegerDivSels = float32IntegerDivSels
+	Float32IntegerDivScalar = float32IntegerDivScalar
+	Float32IntegerDivScalarSels = float32IntegerDivScalarSels
+	Float32IntegerDivByScalar = float32IntegerDivByScalar
+	Float32IntegerDivByScalarSels = float32IntegerDivByScalarSels
 
 	Float64IntegerDiv = float64IntegerDiv
 	Float64IntegerDivSels = float64IntegerDivSels
@@ -570,6 +584,48 @@ func float64DivByScalar(x float64, ys, rs []float64) []float64 {
 func float64DivByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
 	for _, sel := range sels {
 		rs[sel] = ys[sel] / x
+	}
+	return rs
+}
+
+func float32IntegerDiv(xs, ys []float32, rs []int64) []int64 {
+	for i, x := range xs {
+		rs[i] = int64(x / ys[i])
+	}
+	return rs
+}
+
+func float32IntegerDivSels(xs, ys []float32, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(xs[sel] / ys[sel])
+	}
+	return rs
+}
+
+func float32IntegerDivScalar(x float32, ys []float32, rs []int64) []int64 {
+	for i, y := range ys {
+		rs[i] = int64(x / y)
+	}
+	return rs
+}
+
+func float32IntegerDivScalarSels(x float32, ys []float32, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(x / ys[sel])
+	}
+	return rs
+}
+
+func float32IntegerDivByScalar(x float32, ys []float32, rs []int64) []int64 {
+	for i, y := range ys {
+		rs[i] = int64(y / x)
+	}
+	return rs
+}
+
+func float32IntegerDivByScalarSels(x float32, ys []float32, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(ys[sel] / x)
 	}
 	return rs
 }

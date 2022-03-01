@@ -27,9 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"math/rand"
 	"strconv"
+	"sync"
+	"time"
 )
 
-func makeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
+func MakeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
 	var names []string
 	var attrs []*engine.AttributeDef
 	var name string
@@ -86,8 +88,8 @@ func makeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
 	return names, attrs
 }
 
-//makeBatch allocates a batch for test
-func makeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *batch.Batch {
+//MakeBatch allocates a batch for test
+func MakeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *batch.Batch {
 	batchData := batch.New(true, attrName)
 
 	batchData.Zs = make([]int64,batchSize)
@@ -452,7 +454,60 @@ func TpeTypeToEngineType(Ttype orderedcodec.ValueType) types.Type {
 	case orderedcodec.VALUE_TYPE_FLOAT64      : t.Oid = types.T_float64
 	case orderedcodec.VALUE_TYPE_DATE      :    t.Oid = types.T_date
 	case orderedcodec.VALUE_TYPE_DATETIME      :t.Oid = types.T_datetime
+	default:
+		panic("unsupported tpe type")
 	}
 	t.Oid.ToType()
 	return t
+}
+
+func EngineTypeToTpeType(t * types.Type) orderedcodec.ValueType {
+	var vt orderedcodec.ValueType
+	switch t.Oid {
+	case types.T_uint64   : vt =  orderedcodec.VALUE_TYPE_UINT64
+	case types.T_char     : vt =  orderedcodec.VALUE_TYPE_BYTES
+	case types.T_varchar  : vt =  orderedcodec.VALUE_TYPE_STRING
+	case types.T_int8     : vt =  orderedcodec.VALUE_TYPE_INT8
+	case types.T_int16    : vt =  orderedcodec.VALUE_TYPE_INT16
+	case types.T_int32    : vt =  orderedcodec.VALUE_TYPE_INT32
+	case types.T_int64    : vt =  orderedcodec.VALUE_TYPE_INT64
+	case types.T_uint8    : vt =  orderedcodec.VALUE_TYPE_UINT8
+	case types.T_uint16   : vt =  orderedcodec.VALUE_TYPE_UINT16
+	case types.T_uint32   : vt =  orderedcodec.VALUE_TYPE_UINT32
+	case types.T_float32  : vt =  orderedcodec.VALUE_TYPE_FLOAT32
+	case types.T_float64  : vt =  orderedcodec.VALUE_TYPE_FLOAT64
+	case types.T_date     : vt =  orderedcodec.VALUE_TYPE_DATE
+	case types.T_datetime : vt =  orderedcodec.VALUE_TYPE_DATETIME
+	default:
+		panic("unsupported types.Type")
+	}
+	return vt
+}
+
+//for rowid
+var startTime int64 = time.Date(2022,1,1,0,0,0,0,time.UTC).UnixNano()
+
+const interval = uint64(10 * time.Microsecond)
+
+var rowID struct{
+	sync.Mutex
+	previous uint64
+}
+
+func GetRowID(nodeID uint64) uint64 {
+	nano := time.Now().UnixNano()
+	if nano < startTime {
+		nano = startTime
+	}
+
+	ts := uint64(nano - startTime) / interval
+
+	rowID.Lock()
+	if ts <= rowID.previous {
+		ts = rowID.previous+1
+	}
+	rowID.previous = ts
+	rowID.Unlock()
+
+	return (ts << 15) ^ nodeID
 }

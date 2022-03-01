@@ -4,7 +4,7 @@ Contributions to the MatrixOne documentation are welcome from everyone. The Matr
 
 ## **Before you start**
 
-Before you contribute please take a minute to familiarize yourself with basic [Markdown](https://www.markdownguide.org/basic-syntax/) syntax and have a look at our [Code of Conduct](../code_of_conduct.md) and the [Google Developer Documentation Style Guide](https://developers.google.com/style/) for some guidance on how to write accessible, consistent and inclusive documentation.
+Before you contribute please take a minute to familiarize yourself with basic [Markdown](https://www.markdownguide.org/basic-syntax/) syntax and have a look at our [Code of Conduct](../Code-Style/code-of-conduct.md) and the [Google Developer Documentation Style Guide](https://developers.google.com/style/) for some guidance on how to write accessible, consistent, and inclusive documentation.
 
 
 
@@ -20,7 +20,7 @@ The MatrixOne documentation is managed in 3 repositories:
 
 * The images and unstructured data are located in the [artwork](https://github.com/matrixorigin/artwork) repo. 
 
-The `matrixorigin.io` repo contains a submodule that links to `matrixone` repo contents. The images are referred as webimage links from `artwork` repo. The `matrixorigin.io` has implemented a CI&CD project, which will be triggered by a new code merge and manual launch. This CI&CD workflow publishs the documentation to [https://docs.matrixorigin.io/](https://docs.matrixorigin.io/).  
+The `matrixorigin.io` repo contains a submodule that links to `matrixone` repo contents. The images are referred as web image links from `artwork` repo. The `matrixorigin.io` has implemented a CI&CD project, which will be triggered by a new code merge and manual launch. This CI&CD workflow publishes the documentation to [https://docs.matrixorigin.io/](https://docs.matrixorigin.io/).  
 
 The documentation project is based on the [mkdocs-material](https://github.com/squidfunk/mkdocs-material). You can find the corresponding syntax and commands with this project.
 

@@ -25,7 +25,7 @@ type IndexHandler interface {
 
 	WriteIntoTable(table *descriptor.RelationDesc,bat *batch.Batch) error
 
-	WriteIntoIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error
+	WriteIntoIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error
 
 	DeleteFromTable(table *descriptor.RelationDesc,bat *batch.Batch) error
 

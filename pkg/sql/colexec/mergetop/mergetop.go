@@ -58,6 +58,16 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	argument := arg.(*Argument)
 
+	if len(proc.Reg.MergeReceivers) == 1 {
+		reg := proc.Reg.MergeReceivers[0]
+		bat := <-reg.Ch
+		if bat == nil {
+			proc.Reg.MergeReceivers = nil
+		}
+		proc.Reg.InputBatch = bat
+		return true, nil
+	}
+
 	for {
 		switch argument.ctr.state {
 		case running:
@@ -81,7 +91,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 						for k, vec := range bat.Vecs {
 							argument.ctr.bat.Vecs[k] = vector.New(vec.Typ)
 						}
-						argument.ctr.bat.Zs = bat.Zs
+
 						for k := range argument.ctr.cmps {
 							argument.ctr.cmps[k] = compare.New(batch.GetVector(bat, argument.ctr.attrs[k]).Typ.Oid, argument.ctr.ds[k])
 						}
@@ -98,7 +108,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				ctr := &argument.ctr
 				if ctr.bat != nil {
 					if int64(len(ctr.sels)) < argument.Limit {
-						heap.Init(ctr)
+						ctr.sort()
 					}
 
 					for i, cmp := range ctr.cmps {
@@ -126,9 +136,18 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		case end:
 			proc.Reg.InputBatch = argument.ctr.bat
 			argument.ctr.bat = nil
+			argument.ctr.sels = nil
 			return true, nil
 		}
 	}
+}
+
+// do sort work for heap, and result order will be set in container.sels
+func (ctr *container) sort() {
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, ctr.bat.Vecs[i])
+	}
+	heap.Init(ctr)
 }
 
 func (ctr *container) mergeTop(proc *process.Process, limit int64, b *batch.Batch) error {
@@ -156,14 +175,12 @@ func (ctr *container) mergeTop(proc *process.Process, limit int64, b *batch.Batc
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
+			ctr.bat.Zs = append(ctr.bat.Zs, b.Zs[i])
 			n++
 		}
 
 		if n == limit {
-			for i, cmp := range ctr.cmps {
-				cmp.Set(0, ctr.bat.Vecs[i])
-			}
-			heap.Init(ctr)
+			ctr.sort()
 		}
 	}
 	if start == bLength {
@@ -180,6 +197,7 @@ func (ctr *container) mergeTop(proc *process.Process, limit int64, b *batch.Batc
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
 					return err
 				}
+				ctr.bat.Zs[0] = b.Zs[i]
 			}
 			heap.Fix(ctr, 0)
 		}
