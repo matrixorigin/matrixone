@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - docker-ci
 
 jobs:
   docker:
@@ -35,7 +34,7 @@ jobs:
           # Set output parameters.
           echo ::set-output name=tags::${TAGS}
           echo ::set-output name=docker_image::${DOCKER_IMAGE}
-          
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@master
         with:
