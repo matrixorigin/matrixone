@@ -20,17 +20,25 @@ import (
 	"errors"
 	"math/rand"
 
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	aoedbName "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
+
+const defaultRetryTimes = 5
 
 //Close closes the relation. It closes all relations of the tablet in the aoe store.
 func (r *relation) Close() {
@@ -77,7 +85,6 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	if len(r.tablets) == 0 {
 		return errors.New("no tablets exists")
 	}
-	targetTbl := r.tablets[rand.Intn(len(r.tablets))]
 	var buf bytes.Buffer
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
@@ -85,7 +92,101 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	if buf.Len() == 0 {
 		return errors.New("empty batch")
 	}
-	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
+	var err error
+	for i := 0; i < defaultRetryTimes; i++ {
+		targetTbl := r.tablets[rand.Intn(len(r.tablets))]
+		err = r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
+		if err == nil {
+			break
+		}
+		if raftstore.IsShardUnavailableErr(err) {
+			err = r.update()
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	}
+	return err
+}
+
+func (r *relation) update() error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
+	}()
+	dbid := r.tbl.SchemaId
+	tblName := r.tbl.Name
+	tablets, err := r.catalog.GetTablets(dbid, tblName)
+	if err != nil {
+		return err
+	}
+	if tablets == nil || len(tablets) == 0 {
+		return catalog.ErrTableNotExists
+	}
+
+	r.tbl = &tablets[0].Table
+	r.mp = make(map[string]*adb.Relation)
+	r.tablets = tablets
+	ldb := r.catalog.Driver.AOEStore()
+	for _, tbl := range tablets {
+		if ids, err := r.catalog.Driver.GetSegmentIds(
+			tbl.Name, tbl.ShardId); err != nil {
+			log.Errorf(
+				"get segmentInfos for tablet %s failed, %s",
+				 tbl.Name, err.Error())
+			return err
+		} else {
+			if len(ids.Ids) == 0 {
+				continue
+			}
+			addr := r.catalog.Driver.RaftStore().GetRouter().
+				LeaderReplicaStore(tbl.ShardId).ClientAddr
+			storeId := r.catalog.Driver.RaftStore().
+				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
+			if lRelation, err := ldb.Relation(
+				aoedbName.IdToNameFactory.Encode(
+					tbl.ShardId), tbl.Name); err == nil {
+				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
+			}
+			logutil.Debugf(
+				"ClientAddr: %v, shardId: %d, storeId: %d", 
+				addr, tbl.ShardId, storeId)
+			if !Exist(r.nodes, addr) {
+				r.nodes = append(r.nodes, engine.Node{
+					Id:   string(
+						codec.Uint642Bytes(storeId)),
+					Addr: addr,
+				})
+			}
+			for _, id := range ids.Ids {
+				if storeId != r.
+					catalog.Driver.RaftStore().Meta().ID {
+					continue
+				}
+				logutil.Debugf(
+					"shardId: %d, segment: %d, Id: %d",
+					tbl.ShardId, id, r.catalog.Driver.RaftStore().Meta().ID)
+				r.segments = append(r.segments, SegmentInfo{
+					Version:  ids.Version,
+					Id:       string(codec.Uint642Bytes(id)),
+					GroupId:  string(
+						codec.Uint642Bytes(tbl.ShardId)),
+					TabletId: string(
+						codec.Uint642Bytes(tbl.ShardId)),
+					Node: engine.Node{
+						Id:   string(
+							codec.Uint642Bytes(storeId)),
+						Addr: addr,
+					},
+				})
+			}
+
+		}
+	}
+	logutil.Infof("nodes is %v", r.nodes)
+	return nil
 }
 
 func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
@@ -93,6 +194,7 @@ func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
 	//TODO
 	return r.catalog.CreateIndex(epoch, idxInfo[0])
 }
+
 func (r *relation) DropIndex(epoch uint64, name string) error {
 	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
 }
@@ -140,7 +242,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 
 func (r *relation) NewReader(num int) []engine.Reader {
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
-	if num % int(r.cfg.QueueMaxReaderCount) > 0 {
+	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++
 	}
 	readStore := &store{

@@ -29,11 +29,10 @@
 #        2.5. change the rpc-addr ip to the machine ip
 #        2.6. change the client-urls ip to the machine ip
 #        2.7. change the peer-urls ip to the machine ip
-#        2.8. change the shard-groups value to 2
-#        2.9. make sure the dir-data is different from the other nodes in the cluster
+#        2.8. make sure the dir-data is different from the other nodes in the cluster
 #
 #    3. set up the other two prophet nodes
-#        3.1. apply the above 9 steps of prophet genesis node setting
+#        3.1. apply the above 8 steps of prophet genesis node setting
 #        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
 #   
 #    4. set up pure storage node
@@ -41,9 +40,10 @@
 #        4.2. change storage-node to false
 #        4.3. change the addr-raft ip to the machine ip
 #        4.4. change the addr-client ip to the machine ip
-#        4.5. In the external-etcd attribute, fill the three empty string with the three peer-urls of the three prophet node
+#        4.5. In the external-etcd attribute, fill the three empty string with the three client-urls of the three prophet node
 #        4.6. make sure the dir-data is different from the other nodes in the cluster
-#        4.7. change the shard-groups value to 2
+#
+#Start MatrixOne cluster on docker or kubernetes, please refer to this repo [matrixorigin/matrixone-operator](https://github.com/matrixorigin/matrixone-operator)
 
 
 
@@ -358,76 +358,98 @@
 #	UpdateMode:	dynamic
 	cubeMaxEntriesBytes = 314572800
 
+#	Name:	printLogInterVal
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	range
+#	Values:	[10 1 1000]
+#	Comment:	default printLog Interval is 10s.
+#	UpdateMode:	dynamic
+	printLogInterVal = 10
+
+#	Name:	exportDataDefaultFlushSize
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[1 2 4 8]
+#	Comment:	export data to csv file default flush size
+#	UpdateMode:	dynamic
+	exportDataDefaultFlushSize = 1
+
+#	Name:	disablePCI
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	bool
+#	DomainType:	set
+#	Values:	[]
+#	Comment:	default is false. Disable epochgc pci.
+#	UpdateMode:	dynamic
+	disablePCI = false
+
+#	Name:	enableTpe
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	bool
+#	DomainType:	set
+#	Values:	[]
+#	Comment:	default is false. Enable transactional processing engine.
+#	UpdateMode:	dynamic
+	enableTpe = false
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
 
 # Logger Configs
 level = "debug" # debug, info, warn, error, fatal.
-format = "console" # json, console.
+format = "json" # json, console.
 
 # log file config
-filename = "" # log file.
+filename = "./log/mo.log" # log file.
 max-size = 512 # maximum log file size.
-max-days = 1 # maximum log file days kept.
-max-backups = 1 # maximum numbers of old log files to retain.
+max-days = 1   # maximum log file days kept.
+max-backups = 0 # maximum numbers of old log files to retain.
 
 # Cube Configs
 # In a distributed setting, the ip of addr-raft and addr-client should set to the ip address of the machine that mo-server runs on.
 # Docker or NAT network environment configuration
 # If a client cannot access Cube through the default client URLs listened to by Cube, you must manually set the advertise client URLs
-# For exmaple, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
+# For example, addr-raft = "0.0.0.0:10000", addr-advertise-raft = "${HOST}:10000". The same to addr-client.
 addr-raft = "0.0.0.0:10000"
 addr-advertise-raft = "HOST:10000"
 addr-client = "0.0.0.0:20000"
 addr-advertise-client = "HOST:20000"
-dir-deploy = ""
-version = ""
-githash = ""
-capacity = 0
-use-memory-as-storage = false
-# In a distributed setting, the shard-groups should set to 2.
-shard-groups = 2
-
+version = ""                                        # cube version number
+githash = ""                                        # cube git hash
+capacity = 0                                        # the maximum storage capacity of this node
+dir-data = ""                                       # directory for cube data
+labels = [
+    ["zone", "default-zone"],
+    ["rack", "rack-0"],
+    ["host", "node-0"],
+]                                                   # label information of this node
 # Replication Configs
 [replication]
 # If pb scheduler doesn't hear from a node for longer than max-peer-down-time, it will ask this node to destroy itself if it comes back.
-max-peer-down-time = "30m"
-shard-split-check-duration = "30s"
-shard-state-check-duration = "1m"
-compact-log-check-duration = "60s"
-disable-shard-split = false
-allow-remove-leader = false
-shard-capacity-bytes = "96MB"
-shard-split-check-bytes = "64MB"
-
-[snapshot]
-max-concurrency-snap-chunks = 8
-snap-chunk-size = "4MB"
+max-peer-down-time = "30m"                          # the maximum time a node is allowed to leave
+shard-heartbeat-duration = "10s"                    # the period for this raft group to report information to scheduler
+store-heartbeat-duration = "10s"                     # the period for this node to report information to scheduler
+shard-split-check-duration = "30s"                  # the period of shard split checking
+shard-state-check-duration = "1m"                   # the period of shard state checking
+compact-log-check-duration = "60s"                  # the period of log compaction checking
+disable-shard-split = false                         # to disable shard split, set this value to true
+allow-remove-leader = false                         # to allow leader removal, set this value to true
+shard-capacity-bytes = "96MB"                       # shard capacity
 
 [raft]
-enable-pre-vote = true
-# In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
-tick-interval = "1s"
-heartbeat-ticks = 2
-election-timeout-ticks = 10
-max-size-per-msg = 0
-max-inflight-msgs = 512
-max-entry-bytes = 314572800
-send-raft-batch-size = 64
-[raft.raft-log]
-disable-sync = false
-compact-duration = "30s"
-compact-threshold = 256
-max-allow-transfer-lag = 2
-ForceCompactCount = 0
-ForceCompactBytes = 0
-CompactProtectLag = 0
-
-[worker]
-raft-apply-worker = 32
-raft-msg-worker = 8
-raft-event-worker = 32
+tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
+heartbeat-ticks = 2                                 # how many ticks one raft heartbeat has
+election-timeout-ticks = 10                         # how many ticks a election timeout has
+max-size-per-msg = 0                                # maximum number of raft log entry one raft message has
+max-inflight-msgs = 512                             # maximum number of raft message on the way of sending(inflight)
+max-entry-bytes = 314572800                         # maximum bytes for one cube write proposal
 
 # Prophet Configs
 [prophet]
@@ -443,7 +465,7 @@ rpc-timeout = "10s"
 # In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
 storage-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
-# If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's peer-urls.
+# If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's client-urls.
 external-etcd = ["", "", ""]
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting
@@ -453,13 +475,13 @@ external-etcd = ["", "", ""]
 # see more: https://etcd.io/docs/v3.5/op-guide/clustering/
 # join = ""
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
-# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000"). 
+# When you deploy a cluster, you must specify the IP address of the current host as client-urls (for example, "http://192.168.100.214:40000").
 # If the cluster runs on Docker, specify the IP address of Docker as "http://0.0.0.0:40000"
 client-urls = "http://0.0.0.0:40000"
 # In a distributed setting, change the localhost to the machine ip to expose the client-urls to other nodes in the cluster.
 # The list of peer URLs to be listened to by a prophet node
 peer-urls = "http://0.0.0.0:50000"
-# In some situations such as in the Docker or NAT network environment, 
+# In some situations such as in the Docker or NAT network environment,
 # if a client cannot access prophet through the default client URLs listened to by prophet, you must manually set the advertise client URLs
 # For example, client-url = "http://0.0.0.0:40000", advertise-client-urls = "http://${HOST}:40000", The same to peer-urls.
 advertise-client-urls = "http://HOST:40000"
@@ -467,58 +489,39 @@ advertise-peer-urls = "http://HOST:50000"
 initial-cluster = "node0=http://node0:50000,node1=http://node1:50000,node2=http://node2:50000"
 
 [prophet.schedule]
-max-snapshot-count = 1
-max-pending-peer-count = 16
-max-merge-resource-size = 0
-max-merge-resource-keys = 0
-split-merge-interval = "0s"
-enable-one-way-merge = false
-enable-cross-table-merge = false
-patrol-resource-interval = "100ms"
-max-container-down-time = "30m"
-leader-schedule-limit = 4
-leader-schedule-policy = "count"
-resource-schedule-limit = 2048
-replica-schedule-limit = 64
-merge-schedule-limit = 0
-hot-resource-schedule-limit = 4
-hot-resource-cache-hits-threshold = 3
-tolerant-size-ratio = 0.0
-low-space-ratio = 0.8
-high-space-ratio = 0.7
-resource-score-formula-version = ""
-scheduler-max-waiting-operator = 5
-enable-remove-down-replica = true
-enable-replace-offline-replica = true
-enable-make-up-replica = true
-enable-remove-extra-replica = true
-enable-location-replacement = true
-enable-debug-metrics = false
-enable-joint-consensus = true
-container-limit-mode = ""
+max-snapshot-count = 3                              # maximum snapshot a node that can be scheduled by prophet is handling
+max-pending-peer-count = 16                         # maximum pending peers a node that can be scheduled can have
+patrol-resource-interval = "100ms"                  # the period of cube leader patrol
+max-container-down-time = "30m"                     # the maximum time a node is allowed to leave
+leader-schedule-limit = 4                           # the maximum number of transfer leader
+resource-schedule-limit = 2048                      # the maximum resource schedule operation can happen simultaneously
+replica-schedule-limit = 64                         # the maximum resource replication operation can happen simultaneously
+low-space-ratio = 0.8                               # space ratio to decide whether this node's storage is low
+high-space-ratio = 0.7                              # space ratio to decide whether this node's storage is high
 
 [prophet.replication]
-max-replicas = 1
-strictly-match-label = true
-enable-placement-rules = true
-isolation-level = "rack"
+max-replicas = 3                                    # max number of replica in a prophet group
+[location-labels]
+zone = "rack"                                       # label information of this prophet node
+enable-placement-rules = true                       # enable scheduling based on rule
+isolation-level = "rack"                            # replicas isolation level
 
 [metric]
-addr = ""
-interval = 0
-job = ""
-instance = ""
+addr = ""                                           # cube uses prometheus push to send metrics, this address is the prometheus-gateway address
+interval = 0                                        # the period to send cube metrics
+job = ""                                            # prometheus job
+instance = ""                                       # prometheus instance
 
 # Storage Configs
 [meta.conf]
-block-max-rows = 160000
-segment-max-blocks = 40
+block-max-rows = 160000                             # the maximum rows of a block
+segment-max-blocks = 40                             # the maximum blocks of a segment
 
 [scheduler-cfg]
-block-writers = 8
-segment-writers = 4
+block-writers = 8                                   # the maximum parallelism of block flushing
+segment-writers = 4                                 # the maximum parallelism of segment flushing
 
 [cache-cfg]
-index-cache-size = 134217728        # 128M
-insert-cache-size = 4294967296      # 4G
-data-cache-size = 4294967296        # 4G
+index-cache-size = 134217728        # 128M          # index shared cache size
+insert-cache-size = 4294967296      # 4G            # mutable data shared cache size
+data-cache-size = 4294967296        # 4G            # immutable data shared cache size
