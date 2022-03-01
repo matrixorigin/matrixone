@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"sort"
 )
 
 type DatabaseDesc struct {
@@ -216,18 +215,10 @@ type IndexDesc_Attribute struct {
 	Type orderedcodec.ValueType `json:"type,string"`
 }
 
-func ExtractIndexAttributeIDsSorted(attrs []IndexDesc_Attribute) []uint32 {
-	ids := ExtractIndexAttributeIDs(attrs)
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-	return ids
-}
-
-func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) []uint32 {
-	var ids []uint32
+func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int8 {
+	ids := make(map[uint32]int8)
 	for _, attr := range attrs {
-		ids = append(ids,attr.ID)
+		ids[attr.ID] = 1
 	}
 	return ids
 }

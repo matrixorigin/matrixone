@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )
@@ -180,6 +181,21 @@ var (
 				Is_unique:         false,
 				Is_primarykey:     false,
 				Comment:           "",
+				References:        nil,
+				Constrains:        nil,
+			},
+			{
+				ID:                3,
+				Name:              "desc",
+				Ttype:             orderedcodec.VALUE_TYPE_BYTES,
+				Default:           engine.DefaultExpr{},
+				Is_null:           false,
+				Default_value:     "",
+				Is_hidden:         false,
+				Is_auto_increment: false,
+				Is_unique:         false,
+				Is_primarykey:     false,
+				Comment:           "the descriptor of the table dropped",
 				References:        nil,
 				Constrains:        nil,
 			},

@@ -48,18 +48,18 @@ type ComputationHandlerImpl struct {
 	indexHandler index.IndexHandler
 }
 
-func (chi *ComputationHandlerImpl) Read(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, []byte, int, error) {
+func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
-	bat, _, prefix, prefixLen, err = chi.indexHandler.ReadFromIndex(dbDesc,tableDesc,indexDesc,attrs,prefix,prefixLen)
+	bat, _, err = chi.indexHandler.ReadFromIndex(readCtx)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
-	return bat, prefix, prefixLen, nil
+	return bat, nil
 }
 
-func (chi *ComputationHandlerImpl) Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error {
-	err := chi.indexHandler.WriteIntoIndex(dbDesc, tableDesc, indexDesc, attrs, writeCtx, bat)
+func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
+	err := chi.indexHandler.WriteIntoIndex(writeCtx, bat)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func (chi *ComputationHandlerImpl) CreateDatabase(epoch uint64, dbName string, t
 	return id, nil
 }
 
-func (chi *ComputationHandlerImpl) DropDatabase(epoch uint64, dbName string) error {
+func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) error {
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByName(dbName)
 	if err != nil {
@@ -283,7 +283,7 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 	tableDesc.Drop_time = time.Now().Unix()
 	tableDesc.Is_deleted = true
 
-	//4. save thing internal async gc (epoch(pk),dbid,tableid)
+	//4. save thing into the internal async gc (epoch(pk),dbid,tableid)
 	//prefix(tenantID,dbID,tableID,indexID,epoch)
 	var key TupleKey
 	key,_ = chi.dh.MakePrefixWithOneExtraID(InternalDatabaseID,
@@ -395,9 +395,18 @@ type AttributeStateForWrite struct {
 	NeedGenerated bool
 
 	AttrDesc descriptor.AttributeDesc
+
+	//the value for the attribute especially for
+	//the implicit primary key
+	ImplicitPrimaryKey interface{}
 }
 
 type WriteContext struct {
+	//target database,table and index
+	DbDesc *descriptor.DatabaseDesc
+	TableDesc *descriptor.RelationDesc
+	IndexDesc *descriptor.IndexDesc
+
 	//write control for the attribute
 	AttributeStates []AttributeStateForWrite
 
@@ -407,4 +416,23 @@ type WriteContext struct {
 	callback callbackPackage
 
 	NodeID uint64
+}
+
+type ReadContext struct {
+	//target database,table and index
+	DbDesc *descriptor.DatabaseDesc
+	TableDesc *descriptor.RelationDesc
+	IndexDesc *descriptor.IndexDesc
+
+	//the attributes to be read
+	ReadAttributesNames []string
+
+	//the attributes for the read
+	ReadAttributeDescs []*descriptor.AttributeDesc
+
+	//for prefix scan in next time
+	PrefixForScanKey []byte
+
+	//the length of the prefix
+	LengthOfPrefixForScanKey int
 }

@@ -21,11 +21,11 @@ import (
 
 type IndexHandler interface {
 
-	ReadFromIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, int, []byte, int, error)
+	ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error)
 
-	WriteIntoTable(table *descriptor.RelationDesc,bat *batch.Batch) error
+	WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error
 
-	WriteIntoIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error
+	WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error
 
 	DeleteFromTable(table *descriptor.RelationDesc,bat *batch.Batch) error
 

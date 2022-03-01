@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 )
 
 var _ engine.Engine = &TpeEngine{}
@@ -50,8 +51,7 @@ type TpeReader struct {
 	dbDesc         *descriptor.DatabaseDesc
 	tableDesc      *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
-	prefix []byte
-	prefixLen int
+	readCtx *tuplecodec.ReadContext
 	//for test
 	isDumpReader bool
 }

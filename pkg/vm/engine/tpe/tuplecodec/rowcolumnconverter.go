@@ -375,8 +375,8 @@ func NewBatchAdapter(bat *batch.Batch) *BatchAdapter {
 	return &BatchAdapter{bat: bat}
 }
 
-// ForEach process every row with callback function in the batch
-func (ba *BatchAdapter) ForEach(callbackCtx interface{},
+// ForEachTuple process every row with callback function in the batch
+func (ba *BatchAdapter) ForEachTuple(callbackCtx interface{},
 		callback func(callbackCtx interface{},tuple Tuple) error) error {
 	n := vector.Length(ba.bat.Vecs[0])
 
