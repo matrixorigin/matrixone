@@ -1,9 +1,10 @@
 name:  Build and Push images
 
 on:
-  pull_request:
-    types:
-      - closed
+  push:
+    branches:
+      - main
+      - release
   milestone:
     types:
       - closed
@@ -13,7 +14,6 @@ on:
 
 jobs:
   docker:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
