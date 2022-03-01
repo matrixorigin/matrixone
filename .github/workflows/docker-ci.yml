@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+  # docker ci branch for testing ci
+      - docker-ci
 
 jobs:
   docker:
@@ -56,7 +58,7 @@ jobs:
         with:
           builder: ${{ steps.buildx.outputs.name }}
           context: .
-          file: ./images/operator/Dockerfile
+          file: ./optools/images/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.prep.outputs.tags }}
