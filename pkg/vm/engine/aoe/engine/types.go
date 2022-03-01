@@ -47,8 +47,8 @@ type SegmentInfo struct {
 type filterContext struct {
 	filterType int32
 	attr       string
-	param1 	 interface{}
-	param2   interface{}
+	param1     interface{}
+	param2     interface{}
 }
 
 type aoeReader struct {
@@ -105,6 +105,7 @@ type database struct {
 }
 
 type relation struct {
+	mu       sync.Mutex
 	pid      uint64            //database id
 	tbl      *aoe.TableInfo    //table of the tablets
 	catalog  *catalog3.Catalog //the catalog
