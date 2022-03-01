@@ -167,8 +167,7 @@ func Length(v *Vector) int {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)
 	default:
-		hp := *(*reflect.SliceHeader)((*(*emptyInterface)(unsafe.Pointer(&v.Col))).word)
-		return hp.Len
+		return reflect.ValueOf(v.Col).Len()
 	}
 }
 
