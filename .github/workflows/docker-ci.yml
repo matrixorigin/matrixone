@@ -1,14 +1,16 @@
 name:  Build and Push images
 
 on:
-  push:
-    branches:
-      - main
-  # docker ci branch for testing ci
-      - docker-ci
+  pull_request:
+    types:
+      - closed
+  milestone:
+    types:
+      - closed
 
 jobs:
   docker:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
