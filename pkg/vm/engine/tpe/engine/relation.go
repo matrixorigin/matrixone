@@ -148,12 +148,15 @@ func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	}
 
 	writeCtx := &tuplecodec.WriteContext{
+		DbDesc: trel.dbDesc,
+		TableDesc: trel.desc,
+		IndexDesc: &trel.desc.Primary_index,
 		BatchAttrs:      attrDescs,
 		AttributeStates: writeStates,
 		NodeID:          0,//now for test
 	}
 
-	err := trel.computeHandler.Write(trel.dbDesc, trel.desc, &trel.desc.Primary_index, attrDescs, writeCtx, batch)
+	err := trel.computeHandler.Write(writeCtx, batch)
 	if err != nil {
 		return err
 	}
@@ -174,8 +177,6 @@ func (trel * TpeRelation) NewReader(cnt int) []engine.Reader {
 		dbDesc:         trel.dbDesc,
 		tableDesc:      trel.desc,
 		computeHandler: trel.computeHandler,
-		prefix: nil,
-		prefixLen: 0,
 		isDumpReader: false,
 	}
 	for i := 1; i < cnt; i++ {

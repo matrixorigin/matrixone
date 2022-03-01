@@ -15,16 +15,16 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
-	"reflect"
 	"testing"
 )
 
-func TestTpeRelation_Write(t *testing.T) {
-	convey.Convey("table write without primary key",t, func() {
+func TestTpeReader_Read(t *testing.T) {
+	convey.Convey("read without primary key",t, func() {
 		tpe := NewTpeEngine(&TpeConfig{})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
@@ -35,7 +35,6 @@ func TestTpeRelation_Write(t *testing.T) {
 		//(a,b,c)
 		//(uint64,uint64,uint64)
 		_,attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_uint64)
-
 
 		attrNames := []string{
 			"a","b","c",
@@ -59,9 +58,33 @@ func TestTpeRelation_Write(t *testing.T) {
 
 		err = tableDesc.Write(0, bat)
 		convey.So(err,convey.ShouldBeNil)
+
+		var get *batch.Batch
+
+		readers := tableDesc.NewReader(10)
+		for i, reader := range readers {
+			if i== 0 {
+				for{
+					get, err = reader.Read([]uint64{1,1},[]string{"a","b"})
+					if get == nil {
+						break
+					}
+
+					for j := 0; j < 2; j++ {
+						a := bat.Vecs[j].Col.([]uint64)
+						b := get.Vecs[j].Col.([]uint64)
+						convey.So(a,convey.ShouldResemble,b)
+					}
+				}
+			}else{
+				get,err = reader.Read([]uint64{1,1},[]string{"a","b"})
+				convey.So(get,convey.ShouldBeNil)
+				convey.So(err,convey.ShouldBeNil)
+			}
+		}
 	})
 
-	convey.Convey("table write with primary key",t, func() {
+	convey.Convey("read with primary key",t, func() {
 		tpe := NewTpeEngine(&TpeConfig{})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
@@ -84,7 +107,6 @@ func TestTpeRelation_Write(t *testing.T) {
 			defs = append(defs,def)
 			rawDefs = append(rawDefs,def)
 		}
-
 		pkDef := &engine.PrimaryIndexDef{Names: []string{"a","b"}}
 
 		defs = append(defs,pkDef)
@@ -94,37 +116,6 @@ func TestTpeRelation_Write(t *testing.T) {
 
 		tableDesc, err := dbDesc.Relation("A")
 		convey.So(err,convey.ShouldBeNil)
-
-		convey.So(tableDesc.ID(),convey.ShouldEqual,"A")
-
-		convey.So(tableDesc.Nodes()[0].Addr,convey.ShouldEqual,"localhost:20000")
-		convey.So(tableDesc.Nodes()[0].Id,convey.ShouldEqual,"0")
-
-		readers := tableDesc.NewReader(10)
-		dumpReaderCnt := 0
-		for i := 0; i < 10; i++ {
-			rd := readers[i].(*TpeReader)
-			if rd.isDumpReader {
-				dumpReaderCnt++
-			}
-		}
-		convey.So(dumpReaderCnt,convey.ShouldEqual,9)
-
-		getDefs := tableDesc.TableDefs()
-		for _, get := range getDefs {
-			if x,ok := get.(*engine.AttributeDef);  ok {
-				found := false
-				for _, attrDef := range attrDefs {
-					if x.Attr.Name == attrDef.Attr.Name {
-						found = true
-						convey.So(reflect.DeepEqual(*x,*attrDef),convey.ShouldBeTrue)
-					}
-				}
-				convey.So(found,convey.ShouldBeTrue)
-			}else if y,ok := get.(*engine.PrimaryIndexDef); ok {
-				convey.So(y.Names,convey.ShouldResemble,pkDef.Names)
-			}
-		}
 
 		//make data
 		bat := tuplecodec.MakeBatch(10,attrNames, rawDefs)
@@ -138,5 +129,34 @@ func TestTpeRelation_Write(t *testing.T) {
 		}
 		err = tableDesc.Write(0, bat)
 		convey.So(err,convey.ShouldBeNil)
+
+		var get *batch.Batch
+
+		readers := tableDesc.NewReader(10)
+		for i, reader := range readers {
+			if i== 0 {
+				for{
+					get, err = reader.Read([]uint64{1,1},
+						[]string{"a","c"})
+					if get == nil {
+						break
+					}
+
+					columnMapping := [][]int{
+						{0,0},
+						{2,1},
+					}
+					for _, colIdx := range columnMapping {
+						a := bat.Vecs[colIdx[0]].Col.([]uint64)
+						b := get.Vecs[colIdx[1]].Col.([]uint64)
+						convey.So(a,convey.ShouldResemble,b)
+					}
+				}
+			}else{
+				get,err = reader.Read([]uint64{1,1},[]string{"a","b"})
+				convey.So(get,convey.ShouldBeNil)
+				convey.So(err,convey.ShouldBeNil)
+			}
+		}
 	})
 }

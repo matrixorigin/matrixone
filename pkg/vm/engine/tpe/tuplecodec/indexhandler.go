@@ -20,18 +20,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"sort"
 )
 
 var (
 	errorRowIndexDifferentInKeyAndValue = errors.New("the rowIndexForkey != rowIndexForValue")
 	errorWriteContextIsInvalid = errors.New("the write context is invalid")
+	errorReadContextIsInvalid = errors.New("the read context is invalid")
 )
 
 var _ index.IndexHandler = &IndexHandlerImpl{}
 
 type callbackPackage struct {
-	index *descriptor.IndexDesc
 	prefix TupleKey
 }
 
@@ -60,23 +59,27 @@ func NewIndexHandlerImpl(tch *TupleCodecHandler,
 	}
 }
 
-func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, int, []byte, int, error) {
-	//check just need the index key
-	indexAttrIDs := descriptor.ExtractIndexAttributeIDsSorted(index.Attributes)
+func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
+	indexReadCtx,ok := readCtx.(*ReadContext)
+	if !ok {
+		return nil, 0, errorReadContextIsInvalid
+	}
+
+	//check if we need the index key only.
+	//Attributes we want are in the index key only.
+	indexAttrIDs := descriptor.ExtractIndexAttributeIDs(indexReadCtx.IndexDesc.Attributes)
 	amForKey :=&AttributeMap{}
 	amForValue := &AttributeMap{}
-	justNeedKey := true
-	for i,attr := range attrs {
-		pos := sort.Search(len(indexAttrIDs), func(i int) bool {
-			return indexAttrIDs[i] >= attr.ID
-		})
-		//id is not in the index key
-		if pos >= len(indexAttrIDs) || indexAttrIDs[pos] != attr.ID {
-			justNeedKey = false
-			amForValue.Append(int(attr.ID),i)
-		}else{
+	needKeyOnly := true
+	for i,attr := range indexReadCtx.ReadAttributeDescs {
+		if _,exist := indexAttrIDs[attr.ID]; exist {
 			//id in the key
 			amForKey.Append(int(attr.ID),i)
+		}else{
+			//id is not in the index key
+			//then find it in the value
+			needKeyOnly = false
+			amForValue.Append(int(attr.ID),i)
 		}
 	}
 
@@ -84,13 +87,15 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 	tke := ihi.tch.GetEncoder()
 	tkd := ihi.tch.GetDecoder()
 
-	if prefix == nil {
-		prefix,_ = tke.EncodeIndexPrefix(prefix, uint64(db.ID), uint64(table.ID), uint64(index.ID))
-		prefixLen = len(prefix)
+	if indexReadCtx.PrefixForScanKey == nil {
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+			uint64(indexReadCtx.TableDesc.ID),
+			uint64(indexReadCtx.IndexDesc.ID))
+		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
 	}
 
 	//prepare the batch
-	names,attrdefs := ConvertAttributeDescIntoTypesType(attrs)
+	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
 	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
 
 	rowIndexForKey := 0
@@ -101,9 +106,9 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 	//get keys with the prefix
 	var lastKey []byte
 	for {
-		keys, values, err := ihi.kv.GetWithPrefix(prefix,prefixLen,ihi.kvLimit)
+		keys, values, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey,ihi.kvLimit)
 		if err != nil {
-			return nil, 0, nil, 0, err
+			return nil, 0, err
 		}
 
 		if len(keys) == 0 {
@@ -114,17 +119,17 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
-			indexKey := keys[i][prefixLen:]
-			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, index)
+			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
+			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
 			if err != nil {
-				return nil, 0, nil, 0, err
+				return nil, 0, err
 			}
 
 			//pick wanted fields and save them in the batch
-			err = ihi.rcc.FillBatchFromDecodedIndexKey(index,
+			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
 				0, dis, amForKey, bat, rowIndexForKey)
 			if err != nil {
-				return nil, 0, nil, 0, err
+				return nil, 0, err
 			}
 
 			lastKey = keys[i]
@@ -135,28 +140,28 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 		}
 
 		//skip decoding the value
-		if !justNeedKey {
+		if !needKeyOnly {
 			//need to update prefix
 			//decode index value
 			for i := 0; i < len(keys); i++ {
 				//decode the name which is in the value
 				data := values[i]
 				_,dis,err := tkd.DecodePrimaryIndexValue(data,
-					index,0,ihi.serializer)
+					indexReadCtx.IndexDesc,0,ihi.serializer)
 				if err != nil {
-					return nil, 0, nil, 0, err
+					return nil, 0, err
 				}
 
 				//pick wanted fields and save them in the batch
-				err = ihi.rcc.FillBatchFromDecodedIndexValue(index,
+				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
 					0, dis,amForValue, bat, rowIndexForValue)
 				if err != nil {
-					return nil, 0, nil, 0, err
+					return nil, 0, err
 				}
 				rowIndexForValue++
 				if rowIndexForValue >= int(ihi.kvLimit) {
 					if rowIndexForKey != rowIndexForValue {
-						return nil, 0, nil, 0, errorRowIndexDifferentInKeyAndValue
+						return nil, 0, errorRowIndexDifferentInKeyAndValue
 					}
 					break
 				}
@@ -164,11 +169,11 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 		}
 
 		//get the next prefix
-		prefix = SuccessorOfKey(lastKey)
+		indexReadCtx.PrefixForScanKey = SuccessorOfKey(lastKey)
 	}
 
-	if !justNeedKey && rowIndexForKey != rowIndexForValue {
-		return nil, 0, nil, 0, errorRowIndexDifferentInKeyAndValue
+	if !needKeyOnly && rowIndexForKey != rowIndexForValue {
+		return nil, 0, errorRowIndexDifferentInKeyAndValue
 	}
 
 	TruncateBatch(bat,int(ihi.kvLimit),rowIndexForKey)
@@ -182,20 +187,17 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(db *descriptor.DatabaseDesc, table *
 			bat = nil
 		}
 	}
-	return bat, rowIndexForKey, prefix, prefixLen, nil
+	return bat, rowIndexForKey, nil
 }
 
-func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, bat *batch.Batch) error {
-	return ihi.WriteIntoIndex(ihi.dbDesc, table, &table.Primary_index, nil, nil, bat)
+func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error {
+	return ihi.WriteIntoIndex(writeCtx, bat)
 }
 
 //encodePrimaryIndexKey encodes the tuple into bytes.
 //The prefix has the tenantID,dbID,tableID,IndexID.
-func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(prefix TupleKey,
-	index *descriptor.IndexDesc,
-	columnGroupID uint64,writeCtx *WriteContext,
-	tuple Tuple)(TupleKey, *orderedcodec.EncodedItem,error) {
-	if index.ID != PrimaryIndexID {
+func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(columnGroupID uint64, writeCtx *WriteContext, tuple Tuple) (TupleKey, *orderedcodec.EncodedItem, error) {
+	if writeCtx.IndexDesc.ID != PrimaryIndexID {
 		return nil,nil,errorPrimaryIndexIDIsNotOne
 	}
 	tke := ihi.tch.GetEncoder()
@@ -205,11 +207,13 @@ func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(prefix TupleKey,
 		2. Encoding fields
 	*/
 	//index attributes
-	key := prefix
+	//allocate space for the key
+	key := make(TupleKey,len(writeCtx.callback.prefix))
+	copy(key,writeCtx.callback.prefix)
 	var value interface{}
 	var err error
-	for _, attr := range index.Attributes {
-		writeState := writeCtx.AttributeStates[attr.ID]
+	for _, attr := range writeCtx.IndexDesc.Attributes {
+		writeState := &writeCtx.AttributeStates[attr.ID]
 		//the logic for implicit primary key or default expr
 		if writeState.NeedGenerated {
 			if writeState.AttrDesc.Default.Exist {//default expr
@@ -219,6 +223,8 @@ func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(prefix TupleKey,
 				value = writeState.AttrDesc.Default.Value
 			}else{
 				value = GetRowID(writeCtx.NodeID)
+				//store the implicit primary key
+				writeState.ImplicitPrimaryKey = value
 			}
 		}else{
 			posInBatch := writeState.PositionInBatch
@@ -238,52 +244,52 @@ func (ihi * IndexHandlerImpl) encodePrimaryIndexKey(prefix TupleKey,
 }
 
 //EncodePrimaryIndexValue encodes the tuple into bytes
-func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(prefix TupleValue,
-	index *descriptor.IndexDesc,
-	columnGroupID uint64,
-	writeCtx * WriteContext,
-	tuple Tuple,
-	serializer ValueSerializer)(TupleValue, *orderedcodec.EncodedItem,error) {
-	if index.ID != PrimaryIndexID {
+func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(columnGroupID uint64, writeCtx *WriteContext, tuple Tuple, serializer ValueSerializer) (TupleValue, *orderedcodec.EncodedItem, error) {
+	if writeCtx.IndexDesc.ID != PrimaryIndexID {
 		return nil,nil,errorPrimaryIndexIDIsNotOne
 	}
-	//fill value into the row from the tuple
-	//for i, state := range writeCtx.AttributeStates {
-		//TODO:implicit primary key
-	//}
 
-	//just encoding into the json
-	cnt, err := tuple.GetAttributeCount()
-	if err != nil {
-		return nil, nil, err
-	}
-	out := prefix
-	for i := uint32(0); i < cnt; i++ {
-		value, err := tuple.GetValue(i)
-		if err != nil {
-			return nil, nil, err
+	var out TupleValue
+	var value interface{}
+	var err error
+	var serialized []byte
+
+	//fill value into the row from the tuple
+	for _, state := range writeCtx.AttributeStates {
+		//the logic for implicit primary key or default expr
+		if state.NeedGenerated {
+			if state.AttrDesc.Default.Exist {//default expr
+				value = state.AttrDesc.Default.Value
+			}else{
+				//get the implicit primary key
+				value = state.ImplicitPrimaryKey
+			}
+		}else{
+			value, err = tuple.GetValue(uint32(state.PositionInBatch))
+			if err != nil {
+				return nil, nil, err
+			}
 		}
 		//serial value
-		serialized,_, err := serializer.SerializeValue(out,value)
+		serialized,_, err = serializer.SerializeValue(out,value)
 		if err != nil {
 			return nil, nil, err
 		}
 		out = serialized
 	}
+
 	return out, nil, nil
 }
 
-func (ihi * IndexHandlerImpl) callbackForEncodeRowInBatch(callbackCtx interface{}, tuple Tuple) error {
+func (ihi * IndexHandlerImpl) callbackForEncodeTupleInBatch(callbackCtx interface{}, tuple Tuple) error {
 	writeCtx := callbackCtx.(*WriteContext)
 
-	key, _, err := ihi.encodePrimaryIndexKey(writeCtx.callback.prefix,
-		writeCtx.callback.index,0,writeCtx,tuple)
+	key, _, err := ihi.encodePrimaryIndexKey(0, writeCtx, tuple)
 	if err != nil {
 		return err
 	}
 
-	value, _, err := ihi.encodePrimaryIndexValue(nil,
-		writeCtx.callback.index, 0, writeCtx,tuple, ihi.serializer)
+	value, _, err := ihi.encodePrimaryIndexValue(0, writeCtx, tuple, ihi.serializer)
 	if err != nil {
 		return err
 	}
@@ -297,25 +303,27 @@ func (ihi * IndexHandlerImpl) callbackForEncodeRowInBatch(callbackCtx interface{
 	return nil
 }
 
-func (ihi * IndexHandlerImpl) WriteIntoIndex(db *descriptor.DatabaseDesc, table *descriptor.RelationDesc, index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error {
-	//1.encode prefix (tenantID,dbID,tableID,indexID)
-	tke := ihi.tch.GetEncoder()
-	var prefix TupleKey
-	prefix,_ = tke.EncodeIndexPrefix(prefix, uint64(db.ID), uint64(table.ID), uint64(index.ID))
-
+func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error {
 	indexWriteCtx,ok := writeCtx.(*WriteContext)
 	if !ok {
 		return errorWriteContextIsInvalid
 	}
 
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	var prefix TupleKey
+	prefix,_ = tke.EncodeIndexPrefix(prefix,
+		uint64(indexWriteCtx.DbDesc.ID),
+		uint64(indexWriteCtx.TableDesc.ID),
+		uint64(indexWriteCtx.IndexDesc.ID))
+
 	indexWriteCtx.callback = callbackPackage{
-		index:  index,
 		prefix: prefix,
 	}
 
 	//2.encode every row in the batch
 	ba := NewBatchAdapter(bat)
-	err := ba.ForEach(indexWriteCtx, ihi.callbackForEncodeRowInBatch)
+	err := ba.ForEachTuple(indexWriteCtx, ihi.callbackForEncodeTupleInBatch)
 	if err != nil {
 		return err
 	}

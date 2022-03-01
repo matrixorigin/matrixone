@@ -38,7 +38,7 @@ type ComputationHandler interface {
 
 	GetTable(dbId uint64, name string) (*descriptor.RelationDesc, error)
 
-	Read(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, []byte, int, error)
+	Read(readCtx interface{}) (*batch.Batch, error)
 
-	Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, writeCtx interface{}, bat *batch.Batch) error
+	Write(writeCtx interface{}, bat *batch.Batch) error
 }

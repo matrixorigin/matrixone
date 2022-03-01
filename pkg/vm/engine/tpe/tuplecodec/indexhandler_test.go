@@ -15,12 +15,13 @@
 package tuplecodec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/smartystreets/goconvey/convey"
 	"testing"
 )
 
 func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
-	/*
-	TODO:to fix
 	convey.Convey("write into index",t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
@@ -43,27 +44,31 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 
 		fillBatch(lines,bat)
 
+		writeStates := make([]AttributeStateForWrite,4)
+		for i, attrDesc := range internalDescriptorTableDesc.Attributes {
+			writeStates[i].AttrDesc = attrDesc
+			writeStates[i].NeedGenerated = false
+			writeStates[i].PositionInBatch = i
+		}
 
 		writeCtx := &WriteContext{
-			AttributeStates: []AttributeStateForWrite{
-
-			},
-			BatchAttrs:      nil,
+			DbDesc: internalDatabaseDesc,
+			TableDesc: internalDescriptorTableDesc,
+			IndexDesc: &internalDescriptorTableDesc.Primary_index,
+			AttributeStates: writeStates,
+			BatchAttrs:      internalDescriptorTableDesc.Attributes,
 			callback:        callbackPackage{},
 			NodeID:          0,
 		}
-		err := ihi.WriteIntoIndex(internalDatabaseDesc, internalDescriptorTableDesc, &internalDescriptorTableDesc.Primary_index, nil, writeCtx, bat)
+		err := ihi.WriteIntoIndex(writeCtx, bat)
 		convey.So(err,convey.ShouldBeNil)
 
-		err = ihi.WriteIntoTable(internalDescriptorTableDesc, bat)
-		convey.So(err,convey.ShouldBeNil)
+		err = ihi.WriteIntoTable(internalDescriptorTableDesc, writeCtx, bat)
+		convey.So(err,convey.ShouldBeError)
 	})
-	*/
 }
 
 func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
-	/*
-	TODO:to fix
 	convey.Convey("read from index",t, func() {
 		//make table
 		tch := NewTupleCodecHandler(SystemTenantID)
@@ -89,7 +94,24 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 
 		fillBatch(lines,bat)
 
-		err := ihi.WriteIntoIndex(internalDatabaseDesc, internalDescriptorTableDesc, &internalDescriptorTableDesc.Primary_index, nil, nil, bat)
+		writeStates := make([]AttributeStateForWrite,4)
+		for i, attrDesc := range internalDescriptorTableDesc.Attributes {
+			writeStates[i].AttrDesc = attrDesc
+			writeStates[i].NeedGenerated = false
+			writeStates[i].PositionInBatch = i
+		}
+
+		writeCtx := &WriteContext{
+			DbDesc: internalDatabaseDesc,
+			TableDesc: internalDescriptorTableDesc,
+			IndexDesc: &internalDescriptorTableDesc.Primary_index,
+			AttributeStates: writeStates,
+			BatchAttrs:      internalDescriptorTableDesc.Attributes,
+			callback:        callbackPackage{},
+			NodeID:          0,
+		}
+
+		err := ihi.WriteIntoIndex(writeCtx, bat)
 		convey.So(err,convey.ShouldBeNil)
 
 		wantAttr := []*descriptor.AttributeDesc{
@@ -98,22 +120,24 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 			&internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID],
 		}
 
-		var prefix []byte
-		var prefixLen int
+		readCtx := &ReadContext{
+			DbDesc:                   internalDatabaseDesc,
+			TableDesc:                internalDescriptorTableDesc,
+			IndexDesc:                &internalDescriptorTableDesc.Primary_index,
+			ReadAttributeDescs:       wantAttr,
+			PrefixForScanKey:         nil,
+			LengthOfPrefixForScanKey: 0,
+		}
 		//var bat2 *batch.Batch
 		var readcnt int
 
 		for  {
 			//read table
-			_, readcnt, prefix, prefixLen, err = ihi.ReadFromIndex(internalDatabaseDesc,
-				internalDescriptorTableDesc,
-				&internalDescriptorTableDesc.Primary_index,
-				wantAttr,prefix,prefixLen)
+			_, readcnt, err = ihi.ReadFromIndex(readCtx)
 			convey.So(err,convey.ShouldBeNil)
 			if readcnt == 0 {//done
 				break
 			}
 		}
 	})
-	*/
 }

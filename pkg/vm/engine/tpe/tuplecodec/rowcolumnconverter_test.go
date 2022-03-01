@@ -75,7 +75,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 			rowIdx++
 			return nil
 		}
-		err := ba.ForEach(nil, callback)
+		err := ba.ForEachTuple(nil, callback)
 		convey.So(err,convey.ShouldBeNil)
 	})
 }
@@ -165,7 +165,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba := NewBatchAdapter(bat)
-		err := ba.ForEach(nil,callbackForCheck)
+		err := ba.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
 		bat2 := MakeBatch(cnt,names,attrs)
@@ -181,7 +181,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba2 := NewBatchAdapter(bat2)
-		err = ba2.ForEach(nil,callbackForCheck)
+		err = ba2.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
 		bat3 := MakeBatch(cnt,names,attrs)
@@ -226,7 +226,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba3 := NewBatchAdapter(bat3)
-		err = ba3.ForEach(nil,callbackForCheck)
+		err = ba3.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 	})
 }

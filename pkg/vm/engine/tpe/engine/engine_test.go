@@ -62,6 +62,17 @@ func TestTpeEngine_Create(t *testing.T) {
 		convey.So(tpeDb.id,convey.ShouldEqual,3)
 		convey.So(tpeDb.desc.ID,convey.ShouldEqual,3)
 		convey.So(tpeDb.desc.Name,convey.ShouldEqual,dbNames2[0])
+
+		//recreate database again
+		//TODO:to fix
+		/*
+		for i := 0; i < cnt; i++ {
+			if i%2 != 0 {
+				err = tpe.Create(0,dbNames[i],0)
+				convey.So(err,convey.ShouldBeNil)
+			}
+		}
+		*/
 	})
 
 	convey.Convey("get node",t, func() {
