@@ -94,7 +94,9 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	}
 	var err error
 	for i := 0; i < defaultRetryTimes; i++ {
+		r.mu.Lock()
 		targetTbl := r.tablets[rand.Intn(len(r.tablets))]
+		r.mu.Unlock()
 		err = r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 		if err == nil {
 			break
@@ -112,6 +114,8 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 }
 
 func (r *relation) update() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
