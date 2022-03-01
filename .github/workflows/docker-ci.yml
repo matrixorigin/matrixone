@@ -7,6 +7,9 @@ on:
   milestone:
     types:
       - closed
+  release:
+    types:
+      - published
 
 jobs:
   docker:
