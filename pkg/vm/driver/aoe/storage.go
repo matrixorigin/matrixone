@@ -821,8 +821,10 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 
 	waitExpect(2500, func() bool {
 		for _, tb := range metaTbls {
-			logutil.Infof("tb is %v",tb)
-			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
+			if tb ==nil {
+				continue
+			}
+			// logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
 			if !tb.IsHardDeleted() {
 				return false
 			}
