@@ -27,14 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/vtree"
 )
 
-// Compile compiles ast tree to scope list.
+// Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	// do ast rewrite work
 	e.stmt = rewrite.Rewrite(e.stmt)
 	e.stmt = rewrite.AstRewrite(e.stmt)
 
-	// do semantic analysis and build plan for ast
+	// do semantic analysis and build plan for sql
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err
@@ -55,12 +55,60 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	e.e = e.c.e
 	e.fill = fill
 
-	// build scope for ast
+	// build scope for a single sql
 	s, err := e.compileScope(pn)
 	if err != nil {
 		return err
 	}
 	e.scope = s
+	return nil
+}
+
+// Run is an important function of the compute-layer, it executes a single sql according to its scope
+func (e *Exec) Run(ts uint64) error {
+	if e.scope == nil {
+		return nil
+	}
+
+	switch e.scope.Magic {
+	case Normal:
+		return e.scope.Run(e.c.e)
+	case Merge:
+		return e.scope.MergeRun(e.c.e)
+	case Remote:
+		return e.scope.RemoteRun(e.c.e)
+	case Parallel:
+		return e.scope.ParallelRun(e.c.e)
+	case Insert:
+		affectedRows, err := e.scope.Insert(ts)
+		if err != nil {
+			return err
+		}
+		e.setAffectedRows(affectedRows)
+		return nil
+	case CreateDatabase:
+		return e.scope.CreateDatabase(ts)
+	case CreateTable:
+		return e.scope.CreateTable(ts)
+	case CreateIndex:
+		return e.scope.CreateIndex(ts)
+	case DropDatabase:
+		return e.scope.DropDatabase(ts)
+	case DropTable:
+		return e.scope.DropTable(ts)
+	case DropIndex:
+		return e.scope.DropIndex(ts)
+	case ShowDatabases:
+		return e.scope.ShowDatabases(e.u, e.fill)
+	case ShowTables:
+		return e.scope.ShowTables(e.u, e.fill)
+	case ShowColumns:
+		return e.scope.ShowColumns(e.u, e.fill)
+	case ShowCreateTable:
+		return e.scope.ShowCreateTable(e.u, e.fill)
+	case ShowCreateDatabase:
+		return e.scope.ShowCreateDatabase(e.u, e.fill)
+	}
 	return nil
 }
 
@@ -175,55 +223,4 @@ func (e *Exec) setAffectedRows(n uint64) {
 
 func (e *Exec) GetAffectedRows() uint64 {
 	return e.affectRows
-}
-
-func (e *Exec) Run(ts uint64) error {
-	if e.scope == nil {
-		return nil
-	}
-	// only for test
-	fmt.Printf("+++++++++\n")
-	Print(nil, []*Scope{e.scope})
-	fmt.Printf("+++++++++\n")
-
-	switch e.scope.Magic {
-	case Normal:
-		return e.scope.Run(e.c.e)
-	case Merge:
-		return e.scope.MergeRun(e.c.e)
-	case Remote:
-		return e.scope.RemoteRun(e.c.e)
-	case Parallel:
-		return e.scope.ParallelRun(e.c.e)
-	case Insert:
-		affectedRows, err := e.scope.Insert(ts)
-		if err != nil {
-			return err
-		}
-		e.setAffectedRows(affectedRows)
-		return nil
-	case CreateDatabase:
-		return e.scope.CreateDatabase(ts)
-	case CreateTable:
-		return e.scope.CreateTable(ts)
-	case CreateIndex:
-		return e.scope.CreateIndex(ts)
-	case DropDatabase:
-		return e.scope.DropDatabase(ts)
-	case DropTable:
-		return e.scope.DropTable(ts)
-	case DropIndex:
-		return e.scope.DropIndex(ts)
-	case ShowDatabases:
-		return e.scope.ShowDatabases(e.u, e.fill)
-	case ShowTables:
-		return e.scope.ShowTables(e.u, e.fill)
-	case ShowColumns:
-		return e.scope.ShowColumns(e.u, e.fill)
-	case ShowCreateTable:
-		return e.scope.ShowCreateTable(e.u, e.fill)
-	case ShowCreateDatabase:
-		return e.scope.ShowCreateDatabase(e.u, e.fill)
-	}
-	return nil
 }

@@ -92,7 +92,7 @@ type Exec struct {
 	c          *compile
 	//affectRows stores the number of rows affected while insert / update / delete
 	affectRows uint64
-	//e a dbengine instance
+	//e is a db engine instance
 	e engine.Engine
 	//stmt ast of a single sql
 	stmt tree.Statement
