@@ -98,19 +98,20 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
 	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
 
-	rowIndexForKey := 0
-	rowIndexForValue := 0
+	rowRead := 0
 	readFinished := false
 
 	//2.prefix read data from kv
 	//get keys with the prefix
 	var lastKey []byte
-	for {
-		keys, values, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey,ihi.kvLimit)
+	for rowRead < int(ihi.kvLimit) {
+		needRead := int(ihi.kvLimit) - rowRead
+		keys, values, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey, uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
 
+		rowRead += len(keys)
 		if len(keys) == 0 {
 			readFinished = true
 			break
@@ -127,16 +128,12 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 			//pick wanted fields and save them in the batch
 			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
-				0, dis, amForKey, bat, rowIndexForKey)
+				0, dis, amForKey, bat, i)
 			if err != nil {
 				return nil, 0, err
 			}
 
 			lastKey = keys[i]
-			rowIndexForKey++
-			if rowIndexForKey >= int(ihi.kvLimit) {
-				break
-			}
 		}
 
 		//skip decoding the value
@@ -154,16 +151,9 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 				//pick wanted fields and save them in the batch
 				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
-					0, dis,amForValue, bat, rowIndexForValue)
+					0, dis,amForValue, bat, i)
 				if err != nil {
 					return nil, 0, err
-				}
-				rowIndexForValue++
-				if rowIndexForValue >= int(ihi.kvLimit) {
-					if rowIndexForKey != rowIndexForValue {
-						return nil, 0, errorRowIndexDifferentInKeyAndValue
-					}
-					break
 				}
 			}
 		}
@@ -172,14 +162,10 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 		indexReadCtx.PrefixForScanKey = SuccessorOfKey(lastKey)
 	}
 
-	if !needKeyOnly && rowIndexForKey != rowIndexForValue {
-		return nil, 0, errorRowIndexDifferentInKeyAndValue
-	}
-
-	TruncateBatch(bat,int(ihi.kvLimit),rowIndexForKey)
+	TruncateBatch(bat,int(ihi.kvLimit),rowRead)
 
 	if readFinished {
-		if rowIndexForKey == 0 {
+		if rowRead == 0 {
 			//there are no data read in this call.
 			//it means there is no data any more.
 			//reset the batch to the null to notify the
@@ -187,7 +173,7 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			bat = nil
 		}
 	}
-	return bat, rowIndexForKey, nil
+	return bat, rowRead, nil
 }
 
 func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error {

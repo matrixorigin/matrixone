@@ -27,7 +27,7 @@ import (
 
 func TestTpeDatabase_Create(t *testing.T) {
 	convey.Convey("create table with none primary key ",t, func() {
-		tpe := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{})
 
 		dbName := "test"
 		err := tpe.Create(0,dbName,0)
@@ -112,20 +112,18 @@ func TestTpeDatabase_Create(t *testing.T) {
 		}
 		wantNames = dbDesc.Relations()
 		convey.So(wantNames,convey.ShouldResemble,restNames)
+
 		//recreate the dropped table
-		//to fix
-		/*
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
 				err = dbDesc.Create(0,tableNames[i],defs)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}
-		*/
 	})
 
 	convey.Convey("create table with primary key ",t, func() {
-		tpe := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{})
 
 		dbName := "test"
 		err := tpe.Create(0,dbName,0)
@@ -218,5 +216,12 @@ func TestTpeDatabase_Create(t *testing.T) {
 		wantNames = dbDesc.Relations()
 		convey.So(wantNames,convey.ShouldResemble,restNames)
 
+		//recreate the dropped table
+		for i := 0; i < cnt; i++ {
+			if i%2 == 0 {
+				err = dbDesc.Create(0,tableNames[i],defs)
+				convey.So(err, convey.ShouldBeNil)
+			}
+		}
 	})
 }

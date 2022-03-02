@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -27,10 +28,14 @@ var _ engine.Relation = &TpeRelation{}
 var _ engine.Reader = &TpeReader{}
 
 type TpeConfig struct {
+	KvType	tuplecodec.KVType
 
+	//cubeKV needs CubeDriver
+	Cube    driver.CubeDriver
 }
 
 type TpeEngine struct {
+	tpeConfig *TpeConfig
 	computeHandler computation.ComputationHandler
 }
 

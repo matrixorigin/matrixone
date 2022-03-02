@@ -14,7 +14,16 @@
 
 package tuplecodec
 
+type KVType int
+
+const (
+	KV_MEMORY KVType = iota
+	KV_CUBE KVType = iota + 1
+)
+
 type KVHandler interface {
+	GetKVType() KVType
+
 	// NextID gets the next id of the type
 	NextID(typ string) (uint64,error)
 
@@ -29,6 +38,9 @@ type KVHandler interface {
 
 	// DedupSetBatch writes the batch of keys-values. It will fail if there is one key exists
 	DedupSetBatch(keys []TupleKey, values []TupleValue) []error
+
+	// Delete deletes the key
+	Delete(key TupleKey) error
 
 	// Get gets the value of the key
 	Get(key TupleKey)(TupleValue, error)

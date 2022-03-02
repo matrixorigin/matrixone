@@ -15,14 +15,31 @@
 package engine
 
 import (
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 )
 
-func NewTpeEngine(tc *TpeConfig) *TpeEngine{
-	te := &TpeEngine{}
+var (
+	errorInvalidKVType = errors.New("invalid kv type")
+)
+
+func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
+	te := &TpeEngine{tpeConfig: tc}
 	tch := tuplecodec.NewTupleCodecHandler(tuplecodec.SystemTenantID)
-	kv := tuplecodec.NewMemoryKV()
+	var kv tuplecodec.KVHandler
+	var err error
+	if tc.KvType == tuplecodec.KV_MEMORY {
+		kv = tuplecodec.NewMemoryKV()
+	}else if tc.KvType == tuplecodec.KV_CUBE{
+		kv, err = tuplecodec.NewCubeKV(tc.Cube)
+		if err != nil {
+			return nil, err
+		}
+	}else{
+		return nil, errorInvalidKVType
+	}
+
 	serial := &tuplecodec.DefaultValueSerializer{}
 	kvLimit := 10000
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
@@ -30,7 +47,7 @@ func NewTpeEngine(tc *TpeConfig) *TpeEngine{
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
 	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi)
 	te.computeHandler = ch
-	return te
+	return te, nil
 }
 
 func (te * TpeEngine) Delete(epoch uint64, name string) error {

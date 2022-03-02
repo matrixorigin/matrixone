@@ -25,7 +25,7 @@ import (
 
 func TestTpeReader_Read(t *testing.T) {
 	convey.Convey("read without primary key",t, func() {
-		tpe := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
 
@@ -85,7 +85,7 @@ func TestTpeReader_Read(t *testing.T) {
 	})
 
 	convey.Convey("read with primary key",t, func() {
-		tpe := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
 
