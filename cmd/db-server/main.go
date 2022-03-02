@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
 	"strconv"
 	"strings"
@@ -75,6 +76,7 @@ const (
 	CreateRPCExit           = 10
 	WaitCubeStartExit       = 11
 	StartMOExit             = 12
+	CreateTpeExit			= 13
 )
 
 var (
@@ -279,7 +281,11 @@ func main() {
 	var eng engine.Engine
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
-		eng = tpeEngine.NewTpeEngine(&tpeEngine.TpeConfig{})
+		eng, err = tpeEngine.NewTpeEngine(&tpeEngine.TpeConfig{KvType: tuplecodec.KV_MEMORY})
+		if err != nil {
+			logutil.Infof("create tpe error:%v\n", err)
+			os.Exit(CreateTpeExit)
+		}
 	}else{
 		eng = aoeEngine.New(c, &cngineConfig)
 	}

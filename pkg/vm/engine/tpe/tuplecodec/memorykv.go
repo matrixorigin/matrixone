@@ -66,6 +66,10 @@ func NewMemoryKV() *MemoryKV {
 	}
 }
 
+func (m *MemoryKV) GetKVType() KVType {
+	return KV_MEMORY
+}
+
 func (m *MemoryKV) NextID(typ string) (uint64, error) {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
@@ -157,6 +161,14 @@ func (m *MemoryKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
 		errs = append(errs,nil)
 	}
 	return errs
+}
+
+func (m *MemoryKV) Delete(key TupleKey) error {
+	m.rwLock.Lock()
+	defer m.rwLock.Unlock()
+
+	m.container.Delete(NewMemoryItem(key,nil))
+	return nil
 }
 
 func (m *MemoryKV) Get(key TupleKey) (TupleValue, error) {

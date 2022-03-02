@@ -33,8 +33,8 @@ const (
 var (
 	errorDatabaseExists = errors.New("database has exists")
 	errorTableExists = errors.New("table has exists")
-	errorTableDeletedAlready = errors.New("table is deleted already")
-	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc")
+	errorTableDeletedAlready = errors.New("table is deleted already. It is impossible.")
+	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc.  It is impossible.")
 	errorDatabaseDeletedAlready = errors.New("database is deleted already")
 )
 
@@ -136,12 +136,14 @@ func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) er
 		}
 	}
 
-	//3. attatch tag
+	//3. attach tag
 	dbDesc.Is_deleted = true
 	dbDesc.Drop_epoch = epoch
 
-	//4. save the database desc
-	err = chi.dh.StoreDatabaseDescByID(uint64(dbDesc.ID),dbDesc)
+	//Note: we do not save the database desc into the AsyncTable
+
+	//4. delete the database desc
+	err = chi.dh.DeleteDatabaseDescByID(uint64(dbDesc.ID))
 	if err != nil {
 		return err
 	}
@@ -283,30 +285,15 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 	tableDesc.Drop_time = time.Now().Unix()
 	tableDesc.Is_deleted = true
 
-	//4. save thing into the internal async gc (epoch(pk),dbid,tableid)
-	//prefix(tenantID,dbID,tableID,indexID,epoch)
-	var key TupleKey
-	key,_ = chi.dh.MakePrefixWithOneExtraID(InternalDatabaseID,
-		InternalAsyncGCTableID,
-		uint64(PrimaryIndexID),
-		epoch)
-
-	//make the value
-	value, err := chi.encodeFieldsIntoValue(epoch,dbId, uint64(tableDesc.ID))
+	//4. save thing into the internal async gc (epoch(pk),dbid,tableid,desc)
+	err := chi.dh.StoreRelationDescIntoAsyncGC(epoch, dbId, tableDesc)
 	if err != nil {
 		return 0, err
 	}
 
-	//save into the async gc
-	err = chi.kv.Set(key, value)
-	if err != nil {
-		return 0, err
-	}
-
-	//5. update the tableDesc in the internal descriptor table
-	err = chi.dh.StoreRelationDescByID(dbId,
-		uint64(tableDesc.ID),
-		tableDesc)
+	//5. delete the tableDesc from the internal descriptor table
+	err = chi.dh.DeleteRelationDescByID(dbId,
+		uint64(tableDesc.ID))
 	if err != nil {
 		return 0, err
 	}

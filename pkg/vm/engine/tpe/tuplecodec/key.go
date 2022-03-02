@@ -58,7 +58,7 @@ func SuccessorOfKey(key TupleKey) TupleKey {
 	return ret
 }
 
-// SuccessorOfPrefix gets the
+// SuccessorOfPrefix gets the successor of the prefix
 func SuccessorOfPrefix(prefix TupleKey) TupleKey {
 	if len(prefix) == 0 {
 		return TupleKey{0xFF}
