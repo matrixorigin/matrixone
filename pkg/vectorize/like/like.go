@@ -27,28 +27,38 @@ import (
 )
 
 var (
-	SliceLikePure          func(*types.Bytes, []byte, []int64) ([]int64, error)
-	SliceLikeSlice         func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
-	PureLikeSlice          func([]byte, *types.Bytes, []int64) ([]int64, error)
-	PureLikePure           func([]byte, []byte, []int64) ([]int64, error)
-	SliceNullLikePure      func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
-	SliceNullLikeSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
-	PureLikeSliceNull      func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	// BtSliceAndConst is a like function between a slice and a const.
+	BtSliceAndConst func(*types.Bytes, []byte, []int64) ([]int64, error)
+	// BtSliceAndSlice is a like function between two slices.
+	BtSliceAndSlice func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
+	// BtConstAndSlice is a like function between a const and a slice
+	BtConstAndSlice    func([]byte, *types.Bytes, []int64) ([]int64, error)
+	// BtConstAndConst is a like function between two const values.
+	BtConstAndConst        func([]byte, []byte, []int64) ([]int64, error)
+	// BtSliceNullAndConst is a like function between a slice (has null value) and a const value.
+	BtSliceNullAndConst     func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
+	// BtSliceNullAndSliceNull is a like function between two slices which have null value.
+	BtSliceNullAndSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	// BtConstAndSliceNull is a like function between a const value and a slice (has null value).
+	BtConstAndSliceNull     func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
 )
 
-var _ = SliceLikePure
-var _ = SliceLikeSlice
-var _ = PureLikeSlice
-var _ = PureLikePure
+var _ = BtSliceAndConst
+var _ = BtSliceAndSlice
+var _ = BtConstAndSlice
+var _ = BtConstAndConst
+var _ = BtSliceNullAndConst
+var _ = BtSliceNullAndSliceNull
+var _ = BtConstAndSliceNull
 
 func init() {
-	SliceLikePure = sliceLikePure
-	SliceLikeSlice = sliceLikeSlice
-	PureLikeSlice = pureLikeSlice
-	PureLikePure = pureLikePure
-	SliceNullLikePure = sliceNullLikePure
-	SliceNullLikeSliceNull = sliceNullLikeSliceNull
-	PureLikeSliceNull = pureLikeSliceNull
+	BtSliceAndConst = sliceLikePure
+	BtSliceAndSlice = sliceLikeSlice
+	BtConstAndSlice = pureLikeSlice
+	BtConstAndConst = pureLikePure
+	BtSliceNullAndConst = sliceNullLikePure
+	BtSliceNullAndSliceNull = sliceNullLikeSliceNull
+	BtConstAndSliceNull = pureLikeSliceNull
 }
 
 func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {

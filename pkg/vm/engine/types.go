@@ -35,6 +35,7 @@ type Attribute struct {
 	Alg     compress.T  // compression algorithm
 	Type    types.Type  // type of attribute
 	Default DefaultExpr // default value of this attribute.
+	Primary bool		// if true, it is primary key
 }
 
 type DefaultExpr struct {
