@@ -86,6 +86,8 @@ func TestTpeRelation_Write(t *testing.T) {
 		}
 
 		pkDef := &engine.PrimaryIndexDef{Names: []string{"a","b"}}
+		defs[0].(*engine.AttributeDef).Attr.Primary = true
+		defs[1].(*engine.AttributeDef).Attr.Primary = true
 
 		defs = append(defs,pkDef)
 

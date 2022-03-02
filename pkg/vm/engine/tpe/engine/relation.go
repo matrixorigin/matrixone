@@ -76,6 +76,7 @@ func (trel * TpeRelation) TableDefs() []engine.TableDef {
 				Alg:     0,
 				Type:    attr.TypesType,
 				Default: attr.Default,
+				Primary: attr.Is_primarykey,
 			}}
 			defs = append(defs,def)
 		}

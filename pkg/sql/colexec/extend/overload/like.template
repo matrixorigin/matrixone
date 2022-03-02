@@ -50,14 +50,14 @@ func initLike() {
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs.Lengths)]
 					if nulls.Any(lv.Nsp) {
-						rs, err = like.SliceNullLikePure(lvs, rvs.Get(0), lv.Nsp.Np, rs)
+						rs, err = like.BtSliceNullAndConst(lvs, rvs.Get(0), lv.Nsp.Np, rs)
 						if err != nil {
 							return nil, err
 						}
 						vector.SetCol(vec, rs)
 						vec.Nsp = lv.Nsp
 					} else {
-						rs, err = like.SliceLikePure(lvs, rvs.Get(0), rs)
+						rs, err = like.BtSliceAndConst(lvs, rvs.Get(0), rs)
 						if err != nil {
 							return nil, err
 						}
@@ -75,7 +75,7 @@ func initLike() {
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:1]
-					rs, err = like.PureLikePure(lvs.Get(0), rvs.Get(0), rs)
+					rs, err = like.BtConstAndConst(lvs.Get(0), rvs.Get(0), rs)
 					if err != nil {
 						return nil, err
 					}
@@ -90,14 +90,14 @@ func initLike() {
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs.Lengths)]
 					if nulls.Any(rv.Nsp) {
-						rs, err = like.PureLikeSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
+						rs, err = like.BtConstAndSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
 						if err != nil {
 							return nil, err
 						}
 						vector.SetCol(vec, rs)
 						vec.Nsp = rv.Nsp
 					} else {
-						rs, err = like.PureLikeSlice(lvs.Get(0), rvs, rs)
+						rs, err = like.BtConstAndSlice(lvs.Get(0), rvs, rs)
 						if err != nil {
 							return nil, err
 						}
@@ -117,28 +117,28 @@ func initLike() {
 					rs = rs[:len(rvs.Lengths)]
 					if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
 						nsp := lv.Nsp.Or(rv.Nsp)
-						rs, err = like.SliceNullLikeSliceNull(lvs, rvs, nsp.Np, rs)
+						rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp.Np, rs)
 						if err != nil {
 							return nil, err
 						}
 						vector.SetCol(vec, rs)
 						vec.Nsp = nsp
 					} else if nulls.Any(rv.Nsp) && !nulls.Any(lv.Nsp) {
-						rs, err = like.SliceNullLikeSliceNull(lvs, rvs, rv.Nsp.Np, rs)
+						rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, rv.Nsp.Np, rs)
 						if err != nil {
 							return nil, err
 						}
 						vector.SetCol(vec, rs)
 						vec.Nsp = rv.Nsp
 					} else if !nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-						rs, err = like.SliceNullLikeSliceNull(lvs, rvs, lv.Nsp.Np, rs)
+						rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, lv.Nsp.Np, rs)
 						if err != nil {
 							return nil, err
 						}
 						vector.SetCol(vec, rs)
 						vec.Nsp = lv.Nsp
 					} else {
-						rs, err = like.SliceLikeSlice(lvs, rvs, rs)
+						rs, err = like.BtSliceAndSlice(lvs, rvs, rs)
 						if err != nil {
 							return nil, err
 						}

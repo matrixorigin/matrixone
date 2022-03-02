@@ -1579,7 +1579,7 @@ func (b *build) pruneLike(e *extend.BinaryExtend) (extend.Extend, error) {
 	}
 	switch {
 	case lok && rok:
-		k, err := like.PureLikePure(le.V.Col.(*types.Bytes).Data, re.V.Col.(*types.Bytes).Data, make([]int64, 1))
+		k, err := like.BtConstAndConst(le.V.Col.(*types.Bytes).Data, re.V.Col.(*types.Bytes).Data, make([]int64, 1))
 		if err != nil {
 			return nil, err
 		}

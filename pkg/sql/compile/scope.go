@@ -144,8 +144,6 @@ func (s *Scope) DropIndex(ts uint64) error {
 	return p.Relation.DropIndex(ts, p.Id)
 }
 
-// todo: show should get information from system table next day.
-
 // ShowDatabases fill batch with all database names
 func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	p, _ := s.Plan.(*plan.ShowDatabases)
@@ -167,7 +165,7 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 			tempSlice := make([]int64, 1)
 			for _, r := range rs {
 				str := []byte(r)
-				if k, _ := like.PureLikePure(str, p.Like, tempSlice); k != nil {
+				if k, _ := like.BtConstAndConst(str, p.Like, tempSlice); k != nil {
 					vs[count] = str
 					count++
 				}
@@ -206,7 +204,7 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 			tempSlice := make([]int64, 1)
 			for _, r := range rs {
 				str := []byte(r)
-				if k, _ := like.PureLikePure(str, p.Like, tempSlice); k != nil {
+				if k, _ := like.BtConstAndConst(str, p.Like, tempSlice); k != nil {
 					vs[count] = str
 					count++
 				}
@@ -228,6 +226,7 @@ type columnInfo struct {
 	name string
 	typ  types.Type
 	dft  string // default value
+	pri  bool   // primary key
 }
 
 // ShowColumns fill batch with column information of a table
@@ -248,20 +247,21 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 		switch tableOption := def.(type) {
 		case *engine.AttributeDef:
 			if p.Like != nil { // deal with like rule
-				if k, _ := like.PureLikePure([]byte(tableOption.Attr.Name), p.Like, tmpSlice); k == nil {
+				if k, _ := like.BtConstAndConst([]byte(tableOption.Attr.Name), p.Like, tmpSlice); k == nil {
 					continue
 				}
 			}
 			attrs[count] = columnInfo{
 				name: tableOption.Attr.Name,
 				typ:  tableOption.Attr.Type,
+				pri:  tableOption.Attr.Primary,
 			}
 			if tableOption.Attr.HasDefaultExpr() {
 				if tableOption.Attr.Default.IsNull {
 					attrs[count].dft = nullString
 				} else {
 					switch tableOption.Attr.Type.Oid {
-					case types.T_date:
+					case types.T_date, types.T_datetime:
 						attrs[count].dft = fmt.Sprintf("%s", tableOption.Attr.Default.Value)
 					default:
 						attrs[count].dft = fmt.Sprintf("%v", tableOption.Attr.Default.Value)
@@ -278,13 +278,14 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 		bat.Vecs[i] = vector.New(results[i].Type)
 	}
 
-	vnames := make([][]byte, len(attrs))
-	vtyps := make([][]byte, len(attrs))
-	vdfts := make([][]byte, len(attrs))
-	undefine := make([][]byte, len(attrs))
+	nameVector := make([][]byte, len(attrs))
+	typeVector := make([][]byte, len(attrs))
+	defaultValueVector := make([][]byte, len(attrs))
+	keyVector := make([][]byte, len(attrs))
+	emptyVector := make([][]byte, len(attrs))
 
 	for i, attr := range attrs {
-		var typ string
+		var typ, pri string
 
 		if attr.typ.Width > 0 {
 			typ = fmt.Sprintf("%s(%v)", strings.ToLower(attr.typ.String()), attr.typ.Width)
@@ -292,18 +293,25 @@ func (s *Scope) ShowColumns(u interface{}, fill func(interface{}, *batch.Batch) 
 			typ = strings.ToLower(attr.typ.String())
 		}
 
-		vnames[i] = []byte(attr.name)
-		vtyps[i] = []byte(typ)
-		vdfts[i] = []byte(attr.dft)
-		undefine[i] = []byte("")
+		if attr.pri {
+			pri = "PRI"
+		} else {
+			pri = ""
+		}
+
+		nameVector[i] = []byte(attr.name)
+		typeVector[i] = []byte(typ)
+		defaultValueVector[i] = []byte(attr.dft)
+		keyVector[i] = []byte(pri)
+		emptyVector[i] = []byte("")
 	}
 
-	vector.Append(bat.Vecs[0], vnames)   // field
-	vector.Append(bat.Vecs[1], vtyps)    // type
-	vector.Append(bat.Vecs[2], undefine) // null todo: not implement
-	vector.Append(bat.Vecs[3], undefine) // key todo: not implement
-	vector.Append(bat.Vecs[4], vdfts)    // default
-	vector.Append(bat.Vecs[5], undefine) // extra todo: not implement
+	vector.Append(bat.Vecs[0], nameVector)         // field
+	vector.Append(bat.Vecs[1], typeVector)         // type
+	vector.Append(bat.Vecs[2], emptyVector)        // null todo: not implement
+	vector.Append(bat.Vecs[3], keyVector)          // key
+	vector.Append(bat.Vecs[4], defaultValueVector) // default
+	vector.Append(bat.Vecs[5], emptyVector)        // extra todo: not implement
 
 	bat.InitZsOne(count)
 	return fill(u, bat)
@@ -470,7 +478,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	return err
 }
 
-// RemoteRun send the scope to a remote node (if target node is itself, it will call function ParallelRun) and run it.
+// RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var buf bytes.Buffer
 

@@ -51,20 +51,24 @@ func (e *Exec) compileVTree(vt *vtree.ViewTree, varsMap map[string]int) (*Scope,
 			fvarsMap[fvar] = 0
 		}
 	}
+
 	isB := vt.IsBare() // if true, it is a query without aggregate functions
 	d := depth(vt.Views)
 	switch {
 	case d == 0 && isB:
+		// Single table queries without aggregate functions
 		if s, err = e.compileQ(vt, vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err
 		}
 		return s, nil
 	case d == 0 && !isB:
+		// Queries with aggregate functions
 		if s, err = e.compileAQ(vt.Views[len(vt.Views)-1]); err != nil {
 			return nil, err
 		}
 	case d > 0 && !isB:
-		if d > 1 { // only for test
+		// Multi-table queries with aggregate functions
+		if d > 1 {
 			return nil, errors.New(errno.SQLStatementNotYetComplete, "not support now")
 		}
 		if s, err = e.compileCAQ(vt.FreeVars, vt.Views, varsMap, fvarsMap); err != nil {

@@ -82,6 +82,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 				Name:    col.Name,
 				Type:    col.Type,
 				Default: col.Default,
+				Primary: col.PrimaryKey,
 			},
 		})
 	}
