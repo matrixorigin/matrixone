@@ -10,9 +10,7 @@ COPY . .
 
 RUN make config && make build
 
-
 FROM ubuntu:latest
-
 
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-server /mo-server
 COPY --from=builder /go/src/github.com/matrixorigin/matrixone/system_vars_config.toml /system_vars_config.toml
