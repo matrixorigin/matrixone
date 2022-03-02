@@ -444,7 +444,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			}
 			rel, err := s.Relation(db, tblName)
 			if err != nil {
-				return nil, err
+				logutil.Infof("get relation failed: %v", err)
+				continue
 			}
 			attrs := make([]string, 0)
 			for _, ColDef := range rel.Meta.Schema.ColDefs {
