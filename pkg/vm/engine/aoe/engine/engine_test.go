@@ -107,7 +107,7 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
-			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 				cfg.Worker.RaftEventWorkers = uint64(32)
@@ -294,7 +294,7 @@ func doRestartEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {

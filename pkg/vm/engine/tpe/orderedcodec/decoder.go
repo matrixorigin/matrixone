@@ -16,7 +16,10 @@ package orderedcodec
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -40,12 +43,14 @@ func (od *OrderedDecoder) DecodeKey(data []byte)([]byte, *DecodedItem,error){
 	if err == nil {
 		return dataAfterNull,decodeItem,nil
 	}
-	if (data[0] & encodingPrefixForIntegerMinimum) ==
-			encodingPrefixForIntegerMinimum {
-		return od.DecodeUint64(data)
-	}else if data[0] == encodingPrefixForBytes {
+
+	if (data[0] & encodingPrefixForIntegerMinimum) == encodingPrefixForIntegerMinimum {
+		return od.DecodeInt64(data)
+	} else if data[0] == encodingPrefixForBytes {
 		return od.DecodeBytes(data)
-	}else{
+	} else if data[0] >= encodingfloatNaN {
+		return od.DecodeFloat(data)
+	} else {
 		return nil, nil, errorDoNotComeHere
 	}
 	return nil, nil, nil
@@ -62,11 +67,39 @@ func (od *OrderedDecoder) IsNull(data []byte) ([]byte,*DecodedItem,error) {
 	return data[1:], NewDecodeItem(nil,VALUE_TYPE_NULL,0,0,1), nil
 }
 
+// DecodeInt64  decodes the int64 with the variable length encoding
+// and returns the bytes after the int64
+func (od *OrderedDecoder) DecodeInt64(data []byte)([]byte,*DecodedItem,error) {
+	if data == nil || len(data) < 1 {
+		return nil,nil,errorNoEnoughBytesForDecoding
+	}
+	if data[0] >= encodingPrefixForIntegerZero {
+		return od.DecodeUint64(data)
+	}
+
+	//get length from the first byte
+	l := encodingPrefixForIntegerZero - int(data[0])
+	//skip the first byte
+	data = data[1:]
+	if len(data) < l {
+		return nil, nil, errorNoEnoughBytesForDecoding
+	}
+	value := int64(0)
+	for _, t := range data[:l] {
+		value = (value << 8);
+		value |= int64(^t)
+	}
+	return data[l:], NewDecodeItem(^value, VALUE_TYPE_INT64, 0, 0, l + 1), nil
+}
+
 // DecodeUint64  decodes the uint64 with the variable length encoding
 // and returns the bytes after the uint64
 func (od *OrderedDecoder) DecodeUint64(data []byte)([]byte,*DecodedItem,error) {
 	if data == nil || len(data) < 1 {
 		return nil,nil,errorNoEnoughBytesForDecoding
+	}
+	if data[0] < encodingPrefixForIntegerZero {
+		return nil, nil, errorUnmatchedValueType
 	}
 	//get length from the first byte
 	l := int(data[0]) - encodingPrefixForIntegerZero
@@ -91,6 +124,48 @@ func (od *OrderedDecoder) DecodeUint64(data []byte)([]byte,*DecodedItem,error) {
 	}
 	return data[l:], NewDecodeItem(value,VALUE_TYPE_UINT64,0,0,l+1), nil
 }
+
+func (od *OrderedDecoder) DecodeUint64ForFloat(data []byte)([]byte,*DecodedItem,error) {
+	if len(data) < 8 {
+		return nil, nil, errors.New("insufficient bytes to decode uint64 int value")
+	}
+	value := binary.BigEndian.Uint64(data)
+	return data[8:], NewDecodeItem(value,VALUE_TYPE_UINT64,0,0,8), nil
+}
+
+func (od *OrderedDecoder) DecodeFloat(data []byte)([]byte,*DecodedItem,error) {
+	if data == nil || len(data) < 1 {
+		return nil,nil,errorNoEnoughBytesForDecoding
+	}
+	if data[0] > encodingfloatPos {
+		return nil,nil,errorUnmatchedValueType
+	}
+	v := data[0]
+	data = data[1:]
+	if v == encodingfloatNaN {
+		return data, NewDecodeItem(math.NaN(), VALUE_TYPE_UINT64, 0, 0, 0), nil
+	} else if v == encodingfloatZero {
+		return data, NewDecodeItem(0, VALUE_TYPE_UINT64, 0, 0, 0), nil
+	} else if v == encodingfloatNeg {
+		b, d, e := od.DecodeUint64ForFloat(data)
+		if e != nil {
+			return b, d, e
+		}
+		d.Value = ^(d.Value.(uint64))
+		d.Value = math.Float64frombits(d.Value.(uint64))
+		return b, d, e
+	} else if v == encodingfloatPos {
+		b, d, e := od.DecodeUint64ForFloat(data)
+		if e != nil {
+			return b, d, e
+		}
+		d.Value = math.Float64frombits(d.Value.(uint64))
+		return b, d, e
+	} else {
+		return nil, nil, errorUnmatchedValueType
+	}
+}
+
 
 // DecodeBytes decodes the bytes from the encoded bytes.
 func (od *OrderedDecoder) DecodeBytes(data []byte)([]byte,*DecodedItem,error) {

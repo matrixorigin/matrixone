@@ -376,8 +376,17 @@ func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateS
 	logutil.Debugf("split check, len split key is %v", len(splitKeys))
 
 	cubeSplitKeys := make([][]byte, 0)
-	for i := 0; i < len(splitKeys)-1; i++ {
-		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(shard.Start), i)))
+	var start []byte
+	if len(shard.Start) < len(shard.End) {
+		start = make([]byte, len(shard.End))
+		for i, b := range shard.Start {
+			start[i] = b
+		}
+	} else {
+		start = shard.Start
+	}
+	for i := 1; i < len(splitKeys); i++ {
+		cubeSplitKeys = append(cubeSplitKeys, []byte(fmt.Sprintf("%v%c", string(start), i)))
 	}
 
 	splitctx := splitCtx{
@@ -435,7 +444,8 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			}
 			rel, err := s.Relation(db, tblName)
 			if err != nil {
-				return nil, err
+				logutil.Infof("get relation failed: %v", err)
+				continue
 			}
 			attrs := make([]string, 0)
 			for _, ColDef := range rel.Meta.Schema.ColDefs {
@@ -812,7 +822,10 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 
 	waitExpect(2500, func() bool {
 		for _, tb := range metaTbls {
-			logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
+			if tb ==nil {
+				continue
+			}
+			// logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
 			if !tb.IsHardDeleted() {
 				return false
 			}

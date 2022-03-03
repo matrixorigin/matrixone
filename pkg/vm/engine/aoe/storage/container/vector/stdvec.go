@@ -17,6 +17,10 @@ package vector
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,11 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"io"
-	"os"
-	"reflect"
-	"sync/atomic"
-	"unsafe"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
@@ -47,10 +46,7 @@ func NewStdVector(t types.Type, capacity uint64) *StdVector {
 	}
 	size := capacity * uint64(t.Size)
 	v.MNode = common.GPool.Alloc(size)
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.MNode.Buf))
-	hp.Len = 0
-	hp.Cap = int(size)
-	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	v.Data = v.MNode.Buf[:0:size]
 	return v
 }
 
@@ -82,11 +78,7 @@ func (v *StdVector) PlacementNew(t types.Type) {
 		common.GPool.Free(v.MNode)
 	}
 	v.MNode = common.GPool.Alloc(capacity)
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.MNode.Buf))
-	hp.Len = 0
-	hp.Cap = int(capacity)
-	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
-	// v.DataSource = make([]byte, 0, capacity*uint64(t.Size))
+	v.Data = v.MNode.Buf[:0:capacity]
 }
 
 func (v *StdVector) GetType() dbi.VectorType {
@@ -262,7 +254,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	}
 	if vec.Nsp.Np != nil {
 		for row := startRow; row < startRow+ro.Length(vec); row++ {
-			if nulls.Contains(vec.Nsp, uint64(offset + row - startRow)) {
+			if nulls.Contains(vec.Nsp, uint64(offset+row-startRow)) {
 				nulls.Add(v.VMask, uint64(row))
 			}
 		}
@@ -304,9 +296,7 @@ func (v *StdVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 		vec.VMask = &nulls.Nulls{}
 	}
 	vec.StatMask = mask
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
-	hp.Cap = hp.Len
-	vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	vec.Data = vec.Data[:len(vec.Data):len(vec.Data)]
 	return vec, nil
 }
 
@@ -352,9 +342,7 @@ func (v *StdVector) GetLatestView() IVector {
 	} else {
 		vec.VMask = &nulls.Nulls{}
 	}
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
-	hp.Cap = hp.Len
-	vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	vec.Data = vec.Data[:len(vec.Data):len(vec.Data)]
 	return vec
 }
 
@@ -540,9 +528,7 @@ func (vec *StdVector) Unmarshal(data []byte) error {
 		buf = buf[nb:]
 	}
 	if vec.MNode != nil {
-		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
-		hp.Len = len(buf)
-		vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
+		vec.Data = vec.Data[:len(buf)]
 		copy(vec.Data[0:], buf)
 	} else {
 		vec.Data = buf

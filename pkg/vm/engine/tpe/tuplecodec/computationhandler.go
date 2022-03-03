@@ -33,8 +33,8 @@ const (
 var (
 	errorDatabaseExists = errors.New("database has exists")
 	errorTableExists = errors.New("table has exists")
-	errorTableDeletedAlready = errors.New("table is deleted already")
-	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc")
+	errorTableDeletedAlready = errors.New("table is deleted already. It is impossible.")
+	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc.  It is impossible.")
 	errorDatabaseDeletedAlready = errors.New("database is deleted already")
 )
 
@@ -48,18 +48,18 @@ type ComputationHandlerImpl struct {
 	indexHandler index.IndexHandler
 }
 
-func (chi *ComputationHandlerImpl) Read(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []*descriptor.AttributeDesc, prefix []byte, prefixLen int) (*batch.Batch, []byte, int, error) {
+func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
-	bat, _, prefix, prefixLen, err = chi.indexHandler.ReadFromIndex(dbDesc,tableDesc,indexDesc,attrs,prefix,prefixLen)
+	bat, _, err = chi.indexHandler.ReadFromIndex(readCtx)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
-	return bat, prefix, prefixLen, nil
+	return bat, nil
 }
 
-func (chi *ComputationHandlerImpl) Write(dbDesc *descriptor.DatabaseDesc, tableDesc *descriptor.RelationDesc, indexDesc *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error {
-	err := chi.indexHandler.WriteIntoIndex(dbDesc,tableDesc,indexDesc,attrs,bat)
+func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
+	err := chi.indexHandler.WriteIntoIndex(writeCtx, bat)
 	if err != nil {
 		return err
 	}
@@ -116,7 +116,7 @@ func (chi *ComputationHandlerImpl) CreateDatabase(epoch uint64, dbName string, t
 	return id, nil
 }
 
-func (chi *ComputationHandlerImpl) DropDatabase(epoch uint64, dbName string) error {
+func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) error {
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByName(dbName)
 	if err != nil {
@@ -136,12 +136,14 @@ func (chi *ComputationHandlerImpl) DropDatabase(epoch uint64, dbName string) err
 		}
 	}
 
-	//3. attatch tag
+	//3. attach tag
 	dbDesc.Is_deleted = true
 	dbDesc.Drop_epoch = epoch
 
-	//4. save the database desc
-	err = chi.dh.StoreDatabaseDescByID(uint64(dbDesc.ID),dbDesc)
+	//Note: we do not save the database desc into the AsyncTable
+
+	//4. delete the database desc
+	err = chi.dh.DeleteDatabaseDescByID(uint64(dbDesc.ID))
 	if err != nil {
 		return err
 	}
@@ -283,30 +285,15 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 	tableDesc.Drop_time = time.Now().Unix()
 	tableDesc.Is_deleted = true
 
-	//4. save thing internal async gc (epoch(pk),dbid,tableid)
-	//prefix(tenantID,dbID,tableID,indexID,epoch)
-	var key TupleKey
-	key,_ = chi.dh.MakePrefixWithOneExtraID(InternalDatabaseID,
-		InternalAsyncGCTableID,
-		uint64(PrimaryIndexID),
-		epoch)
-
-	//make the value
-	value, err := chi.encodeFieldsIntoValue(epoch,dbId, uint64(tableDesc.ID))
+	//4. save thing into the internal async gc (epoch(pk),dbid,tableid,desc)
+	err := chi.dh.StoreRelationDescIntoAsyncGC(epoch, dbId, tableDesc)
 	if err != nil {
 		return 0, err
 	}
 
-	//save into the async gc
-	err = chi.kv.Set(key, value)
-	if err != nil {
-		return 0, err
-	}
-
-	//5. update the tableDesc in the internal descriptor table
-	err = chi.dh.StoreRelationDescByID(dbId,
-		uint64(tableDesc.ID),
-		tableDesc)
+	//5. delete the tableDesc from the internal descriptor table
+	err = chi.dh.DeleteRelationDescByID(dbId,
+		uint64(tableDesc.ID))
 	if err != nil {
 		return 0, err
 	}
@@ -385,4 +372,54 @@ func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descript
 		return nil,errorTableDeletedAlready
 	}
 	return tableDesc,nil
+}
+
+type AttributeStateForWrite struct {
+	PositionInBatch int
+
+	//true - the attribute value should be generated.
+	//false - the attribute value got from the batch.
+	NeedGenerated bool
+
+	AttrDesc descriptor.AttributeDesc
+
+	//the value for the attribute especially for
+	//the implicit primary key
+	ImplicitPrimaryKey interface{}
+}
+
+type WriteContext struct {
+	//target database,table and index
+	DbDesc *descriptor.DatabaseDesc
+	TableDesc *descriptor.RelationDesc
+	IndexDesc *descriptor.IndexDesc
+
+	//write control for the attribute
+	AttributeStates []AttributeStateForWrite
+
+	//the attributes need to be written
+	BatchAttrs []descriptor.AttributeDesc
+
+	callback callbackPackage
+
+	NodeID uint64
+}
+
+type ReadContext struct {
+	//target database,table and index
+	DbDesc *descriptor.DatabaseDesc
+	TableDesc *descriptor.RelationDesc
+	IndexDesc *descriptor.IndexDesc
+
+	//the attributes to be read
+	ReadAttributesNames []string
+
+	//the attributes for the read
+	ReadAttributeDescs []*descriptor.AttributeDesc
+
+	//for prefix scan in next time
+	PrefixForScanKey []byte
+
+	//the length of the prefix
+	LengthOfPrefixForScanKey int
 }

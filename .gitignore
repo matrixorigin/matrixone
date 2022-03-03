@@ -8,12 +8,12 @@ y.go
 .vscode
 *.iml
 tags
+system_vars_config.toml
 coverage.txt
 vendor/
 gen_config
 main
 mo-server
-*.toml
 cube*/
 store/
 pkg/catalog/test/
@@ -29,3 +29,4 @@ pkg/sql/colexec/extend/overload/*.go
 !pkg/sql/colexec/extend/overload/types.go 
 !pkg/sql/colexec/extend/overload/unary.go
 !pkg/sql/colexec/extend/overload/init.go
+pkg/vm/engine/tpe/tuplecodec/clusterstore

@@ -171,8 +171,7 @@ func TestComputationHandlerImpl_ListTables(t *testing.T) {
 
 			get, err := chi.dh.LoadRelationDescByName(dbID,tableName)
 			if i & 2 == 0 {
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(get.Is_deleted,convey.ShouldBeTrue)
+				convey.So(err,convey.ShouldBeError)
 			}else{
 				convey.So(err,convey.ShouldBeNil)
 				convey.So(get.Name,convey.ShouldEqual,tableName)
@@ -232,14 +231,11 @@ func TestComputationHandlerImpl_DropDatabase(t *testing.T) {
 			err := chi.DropDatabase(0, dbName)
 			convey.So(err,convey.ShouldBeNil)
 
-			dbDesc, err := chi.dh.LoadDatabaseDescByID(dbIDs[i])
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(dbDesc.Is_deleted,convey.ShouldBeTrue)
+			_, err = chi.dh.LoadDatabaseDescByID(dbIDs[i])
+			convey.So(err,convey.ShouldBeError)
 
-			descs,err := chi.ListTables(dbIDs[i])
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(len(descs),convey.ShouldEqual,0)
-
+			_,err = chi.ListTables(dbIDs[i])
+			convey.So(err,convey.ShouldBeError)
 		}
 	})
 }
@@ -289,9 +285,8 @@ func TestComputationHandlerImpl_GetDatabase(t *testing.T) {
 			err := chi.DropDatabase(0, dbName)
 			convey.So(err,convey.ShouldBeNil)
 
-			descs,err := chi.ListTables(dbIDs[i])
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(len(descs),convey.ShouldEqual,0)
+			_,err = chi.ListTables(dbIDs[i])
+			convey.So(err,convey.ShouldBeError)
 
 			_, err = chi.GetDatabase(dbName)
 			convey.So(err,convey.ShouldBeError)

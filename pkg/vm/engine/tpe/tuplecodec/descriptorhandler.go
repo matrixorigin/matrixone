@@ -85,7 +85,7 @@ func (dhi *DescriptorHandlerImpl) encodeFieldsIntoValue(parentID uint64,
 func (dhi *DescriptorHandlerImpl) encodeRelationDescIntoValue(parentID uint64,
 		desc *descriptor.RelationDesc) (TupleValue,error) {
 	//marshal desc
-	descBytes,err := dhi.marshalRelationDesc(desc)
+	descBytes,err := MarshalRelationDesc(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (dhi *DescriptorHandlerImpl) encodeRelationDescIntoValue(parentID uint64,
 func (dhi *DescriptorHandlerImpl) encodeDatabaseDescIntoValue(parentID uint64,
 		desc *descriptor.DatabaseDesc) (TupleValue,error) {
 	//marshal desc
-	descBytes,err := dhi.marshalDatabaseDesc(desc)
+	descBytes,err := MarshalDatabaseDesc(desc)
 	if err != nil {
 		return nil, err
 	}
@@ -118,24 +118,6 @@ func (dhi *DescriptorHandlerImpl) decodeValue(data []byte) ([]*orderedcodec.Deco
 		data = rest
 	}
 	return dis,nil
-}
-
-//marshalRelationDesc encods the relationDesc into the bytes
-func (dhi *DescriptorHandlerImpl) marshalRelationDesc(desc *descriptor.RelationDesc) ([]byte,error) {
-	marshal, err := json.Marshal(*desc)
-	if err != nil {
-		return nil,err
-	}
-	return marshal,nil
-}
-
-//marshalDatabaseDesc encods the relationDesc into the bytes
-func (dhi *DescriptorHandlerImpl) marshalDatabaseDesc(desc *descriptor.DatabaseDesc) ([]byte,error) {
-	marshal, err := json.Marshal(*desc)
-	if err != nil {
-		return nil,err
-	}
-	return marshal,nil
 }
 
 // MakePrefixWithParentID makes the prefix(tenantID,dbID,tableID,indexID,parentID)
@@ -363,6 +345,25 @@ func (dhi *DescriptorHandlerImpl) StoreRelationDescByID(parentID uint64, tableID
 	return nil
 }
 
+func (dhi *DescriptorHandlerImpl) DeleteRelationDescByID(parentID uint64, tableID uint64) error {
+	/*
+		1,make prefix (tenantID,dbID,tableID,indexID,parentID,tableID)
+		2,serialize the value with new descriptor
+		3,save the key with value
+	*/
+	key,_ := dhi.makePrefixWithParentIDAndTableID(InternalDatabaseID,
+		InternalDescriptorTableID,
+		uint64(PrimaryIndexID),
+		parentID,
+		tableID)
+
+	err := dhi.kvHandler.Delete(key)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (dhi *DescriptorHandlerImpl) LoadDatabaseDescByName(name string) (*descriptor.DatabaseDesc, error) {
 	/*
 		1,make prefix (tenantID,dbID,tableID,indexID,parentID(-1))
@@ -472,6 +473,96 @@ func (dhi *DescriptorHandlerImpl) StoreDatabaseDescByID(dbID uint64, dbDesc *des
 		return err
 	}
 	return nil
+}
+
+func (dhi *DescriptorHandlerImpl) DeleteDatabaseDescByID(dbID uint64) error {
+	/*
+		1,make prefix (tenantID,dbID,tableID,indexID,parentID,tableID)
+		2,serialize the value with new descriptor
+		3,save the key with value
+	*/
+	key,_ := dhi.makePrefixWithParentIDAndTableID(InternalDatabaseID,
+		InternalDescriptorTableID,
+		uint64(PrimaryIndexID),
+		math.MaxUint64,
+		dbID)
+
+	err := dhi.kvHandler.Delete(key)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (dhi *DescriptorHandlerImpl) encodeAsyncgcValue(epoch uint64, dbID uint64, tableID uint64, desc *descriptor.RelationDesc) (TupleValue,error) {
+	//marshal desc
+	descBytes,err := MarshalRelationDesc(desc)
+	if err != nil {
+		return nil, err
+	}
+
+	//serialize the value(epoch,dbid,tableid,Bytes)
+	var fields []interface{}
+	fields = append(fields,epoch)
+	fields = append(fields,dbID)
+	fields = append(fields,tableID)
+	fields = append(fields,descBytes)
+
+	out := TupleValue{}
+	for i := 0; i < len(fields); i++ {
+		serialized, _, err := dhi.serializer.SerializeValue(out,fields[i])
+		if err != nil {
+			return nil, err
+		}
+		out = serialized
+	}
+	return out,nil
+}
+
+func (dhi *DescriptorHandlerImpl) StoreRelationDescIntoAsyncGC(epoch uint64, dbID uint64, desc *descriptor.RelationDesc) error {
+	//save thing into the internal async gc (epoch(pk),dbid,tableid,desc)
+	//prefix(tenantID,dbID,tableID,indexID,epoch)
+	var key TupleKey
+	key,_ = dhi.MakePrefixWithOneExtraID(InternalDatabaseID,
+		InternalAsyncGCTableID,
+		uint64(PrimaryIndexID),
+		epoch)
+
+	value, err := dhi.encodeAsyncgcValue(epoch,dbID, uint64(desc.ID),desc)
+	if err != nil {
+		return err
+	}
+
+	err = dhi.kvHandler.Set(key,value)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (dhi *DescriptorHandlerImpl) ListRelationDescFromAsyncGC(epoch uint64) ([]*descriptor.RelationDesc, error) {
+	//TODO:
+	return nil, nil
+}
+
+
+//MarshalRelationDesc encods the relationDesc into the bytes
+func MarshalRelationDesc(desc *descriptor.RelationDesc) ([]byte,error) {
+	marshal, err := json.Marshal(*desc)
+	if err != nil {
+		return nil,err
+	}
+	return marshal,nil
+}
+
+//MarshalDatabaseDesc encods the relationDesc into the bytes
+func MarshalDatabaseDesc(desc *descriptor.DatabaseDesc) ([]byte,error) {
+	marshal, err := json.Marshal(*desc)
+	if err != nil {
+		return nil,err
+	}
+	return marshal,nil
 }
 
 // UnmarshalRelationDesc decodes the bytes into the relationDesc

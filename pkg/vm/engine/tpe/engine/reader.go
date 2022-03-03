@@ -19,55 +19,92 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 )
 
 var (
 	errorMismatchRefcntWithAttributeCnt = errors.New("mismatch refcnts and attribute cnt")
 	errorSomeAttributeNamesAreNotInAttributeDesc = errors.New("some attriute names are not in attribute desc")
+	errorInvalidParameters = errors.New("invalid parameters")
+	errorDifferentReadAttributesInSameReader = errors.New("different attributes in same reader")
 )
 
 func (tr *  TpeReader) NewFilter() engine.Filter {
-	panic("implement me")
+	return nil
 }
 
 func (tr *  TpeReader) NewSummarizer() engine.Summarizer {
-	panic("implement me")
+	return nil
 }
 
 func (tr *  TpeReader) NewSparseFilter() engine.SparseFilter {
-	panic("implement me")
+	return nil
 }
 
 func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error) {
 	if tr.isDumpReader {
+		//read nothing
 		return nil, nil
+	}
+	if len(refCnts) == 0 || len(attrs) == 0{
+		return nil,errorInvalidParameters
 	}
 	if len(refCnts) != len(attrs) {
 		return nil,errorMismatchRefcntWithAttributeCnt
 	}
 
-	var attrDescs []*descriptor.AttributeDesc
-	for _, attr := range attrs {
-		for i2, tta := range tr.tableDesc.Attributes {
-			if tta.Name == attr {
-				attrDescs = append(attrDescs,&tr.tableDesc.Attributes[i2])
-			}
-		}
+	attrSet := make(map[string]uint32)
+	for _, tableAttr := range tr.tableDesc.Attributes {
+		attrSet[tableAttr.Name] = tableAttr.ID
 	}
 
-	if len(attrDescs) != len(attrs) {
-		return nil, errorSomeAttributeNamesAreNotInAttributeDesc
+	//check if the attribute is in the relation
+	var readAttrs []*descriptor.AttributeDesc
+	for _, attr := range attrs {
+		if attrID,exist := attrSet[attr]; exist {
+			readAttrs = append(readAttrs,&tr.tableDesc.Attributes[attrID])
+		}else{
+			return nil, errorSomeAttributeNamesAreNotInAttributeDesc
+		}
 	}
 
 	var bat *batch.Batch
 	var err error
 
-	bat, tr.prefix, tr.prefixLen, err = tr.computeHandler.Read(tr.dbDesc, tr.tableDesc, &tr.tableDesc.Primary_index, attrDescs, tr.prefix, tr.prefixLen)
+	if tr.readCtx == nil {
+		tr.readCtx = &tuplecodec.ReadContext{
+			DbDesc:                   tr.dbDesc,
+			TableDesc:                tr.tableDesc,
+			IndexDesc:                &tr.tableDesc.Primary_index,
+			ReadAttributesNames:      attrs,
+			ReadAttributeDescs:       readAttrs,
+			PrefixForScanKey:         nil,
+			LengthOfPrefixForScanKey: 0,
+		}
+	}else{
+		//check if these attrs are same as last attrs
+		if len(tr.readCtx.ReadAttributesNames) != len(attrs) {
+			return nil,errorDifferentReadAttributesInSameReader
+		}
+
+		for i := 0; i < len(attrs); i++ {
+			if attrs[i] != tr.readCtx.ReadAttributesNames[i] {
+				return nil, errorDifferentReadAttributesInSameReader
+			}
+		}
+	}
+
+	bat, err = tr.computeHandler.Read(tr.readCtx)
 	if err != nil {
 		return nil, err
 	}
-	for i, ref := range refCnts {
-		bat.Vecs[i].Ref = ref
+
+	//when bat is null,it means no data anymore.
+	if bat != nil {
+		//attach refCnts
+		for i, ref := range refCnts {
+			bat.Vecs[i].Ref = ref
+		}
 	}
 	return bat,err
 }

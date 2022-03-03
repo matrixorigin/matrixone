@@ -27,11 +27,11 @@ import (
 	"math"
 )
 
+// BuildCreateTable do semantic analyze and get table definition from tree.CreateTable to make create table plan.
 func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) error {
-	var primaryKeys []string // stores primary key column's names.
 	defs := make([]engine.TableDef, 0, len(stmt.Defs))
 
-	// semantic analysis
+	// 1. get database's information
 	dbName, tblName, err := b.tableInfo(stmt.Table)
 	if err != nil {
 		return err
@@ -41,41 +41,48 @@ func (b *build) BuildCreateTable(stmt *tree.CreateTable, plan *CreateTable) erro
 		return err
 	}
 
-	addPrimaryIndex := true
+	// 2. analyze and get table definition
+	pkNames := []string(nil) // stores primary key column's names.
+	pkFlag := true           // if true, we need to add a definition for the primary key additionally
 	for i := range stmt.Defs {
-		def, pkeys, err := b.getTableDef(stmt.Defs[i])
+		def, pks, err := b.getTableDef(stmt.Defs[i])
 		if err != nil {
 			return err
 		}
-		if primaryKeys != nil && pkeys != nil {
+
+		// only allow primary keys to be defined once
+		if pkNames != nil && pks != nil {
 			return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
 		}
+
 		if _, ok := def.(*engine.PrimaryIndexDef); ok {
-			addPrimaryIndex = false
+			pkFlag = false
 		}
-		if pkeys != nil {
-			primaryKeys = pkeys
+		if pks != nil {
+			pkNames = pks
 		}
 		defs = append(defs, def)
 	}
+
 	for _, option := range stmt.Options {
 		def, _ := b.getOptionDef(option)
 		defs = append(defs, def)
 	}
-	if addPrimaryIndex && primaryKeys != nil {
-		defs = append(defs, &engine.PrimaryIndexDef{Names: primaryKeys})
+	if pkFlag && pkNames != nil {
+		defs = append(defs, &engine.PrimaryIndexDef{Names: pkNames})
 	}
 
 	if stmt.PartitionOption != nil {
 		return errors.New(errno.SQLStatementNotYetComplete, "partitionBy not yet complete")
 	}
-	// returns
+
 	plan.IfNotExistFlag = stmt.IfNotExists
 	plan.Defs = defs
 	plan.Db = db
 	plan.Id = tblName
 	return nil
 }
+
 func (b *build) getOptionDef(option tree.TableOption) (engine.TableDef, error) {
 	switch n := option.(type) {
 	case *tree.TableOptionProperties:
@@ -131,19 +138,23 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 				Default: defaultExpr,
 			},
 		}, primaryKeys, nil
-	case *tree.PrimaryKeyIndex: // todo: need to change if parser will use another AST
+	case *tree.PrimaryKeyIndex:
 		mapPrimaryKeyNames := map[string]struct{}{}
-		pkNames := make([]string, len(n.KeyParts))
+		primaryKeys = make([]string, len(n.KeyParts))
+
 		for i, key := range n.KeyParts {
-			if _, ok := mapPrimaryKeyNames[key.ColName.Parts[0]]; ok {
-				return nil, nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
+			name := key.ColName.Parts[0] // name of primary key column
+
+			if _, ok := mapPrimaryKeyNames[name]; ok {
+				return nil, nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", name))
 			}
-			pkNames[i] = key.ColName.Parts[0]
-			mapPrimaryKeyNames[key.ColName.Parts[0]] = struct{}{}
+			primaryKeys[i] = name
+			mapPrimaryKeyNames[name] = struct{}{}
 		}
+
 		return &engine.PrimaryIndexDef{
-			Names: pkNames,
-		}, pkNames, nil
+			Names: primaryKeys,
+		}, primaryKeys, nil
 	case *tree.Index:
 		keyType := engine.ZoneMap
 		switch n.KeyType {
@@ -156,15 +167,18 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 		nameMap := map[string]struct{}{}
 		colNames := make([]string, len(n.KeyParts))
 		for i, key := range n.KeyParts {
-			if _, ok := nameMap[key.ColName.Parts[0]]; ok {
+			name := key.ColName.Parts[0] // name of index column
+
+			if _, ok := nameMap[name]; ok {
 				return nil, nil, errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
 			}
-			colNames[i] = key.ColName.Parts[0]
-			nameMap[key.ColName.Parts[0]] = struct{}{}
+			colNames[i] = name
+			nameMap[name] = struct{}{}
 		}
+
 		return &engine.IndexTableDef{
-			Name: n.Name,
-			Typ: keyType,
+			Name:     n.Name,
+			Typ:      keyType,
 			ColNames: colNames,
 		}, primaryKeys, nil
 	default:
@@ -217,10 +231,10 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 
 // getDefaultExprFromColumnDef returns
 // has default expr or not / column default expr string / is null expression / error msg
-// from column definition when create table
-// it will check default expression's type and value, if default values does not adapt to column type
+// from column definition when create table.
+// it will verify that default expression's type and value match, and if not,
 // there will make a simple type conversion for values
-// likes:
+// For example:
 // 		create table testTb1 (first int default 15.6) ==> create table testTb1 (first int default 16)
 //		create table testTb2 (first int default 'abc') ==> error(Invalid default value for 'first')
 func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (engine.DefaultExpr, error) {

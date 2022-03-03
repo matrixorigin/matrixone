@@ -27,7 +27,7 @@ import (
 
 func TestBatchAdapter_ForEach(t *testing.T) {
 	convey.Convey("for each",t, func() {
-		names,attrs := makeAttributes(
+		names,attrs := MakeAttributes(
 			types.T_int8,
 			types.T_int16,
 			types.T_int32,
@@ -44,7 +44,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 
 		cnt := 10
 
-		bat := makeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt,names,attrs)
 
 		lines := randomLines(cnt,names,attrs)
 
@@ -75,7 +75,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 			rowIdx++
 			return nil
 		}
-		err := ba.ForEach(nil, callback)
+		err := ba.ForEachTuple(nil, callback)
 		convey.So(err,convey.ShouldBeNil)
 	})
 }
@@ -112,11 +112,11 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		for _, kase := range kases {
 			typs = append(typs,kase.typ)
 		}
-		names,attrs := makeAttributes(typs...)
+		names,attrs := MakeAttributes(typs...)
 
 		cnt := 10
 
-		bat := makeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt,names,attrs)
 
 		var iattrs []descriptor.IndexDesc_Attribute
 		var dis []*orderedcodec.DecodedItem
@@ -165,10 +165,10 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba := NewBatchAdapter(bat)
-		err := ba.ForEach(nil,callbackForCheck)
+		err := ba.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
-		bat2 := makeBatch(cnt,names,attrs)
+		bat2 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
 			err = rcc.FillBatchFromDecodedIndexValue(indexDesc,
 				0,
@@ -181,10 +181,10 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba2 := NewBatchAdapter(bat2)
-		err = ba2.ForEach(nil,callbackForCheck)
+		err = ba2.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 
-		bat3 := makeBatch(cnt,names,attrs)
+		bat3 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
 			am2 := &AttributeMap{
 				attributeID: am.attributeID[:4],
@@ -226,7 +226,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 		}
 
 		ba3 := NewBatchAdapter(bat3)
-		err = ba3.ForEach(nil,callbackForCheck)
+		err = ba3.ForEachTuple(nil,callbackForCheck)
 		convey.So(err,convey.ShouldBeNil)
 	})
 }

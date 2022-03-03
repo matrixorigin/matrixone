@@ -15,9 +15,11 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 )
 
 var _ engine.Engine = &TpeEngine{}
@@ -26,10 +28,14 @@ var _ engine.Relation = &TpeRelation{}
 var _ engine.Reader = &TpeReader{}
 
 type TpeConfig struct {
+	KvType	tuplecodec.KVType
 
+	//cubeKV needs CubeDriver
+	Cube    driver.CubeDriver
 }
 
 type TpeEngine struct {
+	tpeConfig *TpeConfig
 	computeHandler computation.ComputationHandler
 }
 
@@ -50,8 +56,7 @@ type TpeReader struct {
 	dbDesc         *descriptor.DatabaseDesc
 	tableDesc      *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
-	prefix []byte
-	prefixLen int
+	readCtx *tuplecodec.ReadContext
 	//for test
 	isDumpReader bool
 }

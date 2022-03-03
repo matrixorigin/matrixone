@@ -15,6 +15,8 @@
 package engine
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -89,11 +91,12 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 	}
 
 	r := &relation{
+		mu:      sync.Mutex{},
 		pid:     db.id,
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
 		mp:      make(map[string]*adb.Relation),
-		cfg: db.cfg,
+		cfg:     db.cfg,
 	}
 	r.tablets = tablets
 	ldb := db.catalog.Driver.AOEStore()

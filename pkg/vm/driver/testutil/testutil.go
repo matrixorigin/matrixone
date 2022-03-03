@@ -201,15 +201,16 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
 		dCfg := c.initCfgCreator(node)
 		dCfg.CubeConfig = *cfg
-		types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
-		for _, t := range types {
-			if v := cfg.Prophet.GetJobProcessor(t); v != nil {
-				dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
-			}
-		}
 		// dCfg.ServerConfig.ExternalServer = true
 		d, err := driver.NewCubeDriverWithFactory(c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
-			return raftstore.NewStore(c), nil
+			store := raftstore.NewStore(c)
+			types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
+			for _, t := range types {
+				if v := c.Prophet.GetJobProcessor(t); v != nil {
+					dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
+				}
+			}
+			return store, nil
 		})
 		assert.NoError(c.t, err)
 		if len(c.CubeDrivers) > node {

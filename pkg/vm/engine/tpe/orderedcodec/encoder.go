@@ -17,6 +17,9 @@ package orderedcodec
 import (
 	"bytes"
 	"errors"
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
@@ -40,8 +43,32 @@ func (oe *OrderedEncoder) EncodeKey(data []byte,value interface{})([]byte,*Encod
 		return oe.EncodeNull(data)
 	}
 	switch v:=value.(type) {
+	case bool:
+		return oe.EncodeBool(data,v)
+	case int8:
+		return oe.EncodeInt8(data, v)
+	case int16:
+		return oe.EncodeInt16(data, v)
+	case int32:
+		return oe.EncodeInt32(data, v)
+	case int64:
+		return oe.EncodeInt64(data, v)
+	case types.Date:
+		return oe.EncodeDate(data, v)
+	case types.Datetime:
+		return oe.EncodeDatetime(data, v)
+	case uint8:
+		return oe.EncodeUint8(data, v)
+	case uint16:
+		return oe.EncodeUint16(data, v)
+	case uint32:
+		return oe.EncodeUint32(data, v)
 	case uint64:
 		return oe.EncodeUint64(data,v)
+	case float32:
+		return oe.EncodeFloat32(data,v)
+	case float64:
+		return oe.EncodeFloat64(data,v)
 	case []byte:
 		return oe.EncodeBytes(data,v)
 	case string:
@@ -56,6 +83,77 @@ func (oe *OrderedEncoder) EncodeKey(data []byte,value interface{})([]byte,*Encod
 func (oe *OrderedEncoder) EncodeNull(data []byte)([]byte,*EncodedItem){
 	return append(data,nullEncoding), nil
 }
+
+func (oe *OrderedEncoder) EncodeBool(data []byte,value bool)([]byte,*EncodedItem) {
+	if value {
+		return oe.EncodeUint64(data, 1)
+	}
+	return oe.EncodeUint64(data, 0)
+}
+
+func (oe *OrderedEncoder) EncodeInt8(data []byte,value int8)([]byte,*EncodedItem) {
+	return oe.EncodeInt64(data, int64(value))
+}
+
+func (oe *OrderedEncoder) EncodeInt16(data []byte,value int16)([]byte,*EncodedItem) {
+	return oe.EncodeInt64(data, int64(value))
+}
+
+func (oe *OrderedEncoder) EncodeInt32(data []byte,value int32)([]byte,*EncodedItem) {
+	return oe.EncodeInt64(data, int64(value))
+}
+
+func (oe *OrderedEncoder) EncodeInt64(data []byte,value int64)([]byte,*EncodedItem) {
+	if value < 0 {
+		if value >= -0xff {
+			return append(data, encodingPrefixForIntegerMinimum + 7,byte(value)),nil
+		} else if value >= -0xffff {
+			return append(data, encodingPrefixForIntegerMinimum + 6, byte(value >> 8), byte(value)), nil
+		} else if value >= -0xffffff {
+			return append(data, encodingPrefixForIntegerMinimum + 5, byte(value >> 16), byte(value >> 8),
+							byte(value)), nil
+		} else if value >= -0xffffffff {
+			return append(data, encodingPrefixForIntegerMinimum + 4, byte(value >> 24), byte(value >> 16),
+							byte(value >> 8), byte(value)), nil
+		} else if value >= -0xffffffffff {
+			return append(data, encodingPrefixForIntegerMinimum + 3, byte(value >> 32), byte(value >> 24),
+							byte(value >> 16), byte(value >> 8), byte(value)), nil
+		} else if value >= -0xffffffffffff {
+			return append(data, encodingPrefixForIntegerMinimum + 2, byte(value >> 40), byte(value >> 32),
+							byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)), nil
+		} else if value >= -0xffffffffffffff {
+			return append(data, encodingPrefixForIntegerMinimum + 1, byte(value >> 48), byte(value >> 40),
+							byte(value >> 32), byte(value >> 24), byte(value >> 16), byte(value >> 8), 
+							byte(value)), nil
+		} else {
+			return append(data, encodingPrefixForIntegerMinimum, byte(value >> 56), byte(value >> 48),
+							byte(value >> 40), byte(value >> 32), byte(value >> 24), byte(value >> 16),
+							byte(value >> 8), byte(value)), nil
+		}
+	}
+	return oe.EncodeUint64(data, uint64(value))
+}
+
+func (oe *OrderedEncoder) EncodeDate(data []byte,value types.Date)([]byte,*EncodedItem) {
+	return oe.EncodeInt32(data, int32(value))
+}
+
+func (oe *OrderedEncoder) EncodeDatetime(data []byte,value types.Datetime)([]byte,*EncodedItem) {
+	return oe.EncodeInt64(data, int64(value))
+}
+
+func (oe *OrderedEncoder) EncodeUint8(data []byte,value uint8)([]byte,*EncodedItem) {
+	return oe.EncodeUint64(data, uint64(value))
+}
+
+func (oe *OrderedEncoder) EncodeUint16(data []byte,value uint16)([]byte,*EncodedItem) {
+	return oe.EncodeUint64(data, uint64(value))
+}
+
+func (oe *OrderedEncoder) EncodeUint32(data []byte,value uint32)([]byte,*EncodedItem) {
+	return oe.EncodeUint64(data, uint64(value))
+}
+
 
 // EncodeUint64 encodes the uint64 into ordered bytes with uvarint encoding
 // and appends them to the buffer.
@@ -100,6 +198,31 @@ func (oe *OrderedEncoder) EncodeUint64(data []byte,value uint64)([]byte,*Encoded
 			byte(value >> 8), byte(value)),nil
 	}
 	return nil, nil
+}
+
+func (oe *OrderedEncoder) EncodeUint64ForFloat(data []byte,value uint64)([]byte,*EncodedItem) {
+	return append(data, byte(value>>56), byte(value>>48), byte(value>>40), byte(value>>32),
+		byte(value>>24), byte(value>>16), byte(value>>8), byte(value)), nil
+}
+
+func (oe *OrderedEncoder) EncodeFloat32(data []byte,value float32)([]byte,*EncodedItem) {
+	return oe.EncodeFloat64(data, float64(value))
+}
+
+func (oe *OrderedEncoder) EncodeFloat64(data []byte,value float64)([]byte,*EncodedItem) {
+	if math.IsNaN(value) {
+		return append(data, encodingfloatNaN), nil
+	} else if value == 0 {
+		return append(data, encodingfloatZero), nil
+	}
+	x := math.Float64bits(value)
+	if x&(1<<63) != 0 {
+		x = ^x
+		data = append(data, encodingfloatNeg)
+	} else {
+		data = append(data, encodingfloatPos)
+	}
+	return oe.EncodeUint64ForFloat(data, x)
 }
 
 // EncodeBytes encodes the bytes with escaping and appends them to the buffer.

@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"sort"
 )
 
 type DatabaseDesc struct {
@@ -216,18 +215,10 @@ type IndexDesc_Attribute struct {
 	Type orderedcodec.ValueType `json:"type,string"`
 }
 
-func ExtractIndexAttributeIDsSorted(attrs []IndexDesc_Attribute) []uint32 {
-	ids := ExtractIndexAttributeIDs(attrs)
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-	return ids
-}
-
-func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) []uint32 {
-	var ids []uint32
+func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int8 {
+	ids := make(map[uint32]int8)
 	for _, attr := range attrs {
-		ids = append(ids,attr.ID)
+		ids[attr.ID] = 1
 	}
 	return ids
 }
@@ -249,11 +240,14 @@ type DescriptorHandler interface {
 	//LoadRelationDescByID gets the descriptor of the table by the tableid
 	LoadRelationDescByID(parentID uint64, tableID uint64) (*RelationDesc, error)
 
-	//StoreRelationDescByName first get the descriptor of the table by name, then save the descriptor.
+	//StoreRelationDescByName first gets the descriptor of the table by name, then save the descriptor.
 	StoreRelationDescByName(parentID uint64, name string,tableDesc *RelationDesc) error
 
-	//StoreRelationDescByID save the descriptor
+	//StoreRelationDescByID saves the descriptor
 	StoreRelationDescByID(parentID uint64, tableID uint64, table *RelationDesc) error
+
+	//DeleteRelationDescByID deletes the table
+	DeleteRelationDescByID(parentID uint64, tableID uint64) error
 
 	LoadDatabaseDescByName(name string) (*DatabaseDesc, error)
 
@@ -263,7 +257,16 @@ type DescriptorHandler interface {
 
 	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
 
+	//DeleteDatabaseDescByID deletes the database
+	DeleteDatabaseDescByID(dbID uint64) error
+
 	MakePrefixWithOneExtraID(dbID uint64, tableID uint64, indexID uint64, extraID uint64) ([]byte, *orderedcodec.EncodedItem)
 
 	GetValuesWithPrefix(parentID uint64, callbackCtx interface{}, callback func(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error)) ([]byte, error)
+
+	//StoreRelationDescIntoAsyncGC stores the table into the asyncgc table
+	StoreRelationDescIntoAsyncGC(epoch uint64, dbID uint64, desc *RelationDesc) error
+
+	//ListRelationDescFromAsyncGC gets all the tables from the asyncgc table
+	ListRelationDescFromAsyncGC(epoch uint64) ([]*RelationDesc, error)
 }

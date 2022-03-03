@@ -17,6 +17,11 @@ package vector
 import (
 	"bytes"
 	"errors"
+	"io"
+	"os"
+	"sync/atomic"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,11 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"io"
-	"os"
-	"reflect"
-	"sync/atomic"
-	"unsafe"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
@@ -92,16 +92,12 @@ func (v *StrVector) PlacementNew(t types.Type) {
 	}
 	v.MNodes = append(v.MNodes, offsetNode)
 	v.MNodes = append(v.MNodes, lenNode)
-	offsetHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(offsetNode.Buf)))
-	offsetHp.Len = 0
-	offsetHp.Cap = offsetHp.Cap * 4
-	lenHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(lenNode.Buf)))
-	lenHp.Len = 0
-	lenHp.Cap = int(lenCap / 4)
+	offsets := unsafe.Slice((*uint32)(unsafe.Pointer(&offsetNode.Buf[0])), cap(offsetNode.Buf)/4)[:0]
+	lengths := unsafe.Slice((*uint32)(unsafe.Pointer(&lenNode.Buf[0])), cap(lenNode.Buf)/4)[: 0 : lenCap/4]
 	v.Data = &types.Bytes{
 		Data:    make([]byte, 0),
-		Offsets: *(*[]uint32)(unsafe.Pointer(&offsetHp)),
-		Lengths: *(*[]uint32)(unsafe.Pointer(&lenHp)),
+		Offsets: offsets,
+		Lengths: lengths,
 	}
 }
 
@@ -226,7 +222,7 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	}
 	if vec.Nsp.Np != nil {
 		for row := startRow; row < startRow+ro.Length(vec); row++ {
-			if nulls.Contains(vec.Nsp, uint64(offset + row - startRow)) {
+			if nulls.Contains(vec.Nsp, uint64(offset+row-startRow)) {
 				nulls.Add(v.VMask, uint64(row))
 			}
 		}
@@ -433,17 +429,9 @@ func (vec *StrVector) Unmarshal(data []byte) error {
 		vec.Data.Offsets = make([]uint32, cnt)
 		vec.Data.Lengths = lengths
 	} else {
-		{
-			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Lengths))
-			hp.Len = len(lengths)
-			vec.Data.Lengths = *(*[]uint32)(unsafe.Pointer(&hp))
-		}
-		{
-			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Offsets))
-			hp.Len = len(lengths)
-			vec.Data.Offsets = *(*[]uint32)(unsafe.Pointer(&hp))
-		}
-		copy(vec.Data.Lengths, lengths[0:])
+		vec.Data.Lengths = vec.Data.Lengths[:len(lengths)]
+		vec.Data.Offsets = vec.Data.Offsets[:len(lengths)]
+		copy(vec.Data.Lengths, lengths)
 	}
 	vec.Data.Data = buf[4*cnt:]
 	offset := uint32(0)

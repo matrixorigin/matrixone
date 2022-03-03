@@ -31,20 +31,21 @@ type ValueType int
 const (
 	VALUE_TYPE_UNKOWN ValueType = 0x0
 	VALUE_TYPE_NULL ValueType = 0x1
-	VALUE_TYPE_UINT64 ValueType = 0x2
-	VALUE_TYPE_BYTES ValueType = 0x3
-	VALUE_TYPE_STRING ValueType = 0x4
-	VALUE_TYPE_INT8 ValueType = 0x5
-	VALUE_TYPE_INT16 ValueType = 0x6
-	VALUE_TYPE_INT32 ValueType = 0x7
-	VALUE_TYPE_INT64 ValueType = 0x8
-	VALUE_TYPE_UINT8 ValueType = 0x9
-	VALUE_TYPE_UINT16 ValueType = 0xa
-	VALUE_TYPE_UINT32 ValueType = 0xb
-	VALUE_TYPE_FLOAT32 ValueType = 0xc
-	VALUE_TYPE_FLOAT64 ValueType = 0xd
-	VALUE_TYPE_DATE ValueType = 0xe
-	VALUE_TYPE_DATETIME ValueType = 0xf
+	VALUE_TYPE_BOOL ValueType = 0x2
+	VALUE_TYPE_UINT64 ValueType = 0x3
+	VALUE_TYPE_BYTES ValueType = 0x4
+	VALUE_TYPE_STRING ValueType = 0x5
+	VALUE_TYPE_INT8 ValueType = 0x6
+	VALUE_TYPE_INT16 ValueType = 0x7
+	VALUE_TYPE_INT32 ValueType = 0x8
+	VALUE_TYPE_INT64 ValueType = 0x9
+	VALUE_TYPE_UINT8 ValueType = 0xa
+	VALUE_TYPE_UINT16 ValueType = 0xb
+	VALUE_TYPE_UINT32 ValueType = 0xc
+	VALUE_TYPE_FLOAT32 ValueType = 0xd
+	VALUE_TYPE_FLOAT64 ValueType = 0xe
+	VALUE_TYPE_DATE ValueType = 0xf
+	VALUE_TYPE_DATETIME ValueType = 0x10
 )
 
 type SectionType int
