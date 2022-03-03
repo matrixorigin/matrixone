@@ -405,7 +405,7 @@ func (s *Storage) CreateSnapshot(shardID uint64, path string) error {
 	ctx := aoedb.CreateSnapshotCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
-		Sync: false,
+		Sync: true,
 	}
 	idx, err := s.DB.CreateSnapshot(&ctx)
 	logutil.Infof("createSnapshot, index is %v, storage is %v", idx, s)
