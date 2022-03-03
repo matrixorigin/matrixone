@@ -8,15 +8,19 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 var (
-	versionFlag 			 = flag.String("version", "", "if the argument passed in is '--version', mo-server will print MatrixOne build information and exits")
+	versionFlag              = flag.String("version", "", "if the argument passed in is '--version', mo-server will print MatrixOne build information and exits")
 	cpuProfilePathFlag       = flag.String("cpu-profile", "", "write cpu profile to the specified file")
 	allocsProfilePathFlag    = flag.String("allocs-profile", "", "write allocs profile to the specified file")
 	heapProfilePathFlag      = flag.String("heap-profile", "", "write heap profile to the specified file")
 	heapProfileThresholdFlag = flag.Uint64("heap-profile-threshold", 8*1024*1024*1024,
 		"take a heap profile if mapped memory changes exceed the specified threshold bytes")
+	logMetricsIntervalFlag = flag.Uint64("log-metrics-interval", 23,
+		"log metrics every specified seconds. 0 means disable logging")
 )
 
 func startCPUProfile() func() {
@@ -92,6 +96,66 @@ func init() {
 				logutil.Infof("Heap profile written to %s", profilePath)
 			}
 			lastUsing = using
+		}
+
+	}()
+}
+
+func init() {
+	if *logMetricsIntervalFlag == 0 {
+		// disabled
+		return
+	}
+	go func() {
+
+		samples := []metrics.Sample{
+			// gc infos
+			{
+				Name: "/gc/heap/allocs:bytes",
+			},
+			{
+				Name: "/gc/heap/frees:bytes",
+			},
+			{
+				Name: "/gc/heap/goal:bytes",
+			},
+			// memory infos
+			{
+				Name: "/memory/classes/heap/free:bytes",
+			},
+			{
+				Name: "/memory/classes/heap/objects:bytes",
+			},
+			{
+				Name: "/memory/classes/heap/released:bytes",
+			},
+			{
+				Name: "/memory/classes/heap/unused:bytes",
+			},
+			{
+				Name: "/memory/classes/total:bytes",
+			},
+			// goroutine infos
+			{
+				Name: "/sched/goroutines:goroutines",
+			},
+		}
+
+		for range time.NewTicker(time.Second * time.Duration(*logMetricsIntervalFlag)).C {
+			metrics.Read(samples)
+
+			var fields []zapcore.Field
+			for _, sample := range samples {
+				switch sample.Value.Kind() {
+				case metrics.KindUint64:
+					fields = append(fields, zap.Uint64(sample.Name, sample.Value.Uint64()))
+				case metrics.KindFloat64:
+					fields = append(fields, zap.Float64(sample.Name, sample.Value.Float64()))
+				}
+			}
+
+			logutil.Debug("runtime metrics", fields...)
+
 		}
 
 	}()
