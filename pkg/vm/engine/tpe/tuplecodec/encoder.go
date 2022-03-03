@@ -19,9 +19,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"strconv"
 )
 
 var (
@@ -152,8 +154,32 @@ func (dvs *DefaultValueSerializer) SerializeValue(data []byte,value interface{})
 		valueType = SERIAL_TYPE_NULL
 	}else{
 		switch value.(type) {
+		case bool:
+			valueType = SERIAL_TYPE_BOOL
+		case int8:
+			valueType = SERIAL_TYPE_INT8
+		case int16:
+			valueType = SERIAL_TYPE_INT16
+		case int32:
+			valueType = SERIAL_TYPE_INT32
+		case int64:
+			valueType = SERIAL_TYPE_INT64
+		case uint8:
+			valueType = SERIAL_TYPE_UINT8
+		case uint16:
+			valueType = SERIAL_TYPE_UINT16
+		case uint32:
+			valueType = SERIAL_TYPE_UINT32
 		case uint64:
 			valueType = SERIAL_TYPE_UINT64
+		case float32:
+			valueType = SERIAL_TYPE_FLOAT32
+		case float64:
+			valueType = SERIAL_TYPE_FLOAT64
+		case types.Date:
+			valueType = SERIAL_TYPE_DATE
+		case types.Datetime:
+			valueType = SERIAL_TYPE_DATETIME
 		case []byte:
 			valueType = SERIAL_TYPE_BYTES
 		case string:
@@ -185,6 +211,48 @@ func (dvs *DefaultValueSerializer) SerializeValue(data []byte,value interface{})
 	return data, nil, nil
 }
 
+func ParseInterge(actualData []byte, base int, bitSize int, flag bool) (interface{}, error) {
+	dec := json.NewDecoder(bytes.NewReader(actualData))
+	dec.UseNumber()
+
+	var jnum json.Number
+	err := dec.Decode(&jnum)
+	if err != nil {
+		return nil, err
+	}
+
+	var parseNum interface{}
+	if flag {
+		parseNum, err = strconv.ParseInt(jnum.String(), base, bitSize)
+	} else {
+		parseNum, err = strconv.ParseUint(jnum.String(), base, bitSize)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return parseNum, nil
+}
+
+func ParseFloat(actualData []byte, bitSize int) (interface{}, error) {
+	dec := json.NewDecoder(bytes.NewReader(actualData))
+	dec.UseNumber()
+
+	var jnum json.Number
+	err := dec.Decode(&jnum)
+	if err != nil {
+		return nil, err
+	}
+
+	var parseNum interface{}
+	parseNum, err = strconv.ParseFloat(jnum.String(), bitSize)
+
+	if err != nil {
+		return nil, err
+	}
+	return parseNum, nil
+}
+
 // DeserializeValue deserializes the data
 func (dvs *DefaultValueSerializer) DeserializeValue(data []byte)([]byte,*orderedcodec.DecodedItem,error) {
 	if len(data) == 0 {
@@ -195,8 +263,32 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte)([]byte,*ordered
 	switch data[0] {
 	case SERIAL_TYPE_NULL:
 		vt = orderedcodec.VALUE_TYPE_NULL
+	case SERIAL_TYPE_BOOL:
+		vt = orderedcodec.VALUE_TYPE_BOOL
+	case SERIAL_TYPE_INT8:
+		vt = orderedcodec.VALUE_TYPE_INT8
+	case SERIAL_TYPE_INT16:
+		vt = orderedcodec.VALUE_TYPE_INT16
+	case SERIAL_TYPE_INT32:
+		vt = orderedcodec.VALUE_TYPE_INT32
+	case SERIAL_TYPE_INT64:
+		vt = orderedcodec.VALUE_TYPE_INT64
+	case SERIAL_TYPE_UINT8:
+		vt = orderedcodec.VALUE_TYPE_UINT8
+	case SERIAL_TYPE_UINT16:
+		vt = orderedcodec.VALUE_TYPE_UINT16
+	case SERIAL_TYPE_UINT32:
+		vt = orderedcodec.VALUE_TYPE_UINT32
 	case SERIAL_TYPE_UINT64:
 		vt = orderedcodec.VALUE_TYPE_UINT64
+	case SERIAL_TYPE_FLOAT32:
+		vt = orderedcodec.VALUE_TYPE_FLOAT32
+	case SERIAL_TYPE_FLOAT64:
+		vt = orderedcodec.VALUE_TYPE_FLOAT64
+	case SERIAL_TYPE_DATE:
+		vt = orderedcodec.VALUE_TYPE_DATE
+	case SERIAL_TYPE_DATETIME:
+		vt = orderedcodec.VALUE_TYPE_DATETIME
 	case SERIAL_TYPE_STRING:
 		vt = orderedcodec.VALUE_TYPE_STRING
 	case SERIAL_TYPE_BYTES:
@@ -228,29 +320,105 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte)([]byte,*ordered
 	var value interface{}
 
 	//use number decode
-	if vt == orderedcodec.VALUE_TYPE_UINT64 {
-		dec := json.NewDecoder(bytes.NewReader(actualData))
-		dec.UseNumber()
-
-		var jnum json.Number
-		err := dec.Decode(&jnum)
+	switch vt {
+	case orderedcodec.VALUE_TYPE_NULL:
+		if string(actualData) != "null" {
+			return nil, nil, errorWrongValueType
+		}
+		value = nil
+	case orderedcodec.VALUE_TYPE_BOOL:
+		if string(actualData) == "true" {
+			value = true
+		} else if string(actualData) == "false" {
+			value = false
+		} else {
+			return nil, nil, errorWrongValueType
+		}
+	case orderedcodec.VALUE_TYPE_INT8:
+		parseNum, err := ParseInterge(actualData, 10, 8, true)
 		if err != nil {
 			return nil, nil, err
 		}
-
-		parseUint, err := strconv.ParseUint(jnum.String(),10,64)
+		value = int8(parseNum.(int64))
+	case orderedcodec.VALUE_TYPE_INT16:
+		parseNum, err := ParseInterge(actualData, 10, 16, true)
 		if err != nil {
 			return nil, nil, err
 		}
-		value = parseUint
-	}else if vt == orderedcodec.VALUE_TYPE_BYTES {
+		value = int16(parseNum.(int64))
+	case orderedcodec.VALUE_TYPE_INT32:
+		parseNum, err := ParseInterge(actualData, 10, 32, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = int32(parseNum.(int64))
+	case orderedcodec.VALUE_TYPE_INT64:
+		parseNum, err := ParseInterge(actualData, 10, 64, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = parseNum.(int64)
+	case orderedcodec.VALUE_TYPE_UINT8:
+		parseNum, err := ParseInterge(actualData, 10, 8, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = uint8(parseNum.(uint64))
+	case orderedcodec.VALUE_TYPE_UINT16:
+		parseNum, err := ParseInterge(actualData, 10, 16, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = uint16(parseNum.(uint64))
+	case orderedcodec.VALUE_TYPE_UINT32:
+		parseNum, err := ParseInterge(actualData, 10, 32, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = uint32(parseNum.(uint64))
+	case orderedcodec.VALUE_TYPE_UINT64:
+		parseNum, err := ParseInterge(actualData, 10, 64, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = parseNum.(uint64)
+	case orderedcodec.VALUE_TYPE_FLOAT32:
+		parseNum, err := ParseFloat(actualData, 32)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = float32(parseNum.(float64))
+	case orderedcodec.VALUE_TYPE_FLOAT64:
+		parseNum, err := ParseFloat(actualData, 64)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = parseNum.(float64)
+	case orderedcodec.VALUE_TYPE_DATE:
+		parseNum, err := ParseInterge(actualData, 10, 32, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = types.Date(parseNum.(int64))
+	case orderedcodec.VALUE_TYPE_DATETIME:
+		parseNum, err := ParseInterge(actualData, 10, 64, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		value = types.Datetime(parseNum.(int64))
+	case orderedcodec.VALUE_TYPE_BYTES:
 		var sliceValue []byte
 		err := json.Unmarshal(actualData, &sliceValue)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = sliceValue
-	} else {
+	case orderedcodec.VALUE_TYPE_STRING:
+		if len(actualData) < 2 {
+			return nil, nil, errorWrongValueType
+		}
+		value = string(actualData[1:len(actualData) - 1])
+	default:
 		err := json.Unmarshal(actualData, &value)
 		if err != nil {
 			return nil, nil, err
