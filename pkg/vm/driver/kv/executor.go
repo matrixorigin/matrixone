@@ -20,9 +20,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -84,15 +84,25 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 	var data [][]byte
 	var rep []byte
 
+	readCount := uint64(0)
+	needCheckLimit := customReq.Limit != 0
+
 	err := ce.kv.Scan(startKey, endKey, func(key, value []byte) (bool, error) {
 		if (shard.Start != nil && bytes.Compare(shard.Start, key) > 0) ||
 			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
+
+		if needCheckLimit {
+			if readCount >= customReq.Limit {
+				return false,nil
+			}
+			readCount++
+		}
 		data = append(data, key)
 		data = append(data, value)
 		return true, nil
-	}, false)
+	}, true)
 	if err != nil {
 		rep = errDriver.ErrorResp(err)
 		return rep, nil

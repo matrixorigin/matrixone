@@ -17,9 +17,11 @@ package tuplecodec
 import (
 	"errors"
 	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,6 +39,7 @@ var (
 	errorInitIDPoolTimeout = errors.New("init id pool is timeout")
 	errorCubeDriverIsNull = errors.New("cube driver is nil")
 	errorInvalidIDPool = errors.New("invalid idpool")
+	errorInvalidKeyValueCount = errors.New("key count != value count")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -73,17 +76,9 @@ func initIDPool(cd driver.CubeDriver, typ string,pool *IDPool) error {
 		time.Sleep(timeout / 2)
 	}
 
-	max := func(a,b uint64) uint64 {
-		if a < b {
-			return b
-		}else{
-			return a
-		}
-	}
-
 	pool.lock = 0
 	pool.idEnd = id
-	pool.idStart = max(id - idPoolSize +1, UserTableIDOffset)
+	pool.idStart = MaxUint64(id - idPoolSize +1, UserTableIDOffset)
 
 	if pool.idStart > pool.idEnd {
 		return errorInvalidIDPool
@@ -112,7 +107,7 @@ func (ck * CubeKV) GetKVType() KVType {
 	return KV_CUBE
 }
 
-// refreshIDPool refreshes the id pool
+// refreshIDPool refreshes the id pool by requesting it from the cube.
 func (ck *CubeKV) refreshIDPool(typ string,pool *IDPool) {
 	//lock
 	if !atomic.CompareAndSwapInt32(&pool.lock,0,1) {
@@ -175,6 +170,7 @@ func (ck * CubeKV) allocateFromPool(typ string,pool *IDPool) (uint64,error) {
 	return id, errorCanNotComeHere
 }
 
+// allocateID allocates a id for the typ
 func (ck * CubeKV) allocateID(typ string) (uint64,error)  {
 	switch typ {
 	case DATABASE_ID:
@@ -194,7 +190,12 @@ func (ck * CubeKV) Set(key TupleKey, value TupleValue) error {
 }
 
 func (ck * CubeKV) SetBatch(keys []TupleKey, values []TupleValue) []error {
-	panic("implement me")
+	var errs []error
+	for i, key := range keys {
+		err := ck.Set(key,values[i])
+		errs = append(errs,err)
+	}
+	return errs
 }
 
 func (ck * CubeKV) DedupSet(key TupleKey, value TupleValue) error {
@@ -202,27 +203,66 @@ func (ck * CubeKV) DedupSet(key TupleKey, value TupleValue) error {
 }
 
 func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
-	panic("implement me")
+	var errs []error
+	for i, key := range keys {
+		err := ck.DedupSet(key,values[i])
+		errs = append(errs,err)
+	}
+	return errs
 }
 
 func (ck * CubeKV) Delete(key TupleKey) error {
 	return ck.Cube.Delete(key)
 }
 
+// Get gets the value of the key.
+// If the key does not exist, it returns the null
 func (ck * CubeKV) Get(key TupleKey) (TupleValue, error) {
 	return ck.Cube.Get(key)
 }
 
 func (ck * CubeKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
-	panic("implement me")
+	var values []TupleValue
+	for _, key := range keys {
+		get, err := ck.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values,get)
+	}
+	return values, nil
 }
 
 func (ck * CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error) {
-	panic("implement me")
+	ret, err := ck.Cube.Scan(startKey, endKey, math.MaxUint64)
+	if err != nil {
+		return nil, err
+	}
+	var values []TupleValue
+	//ret[even index] is key
+	//ret[odd index] is value
+	for i := 1 ; i < len(ret); i += 2 {
+		values = append(values,ret[i])
+	}
+	return values,err
 }
 
 func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
-	panic("implement me")
+	ret, err := ck.Cube.Scan(startKey, nil, limit)
+	if err != nil {
+		return nil,nil, err
+	}
+	var keys []TupleKey
+	var realKey TupleKey
+	var values []TupleValue
+	//ret[even index] is key
+	//ret[odd index] is value
+	for i := 1 ; i < len(ret); i += 2 {
+		realKey = kv.DecodeDataKey(ret[i-1])
+		keys = append(keys,realKey)
+		values = append(values,ret[i])
+	}
+	return keys,values,err
 }
 
 func (ck * CubeKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
