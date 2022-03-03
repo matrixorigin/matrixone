@@ -76,7 +76,7 @@ const (
 	CreateRPCExit           = 10
 	WaitCubeStartExit       = 11
 	StartMOExit             = 12
-	CreateTpeExit			= 13
+	CreateTpeExit           = 13
 )
 
 var (
@@ -153,6 +153,8 @@ func main() {
 
 	flag.Parse()
 	args := flag.Args()
+
+	handleDebugFlags()
 
 	if len(args) < 1 {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
@@ -286,7 +288,7 @@ func main() {
 			logutil.Infof("create tpe error:%v\n", err)
 			os.Exit(CreateTpeExit)
 		}
-	}else{
+	} else {
 		eng = aoeEngine.New(c, &cngineConfig)
 	}
 
