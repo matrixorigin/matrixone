@@ -55,6 +55,7 @@ func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
 func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64           { return 0 }
 func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
+func (noop *noopWal) TryInitShard(shardId, safeId uint64) error            { return nil }
 func (noop *noopWal) GetAllShardCheckpointId() map[uint64]uint64           { return nil }
 func (noop *noopWal) GetAllPendingEntries() []*shard.ItemsToCheckpointStat { return nil }
 func (noop *noopWal) GetShardPendingCnt(shardId uint64) int                { return 0 }
@@ -228,6 +229,27 @@ func (mgr *manager) InitShard(shardId, safeId uint64) error {
 		return err
 	}
 	s.InitSafeId(safeId)
+	return nil
+}
+
+func (mgr *manager) TryInitShard(shardId, safeId uint64) error {
+	s, err := mgr.GetShard(shardId)
+	if err != nil && err != ShardNotFoundErr {
+		return err
+	}
+	if err == ShardNotFoundErr {
+		mgr.mu.Lock()
+		s, err = mgr.AddShardLocked(shardId)
+		mgr.mu.Unlock()
+		if err != nil && err != DuplicateShardErr {
+			return err
+		}
+	}
+	lastid := s.GetSafeId()
+	if safeId > lastid {
+		logutil.Infof("S-%v|%v->%v", shardId, lastid, safeId)
+		s.InitSafeId(safeId)
+	}
 	return nil
 }
 
