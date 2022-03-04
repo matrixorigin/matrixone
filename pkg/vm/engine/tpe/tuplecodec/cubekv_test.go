@@ -457,3 +457,58 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestCubeKV_GetWithPrefix(t *testing.T) {
+	tc := NewTestCluster(t)
+	defer CloseTestCluster(tc)
+
+	/*
+	//TODO: to fix
+	convey.Convey("get with prefix",t, func() {
+		prefix := "xyz"
+		cnt := 20
+
+		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		convey.So(err,convey.ShouldBeNil)
+
+		type args struct {
+			key   TupleKey
+			value TupleValue
+		}
+
+		var kases []args
+		for i := 0 ; i < cnt; i++ {
+			key := TupleKey(prefix + fmt.Sprintf("%d",i))
+			value := TupleValue(fmt.Sprintf("v%d",i))
+
+			kases = append(kases,args{
+				key:   key,
+				value: value,
+			})
+			err := kv.Set(key, value)
+			convey.So(err,convey.ShouldBeNil)
+		}
+
+		_, values, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		convey.So(err,convey.ShouldBeNil)
+
+		for i, kase := range kases {
+			convey.So(values[i],convey.ShouldResemble,kase.value)
+		}
+
+		step := 10
+		last := TupleKey(prefix)
+		prefixLen := len(prefix)
+		for i := 0; i < cnt; i += step {
+			keys, values, err := kv.GetWithPrefix(last, prefixLen, uint64(step))
+			convey.So(err,convey.ShouldBeNil)
+
+			for j := i; j < i+step; j++ {
+				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
+			}
+
+			last = SuccessorOfKey(keys[len(keys) - 1])
+		}
+	})
+	*/
+}

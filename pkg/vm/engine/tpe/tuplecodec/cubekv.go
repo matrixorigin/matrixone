@@ -265,8 +265,26 @@ func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKe
 	return keys,values,err
 }
 
-func (ck * CubeKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
-	panic("implement me")
+func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
+	if prefixOrStartkey == nil {
+		return nil, nil, errorPrefixIsNull
+	}
+
+	//TODO: to fix
+	ret, err := ck.Cube.PrefixScan(prefixOrStartkey[:prefixLen],limit)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var keys []TupleKey
+	var values []TupleValue
+	//ret[even index] is key
+	//ret[odd index] is value
+	for i := 1 ; i < len(ret); i += 2 {
+		keys = append(keys,ret[i-1])
+		values = append(values,ret[i])
+	}
+	return keys,values,err
 }
 
 func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
