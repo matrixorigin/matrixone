@@ -299,7 +299,7 @@ func TestMemoryKV_GetRange(t *testing.T) {
 }
 
 func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
-	convey.Convey("get with prefix",t, func() {
+	convey.Convey("get rage",t, func() {
 		prefix := "abc"
 		cnt := 20
 
@@ -370,7 +370,7 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetWithPrefix(TupleKey(prefix), 0, uint64(cnt))
+		_, values, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -379,8 +379,9 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 
 		step := 10
 		last := TupleKey(prefix)
+		prefixLen := len(prefix)
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetWithPrefix(last, 0, uint64(step))
+			keys, values, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {

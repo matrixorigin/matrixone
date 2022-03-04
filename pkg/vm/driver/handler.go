@@ -73,6 +73,13 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.CustomType = uint64(pb.Scan)
 		req.Read = true
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TpePrefixScan:
+		msg := customReq.TpePrefixScan
+		req.Key = msg.PrefixOrStartKey
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.TpePrefixScan)
+		req.Read = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Incr:
 		msg := customReq.AllocID
 		req.Key = msg.Key
