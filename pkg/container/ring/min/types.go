@@ -96,3 +96,16 @@ type StrRing struct {
 	Typ types.Type
 	Mp  *mheap.Mheap
 }
+type DateRing struct {
+	Da  []byte
+	Vs  []types.Date
+	Ns  []int64
+	Typ types.Type
+}
+
+type DateTimeRing struct {
+	Da  []byte
+	Vs  []types.Datetime
+	Ns  []int64
+	Typ types.Type
+}
