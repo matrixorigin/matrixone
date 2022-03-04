@@ -24,8 +24,8 @@ The coding style suggested by the Golang community is used in MatrixOne. See the
 ## **Workflow<c name="workflow"></c>**
 You can follow the workflow to operate development, and you can see [Make Your First Contribution](../make-your-first-contribution.md) if you are a newcomer and need more detailed instructions about workflow.  
 
-1. Fork the [MatrixOne repository](https://github.com/matrixorigin/matrixone) on GitHub.
-2. Clone your fork to your local machine with:  
+*1.* Fork the [MatrixOne repository](https://github.com/matrixorigin/matrixone) on GitHub.
+*2.* Clone your fork to your local machine with:  
 
 ```
 git clone git@github.com:<yourname>/matrixone.git
@@ -36,36 +36,36 @@ And add MatrixOne repo as a remote repository with:
 git remote add upstream https://github.com/matrixorigin/matrixone.git
 ```  
 
-3. Create a new branch, the branch name is up to you.
+*3.* Create a new branch, the branch name is up to you.
 ```
 git checkout -b topic-branch
 ```
 
-4. Commit changes to your own branch locally, add necessary unit tests.
+*4.* Commit changes to your own branch locally, add necessary unit tests.
 
-5. Run static code analysis with `make sca`.
+*5.* Run static code analysis with `make sca`.
 ```
 make sca
 ```
 
-6. Run tests with `make ut` and `make bvt`, make sure all the tests passed.
+*6.* Run tests with `make ut` and `make bvt`, make sure all the tests passed.
 ```
 make ut
 make bvt
 ```
 
-7. Push to a new branch in your own fork.
+*7.* Push to a new branch in your own fork.
 ```
 git push origin main:NEW_BRANCH
 ```
 
-8. Go back to GitHub, and submit a pull request in `NEW_BRANCH` so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
+*8.* Go back to GitHub, and submit a pull request in `NEW_BRANCH` so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
 
-9. Once your PR get approved, it would be merged sooner. After merging, synchronize your local repository. 
+*9.* Once your PR get approved, it would be merged sooner. After merging, synchronize your local repository. 
 ```
 git pull --force upstream main:main
 ```
-10. Synchronized the `main` branch of your remote repository in Github.
+*10. *Synchronized the `main` branch of your remote repository in Github.
 ```
 git push --force origin main:main
 ```
