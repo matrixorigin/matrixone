@@ -304,8 +304,18 @@ scope = ["global"]
 access = ["file"]
 type = "int64"
 domain-type = "range"
-values = ["16","1","16"]
-comment = "default is 16. The count of go routine writing batch into the storage."
+values = ["4","1","16"]
+comment = "default is 4. The count of go routine writing batch into the storage."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "loadDataSkipWritingBatch"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is fase. Skip writing batch into the storage"
 update-mode = "dynamic"
 
 [[parameter]]
