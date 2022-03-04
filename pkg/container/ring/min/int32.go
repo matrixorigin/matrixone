@@ -100,7 +100,7 @@ func (r *Int32Ring) Grow(m *mheap.Mheap) error {
 		r.Vs = encoding.DecodeInt32Slice(data)
 	}
 	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = math.MaxInt16
+	r.Vs[n] = math.MaxInt32
 	r.Ns = append(r.Ns, 0)
 	return nil
 }
