@@ -105,7 +105,7 @@ type DateRing struct {
 	Typ types.Type
 }
 
-type DateTimeRing struct {
+type DatetimeRing struct {
 	Da  []byte
 	Vs  []types.Datetime
 	Ns  []int64
