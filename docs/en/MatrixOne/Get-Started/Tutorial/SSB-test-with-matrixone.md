@@ -158,7 +158,7 @@ CREATE TABLE lineorder_flat (
 ```
 
 ## **4. Load data into the created tables**
-If you use dbgen to generate date for ssb, there is still an extra step to replace the ‘,’ in the end of every line. In the directory of ssb-dbgen, use the following command. 
+If you use dbgen to generate data for ssb, there is still an extra step to replace the ‘,’ in the end of every line. In the directory of ssb-dbgen, use the following command. 
 
 ```
 $ sed -i 's/.$//' customer.tbl
