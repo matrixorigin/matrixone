@@ -16,6 +16,11 @@ package tuplecodec
 
 import (
 	"fmt"
+	"math/rand"
+	"strconv"
+	"sync"
+	"time"
+
 	"github.com/lni/goutils/random"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -25,10 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math/rand"
-	"strconv"
-	"sync"
-	"time"
 )
 
 func MakeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
@@ -419,6 +420,7 @@ func TruncateBatch(bat *batch.Batch,batchSize, needLen int) {
 			vec.Col = cols[:needLen]
 		}
 	}
+	bat.Zs = bat.Zs[:needLen]
 }
 
 func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc)([]string,[]*engine.AttributeDef) {

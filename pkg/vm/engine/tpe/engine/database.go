@@ -17,11 +17,12 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"time"
 )
 
 var (

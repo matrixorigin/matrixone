@@ -17,6 +17,7 @@ package tuplecodec
 import (
 	"bytes"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )
@@ -109,7 +110,7 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor
 	//needs attribute type
 	rest := key
 	for _,attr := range index.Attributes {
-		rest2, di, err := tkd.od.DecodeKey(rest)
+		rest2, di, err := tkd.od.DecodeKey(rest, attr.Type)
 		if err != nil {
 			return nil, nil, err
 		}

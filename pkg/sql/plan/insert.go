@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"strconv"
 )
 
 func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
@@ -456,6 +457,10 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 	}
 	switch typ.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		switch value.(type) {
+		case float64:
+			value = int64(value.(float64))
+		}
 		res := value.(int64)
 		str := strconv.FormatInt(res, 10)
 		if res < 0 {
@@ -463,6 +468,10 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		}
 		return tree.NewNumVal(constant.MakeInt64(res), str, false)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		switch value.(type) {
+		case float64:
+			value = uint64(value.(float64))
+		}
 		res := value.(uint64)
 		str := strconv.FormatUint(res, 10)
 		return tree.NewNumVal(constant.MakeUint64(res), str, false)
@@ -474,9 +483,17 @@ func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 		res := value.(string)
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_date:
+		switch value.(type) {
+		case float64:
+			value = types.Date(value.(float64))
+		}
 		res := value.(types.Date).String()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	case types.T_datetime:
+		switch value.(type) {
+		case float64:
+			value = types.Datetime(value.(float64))
+		}
 		res := value.(types.Datetime).String()
 		return tree.NewNumVal(constant.MakeString(res), res, false)
 	}

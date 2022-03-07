@@ -17,9 +17,10 @@ package tuplecodec
 import (
 	"encoding/json"
 	"errors"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
 )
 
 var (
