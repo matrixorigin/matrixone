@@ -133,6 +133,10 @@ func NewMax(typ types.Type) (ring.Ring, error) {
 		return max.NewFloat64(typ), nil
 	case types.T_char, types.T_varchar:
 		return max.NewStr(typ), nil
+	case types.T_date:
+		return max.NewDate(typ), nil
+	case types.T_datetime:
+		return max.NewDatetime(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support Max", typ))
 }
@@ -161,6 +165,10 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewFloat64(typ), nil
 	case types.T_char, types.T_varchar:
 		return min.NewStr(typ), nil
+	case types.T_date:
+		return min.NewDate(typ), nil
+	case types.T_datetime:
+		return min.NewDatetime(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support Min", typ))
 }

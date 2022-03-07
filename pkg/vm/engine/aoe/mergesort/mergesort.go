@@ -17,6 +17,8 @@ package mergesort
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/dates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/datetimes"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float32s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int16s"
@@ -30,7 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/varchar"
 )
 
-func SortBlockColumns(cols []*vector.Vector,pk int) error {
+func SortBlockColumns(cols []*vector.Vector, pk int) error {
 	sortedIdx := make([]uint32, vector.Length(cols[pk]))
 
 	switch cols[pk].Typ.Oid {
@@ -54,12 +56,16 @@ func SortBlockColumns(cols []*vector.Vector,pk int) error {
 		float32s.Sort(cols[pk], sortedIdx)
 	case types.T_float64:
 		float64s.Sort(cols[pk], sortedIdx)
+	case types.T_date:
+		dates.Sort(cols[pk], sortedIdx)
+	case types.T_datetime:
+		datetimes.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Sort(cols[pk], sortedIdx)
 	}
 
 	for i := 0; i < len(cols); i++ {
-		if i==pk {
+		if i == pk {
 			continue
 		}
 		switch cols[i].Typ.Oid {
@@ -83,6 +89,10 @@ func SortBlockColumns(cols []*vector.Vector,pk int) error {
 			float32s.Shuffle(cols[i], sortedIdx)
 		case types.T_float64:
 			float64s.Shuffle(cols[i], sortedIdx)
+		case types.T_date:
+			dates.Shuffle(cols[i], sortedIdx)
+		case types.T_datetime:
+			datetimes.Shuffle(cols[i], sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
 			varchar.Shuffle(cols[i], sortedIdx)
 		}
@@ -113,6 +123,10 @@ func MergeSortedColumn(column []*vector.Vector, sortedIdx *[]uint16) error {
 		float32s.Merge(column, sortedIdx)
 	case types.T_float64:
 		float64s.Merge(column, sortedIdx)
+	case types.T_date:
+		dates.Merge(column, sortedIdx)
+	case types.T_datetime:
+		datetimes.Merge(column, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Merge(column, sortedIdx)
 	}
@@ -141,6 +155,10 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint16) error {
 		float32s.Multiplex(column, sortedIdx)
 	case types.T_float64:
 		float64s.Multiplex(column, sortedIdx)
+	case types.T_date:
+		dates.Multiplex(column, sortedIdx)
+	case types.T_datetime:
+		datetimes.Multiplex(column, sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
 		varchar.Multiplex(column, sortedIdx)
 	}
@@ -177,6 +195,10 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint16) error {
 //		float32s.Merge(col, mergedSrc)
 //	case types.T_float64:
 //		float64s.Merge(col, mergedSrc)
+//	case types.T_date:
+//		dates.Merge(col, mergedSrc)
+//	case types.T_datetime:
+//		datetimes.Merge(col, mergedSrc)
 //	case types.T_char, types.T_json, types.T_varchar:
 //		varchar.Merge(col, mergedSrc)
 //	}
@@ -210,6 +232,10 @@ func ShuffleColumn(column []*vector.Vector, sortedIdx []uint16) error {
 //			float32s.Multiplex(col, mergedSrc)
 //		case types.T_float64:
 //			float64s.Multiplex(col, mergedSrc)
+//		case types.T_date:
+//			dates.Multiplex(col, mergedSrc)
+//		case types.T_datetime:
+//			datetimes.Multiplex(col, mergedSrc)
 //		case types.T_char, types.T_json, types.T_varchar:
 //			varchar.Multiplex(col, mergedSrc)
 //		}

@@ -32,6 +32,7 @@ var (
 	errorKeysCountNotEqualToValuesCount = errors.New("the count of keys is not equal to the count of values")
 	errorKeyExists = errors.New("key exists")
 	errorIsNotMemoryItem = errors.New("it is not the memory item")
+	errorUnsupportedInMemoryKV = errors.New("unsupported in memory kv")
 )
 
 type MemoryItem struct {
@@ -256,10 +257,10 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKe
 }
 
 
-func (m *MemoryKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
-	if prefix == nil {
+	if prefixOrStartkey == nil {
 		return nil, nil, errorPrefixIsNull
 	}
 
@@ -272,7 +273,7 @@ func (m *MemoryKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) (
 		}
 		cnt++
 		if x,ok := i.(*MemoryItem); ok {
-			if !bytes.HasPrefix(x.key,prefix[:prefixLen]) {
+			if !bytes.HasPrefix(x.key, prefixOrStartkey[:prefixLen]) {
 				return false
 			}
 			keys = append(keys,x.key)
@@ -284,16 +285,16 @@ func (m *MemoryKV) GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) (
 		return true
 	}
 
-	m.container.AscendGreaterOrEqual(NewMemoryItem(prefix,nil),iter)
+	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey,nil),iter)
 	return keys, values, nil
 }
 
 func (m *MemoryKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
-	panic("implement me")
+	return nil, errorUnsupportedInMemoryKV
 }
 
 func (m *MemoryKV) GetShardsWithPrefix(prefix TupleKey) (interface{}, error) {
-	panic("implement me")
+	return nil, errorUnsupportedInMemoryKV
 }
 
 func (m *MemoryKV) PrintKeys()  {

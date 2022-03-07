@@ -54,9 +54,12 @@ type KVHandler interface {
 	// GetRange gets the values from the startKey with limit
 	GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey,[]TupleValue, error)
 
-	// GetWithPrefix gets the values of the prefix with limit
-	// The prefixLen denotes the prefix[:prefixLen] is the real prefix
-	GetWithPrefix(prefix TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error)
+	// GetWithPrefix gets the values of the prefix with limit.
+	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
+	// When we invoke GetWithPrefix several times, the prefix is the real
+	// prefix in the first time. But from the second time, the prefix is the
+	// last key in previous results of the GetWithPrefix.
+	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
 	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)

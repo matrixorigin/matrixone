@@ -20,6 +20,7 @@ enum Type {
   Incr = 5;
   SetIfNotExist = 6;
   DelIfNotExist = 7;
+  TpePrefixScan = 8;
 
   Append = 100;
   GetSnapshot = 101;
@@ -45,6 +46,7 @@ message Request {
   ScanRequest                  scan = 8  [(gogoproto.nullable) = false];
   PrefixScanRequest               prefixScan = 9  [(gogoproto.nullable) = false];
   AllocIDRequest               allocID = 10 [(gogoproto.nullable) = false];
+  TpePrefixScanRequest         tpePrefixScan = 11  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -104,6 +106,13 @@ message ScanRequest {
 message PrefixScanRequest {
   bytes        prefix = 1;
   bytes        startKey = 2;
+  uint64       limit = 3;
+}
+
+// TpePrefixScanRequest scan request
+message TpePrefixScanRequest {
+  bytes        prefixOrStartKey = 1;
+  int64        prefixLength = 2;
   uint64       limit = 3;
 }
 
