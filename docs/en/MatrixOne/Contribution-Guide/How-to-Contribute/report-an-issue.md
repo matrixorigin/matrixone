@@ -1,5 +1,5 @@
 # **Report Issues**
-Any problems are encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with relative templates and labels we suggest.  
+Any problem is encouraged to be published when you participate in MatrixOne, and you can [report issues](https://github.com/matrixorigin/matrixone/issues/new/choose) about this problem in GitHub with relative templates and labels we suggest.  
 This page is intended to introduce templates, labels, and precautions you will follow when you report issues.
 
 ## **Avoid Duplicated Issues**
@@ -88,6 +88,6 @@ Once your issue is submitted, it will be automatically labeled with `needs-triag
 If you'd like to work on the issue by yourself, you can comment `/assign` on the issue you would like to work on, you will be automatically assigned to the issue. You can then find yourself listed under Assignees section.
 
 ## **Good First Issues**
-When you make the first contribution to MatrixOne, you can select one of the issues labeled [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) each of which is relative approachability for first-time contributors.
+When you make the first contribution to MatrixOne, you can select one of the issues labeled [`good-first-issues`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22) each of which is relatively approachable for first-time contributors.
 For detailed suggestions you need when you make the first contribution, you can see [Make Your First Contribution](make-your-first-contribution.md). 
 
