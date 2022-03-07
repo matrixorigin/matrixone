@@ -19,8 +19,18 @@ import (
 	"errors"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+)
+
+const (
+	INT64 = "int64"
+	UINT64 = "uint64"
+	FLOAT64 = "FLOAT64"
+	STRING = "string"
+	TYPE_DATE = "types.Date"
+	TYPE_DATETIME = "types.Datetime"
 )
 
 var (
@@ -550,6 +560,18 @@ func (dhi *DescriptorHandlerImpl) ListRelationDescFromAsyncGC(epoch uint64) ([]*
 
 //MarshalRelationDesc encods the relationDesc into the bytes
 func MarshalRelationDesc(desc *descriptor.RelationDesc) ([]byte,error) {
+	for i := 0; i < len(desc.Attributes); i++ {
+		switch desc.Attributes[i].Default.Value.(type) {
+		case int64:
+			desc.Attributes[i].DefaultVal.ValueType = INT64
+		case uint64:
+			desc.Attributes[i].DefaultVal.ValueType = UINT64
+		case types.Date:
+			desc.Attributes[i].DefaultVal.ValueType = TYPE_DATE
+		case types.Datetime:
+			desc.Attributes[i].DefaultVal.ValueType = TYPE_DATETIME
+		}
+	}
 	marshal, err := json.Marshal(*desc)
 	if err != nil {
 		return nil,err
@@ -572,6 +594,18 @@ func UnmarshalRelationDesc(data []byte) (*descriptor.RelationDesc,error) {
 	err := json.Unmarshal(data, tableDesc)
 	if err != nil {
 		return nil, errorDecodeDescriptorFailed
+	}
+	for i := 0; i < len(tableDesc.Attributes); i++ {
+		switch tableDesc.Attributes[i].DefaultVal.ValueType {
+		case INT64:
+			tableDesc.Attributes[i].Default.Value = int64(tableDesc.Attributes[i].Default.Value.(float64))
+		case UINT64:
+			tableDesc.Attributes[i].Default.Value = uint64(tableDesc.Attributes[i].Default.Value.(float64))
+		case TYPE_DATE:
+			tableDesc.Attributes[i].Default.Value = types.Date(tableDesc.Attributes[i].Default.Value.(float64))
+		case TYPE_DATETIME:
+			tableDesc.Attributes[i].Default.Value = types.Datetime(tableDesc.Attributes[i].Default.Value.(float64))
+		}
 	}
 	return tableDesc,nil
 }

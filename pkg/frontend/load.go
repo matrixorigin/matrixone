@@ -90,6 +90,7 @@ type SharePart struct {
 	//batch
 	batchSize            int
 	maxEntryBytesForCube int64
+	skipWriteBatch bool
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -475,6 +476,7 @@ func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandle
 	wHandler.closeRef = handler.closeRef
 	wHandler.lineCount = handler.lineCount
 	wHandler.maxEntryBytesForCube = handler.maxEntryBytesForCube
+	wHandler.skipWriteBatch = handler.skipWriteBatch
 
 	wHandler.pl = allocBatch(handler)
 	wHandler.ThreadInfo = handler.threadInfo[wHandler.pl.id]
@@ -1290,7 +1292,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		wait_a := time.Now()
 		handler.ThreadInfo.SetTime(wait_a)
 		handler.ThreadInfo.SetCnt(1)
-		err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+		if !handler.skipWriteBatch {
+			err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+		}
 		handler.ThreadInfo.SetCnt(0)
 		if err == nil {
 			handler.result.Records += uint64(handler.batchSize)
@@ -1388,7 +1392,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 				wait_a := time.Now()
 				handler.ThreadInfo.SetTime(wait_a)
 				handler.ThreadInfo.SetCnt(1)
-				err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+				if !handler.skipWriteBatch {
+					err = handler.tableHandler.Write(handler.timestamp, handler.batchData)
+				}
 				handler.ThreadInfo.SetCnt(0)
 				if err == nil {
 					handler.result.Records += uint64(needLen)
@@ -1517,6 +1523,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			batchSize:            curBatchSize,
 			result:               result,
 			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
+			skipWriteBatch: ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),

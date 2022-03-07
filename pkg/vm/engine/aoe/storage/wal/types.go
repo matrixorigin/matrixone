@@ -43,6 +43,7 @@ type Wal interface {
 type ShardAwareWal interface {
 	Wal
 	InitShard(uint64, uint64) error
+	TryInitShard(uint64, uint64) error
 	GetAllShardCheckpointId() map[uint64]uint64
 	GetShardCheckpointId(uint64) uint64
 	GetShardCurrSeqNum(uint64) uint64
@@ -78,6 +79,12 @@ func (wal *ShardWal) InitWal(index uint64) error {
 		return nil
 	}
 	return wal.Wal.InitShard(wal.ShardId, index)
+}
+func (wal *ShardWal) TryInitWal(index uint64) error {
+	if wal.Wal == nil {
+		return nil
+	}
+	return wal.Wal.TryInitShard(wal.ShardId, index)
 }
 
 func (wal *ShardWal) WalEnabled() bool {

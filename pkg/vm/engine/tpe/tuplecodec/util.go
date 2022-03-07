@@ -513,3 +513,11 @@ func GetRowID(nodeID uint64) uint64 {
 
 	return (ts << 15) ^ nodeID
 }
+
+func MaxUint64(a,b uint64) uint64 {
+	if a < b {
+		return b
+	}else{
+		return a
+	}
+}

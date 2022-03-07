@@ -17,7 +17,6 @@ package tuplecodec
 import (
 	"bytes"
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )

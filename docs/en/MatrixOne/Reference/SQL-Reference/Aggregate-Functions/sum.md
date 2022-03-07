@@ -22,7 +22,7 @@ Note: NULL values are not counted.
 ## **Returned Value**
 Returns the sum of expr. A double if the input type is double, otherwise integer.
 
-f there are no matching rows, SUM() returns NULL.
+If there are no matching rows, SUM() returns NULL.
 
 ## **Examples**
 

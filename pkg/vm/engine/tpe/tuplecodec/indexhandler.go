@@ -16,7 +16,6 @@ package tuplecodec
 
 import (
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
@@ -126,11 +125,10 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			if err != nil {
 				return nil, 0, err
 			}
-			
+
 			//pick wanted fields and save them in the batch
 			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
 				0, dis, amForKey, bat, i)
-
 			if err != nil {
 				return nil, 0, err
 			}

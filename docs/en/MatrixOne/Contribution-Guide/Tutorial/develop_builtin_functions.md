@@ -1,13 +1,36 @@
+# Develop a built-in function
 
-### A little primer for adding builtin functions
+## Prerequisite
 
-##### add unary functions:
+To develop a build-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to get some Golang basic concepts. 
 
-In this guide, we use the function abs(get the absolute value) as an example.
+## Preparation 
+
+Before you start, please make sure that you have `Go` installed, cloned the `MatrixOne` code base.
+Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
+
+## What is a built-in function? 
+
+There are two types of functions in a database,  built-in functions are functions that are shipped with the database, in contrast, user-defined functions is customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions. 
+
+An example of a built-in function is `abs()`, which when given a value calculates the absolute (non-negative) value of the number.
+
+Some functions, such as `abs()` are used to perform calculations, others such as `getdate()` are used to obtain a system value, such as the current data, or others, like `left()`, are used to manipulate textual data.
+
+Usually the built-in functions are categorized into major categories:
+* Conversion Functions
+* Logical Functions
+* Math Functions
+* String Functions
+* Date Functions
+
+## Develop an abs() function:
+
+In this tutorial, we use the function ABS (get the absolute value) as an example.
 
 Step 1: register function
 
-MatrixOne doesn't distinguish between operators and functions. In our code repository, the file pkg/builtin/types.go register builtin functions as operators and we assign each operator a distinct integer number. To add a new function abs, add a new const Abs in the const declaration.
+MatrixOne doesn't distinguish between operators and functions. In our code repository, the file `pkg/builtin/types.go` register builtin functions as operators and we assign each operator a distinct integer number. To add a new function `abs()`, add a new const Abs in the const declaration.
 
 ```go
 const (
@@ -19,9 +42,12 @@ const (
 )
 ```
 
-In the directory pkg/builtin/unary, create a new go file abs.go.
+In the directory `pkg/builtin/unary`, create a new go file `abs.go`.
 
-This abs.go file has the following functionalities:
+!!! info 
+    The functions under `unary` directory take only one value as input. The functions under `binary` directory take only two values as input. Other forms of functions are put under `multi` directory.
+
+This `abs.go` file has the following functionalities:
 
  	1. function name registration
  	2. declare all the different parameter types this function accepts, and the different return type when given different parameter types.
@@ -39,7 +65,7 @@ func init() {
 
 ```
 
-In Golang, init function will be called when a package is initialized. We wrap all abs.go's functionality inside this init function so we don't need to call it explicitly.
+In Golang, init function will be called when a package is initialized. We wrap all `ABS()`'s functionality inside this init function so we don't need to call it explicitly.
 
 1. function name registration
 
@@ -261,8 +287,8 @@ func init() {
 
 Step 2: Implement Abs function
 
-In MatrixOne, We put all of our builtin function definition code in the vectorize directory, to implement abs functions, first we need to create a subdirectory abs in this vectorize directory.
-In this fresh abs directory, create a file abs.go, the place where our abs function implementation code goes.
+In MatrixOne, We put all of our builtin function definition code in the `pkg/vectorize/` directory, to implement abs functions, first we need to create a subdirectory `abs` in this vectorize directory.
+In this fresh `abs` directory, create a file `abs.go`, the place where our abs function implementation code goes.
 For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruction to compute the absolute value and hence boost our function's performance, to differentiate function implementations for different cpu architectures, we declare our pure go version of abs function this way:
 
 ```go
@@ -293,7 +319,7 @@ func absFloat64Pure(xs, rs []float64) []float64 {
 }
 ```
 
-Inside the absFloat32Pure and absFloat64Pure, we implement our golang version of abs function for float32 and float64 type.
+Inside the absFloat32Pure and absFloat64Pure, we implement our golang version of abs function for float32 and float64 type. The other data types (int8, int16, int32, int64) are more or less the same. 
 
 ```go
 func absFloat32Pure(xs, rs []float32) []float32 {
@@ -321,7 +347,44 @@ func absFloat64Pure(xs, rs []float64) []float64 {
 }
 ```
 
+
 Here we go. Now we can fire up MatrixOne and take our abs function for a little spin.
+
+## Compile and run MatrixOne
+
+Once the function is ready, we could compile and run MatrixOne to see the function behavior. 
+
+Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
+```
+make config
+make build
+``` 
+
+!!! info 
+    `make config` generates a new configuration file, in this tutorial, you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
+
+Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
+```
+./mo-server system_vars_config.toml
+```
+
+!!! info 
+	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your built-in function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
+
+	
+	cubeLogLevel = "error"
+	level = "error"
+	
+Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
+
+user: dump
+password: 111
+```
+$ mysql -h 127.0.0.1 -P 6001 -udump -p
+Enter password:
+```
+
+Step4: Test your function behavior with some data. Below is an example. 
 
 ```sql
 mysql> create table abs_test_table(a float, b double);
@@ -346,13 +409,91 @@ mysql> select a, b, abs(a), abs(b) from abs_test_table;
 +----------+----------+---------+---------+
 3 rows in set (0.01 sec)
 ```
+
 Bingo!
 
-##### add binary and variadic functions for MatrixOne:
 
-MatrixOne has some neat examples for adding binary and variadic functions(bitAnd function, floor function, etc. ), with some minor corresponding changes, the procedure is quite the same as the unary function.
-
+!!! info 
+    Except for `abs()`, MatrixOne has already some neat examples for built-in functions, such as `floor()`, `round()`, `year()`. With some minor corresponding changes, the procedure is quite the same as other functions.
 ​
+## Write a unit Test for your function
 
-Special thanks to [nnsgmsone](https://github.com/nnsgmsone)!
+We recommend you to also write a unit test for the new function. 
+Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
+```
+func TestXxx(*testing.T)
+```
+
+To write a new test suite, create a file whose name ends `_test.go` that contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run. 
+
+Step1: Create a file named `abs_test.go` under `vectorize/abs/` directory. Import the `testing` framework and the `testify` framework we are going to use for testing mathematical `equal`. 
+
+```
+package abs
+
+import (
+    "testing"
+    "github.com/stretchr/testify/require"
+)
+
+function TestAbsFloat32(t *testing.T) {
+
+}
+
+function TestAbsFloat64(t *testing.T) {
+
+}
+```
+Step2: Implement the `TestXxx` functions with some predefined values.
+```
+func TestAbsFloat32(t *testing.T) {
+    //Test values
+    nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+    //Predefined Correct Values
+    absNums := []float32{1.5, 1.5, 2.5, 2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, 1.2, 12.3, 123.4, 1234.5, 12345.6}
+
+    //Init a new variable
+    newNums := make([]float32, len(nums))
+    //Run abs function
+    newNums = absFloat32(nums, newNums)
+
+    for i, _ := range newNums {
+        require.Equal(t, absNums[i], newNums[i])
+    }
+}
+
+func TestAbsFloat64(t *testing.T) {
+    //Test values
+    nums := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+    //Predefined Correct Values
+    absNums := []float64{1.5, 1.5, 2.5, 2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, 1.2, 12.3, 123.4, 1234.5, 12345.6}
+
+    //Init a new variable
+    newNums := make([]float64, len(nums))
+    //Run abs function
+    newNums = absFloat64(nums, newNums)
+
+    for i, _ := range newNums {
+        require.Equal(t, absNums[i], newNums[i])
+    }
+}
+```
+Step3: Launch Test.
+Within the same directory as the test:
+```
+go test
+```
+This picks up any files matching packagename_test.go.
+If you are getting a `PASS`, you are passing the unit test. 
+
+In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your code is merged in the code base, the test will automatically run. 
+
+
+
+
+
+
+
+
+
 

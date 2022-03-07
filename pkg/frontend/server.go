@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"log"
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty"
@@ -66,10 +65,10 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(encoder, decoder),
 			goetty.WithLogger(logutil.GetGlobalLogger()),
-			goetty.WithBufSize(1024*1024,1024*1024)),
+			goetty.WithBufSize(1024*1024, 1024*1024)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
-		log.Panicf("start server failed with %+v", err)
+		logutil.Panicf("start server failed with %+v", err)
 	}
 
 	return &MOServer{

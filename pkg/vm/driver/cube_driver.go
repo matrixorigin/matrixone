@@ -87,6 +87,12 @@ type CubeDriver interface {
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
 	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
+	// TpePrefixScan gets the values of the prefix with limit.
+	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
+	// When we invoke TpePrefixScan several times, the prefix is the real
+	// prefix in the first time. But from the second time, the prefix is the
+	// last key in previous results of the TpePrefixScan.
+	TpePrefixScan([]byte,int,uint64)([][]byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -493,6 +499,43 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 
 		pairs = append(pairs, kvs[0:len(kvs)-1]...)
 		req.PrefixScan.StartKey = kvs[len(kvs)-1]
+	}
+	return pairs, err
+}
+
+func (h *driver) TpePrefixScan(prefixOrStartkey []byte, prefixLength int, limit uint64) ([][]byte, error) {
+	req := pb.Request{
+		Type:  pb.TpePrefixScan,
+		Group: pb.KVGroup,
+		TpePrefixScan: pb.TpePrefixScanRequest{
+			PrefixOrStartKey: prefixOrStartkey,
+			PrefixLength: int64(prefixLength),
+			Limit:            limit,
+		},
+	}
+	var pairs [][]byte
+	var err error
+	var data []byte
+	i := 0
+	//TODO:to fix
+	for {
+		i = i + 1
+		data, err = h.ExecWithGroup(req, pb.KVGroup)
+		if data == nil || err != nil {
+			break
+		}
+		var kvs [][]byte
+		err = json.Unmarshal(data, &kvs)
+		if err != nil || kvs == nil || len(kvs) == 0 {
+			break
+		}
+		if len(kvs)%2 == 0 {
+			pairs = append(pairs, kvs...)
+			break
+		}
+
+		pairs = append(pairs, kvs[0:len(kvs)-1]...)
+		req.TpePrefixScan.PrefixOrStartKey = kvs[len(kvs)-1]
 	}
 	return pairs, err
 }
