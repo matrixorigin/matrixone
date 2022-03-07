@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"log"
 	"math"
 	"sort"
 	"sync"
@@ -478,7 +477,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY, msg.body)
 			if err != nil {
 				//panic(err)
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 
 		case MSG_TYPE_SERVER_INFO:
@@ -489,7 +488,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			err := kv.BatchPutCustomData(msg.body2, msg.body3)
 			if err != nil {
 				//panic(err)
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
 			if pci.enableLog {
@@ -499,7 +498,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY, msg.body)
 			if err != nil {
 				//panic(err)
-				log.Fatal(err)
+				logutil.Fatal(err.Error())
 			}
 		}
 	}
