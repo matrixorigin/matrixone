@@ -24,4 +24,5 @@ const (
 	Round
 	Floor
 	Abs
+	Ln
 )
