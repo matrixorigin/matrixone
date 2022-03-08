@@ -42,6 +42,9 @@ type KVHandler interface {
 	// Delete deletes the key
 	Delete(key TupleKey) error
 
+	// DeleteWithPrefix keys with the prefix
+	DeleteWithPrefix(prefix TupleKey) error
+
 	// Get gets the value of the key
 	Get(key TupleKey)(TupleValue, error)
 

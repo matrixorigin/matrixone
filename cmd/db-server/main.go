@@ -137,6 +137,13 @@ func removeEpoch(epoch uint64) {
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
+	if tpe,ok := config.StorageEngine.(*tpeEngine.TpeEngine) ; ok {
+		err = tpe.RemoveDeletedTable(epoch)
+		if err != nil {
+			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+		}
+	}
+
 }
 
 func main() {

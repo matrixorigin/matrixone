@@ -172,6 +172,31 @@ func (m *MemoryKV) Delete(key TupleKey) error {
 	return nil
 }
 
+func (m *MemoryKV) DeleteWithPrefix(prefix TupleKey) error {
+	m.rwLock.Lock()
+	defer m.rwLock.Unlock()
+
+	var keys []TupleKey
+	iter := func(i btree.Item) bool {
+		if x,ok := i.(*MemoryItem); ok {
+			if bytes.HasPrefix(x.key,prefix) {
+				keys = append(keys,x.key)
+			}
+		}else{
+			keys = append(keys,nil)
+		}
+		return true
+	}
+
+	m.container.Ascend(iter)
+
+	for _, key := range keys {
+		m.container.Delete(NewMemoryItem(key,nil))
+	}
+
+	return nil
+}
+
 func (m *MemoryKV) Get(key TupleKey) (TupleValue, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
