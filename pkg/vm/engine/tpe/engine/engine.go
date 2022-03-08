@@ -92,3 +92,11 @@ func (te * TpeEngine) Database(name string) (engine.Database, error) {
 func (te * TpeEngine) Node(s string) *engine.NodeInfo {
 	return &engine.NodeInfo{Mcpu: 1}
 }
+
+func (te * TpeEngine) RemoveDeletedTable(epoch uint64) error {
+	_, err := te.computeHandler.RemoveDeletedTable(epoch)
+	if err != nil {
+		return err
+	}
+	return nil
+}

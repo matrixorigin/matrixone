@@ -41,4 +41,6 @@ type ComputationHandler interface {
 	Read(readCtx interface{}) (*batch.Batch, error)
 
 	Write(writeCtx interface{}, bat *batch.Batch) error
+
+	RemoveDeletedTable(epoch uint64) (int, error)
 }

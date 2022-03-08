@@ -231,6 +231,12 @@ func ExtractIndexAttributeDescIDs(attrs []*AttributeDesc) []int {
 	return ids
 }
 
+type EpochGCItem struct {
+	Epoch uint64
+	DbID uint64
+	TableID uint64
+}
+
 // DescriptorHandler loads and updates the descriptors
 type DescriptorHandler interface {
 
@@ -267,6 +273,6 @@ type DescriptorHandler interface {
 	//StoreRelationDescIntoAsyncGC stores the table into the asyncgc table
 	StoreRelationDescIntoAsyncGC(epoch uint64, dbID uint64, desc *RelationDesc) error
 
-	//ListRelationDescFromAsyncGC gets all the tables from the asyncgc table
-	ListRelationDescFromAsyncGC(epoch uint64) ([]*RelationDesc, error)
+	//ListRelationDescFromAsyncGC gets all the tables need to deleted from the asyncgc table
+	ListRelationDescFromAsyncGC(epoch uint64) ([]EpochGCItem, error)
 }
