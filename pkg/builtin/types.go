@@ -23,4 +23,5 @@ const (
 	Year
 	Round
 	Floor
+	Abs
 )
