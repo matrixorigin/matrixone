@@ -45,7 +45,8 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
-	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi)
+	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
+	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch)
 	te.computeHandler = ch
 	return te, nil
 }
