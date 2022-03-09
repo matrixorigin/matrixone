@@ -107,7 +107,7 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 		}
 		return tree.NewComparisonExpr(tree.EQUAL, t.Expr, tree.NewNumVal(constant.MakeInt64(0), "0", false))
 	// rewrite to != 0
-	case *tree.UnresolvedName, *tree.NumVal, *tree.CastExpr:
+	case *tree.UnresolvedName, *tree.NumVal, *tree.CastExpr, *tree.UnaryExpr:
 		return tree.NewComparisonExpr(tree.NOT_EQUAL, t, tree.NewNumVal(constant.MakeInt64(0), "0", false))
 	case *tree.BinaryExpr:
 		if !isLogicalBinaryOp(t.Op) {
