@@ -57,6 +57,20 @@ func (trel * TpeRelation) DropIndex(epoch uint64, name string) error {
 	panic("implement me")
 }
 
+func (trel * TpeRelation) GetHideColDef() *engine.Attribute {
+	for _, attr := range trel.desc.Attributes {
+		if attr.Is_hidden {
+			return &engine.Attribute{
+				Name:    attr.Name,
+				Alg:     0,
+				Type:    attr.TypesType,
+				Default: attr.Default,
+			}
+		}
+	}
+	return nil
+}
+
 func (trel * TpeRelation) TableDefs() []engine.TableDef {
 	var defs []engine.TableDef
 	var pkNames []string

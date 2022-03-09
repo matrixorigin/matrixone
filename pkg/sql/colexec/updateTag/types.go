@@ -12,41 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package vm
+package updateTag
 
-const (
-	Top = iota
-	Plus
-	Limit
-	Times
-	Merge
-	Dedup
-	Order
-	Oplus
-	Output
-	Offset
-	Restrict
-	Connector
-	Transform
-	Projection
-	UnTransform
-
-	MergeDedup
-	MergeLimit
-	MergeOffset
-	MergeOrder
-	MergeTop
-
-	DeleteTag
-	UpdateTag
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sync"
 )
 
-// Instruction contains relational algebra
-type Instruction struct {
-	// Op specified the operator code of an instruction.
-	Op int
-	// Arg contains the operand of this instruction.
-	Arg interface{}
+type Argument struct {
+	Ts 		     uint64
+	Relation     engine.Relation
+	M	  	 	 sync.Mutex
+	AffectedRows uint64
 }
-
-type Instructions []Instruction
