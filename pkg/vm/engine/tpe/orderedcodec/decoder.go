@@ -35,7 +35,7 @@ var (
 )
 
 //DecodeKey decodes
-func (od *OrderedDecoder) DecodeKey(data []byte)([]byte, *DecodedItem,error){
+func (od *OrderedDecoder) DecodeKey(data []byte, valueType ValueType)([]byte, *DecodedItem,error){
 	if data == nil || len(data) < 1 {
 		return data,nil,errorNoEnoughBytesForDecoding
 	}
@@ -44,16 +44,56 @@ func (od *OrderedDecoder) DecodeKey(data []byte)([]byte, *DecodedItem,error){
 		return dataAfterNull,decodeItem,nil
 	}
 
+	var b []byte
+	var d *DecodedItem
 	if (data[0] & encodingPrefixForIntegerMinimum) == encodingPrefixForIntegerMinimum {
-		return od.DecodeInt64(data)
+		b, d, err = od.DecodeInt64(data)
 	} else if data[0] == encodingPrefixForBytes {
-		return od.DecodeBytes(data)
+		b, d, err = od.DecodeBytes(data)
 	} else if data[0] >= encodingfloatNaN {
-		return od.DecodeFloat(data)
+		b, d, err = od.DecodeFloat(data)
 	} else {
-		return nil, nil, errorDoNotComeHere
+		b, d, err = nil, nil, errorDoNotComeHere
 	}
-	return nil, nil, nil
+	if err != nil {
+		return b, d, err
+	}
+
+	switch valueType {
+	case VALUE_TYPE_BOOL:
+		if d.Value.(uint64) == 1 {
+			d.Value = true
+		} else {
+			d.Value = false
+		}
+	case VALUE_TYPE_UINT64:
+		d.Value = uint64(d.Value.(uint64))
+	case VALUE_TYPE_INT8:
+		d.Value = int8(d.Value.(uint64))
+	case VALUE_TYPE_INT16:
+		d.Value = int16(d.Value.(uint64))
+	case VALUE_TYPE_INT32:
+		d.Value = int32(d.Value.(uint64))
+	case VALUE_TYPE_INT64:
+		d.Value = int64(d.Value.(uint64))
+	case VALUE_TYPE_UINT8:
+		d.Value = uint8(d.Value.(uint64))
+	case VALUE_TYPE_UINT16:
+		d.Value = uint16(d.Value.(uint64))
+	case VALUE_TYPE_UINT32:
+		d.Value = uint32(d.Value.(uint64))
+	case VALUE_TYPE_FLOAT32:
+		d.Value = float32(d.Value.(float64))
+	case VALUE_TYPE_FLOAT64:
+		d.Value = float64(d.Value.(float64))
+	case VALUE_TYPE_DATE:
+		d.Value = types.Date(d.Value.(uint64))
+	case VALUE_TYPE_DATETIME:
+		d.Value = types.Datetime(d.Value.(uint64))
+	}
+
+	d.ValueType = valueType;
+	return b, d, err
 }
 
 // isNll decodes the NULL and returns the bytes after the null.
@@ -89,7 +129,7 @@ func (od *OrderedDecoder) DecodeInt64(data []byte)([]byte,*DecodedItem,error) {
 		value = (value << 8);
 		value |= int64(^t)
 	}
-	return data[l:], NewDecodeItem(^value, VALUE_TYPE_INT64, 0, 0, l + 1), nil
+	return data[l:], NewDecodeItem(^value, VALUE_TYPE_UINT64, 0, 0, l + 1), nil
 }
 
 // DecodeUint64  decodes the uint64 with the variable length encoding
@@ -130,7 +170,7 @@ func (od *OrderedDecoder) DecodeUint64ForFloat(data []byte)([]byte,*DecodedItem,
 		return nil, nil, errors.New("insufficient bytes to decode uint64 int value")
 	}
 	value := binary.BigEndian.Uint64(data)
-	return data[8:], NewDecodeItem(value,VALUE_TYPE_UINT64,0,0,8), nil
+	return data[8:], NewDecodeItem(value,VALUE_TYPE_FLOAT64,0,0,8), nil
 }
 
 func (od *OrderedDecoder) DecodeFloat(data []byte)([]byte,*DecodedItem,error) {
@@ -143,9 +183,9 @@ func (od *OrderedDecoder) DecodeFloat(data []byte)([]byte,*DecodedItem,error) {
 	v := data[0]
 	data = data[1:]
 	if v == encodingfloatNaN {
-		return data, NewDecodeItem(math.NaN(), VALUE_TYPE_UINT64, 0, 0, 0), nil
+		return data, NewDecodeItem(math.NaN(), VALUE_TYPE_FLOAT64, 0, 0, 0), nil
 	} else if v == encodingfloatZero {
-		return data, NewDecodeItem(0, VALUE_TYPE_UINT64, 0, 0, 0), nil
+		return data, NewDecodeItem(float64(0), VALUE_TYPE_FLOAT64, 0, 0, 0), nil
 	} else if v == encodingfloatNeg {
 		b, d, e := od.DecodeUint64ForFloat(data)
 		if e != nil {
@@ -165,7 +205,6 @@ func (od *OrderedDecoder) DecodeFloat(data []byte)([]byte,*DecodedItem,error) {
 		return nil, nil, errorUnmatchedValueType
 	}
 }
-
 
 // DecodeBytes decodes the bytes from the encoded bytes.
 func (od *OrderedDecoder) DecodeBytes(data []byte)([]byte,*DecodedItem,error) {

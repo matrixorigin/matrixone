@@ -103,6 +103,10 @@ type DependsOnDesc struct {
 	AttributeID []uint32 `json:"attribute_id,string"`
 }
 
+type DefaultValue struct {
+	ValueType string
+}
+
 type AttributeDesc struct {
 	ID uint32 `json:"id,string"`
 
@@ -113,6 +117,8 @@ type AttributeDesc struct {
 	TypesType types.Type `json:"types_type"`
 
 	Default engine.DefaultExpr `json:"default"`
+
+	DefaultVal DefaultValue `json:"defaultValue"`
 
 	Is_null bool `json:"is_null,string"`
 
