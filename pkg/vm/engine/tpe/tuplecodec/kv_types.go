@@ -55,7 +55,7 @@ type KVHandler interface {
 	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
 
 	// GetRange gets the values from the startKey with limit
-	GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey,[]TupleValue, error)
+	GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error)
 
 	// GetWithPrefix gets the values of the prefix with limit.
 	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
