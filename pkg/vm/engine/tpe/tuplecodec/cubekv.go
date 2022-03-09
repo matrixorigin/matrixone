@@ -40,6 +40,7 @@ var (
 	errorCubeDriverIsNull = errors.New("cube driver is nil")
 	errorInvalidIDPool = errors.New("invalid idpool")
 	errorInvalidKeyValueCount = errors.New("key count != value count")
+	errorUnsupportedInCubeKV = errors.New("unsupported in cubekv")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -213,6 +214,10 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
 
 func (ck * CubeKV) Delete(key TupleKey) error {
 	return ck.Cube.Delete(key)
+}
+
+func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
+	return errorUnsupportedInCubeKV
 }
 
 // Get gets the value of the key.

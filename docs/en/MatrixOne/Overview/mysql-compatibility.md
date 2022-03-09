@@ -36,7 +36,7 @@ MatrixOne SQL syntax conforms with MySQL 8.0.23 version.
 |   |   | Sub query is not supported now.  | 
 |   |   | Distinct is limitedly support.  | 
 |   |   | For clause is not supported now.  | 
-|   |   | INTO OUTFILE is not supported now. | 
+|   |   | INTO OUTFILE is limitedly support. | 
 |   | LOAD DATA | Only csv files can be loaded currently.  | 
 |   |   | The enclosed character shoud be "".  | 
 |   |   | FILEDS TERMINATED BY should be "," or "|". | 

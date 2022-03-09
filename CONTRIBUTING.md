@@ -15,10 +15,8 @@ Contributions to MatrixOne fall into the following categories.
 3. Clone your fork to your local machine with `git clone git@github.com:<yourname>/matrixone.git`.
 4. Create a branch with `git checkout -b topic-branch`, the branch name is up to you.
 5. Commit changes to your own branch locally, add necessary unit tests.
-6. Run static code analysis with `make sca`.   
-7. Run tests with `make ut` and `make bvt`, make sure all the tests passed.
-8. Go back to GitHub, and submit a pull request so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
-9. Once your PR get approved, it would be merged sooner. Congratulations.
+6. Go back to GitHub, and submit a pull request so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
+7. Once your PR get approved, it would be merged sooner. Congratulations.
    
 Remember to [sync your forked repository](https://docs.github.com/en/get-started/quickstart/fork-a-repo#keep-your-fork-synced) **before** submitting proposed changes upstream. If you have an existing local repository, please update it before you start, to minimize the chance of merge conflicts.
 ```shell

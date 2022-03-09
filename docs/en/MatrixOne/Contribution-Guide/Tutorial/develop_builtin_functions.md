@@ -1,15 +1,15 @@
-# Develop a built-in function
+# **Develop a built-in function**
 
-## Prerequisite
+## **Prerequisite**
 
 To develop a build-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to get some Golang basic concepts. 
 
-## Preparation 
+## **Preparation**
 
 Before you start, please make sure that you have `Go` installed, cloned the `MatrixOne` code base.
 Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribute Code](../How-to-Contribute/contribute-code.md) for more details.
 
-## What is a built-in function? 
+## **What is a built-in function?**
 
 There are two types of functions in a database,  built-in functions are functions that are shipped with the database, in contrast, user-defined functions is customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions. 
 
@@ -17,14 +17,15 @@ An example of a built-in function is `abs()`, which when given a value calculate
 
 Some functions, such as `abs()` are used to perform calculations, others such as `getdate()` are used to obtain a system value, such as the current data, or others, like `left()`, are used to manipulate textual data.
 
-Usually the built-in functions are categorized into major categories:
+Usually the built-in functions are categorized into major categories:  
+
 * Conversion Functions
 * Logical Functions
 * Math Functions
 * String Functions
 * Date Functions
 
-## Develop an abs() function:
+## **Develop an abs() function:**
 
 In this tutorial, we use the function ABS (get the absolute value) as an example.
 
@@ -67,7 +68,7 @@ func init() {
 
 In Golang, init function will be called when a package is initialized. We wrap all `ABS()`'s functionality inside this init function so we don't need to call it explicitly.
 
-1. function name registration
+**1.** function name registration
 
 ```go
 func init() {
@@ -77,7 +78,7 @@ func init() {
 
 In MatrixOne, all letters in a function name will be lowercased during the parsing process, so register function names using only lowercase letters otherwise the function won't be recognized.
 
-2. declare function parameter types and return types.
+**2.** declare function parameter types and return types.
 
 The function abs accepts all numeric types as its parameter(uint8, int8, float32...), we can return a 64bit value covering all different parameter types, or, to optimize the performance of our function, we can return different types with respect to the parameter type.
 
@@ -350,7 +351,7 @@ func absFloat64Pure(xs, rs []float64) []float64 {
 
 Here we go. Now we can fire up MatrixOne and take our abs function for a little spin.
 
-## Compile and run MatrixOne
+## **Compile and run MatrixOne**
 
 Once the function is ready, we could compile and run MatrixOne to see the function behavior. 
 
@@ -370,11 +371,15 @@ Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the Matrix
 
 !!! info 
 	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your built-in function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
-
 	
 	cubeLogLevel = "error"
-	level = "error"
 	
+	level = "error"
+
+
+!!! info 
+	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
+
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
 
 user: dump
@@ -416,7 +421,7 @@ Bingo!
 !!! info 
     Except for `abs()`, MatrixOne has already some neat examples for built-in functions, such as `floor()`, `round()`, `year()`. With some minor corresponding changes, the procedure is quite the same as other functions.
 ​
-## Write a unit Test for your function
+## **Write a unit Test for your function**
 
 We recommend you to also write a unit test for the new function. 
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
