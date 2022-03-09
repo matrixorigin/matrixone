@@ -67,13 +67,14 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,
 		kv: kv,
 		tch: tch,
 		serializer: serial,
 		indexHandler: ih,
+		epochHandler: epoch,
 	}
 }
 
