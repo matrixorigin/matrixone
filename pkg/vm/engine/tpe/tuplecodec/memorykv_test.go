@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/smartystreets/goconvey/convey"
 	"reflect"
@@ -389,6 +390,57 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 			}
 
 			last = SuccessorOfKey(keys[len(keys) - 1])
+		}
+	})
+}
+
+func TestMemoryKV_DeletePrefix(t *testing.T) {
+	convey.Convey("delete prefix",t, func() {
+		kv := NewMemoryKV()
+		cnt := 10
+
+		genData := func(cnt int,handler KVHandler,prefix string) ([]TupleKey,[]TupleValue) {
+			var keys []TupleKey
+			var values []TupleValue
+			for i := 0; i < cnt; i++ {
+				key := fmt.Sprintf("%s%d",prefix,i)
+				value := fmt.Sprintf("v%d",i)
+				keys = append(keys,[]byte(key))
+				values = append(values,[]byte(value))
+				err := handler.Set([]byte(key), []byte(value))
+				convey.So(err,convey.ShouldBeNil)
+			}
+
+			return keys, values
+		}
+
+		wKeys1, wValues1 := genData(cnt,kv,"abc")
+		err := kv.SetBatch(wKeys1,wValues1)
+		for _, e := range err {
+			convey.So(e,convey.ShouldBeNil)
+		}
+
+		wKeys2, wValues2 := genData(cnt,kv,"cde")
+		err = kv.SetBatch(wKeys2,wValues2)
+		for _, e := range err {
+			convey.So(e,convey.ShouldBeNil)
+		}
+
+		err2 := kv.DeleteWithPrefix([]byte("abc"))
+		convey.So(err2,convey.ShouldBeNil)
+
+		resKeys, resValues, err3 := kv.GetWithPrefix(TupleKey("cde"), len("cde"), uint64(cnt))
+		convey.So(err3,convey.ShouldBeNil)
+
+		for i, key := range resKeys {
+			for j, wKey := range wKeys2 {
+				if bytes.Equal(key,wKey) {
+					convey.So(resValues[i],
+						convey.ShouldResemble,wValues2[j])
+				}else {
+					break
+				}
+			}
 		}
 	})
 }

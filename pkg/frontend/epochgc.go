@@ -476,8 +476,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			}
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY, msg.body)
 			if err != nil {
-				//panic(err)
-				logutil.Fatal(err.Error())
+				logutil.Errorf(err.Error())
 			}
 
 		case MSG_TYPE_SERVER_INFO:
@@ -487,8 +486,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			//save kv<server,maximumRemovableEpoch>
 			err := kv.BatchPutCustomData(msg.body2, msg.body3)
 			if err != nil {
-				//panic(err)
-				logutil.Fatal(err.Error())
+				logutil.Errorf(err.Error())
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
 			if pci.enableLog {
@@ -497,8 +495,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY, msg.body)
 			if err != nil {
-				//panic(err)
-				logutil.Fatal(err.Error())
+				logutil.Errorf(err.Error())
 			}
 		}
 	}
@@ -609,7 +606,8 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		for _, ep := range eps {
 			v := sci.epoch_info[ep]
 			if v != 0 {
-				panic(fmt.Errorf("query_cnt is not zero in removableEpoch. epoch %d epoch_info %v", ep, sci.epoch_info))
+				logutil.Errorf("query_cnt is not zero in removableEpoch. epoch %d epoch_info %v", ep, sci.epoch_info)
+				break
 			}
 
 			sci.removeEpochInfoUnsafe(ep)

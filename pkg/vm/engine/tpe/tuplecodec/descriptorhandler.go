@@ -17,9 +17,20 @@ package tuplecodec
 import (
 	"encoding/json"
 	"errors"
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
+)
+
+const (
+	INT64 = "int64"
+	UINT64 = "uint64"
+	FLOAT64 = "FLOAT64"
+	STRING = "string"
+	TYPE_DATE = "types.Date"
+	TYPE_DATETIME = "types.Datetime"
 )
 
 var (
@@ -28,6 +39,8 @@ var (
 	errorDoNotFindTheValue = errors.New("do not find the value")
 	errorDecodeDescriptorFailed = errors.New("decode the descriptor failed")
 	errorDescriptorSavedIsNotTheWanted = errors.New("the descriptor saved is not the wanted one")
+	errorDescInAsyncGCIsNotBytes = errors.New("desc in asyncGC is not bytes")
+	errorIDInAsyncGCIsNotUint64 = errors.New("id in asyncGC is not uint64")
 )
 /*
 Internal descriptor table for schema management.
@@ -105,7 +118,7 @@ func (dhi *DescriptorHandlerImpl) encodeDatabaseDescIntoValue(parentID uint64,
 	return dhi.encodeFieldsIntoValue(parentID, uint64(desc.ID),desc.Name,descBytes)
 }
 
-// decodeValue decodes the data from (parentID,ID,Name,Bytes)
+// decodeValue decodes the data into (parentID,ID,Name,Bytes)
 func (dhi *DescriptorHandlerImpl) decodeValue(data []byte) ([]*orderedcodec.DecodedItem,error) {
 	attrCnt := len(internalDescriptorTableDesc.Attributes)
 	dis := make([]*orderedcodec.DecodedItem,0,attrCnt)
@@ -207,10 +220,10 @@ func (dhi *DescriptorHandlerImpl) GetValuesWithPrefix(parentID uint64, callbackC
 //callbackForGetTableDescByName extracts the tabledesc by name
 func (dhi *DescriptorHandlerImpl) callbackForGetTableDescByName(callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	nameAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_name_ID]
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-	nameDI := dis[InternalDescriptorTableID_name_ID]
-	descDI := dis[InternalDescriptorTableID_desc_ID]
+	nameAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_name_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	nameDI := dis[InternalDescriptorTable_name_ID]
+	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(nameDI.IsValueType(nameAttr.Ttype) ||
 		descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
@@ -273,8 +286,8 @@ func (dhi *DescriptorHandlerImpl) LoadRelationDescByID(parentID uint64, tableID 
 	if err != nil {
 		return nil, err
 	}
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-	descDI := dis[InternalDescriptorTableID_desc_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !descDI.IsValueType(descAttr.Ttype) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
 	}
@@ -403,8 +416,8 @@ func (dhi *DescriptorHandlerImpl) LoadDatabaseDescByID(dbID uint64) (*descriptor
 	if err != nil {
 		return nil, err
 	}
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-	descDI := dis[InternalDescriptorTableID_desc_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !descDI.IsValueType(descAttr.Ttype) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
 	}
@@ -519,14 +532,37 @@ func (dhi *DescriptorHandlerImpl) encodeAsyncgcValue(epoch uint64, dbID uint64, 
 	return out,nil
 }
 
+// MakePrefixWithEpochAndDBIDAndTableID makes the prefix(tenantID,dbID,tableID,indexID,delEpoch,delDbID,delTableID)
+func (dhi *DescriptorHandlerImpl) MakePrefixWithEpochAndDBIDAndTableID(
+		dbID uint64, tableID uint64, indexID uint64,
+		gcEpoch uint64, gcDbID uint64,gcTableID uint64)(TupleKey, *orderedcodec.EncodedItem){
+	tke := dhi.codecHandler.GetEncoder()
+
+	//make prefix
+	var prefix TupleKey
+	// tenantID,dbID,tableID,indexID
+	prefix,_ = tke.EncodeIndexPrefix(prefix,
+		dbID,
+		tableID,
+		indexID)
+
+	// append gcEpoch
+	prefix,_ = tke.oe.EncodeUint64(prefix,gcEpoch)
+	// append gcDbId
+	prefix,_ = tke.oe.EncodeUint64(prefix,gcDbID)
+	// append gcTableId
+	prefix,_ = tke.oe.EncodeUint64(prefix,gcTableID)
+	return prefix,nil
+}
+
 func (dhi *DescriptorHandlerImpl) StoreRelationDescIntoAsyncGC(epoch uint64, dbID uint64, desc *descriptor.RelationDesc) error {
-	//save thing into the internal async gc (epoch(pk),dbid,tableid,desc)
+	//save thing into the internal async gc (epoch,dbid,tableid,desc), pk(epoch,dbid,tableid)
 	//prefix(tenantID,dbID,tableID,indexID,epoch)
 	var key TupleKey
-	key,_ = dhi.MakePrefixWithOneExtraID(InternalDatabaseID,
+	key,_ = dhi.MakePrefixWithEpochAndDBIDAndTableID(InternalDatabaseID,
 		InternalAsyncGCTableID,
 		uint64(PrimaryIndexID),
-		epoch)
+		epoch,dbID,uint64(desc.ID))
 
 	value, err := dhi.encodeAsyncgcValue(epoch,dbID, uint64(desc.ID),desc)
 	if err != nil {
@@ -541,14 +577,105 @@ func (dhi *DescriptorHandlerImpl) StoreRelationDescIntoAsyncGC(epoch uint64, dbI
 	return nil
 }
 
-func (dhi *DescriptorHandlerImpl) ListRelationDescFromAsyncGC(epoch uint64) ([]*descriptor.RelationDesc, error) {
-	//TODO:
-	return nil, nil
+// decodeValueIntoEpochGCItem decodes bytes into the (epoch,dbID,tableID,desc)
+func (dhi *DescriptorHandlerImpl) decodeValueIntoEpochGCItem(data []byte) ([]*orderedcodec.DecodedItem,error) {
+	attrCnt := len(internalAsyncGCTableDesc.Attributes)
+	dis := make([]*orderedcodec.DecodedItem,0,attrCnt)
+	for j := 0; j < attrCnt; j++ {
+		rest, di, err := dhi.serializer.DeserializeValue(data)
+		if err != nil {
+			return nil, err
+		}
+		dis = append(dis,di)
+		data = rest
+	}
+	return dis,nil
+}
+
+func (dhi *DescriptorHandlerImpl) ListRelationDescFromAsyncGC(epoch uint64) ([]descriptor.EpochGCItem, error) {
+	var startPrefix TupleKey
+	tke := dhi.codecHandler.GetEncoder()
+	// tenantID,dbID,tableID,indexID
+	startPrefix,_ = tke.EncodeIndexPrefix(nil,
+		InternalDatabaseID,
+		InternalAsyncGCTableID,
+		uint64(PrimaryIndexID))
+
+	var endPrefix TupleKey
+	var nextEpoch uint64 = epoch
+	if epoch < math.MaxUint64 {
+		nextEpoch++
+	}
+	// tenantID,dbID,tableID,indexID,epoch
+	endPrefix,_ = dhi.MakePrefixWithOneExtraID(InternalDatabaseID,
+		InternalAsyncGCTableID,
+		uint64(PrimaryIndexID),
+		nextEpoch)
+
+	//get all epochgc (epoch,dbID,tableID,desc)
+	gcItems, err := dhi.kvHandler.GetRange(startPrefix,endPrefix)
+	if err != nil {
+		return nil, err
+	}
+
+	var retItems []descriptor.EpochGCItem
+
+	for _, item := range gcItems {
+		dis, err := dhi.decodeValueIntoEpochGCItem(item)
+		if err != nil {
+			return nil, err
+		}
+
+		if descBytes,ok := dis[InternalAsyncGCTable_desc_ID].Value.([]byte); ok {
+			desc, err := UnmarshalRelationDesc(descBytes)
+			if err != nil {
+				return nil, err
+			}
+			//check maximal epoch
+			if epoch >= desc.Max_access_epoch {
+				var delDbID, delTableID,delEpoch uint64
+				var ok2,ok3,ok4 bool
+				if delDbID,ok2 = dis[InternalAsyncGCTable_dbID_ID].Value.(uint64) ; !ok2 {
+					return nil, errorIDInAsyncGCIsNotUint64
+				}
+
+				if delTableID,ok3 = dis[InternalAsyncGCTable_tableID_ID].Value.(uint64) ; !ok3 {
+					return nil, errorIDInAsyncGCIsNotUint64
+				}
+
+				if delEpoch,ok4 = dis[InternalAsyncGCTable_epoch_ID].Value.(uint64); !ok4{
+					return nil, errorIDInAsyncGCIsNotUint64
+				}
+
+				retItems = append(retItems,descriptor.EpochGCItem{
+					Epoch:   delEpoch,
+					DbID:    delDbID,
+					TableID: delTableID,
+				})
+
+			}
+		}else{
+			return nil, errorDescInAsyncGCIsNotBytes
+		}
+	}
+	return retItems, nil
 }
 
 
 //MarshalRelationDesc encods the relationDesc into the bytes
 func MarshalRelationDesc(desc *descriptor.RelationDesc) ([]byte,error) {
+	for i := 0; i < len(desc.Attributes); i++ {
+		switch desc.Attributes[i].Default.Value.(type) {
+		case int64:
+			desc.Attributes[i].DefaultVal.ValueType = INT64
+		case uint64:
+			desc.Attributes[i].DefaultVal.ValueType = UINT64
+		case types.Date:
+			desc.Attributes[i].DefaultVal.ValueType = TYPE_DATE
+		case types.Datetime:
+			desc.Attributes[i].DefaultVal.ValueType = TYPE_DATETIME
+		}
+	}
 	marshal, err := json.Marshal(*desc)
 	if err != nil {
 		return nil,err
@@ -571,6 +698,18 @@ func UnmarshalRelationDesc(data []byte) (*descriptor.RelationDesc,error) {
 	err := json.Unmarshal(data, tableDesc)
 	if err != nil {
 		return nil, errorDecodeDescriptorFailed
+	}
+	for i := 0; i < len(tableDesc.Attributes); i++ {
+		switch tableDesc.Attributes[i].DefaultVal.ValueType {
+		case INT64:
+			tableDesc.Attributes[i].Default.Value = int64(tableDesc.Attributes[i].Default.Value.(float64))
+		case UINT64:
+			tableDesc.Attributes[i].Default.Value = uint64(tableDesc.Attributes[i].Default.Value.(float64))
+		case TYPE_DATE:
+			tableDesc.Attributes[i].Default.Value = types.Date(tableDesc.Attributes[i].Default.Value.(float64))
+		case TYPE_DATETIME:
+			tableDesc.Attributes[i].Default.Value = types.Datetime(tableDesc.Attributes[i].Default.Value.(float64))
+		}
 	}
 	return tableDesc,nil
 }

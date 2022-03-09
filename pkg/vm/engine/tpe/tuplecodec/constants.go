@@ -29,14 +29,18 @@ const (
 	//holding the schema of the table
 	InternalDescriptorTableID uint64 = 0
 
-	InternalDescriptorTableID_parentID_ID = 0
-	InternalDescriptorTableID_id_ID = 1
-	InternalDescriptorTableID_name_ID = 2
-	InternalDescriptorTableID_desc_ID = 3
-	PrimaryIndexID uint32 = 1
+	InternalDescriptorTable_parentID_ID        = 0
+	InternalDescriptorTable_id_ID              = 1
+	InternalDescriptorTable_name_ID            = 2
+	InternalDescriptorTable_desc_ID            = 3
+	PrimaryIndexID                      uint32 = 1
 
 	//holding the epochgced table
 	InternalAsyncGCTableID uint64 = 1
+	InternalAsyncGCTable_epoch_ID = 0
+	InternalAsyncGCTable_dbID_ID = 1
+	InternalAsyncGCTable_tableID_ID = 2
+	InternalAsyncGCTable_desc_ID = 3
 
 	//user table id offset
 	UserTableIDOffset uint64 = 3
@@ -212,6 +216,16 @@ var (
 				{
 					Name:      "epoch",
 					ID:        0,
+					Type:      orderedcodec.VALUE_TYPE_UINT64,
+				},
+				{
+					Name:      "dbID",
+					ID:        1,
+					Type:      orderedcodec.VALUE_TYPE_UINT64,
+				},
+				{
+					Name:      "tableID",
+					ID:        2,
 					Type:      orderedcodec.VALUE_TYPE_UINT64,
 				},
 			},
