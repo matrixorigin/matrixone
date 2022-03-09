@@ -1,6 +1,8 @@
 # **Install standalone MatrixOne**
 
 MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version either by [building from source](#building-from-source) or [using docker](#using-docker).
+
+Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS. 
  
 ## **Building from source**
 
