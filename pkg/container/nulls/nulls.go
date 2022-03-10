@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Package nulls wrap up functions for the manipulation of bitmap library roaring.
+// MatrixOne uses nulls to store all NULL values in a column.
+// You can think of Nulls as a bitmap.
 package nulls
 
 import (
@@ -22,6 +25,7 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
+// Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
 	if (n == nil || (n != nil && n.Np == nil)) && m != nil && m.Np != nil {
 		if r.Np == nil {
@@ -30,7 +34,7 @@ func Or(n, m, r *Nulls) {
 		r.Np.Or(m.Np)
 		return
 	}
-	if (m == nil || m != nil && m.Np == nil) && n != nil && n.Np != nil {
+	if (m == nil || (m != nil && m.Np == nil)) && n != nil && n.Np != nil {
 		if r.Np == nil {
 			r.Np = roaring.NewBitmap()
 		}
@@ -52,6 +56,7 @@ func Reset(n *Nulls) {
 	}
 }
 
+// Any returns true if any bit in the Nulls is set, otherwise it will return false.
 func Any(n *Nulls) bool {
 	if n.Np == nil {
 		return false
@@ -59,6 +64,7 @@ func Any(n *Nulls) bool {
 	return !n.Np.IsEmpty()
 }
 
+// Size estimates the memory usage of the Nulls.
 func Size(n *Nulls) int {
 	if n.Np == nil {
 		return 0
@@ -66,6 +72,7 @@ func Size(n *Nulls) int {
 	return int(n.Np.GetSizeInBytes())
 }
 
+// Length returns the number of integers contained in the Nulls
 func Length(n *Nulls) int {
 	if n.Np == nil {
 		return 0
@@ -80,6 +87,7 @@ func String(n *Nulls) string {
 	return fmt.Sprintf("%v", n.Np.ToArray())
 }
 
+// Contains returns true if the integer is contained in the Nulls
 func Contains(n *Nulls, row uint64) bool {
 	if n.Np != nil {
 		return n.Np.Contains(row)
@@ -104,6 +112,7 @@ func Del(n *Nulls, rows ...uint64) {
 	}
 }
 
+// Set performs union operation on Nulls n,m and store the result in n
 func Set(n, m *Nulls) {
 	if m != nil && m.Np != nil {
 		if n.Np == nil {
@@ -113,6 +122,7 @@ func Set(n, m *Nulls) {
 	}
 }
 
+// FilterCount returns the number count that appears in both n and sel
 func FilterCount(n *Nulls, sels []int64) int {
 	var cnt int
 	if n.Np == nil {
@@ -136,6 +146,8 @@ func RemoveRange(n *Nulls, start, end uint64) {
 	}
 }
 
+// Range adds the numbers in n starting at start and ending at end to m.
+// Return the result
 func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
