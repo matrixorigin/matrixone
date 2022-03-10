@@ -46,6 +46,7 @@ type ComputationHandlerImpl struct {
 	tch *TupleCodecHandler
 	serializer ValueSerializer
 	indexHandler index.IndexHandler
+	epochHandler * EpochHandler
 }
 
 func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
@@ -66,13 +67,14 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,
 		kv: kv,
 		tch: tch,
 		serializer: serial,
 		indexHandler: ih,
+		epochHandler: epoch,
 	}
 }
 
@@ -168,8 +170,8 @@ func (chi *ComputationHandlerImpl) GetDatabase(dbName string) (*descriptor.Datab
 //callbackForGetDatabaseDesc extracts the databaseDesc
 func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-	descDI := dis[InternalDescriptorTableID_desc_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
 	}
@@ -303,8 +305,8 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 //callbackForGetTableDesc extracts the tableDesc
 func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID]
-	descDI := dis[InternalDescriptorTableID_desc_ID]
+	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
 	}
@@ -372,6 +374,10 @@ func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descript
 		return nil,errorTableDeletedAlready
 	}
 	return tableDesc,nil
+}
+
+func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error) {
+	return chi.epochHandler.RemoveDeletedTable(epoch)
 }
 
 type AttributeStateForWrite struct {

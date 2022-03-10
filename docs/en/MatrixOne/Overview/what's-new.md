@@ -1,5 +1,5 @@
 # **What's New** 
 
-The lastest version of MatrixOne is 0.2.0, releases on 6th Jan, 2022. See the following:
+The lastest version of MatrixOne is 0.3.0, releases on 10th Mar, 2022. See the following:
 
-* [v0.2.0 Release Notes](../Release-Notes/v0.2.0.md)
+* [v0.3.0 Release Notes](../Release-Notes/v0.3.0.md)

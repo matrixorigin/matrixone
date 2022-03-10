@@ -97,7 +97,7 @@ func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
 	mo = frontend.NewMOServer(address, pu, callback)
-	frontend.ServerVersion = MoVersion
+	frontend.InitServerVersion(MoVersion)
 }
 
 func runMOServer() error {
@@ -137,6 +137,13 @@ func removeEpoch(epoch uint64) {
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
+	if tpe,ok := config.StorageEngine.(*tpeEngine.TpeEngine) ; ok {
+		err = tpe.RemoveDeletedTable(epoch)
+		if err != nil {
+			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+		}
+	}
+
 }
 
 func main() {

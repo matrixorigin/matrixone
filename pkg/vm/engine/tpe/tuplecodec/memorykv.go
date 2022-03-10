@@ -172,6 +172,31 @@ func (m *MemoryKV) Delete(key TupleKey) error {
 	return nil
 }
 
+func (m *MemoryKV) DeleteWithPrefix(prefix TupleKey) error {
+	m.rwLock.Lock()
+	defer m.rwLock.Unlock()
+
+	var keys []TupleKey
+	iter := func(i btree.Item) bool {
+		if x,ok := i.(*MemoryItem); ok {
+			if bytes.HasPrefix(x.key,prefix) {
+				keys = append(keys,x.key)
+			}
+		}else{
+			keys = append(keys,nil)
+		}
+		return true
+	}
+
+	m.container.Ascend(iter)
+
+	for _, key := range keys {
+		m.container.Delete(NewMemoryItem(key,nil))
+	}
+
+	return nil
+}
+
 func (m *MemoryKV) Get(key TupleKey) (TupleValue, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
@@ -229,7 +254,7 @@ func (m *MemoryKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	return values, nil
 }
 
-func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	var keys []TupleKey
@@ -239,14 +264,19 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKe
 		if cnt >= limit {
 			return false
 		}
-		cnt++
+
 		if x,ok := i.(*MemoryItem); ok {
+			//endKey <= key
+			if endKey != nil && bytes.Compare(endKey,x.key) <= 0 {
+				return false
+			}
 			keys = append(keys,x.key)
 			values = append(values,x.value)
 		}else{
 			keys = append(keys,nil)
 			values = append(values,nil)
 		}
+		cnt++
 		return true
 	}
 

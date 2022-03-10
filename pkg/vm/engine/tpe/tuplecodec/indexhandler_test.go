@@ -115,9 +115,9 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		convey.So(err,convey.ShouldBeNil)
 
 		wantAttr := []*descriptor.AttributeDesc{
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_parentID_ID],
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_id_ID],
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTableID_desc_ID],
+			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_parentID_ID],
+			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_id_ID],
+			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID],
 		}
 
 		readCtx := &ReadContext{

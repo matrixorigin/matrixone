@@ -30,7 +30,7 @@ func TestOrderedDecoder_DecodeKey(t *testing.T) {
 			nil,
 		}
 
-		d,di,e := od.DecodeKey(kases[0])
+		d,di,e := od.DecodeKey(kases[0], VALUE_TYPE_NULL)
 		convey.So(e,convey.ShouldBeError)
 		convey.So(d,convey.ShouldEqual,kases[0])
 		convey.So(di,convey.ShouldBeNil)
