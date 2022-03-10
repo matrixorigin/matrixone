@@ -398,6 +398,16 @@ values = []
 comment = "default is false. Enable transactional processing engine."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "tpeKVType"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["memorykv","cubekv"]
+comment = "default is memorykv. Chose memory or cube as the KV storage."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

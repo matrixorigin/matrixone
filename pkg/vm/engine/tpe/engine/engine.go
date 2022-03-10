@@ -45,7 +45,8 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
-	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi)
+	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
+	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch)
 	te.computeHandler = ch
 	return te, nil
 }
@@ -91,4 +92,12 @@ func (te * TpeEngine) Database(name string) (engine.Database, error) {
 
 func (te * TpeEngine) Node(s string) *engine.NodeInfo {
 	return &engine.NodeInfo{Mcpu: 1}
+}
+
+func (te * TpeEngine) RemoveDeletedTable(epoch uint64) error {
+	_, err := te.computeHandler.RemoveDeletedTable(epoch)
+	if err != nil {
+		return err
+	}
+	return nil
 }

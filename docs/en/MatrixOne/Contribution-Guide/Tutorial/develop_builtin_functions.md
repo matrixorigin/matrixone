@@ -371,11 +371,15 @@ Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the Matrix
 
 !!! info 
 	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your built-in function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
-
 	
 	cubeLogLevel = "error"
-	level = "error"
 	
+	level = "error"
+
+
+!!! info 
+	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
+
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
 
 user: dump

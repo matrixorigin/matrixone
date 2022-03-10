@@ -43,29 +43,18 @@ git checkout -b topic-branch
 
 *4.* Commit changes to your own branch locally, add necessary unit tests.
 
-*5.* Run static code analysis with `make sca`.
-```
-make sca
-```
-
-*6.* Run tests with `make ut` and `make bvt`, make sure all the tests passed.
-```
-make ut
-make bvt
-```
-
-*7.* Push to a new branch in your own fork.
+*5.* Push to a new branch in your own fork.
 ```
 git push origin main:NEW_BRANCH
 ```
 
-*8.* Go back to GitHub, and submit a pull request in `NEW_BRANCH` so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
+*6.* Go back to GitHub, and submit a pull request in `NEW_BRANCH` so that we can review your changes. Add some labels if needed, and don't forget to [refer to the related issue](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue).
 
-*9.* Once your PR get approved, it would be merged sooner. After merging, synchronize your local repository. 
+*7.* Once your PR get approved, it would be merged sooner. After merging, synchronize your local repository. 
 ```
 git pull --force upstream main:main
 ```
-*10. *Synchronized the `main` branch of your remote repository in Github.
+*8. *Synchronized the `main` branch of your remote repository in Github.
 ```
 git push --force origin main:main
 ```

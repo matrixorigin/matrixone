@@ -42,6 +42,9 @@ type KVHandler interface {
 	// Delete deletes the key
 	Delete(key TupleKey) error
 
+	// DeleteWithPrefix keys with the prefix
+	DeleteWithPrefix(prefix TupleKey) error
+
 	// Get gets the value of the key
 	Get(key TupleKey)(TupleValue, error)
 
@@ -52,7 +55,7 @@ type KVHandler interface {
 	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
 
 	// GetRange gets the values from the startKey with limit
-	GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey,[]TupleValue, error)
+	GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error)
 
 	// GetWithPrefix gets the values of the prefix with limit.
 	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
@@ -66,4 +69,22 @@ type KVHandler interface {
 
 	// GetShardsWithPrefix get the shards that holds the keys with prefix
 	GetShardsWithPrefix(prefix TupleKey) (interface{}, error)
+}
+
+type ShardNode struct {
+	//the address of the store of the leader replica of the shard
+	Addr string
+	//the id of the store of the leader replica of the shard
+	ID string
+}
+
+type ShardInfo struct {
+	startKey []byte
+	endKey []byte
+	node ShardNode
+}
+
+type Shards struct {
+	nodes []ShardNode
+	shardInfos []ShardInfo
 }

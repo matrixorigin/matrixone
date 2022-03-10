@@ -15,12 +15,15 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"errors"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -40,6 +43,9 @@ var (
 	errorCubeDriverIsNull = errors.New("cube driver is nil")
 	errorInvalidIDPool = errors.New("invalid idpool")
 	errorInvalidKeyValueCount = errors.New("key count != value count")
+	errorUnsupportedInCubeKV = errors.New("unsupported in cubekv")
+	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
+	errorRangeIsInvalid = errors.New("the range is invalid")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -215,6 +221,13 @@ func (ck * CubeKV) Delete(key TupleKey) error {
 	return ck.Cube.Delete(key)
 }
 
+func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
+	if prefix == nil {
+		return errorPrefixIsNull
+	}
+	return errorUnsupportedInCubeKV
+}
+
 // Get gets the value of the key.
 // If the key does not exist, it returns the null
 func (ck * CubeKV) Get(key TupleKey) (TupleValue, error) {
@@ -234,33 +247,27 @@ func (ck * CubeKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
 }
 
 func (ck * CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error) {
-	ret, err := ck.Cube.Scan(startKey, endKey, math.MaxUint64)
+	_, retValues, _, _, err := ck.Cube.TpeScan(startKey, endKey, math.MaxUint64,false)
 	if err != nil {
 		return nil, err
 	}
 	var values []TupleValue
-	//ret[even index] is key
-	//ret[odd index] is value
-	for i := 1 ; i < len(ret); i += 2 {
-		values = append(values,ret[i])
+	for i := 0 ; i < len(retValues); i ++ {
+		values = append(values,retValues[i])
 	}
 	return values,err
 }
 
-func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
-	ret, err := ck.Cube.Scan(startKey, nil, limit)
+func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
+	scanKeys, scanValues, _, _, err := ck.Cube.TpeScan(startKey, endKey, limit, true)
 	if err != nil {
 		return nil,nil, err
 	}
 	var keys []TupleKey
-	var realKey TupleKey
 	var values []TupleValue
-	//ret[even index] is key
-	//ret[odd index] is value
-	for i := 1 ; i < len(ret); i += 2 {
-		realKey = kv.DecodeDataKey(ret[i-1])
-		keys = append(keys,realKey)
-		values = append(values,ret[i])
+	for i := 0 ; i < len(scanKeys); i ++{
+		keys = append(keys,scanKeys[i])
+		values = append(values,scanValues[i])
 	}
 	return keys,values,err
 }
@@ -270,29 +277,131 @@ func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 		return nil, nil, errorPrefixIsNull
 	}
 
-	//TODO: to fix
-	ret, err := ck.Cube.PrefixScan(prefixOrStartkey[:prefixLen],limit)
+	if prefixLen > len(prefixOrStartkey) {
+		return nil, nil, errorPrefixLengthIsLongerThanStartKey
+	}
+
+	scanKeys, scanValues, _, _, err := ck.Cube.TpePrefixScan(prefixOrStartkey,prefixLen,limit)
 	if err != nil {
 		return nil, nil, err
 	}
-
 	var keys []TupleKey
 	var values []TupleValue
-	//ret[even index] is key
-	//ret[odd index] is value
-	for i := 1 ; i < len(ret); i += 2 {
-		keys = append(keys,ret[i-1])
-		values = append(values,ret[i])
+	for i := 0 ; i < len(scanKeys); i ++{
+		keys = append(keys,scanKeys[i])
+		values = append(values,scanValues[i])
 	}
+
 	return keys,values,err
 }
 
 func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
-	panic("implement me")
+	wantRange := Range{startKey: startKey,endKey: endKey}
+
+	isInfinity := func(in []byte) bool {
+		return len(in) == 0
+	}
+
+	wantNegativeInfinity := isInfinity(wantRange.startKey)
+	wantPositiveInfinity := isInfinity(wantRange.endKey)
+
+	var shardInfos []ShardInfo
+	var stores map[uint64]string
+
+	callback := func(shard meta.Shard, store meta.Store) bool {
+		//the shard overlaps the [startKey,endKey)
+		checkRange := Range{startKey: shard.GetStart(), endKey: shard.GetEnd()}
+		checkNegativeInfinity := isInfinity(checkRange.startKey)
+		checkPositiveInfinity := isInfinity(checkRange.endKey)
+		ok := false
+
+		if wantNegativeInfinity && wantPositiveInfinity {
+			//(-infinity,+infinity)
+			ok = true
+		}else if wantNegativeInfinity && !wantPositiveInfinity {
+			//(-infinity,x)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				// x<=y, or x > y
+				ok = true
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}
+		}else if !wantNegativeInfinity && wantPositiveInfinity {
+			//[x,infinity)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = true
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}
+		}else{
+			//[a, b)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0 &&
+						bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0 ||
+					bytes.Compare(wantRange.startKey,checkRange.startKey) >= 0 &&
+						bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}
+		}
+
+		if ok {
+			if _,exist := stores[store.ID]; !exist {
+				stores[store.ID] = store.ClientAddr
+			}
+			shardInfos = append(shardInfos,ShardInfo{
+				startKey: shard.GetStart(),
+				endKey:   shard.GetEnd(),
+				node:     ShardNode{
+					Addr: store.ClientAddr,
+					ID: string(codec.Uint642Bytes(store.ID)),
+				},
+			})
+		}
+
+		return true
+	}
+	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup),true,callback)
+
+	var nodes []ShardNode
+	for id, addr := range stores {
+		nodes = append(nodes,ShardNode{
+			Addr: addr,
+			ID:   string(codec.Uint642Bytes(id)),
+		})
+	}
+
+	sd := &Shards{
+		nodes:      nodes,
+		shardInfos: shardInfos,
+	}
+	return sd, nil
 }
 
 func (ck * CubeKV) GetShardsWithPrefix(prefix TupleKey) (interface{}, error) {
-	panic("implement me")
+	prefixEnd := SuccessorOfPrefix(prefix)
+	return ck.GetShardsWithRange(prefix,prefixEnd)
 }
 
 

@@ -882,3 +882,51 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByID(t *testing.T) {
 		}
 	})
 }
+
+func TestDescriptorHandlerImpl_StoreRelationDescIntoAsyncGC(t *testing.T) {
+	convey.Convey("store relation desc into asyncgc",t, func() {
+		tch := NewTupleCodecHandler(SystemTenantID)
+		kv := NewMemoryKV()
+		serial := &DefaultValueSerializer{}
+		kvLimit := uint64(2)
+
+		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+
+		make_relation_desc := func(from *descriptor.RelationDesc,name string,id uint32) *descriptor.RelationDesc {
+			desc := new(descriptor.RelationDesc)
+			*desc = *from
+			desc.ID = id
+			desc.Name = name
+			return desc
+		}
+
+		var wantGCItems []descriptor.EpochGCItem
+
+		cnt := uint64(2)
+
+		for epoch := uint64(0); epoch < cnt; epoch++ {
+			offset := 100 * epoch
+			for dbId := offset + uint64(0); dbId < offset + cnt; dbId++ {
+				for tableId := uint32(0); uint64(tableId) < cnt; tableId++ {
+					wantGCItems = append(wantGCItems,descriptor.EpochGCItem{
+						Epoch:   epoch,
+						DbID:    dbId,
+						TableID: uint64(tableId),
+					})
+
+					tableName := fmt.Sprintf("table%d",tableId)
+					desc := make_relation_desc(internalDescriptorTableDesc,tableName,tableId)
+					err := dhi.StoreRelationDescIntoAsyncGC(epoch, dbId, desc)
+					convey.So(err,convey.ShouldBeNil)
+				}
+			}
+		}
+
+		gcItems, err := dhi.ListRelationDescFromAsyncGC(cnt)
+		convey.So(err,convey.ShouldBeNil)
+		convey.So(len(gcItems),convey.ShouldEqual,len(wantGCItems))
+		for i, item := range gcItems {
+			convey.So(item,convey.ShouldResemble,wantGCItems[i])
+		}
+	})
+}

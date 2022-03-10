@@ -147,6 +147,11 @@ func (tke *TupleKeyEncoder) EncodePrimaryIndexValue(prefix TupleValue,
 	return out, nil, nil
 }
 
+type DefaultValue struct {
+	ValueType string `json:"value_type"`
+	Value interface{} `json:"value,string"`
+}
+
 //SerializeValue serializes the value with json
 func (dvs *DefaultValueSerializer) SerializeValue(data []byte,value interface{})([]byte,*orderedcodec.EncodedItem,error) {
 	valueType := SERIAL_TYPE_UNKNOWN
