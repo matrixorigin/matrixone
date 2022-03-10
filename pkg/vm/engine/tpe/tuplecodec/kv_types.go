@@ -70,3 +70,21 @@ type KVHandler interface {
 	// GetShardsWithPrefix get the shards that holds the keys with prefix
 	GetShardsWithPrefix(prefix TupleKey) (interface{}, error)
 }
+
+type ShardNode struct {
+	//the address of the store of the leader replica of the shard
+	Addr string
+	//the id of the store of the leader replica of the shard
+	ID string
+}
+
+type ShardInfo struct {
+	startKey []byte
+	endKey []byte
+	node ShardNode
+}
+
+type Shards struct {
+	nodes []ShardNode
+	shardInfos []ShardInfo
+}

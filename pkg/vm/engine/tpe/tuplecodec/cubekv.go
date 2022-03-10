@@ -15,11 +15,15 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"errors"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -41,6 +45,7 @@ var (
 	errorInvalidKeyValueCount = errors.New("key count != value count")
 	errorUnsupportedInCubeKV = errors.New("unsupported in cubekv")
 	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
+	errorRangeIsInvalid = errors.New("the range is invalid")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -291,11 +296,112 @@ func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 }
 
 func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
-	return nil,errorUnsupportedInCubeKV
+	wantRange := Range{startKey: startKey,endKey: endKey}
+
+	isInfinity := func(in []byte) bool {
+		return len(in) == 0
+	}
+
+	wantNegativeInfinity := isInfinity(wantRange.startKey)
+	wantPositiveInfinity := isInfinity(wantRange.endKey)
+
+	var shardInfos []ShardInfo
+	var stores map[uint64]string
+
+	callback := func(shard meta.Shard, store meta.Store) bool {
+		//the shard overlaps the [startKey,endKey)
+		checkRange := Range{startKey: shard.GetStart(), endKey: shard.GetEnd()}
+		checkNegativeInfinity := isInfinity(checkRange.startKey)
+		checkPositiveInfinity := isInfinity(checkRange.endKey)
+		ok := false
+
+		if wantNegativeInfinity && wantPositiveInfinity {
+			//(-infinity,+infinity)
+			ok = true
+		}else if wantNegativeInfinity && !wantPositiveInfinity {
+			//(-infinity,x)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				// x<=y, or x > y
+				ok = true
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}
+		}else if !wantNegativeInfinity && wantPositiveInfinity {
+			//[x,infinity)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = true
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}
+		}else{
+			//[a, b)
+			if checkNegativeInfinity && checkPositiveInfinity {
+				ok = true
+			}else if checkNegativeInfinity && !checkPositiveInfinity {
+				//(-infinity,y)
+				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}else if !checkNegativeInfinity && checkPositiveInfinity {
+				//[y,infinity)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			}else{
+				//[y,z)
+				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0 &&
+						bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0 ||
+					bytes.Compare(wantRange.startKey,checkRange.startKey) >= 0 &&
+						bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			}
+		}
+
+		if ok {
+			if _,exist := stores[store.ID]; !exist {
+				stores[store.ID] = store.ClientAddr
+			}
+			shardInfos = append(shardInfos,ShardInfo{
+				startKey: shard.GetStart(),
+				endKey:   shard.GetEnd(),
+				node:     ShardNode{
+					Addr: store.ClientAddr,
+					ID: string(codec.Uint642Bytes(store.ID)),
+				},
+			})
+		}
+
+		return true
+	}
+	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup),true,callback)
+
+	var nodes []ShardNode
+	for id, addr := range stores {
+		nodes = append(nodes,ShardNode{
+			Addr: addr,
+			ID:   string(codec.Uint642Bytes(id)),
+		})
+	}
+
+	sd := &Shards{
+		nodes:      nodes,
+		shardInfos: shardInfos,
+	}
+	return sd, nil
 }
 
 func (ck * CubeKV) GetShardsWithPrefix(prefix TupleKey) (interface{}, error) {
-	return nil,errorUnsupportedInCubeKV
+	prefixEnd := SuccessorOfPrefix(prefix)
+	return ck.GetShardsWithRange(prefix,prefixEnd)
 }
 
 
