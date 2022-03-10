@@ -40,7 +40,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogUint8(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -64,7 +64,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogUint16(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -88,7 +88,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogUint32(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -112,7 +112,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogUint64(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -136,7 +136,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogInt8(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -160,7 +160,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogInt16(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -184,7 +184,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogInt32(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -208,7 +208,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogInt64(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -232,7 +232,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogFloat32(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
@@ -256,7 +256,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				logResult := log.LogFloat64(origVecCol, results)
 				if nulls.Any(logResult.Nsp) {
-					if !nulls.Any(logResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
 						resultVector.Nsp = logResult.Nsp
 					} else {
 						resultVector.Nsp.Or(logResult.Nsp)
