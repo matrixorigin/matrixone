@@ -21,6 +21,8 @@ enum Type {
   SetIfNotExist = 6;
   DelIfNotExist = 7;
   TpePrefixScan = 8;
+  TpeScan = 9;
+  TpeDeleteWithPrefix = 10;
 
   Append = 100;
   GetSnapshot = 101;
@@ -47,6 +49,8 @@ message Request {
   PrefixScanRequest               prefixScan = 9  [(gogoproto.nullable) = false];
   AllocIDRequest               allocID = 10 [(gogoproto.nullable) = false];
   TpePrefixScanRequest         tpePrefixScan = 11  [(gogoproto.nullable) = false];
+  TpeScanRequest         tpeScan = 12  [(gogoproto.nullable) = false];
+  TpeDeleteWithPrefixRequest TpeDeleteWithPrefix = 13  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -111,9 +115,30 @@ message PrefixScanRequest {
 
 // TpePrefixScanRequest scan request
 message TpePrefixScanRequest {
+  //the startKey for the scan
   bytes        prefixOrStartKey = 1;
+  //the prefixOrStartKey[:prefixLength] is the prefix
   int64        prefixLength = 2;
+  //the count of key/value wanted at most in the reqeust
   uint64       limit = 3;
+}
+
+// TpeScanRequest scan request
+message TpeScanRequest {
+  //the range [start,end)
+  bytes        start = 1;
+  bytes        end = 2;
+  //the count of key/value wanted at most in the request
+  uint64       limit = 3;
+  //the key needed to be returned
+  bool         needKey = 4;
+}
+
+message TpeDeleteWithPrefixRequest {
+  //the prefix of the keys to be deleted
+  bytes prefix = 1;
+  //the count of key/value to be deleted per batch
+  uint64 coutPerBatch = 2;
 }
 
 //AppendRequest appends data in the table.

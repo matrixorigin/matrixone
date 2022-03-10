@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"strconv"
 	"time"
+	"unicode"
 
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -48,7 +49,28 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 // DefaultClientConnStatus default server status
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
-var ServerVersion = ""
+var serverVersion = ""
+
+func InitServerVersion(v string) {
+	if len(v) > 0 {
+		switch v[0] {
+		case 'v': // format 'v1.1.1'
+			v = v[1:]
+			serverVersion = v
+		default:
+			vv := []byte(v)
+			for i := 0; i < len(vv); i++ {
+				if !unicode.IsDigit(rune(vv[i])) && vv[i] != '.' {
+					vv = append(vv[:i], vv[i+1:]...)
+					i--
+				}
+			}
+			serverVersion = string(vv)
+		}
+	} else {
+		serverVersion = "0.3.0"
+	}
+}
 
 const (
 	clientProtocolVersion uint8 = 10
@@ -682,7 +704,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, clientProtocolVersion)
 
 	//string[NUL] server version
-	pos = mp.writeStringNUL(data, pos, ServerVersion)
+	pos = mp.writeStringNUL(data, pos, serverVersion)
 
 	//int<4> connection id
 	pos = mp.io.WriteUint32(data, pos, mp.connectionID)

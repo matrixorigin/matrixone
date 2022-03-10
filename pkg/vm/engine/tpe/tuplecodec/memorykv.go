@@ -254,7 +254,7 @@ func (m *MemoryKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	return values, nil
 }
 
-func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	var keys []TupleKey
@@ -264,14 +264,19 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKe
 		if cnt >= limit {
 			return false
 		}
-		cnt++
+
 		if x,ok := i.(*MemoryItem); ok {
+			//endKey <= key
+			if endKey != nil && bytes.Compare(endKey,x.key) <= 0 {
+				return false
+			}
 			keys = append(keys,x.key)
 			values = append(values,x.value)
 		}else{
 			keys = append(keys,nil)
 			values = append(values,nil)
 		}
+		cnt++
 		return true
 	}
 
