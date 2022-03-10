@@ -97,7 +97,7 @@ func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
 	mo = frontend.NewMOServer(address, pu, callback)
-	frontend.ServerVersion = MoVersion
+	frontend.InitServerVersion(MoVersion)
 }
 
 func runMOServer() error {
