@@ -23,6 +23,7 @@ type Delete struct {
 	Limit   *Limit
 }
 
+
 func (node *Delete) Format(ctx *FmtCtx) {
 	ctx.WriteString("delete from ")
 	node.Table.Format(ctx)
