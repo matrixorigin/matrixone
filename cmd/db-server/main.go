@@ -290,7 +290,18 @@ func main() {
 	var eng engine.Engine
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
-		eng, err = tpeEngine.NewTpeEngine(&tpeEngine.TpeConfig{KvType: tuplecodec.KV_MEMORY})
+		tpeConf := &tpeEngine.TpeConfig{}
+		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
+		if configKvTyp == "memorykv" {
+			tpeConf.KvType = tuplecodec.KV_MEMORY
+		}else if configKvTyp == "cubekv" {
+			tpeConf.KvType = tuplecodec.KV_CUBE
+			tpeConf.Cube = a
+		}else{
+			logutil.Infof("there is no such kvType %s \n", configKvTyp)
+			os.Exit(CreateTpeExit)
+		}
+		eng, err = tpeEngine.NewTpeEngine(tpeConf)
 		if err != nil {
 			logutil.Infof("create tpe error:%v\n", err)
 			os.Exit(CreateTpeExit)
