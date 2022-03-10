@@ -509,3 +509,9 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		}
 	})
 }
+
+func TestCubeKV_GetShardsWithRange(t *testing.T) {
+	convey.Convey("get shards with range",t, func() {
+		//TODO: to fix
+	})
+}
