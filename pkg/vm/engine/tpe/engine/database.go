@@ -48,11 +48,18 @@ func (td * TpeDatabase) Relation(name string) (engine.Relation, error) {
 		return nil, err
 	}
 
+	//load nodes for the table
+	nodes, err := td.computeHandler.GetNodesHoldTheTable(td.id,tableDesc)
+	if err != nil {
+		return nil, err
+	}
+
 	return &TpeRelation{
 		id: uint64(tableDesc.ID),
 		dbDesc: td.desc,
 		desc: tableDesc,
 		computeHandler: td.computeHandler,
+		nodes: nodes,
 	},nil
 }
 

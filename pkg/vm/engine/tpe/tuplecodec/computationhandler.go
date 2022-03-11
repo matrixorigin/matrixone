@@ -17,6 +17,7 @@ package tuplecodec
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
@@ -36,6 +37,9 @@ var (
 	errorTableDeletedAlready = errors.New("table is deleted already. It is impossible.")
 	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc.  It is impossible.")
 	errorDatabaseDeletedAlready = errors.New("database is deleted already")
+	errorIsNotShards = errors.New("it is not the shards")
+	errorShardsAreNil = errors.New("shards are nil")
+	errorThereAreNotNodesHoldTheTable = errors.New("there are not nodes hold the table")
 )
 
 var _ computation.ComputationHandler = &ComputationHandlerImpl{}
@@ -378,6 +382,47 @@ func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descript
 
 func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error) {
 	return chi.epochHandler.RemoveDeletedTable(epoch)
+}
+
+func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, error) {
+	if chi.kv.GetKVType() == KV_MEMORY {
+		var nds = []engine.Node{
+			{
+				Id:   "0",
+				Addr: "localhost:20000",
+			},
+		}
+		return nds, nil
+	}
+	tce := chi.tch.GetEncoder()
+	prefix, _ := tce.EncodeIndexPrefix(nil,dbId, uint64(desc.ID),uint64(PrimaryIndexID))
+	ret, err := chi.kv.GetShardsWithPrefix(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	shards,ok := ret.(*Shards)
+	if !ok {
+		return nil, errorIsNotShards
+	}
+
+	if shards == nil {
+		return nil,errorShardsAreNil
+	}
+
+	var nodes engine.Nodes
+	for _, node := range shards.nodes {
+		nodes = append(nodes,engine.Node{
+			Id:   node.IDbytes,
+			Addr:	node.Addr,
+		})
+	}
+
+	if len(nodes) == 0 {
+		return nil, errorThereAreNotNodesHoldTheTable
+	}
+
+	return nodes, nil
 }
 
 type AttributeStateForWrite struct {

@@ -15,7 +15,6 @@
 package tuplecodec
 
 import (
-	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
@@ -225,6 +224,7 @@ func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
 	if prefix == nil {
 		return errorPrefixIsNull
 	}
+	//TODO: to fix
 	return errorUnsupportedInCubeKV
 }
 
@@ -258,10 +258,10 @@ func (ck * CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	return values,err
 }
 
-func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
-	scanKeys, scanValues, _, _, err := ck.Cube.TpeScan(startKey, endKey, limit, true)
+func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+	scanKeys, scanValues, hasMoreData, nextScanKey, err := ck.Cube.TpeScan(startKey, endKey, limit, true)
 	if err != nil {
-		return nil,nil, err
+		return nil, nil, false, nil, err
 	}
 	var keys []TupleKey
 	var values []TupleValue
@@ -269,21 +269,21 @@ func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 		keys = append(keys,scanKeys[i])
 		values = append(values,scanValues[i])
 	}
-	return keys,values,err
+	return keys, values, hasMoreData, nextScanKey, err
 }
 
-func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, []byte, error) {
 	if prefixOrStartkey == nil {
-		return nil, nil, errorPrefixIsNull
+		return nil, nil, false, nil, errorPrefixIsNull
 	}
 
 	if prefixLen > len(prefixOrStartkey) {
-		return nil, nil, errorPrefixLengthIsLongerThanStartKey
+		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
 
-	scanKeys, scanValues, _, _, err := ck.Cube.TpePrefixScan(prefixOrStartkey,prefixLen,limit)
+	scanKeys, scanValues, hasMoreData, nextScanKey, err := ck.Cube.TpePrefixScan(prefixOrStartkey,prefixLen,limit)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, nil, err
 	}
 	var keys []TupleKey
 	var values []TupleValue
@@ -292,78 +292,22 @@ func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 		values = append(values,scanValues[i])
 	}
 
-	return keys,values,err
+	return keys, values, hasMoreData, nextScanKey, err
 }
 
 func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
 	wantRange := Range{startKey: startKey,endKey: endKey}
 
-	isInfinity := func(in []byte) bool {
-		return len(in) == 0
-	}
-
-	wantNegativeInfinity := isInfinity(wantRange.startKey)
-	wantPositiveInfinity := isInfinity(wantRange.endKey)
-
 	var shardInfos []ShardInfo
-	var stores map[uint64]string
+	var stores = make(map[uint64]string)
 
 	callback := func(shard meta.Shard, store meta.Store) bool {
 		//the shard overlaps the [startKey,endKey)
 		checkRange := Range{startKey: shard.GetStart(), endKey: shard.GetEnd()}
-		checkNegativeInfinity := isInfinity(checkRange.startKey)
-		checkPositiveInfinity := isInfinity(checkRange.endKey)
-		ok := false
 
-		if wantNegativeInfinity && wantPositiveInfinity {
-			//(-infinity,+infinity)
-			ok = true
-		}else if wantNegativeInfinity && !wantPositiveInfinity {
-			//(-infinity,x)
-			if checkNegativeInfinity && checkPositiveInfinity {
-				ok = true
-			}else if checkNegativeInfinity && !checkPositiveInfinity {
-				//(-infinity,y)
-				// x<=y, or x > y
-				ok = true
-			}else if !checkNegativeInfinity && checkPositiveInfinity {
-				//[y,infinity)
-				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
-			}else{
-				//[y,z)
-				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
-			}
-		}else if !wantNegativeInfinity && wantPositiveInfinity {
-			//[x,infinity)
-			if checkNegativeInfinity && checkPositiveInfinity {
-				ok = true
-			}else if checkNegativeInfinity && !checkPositiveInfinity {
-				//(-infinity,y)
-				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-			}else if !checkNegativeInfinity && checkPositiveInfinity {
-				//[y,infinity)
-				ok = true
-			}else{
-				//[y,z)
-				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-			}
-		}else{
-			//[a, b)
-			if checkNegativeInfinity && checkPositiveInfinity {
-				ok = true
-			}else if checkNegativeInfinity && !checkPositiveInfinity {
-				//(-infinity,y)
-				ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-			}else if !checkNegativeInfinity && checkPositiveInfinity {
-				//[y,infinity)
-				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
-			}else{
-				//[y,z)
-				ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0 &&
-						bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0 ||
-					bytes.Compare(wantRange.startKey,checkRange.startKey) >= 0 &&
-						bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-			}
+		ok, err := isOverlap(wantRange,checkRange)
+		if err != nil {
+			logutil.Errorf("wantRange or checkRange may be invalid")
 		}
 
 		if ok {
@@ -374,22 +318,29 @@ func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (inter
 				startKey: shard.GetStart(),
 				endKey:   shard.GetEnd(),
 				node:     ShardNode{
-					Addr: store.ClientAddr,
-					ID: string(codec.Uint642Bytes(store.ID)),
+					Addr:    store.ClientAddr,
+					IDbytes: string(codec.Uint642Bytes(store.ID)),
+					ID: store.ID,
 				},
 			})
 		}
 
 		return true
 	}
+
 	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup),true,callback)
 
 	var nodes []ShardNode
 	for id, addr := range stores {
 		nodes = append(nodes,ShardNode{
-			Addr: addr,
-			ID:   string(codec.Uint642Bytes(id)),
+			Addr:    addr,
+			IDbytes: string(codec.Uint642Bytes(id)),
+			ID: id,
 		})
+	}
+
+	if len(nodes) == 0 {
+		logutil.Warnf("there are no nodes hold the range [%v %v)",startKey,endKey)
 	}
 
 	sd := &Shards{

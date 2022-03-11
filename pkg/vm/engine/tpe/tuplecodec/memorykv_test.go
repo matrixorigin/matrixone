@@ -324,7 +324,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetRangeWithLimit(TupleKey(prefix), nil, uint64(cnt))
+		_, values, _, _, err := kv.GetRangeWithLimit(TupleKey(prefix), nil, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -334,7 +334,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 		step := 10
 		last := TupleKey(prefix)
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetRangeWithLimit(last, nil, uint64(step))
+			keys, values, _, _, err := kv.GetRangeWithLimit(last, nil, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
@@ -371,7 +371,7 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -382,7 +382,7 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 		last := TupleKey(prefix)
 		prefixLen := len(prefix)
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
+			keys, values, _, _, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
@@ -429,7 +429,7 @@ func TestMemoryKV_DeletePrefix(t *testing.T) {
 		err2 := kv.DeleteWithPrefix([]byte("abc"))
 		convey.So(err2,convey.ShouldBeNil)
 
-		resKeys, resValues, err3 := kv.GetWithPrefix(TupleKey("cde"), len("cde"), uint64(cnt))
+		resKeys, resValues, _, _, err3 := kv.GetWithPrefix(TupleKey("cde"), len("cde"), uint64(cnt))
 		convey.So(err3,convey.ShouldBeNil)
 
 		for i, key := range resKeys {
