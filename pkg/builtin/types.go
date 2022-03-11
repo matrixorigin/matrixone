@@ -24,5 +24,6 @@ const (
 	Round
 	Floor
 	Abs
+	Log
 	Ln
 )

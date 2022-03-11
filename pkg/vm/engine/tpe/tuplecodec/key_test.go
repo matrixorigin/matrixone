@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"fmt"
 	"github.com/smartystreets/goconvey/convey"
 	"reflect"
 	"testing"
@@ -464,6 +465,229 @@ func TestRange_ContainRange(t *testing.T) {
 		for _, kase := range kases {
 			ret := rg.ContainRange(kase.a)
 			convey.So(ret,convey.ShouldEqual,kase.want)
+		}
+	})
+}
+
+func TestIsOverlap(t *testing.T) {
+	convey.Convey("isOverlap",t, func() {
+		type args struct {
+			a Range
+			b Range
+			want bool
+			wantErr bool
+		}
+		a := gen("a","")
+		d := gen("d","")
+		ac := gen("a","c")
+		bd := gen("b","d")
+		ca := gen("c","a")
+		db := gen("d","b")
+
+		//(-infinity,+infinity)
+		{
+			infi_infi1 := gen("","")
+
+			infi_infi2 := gen("","")
+			a_infi := gen("a","")
+			infi_a := gen("","a")
+			a_b := gen("a","b")
+			kases := []args{
+				{infi_infi1,infi_infi2,true,false},
+				{infi_infi1,a_infi,true,false},
+				{infi_infi1,infi_a,true,false},
+				{infi_infi1,a_b,true,false},
+			}
+			for _, kase := range kases {
+				ret, err := isOverlap(kase.a,kase.b)
+				if kase.wantErr {
+					convey.So(err,convey.ShouldBeError)
+				}else{
+					convey.So(ret,convey.ShouldEqual,kase.want)
+				}
+			}
+		}
+
+		//(-infinity,x)
+		{
+			infi_c := gen("","c")
+
+			infi_infi1 := gen("","")
+
+			infi_a := gen("","a")
+			infi_c2 := gen("","c")
+			infi_b := gen("","d")
+
+			a_infi := gen("a","")
+			c_infi := gen("c","")
+			d_infi := gen("d","")
+
+			a_c := gen("a","c")
+			b_e := gen("b","e")
+			c_d := gen("c","d")
+			d_e := gen("d","e")
+
+			kases := []args{
+				{infi_c,infi_infi1,true,false},
+				{infi_c,infi_a,true,false},
+				{infi_c,infi_c2,true,false},
+				{infi_c,infi_b,true,false},
+				{infi_c,a_infi,true,false},
+				{infi_c,c_infi,false,false},
+				{infi_c,d_infi,false,false},
+				{infi_c,a_c,true,false},
+				{infi_c,b_e,true,false},
+				{infi_c,c_d,false,false},
+				{infi_c,d_e,false,false},
+			}
+			for _, kase := range kases {
+				ret, err := isOverlap(kase.a,kase.b)
+				if kase.wantErr {
+					convey.So(err,convey.ShouldBeError)
+				}else{
+					convey.So(ret,convey.ShouldEqual,kase.want)
+				}
+			}
+		}
+
+		//[x,+infinity)
+		{
+			c_infi := gen("c","")
+
+			infi_infi1 := gen("","")
+
+			infi_a := gen("","a")
+			infi_c2 := gen("","c")
+			infi_d := gen("","d")
+
+			a_infi := gen("a","")
+			c_infi2 := gen("c","")
+			d_infi3 := gen("d","")
+
+			a_c := gen("a","c")
+			a_b := gen("a","b")
+			b_e := gen("b","e")
+			c_d := gen("c","d")
+			d_e := gen("d","e")
+
+			kases := []args {
+				{c_infi,infi_infi1,true,false},
+				{c_infi,infi_a,false,false},
+				{c_infi,infi_c2,false,false},
+				{c_infi,infi_d,true,false},
+				{c_infi,a_infi,true,false},
+				{c_infi,c_infi2,true,false},
+				{c_infi,d_infi3,true,false},
+				{c_infi,a_c,false,false},
+				{c_infi,a_b,false,false},
+				{c_infi,b_e,true,false},
+				{c_infi,c_d,true,false},
+				{c_infi,d_e,true,false},
+			}
+			for _, kase := range kases {
+				ret, err := isOverlap(kase.a,kase.b)
+				if kase.wantErr {
+					convey.So(err,convey.ShouldBeError)
+				}else{
+					convey.So(ret,convey.ShouldEqual,kase.want)
+				}
+			}
+		}
+
+		//[x,y)
+		{
+			c_f := gen("c","f")
+
+			infi_infi1 := gen("","")
+
+			infi_a := gen("","a")
+			infi_c2 := gen("","c")
+			infi_d := gen("","d")
+
+			a_infi := gen("a","")
+			c_infi2 := gen("c","")
+			d_infi := gen("d","")
+			f_infi := gen("f","")
+
+			a_c := gen("a","c")
+			a_b := gen("a","b")
+			b_e := gen("b","e")
+			c_d := gen("c","d")
+			c_g := gen("c","g")
+			d_e := gen("d","e")
+			d_f := gen("d","f")
+			d_g := gen("d","g")
+			f_g := gen("f","g")
+			g_h := gen("g","h")
+
+			kases := []args{
+				{c_f,infi_infi1,true,false},
+				{c_f,infi_a,false,false},
+				{c_f,infi_c2,false,false},
+				{c_f,infi_d,true,false},
+				{c_f,a_infi,true,false},
+				{c_f,c_infi2,true,false},
+				{c_f,d_infi,true,false},
+				{c_f,f_infi,false,false},
+				{c_f,a_c,false,false},
+				{c_f,a_b,false,false},
+				{c_f,b_e,true,false},
+				{c_f,c_d,true,false},
+				{c_f,c_g,true,false},
+				{c_f,d_e,true,false},
+				{c_f,d_f,true,false},
+				{c_f,d_g,true,false},
+				{c_f,f_g,false,false},
+				{c_f,g_h,false,false},
+
+				{a_c,c_f,false,false},
+				{a_b,c_f,false,false},
+				{b_e,c_f,true,false},
+				{c_d,c_f,true,false},
+				{c_g,c_f,true,false},
+				{d_e,c_f,true,false},
+				{d_f,c_f,true,false},
+				{d_g,c_f,true,false},
+				{f_g,c_f,false,false},
+				{g_h,c_f,false,false},
+			}
+
+			for i, kase := range kases {
+				fmt.Printf("%d %s %s\n",i,kase.a,kase.b)
+				ret, err := isOverlap(kase.a,kase.b)
+				if kase.wantErr {
+					convey.So(err,convey.ShouldBeError)
+				}else{
+					convey.So(ret,convey.ShouldEqual,kase.want)
+				}
+			}
+		}
+
+		kases := []args{
+			{a,a,true,false},
+			{a,d,true,false},
+			{a,bd,true,false},
+			{bd,a,true,false},
+			{d,bd,false,false},
+			{bd,d,false,false},
+			{a,ac,true,false},
+			{ac,a,true,false},
+			{ac,ac,true,false},
+			{ac,bd,true,false},
+			{bd,ac,true,false},
+			{ac,db,false,true},
+			{db,ac,false,true},
+			{bd,ca,false,true},
+			{ca,bd,false,true},
+		}
+		for i, kase := range kases {
+			fmt.Printf("%d %s %s\n",i,kase.a,kase.b)
+			ret, err := isOverlap(kase.a,kase.b)
+			if kase.wantErr {
+				convey.So(err,convey.ShouldBeError)
+			}else{
+				convey.So(ret,convey.ShouldEqual,kase.want)
+			}
 		}
 	})
 }

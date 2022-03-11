@@ -254,7 +254,7 @@ func (m *MemoryKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	return values, nil
 }
 
-func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	var keys []TupleKey
@@ -283,15 +283,15 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 	m.container.AscendGreaterOrEqual(
 		NewMemoryItem(startKey,nil),
 		iter)
-	return keys,values, nil
+	return keys, values, false, nil, nil
 }
 
 
-func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error) {
+func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, []byte, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	if prefixOrStartkey == nil {
-		return nil, nil, errorPrefixIsNull
+		return nil, nil, false, nil, errorPrefixIsNull
 	}
 
 	var keys []TupleKey
@@ -316,7 +316,7 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 	}
 
 	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey,nil),iter)
-	return keys, values, nil
+	return keys, values, false, nil, nil
 }
 
 func (m *MemoryKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {
