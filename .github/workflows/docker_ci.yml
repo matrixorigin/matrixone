@@ -1,9 +1,6 @@
 name:  Build and Push images
 
 on:
-  push:
-    branches:
-      - fix-docker-ci
   schedule:
     - cron: '0 22 * * *'
   release:
