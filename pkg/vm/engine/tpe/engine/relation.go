@@ -45,13 +45,7 @@ func (trel * TpeRelation) ID() string {
 }
 
 func (trel * TpeRelation) Nodes() engine.Nodes {
-	var nds = []engine.Node{
-		{
-			Id:   "0",
-			Addr: "localhost:20000",
-		},
-	}
-	return nds
+	return trel.nodes
 }
 
 func (trel * TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {

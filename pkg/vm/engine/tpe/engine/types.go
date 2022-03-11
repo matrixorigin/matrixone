@@ -50,6 +50,7 @@ type TpeRelation struct {
 	dbDesc *descriptor.DatabaseDesc
 	desc *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
+	nodes engine.Nodes
 }
 
 type TpeReader struct {

@@ -181,7 +181,7 @@ func (dhi *DescriptorHandlerImpl) GetValuesWithPrefix(parentID uint64, callbackC
 	//get keys with the prefix
 	prefixLen := len(prefix)
 	for {
-		keys, values, err := dhi.kvHandler.GetWithPrefix(prefix,prefixLen,dhi.kvLimit)
+		keys, values, _, _, err := dhi.kvHandler.GetWithPrefix(prefix,prefixLen,dhi.kvLimit)
 		if err != nil {
 			return nil, err
 		}
