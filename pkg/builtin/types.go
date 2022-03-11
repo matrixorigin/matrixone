@@ -25,4 +25,5 @@ const (
 	Floor
 	Abs
 	Log
+	Ln
 )
