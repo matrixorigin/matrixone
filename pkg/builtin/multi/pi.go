@@ -9,8 +9,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/pi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 func init() {
@@ -43,7 +43,7 @@ func init() {
 				//vec.Nsp = nil
 				nulls.Set(vec.Nsp, new(nulls.Nulls))
 				result := make([]float64, 0)
-				result = append(result, math.Pi)
+				result = append(result, pi.GetPi())
 				vector.SetCol(vec, result)
 				return vec, nil
 			},
