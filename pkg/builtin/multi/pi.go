@@ -1,7 +1,6 @@
 package multi
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/builtin"
