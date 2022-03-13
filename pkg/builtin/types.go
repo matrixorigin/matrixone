@@ -26,4 +26,5 @@ const (
 	Abs
 	Log
 	Ln
+	Exp
 )
