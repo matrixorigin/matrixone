@@ -26,5 +26,6 @@ const (
 	Abs
 	Log
 	Ln
+	Power
 	Pi
 )

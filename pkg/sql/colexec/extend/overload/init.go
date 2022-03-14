@@ -55,6 +55,11 @@ type retType struct {
 	ret      types.T
 }
 
+func AppendCastRules(op int, numArgs uint8, sourceTypes []types.T, targetTypes []types.Type) {
+	cr := castRule{numArgs, sourceTypes, targetTypes}
+	OperatorCastRules[op] = append(OperatorCastRules[op], cr)
+}
+
 // GetUnaryOpReturnType returns the returnType of unary ops or binary functions
 func GetUnaryOpReturnType(op int, arg types.T) types.T {
 	if m, ok := OperatorReturnType[op]; ok {
