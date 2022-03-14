@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,22 +11,20 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-package builtin
+package pi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"math"
 )
 
-const (
-	Length = iota + overload.NE + 1
-	Year
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Exp
-	Power
-	Pi
+var (
+	GetPi func() float64
 )
+
+func init() {
+	GetPi = getPiImpl
+}
+
+func getPiImpl() float64 {
+	return math.Pi
+}
