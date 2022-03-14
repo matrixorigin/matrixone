@@ -370,19 +370,49 @@ func (ce *kvExecutor) del(wb util.WriteBatch, req storage.Request) (uint64, []by
 	return writtenBytes, req.Cmd
 }
 
-func (ce *kvExecutor) tpeDeleteBatch(wb util.WriteBatch, req storage.Request) (uint64, []byte)  {
+func (ce *kvExecutor) tpeDeleteBatch(ctx storage.WriteContext,wb util.WriteBatch, req storage.Request) (uint64, []byte)  {
 	userReq := &pb.TpeDeleteBatchRequest{}
 	protoc.MustUnmarshal(userReq, req.Cmd)
+
+	shard :=ctx.Shard()
+
+	adjustRange := func (start, end []byte, s meta.Shard) ([]byte, []byte) {
+		if len(s.Start) > 0 && bytes.Compare(start, s.Start) < 0 {
+			start = s.Start
+		}
+
+		if len(s.End) > 0 && bytes.Compare(end, s.End) > 0 {
+			end = s.End
+		}
+		return start, end
+	}
+
+	adjustKey := func (key []byte, s meta.Shard) []byte {
+		if len(s.Start) > 0 && bytes.Compare(key, s.Start) < 0 {
+			key = s.Start
+		}
+
+		if len(s.End) > 0 && bytes.Compare(key, s.End) > 0 {
+			key = s.End
+		}
+		return key
+	}
 
 	writtenBytes := uint64(0)
 	if userReq.GetKeys() != nil {
 		for _, key := range userReq.GetKeys() {
-			wb.Delete(key)
-			writtenBytes += uint64(len(key))
+			adjKey := adjustKey(key,shard)
+			wb.Delete(adjKey)
+			writtenBytes += uint64(len(adjKey))
 		}
 	}else{
-		wb.DeleteRange(userReq.GetStart(),userReq.GetEnd())
-		writtenBytes += uint64(len(userReq.GetStart())) + uint64(len(userReq.GetEnd()))
+		startKey,endKey := adjustRange(userReq.GetStart(),userReq.GetEnd(),shard)
+
+		encodedStartKey := kv.EncodeDataKey(startKey,ctx.ByteBuf())
+		encodedEndKey := kv.EncodeDataKey(endKey,ctx.ByteBuf())
+
+		wb.DeleteRange(encodedStartKey,encodedEndKey)
+		writtenBytes += uint64(len(encodedStartKey)) + uint64(len(encodedEndKey))
 	}
 	return writtenBytes, req.Cmd
 }
@@ -438,7 +468,7 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 			ctx.AppendResponse(rep)
 			writtenBytes += writtenBytes
 		case uint64(pb.TpeDeleteBatch):
-			bytes, rep := ce.tpeDeleteBatch(wb,requests[j])
+			bytes, rep := ce.tpeDeleteBatch(ctx,wb,requests[j])
 			ctx.AppendResponse(rep)
 			writtenBytes += bytes
 		case uint64(pb.Incr):
