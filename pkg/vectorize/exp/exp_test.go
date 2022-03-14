@@ -17,7 +17,6 @@ package exp
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,10 +29,9 @@ func TestExpUint8(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	expResult := expUint8(nums, newNums)
-	require.Equal(t, nulls.Any(expResult.Nsp), false)
 
-	for i := range expResult.Result {
-		require.Equal(t, expNums[i], expResult.Result[i])
+	for i := range expResult {
+		require.Equal(t, expNums[i], expResult[i])
 	}
 }
 
@@ -46,10 +44,9 @@ func TestExpUint16(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expUint16(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -62,10 +59,9 @@ func TestExpUint32(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expUint32(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -78,10 +74,9 @@ func TestExpUint64(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expUint64(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -94,10 +89,9 @@ func TestExpint8(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expInt8(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -110,10 +104,9 @@ func TestExpint16(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expInt16(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -126,10 +119,9 @@ func TestExpint32(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expInt32(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -142,10 +134,9 @@ func TestExpint64(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expInt64(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -158,10 +149,9 @@ func TestExpfloat32(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expFloat32(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }
 
@@ -174,9 +164,8 @@ func TestExpfloat64(t *testing.T) {
 	newNums := make([]float64, len(nums))
 	//Run abs function
 	ExpResult := expFloat64(nums, newNums)
-	require.Equal(t, nulls.Any(ExpResult.Nsp), false)
 
-	for i := range ExpResult.Result {
-		require.Equal(t, expNums[i], ExpResult.Result[i])
+	for i := range ExpResult {
+		require.Equal(t, expNums[i], ExpResult[i])
 	}
 }

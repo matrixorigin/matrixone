@@ -16,21 +16,19 @@ package exp
 
 import (
 	"math"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 var (
-	expUint8   func([]uint8, []float64) ExpResult
-	expUint16  func([]uint16, []float64) ExpResult
-	expUint32  func([]uint32, []float64) ExpResult
-	expUint64  func([]uint64, []float64) ExpResult
-	expInt8    func([]int8, []float64) ExpResult
-	expInt16   func([]int16, []float64) ExpResult
-	expInt32   func([]int32, []float64) ExpResult
-	expInt64   func([]int64, []float64) ExpResult
-	expFloat32 func([]float32, []float64) ExpResult
-	expFloat64 func([]float64, []float64) ExpResult
+	expUint8   func([]uint8, []float64) []float64
+	expUint16  func([]uint16, []float64) []float64
+	expUint32  func([]uint32, []float64) []float64
+	expUint64  func([]uint64, []float64) []float64
+	expInt8    func([]int8, []float64) []float64
+	expInt16   func([]int16, []float64) []float64
+	expInt32   func([]int32, []float64) []float64
+	expInt64   func([]int64, []float64) []float64
+	expFloat32 func([]float32, []float64) []float64
+	expFloat64 func([]float64, []float64) []float64
 )
 
 func init() {
@@ -46,127 +44,112 @@ func init() {
 	expFloat64 = expFloat64Pure
 }
 
-type ExpResult struct {
-	Result []float64
-	Nsp    *nulls.Nulls
-}
-
-func ExpUint8(xs []uint8, rs []float64) ExpResult {
+func ExpUint8(xs []uint8, rs []float64) []float64 {
 	return expUint8(xs, rs)
 }
 
-func expUint8Pure(xs []uint8, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expUint8Pure(xs []uint8, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpUint16(xs []uint16, rs []float64) ExpResult {
+func ExpUint16(xs []uint16, rs []float64) []float64 {
 	return expUint16(xs, rs)
 }
 
-func expUint16Pure(xs []uint16, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expUint16Pure(xs []uint16, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpUint32(xs []uint32, rs []float64) ExpResult {
+func ExpUint32(xs []uint32, rs []float64) []float64 {
 	return expUint32(xs, rs)
 }
 
-func expUint32Pure(xs []uint32, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expUint32Pure(xs []uint32, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpUint64(xs []uint64, rs []float64) ExpResult {
+func ExpUint64(xs []uint64, rs []float64) []float64 {
 	return expUint64(xs, rs)
 }
 
-func expUint64Pure(xs []uint64, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expUint64Pure(xs []uint64, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpInt8(xs []int8, rs []float64) ExpResult {
+func ExpInt8(xs []int8, rs []float64) []float64 {
 	return expInt8(xs, rs)
 }
 
-func expInt8Pure(xs []int8, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expInt8Pure(xs []int8, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpInt16(xs []int16, rs []float64) ExpResult {
+func ExpInt16(xs []int16, rs []float64) []float64 {
 	return expInt16(xs, rs)
 }
 
-func expInt16Pure(xs []int16, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expInt16Pure(xs []int16, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpInt32(xs []int32, rs []float64) ExpResult {
+func ExpInt32(xs []int32, rs []float64) []float64 {
 	return expInt32(xs, rs)
 }
 
-func expInt32Pure(xs []int32, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expInt32Pure(xs []int32, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpInt64(xs []int64, rs []float64) ExpResult {
+func ExpInt64(xs []int64, rs []float64) []float64 {
 	return expInt64(xs, rs)
 }
 
-func expInt64Pure(xs []int64, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expInt64Pure(xs []int64, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpFloat32(xs []float32, rs []float64) ExpResult {
+func ExpFloat32(xs []float32, rs []float64) []float64 {
 	return expFloat32(xs, rs)
 }
 
-func expFloat32Pure(xs []float32, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expFloat32Pure(xs []float32, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(float64(n))
+		rs[i] = math.Exp(float64(n))
 	}
-	return result
+	return rs
 }
 
-func ExpFloat64(xs []float64, rs []float64) ExpResult {
+func ExpFloat64(xs []float64, rs []float64) []float64 {
 	return expFloat64(xs, rs)
 }
 
-func expFloat64Pure(xs []float64, rs []float64) ExpResult {
-	result := ExpResult{Result: rs, Nsp: new(nulls.Nulls)}
+func expFloat64Pure(xs []float64, rs []float64) []float64 {
 	for i, n := range xs {
-		result.Result[i] = math.Exp(n)
+		rs[i] = math.Exp(n)
 	}
-	return result
+	return rs
 }

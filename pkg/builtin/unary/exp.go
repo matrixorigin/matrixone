@@ -53,15 +53,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpUint8(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpUint8(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_uint16
@@ -77,15 +70,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpUint16(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpUint16(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_uint32
@@ -101,15 +87,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpUint32(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpUint32(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_uint64
@@ -125,15 +104,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpUint64(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpUint64(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_int8
@@ -149,15 +121,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpInt8(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpInt8(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_int16
@@ -173,15 +138,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpInt16(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpInt16(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_int32
@@ -197,15 +155,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpInt32(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpInt32(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_int64
@@ -221,15 +172,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpInt64(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpInt64(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_float32
@@ -245,15 +189,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpFloat32(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpFloat32(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 		{ // T_float64
@@ -269,15 +206,8 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				expResult := exp.ExpFloat64(origVecCol, results)
-				if nulls.Any(expResult.Nsp) {
-					if !nulls.Any(origVec.Nsp) {
-						resultVector.Nsp = expResult.Nsp
-					} else {
-						resultVector.Nsp.Or(expResult.Nsp)
-					}
-				}
-				return resultVector, err
+				vector.SetCol(resultVector, exp.ExpFloat64(origVecCol, results))
+				return resultVector, nil
 			},
 		},
 	}
