@@ -333,15 +333,21 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 
 		step := 10
 		last := TupleKey(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, _, _, err := kv.GetRangeWithLimit(last, nil, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, nil, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
 	})
 }
@@ -381,15 +387,21 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 		step := 10
 		last := TupleKey(prefix)
 		prefixLen := len(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, _, _, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
 	})
 }

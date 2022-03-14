@@ -53,12 +53,17 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.Group = uint64(customReq.Group)
 		req.CustomType = uint64(pb.DelIfNotExist)
 		req.Write = true
-	case pb.TpeDeleteWithPrefix:
-		msg := customReq.TpeDeleteWithPrefix
-		req.Key = msg.GetPrefix()
+	case pb.TpeDeleteBatch:
+		msg := customReq.TpeDeleteBatch
+		if msg.GetKeys() != nil {
+			req.Key = msg.GetKeys()[0]
+		}else{
+			req.Key = msg.GetStart()
+		}
 		req.Group = uint64(customReq.Group)
-		req.CustomType = uint64(pb.TpeDeleteWithPrefix)
+		req.CustomType = uint64(pb.TpeDeleteBatch)
 		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Get:
 		msg := customReq.Get
 		req.Key = msg.Key

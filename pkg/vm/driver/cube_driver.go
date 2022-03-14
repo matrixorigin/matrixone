@@ -84,9 +84,10 @@ type CubeDriver interface {
 	Delete([]byte) error
 	// DeleteIfExist remove the key from the store if key exists.
 	DeleteIfExist([]byte) error
-	// TpeDeleteWithPrefix will deletes all keys started with the prefix.
-	// countPerBatch : it denotes deleting the keys in every countPerBatch.
-	TpeDeleteWithPrefix(prefix []byte, countPerBatch uint64) error
+	// TpeDeleteBatch deletes keys in the parameter.
+	TpeDeleteBatch(keys [][]byte) error
+	// TpeDeleteBatchWithRange deletes keys in the range [startKey,endKey)
+	TpeDeleteBatchWithRange([]byte,[]byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup scan [start,end) data in specific group.
@@ -101,8 +102,8 @@ type CubeDriver interface {
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
@@ -119,8 +120,8 @@ type CubeDriver interface {
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
@@ -446,13 +447,26 @@ func (h *driver) DeleteIfExist(key []byte) error {
 	return err
 }
 
-func (h *driver) TpeDeleteWithPrefix(prefix []byte, countPerBatch uint64) error {
+func (h *driver) TpeDeleteBatch(keys [][]byte) error {
 	req := pb.Request{
-		Type:  pb.TpeDeleteWithPrefix,
+		Type:  pb.TpeDeleteBatch,
 		Group: pb.KVGroup,
-		TpeDeleteWithPrefix: pb.TpeDeleteWithPrefixRequest{
-			Prefix: prefix,
-			CoutPerBatch: countPerBatch,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys:keys,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	return err
+}
+
+func (h *driver) TpeDeleteBatchWithRange(startKey []byte, endKey []byte) error {
+	req := pb.Request{
+		Type:  pb.TpeDeleteBatch,
+		Group: pb.KVGroup,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys: nil,
+			Start: startKey,
+			End: endKey,
 		},
 	}
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
@@ -538,7 +552,7 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 		keys = tsr.Keys
 	}
 
-	return keys, tsr.Values, tsr.HasMoreData, tsr.NextScanKey, err
+	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
 //PrefixScan scans in KVGroup
@@ -615,7 +629,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit 
 		return nil, nil, false, nil, err
 	}
 
-	return tsr.Keys, tsr.Values, tsr.HasMoreData, tsr.NextScanKey, err
+	return tsr.Keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
 //PrefixKeys scans in KVGroup.
@@ -939,8 +953,8 @@ func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 
 // TpeScanResponse is the response to the tpeScan
 type TpeScanResponse struct {
-	Keys [][]byte	`json:"keys"`
-	Values [][]byte	`json:"values"`
-	HasMoreData bool `json:"has_more_data,string"`
-	NextScanKey []byte `json:"next_scan_key"`
+	Keys                [][]byte `json:"keys"`
+	Values              [][]byte `json:"values"`
+	CompleteInAllShards bool     `json:"CompleteInAllShards,string"`
+	NextScanKey         []byte   `json:"next_scan_key"`
 }
