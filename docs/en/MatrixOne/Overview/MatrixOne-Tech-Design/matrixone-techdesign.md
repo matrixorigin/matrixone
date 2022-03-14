@@ -70,3 +70,4 @@ In the future, it's possible that TPE provides complete SQL capabilities externa
 
 ## **Learn More**
 
+If you are interested in a particular module and would like to contribute, please refer to [contribution guide](../../Contribution-Guide/How-to-Contribute/preparation.md) to check out MatrixOne codebase structure. 
