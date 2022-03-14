@@ -63,3 +63,4 @@ MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supp
 This page outlines the overall introduction of MatrixOne. For information on other options that are available when you what to know more about MatrixOne product design, see the following:
 
 * [MatrixOne Architecture](matrixone-architecture.md)
+* [MatrixOne Tech Design](MatrixOne-Tech-Design/matrixone-techdesign.md)
