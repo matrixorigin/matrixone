@@ -468,6 +468,9 @@ type ReadContext struct {
 	//the attributes for the read
 	ReadAttributeDescs []*descriptor.AttributeDesc
 
+	//true -- the scanner has scanned all shards
+	CompleteInAllShards bool
+
 	//for prefix scan in next time
 	PrefixForScanKey []byte
 

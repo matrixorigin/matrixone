@@ -184,22 +184,24 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard meta.Shard, req
 		return rep, nil
 	}
 
-	var nextKey []byte
+	var nextKey []byte = nil
 
-	switch policy {
-	case executor.None:
-		nextKey = nil
-	case executor.GenWithResultLastKey:
-		nextKey = kv.NextKey(lastKey,readCtx.ByteBuf())
-	case executor.UseShardEnd:
-		nextKey,err = ce.clone(shard.GetEnd(),readCtx.ByteBuf())
+	if !completed {
+		switch policy {
+		case executor.None:
+			nextKey = nil
+		case executor.GenWithResultLastKey:
+			nextKey = kv.NextKey(lastKey,readCtx.ByteBuf())
+		case executor.UseShardEnd:
+			nextKey,err = ce.clone(shard.GetEnd(),readCtx.ByteBuf())
+		}
 	}
 
 	tsr := driver.TpeScanResponse{
-		Keys:             keys,
-		Values:           values,
-		HasMoreData:  !completed,
-		NextScanKey:   nextKey,
+		Keys:                keys,
+		Values:              values,
+		CompleteInAllShards: completed,
+		NextScanKey:         nextKey,
 	}
 
 	if rep, err = json.Marshal(tsr); err != nil {
@@ -295,22 +297,24 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard meta.Shar
 		return nil, err
 	}
 
-	var nextKey []byte
+	var nextKey []byte = nil
 
-	switch policy {
-	case executor.None:
-		nextKey = nil
-	case executor.GenWithResultLastKey:
-		nextKey = kv.NextKey(lastKey,readCtx.ByteBuf())
-	case executor.UseShardEnd:
-		nextKey,err = ce.clone(shard.GetEnd(),readCtx.ByteBuf())
+	if !completed {
+		switch policy {
+		case executor.None:
+			nextKey = nil
+		case executor.GenWithResultLastKey:
+			nextKey = kv.NextKey(lastKey,readCtx.ByteBuf())
+		case executor.UseShardEnd:
+			nextKey,err = ce.clone(shard.GetEnd(),readCtx.ByteBuf())
+		}
 	}
 
 	tsr := driver.TpeScanResponse{
-		Keys:             keys,
-		Values:           values,
-		HasMoreData:  !completed,
-		NextScanKey:   nextKey,
+		Keys:                keys,
+		Values:              values,
+		CompleteInAllShards: completed,
+		NextScanKey:         nextKey,
 	}
 
 	if err != nil {
@@ -366,6 +370,23 @@ func (ce *kvExecutor) del(wb util.WriteBatch, req storage.Request) (uint64, []by
 	return writtenBytes, req.Cmd
 }
 
+func (ce *kvExecutor) tpeDeleteBatch(wb util.WriteBatch, req storage.Request) (uint64, []byte)  {
+	userReq := &pb.TpeDeleteBatchRequest{}
+	protoc.MustUnmarshal(userReq, req.Cmd)
+
+	writtenBytes := uint64(0)
+	if userReq.GetKeys() != nil {
+		for _, key := range userReq.GetKeys() {
+			wb.Delete(key)
+			writtenBytes += uint64(len(key))
+		}
+	}else{
+		wb.DeleteRange(userReq.GetStart(),userReq.GetEnd())
+		writtenBytes += uint64(len(userReq.GetStart())) + uint64(len(userReq.GetEnd()))
+	}
+	return writtenBytes, req.Cmd
+}
+
 func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
 
 	customReq := &pb.SetRequest{}
@@ -416,6 +437,10 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 			writtenBytes, rep := ce.del(wb, requests[j])
 			ctx.AppendResponse(rep)
 			writtenBytes += writtenBytes
+		case uint64(pb.TpeDeleteBatch):
+			bytes, rep := ce.tpeDeleteBatch(wb,requests[j])
+			ctx.AppendResponse(rep)
+			writtenBytes += bytes
 		case uint64(pb.Incr):
 			writtenByte, rep := ce.incr(wb, requests[j])
 			ctx.AppendResponse(rep)

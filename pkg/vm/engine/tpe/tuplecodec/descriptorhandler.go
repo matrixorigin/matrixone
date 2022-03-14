@@ -180,14 +180,11 @@ func (dhi *DescriptorHandlerImpl) GetValuesWithPrefix(parentID uint64, callbackC
 
 	//get keys with the prefix
 	prefixLen := len(prefix)
+	//read all values with the prefix
 	for {
-		keys, values, _, _, err := dhi.kvHandler.GetWithPrefix(prefix,prefixLen,dhi.kvLimit)
+		keys, values, complete, nextScanKey, err := dhi.kvHandler.GetWithPrefix(prefix,prefixLen,dhi.kvLimit)
 		if err != nil {
 			return nil, err
-		}
-
-		if len(keys) == 0 {
-			break
 		}
 
 		for i := 0; i < len(keys); i++ {
@@ -211,7 +208,10 @@ func (dhi *DescriptorHandlerImpl) GetValuesWithPrefix(parentID uint64, callbackC
 		}
 
 		//get the next prefix
-		prefix = SuccessorOfKey(keys[len(keys) - 1])
+		prefix = nextScanKey
+		if complete {
+			break
+		}
 	}
 
 	return nil, errorDoNotFindTheDesc

@@ -58,6 +58,7 @@ type CubeKV struct {
 	Cube    driver.CubeDriver
 	dbIDPool    IDPool
 	tableIDPool IDPool
+	limit uint64
 }
 
 func initIDPool(cd driver.CubeDriver, typ string,pool *IDPool) error {
@@ -92,11 +93,11 @@ func initIDPool(cd driver.CubeDriver, typ string,pool *IDPool) error {
 	return nil
 }
 
-func NewCubeKV(cd driver.CubeDriver) (*CubeKV,error) {
+func NewCubeKV(cd driver.CubeDriver, limit uint64) (*CubeKV, error) {
 	if cd == nil {
 		return nil, errorCubeDriverIsNull
 	}
-	ck := &CubeKV{Cube: cd}
+	ck := &CubeKV{Cube: cd, limit: limit}
 	err := initIDPool(cd,DATABASE_ID,&ck.dbIDPool)
 	if err != nil {
 		return nil, err
@@ -224,8 +225,30 @@ func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
 	if prefix == nil {
 		return errorPrefixIsNull
 	}
-	//TODO: to fix
-	return errorUnsupportedInCubeKV
+
+	last := prefix
+	prefixLen := len(prefix)
+	for {
+		keys, _, complete, nextScanKey, err := ck.GetWithPrefix(last,prefixLen,ck.limit)
+		if err != nil {
+			return err
+		}
+
+		if len(keys) != 0 {
+			endKey := SuccessorOfKey(keys[len(keys) - 1])
+
+			err = ck.Cube.TpeDeleteBatchWithRange(last,endKey)
+			if err != nil {
+				return err
+			}
+		}
+
+		last = nextScanKey
+		if complete {
+			break
+		}
+	}
+	return nil
 }
 
 // Get gets the value of the key.
@@ -247,32 +270,64 @@ func (ck * CubeKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
 }
 
 func (ck * CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error) {
-	_, retValues, _, _, err := ck.Cube.TpeScan(startKey, endKey, math.MaxUint64,false)
-	if err != nil {
-		return nil, err
-	}
 	var values []TupleValue
-	for i := 0 ; i < len(retValues); i ++ {
-		values = append(values,retValues[i])
+	lastKey := startKey
+	for {
+		_, retValues, complete, nextScanKey, err := ck.Cube.TpeScan(lastKey, endKey, math.MaxUint64,false)
+		if err != nil {
+			return nil, err
+		}
+
+		for i := 0 ; i < len(retValues); i ++ {
+			values = append(values,retValues[i])
+		}
+
+		lastKey = nextScanKey
+		//all shards has been scanned
+		if complete {
+			break
+		}
 	}
-	return values,err
+
+	return values, nil
 }
 
 func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
-	scanKeys, scanValues, hasMoreData, nextScanKey, err := ck.Cube.TpeScan(startKey, endKey, limit, true)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
 	var keys []TupleKey
 	var values []TupleValue
-	for i := 0 ; i < len(scanKeys); i ++{
-		keys = append(keys,scanKeys[i])
-		values = append(values,scanValues[i])
+	var scanKeys [][]byte
+	var scanValues [][]byte
+	var nextScanKey []byte
+	var err error
+	lastKey := startKey
+	readCnt := uint64(0)
+	complete := false
+
+	for readCnt < limit {
+		needCnt := limit - readCnt
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, needCnt, true)
+		if err != nil {
+			return nil, nil, false, nil, err
+		}
+
+		readCnt += uint64(len(scanKeys))
+
+		for i := 0 ; i < len(scanKeys); i ++{
+			keys = append(keys,scanKeys[i])
+			values = append(values,scanValues[i])
+		}
+
+		lastKey = nextScanKey
+		//all shards has been scanned
+		if complete {
+			break
+		}
 	}
-	return keys, values, hasMoreData, nextScanKey, err
+
+	return keys, values, complete, nextScanKey, err
 }
 
-func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, []byte, error) {
+func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	if prefixOrStartkey == nil {
 		return nil, nil, false, nil, errorPrefixIsNull
 	}
@@ -281,18 +336,38 @@ func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
 
-	scanKeys, scanValues, hasMoreData, nextScanKey, err := ck.Cube.TpePrefixScan(prefixOrStartkey,prefixLen,limit)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
 	var keys []TupleKey
 	var values []TupleValue
-	for i := 0 ; i < len(scanKeys); i ++{
-		keys = append(keys,scanKeys[i])
-		values = append(values,scanValues[i])
+	var scanKeys [][]byte
+	var scanValues [][]byte
+	var nextScanKey []byte
+	var err error
+
+	lastKey := prefixOrStartkey
+	readCnt := uint64(0)
+	complete := false
+
+	for readCnt < limit {
+		needCnt := limit - readCnt
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey,prefixLen,needCnt)
+		if err != nil {
+			return nil, nil, false, nil, err
+		}
+
+		readCnt += uint64(len(scanKeys))
+
+		for i := 0 ; i < len(scanKeys); i ++{
+			keys = append(keys,scanKeys[i])
+			values = append(values,scanValues[i])
+		}
+
+		lastKey = nextScanKey
+		if complete {
+			break
+		}
 	}
 
-	return keys, values, hasMoreData, nextScanKey, err
+	return keys, values, complete, nextScanKey, err
 }
 
 func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {

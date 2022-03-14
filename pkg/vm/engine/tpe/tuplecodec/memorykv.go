@@ -283,15 +283,50 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 	m.container.AscendGreaterOrEqual(
 		NewMemoryItem(startKey,nil),
 		iter)
-	return keys, values, false, nil, nil
+
+	complete := false
+	nextScanKey := []byte{}
+	if len(keys) != 0 {
+		more := 0
+		checkMoreDataIter := func(i btree.Item) bool {
+			if x,ok := i.(*MemoryItem); ok {
+				//endKey <= key
+				if endKey != nil && bytes.Compare(endKey,x.key) <= 0 {
+					return false
+				}
+				more++
+			}
+			return true
+		}
+		checkKey := SuccessorOfKey(keys[len(keys) - 1])
+		m.container.AscendGreaterOrEqual(
+			NewMemoryItem(checkKey,nil),
+			checkMoreDataIter)
+
+		if more > 0 {
+			complete = false
+			nextScanKey = checkKey
+		} else {
+			complete = true
+			nextScanKey = nil
+		}
+	}else{
+		complete = true
+		nextScanKey = nil
+	}
+	return keys, values, complete, nextScanKey, nil
 }
 
 
-func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, []byte, error) {
+func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	if prefixOrStartkey == nil {
 		return nil, nil, false, nil, errorPrefixIsNull
+	}
+
+	if prefixLen > len(prefixOrStartkey) {
+		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
 
 	var keys []TupleKey
@@ -316,7 +351,38 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 	}
 
 	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey,nil),iter)
-	return keys, values, false, nil, nil
+
+	complete := false
+	nextScanKey := []byte{}
+	if len(keys) != 0 {
+		more := 0
+		checkMoreDataIter := func(i btree.Item) bool {
+			if x,ok := i.(*MemoryItem); ok {
+				if !bytes.HasPrefix(x.key, prefixOrStartkey[:prefixLen]) {
+					return false
+				}
+				more++
+			}
+			return true
+		}
+		checkKey := SuccessorOfKey(keys[len(keys) - 1])
+		m.container.AscendGreaterOrEqual(
+			NewMemoryItem(checkKey,nil),
+			checkMoreDataIter)
+
+		if more > 0 {
+			complete = false
+			nextScanKey = checkKey
+		} else {
+			complete = true
+			nextScanKey = nil
+		}
+	}else{
+		complete = true
+		nextScanKey = nil
+	}
+
+	return keys, values, complete, nextScanKey, nil
 }
 
 func (m *MemoryKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error) {

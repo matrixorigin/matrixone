@@ -87,7 +87,10 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 	tke := ihi.tch.GetEncoder()
 	tkd := ihi.tch.GetDecoder()
 
-	if indexReadCtx.PrefixForScanKey == nil {
+	if indexReadCtx.CompleteInAllShards {
+		return nil, 0, nil
+	}else if !indexReadCtx.CompleteInAllShards &&
+			indexReadCtx.PrefixForScanKey == nil {
 		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
@@ -103,19 +106,14 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 	//2.prefix read data from kv
 	//get keys with the prefix
-	var lastKey []byte
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, _, _, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey, uint64(needRead))
+		keys, values, complete, nextScanKey, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey, uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
 
 		rowRead += len(keys)
-		if len(keys) == 0 {
-			readFinished = true
-			break
-		}
 
 		//1.decode index key
 		//2.get fields wanted
@@ -132,8 +130,6 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			if err != nil {
 				return nil, 0, err
 			}
-
-			lastKey = keys[i]
 		}
 
 		//skip decoding the value
@@ -159,7 +155,12 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 		}
 
 		//get the next prefix
-		indexReadCtx.PrefixForScanKey = SuccessorOfKey(lastKey)
+		indexReadCtx.PrefixForScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInAllShards = true
+			readFinished = true
+			break
+		}
 	}
 
 	TruncateBatch(bat,int(ihi.kvLimit),rowRead)

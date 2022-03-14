@@ -96,7 +96,7 @@ func TestCubeKV_NextID(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("next id",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		typ := DATABASE_ID
@@ -113,7 +113,7 @@ func TestCubeKV_Set(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("set/get/delete",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -162,7 +162,7 @@ func TestCubeKV_SetBatch(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("setBatch/getBatch",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -218,7 +218,7 @@ func TestCubeKV_DedupSet(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("dedup set",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -262,7 +262,7 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("dedup set batch",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -324,7 +324,7 @@ func TestCubeKV_GetRange(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("get range",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -411,7 +411,7 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 		prefix := "xyz"
 		cnt := 10
 
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -445,16 +445,22 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 
 		step := 2
 		last := TupleKey(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, _, _, err := kv.GetRangeWithLimit(last, nil, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, nil, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
+		convey.So(readCnt,convey.ShouldEqual,cnt)
 	})
 }
 
@@ -466,7 +472,7 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		prefix := "xyz"
 		cnt := 10
 
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		type args struct {
@@ -497,16 +503,22 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		step := 2
 		last := TupleKey(prefix)
 		prefixLen := len(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, _, _, err := kv.GetWithPrefix(last, prefixLen, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
+		convey.So(readCnt,convey.ShouldEqual,cnt)
 	})
 }
 
@@ -515,7 +527,7 @@ func TestCubeKV_GetShardsWithRange(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("get shards with range",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 		cnt := 10
 		for i := 0; i < cnt; i++ {
@@ -551,7 +563,7 @@ func TestCubeKV_GetShardsWithPrefix(t *testing.T) {
 	defer CloseTestCluster(tc)
 
 	convey.Convey("get shards with prefix",t, func() {
-		kv, err := NewCubeKV(tc.CubeDrivers[0])
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
 		convey.So(err,convey.ShouldBeNil)
 
 		cnt := 10
@@ -580,5 +592,51 @@ func TestCubeKV_GetShardsWithPrefix(t *testing.T) {
 				info.node.ID,
 				info.node.IDbytes,info.node.Addr)
 		}
+	})
+}
+
+func TestCubeKV_DeleteWithPrefix(t *testing.T) {
+	tc := NewTestCluster(t)
+	defer CloseTestCluster(tc)
+
+	convey.Convey("get with prefix",t, func() {
+		prefix := "xyz"
+		cnt := 10
+
+		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000)
+		convey.So(err,convey.ShouldBeNil)
+
+		type args struct {
+			key   TupleKey
+			value TupleValue
+		}
+
+		var kases []args
+		for i := 0 ; i < cnt; i++ {
+			key := TupleKey(prefix + fmt.Sprintf("%d",i))
+			value := TupleValue(fmt.Sprintf("v%d",i))
+
+			kases = append(kases,args{
+				key:   key,
+				value: value,
+			})
+			err := kv.Set(key, value)
+			convey.So(err,convey.ShouldBeNil)
+		}
+
+		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		convey.So(err,convey.ShouldBeNil)
+
+		for i, kase := range kases {
+			convey.So(values[i],convey.ShouldResemble,kase.value)
+		}
+
+		err = kv.DeleteWithPrefix([]byte(prefix))
+		convey.So(err,convey.ShouldBeNil)
+
+		_, values, _, _, err = kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		convey.So(err,convey.ShouldBeNil)
+
+		convey.So(len(values),convey.ShouldEqual,0)
 	})
 }

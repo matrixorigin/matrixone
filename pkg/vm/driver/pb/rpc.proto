@@ -22,7 +22,7 @@ enum Type {
   DelIfNotExist = 7;
   TpePrefixScan = 8;
   TpeScan = 9;
-  TpeDeleteWithPrefix = 10;
+  TpeDeleteBatch = 10;
 
   Append = 100;
   GetSnapshot = 101;
@@ -50,7 +50,7 @@ message Request {
   AllocIDRequest               allocID = 10 [(gogoproto.nullable) = false];
   TpePrefixScanRequest         tpePrefixScan = 11  [(gogoproto.nullable) = false];
   TpeScanRequest         tpeScan = 12  [(gogoproto.nullable) = false];
-  TpeDeleteWithPrefixRequest TpeDeleteWithPrefix = 13  [(gogoproto.nullable) = false];
+  TpeDeleteBatchRequest tpeDeleteBatch = 13  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -134,11 +134,13 @@ message TpeScanRequest {
   bool         needKey = 4;
 }
 
-message TpeDeleteWithPrefixRequest {
-  //the prefix of the keys to be deleted
-  bytes prefix = 1;
-  //the count of key/value to be deleted per batch
-  uint64 coutPerBatch = 2;
+message TpeDeleteBatchRequest {
+  //the keys wanted to be deleted
+  //if the keys is null,then use the range follow
+  repeated bytes keys = 1;
+  //the range [start,end)
+  bytes        start = 3;
+  bytes        end = 4;
 }
 
 //AppendRequest appends data in the table.

@@ -78,6 +78,7 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 			IndexDesc:                &tr.tableDesc.Primary_index,
 			ReadAttributesNames:      attrs,
 			ReadAttributeDescs:       readAttrs,
+			CompleteInAllShards: false,
 			PrefixForScanKey:         nil,
 			LengthOfPrefixForScanKey: 0,
 		}
