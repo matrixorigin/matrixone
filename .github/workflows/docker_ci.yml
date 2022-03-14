@@ -1,12 +1,8 @@
 name:  Build and Push images
 
 on:
-  push:
-    branches:
-      - main
-  milestone:
-    types:
-      - closed
+  schedule:
+    - cron: '0 22 * * *'
   release:
     types:
       - published
@@ -24,13 +20,12 @@ jobs:
         id: prep
         run: |
           DOCKER_IMAGE=${{ secrets.DOCKERHUB_USERNAME }}/${GITHUB_REPOSITORY#*/}
-          VERSION=latest
-          SHORTREF=${GITHUB_SHA::8}
+          VERSION=nightly-${GITHUB_SHA::8}
           # If this is git tag, use the tag name as a docker tag
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION=${GITHUB_REF#refs/tags/v}
           fi
-          TAGS="${DOCKER_IMAGE}:${VERSION},${DOCKER_IMAGE}:${SHORTREF}"
+          TAGS="${DOCKER_IMAGE}:${VERSION}"
           # If the VERSION looks like a version number, assume that
           # this is the most recent version of the image and also
           # tag it 'latest'.
@@ -40,11 +35,16 @@ jobs:
           # Set output parameters.
           echo ::set-output name=tags::${TAGS}
           echo ::set-output name=docker_image::${DOCKER_IMAGE}
+          
+      - name: Get image info
+        run: |
+          echo image-tags: ${{ steps.prep.outputs.tags }}
+    
       - name: Set up QEMU
         uses: docker/setup-qemu-action@master
         with:
           image: tonistiigi/binfmt:latest
-          platforms: all
+          platforms:  linux/amd64,linux/arm64
 
       - name: Set up Docker Buildx
         id: buildx
