@@ -7,8 +7,8 @@ assignees:
 body:
   - type: checkboxes
     attributes:
-      label: Is there an existing issue for the same bug?
-      description: Please check if an issue already exists for the bug you encountered.
+      label: Is there an existing issue for the same feature request?
+      description: Please check if an issue already exists for the feature you request.
       options:
         - label: I have checked the existing issues.
           required: true
@@ -22,14 +22,14 @@ body:
       required: false
   - type: textarea
     attributes:
-      label: Describe the solution you'd like
+      label: Describe the feature you'd like
       description: A clear and concise description of what you want to happen.
     validations:
       required: true
   - type: textarea
     attributes:
-      label: Describe alternatives you've considered
-      description: A clear and concise description of any alternative solutions or features you've considered.
+      label: Describe implementation you've considered
+      description: A clear and concise description of implementation you've considered or investigated.
     validations:
       required: false
   - type: textarea
