@@ -16,8 +16,14 @@ import (
 
 func init() {
 	extend.FunctionRegistry["ceil"] = builtin.Ceil
-	extend.UnaryReturnTypes[builtin.Ceil] = func(_ extend.Extend) types.T {
-		return types.T_float64
+	for _, item := range ArgAndRets {
+		// append function parameter types and return types
+		overload.AppendFunctionRets(builtin.Ceil, item.args, item.ret)
+	}
+	overload.AppendFunctionRets(builtin.Ceil, []types.T{types.T_varchar}, types.T_float64)
+	overload.AppendFunctionRets(builtin.Ceil, []types.T{types.T_char}, types.T_float64)
+	extend.UnaryReturnTypes[builtin.Ceil] = func(extend extend.Extend) types.T {
+		return getUnaryReturnType(builtin.Ceil, extend)
 	}
 	extend.UnaryStrings[builtin.Ceil] = func(e extend.Extend) string {
 		return fmt.Sprintf("ceil(%s)", e)
