@@ -214,6 +214,27 @@ func TestInsertAndSelectFunction(t *testing.T) {
 				{"1"},
 			},
 		}},
+
+		{sql: "create table issue1660 (a int, b int);"},
+		{sql: "insert into issue1660 values (0, 0), (1, 2);"},
+		{sql: "select * from issue1660 where -a;", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+			},
+		}, com: "issue 1660"},
+
+		{sql: "create table t_issue1659 (a int, b int);"},
+		{sql: "insert into t_issue1659 values (1, 2), (3, 4), (5, 6);"},
+		{sql: "select * from t_issue1659 where (--1);", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+				{"3", "4"},
+				{"5", "6"},
+			},
+		}, com: "issue 1659"},
+
 		{sql: "insert into cha1 values ('1');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into cha2 values ('21');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into iis (i1) values (128);", err: "[22000]Out of range value for column 'i1' at row 1"},
