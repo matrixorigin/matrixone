@@ -171,7 +171,7 @@ func init() {
 			ReturnType: types.T_float32,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float32)
-				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_int64, Size: 8})
+				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float32, Size: 8})
 				if err != nil {
 					return nil, err
 				}
@@ -188,7 +188,7 @@ func init() {
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
-				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_int64, Size: 8})
+				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
 				if err != nil {
 					return nil, err
 				}
@@ -202,15 +202,15 @@ func init() {
 		},
 		{
 			Typ:        types.T_char,
-			ReturnType: types.T_char,
+			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
-				origVecCol := origVec.Col.([]string)
-				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_char, Size: 8})
+				origVecCol := origVec.Col.(*types.Bytes)
+				resultVector, err := process.Get(proc, 8*int64(len(origVecCol.Lengths)), types.Type{Oid: types.T_char, Size: 8})
 				if err != nil {
 					return nil, err
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
-				results = results[:len(origVecCol)]
+				results = results[:len(origVecCol.Lengths)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				vector.SetCol(resultVector, ceil.CeilString(origVecCol, results))
@@ -221,13 +221,13 @@ func init() {
 			Typ:        types.T_varchar,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
-				origVecCol := origVec.Col.([]string)
-				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_int64, Size: 8})
+				origVecCol := origVec.Col.(*types.Bytes)
+				resultVector, err := process.Get(proc, 8*int64(len(origVecCol.Lengths)), types.Type{Oid: types.T_int64, Size: 8})
 				if err != nil {
 					return nil, err
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
-				results = results[:len(origVecCol)]
+				results = results[:len(origVecCol.Lengths)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				vector.SetCol(resultVector, ceil.CeilString(origVecCol, results))

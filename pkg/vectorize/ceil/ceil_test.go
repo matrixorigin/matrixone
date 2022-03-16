@@ -1,6 +1,7 @@
 package ceil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -149,12 +150,12 @@ func TestExpfloat64(t *testing.T) {
 func TestExpString(t *testing.T) {
 	//Test values
 	nums := []string{"1.4", "-2.3", "3.3", "-8.2", "-10.2", "12.2", "-40.6"}
-	//Predefined Correct Values
+	tt := testutil.MakeBytes(nums)
 	ceilnum := []float64{2, -2, 4, -8, -10, 13, -40}
-	//Init a new variable
+
 	newnum := make([]float64, len(nums))
 	//Run abs function
-	ceilresult := ceilString(nums, newnum)
+	ceilresult := ceilString(tt, newnum)
 
 	for i := range ceilresult {
 		require.Equal(t, ceilnum[i], ceilresult[i])

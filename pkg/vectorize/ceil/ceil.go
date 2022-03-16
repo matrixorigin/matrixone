@@ -1,6 +1,7 @@
 package ceil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 	"strconv"
 )
@@ -16,7 +17,7 @@ var (
 	ceilInt64   func([]int64, []int64) []int64
 	ceilFloat32 func([]float32, []float32) []float32
 	ceilFloat64 func([]float64, []float64) []float64
-	ceilString  func([]string, []float64) []float64
+	ceilString  func(*types.Bytes, []float64) []float64
 )
 
 func init() {
@@ -123,14 +124,18 @@ func ceilFloat64Pure(xs, rs []float64) []float64 {
 	}
 	return rs
 }
-func CeilString(xs []string, rs []float64) []float64 {
+func CeilString(xs *types.Bytes, rs []float64) []float64 {
 	return ceilString(xs, rs)
 }
-func ceilStringPure(xs []string, rs []float64) []float64 {
-	for i, r := range xs {
-		t, err := strconv.ParseFloat(r, 64)
-		if err == nil {
-			rs[i] = float64(math.Ceil(t))
+func ceilStringPure(xs *types.Bytes, rs []float64) []float64 {
+	var tt uint32
+	tt = 0
+	for i, r := range xs.Lengths {
+		t := xs.Data[tt : tt+r]
+		tt += r
+		ss, er := strconv.ParseFloat(string(t), 64)
+		if er == nil {
+			rs[i] = float64(math.Ceil(float64(ss)))
 		}
 	}
 	return rs
