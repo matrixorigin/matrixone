@@ -104,24 +104,23 @@ func (m *MemoryKV) Set(key TupleKey, value TupleValue) error {
 	return nil
 }
 
-func (m *MemoryKV) SetBatch(keys []TupleKey, values []TupleValue) []error {
+func (m *MemoryKV) SetBatch(keys []TupleKey, values []TupleValue) error {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
-	var errs []error
 	kl := len(keys)
 	vl := len(values)
 	if kl != vl {
-		return append(errs, errorKeysCountNotEqualToValuesCount)
+		return errorKeysCountNotEqualToValuesCount
 	}
 
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
-			errs = append(errs, errorKeyIsNull)
+			return errorKeyIsNull
 		}else{
 			m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
 		}
 	}
-	return errs
+	return nil
 }
 
 func (m *MemoryKV) DedupSet(key TupleKey, value TupleValue) error {
@@ -137,31 +136,28 @@ func (m *MemoryKV) DedupSet(key TupleKey, value TupleValue) error {
 	return nil
 }
 
-func (m *MemoryKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
+func (m *MemoryKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
-	var errs []error
+	var err error
 	kl := len(keys)
 	vl := len(values)
 	if kl != vl {
-		return append(errs, errorKeysCountNotEqualToValuesCount)
+		return errorKeysCountNotEqualToValuesCount
 	}
 
 	//check nils and duplication
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
-			errs = append(errs, errorKeyIsNull)
-			continue
+			return errorKeyIsNull
 		}
 
 		if m.container.Has(NewMemoryItem(keys[i],nil)) {
-			errs = append(errs, errorKeyExists)
-			continue
+			return errorKeyExists
 		}
 		m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
-		errs = append(errs,nil)
 	}
-	return errs
+	return err
 }
 
 func (m *MemoryKV) Delete(key TupleKey) error {

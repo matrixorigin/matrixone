@@ -29,7 +29,7 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 
 		ihi := &IndexHandlerImpl{
 			tch:        tch,
-			dbDesc:     internalDatabaseDesc,
+			dbDesc:     InternalDatabaseDesc,
 			kv:         kv,
 			serializer: serial,
 		}
@@ -45,25 +45,25 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 		fillBatch(lines,bat)
 
 		writeStates := make([]AttributeStateForWrite,4)
-		for i, attrDesc := range internalDescriptorTableDesc.Attributes {
+		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
 			writeStates[i].AttrDesc = attrDesc
 			writeStates[i].NeedGenerated = false
 			writeStates[i].PositionInBatch = i
 		}
 
 		writeCtx := &WriteContext{
-			DbDesc: internalDatabaseDesc,
-			TableDesc: internalDescriptorTableDesc,
-			IndexDesc: &internalDescriptorTableDesc.Primary_index,
+			DbDesc:          InternalDatabaseDesc,
+			TableDesc:       InternalDescriptorTableDesc,
+			IndexDesc:       &InternalDescriptorTableDesc.Primary_index,
 			AttributeStates: writeStates,
-			BatchAttrs:      internalDescriptorTableDesc.Attributes,
+			BatchAttrs:      InternalDescriptorTableDesc.Attributes,
 			callback:        callbackPackage{},
 			NodeID:          0,
 		}
 		err := ihi.WriteIntoIndex(writeCtx, bat)
 		convey.So(err,convey.ShouldBeNil)
 
-		err = ihi.WriteIntoTable(internalDescriptorTableDesc, writeCtx, bat)
+		err = ihi.WriteIntoTable(InternalDescriptorTableDesc, writeCtx, bat)
 		convey.So(err,convey.ShouldBeError)
 	})
 }
@@ -77,11 +77,11 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 
 		ihi := &IndexHandlerImpl{
 			tch:        tch,
-			dbDesc:     internalDatabaseDesc,
+			dbDesc:     InternalDatabaseDesc,
 			kv:         kv,
-			kvLimit: uint64(10),
+			kvLimit:    uint64(10),
 			serializer: serial,
-			rcc: &RowColumnConverterImpl{},
+			rcc:        &RowColumnConverterImpl{},
 		}
 
 		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_char,types.T_char)
@@ -95,18 +95,18 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		fillBatch(lines,bat)
 
 		writeStates := make([]AttributeStateForWrite,4)
-		for i, attrDesc := range internalDescriptorTableDesc.Attributes {
+		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
 			writeStates[i].AttrDesc = attrDesc
 			writeStates[i].NeedGenerated = false
 			writeStates[i].PositionInBatch = i
 		}
 
 		writeCtx := &WriteContext{
-			DbDesc: internalDatabaseDesc,
-			TableDesc: internalDescriptorTableDesc,
-			IndexDesc: &internalDescriptorTableDesc.Primary_index,
+			DbDesc:          InternalDatabaseDesc,
+			TableDesc:       InternalDescriptorTableDesc,
+			IndexDesc:       &InternalDescriptorTableDesc.Primary_index,
 			AttributeStates: writeStates,
-			BatchAttrs:      internalDescriptorTableDesc.Attributes,
+			BatchAttrs:      InternalDescriptorTableDesc.Attributes,
 			callback:        callbackPackage{},
 			NodeID:          0,
 		}
@@ -115,17 +115,17 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		convey.So(err,convey.ShouldBeNil)
 
 		wantAttr := []*descriptor.AttributeDesc{
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_parentID_ID],
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_id_ID],
-			&internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID],
+			&InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_parentID_ID],
+			&InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_id_ID],
+			&InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID],
 		}
 
 		readCtx := &ReadContext{
-			DbDesc:                   internalDatabaseDesc,
-			TableDesc:                internalDescriptorTableDesc,
-			IndexDesc:                &internalDescriptorTableDesc.Primary_index,
+			DbDesc:                   InternalDatabaseDesc,
+			TableDesc:                InternalDescriptorTableDesc,
+			IndexDesc:                &InternalDescriptorTableDesc.Primary_index,
 			ReadAttributeDescs:       wantAttr,
-			CompleteInAllShards: false,
+			CompleteInAllShards:      false,
 			PrefixForScanKey:         nil,
 			LengthOfPrefixForScanKey: 0,
 		}

@@ -40,6 +40,8 @@ var (
 	errorIsNotShards = errors.New("it is not the shards")
 	errorShardsAreNil = errors.New("shards are nil")
 	errorThereAreNotNodesHoldTheTable = errors.New("there are not nodes hold the table")
+	errorCanNotDropTheInternalDatabase = errors.New("you can not drop the internal database")
+	errorCanNotDropTheTableInTheInternalDatabase = errors.New("you can not drop the table in the internal database")
 )
 
 var _ computation.ComputationHandler = &ComputationHandlerImpl{}
@@ -129,6 +131,10 @@ func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) er
 		return err
 	}
 
+	if chi.isInternalDatabase(uint64(dbDesc.ID)) {
+		return errorCanNotDropTheInternalDatabase
+	}
+
 	//2. list tables and drop them one by one
 	tableDescs, err := chi.ListTables(uint64(dbDesc.ID))
 	if err != nil {
@@ -174,7 +180,7 @@ func (chi *ComputationHandlerImpl) GetDatabase(dbName string) (*descriptor.Datab
 //callbackForGetDatabaseDesc extracts the databaseDesc
 func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
@@ -264,7 +270,20 @@ func (chi *ComputationHandlerImpl) encodeFieldsIntoValue(epoch,dbID,tableID uint
 	return out,nil
 }
 
+func (chi *ComputationHandlerImpl) isInternalDatabase(dbID uint64) bool {
+	return dbID == InternalDatabaseID
+}
+
+func (chi *ComputationHandlerImpl) isInternalTable(tableID uint64) bool {
+	return tableID == InternalDescriptorTableID ||
+		tableID == InternalAsyncGCTableID
+}
+
 func (chi *ComputationHandlerImpl) DropTable(epoch, dbId uint64, tableName string) (uint64, error) {
+	if chi.isInternalDatabase(dbId) {
+		return 0, errorCanNotDropTheTableInTheInternalDatabase
+	}
+
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByID(dbId)
 	if err != nil {
@@ -281,6 +300,10 @@ func (chi *ComputationHandlerImpl) DropTable(epoch, dbId uint64, tableName strin
 }
 
 func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc *descriptor.RelationDesc) (uint64, error) {
+	if chi.isInternalDatabase(dbId) {
+		return 0, errorCanNotDropTheTableInTheInternalDatabase
+	}
+
 	//check the table is deleted already
 	if tableDesc.Is_deleted {
 		return 0, errorTableDeletedAlready
@@ -309,7 +332,7 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 //callbackForGetTableDesc extracts the tableDesc
 func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
@@ -454,6 +477,11 @@ type WriteContext struct {
 	callback callbackPackage
 
 	NodeID uint64
+
+	//to set
+	keys []TupleKey
+	values []TupleValue
+	t0 time.Duration
 }
 
 type ReadContext struct {

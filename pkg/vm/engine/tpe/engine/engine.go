@@ -22,17 +22,21 @@ import (
 
 var (
 	errorInvalidKVType = errors.New("invalid kv type")
+	errorTheInternalDatabaseHasExisted = errors.New("the internal database has existed")
+	errorTheInternalDescriptorTableHasExisted = errors.New("the internal descriptor table has existed")
+	errorTheInternalAsyncGCTableHasExisted = errors.New("the internal asyncgc table has existed")
 )
 
 func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	te := &TpeEngine{tpeConfig: tc}
 	tch := tuplecodec.NewTupleCodecHandler(tuplecodec.SystemTenantID)
+	kvLimit := 10000
 	var kv tuplecodec.KVHandler
 	var err error
 	if tc.KvType == tuplecodec.KV_MEMORY {
 		kv = tuplecodec.NewMemoryKV()
 	}else if tc.KvType == tuplecodec.KV_CUBE{
-		kv, err = tuplecodec.NewCubeKV(tc.Cube, 10000)
+		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit))
 		if err != nil {
 			return nil, err
 		}
@@ -41,13 +45,13 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	}
 
 	serial := &tuplecodec.DefaultValueSerializer{}
-	kvLimit := 10000
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
 	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
 	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch)
 	te.computeHandler = ch
+	te.dh = dh
 	return te, nil
 }
 
@@ -99,5 +103,58 @@ func (te * TpeEngine) RemoveDeletedTable(epoch uint64) error {
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+//Bootstrap initializes the tpe
+func (te * TpeEngine) Bootstrap() error {
+	//create internal database 'system'
+	_, err := te.dh.LoadDatabaseDescByID(tuplecodec.InternalDatabaseID)
+	if err == nil {//it denotes the 'system' exists
+		return errorTheInternalDatabaseHasExisted
+	}
+
+	//the database does not exist
+	err = te.dh.StoreDatabaseDescByID(tuplecodec.InternalDatabaseID, tuplecodec.InternalDatabaseDesc)
+	if err != nil {
+		return err
+	}
+
+	//create internal table 'descriptor' for the 'system'
+	_, err = te.dh.LoadRelationDescByID(tuplecodec.InternalDatabaseID, tuplecodec.InternalDescriptorTableID)
+	if err == nil {
+		return errorTheInternalDescriptorTableHasExisted
+	}
+
+	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID,tuplecodec.InternalDescriptorTableID,tuplecodec.InternalDescriptorTableDesc)
+	if err != nil {
+		return err
+	}
+
+	//create internal table 'asyncGC' for the 'system'
+	_, err = te.dh.LoadRelationDescByID(tuplecodec.InternalDatabaseID, tuplecodec.InternalAsyncGCTableID)
+	if err == nil {
+		return errorTheInternalAsyncGCTableHasExisted
+	}
+
+	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID,tuplecodec.InternalAsyncGCTableID,tuplecodec.InternalAsyncGCTableDesc)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+//Destroy delete the tpe
+func (te * TpeEngine) Destroy() error {
+	return nil
+}
+
+func (te * TpeEngine) Open() error {
+	_ = te.Bootstrap()
+	return nil
+}
+
+func (te * TpeEngine)  Close() error {
 	return nil
 }

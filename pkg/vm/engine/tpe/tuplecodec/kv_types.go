@@ -31,13 +31,13 @@ type KVHandler interface {
 	Set(key TupleKey,value TupleValue) error
 
 	// SetBatch writes the batch of key-value (overwrite)
-	SetBatch(keys []TupleKey,values []TupleValue) []error
+	SetBatch(keys []TupleKey, values []TupleValue) error
 
 	// DedupSet writes the key-value. It will fail if the key exists
 	DedupSet(key TupleKey, value TupleValue) error
 
 	// DedupSetBatch writes the batch of keys-values. It will fail if there is one key exists
-	DedupSetBatch(keys []TupleKey, values []TupleValue) []error
+	DedupSetBatch(keys []TupleKey, values []TupleValue) error
 
 	// Delete deletes the key
 	Delete(key TupleKey) error
