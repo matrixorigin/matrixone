@@ -281,12 +281,8 @@ func (ihi * IndexHandlerImpl) callbackForEncodeTupleInBatch(callbackCtx interfac
 		return err
 	}
 
-	//write key,value into the kv storage
-	//failed if the key has existed
-	err = ihi.kv.DedupSet(key,value)
-	if err != nil {
-		return err
-	}
+	writeCtx.keys = append(writeCtx.keys,key)
+	writeCtx.values = append(writeCtx.values,value)
 	return nil
 }
 
@@ -311,6 +307,11 @@ func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Ba
 	//2.encode every row in the batch
 	ba := NewBatchAdapter(bat)
 	err := ba.ForEachTuple(indexWriteCtx, ihi.callbackForEncodeTupleInBatch)
+	if err != nil {
+		return err
+	}
+
+	err = ihi.kv.DedupSetBatch(indexWriteCtx.keys,indexWriteCtx.values)
 	if err != nil {
 		return err
 	}

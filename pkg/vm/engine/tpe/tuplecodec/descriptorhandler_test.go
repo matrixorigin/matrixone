@@ -77,7 +77,7 @@ func TestDescriptorHandlerImpl_LoadRelationDescByName(t *testing.T) {
 					parentID: InternalDatabaseID,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_tableDesc(internalDescriptorTableDesc,uint32(id),name),
+					desc:     make_tableDesc(InternalDescriptorTableDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -94,14 +94,14 @@ func TestDescriptorHandlerImpl_LoadRelationDescByName(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -183,7 +183,7 @@ func TestDescriptorHandlerImpl_LoadRelationDescByID(t *testing.T) {
 					parentID: InternalDatabaseID,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_tableDesc(internalDescriptorTableDesc,uint32(id),name),
+					desc:     make_tableDesc(InternalDescriptorTableDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -200,14 +200,14 @@ func TestDescriptorHandlerImpl_LoadRelationDescByID(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -289,7 +289,7 @@ func TestDescriptorHandlerImpl_StoreRelationDescByName(t *testing.T) {
 					parentID: InternalDatabaseID,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_tableDesc(internalDescriptorTableDesc,uint32(id),name),
+					desc:     make_tableDesc(InternalDescriptorTableDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -306,14 +306,14 @@ func TestDescriptorHandlerImpl_StoreRelationDescByName(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -399,7 +399,7 @@ func TestDescriptorHandlerImpl_StoreRelationDescByID(t *testing.T) {
 					parentID: InternalDatabaseID,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_tableDesc(internalDescriptorTableDesc,uint32(id),name),
+					desc:     make_tableDesc(InternalDescriptorTableDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -416,14 +416,14 @@ func TestDescriptorHandlerImpl_StoreRelationDescByID(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -509,7 +509,7 @@ func TestDescriptorHandlerImpl_LoadDatabaseDescByName(t *testing.T) {
 					parentID: math.MaxUint64,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_dbDesc(internalDatabaseDesc,uint32(id),name),
+					desc:     make_dbDesc(InternalDatabaseDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -526,14 +526,14 @@ func TestDescriptorHandlerImpl_LoadDatabaseDescByName(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -615,7 +615,7 @@ func TestDescriptorHandlerImpl_LoadDatabaseDescByID(t *testing.T) {
 					parentID: math.MaxUint64,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_dbDesc(internalDatabaseDesc,uint32(id),name),
+					desc:     make_dbDesc(InternalDatabaseDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -632,14 +632,14 @@ func TestDescriptorHandlerImpl_LoadDatabaseDescByID(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -721,7 +721,7 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByName(t *testing.T) {
 					parentID: math.MaxUint64,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_dbDesc(internalDatabaseDesc,uint32(id),name),
+					desc:     make_dbDesc(InternalDatabaseDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -738,14 +738,14 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByName(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -829,7 +829,7 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByID(t *testing.T) {
 					parentID: math.MaxUint64,
 					id:       uint64(id),
 					name:     name,
-					desc:     make_dbDesc(internalDatabaseDesc,uint32(id),name),
+					desc:     make_dbDesc(InternalDatabaseDesc,uint32(id),name),
 				})
 			}
 			return kases
@@ -846,14 +846,14 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByID(t *testing.T) {
 
 			tuple := make_tuple(kase.parentID,kase.id,kase.name,descBytes)
 			key, _, err := tch.tke.EncodePrimaryIndexKey(tmpPrefix,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 			)
 			convey.So(err,convey.ShouldBeNil)
 
 			value, _, err := tch.tke.EncodePrimaryIndexValue(nil,
-				&internalDescriptorTableDesc.Primary_index,
+				&InternalDescriptorTableDesc.Primary_index,
 				0,
 				tuple,
 				serial)
@@ -915,7 +915,7 @@ func TestDescriptorHandlerImpl_StoreRelationDescIntoAsyncGC(t *testing.T) {
 					})
 
 					tableName := fmt.Sprintf("table%d",tableId)
-					desc := make_relation_desc(internalDescriptorTableDesc,tableName,tableId)
+					desc := make_relation_desc(InternalDescriptorTableDesc,tableName,tableId)
 					err := dhi.StoreRelationDescIntoAsyncGC(epoch, dbId, desc)
 					convey.So(err,convey.ShouldBeNil)
 				}

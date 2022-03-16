@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
@@ -45,6 +46,7 @@ var (
 	errorUnsupportedInCubeKV = errors.New("unsupported in cubekv")
 	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
 	errorRangeIsInvalid = errors.New("the range is invalid")
+	errorNoKeysToSet = errors.New("the count of keys is zero")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -195,26 +197,79 @@ func (ck * CubeKV) Set(key TupleKey, value TupleValue) error {
 	return ck.Cube.Set(key,value)
 }
 
-func (ck * CubeKV) SetBatch(keys []TupleKey, values []TupleValue) []error {
-	var errs []error
-	for i, key := range keys {
-		err := ck.Set(key,values[i])
-		errs = append(errs,err)
+func (ck * CubeKV) SetBatch(keys []TupleKey, values []TupleValue) error {
+	if len(keys) != len(values) {
+		return errorInvalidKeyValueCount
 	}
-	return errs
+
+	if len(keys) == 0 {
+		return errorNoKeysToSet
+	}
+
+	var retErr error = nil
+	var checkErr int32
+
+	atomic.StoreInt32(&checkErr,0)
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(keys))
+
+	callback := func(req server.CustomRequest,resp []byte, err error) {
+		if err != nil {
+			if atomic.CompareAndSwapInt32(&checkErr,0,1) {
+				retErr = errors.New(string(resp))
+			}
+			logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
+		}
+
+		wg.Done()
+	}
+
+	for i, key := range keys {
+		ck.Cube.AsyncSet(key,values[i],callback,nil)
+	}
+	wg.Wait()
+
+	return retErr
 }
 
 func (ck * CubeKV) DedupSet(key TupleKey, value TupleValue) error {
 	return ck.Cube.SetIfNotExist(key, value)
 }
 
-func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) []error {
-	var errs []error
-	for i, key := range keys {
-		err := ck.DedupSet(key,values[i])
-		errs = append(errs,err)
+func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
+	if len(keys) != len(values) {
+		return errorInvalidKeyValueCount
 	}
-	return errs
+
+	if len(keys) == 0 {
+		return errorNoKeysToSet
+	}
+
+	var retErr error = nil
+	var checkErr int32
+
+	atomic.StoreInt32(&checkErr,0)
+
+	wg := sync.WaitGroup{}
+	wg.Add(len(keys))
+
+	callback := func(req server.CustomRequest,resp []byte, err error) {
+		if err != nil {
+			if atomic.CompareAndSwapInt32(&checkErr,0,1) {
+				retErr = errors.New(string(resp))
+			}
+			logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
+		}
+
+		wg.Done()
+	}
+
+	for i, key := range keys {
+		ck.Cube.AsyncSetIfNotExist(key,values[i],callback,nil)
+	}
+	wg.Wait()
+	return retErr
 }
 
 func (ck * CubeKV) Delete(key TupleKey) error {
@@ -226,26 +281,36 @@ func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
 		return errorPrefixIsNull
 	}
 
-	last := prefix
-	prefixLen := len(prefix)
-	for {
-		keys, _, complete, nextScanKey, err := ck.GetWithPrefix(last,prefixLen,ck.limit)
+	ret, err := ck.GetShardsWithPrefix(prefix)
+	if err != nil {
+		return err
+	}
+
+	shards,ok := ret.(*Shards)
+	if !ok {
+		return errorIsNotShards
+	}
+
+	//shrink [start,end) according to the shard.
+	adjustRange := func (start, end []byte, shardStart, shardEnd []byte) ([]byte, []byte) {
+		if len(shardStart) > 0 && bytes.Compare(start, shardStart) < 0 {
+			start = shardStart
+		}
+
+		if len(shardEnd) > 0 && bytes.Compare(end, shardEnd) > 0 {
+			end = shardEnd
+		}
+		return start, end
+	}
+
+	prefixEnd := SuccessorOfPrefix(prefix)
+
+	for _, info := range shards.shardInfos {
+		startKey,endKey := adjustRange(prefix,prefixEnd,info.startKey,info.endKey)
+		logutil.Infof("delete range %v,%v",startKey,endKey)
+		err = ck.Cube.TpeDeleteBatchWithRange(startKey,endKey)
 		if err != nil {
 			return err
-		}
-
-		if len(keys) != 0 {
-			endKey := SuccessorOfKey(keys[len(keys) - 1])
-
-			err = ck.Cube.TpeDeleteBatchWithRange(last,endKey)
-			if err != nil {
-				return err
-			}
-		}
-
-		last = nextScanKey
-		if complete {
-			break
 		}
 	}
 	return nil

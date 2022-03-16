@@ -64,7 +64,7 @@ func TestComputationHandlerImpl_CreateTable(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -98,7 +98,7 @@ func TestComputationHandlerImpl_DropTable(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -135,7 +135,7 @@ func TestComputationHandlerImpl_ListTables(t *testing.T) {
 		var tables []*descriptor.RelationDesc
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -207,7 +207,7 @@ func TestComputationHandlerImpl_DropDatabase(t *testing.T) {
 			var tables []*descriptor.RelationDesc
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -267,7 +267,7 @@ func TestComputationHandlerImpl_GetDatabase(t *testing.T) {
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -322,7 +322,7 @@ func TestComputationHandlerImpl_ListDatabases(t *testing.T) {
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -373,7 +373,7 @@ func TestComputationHandlerImpl_GetTable(t *testing.T) {
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName

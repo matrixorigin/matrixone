@@ -198,10 +198,9 @@ func TestCubeKV_SetBatch(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.SetBatch(keys, values)
-		for _, err := range errs {
-			convey.So(err,convey.ShouldBeNil)
-		}
+		err = kv.SetBatch(keys, values)
+		convey.So(err,convey.ShouldBeNil)
+
 
 		gets, err2 := kv.GetBatch(keys)
 		convey.So(err2,convey.ShouldBeNil)
@@ -300,14 +299,8 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.DedupSetBatch(keys, values)
-		for i, err := range errs {
-			if kases[i].want {
-				convey.So(err,convey.ShouldBeNil)
-			}else{
-				convey.So(err,convey.ShouldBeError)
-			}
-		}
+		err = kv.DedupSetBatch(keys, values)
+		convey.So(err,convey.ShouldBeError)
 
 		gets, err2 := kv.GetBatch(keys)
 		convey.So(err2,convey.ShouldBeNil)
@@ -352,10 +345,8 @@ func TestCubeKV_GetRange(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.SetBatch(keys, values)
-		for _, err := range errs {
-			convey.So(err,convey.ShouldBeNil)
-		}
+		err = kv.SetBatch(keys, values)
+		convey.So(err,convey.ShouldBeNil)
 
 		type args2 struct {
 			start TupleKey

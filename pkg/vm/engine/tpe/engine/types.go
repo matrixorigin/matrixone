@@ -36,6 +36,7 @@ type TpeConfig struct {
 
 type TpeEngine struct {
 	tpeConfig *TpeConfig
+	dh descriptor.DescriptorHandler
 	computeHandler computation.ComputationHandler
 }
 
