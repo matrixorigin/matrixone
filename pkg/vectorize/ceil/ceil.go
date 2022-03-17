@@ -14,7 +14,11 @@
 
 package ceil
 
-import "math"
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
+)
 
 /*ceil(1.23) -----> 2.0
 ceil(1.23, 0) ----> 2.0
@@ -33,48 +37,6 @@ var (
 	ceilFloat32 func([]float32, []float32, int64) []float32
 	ceilFloat64 func([]float64, []float64, int64) []float64
 )
-
-var MaxUint8digits = digits(math.MaxUint8)
-var MaxUint16digits = digits(math.MaxUint16)
-var MaxUint32digits = digits(math.MaxUint32)
-var MaxUint64digits = digits(math.MaxUint64) // 20
-var MaxInt8digits = digits(math.MaxInt8)
-var MaxInt16digits = digits(math.MaxInt16)
-var MaxInt32digits = digits(math.MaxInt32)
-var MaxInt64digits = digits(math.MaxInt64) // 19
-
-func digits(value uint64) int64 {
-	digits := int64(0)
-	for value > 0 {
-		value /= 10
-		digits++
-	}
-	return digits
-}
-
-// scaleTable is a lookup array for digits
-var ScaleTable = [...]uint64{
-	1,
-	10,
-	100,
-	1000,
-	10000,
-	100000,
-	1000000,
-	10000000,
-	100000000,
-	1000000000,
-	10000000000,
-	100000000000,
-	1000000000000,
-	10000000000000,
-	100000000000000,
-	1000000000000000,
-	10000000000000000,
-	100000000000000000,
-	1000000000000000000,
-	10000000000000000000, // 1 followed by 19 zeros, maxUint64 number has 20 digits, so the max scale is 1 followed by 19 zeroes
-}
 
 func init() {
 	ceilUint8 = ceilUint8Pure
@@ -99,7 +61,7 @@ func ceilUint8Pure(xs, rs []uint8, digits int64) []uint8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := uint8(ScaleTable[-digits])
+		scale := uint8(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -110,7 +72,7 @@ func ceilUint8Pure(xs, rs []uint8, digits int64) []uint8 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -126,8 +88,8 @@ func ceilUint16Pure(xs, rs []uint16, digits int64) []uint16 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxUint16digits:
-		scale := uint16(ScaleTable[-digits])
+	case digits > -floor.MaxUint16digits:
+		scale := uint16(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -138,7 +100,7 @@ func ceilUint16Pure(xs, rs []uint16, digits int64) []uint16 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxInt8digits:
+	case digits <= -floor.MaxInt8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -154,8 +116,8 @@ func ceilUint32Pure(xs, rs []uint32, digits int64) []uint32 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxInt16digits:
-		scale := uint32(ScaleTable[-digits])
+	case digits > -floor.MaxUint32digits:
+		scale := uint32(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -166,7 +128,7 @@ func ceilUint32Pure(xs, rs []uint32, digits int64) []uint32 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxInt8digits:
+	case digits <= -floor.MaxInt8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -182,8 +144,8 @@ func ceilUint64Pure(xs, rs []uint64, digits int64) []uint64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxUint16digits:
-		scale := uint64(ScaleTable[-digits])
+	case digits > -floor.MaxUint64digits:
+		scale := uint64(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -194,7 +156,7 @@ func ceilUint64Pure(xs, rs []uint64, digits int64) []uint64 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -211,7 +173,7 @@ func ceilInt8Pure(xs, rs []int8, digits int64) []int8 {
 	case digits >= 0:
 		return xs
 	case digits == -1 || digits == -2:
-		scale := int8(ScaleTable[-digits])
+		scale := int8(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -226,7 +188,7 @@ func ceilInt8Pure(xs, rs []int8, digits int64) []int8 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -242,8 +204,8 @@ func ceilInt16Pure(xs, rs []int16, digits int64) []int16 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxUint16digits:
-		scale := int16(ScaleTable[-digits])
+	case digits > -floor.MaxInt16digits:
+		scale := int16(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -258,7 +220,7 @@ func ceilInt16Pure(xs, rs []int16, digits int64) []int16 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -274,8 +236,8 @@ func ceilInt32Pure(xs, rs []int32, digits int64) []int32 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxUint16digits:
-		scale := int32(ScaleTable[-digits])
+	case digits > -floor.MaxInt32digits:
+		scale := int32(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -290,7 +252,7 @@ func ceilInt32Pure(xs, rs []int32, digits int64) []int32 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -306,8 +268,8 @@ func ceilInt64Pure(xs, rs []int64, digits int64) []int64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -MaxUint16digits:
-		scale := int64(ScaleTable[-digits])
+	case digits > -floor.MaxInt64digits:
+		scale := int64(floor.ScaleTable[-digits])
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -322,7 +284,7 @@ func ceilInt64Pure(xs, rs []int64, digits int64) []int64 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -MaxUint8digits:
+	case digits <= -floor.MaxUint8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -340,13 +302,13 @@ func ceilFloat32Pure(xs, rs []float32, digits int64) []float32 {
 			rs[i] = float32(math.Ceil(float64(xs[i])))
 		}
 	} else if digits > 0 {
-		scale := float32(ScaleTable[digits])
+		scale := float32(floor.ScaleTable[digits])
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = float32(math.Ceil(float64(value))) / scale
 		}
 	} else {
-		scale := float32(ScaleTable[-digits])
+		scale := float32(floor.ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i] / scale
 			rs[i] = float32(math.Ceil(float64(value))) * scale
@@ -365,13 +327,13 @@ func ceilFloat64Pure(xs, rs []float64, digits int64) []float64 {
 			rs[i] = math.Ceil(xs[i])
 		}
 	} else if digits > 0 {
-		scale := float64(ScaleTable[digits])
+		scale := float64(floor.ScaleTable[digits])
 		for i := range xs {
 			value := xs[i] * scale
 			rs[i] = math.Ceil(value) / scale
 		}
 	} else {
-		scale := float64(ScaleTable[-digits])
+		scale := float64(floor.ScaleTable[-digits])
 		for i := range xs {
 			value := xs[i] / scale
 			rs[i] = math.Ceil(value) * scale
