@@ -100,7 +100,7 @@ func ceilUint16Pure(xs, rs []uint16, digits int64) []uint16 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxInt8digits:
+	case digits <= -floor.MaxUint16digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -128,7 +128,7 @@ func ceilUint32Pure(xs, rs []uint32, digits int64) []uint32 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxInt8digits:
+	case digits <= -floor.MaxUint32digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -156,7 +156,7 @@ func ceilUint64Pure(xs, rs []uint64, digits int64) []uint64 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxUint8digits:
+	case digits <= -floor.MaxUint64digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -220,7 +220,7 @@ func ceilInt16Pure(xs, rs []int16, digits int64) []int16 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxUint8digits:
+	case digits <= -floor.MaxInt16digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -252,7 +252,7 @@ func ceilInt32Pure(xs, rs []int32, digits int64) []int32 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxUint8digits:
+	case digits <= -floor.MaxInt32digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -284,7 +284,7 @@ func ceilInt64Pure(xs, rs []int64, digits int64) []int64 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxUint8digits:
+	case digits <= -floor.MaxInt64digits:
 		for i := range xs {
 			rs[i] = 0
 		}
