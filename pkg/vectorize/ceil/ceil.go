@@ -188,7 +188,7 @@ func ceilInt8Pure(xs, rs []int8, digits int64) []int8 {
 				rs[i] = xs[i]
 			}
 		}
-	case digits <= -floor.MaxUint8digits:
+	case digits <= -floor.MaxInt8digits:
 		for i := range xs {
 			rs[i] = 0
 		}
