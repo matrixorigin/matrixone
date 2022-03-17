@@ -109,8 +109,6 @@ func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.
 	rowRead := 0
 	readFinished := false
 
-	cpuf := BeginCpuProfile("cpu_profile")
-
 	//2.prefix read data from kv
 	//get keys with the prefix
 	for rowRead < int(ihi.kvLimit) {
@@ -183,7 +181,6 @@ func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.
 		}
 	}
 
-	EndCpuProfile(cpuf)
 	return bat, rowRead, nil
 }
 
@@ -235,8 +232,6 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 	rowRead := 0
 	readFinished := false
-
-	cpuf := BeginCpuProfile("cpu_profile")
 
 	//2.prefix read data from kv
 	//get keys with the prefix
@@ -309,7 +304,6 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 		}
 	}
 
-	EndCpuProfile(cpuf)
 	return bat, rowRead, nil
 }
 

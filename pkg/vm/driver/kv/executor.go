@@ -19,18 +19,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/storage/executor"
-	"github.com/matrixorigin/matrixcube/util/buf"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver"
-	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
-	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"time"
-
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
+	"github.com/matrixorigin/matrixcube/storage/executor"
 	"github.com/matrixorigin/matrixcube/storage/kv"
+	"github.com/matrixorigin/matrixcube/util/buf"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
+	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
@@ -452,7 +449,6 @@ func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (ui
 }
 
 func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
-	s0 := time.Now()
 	ce.attrs = map[string]interface{}{}
 	writtenBytes := uint64(0)
 	r := ctx.WriteBatch()
@@ -491,15 +487,12 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 	writtenBytes += uint64(16)
 	ctx.SetDiffBytes(int64(writtenBytes))
 	ctx.SetWrittenBytes(writtenBytes)
-	logutil.Infof("UpdateWriteBatch %s",time.Since(s0))
 	return nil
 }
 
 func (ce *kvExecutor) ApplyWriteBatch(r storage.Resetable) error {
-	s0 := time.Now()
 	wb := r.(util.WriteBatch)
 	ret:= ce.kv.Write(wb, false)
-	logutil.Infof("ApplyWriteBatch %s",time.Since(s0))
 	return ret
 }
 

@@ -259,7 +259,7 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 			if atomic.CompareAndSwapInt32(&checkErr,0,1) {
 				retErr = errors.New(string(resp))
 			}
-			//logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
+			logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
 		}
 
 		wg.Done()
