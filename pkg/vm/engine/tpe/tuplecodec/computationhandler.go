@@ -417,7 +417,7 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 				Addr: "localhost:20000",
 			},
 		}
-		return nds, nil, nil
+		return nds, &Shards{}, nil
 	}
 	tce := chi.tch.GetEncoder()
 	prefix, _ := tce.EncodeIndexPrefix(nil,dbId, uint64(desc.ID),uint64(PrimaryIndexID))

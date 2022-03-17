@@ -125,9 +125,11 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 			TableDesc:                InternalDescriptorTableDesc,
 			IndexDesc:                &InternalDescriptorTableDesc.Primary_index,
 			ReadAttributeDescs:       wantAttr,
-			CompleteInAllShards:      false,
-			PrefixForScanKey:         nil,
-			LengthOfPrefixForScanKey: 0,
+			SingleReaderContext:SingleReaderContext{
+				CompleteInAllShards:      false,
+				PrefixForScanKey:         nil,
+				LengthOfPrefixForScanKey: 0,
+			},
 		}
 		//var bat2 *batch.Batch
 		var readcnt int
