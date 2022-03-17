@@ -292,6 +292,8 @@ func main() {
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
 		tpeConf := &tpeEngine.TpeConfig{}
+		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
+		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY

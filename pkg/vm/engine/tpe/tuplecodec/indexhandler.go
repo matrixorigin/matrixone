@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -59,10 +60,141 @@ func NewIndexHandlerImpl(tch *TupleCodecHandler,
 	}
 }
 
+func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.Batch, int, error) {
+	if indexReadCtx.CompleteInShard {
+		return nil, 0, nil
+	}
+
+	//check if we need the index key only.
+	//Attributes we want are in the index key only.
+	indexAttrIDs := descriptor.ExtractIndexAttributeIDs(indexReadCtx.IndexDesc.Attributes)
+	amForKey :=&AttributeMap{}
+	amForValue := &AttributeMap{}
+	needKeyOnly := true
+	for i,attr := range indexReadCtx.ReadAttributeDescs {
+		if _,exist := indexAttrIDs[attr.ID]; exist {
+			//id in the key
+			amForKey.Append(int(attr.ID),i)
+		}else{
+			//id is not in the index key
+			//then find it in the value
+			needKeyOnly = false
+			amForValue.Append(int(attr.ID),i)
+		}
+	}
+
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	tkd := ihi.tch.GetDecoder()
+
+	if indexReadCtx.PrefixForScanKey == nil {
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(nil, uint64(indexReadCtx.DbDesc.ID),
+			uint64(indexReadCtx.TableDesc.ID),
+			uint64(indexReadCtx.IndexDesc.ID))
+	}
+
+	if indexReadCtx.ShardNextScanKey == nil {
+		indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+	}
+
+	//nextScanKey will not have
+	if bytes.HasPrefix(indexReadCtx.ShardNextScanKey,indexReadCtx.PrefixForScanKey) {
+		return nil, 0, nil
+	}
+
+	//prepare the batch
+	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
+	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
+
+	rowRead := 0
+	readFinished := false
+
+	cpuf := BeginCpuProfile("cpu_profile")
+
+	//2.prefix read data from kv
+	//get keys with the prefix
+	for rowRead < int(ihi.kvLimit) {
+		needRead := int(ihi.kvLimit) - rowRead
+		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithLimit(indexReadCtx.ShardNextScanKey,
+			indexReadCtx.ShardEndKey, uint64(needRead))
+		if err != nil {
+			return nil, 0, err
+		}
+
+		rowRead += len(keys)
+
+		//1.decode index key
+		//2.get fields wanted
+		for i := 0; i < len(keys); i++ {
+			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
+			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
+			if err != nil {
+				return nil, 0, err
+			}
+
+			//pick wanted fields and save them in the batch
+			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
+				0, dis, amForKey, bat, i)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+
+		//skip decoding the value
+		if !needKeyOnly {
+			//need to update prefix
+			//decode index value
+			for i := 0; i < len(keys); i++ {
+				//decode the name which is in the value
+				data := values[i]
+				_,dis,err := tkd.DecodePrimaryIndexValue(data,
+					indexReadCtx.IndexDesc,0,ihi.serializer)
+				if err != nil {
+					return nil, 0, err
+				}
+
+				//pick wanted fields and save them in the batch
+				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+					0, dis,amForValue, bat, i)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+		}
+
+		//get the next prefix
+		indexReadCtx.ShardNextScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInShard = true
+			readFinished = true
+			break
+		}
+	}
+
+	TruncateBatch(bat,int(ihi.kvLimit),rowRead)
+
+	if readFinished {
+		if rowRead == 0 {
+			//there are no data read in this call.
+			//it means there is no data any more.
+			//reset the batch to the null to notify the
+			//computation engine will not read data again.
+			bat = nil
+		}
+	}
+
+	EndCpuProfile(cpuf)
+	return bat, rowRead, nil
+}
+
 func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
 	indexReadCtx,ok := readCtx.(*ReadContext)
 	if !ok {
 		return nil, 0, errorReadContextIsInvalid
+	}
+
+	if indexReadCtx.ParallelReader {
+		return ihi.parallelReader(indexReadCtx)
 	}
 
 	//check if we need the index key only.
@@ -103,6 +235,8 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 	rowRead := 0
 	readFinished := false
+
+	cpuf := BeginCpuProfile("cpu_profile")
 
 	//2.prefix read data from kv
 	//get keys with the prefix
@@ -174,6 +308,8 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			bat = nil
 		}
 	}
+
+	EndCpuProfile(cpuf)
 	return bat, rowRead, nil
 }
 
@@ -291,6 +427,10 @@ func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Ba
 	if !ok {
 		return errorWriteContextIsInvalid
 	}
+
+	defer func() {
+		indexWriteCtx.resetWriteCache()
+	}()
 
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()

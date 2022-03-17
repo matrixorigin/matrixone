@@ -96,7 +96,23 @@ type ShardInfo struct {
 	node ShardNode
 }
 
+func (si ShardInfo) GetStartKey() []byte {
+	return si.startKey
+}
+
+func (si ShardInfo) GetEndKey() []byte {
+	return si.endKey
+}
+
+func (si ShardInfo) GetShardNode() ShardNode {
+	return si.node
+}
+
 type Shards struct {
 	nodes []ShardNode
 	shardInfos []ShardInfo
+}
+
+func (s Shards) ShardInfos() []ShardInfo {
+	return s.shardInfos
 }
