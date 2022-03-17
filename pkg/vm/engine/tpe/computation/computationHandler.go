@@ -45,5 +45,7 @@ type ComputationHandler interface {
 
 	RemoveDeletedTable(epoch uint64) (int, error)
 
-	GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, error)
+	GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error)
+
+	ParallelReader() bool
 }

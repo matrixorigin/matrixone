@@ -288,7 +288,7 @@ func (ck *CubeKV) DeleteWithPrefix(prefix TupleKey) error {
 
 	shards,ok := ret.(*Shards)
 	if !ok {
-		return errorIsNotShards
+		return ErrorIsNotShards
 	}
 
 	//shrink [start,end) according to the shard.

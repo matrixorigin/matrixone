@@ -379,6 +379,10 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequ
 		},
 	}
 	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
+		if err != nil {
+			logutil.Errorf("cube error: %v",err)
+		}
+
 		if bytes != nil || len(bytes) != 0 {
 			err = errors.New(string(bytes))
 		}

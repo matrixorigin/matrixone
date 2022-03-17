@@ -19,16 +19,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor"
+	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/util/buf"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-
-	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixcube/pb/meta"
-	"github.com/matrixorigin/matrixcube/storage"
-	"github.com/matrixorigin/matrixcube/storage/kv"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
@@ -493,7 +492,8 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 
 func (ce *kvExecutor) ApplyWriteBatch(r storage.Resetable) error {
 	wb := r.(util.WriteBatch)
-	return ce.kv.Write(wb, false)
+	ret:= ce.kv.Write(wb, false)
+	return ret
 }
 
 func (ce *kvExecutor) Read(ctx storage.ReadContext) ([]byte, error) {

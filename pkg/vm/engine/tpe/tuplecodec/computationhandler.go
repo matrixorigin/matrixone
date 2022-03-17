@@ -32,15 +32,15 @@ const (
 )
 
 var (
-	errorDatabaseExists = errors.New("database has exists")
-	errorTableExists = errors.New("table has exists")
-	errorTableDeletedAlready = errors.New("table is deleted already. It is impossible.")
-	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc.  It is impossible.")
-	errorDatabaseDeletedAlready = errors.New("database is deleted already")
-	errorIsNotShards = errors.New("it is not the shards")
-	errorShardsAreNil = errors.New("shards are nil")
-	errorThereAreNotNodesHoldTheTable = errors.New("there are not nodes hold the table")
-	errorCanNotDropTheInternalDatabase = errors.New("you can not drop the internal database")
+	errorDatabaseExists                          = errors.New("database has exists")
+	errorTableExists                             = errors.New("table has exists")
+	errorTableDeletedAlready                     = errors.New("table is deleted already. It is impossible.")
+	errorWrongDatabaseIDInDatabaseDesc           = errors.New("wrong database id in the database desc.  It is impossible.")
+	errorDatabaseDeletedAlready                  = errors.New("database is deleted already")
+	ErrorIsNotShards                             = errors.New("it is not the shards")
+	errorShardsAreNil                            = errors.New("shards are nil")
+	errorThereAreNotNodesHoldTheTable            = errors.New("there are not nodes hold the table")
+	errorCanNotDropTheInternalDatabase           = errors.New("you can not drop the internal database")
 	errorCanNotDropTheTableInTheInternalDatabase = errors.New("you can not drop the table in the internal database")
 )
 
@@ -53,6 +53,7 @@ type ComputationHandlerImpl struct {
 	serializer ValueSerializer
 	indexHandler index.IndexHandler
 	epochHandler * EpochHandler
+	parallelReader bool
 }
 
 func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
@@ -73,7 +74,7 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,
 		kv: kv,
@@ -81,6 +82,7 @@ func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tc
 		serializer: serial,
 		indexHandler: ih,
 		epochHandler: epoch,
+		parallelReader: parallelReader,
 	}
 }
 
@@ -407,7 +409,7 @@ func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error)
 	return chi.epochHandler.RemoveDeletedTable(epoch)
 }
 
-func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, error) {
+func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error) {
 	if chi.kv.GetKVType() == KV_MEMORY {
 		var nds = []engine.Node{
 			{
@@ -415,22 +417,22 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 				Addr: "localhost:20000",
 			},
 		}
-		return nds, nil
+		return nds, &Shards{}, nil
 	}
 	tce := chi.tch.GetEncoder()
 	prefix, _ := tce.EncodeIndexPrefix(nil,dbId, uint64(desc.ID),uint64(PrimaryIndexID))
 	ret, err := chi.kv.GetShardsWithPrefix(prefix)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	shards,ok := ret.(*Shards)
 	if !ok {
-		return nil, errorIsNotShards
+		return nil, nil, ErrorIsNotShards
 	}
 
 	if shards == nil {
-		return nil,errorShardsAreNil
+		return nil, nil, errorShardsAreNil
 	}
 
 	var nodes engine.Nodes
@@ -442,10 +444,14 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	}
 
 	if len(nodes) == 0 {
-		return nil, errorThereAreNotNodesHoldTheTable
+		return nil, nil, errorThereAreNotNodesHoldTheTable
 	}
 
-	return nodes, nil
+	return nodes, ret, nil
+}
+
+func (chi *ComputationHandlerImpl) ParallelReader() bool {
+	return chi.parallelReader
 }
 
 type AttributeStateForWrite struct {
@@ -484,6 +490,40 @@ type WriteContext struct {
 	t0 time.Duration
 }
 
+func (wc *WriteContext) resetWriteCache()  {
+	wc.keys = nil
+	wc.values = nil
+}
+
+//for parallel readers
+type ParallelReaderContext struct {
+	//index in shard info
+	ShardIndex int
+
+	//the startKey of the shard
+	ShardStartKey []byte
+
+	//the endKey of the shard
+	ShardEndKey []byte
+
+	//the next scan key of the shard
+	ShardNextScanKey []byte
+
+	//finished ?
+	CompleteInShard bool
+}
+
+type SingleReaderContext struct {
+	//true -- the scanner has scanned all shards
+	CompleteInAllShards bool
+
+	//for prefix scan in next time
+	PrefixForScanKey []byte
+
+	//the length of the prefix
+	LengthOfPrefixForScanKey int
+}
+
 type ReadContext struct {
 	//target database,table and index
 	DbDesc *descriptor.DatabaseDesc
@@ -496,12 +536,9 @@ type ReadContext struct {
 	//the attributes for the read
 	ReadAttributeDescs []*descriptor.AttributeDesc
 
-	//true -- the scanner has scanned all shards
-	CompleteInAllShards bool
+	ParallelReader bool
 
-	//for prefix scan in next time
-	PrefixForScanKey []byte
+	ParallelReaderContext
 
-	//the length of the prefix
-	LengthOfPrefixForScanKey int
+	SingleReaderContext
 }

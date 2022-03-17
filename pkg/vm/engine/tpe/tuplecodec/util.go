@@ -17,6 +17,8 @@ package tuplecodec
 import (
 	"fmt"
 	"math/rand"
+	"os"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
@@ -520,4 +522,15 @@ func MaxUint64(a,b uint64) uint64 {
 	}else{
 		return a
 	}
+}
+
+func BeginCpuProfile (cpu string) *os.File {
+	cpuf, _ := os.Create(cpu)
+	pprof.StartCPUProfile(cpuf)
+	return cpuf
+}
+
+func EndCpuProfile(cpuf *os.File) {
+	pprof.StopCPUProfile()
+	_ = cpuf.Close()
 }

@@ -30,7 +30,7 @@ var (
 func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	te := &TpeEngine{tpeConfig: tc}
 	tch := tuplecodec.NewTupleCodecHandler(tuplecodec.SystemTenantID)
-	kvLimit := 10000
+	kvLimit := tc.KVLimit
 	var kv tuplecodec.KVHandler
 	var err error
 	if tc.KvType == tuplecodec.KV_MEMORY {
@@ -49,7 +49,7 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	rcc := &tuplecodec.RowColumnConverterImpl{}
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
 	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
-	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch)
+	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch, tc.ParallelReader)
 	te.computeHandler = ch
 	te.dh = dh
 	return te, nil
