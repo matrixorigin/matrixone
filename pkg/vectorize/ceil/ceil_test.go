@@ -14,8 +14,11 @@
 package ceil
 
 import (
-	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCeilUint8(t *testing.T) {
@@ -160,53 +163,53 @@ func TestCeilInt64(t *testing.T) {
 	}
 }
 
-//const tolerance = .00001
-//
-//func floatCompare(x, y float64) bool {
-//	diff := math.Abs(x - y)
-//	mean := math.Abs(x + y)
-//	if math.IsNaN(diff / mean) {
-//		return true
-//	}
-//	return (diff / mean) < tolerance
-//}
-//
-//func TestCeilFloat32(t *testing.T) {
-//	nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-//	res := make([]float32, len(nums))
-//	res0 := CeilFloat32Pure(nums, res, 0)
-//	correctRes0 := []float32{1, -2, 2, -3, 1, 12, 123, 1234, 12345, 1234, -2, -13, -124, -1235, -12346}
-//	for i, _ := range nums {
-//		assert.True(t, floatCompare(float64(correctRes0[i]), float64(res0[i])))
-//	}
-//	resMinus1 := CeilFloat32Pure(nums, res, -1)
-//	correctResMinus1 := []float32{0, -10, 0, -10, 0, 10, 120, 1230, 12340, 1230, -10, -20, -130, -1240, -12350}
-//	for i, _ := range nums {
-//		assert.True(t, floatCompare(float64(correctResMinus1[i]), float64(resMinus1[i])))
-//	}
-//	res1 := CeilFloat32Pure(nums, res, 1)
-//	correctRes1 := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.5, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-//	for i, _ := range res1 {
-//		assert.True(t, floatCompare(float64(correctRes1[i]), float64(res1[i])))
-//	}
-//}
-//
-//func TestCeilFloat64(t *testing.T) {
-//	nums := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-//	res := make([]float64, len(nums))
-//	res0 := CeilFloat64Pure(nums, res, 0)
-//	correctRes0 := []float64{1, -2, 2, -3, 1, 12, 123, 1234, 12345, 1234, -2, -13, -124, -1235, -12346}
-//	for i, _ := range nums {
-//		assert.True(t, floatCompare(correctRes0[i], res0[i]))
-//	}
-//	resMinus1 := CeilFloat64Pure(nums, res, -1)
-//	correctResMinus1 := []float64{0, -10, 0, -10, 0, 10, 120, 1230, 12340, 1230, -10, -20, -130, -1240, -12350}
-//	for i, _ := range nums {
-//		assert.True(t, floatCompare(correctResMinus1[i], resMinus1[i]))
-//	}
-//	res1 := CeilFloat64Pure(nums, res, 1)
-//	correctRes1 := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.5, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-//	for i, _ := range res1 {
-//		assert.True(t, floatCompare(correctRes1[i], res1[i]))
-//	}
-//}
+const tolerance = .00001
+
+func floatCompare(x, y float64) bool {
+	diff := math.Abs(x - y)
+	mean := math.Abs(x + y)
+	if math.IsNaN(diff / mean) {
+		return true
+	}
+	return (diff / mean) < tolerance
+}
+
+func TestCeilCeil32(t *testing.T) {
+	nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+	res := make([]float32, len(nums))
+	res0 := ceilFloat32Pure(nums, res, 0)
+	correctRes0 := []float32{2, -1, 3, -2, 2, 13, 124, 1235, 12346, 1235, -1, -12, -123, -1234, -12345}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(float64(correctRes0[i]), float64(res0[i])))
+	}
+	resMinus1 := ceilFloat32Pure(nums, res, -1)
+	correctResMinus1 := []float32{10, 0, 10, 0, 10, 20, 130, 1240, 12350, 1240, 0, -10, -120, -1230, -12340}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(float64(correctResMinus1[i]), float64(resMinus1[i])))
+	}
+	res1 := ceilFloat32Pure(nums, res, 1)
+	correctRes1 := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.6, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+	for i, _ := range res1 {
+		assert.True(t, floatCompare(float64(correctRes1[i]), float64(res1[i])))
+	}
+}
+
+func TestCeilFloat64(t *testing.T) {
+	nums := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+	res := make([]float64, len(nums))
+	res0 := ceilFloat64Pure(nums, res, 0)
+	correctRes0 := []float64{2, -1, 3, -2, 2, 13, 124, 1235, 12346, 1235, -1, -12, -123, -1234, -12345}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(correctRes0[i], res0[i]))
+	}
+	resMinus1 := ceilFloat64Pure(nums, res, -1)
+	correctResMinus1 := []float64{10, 0, 10, 0, 10, 20, 130, 1240, 12350, 1240, 0, -10, -120, -1230, -12340}
+	for i, _ := range nums {
+		assert.True(t, floatCompare(correctResMinus1[i], resMinus1[i]))
+	}
+	res1 := ceilFloat64Pure(nums, res, 1)
+	correctRes1 := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.6, -1.2, -12.3, -123.4, -1234.5, -12345.6}
+	for i, _ := range res1 {
+		assert.True(t, floatCompare(correctRes1[i], res1[i]))
+	}
+}
