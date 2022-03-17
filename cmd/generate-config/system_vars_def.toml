@@ -415,7 +415,7 @@ access = ["file"]
 type = "int64"
 domain-type = "range"
 values = ["40000", "10000", "160000"]
-comment = "export data to csv file default flush size"
+comment = "limit count per batch in the read/write of the Tpe"
 update-mode = "dynamic"
 
 [[parameter]]
