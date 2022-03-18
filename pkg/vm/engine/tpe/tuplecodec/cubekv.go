@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -305,7 +306,11 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	callbackCheckKeysExisted := func(cr server.CustomRequest, resp []byte, cubeErr error) {
 		setErrFunc(cubeErr)
 		if cubeErr != nil {
-			logutil.Errorf("DedupSetBatch cube error :%v",cubeErr)
+			if errors.Is(cubeErr,raftstore.ErrTimeout) {
+				logutil.Errorf("DedupSetBatch cube timeout :%v",cubeErr)
+			}else{
+				logutil.Errorf("DedupSetBatch cube error :%v",cubeErr)
+			}
 		}
 
 		if len(resp) != 0 {
@@ -370,7 +375,11 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 			if atomic.CompareAndSwapInt32(&checkErr,0,1) {
 				retErr = errors.New(string(resp))
 			}
-			logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
+			if errors.Is(err,raftstore.ErrTimeout) {
+				logutil.Errorf("AsyncSet key %v timeout. error %v",req.Key,err)
+			}else{
+				logutil.Errorf("AsyncSet key %v failed. error %v",req.Key,err)
+			}
 		}
 
 		wg.Done()
