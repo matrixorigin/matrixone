@@ -12,13 +12,13 @@
 ## **一般流程**
 通常，从头到尾地完成一项技术设计需要以下步骤：
 
-* 在Github上提出issue，描述该功能想要解决的问题、目标、大致解决方案。
+* 在GitHub上提出issue，描述该功能想要解决的问题、目标、大致解决方案。
 * 在得到管理者与其他开发者的回应，听取相关建议，然后对你的想法做进一步修改。
-* 按照[模板,需要给出链接](xxxxxx)撰写技术设计文档并创建PR。
-[此处为tidb给出的模板](https://github.com/pingcap/tidb/blob/7f4f5c02364b6578da561ec14f409a39ddf954a5/docs/design/TEMPLATE.md)
-* 与审查者交流，并按要求做相应的修改。
-* 当至少有两个提交者达成一致且其他提交者没有异议时，设计文件即被接受，反之亦然。The design document is accepted or rejected when at least two committers reach consensus and no objection from the committer.  **(我们的要求是怎样的)**
-* 如果提议被接受，那就请为该提议创建一个[跟踪性议题(tracking issue)](https://github.com/matrixorigin/matrixone/issues/new)，或者将之前讨论的议题转换为跟踪议题，后续不断跟踪子任务和开发进度。并设计文档中替换模板中的占位符的跟踪问题。 And refer the tracking issue in the design document replacing placeholder in the template. 
-* Merge the pull request of design.
-* Start the implementation.
-Please refer to the tracking issue from subtasks to track the progress.
+* 按照[模板]([xxxxxx](https://github.com/matrixorigin/matrixone/blob/main/docs/rfcs/00000000-template.md))撰写技术设计文档并创建PR。
+* 与Reviewers交流，并按要求做相应的修改。
+* 当至少有两个Committer达成一致且其他Committer没有异议时，设计文件即被接受，反之亦然。
+* 如果提议被接受，那就请为该提议创建一个[tracking issue](https://github.com/matrixorigin/matrixone/issues/new)，或者将之前讨论的issue转换为tracking issue，后续不断跟踪子任务和开发进度。
+* 合并该设计的Pull Request。
+* 开始着手实现。
+
+请及时查看子任务的tracking issue来跟踪任务开发进程。

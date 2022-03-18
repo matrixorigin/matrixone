@@ -12,7 +12,7 @@
 
 ## 什么是好的commit message
 
-我们认为有以下元素：
+我们认为有以下要素：
 
 1. **What is your change? (必要)**
 
@@ -30,11 +30,11 @@
 
 ## 如何写好一条commit message？
 
-要写出一条commit message，我们建议遵循规定的格式，培养良好的习惯并使用规范的语言。
+要写出一条commit message，我们建议您遵循规定的格式，培养良好的习惯并使用规范的语言。
 
 ### 规定的格式
 
-请在提交时遵循一下格式：
+请在提交时遵循以下格式：
 
 ```
 <subsystem>: <what changed>
