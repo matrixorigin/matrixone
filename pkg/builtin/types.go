@@ -24,4 +24,9 @@ const (
 	Round
 	Floor
 	Abs
+	Log
+	Ln
+	Exp
+	Power
+	Pi
 )

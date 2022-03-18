@@ -48,11 +48,24 @@ func (td * TpeDatabase) Relation(name string) (engine.Relation, error) {
 		return nil, err
 	}
 
+	//load nodes for the table
+	nodes, shardsHandler, err := td.computeHandler.GetNodesHoldTheTable(td.id,tableDesc)
+	if err != nil {
+		return nil, err
+	}
+
+	shards,ok := shardsHandler.(*tuplecodec.Shards)
+	if !ok {
+		return nil,tuplecodec.ErrorIsNotShards
+	}
+
 	return &TpeRelation{
 		id: uint64(tableDesc.ID),
 		dbDesc: td.desc,
 		desc: tableDesc,
 		computeHandler: td.computeHandler,
+		nodes: nodes,
+		shards: shards,
 	},nil
 }
 

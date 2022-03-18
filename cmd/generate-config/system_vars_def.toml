@@ -408,6 +408,26 @@ values = ["memorykv","cubekv"]
 comment = "default is memorykv. Chose memory or cube as the KV storage."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "tpeKVLimit"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["40000", "10000", "160000"]
+comment = "limit count per batch in the read/write of the Tpe"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeParallelReader"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is false. true : tpe creates multiple readers reading data from KV. false : only one reader"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

@@ -15,9 +15,11 @@
 package tuplecodec
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
+	"math"
 )
 
 const (
@@ -46,16 +48,20 @@ const (
 	UserTableIDOffset uint64 = 3
 )
 
+func toTypesType(t types.T) types.Type {
+	return t.ToType()
+}
+
 var (
-	internalDatabaseDesc = &descriptor.DatabaseDesc{
+	InternalDatabaseDesc = &descriptor.DatabaseDesc{
 		ID:           uint32(InternalDatabaseID),
 		Name:         "system",
 		Update_time:  0,
-		Create_epoch: 0,
+		Create_epoch: math.MaxUint64,
 		Is_deleted:   false,
 		Drop_epoch:   0,
 	}
-	internalDescriptorTableDesc = &descriptor.RelationDesc{
+	InternalDescriptorTableDesc = &descriptor.RelationDesc{
 		ID: uint32(InternalDescriptorTableID),
 		Name:                    "descriptor",
 		Update_time:             0,
@@ -65,6 +71,7 @@ var (
 				ID: 0,
 				Name: "parentID",
 				Ttype: orderedcodec.VALUE_TYPE_UINT64,
+				TypesType: toTypesType(types.T_uint64),
 				Is_null: false,
 				Is_hidden: false,
 				Is_auto_increment: false,
@@ -76,6 +83,7 @@ var (
 				ID: 1,
 				Name: "ID",
 				Ttype: orderedcodec.VALUE_TYPE_UINT64,
+				TypesType: toTypesType(types.T_uint64),
 				Is_null: false,
 				Is_hidden: false,
 				Is_auto_increment: false,
@@ -87,6 +95,7 @@ var (
 				ID: 2,
 				Name: "Name",
 				Ttype: orderedcodec.VALUE_TYPE_STRING,
+				TypesType: toTypesType(types.T_varchar),
 				Is_null: false,
 				Is_hidden: false,
 				Is_auto_increment: false,
@@ -98,6 +107,7 @@ var (
 				ID: 3,
 				Name: "desc",
 				Ttype: orderedcodec.VALUE_TYPE_BYTES,
+				TypesType: toTypesType(types.T_varchar),
 				Is_null: false,
 				Is_hidden: false,
 				Is_auto_increment: false,
@@ -119,11 +129,13 @@ var (
 					Name: "parentID",
 					ID:0,
 					Type: orderedcodec.VALUE_TYPE_UINT64,
+					TypesType: toTypesType(types.T_uint64),
 				},
 				{
 					Name: "ID",
 					ID:1,
 					Type: orderedcodec.VALUE_TYPE_UINT64,
+					TypesType: toTypesType(types.T_uint64),
 				},
 			},
 		},
@@ -132,7 +144,7 @@ var (
 		Create_sql:              "hard code",
 		Create_time:             0,
 		Drop_time:               0,
-		Create_epoch:            0,
+		Create_epoch:            math.MaxUint64,
 		Is_deleted:              false,
 		Drop_epoch:              0,
 		Max_access_epoch:        0,
@@ -140,9 +152,9 @@ var (
 		Partition_options:       nil,
 	}
 
-	internalAsyncGCTableDesc = &descriptor.RelationDesc{
+	InternalAsyncGCTableDesc = &descriptor.RelationDesc{
 		ID:                      uint32(InternalAsyncGCTableID),
-		Name:                    "asyngc",
+		Name:                    "asyncgc",
 		Update_time:             0,
 		Next_attribute_id:       0,
 		Attributes:              []descriptor.AttributeDesc{
@@ -150,6 +162,7 @@ var (
 				ID:                0,
 				Name:              "epoch",
 				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				TypesType: toTypesType(types.T_uint64),
 				Is_null:           false,
 				Default_value:     "",
 				Is_hidden:         false,
@@ -164,12 +177,13 @@ var (
 				ID:                1,
 				Name:              "dbID",
 				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				TypesType: toTypesType(types.T_uint64),
 				Is_null:           false,
 				Default_value:     "",
 				Is_hidden:         false,
 				Is_auto_increment: false,
 				Is_unique:         false,
-				Is_primarykey:     false,
+				Is_primarykey:     true,
 				Comment:           "the dbID that the table belongs to",
 				References:        nil,
 				Constrains:        nil,
@@ -178,12 +192,13 @@ var (
 				ID:                2,
 				Name:              "tableID",
 				Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+				TypesType: toTypesType(types.T_uint64),
 				Is_null:           false,
 				Default_value:     "the tableID to be dropped",
 				Is_hidden:         false,
 				Is_auto_increment: false,
 				Is_unique:         false,
-				Is_primarykey:     false,
+				Is_primarykey:     true,
 				Comment:           "",
 				References:        nil,
 				Constrains:        nil,
@@ -192,6 +207,7 @@ var (
 				ID:                3,
 				Name:              "desc",
 				Ttype:             orderedcodec.VALUE_TYPE_BYTES,
+				TypesType: toTypesType(types.T_varchar),
 				Default:           engine.DefaultExpr{},
 				Is_null:           false,
 				Default_value:     "",
@@ -217,16 +233,19 @@ var (
 					Name:      "epoch",
 					ID:        0,
 					Type:      orderedcodec.VALUE_TYPE_UINT64,
+					TypesType: toTypesType(types.T_uint64),
 				},
 				{
 					Name:      "dbID",
 					ID:        1,
 					Type:      orderedcodec.VALUE_TYPE_UINT64,
+					TypesType: toTypesType(types.T_uint64),
 				},
 				{
 					Name:      "tableID",
 					ID:        2,
 					Type:      orderedcodec.VALUE_TYPE_UINT64,
+					TypesType: toTypesType(types.T_uint64),
 				},
 			},
 			Impilict_attributes:  nil,
@@ -240,7 +259,7 @@ var (
 		Create_sql:              "",
 		Create_time:             0,
 		Drop_time:               0,
-		Create_epoch:            0,
+		Create_epoch:            math.MaxUint64,
 		Is_deleted:              false,
 		Drop_epoch:              0,
 		Max_access_epoch:        0,

@@ -114,7 +114,7 @@ type AttributeDesc struct {
 
 	Ttype orderedcodec.ValueType `json:"type,string"`
 
-	TypesType types.Type `json:"types_type"`
+	TypesType types.Type `json:"types_type,string"`
 
 	Default engine.DefaultExpr `json:"default"`
 
@@ -219,6 +219,8 @@ type IndexDesc_Attribute struct {
 	ID uint32 `json:"id,string"`
 
 	Type orderedcodec.ValueType `json:"type,string"`
+
+	TypesType types.Type `json:"types_type,string"`
 }
 
 func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int8 {
