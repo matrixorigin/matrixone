@@ -292,23 +292,52 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 			genkv("c","b",true).value,
 		}
 
-		var keys []TupleKey
-		var values []TupleValue
-		for _, kase := range kases {
-			keys = append(keys,kase.key)
-			values = append(values,kase.value)
+		setFunc := func(kases []args, want []TupleValue, exist bool,hasKeys bool) {
+			var keys []TupleKey
+			var values []TupleValue
+			for _, kase := range kases {
+				keys = append(keys,kase.key)
+				values = append(values,kase.value)
+			}
+
+			err = kv.DedupSetBatch(keys, values)
+			if exist {
+				convey.So(err,convey.ShouldBeError)
+			}else {
+				convey.So(err,convey.ShouldBeNil)
+			}
+
+			gets, err2 := kv.GetBatch(keys)
+			convey.So(err2,convey.ShouldBeNil)
+			convey.So(len(gets),convey.ShouldEqual,len(want))
+
+			for i, get := range gets {
+				if hasKeys {
+					convey.So(get,convey.ShouldResemble,want[i])
+				}else{
+					convey.So(get,convey.ShouldBeNil)
+				}
+			}
 		}
 
-		err = kv.DedupSetBatch(keys, values)
-		convey.So(err,convey.ShouldBeError)
+		setFunc(kases,want,true,false)
 
-		gets, err2 := kv.GetBatch(keys)
-		convey.So(err2,convey.ShouldBeNil)
-		convey.So(len(gets),convey.ShouldEqual,len(want))
-
-		for i, get := range gets {
-			convey.So(get,convey.ShouldResemble,want[i])
+		//
+		kases2 := []args{
+			genkv("a","b",true),
+			genkv("b","b",true),
+			genkv("c","b",true),
 		}
+
+		want2 := []TupleValue{
+			genkv("a","b",true).value,
+			genkv("b","b",true).value,
+			genkv("c","b",true).value,
+		}
+
+		setFunc(kases2,want2,false,true)
+
+		setFunc(kases2,want2,true,true)
 	})
 }
 

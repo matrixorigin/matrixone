@@ -23,6 +23,7 @@ enum Type {
   TpePrefixScan = 8;
   TpeScan = 9;
   TpeDeleteBatch = 10;
+  TpeCheckKeysExistInBatch = 11;
 
   Append = 100;
   GetSnapshot = 101;
@@ -51,6 +52,7 @@ message Request {
   TpePrefixScanRequest         tpePrefixScan = 11  [(gogoproto.nullable) = false];
   TpeScanRequest         tpeScan = 12  [(gogoproto.nullable) = false];
   TpeDeleteBatchRequest tpeDeleteBatch = 13  [(gogoproto.nullable) = false];
+  TpeCheckKeysExistInBatchRequest tpeCheckKeysExistInBatch = 14  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -141,6 +143,13 @@ message TpeDeleteBatchRequest {
   //the range [start,end)
   bytes        start = 3;
   bytes        end = 4;
+}
+
+message TpeCheckKeysExistInBatchRequest {
+  //the keys from the same shard
+  repeated bytes keys = 1;
+  //the shardID
+  uint64 shardID = 2;
 }
 
 //AppendRequest appends data in the table.
