@@ -91,6 +91,14 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.CustomType = uint64(pb.TpeScan)
 		req.Read = true
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TpeCheckKeysExistInBatch:
+		msg := customReq.TpeCheckKeysExistInBatch
+		req.Key = nil
+		req.ToShard = msg.GetShardID()
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.TpeCheckKeysExistInBatch)
+		req.Read = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.TpePrefixScan:
 		msg := customReq.TpePrefixScan
 		req.Key = msg.PrefixOrStartKey

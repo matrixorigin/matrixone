@@ -105,6 +105,9 @@ type CubeDriver interface {
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
+	// TpeCheckKeysExist checks the shard has keys.
+	// return the index of the key that existed in the shard.
+	AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error))
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
@@ -559,6 +562,19 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
+func (h *driver) AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error)) {
+	req := pb.Request{
+		Type:  pb.TpeCheckKeysExistInBatch,
+		Group: pb.KVGroup,
+		TpeCheckKeysExistInBatch: pb.TpeCheckKeysExistInBatchRequest{
+			Keys: keys,
+			ShardID: shardID,
+		},
+	}
+
+	h.AsyncExecWithGroup(req,pb.KVGroup,cb,nil)
+}
+
 //PrefixScan scans in KVGroup
 //It returns the kv pairs with specific prefix
 func (h *driver) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
@@ -961,4 +977,9 @@ type TpeScanResponse struct {
 	Values              [][]byte `json:"values"`
 	CompleteInAllShards bool     `json:"CompleteInAllShards,string"`
 	NextScanKey         []byte   `json:"next_scan_key"`
+}
+
+type TpeCheckKeysExistInBatchResponse struct {
+	ExistedKeyIndex int `json:"ExistedKeyIndex,string"`
+	ShardID uint64 `json:"shard_id,string"`
 }

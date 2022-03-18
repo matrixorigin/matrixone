@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/executor"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/util/buf"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -329,6 +330,69 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard meta.Shar
 	return rep, nil
 }
 
+func (ce *kvExecutor) tpeCheckKeysExistInBatch(readCtx storage.ReadContext, shard meta.Shard, req storage.Request) ([]byte, error) {
+	userReq := &pb.TpeCheckKeysExistInBatchRequest{}
+	protoc.MustUnmarshal(userReq,req.Cmd)
+
+	view := ce.kv.GetView()
+	defer func(view storage.View) {
+		err := view.Close()
+		if err != nil {
+			logutil.Errorf("tpeCheckKeysExistInBatch close view of kv failed. error: %v",err)
+		}
+	}(view)
+
+	//to be sure that, keys in the request are needed to be sorted.
+
+	keyCnt := len(userReq.GetKeys())
+
+	startKey := kv.EncodeShardStart(userReq.GetKeys()[0],readCtx.ByteBuf())
+	endKey := kv.NextKey(userReq.GetKeys()[keyCnt - 1],readCtx.ByteBuf())
+	endKey = kv.EncodeShardEnd(endKey,readCtx.ByteBuf())
+
+	copyKeyValue := false
+	keyIndex := 0
+
+	var existedKeyIndex int = -1
+
+	callback := func(key []byte, value []byte) (bool, error) {
+		decodedKey := kv.DecodeDataKey(key)
+		for ; keyIndex < keyCnt ;{
+			curKey := userReq.GetKeys()[keyIndex]
+			cmp := bytes.Compare(curKey,decodedKey)
+			if cmp < 0 {
+				keyIndex++
+			}else if cmp == 0 {
+				existedKeyIndex = keyIndex
+				return false, nil
+			}else{
+				//check next key
+				return true, nil
+			}
+		}
+		//if keyIndex >= keyCnt, there are no keys exist in the storage from this request
+		return false, nil
+	}
+
+	err := ce.kv.ScanInView(view, startKey, endKey, callback, copyKeyValue)
+	if err != nil {
+		logutil.Errorf("tpeCheckKeysExistInBatch scan in view failed. error:%v",err)
+		return nil, err
+	}
+
+	var rep []byte
+	tcke := driver.TpeCheckKeysExistInBatchResponse{}
+	tcke.ExistedKeyIndex = existedKeyIndex
+	tcke.ShardID = userReq.GetShardID()
+
+	if rep, err = json.Marshal(tcke); err != nil {
+		logutil.Errorf("tpeCheckKeysExistInBatch marshal response failed. error:%v",err)
+		return nil, err
+	}
+
+	return rep, nil
+}
+
 func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
 
 	customReq := &pb.AllocIDRequest{}
@@ -529,6 +593,13 @@ func (ce *kvExecutor) Read(ctx storage.ReadContext) ([]byte, error) {
 		return v, nil
 	case uint64(pb.TpePrefixScan):
 		v, err := ce.tpePrefixScan(ctx, ctx.Shard(), request)
+		if err != nil {
+			return nil, err
+		}
+		ctx.SetReadBytes(uint64(len(v)))
+		return v, nil
+	case uint64(pb.TpeCheckKeysExistInBatch):
+		v, err := ce.tpeCheckKeysExistInBatch(ctx, ctx.Shard(), request)
 		if err != nil {
 			return nil, err
 		}
