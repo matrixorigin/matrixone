@@ -10,7 +10,6 @@ on:
 jobs:
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
 
     steps:
       - name: Checkout
