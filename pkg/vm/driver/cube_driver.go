@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixcube/metric"
+	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -45,7 +47,7 @@ import (
 )
 
 var (
-	errorCubeReturnIsNull = errors.New("cube return is null")
+	errorCubeReturnIsNull                 = errors.New("cube return is null")
 	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
 )
 
@@ -87,7 +89,7 @@ type CubeDriver interface {
 	// TpeDeleteBatch deletes keys in the parameter.
 	TpeDeleteBatch(keys [][]byte) error
 	// TpeDeleteBatchWithRange deletes keys in the range [startKey,endKey)
-	TpeDeleteBatchWithRange([]byte,[]byte) error
+	TpeDeleteBatchWithRange([]byte, []byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup scan [start,end) data in specific group.
@@ -295,12 +297,15 @@ func (h *driver) Start() error {
 			logutil.Error("wait for available shard timeout")
 			return errDriver.ErrStartupTimeout
 		default:
-			err := h.initShardPool()
+			err = h.initShardPool()
 			if err == nil {
 				if h.cfg.CubeConfig.Metric.Interval > 0 {
 					metric.StartPush(h.cfg.CubeConfig.Metric, logutil.GetGlobalLogger())
 				}
 				return err
+			} else if strings.Contains(err.Error(),"missing job processor") {
+				logutil.Errorf("Startup failed: %v", err)
+				return errDriver.ErrStartupFailed
 			}
 			time.Sleep(time.Millisecond * 100)
 		}
@@ -380,7 +385,7 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequ
 	}
 	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
 		if err != nil {
-			logutil.Errorf("cube error: %v",err)
+			logutil.Errorf("cube error: %v", err)
 		}
 
 		if bytes != nil || len(bytes) != 0 {
@@ -456,7 +461,7 @@ func (h *driver) TpeDeleteBatch(keys [][]byte) error {
 		Type:  pb.TpeDeleteBatch,
 		Group: pb.KVGroup,
 		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
-			Keys:keys,
+			Keys: keys,
 		},
 	}
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
@@ -468,9 +473,9 @@ func (h *driver) TpeDeleteBatchWithRange(startKey []byte, endKey []byte) error {
 		Type:  pb.TpeDeleteBatch,
 		Group: pb.KVGroup,
 		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
-			Keys: nil,
+			Keys:  nil,
 			Start: startKey,
-			End: endKey,
+			End:   endKey,
 		},
 	}
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
@@ -525,9 +530,9 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 		Type:  pb.TpeScan,
 		Group: pb.KVGroup,
 		TpeScan: pb.TpeScanRequest{
-			Start: startKey,
-			End:   endKey,
-			Limit: limit,
+			Start:   startKey,
+			End:     endKey,
+			Limit:   limit,
 			NeedKey: needKey,
 		},
 	}
