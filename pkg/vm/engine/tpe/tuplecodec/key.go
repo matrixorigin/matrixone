@@ -14,7 +14,14 @@
 
 package tuplecodec
 
-import "bytes"
+import (
+	"bytes"
+	"errors"
+)
+
+var (
+	errorInvalidRange = errors.New("invalid range")
+)
 
 // Less decides the key is less than another key
 func (tk TupleKey) Less(another TupleKey) bool {
@@ -200,4 +207,106 @@ func (r Range) ContainRange(another Range) bool {
 	}
 	return bytes.Compare(r.startKey,another.startKey) <= 0 &&
 		bytes.Compare(r.endKey,another.endKey) >= 0
+}
+
+// IsValid check the Range is valid or not.
+// It is different the IsValid above.
+// IsValid here can accept the nil for the startKey and endKey
+func IsValid(r Range) bool {
+	if len(r.startKey) == 0 &&
+		len(r.endKey) == 0 {
+		return true
+	}else if len(r.endKey) == 0 || len(r.startKey) == 0 {
+		//startKey or endKey can be empty
+		return true
+	}
+
+	//startKey < endKey
+	if bytes.Compare(r.startKey,r.endKey) >= 0 {
+		return false
+	}
+
+	return true
+}
+
+// isOverlap checks the wantRange overlaps the checkRange or not.
+// isOverlap is different with the Overlap above.
+// isOverlap can accept the nil for startKey and endKey
+// return parameters:
+// bool:
+// error
+func isOverlap(wantRange,checkRange Range) (bool,error) {
+	if !IsValid(wantRange) || !IsValid(checkRange){
+		return false, errorInvalidRange
+	}
+
+	isInfinity := func(in []byte) bool {
+		return len(in) == 0
+	}
+
+	wantNegativeInfinity := isInfinity(wantRange.startKey)
+	wantPositiveInfinity := isInfinity(wantRange.endKey)
+
+	checkNegativeInfinity := isInfinity(checkRange.startKey)
+	checkPositiveInfinity := isInfinity(checkRange.endKey)
+
+	ok := false
+
+	if wantNegativeInfinity && wantPositiveInfinity {
+		//(-infinity,+infinity)
+		ok = true
+	}else if wantNegativeInfinity && !wantPositiveInfinity {
+		//(-infinity,x)
+		if checkNegativeInfinity && checkPositiveInfinity {
+			ok = true
+		}else if checkNegativeInfinity && !checkPositiveInfinity {
+			//(-infinity,y)
+			// x<=y, or x > y
+			ok = true
+		}else if !checkNegativeInfinity && checkPositiveInfinity {
+			//[y,infinity)
+			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+		}else{
+			//[y,z)
+			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+		}
+	}else if !wantNegativeInfinity && wantPositiveInfinity {
+		//[x,infinity)
+		if checkNegativeInfinity && checkPositiveInfinity {
+			ok = true
+		}else if checkNegativeInfinity && !checkPositiveInfinity {
+			//(-infinity,y)
+			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+		}else if !checkNegativeInfinity && checkPositiveInfinity {
+			//[y,infinity)
+			ok = true
+		}else{
+			//[y,z)
+			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+		}
+	}else{
+		//[a, b)
+		if checkNegativeInfinity && checkPositiveInfinity {
+			ok = true
+		}else if checkNegativeInfinity && !checkPositiveInfinity {
+			//(-infinity,y)
+			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+		}else if !checkNegativeInfinity && checkPositiveInfinity {
+			//[y,infinity)
+			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+		}else{
+			checkFunc := func(wantRange,checkRange Range) bool {
+				return bytes.Compare(wantRange.endKey,checkRange.startKey) > 0 &&
+					bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0 ||
+					bytes.Compare(wantRange.startKey,checkRange.startKey) >= 0 &&
+						bytes.Compare(wantRange.startKey,checkRange.endKey) < 0 ||
+					bytes.Compare(wantRange.startKey,checkRange.startKey) >=0 &&
+						bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0
+			}
+			//[y,z)
+			ok = checkFunc(wantRange,checkRange) ||
+				checkFunc(checkRange,wantRange)
+		}
+	}
+	return ok, nil
 }

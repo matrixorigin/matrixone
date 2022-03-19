@@ -612,7 +612,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				columnFLags[k] = 0
 			}
 
-			for j, field := range line {
+			for j, lineStr := range line {
 				//logutil.Infof("data col %d : %v",j,field)
 				//where will column j go ?
 				colIdx := -1
@@ -627,6 +627,8 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				if colIdx == -1 {
 					continue
 				}
+
+				field := strings.TrimSpace(lineStr)
 
 				isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
 

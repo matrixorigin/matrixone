@@ -27,7 +27,7 @@ import (
 
 func TestTpeDatabase_Create(t *testing.T) {
 	convey.Convey("create table with none primary key ",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 
 		dbName := "test"
 		err := tpe.Create(0,dbName,0)
@@ -123,7 +123,7 @@ func TestTpeDatabase_Create(t *testing.T) {
 	})
 
 	convey.Convey("create table with primary key ",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 
 		dbName := "test"
 		err := tpe.Create(0,dbName,0)

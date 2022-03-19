@@ -66,7 +66,7 @@ func TestEpochHandler_RemoveDeletedTable(t *testing.T) {
 					})
 
 					tableName := fmt.Sprintf("table%d",tableId)
-					desc := make_relation_desc(internalDescriptorTableDesc,tableName,tableId)
+					desc := make_relation_desc(InternalDescriptorTableDesc,tableName,tableId)
 					err := dhi.StoreRelationDescIntoAsyncGC(epoch, dbId, desc)
 					convey.So(err,convey.ShouldBeNil)
 				}

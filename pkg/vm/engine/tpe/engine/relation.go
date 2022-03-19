@@ -17,6 +17,7 @@ package engine
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -45,13 +46,7 @@ func (trel * TpeRelation) ID() string {
 }
 
 func (trel * TpeRelation) Nodes() engine.Nodes {
-	var nds = []engine.Node{
-		{
-			Id:   "0",
-			Addr: "localhost:20000",
-		},
-	}
-	return nds
+	return trel.nodes
 }
 
 func (trel * TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
@@ -172,14 +167,81 @@ func (trel * TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
+func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
+	tcnt := cnt
+	if cnt <= 0 {
+		tcnt = 1
+	}
+	var retReaders []engine.Reader = make([]engine.Reader,cnt)
+	var tpeReaders []*TpeReader = make([]*TpeReader,tcnt)
+	//split shards into multiple readers
+	shardInfos := trel.shards.ShardInfos()
+	for i, info := range shardInfos {
+		readIndex := i % tcnt
+		newInfo := ShardInfo{
+			startKey:    info.GetStartKey(),
+			endKey:      info.GetEndKey(),
+			nextScanKey: nil,
+			completeInShard:    false,
+			node:        ShardNode{
+				Addr:    info.GetShardNode().Addr,
+				ID:      info.GetShardNode().ID,
+				IDbytes: info.GetShardNode().IDbytes,
+			},
+		}
+		if tpeReaders[readIndex] == nil {
+			tpeReaders[readIndex] = &TpeReader{
+				dbDesc:         trel.dbDesc,
+				tableDesc:      trel.desc,
+				computeHandler: trel.computeHandler,
+				shardInfos: []ShardInfo{newInfo},
+				parallelReader: true,
+				isDumpReader: false,
+			}
+		}else{
+			tpeReaders[readIndex].shardInfos = append(tpeReaders[readIndex].shardInfos,newInfo)
+		}
+	}
+
+	for i, reader := range tpeReaders {
+		if reader != nil {
+			retReaders[i] = reader
+			logutil.Infof("-->reader %v",reader.shardInfos)
+		}else{
+			retReaders[i] = &TpeReader{isDumpReader: true}
+		}
+	}
+	return retReaders
+}
+
 func (trel * TpeRelation) NewReader(cnt int) []engine.Reader {
+	if trel.computeHandler.ParallelReader() {
+		return trel.parallelReader(cnt)
+	}
 	var readers []engine.Reader = make([]engine.Reader,cnt)
-	readers[0] = &TpeReader{
+	tr := &TpeReader{
 		dbDesc:         trel.dbDesc,
 		tableDesc:      trel.desc,
 		computeHandler: trel.computeHandler,
+		parallelReader: false,
 		isDumpReader: false,
 	}
+	shardInfos := trel.shards.ShardInfos()
+	for _, info := range shardInfos {
+		newInfo := ShardInfo{
+			startKey:    info.GetStartKey(),
+			endKey:      info.GetEndKey(),
+			nextScanKey: nil,
+			completeInShard:    false,
+			node:        ShardNode{
+				Addr:    info.GetShardNode().Addr,
+				ID:      info.GetShardNode().ID,
+				IDbytes: info.GetShardNode().IDbytes,
+			},
+		}
+		tr.shardInfos = append(tr.shardInfos,newInfo)
+	}
+	readers[0] = tr
 	for i := 1; i < cnt; i++ {
 		readers[i] = &TpeReader{isDumpReader: true}
 	}

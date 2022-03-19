@@ -106,10 +106,9 @@ func TestMemoryKV_SetBatch(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.SetBatch(keys, values)
-		for _, err := range errs {
-			convey.So(err,convey.ShouldBeNil)
-		}
+		err := kv.SetBatch(keys, values)
+		convey.So(err,convey.ShouldBeNil)
+
 
 		gets, err2 := kv.GetBatch(keys)
 		convey.So(err2,convey.ShouldBeNil)
@@ -200,14 +199,8 @@ func TestMemoryKV_DedupSetBatch(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.DedupSetBatch(keys, values)
-		for i, err := range errs {
-			if kases[i].want {
-				convey.So(err,convey.ShouldBeNil)
-			}else{
-				convey.So(err,convey.ShouldBeError)
-			}
-		}
+		err := kv.DedupSetBatch(keys, values)
+		convey.So(err,convey.ShouldBeError)
 
 		gets, err2 := kv.GetBatch(keys)
 		convey.So(err2,convey.ShouldBeNil)
@@ -248,10 +241,8 @@ func TestMemoryKV_GetRange(t *testing.T) {
 			values = append(values,kase.value)
 		}
 
-		errs := kv.SetBatch(keys, values)
-		for _, err := range errs {
-			convey.So(err,convey.ShouldBeNil)
-		}
+		err := kv.SetBatch(keys, values)
+		convey.So(err,convey.ShouldBeNil)
 
 		type args2 struct {
 			start TupleKey
@@ -300,7 +291,7 @@ func TestMemoryKV_GetRange(t *testing.T) {
 }
 
 func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
-	convey.Convey("get rage",t, func() {
+	convey.Convey("get range",t, func() {
 		prefix := "abc"
 		cnt := 20
 
@@ -324,7 +315,7 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetRangeWithLimit(TupleKey(prefix),uint64(cnt))
+		_, values, _, _, err := kv.GetRangeWithLimit(TupleKey(prefix), nil, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -333,15 +324,21 @@ func TestMemoryKV_GetRangeWithLimit(t *testing.T) {
 
 		step := 10
 		last := TupleKey(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetRangeWithLimit(last, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, nil, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
 	})
 }
@@ -371,7 +368,7 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -381,15 +378,21 @@ func TestMemoryKV_GetWithPrefix(t *testing.T) {
 		step := 10
 		last := TupleKey(prefix)
 		prefixLen := len(prefix)
+		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			keys, values, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen , uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
 				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
 			}
 
-			last = SuccessorOfKey(keys[len(keys) - 1])
+			readCnt += len(values)
+
+			last = nextScanKey
+			if complete {
+				break
+			}
 		}
 	})
 }
@@ -416,20 +419,16 @@ func TestMemoryKV_DeletePrefix(t *testing.T) {
 
 		wKeys1, wValues1 := genData(cnt,kv,"abc")
 		err := kv.SetBatch(wKeys1,wValues1)
-		for _, e := range err {
-			convey.So(e,convey.ShouldBeNil)
-		}
+		convey.So(err,convey.ShouldBeNil)
 
 		wKeys2, wValues2 := genData(cnt,kv,"cde")
 		err = kv.SetBatch(wKeys2,wValues2)
-		for _, e := range err {
-			convey.So(e,convey.ShouldBeNil)
-		}
+		convey.So(err,convey.ShouldBeNil)
 
 		err2 := kv.DeleteWithPrefix([]byte("abc"))
 		convey.So(err2,convey.ShouldBeNil)
 
-		resKeys, resValues, err3 := kv.GetWithPrefix(TupleKey("cde"), len("cde"), uint64(cnt))
+		resKeys, resValues, _, _, err3 := kv.GetWithPrefix(TupleKey("cde"), len("cde"), uint64(cnt))
 		convey.So(err3,convey.ShouldBeNil)
 
 		for i, key := range resKeys {

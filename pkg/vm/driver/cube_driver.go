@@ -18,8 +18,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixcube/metric"
+	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -42,6 +44,11 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
+)
+
+var (
+	errorCubeReturnIsNull                 = errors.New("cube return is null")
+	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
 )
 
 const (
@@ -79,20 +86,48 @@ type CubeDriver interface {
 	Delete([]byte) error
 	// DeleteIfExist remove the key from the store if key exists.
 	DeleteIfExist([]byte) error
+	// TpeDeleteBatch deletes keys in the parameter.
+	TpeDeleteBatch(keys [][]byte) error
+	// TpeDeleteBatchWithRange deletes keys in the range [startKey,endKey)
+	TpeDeleteBatchWithRange([]byte, []byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup scan [start,end) data in specific group.
 	ScanWithGroup([]byte, []byte, uint64, pb.Group) ([][]byte, error)
+	// TpeScan gets the keys in the range [startKey,endKey), return keys/values.
+	//a. startKey maybe nil.
+	//b. endKey maybe nil.
+	//c. limit: if it is the math.MaxUint64,
+	//	        it means there is not limitation on the count of keys.
+	//d. needKey: if it is true, the keys and the values are returned.
+	//			  if it is false, the keys are returned only.
+	//return parameters:
+	//[][]byte : return keys
+	//[][]byte : return values
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
+	// TpeCheckKeysExist checks the shard has keys.
+	// return the index of the key that existed in the shard.
+	AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error))
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
 	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	// TpePrefixScan gets the values of the prefix with limit.
-	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
-	// When we invoke TpePrefixScan several times, the prefix is the real
-	// prefix in the first time. But from the second time, the prefix is the
-	// last key in previous results of the TpePrefixScan.
-	TpePrefixScan([]byte,int,uint64)([][]byte, error)
+	//a. startKeyOrPrefix : When we invoke TpePrefixScan several times,
+	//	the startKeyOrPrefix is the real prefix in the first time.
+	//	But from the second time, the startKeyOrPrefix is the next scan key
+	//	that generated from results in the previous TpePrefixScan.
+	//b. prefixLength : it denotes startKeyOrPrefix[:prefixLength] is the real prefix.
+	//c. limit: if it is the math.MaxUint64,
+	//	        it means there is not limitation on the count of keys.
+	//return parameters:
+	//[][]byte : return keys
+	//[][]byte : return values
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -265,12 +300,15 @@ func (h *driver) Start() error {
 			logutil.Error("wait for available shard timeout")
 			return errDriver.ErrStartupTimeout
 		default:
-			err := h.initShardPool()
+			err = h.initShardPool()
 			if err == nil {
 				if h.cfg.CubeConfig.Metric.Interval > 0 {
 					metric.StartPush(h.cfg.CubeConfig.Metric, logutil.GetGlobalLogger())
 				}
 				return err
+			} else if strings.Contains(err.Error(),"missing job processor") {
+				logutil.Errorf("Startup failed: %v", err)
+				return errDriver.ErrStartupFailed
 			}
 			time.Sleep(time.Millisecond * 100)
 		}
@@ -349,6 +387,10 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequ
 		},
 	}
 	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
+		if err != nil {
+			logutil.Errorf("cube error: %v", err)
+		}
+
 		if bytes != nil || len(bytes) != 0 {
 			err = errors.New(string(bytes))
 		}
@@ -417,6 +459,32 @@ func (h *driver) DeleteIfExist(key []byte) error {
 	return err
 }
 
+func (h *driver) TpeDeleteBatch(keys [][]byte) error {
+	req := pb.Request{
+		Type:  pb.TpeDeleteBatch,
+		Group: pb.KVGroup,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys: keys,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	return err
+}
+
+func (h *driver) TpeDeleteBatchWithRange(startKey []byte, endKey []byte) error {
+	req := pb.Request{
+		Type:  pb.TpeDeleteBatch,
+		Group: pb.KVGroup,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys:  nil,
+			Start: startKey,
+			End:   endKey,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	return err
+}
+
 //Scan scans in KVGroup.
 //It returns the keys and values whose key is between start and end.
 func (h *driver) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
@@ -458,6 +526,58 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 		req.Scan.Start = kvs[len(kvs)-1]
 	}
 	return pairs, err
+}
+
+func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error) {
+	req := pb.Request{
+		Type:  pb.TpeScan,
+		Group: pb.KVGroup,
+		TpeScan: pb.TpeScanRequest{
+			Start:   startKey,
+			End:     endKey,
+			Limit:   limit,
+			NeedKey: needKey,
+		},
+	}
+
+	var err error
+	var data []byte
+	var keys [][]byte = nil
+
+	data, err = h.ExecWithGroup(req, pb.KVGroup)
+	if data == nil {
+		return nil, nil, false, nil, errorCubeReturnIsNull
+	}
+
+	if err != nil {
+		return nil, nil, false, nil, err
+	}
+
+	var tsr TpeScanResponse
+	err = json.Unmarshal(data, &tsr)
+	if err != nil {
+		return nil, nil, false, nil, err
+	}
+
+	//save keys
+	if needKey {
+		keys = tsr.Keys
+	}
+
+	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
+}
+
+func (h *driver) AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error)) {
+	req := pb.Request{
+		Type:  pb.TpeCheckKeysExistInBatch,
+		Group: pb.KVGroup,
+		TpeCheckKeysExistInBatch: pb.TpeCheckKeysExistInBatchRequest{
+			Keys: keys,
+			ShardID: shardID,
+		},
+	}
+
+	h.AsyncExecWithGroup(req,pb.KVGroup,cb,nil)
 }
 
 //PrefixScan scans in KVGroup
@@ -503,41 +623,38 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	return pairs, err
 }
 
-func (h *driver) TpePrefixScan(prefixOrStartkey []byte, prefixLength int, limit uint64) ([][]byte, error) {
+func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
+	if prefixLength > len(startKeyOrPrefix) {
+		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
+	}
 	req := pb.Request{
 		Type:  pb.TpePrefixScan,
 		Group: pb.KVGroup,
 		TpePrefixScan: pb.TpePrefixScanRequest{
-			PrefixOrStartKey: prefixOrStartkey,
-			PrefixLength: int64(prefixLength),
+			PrefixOrStartKey: startKeyOrPrefix,
+			PrefixLength:     int64(prefixLength),
 			Limit:            limit,
 		},
 	}
-	var pairs [][]byte
+
 	var err error
 	var data []byte
-	i := 0
-	//TODO:to fix
-	for {
-		i = i + 1
-		data, err = h.ExecWithGroup(req, pb.KVGroup)
-		if data == nil || err != nil {
-			break
-		}
-		var kvs [][]byte
-		err = json.Unmarshal(data, &kvs)
-		if err != nil || kvs == nil || len(kvs) == 0 {
-			break
-		}
-		if len(kvs)%2 == 0 {
-			pairs = append(pairs, kvs...)
-			break
-		}
 
-		pairs = append(pairs, kvs[0:len(kvs)-1]...)
-		req.TpePrefixScan.PrefixOrStartKey = kvs[len(kvs)-1]
+	data, err = h.ExecWithGroup(req, pb.KVGroup)
+	if data == nil {
+		return nil, nil, false, nil, errorCubeReturnIsNull
 	}
-	return pairs, err
+	if err != nil {
+		return nil, nil, false, nil, err
+	}
+
+	var tsr TpeScanResponse
+	err = json.Unmarshal(data, &tsr)
+	if err != nil {
+		return nil, nil, false, nil, err
+	}
+
+	return tsr.Keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
 //PrefixKeys scans in KVGroup.
@@ -857,4 +974,17 @@ func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
 
 func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
+}
+
+// TpeScanResponse is the response to the tpeScan
+type TpeScanResponse struct {
+	Keys                [][]byte `json:"keys"`
+	Values              [][]byte `json:"values"`
+	CompleteInAllShards bool     `json:"CompleteInAllShards,string"`
+	NextScanKey         []byte   `json:"next_scan_key"`
+}
+
+type TpeCheckKeysExistInBatchResponse struct {
+	ExistedKeyIndex int `json:"ExistedKeyIndex,string"`
+	ShardID uint64 `json:"shard_id,string"`
 }

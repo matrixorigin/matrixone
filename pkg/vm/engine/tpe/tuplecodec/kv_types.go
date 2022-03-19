@@ -31,13 +31,13 @@ type KVHandler interface {
 	Set(key TupleKey,value TupleValue) error
 
 	// SetBatch writes the batch of key-value (overwrite)
-	SetBatch(keys []TupleKey,values []TupleValue) []error
+	SetBatch(keys []TupleKey, values []TupleValue) error
 
 	// DedupSet writes the key-value. It will fail if the key exists
 	DedupSet(key TupleKey, value TupleValue) error
 
 	// DedupSetBatch writes the batch of keys-values. It will fail if there is one key exists
-	DedupSetBatch(keys []TupleKey, values []TupleValue) []error
+	DedupSetBatch(keys []TupleKey, values []TupleValue) error
 
 	// Delete deletes the key
 	Delete(key TupleKey) error
@@ -54,19 +54,65 @@ type KVHandler interface {
 	// GetRange gets the values among the range [startKey,endKey).
 	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
 
-	// GetRange gets the values from the startKey with limit
-	GetRangeWithLimit(startKey TupleKey, limit uint64) ([]TupleKey,[]TupleValue, error)
+	// GetRangeWithLimit gets the values from the startKey with limit
+	//return parameters:
+	//[][]byte : return keys
+	//[][]byte : return values
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetWithPrefix gets the values of the prefix with limit.
 	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
 	// When we invoke GetWithPrefix several times, the prefix is the real
 	// prefix in the first time. But from the second time, the prefix is the
 	// last key in previous results of the GetWithPrefix.
-	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, error)
+	//return parameters:
+	//[][]byte : return keys
+	//[][]byte : return values
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
 	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)
 
 	// GetShardsWithPrefix get the shards that holds the keys with prefix
 	GetShardsWithPrefix(prefix TupleKey) (interface{}, error)
+}
+
+type ShardNode struct {
+	//the address of the store of the leader replica of the shard
+	Addr string
+	//the id of the store of the leader replica of the shard
+	ID uint64
+	//the bytes of the id
+	IDbytes string
+}
+
+type ShardInfo struct {
+	startKey []byte
+	endKey []byte
+	node ShardNode
+}
+
+func (si ShardInfo) GetStartKey() []byte {
+	return si.startKey
+}
+
+func (si ShardInfo) GetEndKey() []byte {
+	return si.endKey
+}
+
+func (si ShardInfo) GetShardNode() ShardNode {
+	return si.node
+}
+
+type Shards struct {
+	nodes []ShardNode
+	shardInfos []ShardInfo
+}
+
+func (s Shards) ShardInfos() []ShardInfo {
+	return s.shardInfos
 }

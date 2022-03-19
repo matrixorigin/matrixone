@@ -97,7 +97,7 @@ func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
 	mo = frontend.NewMOServer(address, pu, callback)
-	frontend.ServerVersion = MoVersion
+	frontend.InitServerVersion(MoVersion)
 }
 
 func runMOServer() error {
@@ -133,6 +133,7 @@ func recreateDir(dir string) (err error) {
 call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
+	//logutil.Infof("removeEpoch %d",epoch)
 	_, err := c.RemoveDeletedTable(epoch)
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
@@ -290,11 +291,30 @@ func main() {
 	var eng engine.Engine
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
-		eng, err = tpeEngine.NewTpeEngine(&tpeEngine.TpeConfig{KvType: tuplecodec.KV_MEMORY})
+		tpeConf := &tpeEngine.TpeConfig{}
+		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
+		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
+		if configKvTyp == "memorykv" {
+			tpeConf.KvType = tuplecodec.KV_MEMORY
+		}else if configKvTyp == "cubekv" {
+			tpeConf.KvType = tuplecodec.KV_CUBE
+			tpeConf.Cube = a
+		}else{
+			logutil.Infof("there is no such kvType %s \n", configKvTyp)
+			os.Exit(CreateTpeExit)
+		}
+		te, err := tpeEngine.NewTpeEngine(tpeConf)
 		if err != nil {
 			logutil.Infof("create tpe error:%v\n", err)
 			os.Exit(CreateTpeExit)
 		}
+		err = te.Open()
+		if err != nil {
+			logutil.Infof("open tpe error:%v\n", err)
+			os.Exit(CreateTpeExit)
+		}
+		eng = te
 	} else {
 		eng = aoeEngine.New(c, &cngineConfig)
 	}
