@@ -24,6 +24,7 @@ enum Type {
   TpeScan = 9;
   TpeDeleteBatch = 10;
   TpeCheckKeysExistInBatch = 11;
+  TpeSetBatch = 12;
 
   Append = 100;
   GetSnapshot = 101;
@@ -53,6 +54,7 @@ message Request {
   TpeScanRequest         tpeScan = 12  [(gogoproto.nullable) = false];
   TpeDeleteBatchRequest tpeDeleteBatch = 13  [(gogoproto.nullable) = false];
   TpeCheckKeysExistInBatchRequest tpeCheckKeysExistInBatch = 14  [(gogoproto.nullable) = false];
+  TpeSetBatchRequest tpeSetBatch = 15  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -83,6 +85,15 @@ message SetRequest {
   bytes  key = 1;
   bytes  value = 2;
   int64  ttl = 3 [(gogoproto.customname) = "TTL"];
+  int32 keyIndex = 4; //for TpeAsyncSet
+}
+
+message TpeSetBatchRequest {
+  //the keys/values need to be set
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+  //the shardID
+  uint64 shardID = 3;
 }
 
 // GetRequest get value by key
