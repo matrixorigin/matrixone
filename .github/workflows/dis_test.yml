@@ -8,9 +8,6 @@ on:
       - reopened
     branches:
       - main
-  push:
-    branches:
-      - fix-dis-test
     
 jobs: 
   build:
