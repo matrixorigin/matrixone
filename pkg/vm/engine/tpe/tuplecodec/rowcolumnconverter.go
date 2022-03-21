@@ -17,6 +17,8 @@ package tuplecodec
 import (
 	"errors"
 	"fmt"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"sort"
 )
 
 var (
@@ -388,13 +389,37 @@ func (ba *BatchAdapter) ForEachTuple(callbackCtx interface{},
 			continue
 		}
 
-		var rowIndex int64 = int64(j)
-		if len(ba.bat.Sels) != 0 {
-			rowIndex = ba.bat.Sels[j]
+		err := GetRow(ba.bat, row, j)
+		if err != nil {
+			return err
+		}
+
+		err = callback(callbackCtx,tbi)
+		if err != nil {
+			return err
+		}
+
+		if len(ba.bat.Zs) != 0 {
+			//get duplicate rows
+			for i := int64(0); i < ba.bat.Zs[j]-1; i++ {
+				err = callback(callbackCtx,tbi)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func GetRow(bat *batch.Batch, row []interface{}, j int) error {
+	var rowIndex int64 = int64(j)
+		if len(bat.Sels) != 0 {
+			rowIndex = bat.Sels[j]
 		}
 
 		//get the row
-		for i, vec := range ba.bat.Vecs { //col index
+		for i, vec := range bat.Vecs { //col index
 			switch vec.Typ.Oid { //get col
 			case types.T_int8:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
@@ -569,21 +594,5 @@ func (ba *BatchAdapter) ForEachTuple(callbackCtx interface{},
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 			}
 		}
-
-		err := callback(callbackCtx,tbi)
-		if err != nil {
-			return err
-		}
-
-		if len(ba.bat.Zs) != 0 {
-			//get duplicate rows
-			for i := int64(0); i < ba.bat.Zs[j]-1; i++ {
-				err = callback(callbackCtx,tbi)
-				if err != nil {
-					return err
-				}
-			}
-		}
-	}
 	return nil
 }

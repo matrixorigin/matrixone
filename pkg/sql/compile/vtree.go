@@ -615,7 +615,7 @@ func (e *Exec) compileDelete(vt *vtree.ViewTree, v *vtree.View) (*Scope, error )
 			v.Rel.Vars = append(v.Rel.Vars, &vtree.Variable{Name: colDef.Name, Type: colDef.Type.Oid})
 		}
 	} else {
-		return nil, errors.New(errno.CaseNotFound, "Do not support deletion for other engine")
+		return nil, errors.New(errno.CaseNotFound, "Do not support deletion for other engine except Tpe")
 	}
 	// init date source
 	src := &Source{
