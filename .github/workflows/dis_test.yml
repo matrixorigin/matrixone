@@ -30,7 +30,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildx
     
-      - name: Build and Push Image
+      - name: Build MO image
         uses: docker/build-push-action@v2
         env:
           DOCKER_BUILDKIT: 1
@@ -44,7 +44,7 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
         
-      - name: Build Bvt Image
+      - name: Build BVT image
         uses: docker/build-push-action@v2
         env:
           DOCKER_BUILDKIT: 1
@@ -71,7 +71,7 @@ jobs:
         run:  docker network list
   
       - name: Run test suite
-        run: docker run --tty --rm --name mysql-tester --network test_monet wanglei1995/mysql-tester -host 172.19.0.2 -port 6001 -user dump -passwd 111
+        run: docker run --tty --rm --name mysql-tester --network test_monet matrixorigin/mysql-tester:dt -host 172.19.0.2 -port 6001 -user dump -passwd 111
 
       - name: Move cache
         run: |
