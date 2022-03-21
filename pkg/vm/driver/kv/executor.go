@@ -62,6 +62,21 @@ func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) (uint64, []by
 	return writtenBytes, req.Cmd
 }
 
+func (ce *kvExecutor) tpeSetBatch(ctx storage.WriteContext,wb util.WriteBatch, req storage.Request) (uint64, []byte) {
+	userReq := &pb3.TpeSetBatchRequest{}
+	protoc.MustUnmarshal(userReq, req.Cmd)
+	writtenBytes := uint64(len(req.Cmd))
+	keys := userReq.GetKeys()
+	values := userReq.GetValues()
+	for i, key := range keys {
+		setKey := kv.EncodeDataKey(key,ctx.ByteBuf())
+		wb.Set(setKey,values[i])
+		writtenBytes += uint64(len(setKey))
+		writtenBytes += uint64(len(values[i]))
+	}
+	return writtenBytes, req.Cmd
+}
+
 func (ce *kvExecutor) get(req storage.Request) ([]byte, error) {
 	value, err := ce.kv.Get(req.Key)
 	if err != nil {
@@ -526,6 +541,10 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 			writtenBytes, rep := ce.set(wb, requests[j])
 			ctx.AppendResponse(rep)
 			writtenBytes += writtenBytes
+		case uint64(pb.TpeSetBatch):
+			bytes,rep := ce.tpeSetBatch(ctx,wb,requests[j])
+			ctx.AppendResponse(rep)
+			writtenBytes += bytes
 		case uint64(pb.Del):
 			writtenBytes, rep := ce.del(wb, requests[j])
 			ctx.AppendResponse(rep)

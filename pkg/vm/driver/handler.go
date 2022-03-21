@@ -34,6 +34,14 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.CustomType = uint64(pb.Set)
 		req.Write = true
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TpeSetBatch:
+		msg := customReq.TpeSetBatch
+		req.Key = nil
+		req.ToShard = msg.GetShardID()
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.TpeSetBatch)
+		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.SetIfNotExist:
 		msg := customReq.Set
 		req.Key = msg.Key

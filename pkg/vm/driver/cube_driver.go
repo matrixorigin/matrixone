@@ -72,6 +72,7 @@ type CubeDriver interface {
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
 	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
+	TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error))
 	TpeAsyncSet([]byte, []byte, int, time.Duration, func(server.CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
 	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
@@ -364,6 +365,19 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 //AsyncSet sets key and value in KVGroup asynchronously.
 func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
+}
+
+func (h *driver) TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
+	req := pb.Request{
+		Type:  pb.TpeSetBatch,
+		Group: pb.KVGroup,
+		TpeSetBatch: pb.TpeSetBatchRequest{
+			Keys:                 keys,
+			Values:               values,
+			ShardID:              shardID,
+		},
+	}
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
 }
 
 func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout time.Duration, cb func(server.CustomRequest, []byte, error), data interface{}) {
