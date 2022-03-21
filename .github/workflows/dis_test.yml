@@ -35,7 +35,7 @@ jobs:
           DOCKER_BUILDKIT: 1
         with:
           context: .
-          file: optools/test/Dockerfile
+          file: optools/test/Dockerfile.mo
           push: false
           load: true
           tags: matrixorigin/matrixone:dt
@@ -43,6 +43,20 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
         
+      - name: Build Bvt Image
+        uses: docker/build-push-action@v2
+        env:
+          DOCKER_BUILDKIT: 1
+        with:
+          context: .
+          file: ./optools/test/Dockerfile.bvt
+          push: false
+          load: true
+          tags: matrixorigin/mysql-tester:dt
+          builder: ${{ steps.buildx.outputs.name }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new
+
       - name: Build the docker-compose stack
         env:
           DOCKER_BUILDKIT: 1
