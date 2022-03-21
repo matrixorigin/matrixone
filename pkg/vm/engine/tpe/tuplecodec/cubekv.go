@@ -16,8 +16,10 @@ package tuplecodec
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"math"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,6 +50,7 @@ var (
 	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
 	errorRangeIsInvalid = errors.New("the range is invalid")
 	errorNoKeysToSet = errors.New("the count of keys is zero")
+	errorAsyncTpeCheckKeysExistGenNilResponse = errors.New("AsyncTpeCheckKeysExist generates nil response")
 )
 var _ KVHandler = &CubeKV{}
 
@@ -246,6 +250,118 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 		return errorNoKeysToSet
 	}
 
+	//1,sort all keys
+	keysIndexes := make([]int,len(keys))
+	for i := 0; i < len(keysIndexes); i++ {
+		keysIndexes[i] = i
+	}
+
+	sort.Slice(keysIndexes, func(i, j int) bool {
+		ki := keysIndexes[i]
+		kj := keysIndexes[j]
+
+		return keys[ki].Less(keys[kj])
+	})
+
+	//2. check key duplicate in the request
+	for i := 1; i < len(keysIndexes); i++ {
+		preKey := keys[keysIndexes[i - 1]]
+		curKey := keys[keysIndexes[i]]
+		if bytes.Compare(preKey,curKey) == 0 {
+			return errorKeyExists
+		}
+	}
+
+	//get all shards for all keys
+	//3.partition keys according to shards
+	shard2keysIndex := make(map[uint64][]int)
+	for _, ki := range keysIndexes {
+		shard, _ := ck.Cube.RaftStore().GetRouter().SelectShard(uint64(pb.KVGroup),keys[ki])
+		shard2keysIndex[shard.GetID()] = append(shard2keysIndex[shard.GetID()],ki)
+	}
+
+	keyExisted := int32(0)
+	atomic.StoreInt32(&keyExisted,0)
+	var keyExistedShardID uint64 = math.MaxUint64
+	var keyExistedIndex int = -1
+	setKeyExistedFunc := func(shardID uint64,keyIdx int) {
+		if atomic.CompareAndSwapInt32(&keyExisted,0,1) {
+			keyExistedShardID = shardID
+			keyExistedIndex = keyIdx
+		}
+	}
+
+	hasErr := int32(0)
+	atomic.StoreInt32(&hasErr, 0)
+	var checkKeysExistedErr error
+	setErrFunc := func(err error) {
+		if err != nil {
+			if atomic.CompareAndSwapInt32(&hasErr,0,1) {
+				checkKeysExistedErr = err
+			}
+		}
+	}
+
+	checkKeysExistedWG := sync.WaitGroup{}
+	callbackCheckKeysExisted := func(cr server.CustomRequest, resp []byte, cubeErr error) {
+		setErrFunc(cubeErr)
+		if cubeErr != nil {
+			if errors.Is(cubeErr,raftstore.ErrTimeout) {
+				logutil.Errorf("DedupSetBatch cube timeout :%v",cubeErr)
+			}else{
+				logutil.Errorf("DedupSetBatch cube error :%v",cubeErr)
+			}
+		}
+
+		if len(resp) != 0 {
+			tce := driver.TpeCheckKeysExistInBatchResponse{}
+			err := json.Unmarshal(resp, &tce)
+			setErrFunc(err)
+			if err != nil {
+				logutil.Errorf("DedupSetBatch unmarshal response failed.err:%v",err)
+				return
+			}else{
+				if tce.ExistedKeyIndex != -1 {
+					realKeyIndex := shard2keysIndex[tce.ShardID][tce.ExistedKeyIndex]
+					setKeyExistedFunc(tce.ShardID,realKeyIndex)
+					logutil.Errorf("DedupSetBatch response.ExistedKeyIndex %d realKeyIndex %d in shardID %d has key %v ",
+						tce.ExistedKeyIndex,
+						realKeyIndex,
+						tce.ShardID,
+						keys[realKeyIndex])
+				}
+			}
+		}else{
+			logutil.Errorf("DedupSetBatch get nil repsonse.")
+			setErrFunc(errorAsyncTpeCheckKeysExistGenNilResponse)
+		}
+		checkKeysExistedWG.Done()
+	}
+
+	//4.check keys exist or not in the every shard
+	for shardID, keyIdxSlice := range shard2keysIndex {
+		var shardkeys [][]byte
+		for _, keyIdx := range keyIdxSlice {
+			shardkeys = append(shardkeys,keys[keyIdx])
+		}
+		if len(shardkeys) != 0 {
+			checkKeysExistedWG.Add(1)
+			ck.Cube.AsyncTpeCheckKeysExist(shardID,shardkeys,callbackCheckKeysExisted)
+		}
+	}
+
+	checkKeysExistedWG.Wait()
+
+	if checkKeysExistedErr != nil {
+		return checkKeysExistedErr
+	}
+
+	if keyExistedIndex != -1 || keyExistedShardID != math.MaxUint64 {
+		return errorKeyExists
+	}
+
+	//5.AsyncSet keys into the storage
+
 	var retErr error = nil
 	var checkErr int32
 
@@ -259,14 +375,18 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 			if atomic.CompareAndSwapInt32(&checkErr,0,1) {
 				retErr = errors.New(string(resp))
 			}
-			logutil.Errorf("AsyncSetIfNotExist key %v failed. error %v",req,err)
+			if errors.Is(err,raftstore.ErrTimeout) {
+				logutil.Errorf("AsyncSet key %v timeout. error %v",req.Key,err)
+			}else{
+				logutil.Errorf("AsyncSet key %v failed. error %v",req.Key,err)
+			}
 		}
 
 		wg.Done()
 	}
 
 	for i, key := range keys {
-		ck.Cube.AsyncSetIfNotExist(key,values[i],callback,nil)
+		ck.Cube.AsyncSet(key,values[i],callback,nil)
 	}
 	wg.Wait()
 	return retErr
