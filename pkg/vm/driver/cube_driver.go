@@ -72,6 +72,7 @@ type CubeDriver interface {
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
 	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
+	TpeAsyncSet([]byte, []byte, int, time.Duration, func(server.CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
 	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// Set async set key value in specific group.
@@ -109,7 +110,7 @@ type CubeDriver interface {
 	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
 	// TpeCheckKeysExist checks the shard has keys.
 	// return the index of the key that existed in the shard.
-	AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error))
+	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error))
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
@@ -165,6 +166,7 @@ type CubeDriver interface {
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
 	AsyncExecWithGroup(interface{}, pb.Group, func(server.CustomRequest, []byte, error), interface{})
+	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(server.CustomRequest, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
@@ -362,6 +364,19 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 //AsyncSet sets key and value in KVGroup asynchronously.
 func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
+}
+
+func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout time.Duration, cb func(server.CustomRequest, []byte, error), data interface{}) {
+	req := pb.Request{
+		Type:  pb.Set,
+		Group: pb.KVGroup,
+		Set: pb.SetRequest{
+			Key:      key,
+			Value:    value,
+			KeyIndex: int32(keyIndex),
+		},
+	}
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,data)
 }
 
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
@@ -567,7 +582,7 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
-func (h *driver) AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(server.CustomRequest, []byte, error)) {
+func (h *driver) TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
 	req := pb.Request{
 		Type:  pb.TpeCheckKeysExistInBatch,
 		Group: pb.KVGroup,
@@ -577,7 +592,7 @@ func (h *driver) AsyncTpeCheckKeysExist(shardID uint64, keys [][]byte, cb func(s
 		},
 	}
 
-	h.AsyncExecWithGroup(req,pb.KVGroup,cb,nil)
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
 }
 
 //PrefixScan scans in KVGroup
@@ -945,6 +960,12 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(ser
 	cr := &server.CustomRequest{}
 	h.BuildRequest(cr, cmd)
 	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
+}
+
+func (h *driver) TpeAsyncExecWithGroup(cmd interface{}, group pb.Group, timeout time.Duration, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, timeout)
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err error) {

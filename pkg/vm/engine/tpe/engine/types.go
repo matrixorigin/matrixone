@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"time"
 )
 
 var _ engine.Engine = &TpeEngine{}
@@ -37,6 +38,9 @@ type TpeConfig struct {
 	KVLimit uint64
 
 	ParallelReader bool
+
+	TpeDedupSetBatchTimeout time.Duration
+	TpeDedupSetBatchTrycount int
 }
 
 type TpeEngine struct {
