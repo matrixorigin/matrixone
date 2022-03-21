@@ -56,7 +56,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]uint8)
 				if len(vecs) > 1 {
-					if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] || vecs[1].Typ.Oid != types.T_uint8 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -87,7 +87,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]uint16)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_uint16 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -118,7 +118,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]uint32)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_uint32 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -150,7 +150,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]uint64)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_uint64 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -182,7 +182,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]int8)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_int8 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -214,7 +214,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]int16)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_int16 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -246,7 +246,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]int32)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_int32 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -310,7 +310,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]float32)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_float32 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
@@ -342,7 +342,7 @@ func init() {
 				digits := int64(0)
 				vs := vecs[0].Col.([]float64)
 				if len(vecs) > 1 {
-					if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
+					if !cs[1] && vecs[1].Typ.Oid != types.T_float64 {
 						return nil, errors.New("The second argument of the ceil function must be an int64 constant")
 					}
 					digits = vecs[1].Col.([]int64)[0]
