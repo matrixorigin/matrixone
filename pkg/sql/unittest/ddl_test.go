@@ -32,7 +32,7 @@ func TestTableFunction(t *testing.T) {
 			},
 		}},
 		{sql: "show columns from ddlt2;", res: executeResult{
-			attr: []string{"Filed", "Type", "Null", "Key", "Default", "Extra"},
+			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
 				{"orderId", "varchar(100)", "", "", "NULL", ""},
 				{"uid", 	"int(32)", 		"", "", "NULL", ""},
@@ -40,7 +40,7 @@ func TestTableFunction(t *testing.T) {
 			},
 		}},
 		{sql: "show columns from ddlt2 like 'pri%';", res: executeResult{
-			attr: []string{"Filed", "Type", "Null", "Key", "Default", "Extra"},
+			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
 				{"price",   "float(32)", 	"", "", "NULL", ""},
 			},
