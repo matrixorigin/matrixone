@@ -428,6 +428,26 @@ values = []
 comment = "default is false. true : tpe creates multiple readers reading data from KV. false : only one reader"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "tpeDedupSetBatchTimeout"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["30", "30", "180"]
+comment = "timeout in DedupSetBatch"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeDedupSetBatchTryCount"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["3", "1", "5"]
+comment = "the count of tries when the set failed. in DedupSetBatch"
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

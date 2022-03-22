@@ -36,7 +36,7 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	if tc.KvType == tuplecodec.KV_MEMORY {
 		kv = tuplecodec.NewMemoryKV()
 	}else if tc.KvType == tuplecodec.KV_CUBE{
-		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit))
+		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit), tc.TpeDedupSetBatchTimeout, tc.TpeDedupSetBatchTrycount)
 		if err != nil {
 			return nil, err
 		}

@@ -538,7 +538,7 @@ func (s ShowColumns) String() string {
 
 func (s ShowColumns) ResultColumns() []*Attribute {
 	attrs := []*Attribute{
-		&Attribute{Ref: 1, Name: "Filed", Type: types.Type{Oid: types.T_varchar, Size: 24}},
+		&Attribute{Ref: 1, Name: "Field", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 		&Attribute{Ref: 1, Name: "Type", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 		&Attribute{Ref: 1, Name: "Null", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 		&Attribute{Ref: 1, Name: "Key", Type: types.Type{Oid: types.T_varchar, Size: 24}},
