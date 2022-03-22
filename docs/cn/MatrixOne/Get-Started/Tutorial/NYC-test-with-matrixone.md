@@ -10,7 +10,7 @@
 
 ## **准备工作** 
 
-确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.zh.md)并[连接到MatrixOne服务器](../connect-to-matrixone-server.zh.md).
+确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务器](../connect-to-matrixone-server.md).
   
 
 ## **1. 下载并导入数据**

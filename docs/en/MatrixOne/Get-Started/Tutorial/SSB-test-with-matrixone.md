@@ -34,7 +34,8 @@ $ ./dbgen -s 1 -T d
 
 ```
 create database if not exists ssb;
-use ssb
+use ssb;
+
 drop table if exists lineorder;
 drop table if exists part;
 drop table if exists supplier;
@@ -48,7 +49,7 @@ create table lineorder (
         lo_custkey int,
         lo_partkey int,
         lo_suppkey int,
-        lo_orderdate char(10),
+        lo_orderdate date,
         lo_orderpriority char (15),
         lo_shippriority tinyint,
         lo_quantity double,
@@ -58,7 +59,7 @@ create table lineorder (
         lo_revenue double,
         lo_supplycost double,
         lo_tax double,
-        lo_commitdate char(10),
+        lo_commitdate date,
         lo_shipmode char (10)
 ) ;
 
@@ -95,15 +96,14 @@ create table customer (
         c_mktsegment char (10)
 ) ;
 
-create table dim_date (
-        d_datekey int,
+create table dates (
+        d_datekey date,
         d_date char (18),
         d_dayofweek char (9),
         d_month char (9),
-        d_year int,
         d_yearmonthnum int,
         d_yearmonth char (7),
-        d_daynuminweek int,
+        d_daynuminweek varchar(12),
         d_daynuminmonth int,
         d_daynuminyear int,
         d_monthnuminyear int,
@@ -115,23 +115,23 @@ create table dim_date (
         d_weekdayfl varchar (1)
 ) ;
 
-CREATE TABLE lineorder_flat (
-  LO_ORDERKEY bigint,
+CREATE TABLE lineorder_flat(
+  LO_ORDERKEY bigint primary key,
   LO_LINENUMBER int,
   LO_CUSTKEY int,
   LO_PARTKEY int,
   LO_SUPPKEY int,
-  LO_ORDERDATE int,
+  LO_ORDERDATE date,
   LO_ORDERPRIORITY char(15),
   LO_SHIPPRIORITY tinyint,
   LO_QUANTITY double,
   LO_EXTENDEDPRICE double,
   LO_ORDTOTALPRICE double,
   LO_DISCOUNT double,
-  LO_REVENUE double,
-  LO_SUPPLYCOST double,
+  LO_REVENUE int unsigned,
+  LO_SUPPLYCOST int unsigned,
   LO_TAX double,
-  LO_COMMITDATE int,
+  LO_COMMITDATE date,
   LO_SHIPMODE char(10),
   C_NAME varchar(25),
   C_ADDRESS varchar(25),
@@ -157,18 +157,10 @@ CREATE TABLE lineorder_flat (
 );
 ```
 
+
 ## **4. Load data into the created tables**
-If you use dbgen to generate data for ssb, there is still an extra step to replace the ‘,’ in the end of every line. In the directory of ssb-dbgen, use the following command. 
 
-```
-$ sed -i 's/.$//' customer.tbl
-$ sed -i 's/.$//' date.tbl
-$ sed -i 's/.$//' supplier.tbl
-$ sed -i 's/.$//' lineorder.tbl
-$ sed -i 's/.$//' part.tbl
-```
-
-Then modify the parameter of system_vars_config.toml to a larger one in matrixone directory, such as 10GB. And restart MatrixOne service.
+Modify the parameter of system_vars_config.toml to a larger one in matrixone directory, such as 10GB. And restart MatrixOne service.
 ```
 max-entry-bytes = "10GB"
 ```

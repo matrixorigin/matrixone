@@ -18,7 +18,7 @@ MatrixOne集群中有两种类型的节点(store):调度节点(prophet stores)�
 
 
 准备3台服务器作为调度节点（推荐规格:x86 CPU，16核，64GB内存，CentOS 7+操作系统）。
-每个节点必须安装单机版本的MatrixOne。安装步骤与[单机版安装教程](install-standalone-matrixone.zh.md)一致。
+每个节点必须安装单机版本的MatrixOne。安装步骤与[单机版安装教程](install-standalone-matrixone.md)一致。
  
 
 #### *步骤2*:
@@ -83,4 +83,4 @@ storage-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","i
 ```
 
 ### 相关信息
-若想了解更多关于分布式架构的配置参数的信息，可以查阅[distributed settings](../Reference/System-Parameters/distributed-settings.zh.md). 
+若想了解更多关于分布式架构的配置参数的信息，可以查阅[distributed settings](../Reference/System-Parameters/distributed-settings.md). 

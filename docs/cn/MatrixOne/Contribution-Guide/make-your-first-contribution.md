@@ -2,7 +2,7 @@
 感谢您致力于为MatrixOne做出贡献，欢迎投稿！本章旨在帮助您为MatrixOne完成首次贡献。
 
 ## **如何贡献?**
-正式开始前，或许您应该先了解在哪些方面可以大展拳脚，详情请参见[贡献种类](How-to-Contribute/types-of-contributions.zh.md.md)。
+正式开始前，或许您应该先了解在哪些方面可以大展拳脚，详情请参见[贡献种类](How-to-Contribute/types-of-contributions.md.md)。
 您可以从以下类别中选择一种进行尝试，这些类别的问题对您技术背景的要求很少，所以不必担心！
 
 * To clarify code, variables, or functions
@@ -20,7 +20,7 @@
 
 
 ## **前置准备**
-在处理问题之前，请确保您至少安装了单机版MatrixOne并部署了相关开发环境。具体请参考[准备工作](How-to-Contribute/preparation.zh.md)。
+在处理问题之前，请确保您至少安装了单机版MatrixOne并部署了相关开发环境。具体请参考[准备工作](How-to-Contribute/preparation.md)。
 
 ## **工作流程**
 ### **步骤 1: Fork 仓库**

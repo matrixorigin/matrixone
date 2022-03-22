@@ -7,7 +7,7 @@ MatrixOne的SQL语法兼容了MySQL 8.0.23版本。
 |  ----  | ----  |  ----  |
 | DDL  | CREATE DATABASE | 以中文作为表名会导致显示错误 | 
 |   |   | 支持部分拉丁语  | 
-|   |   | `ENCRYPTION`目前可以使用但不会生效|
+|   |   | `ENCRYPTION`目前可以使用但无效|
 |   | CREATE TABLE | 不单独支持临时表 | 
 |   |   | 不支持表的分区 | 
 |   |   | 不支持`Create table  as clause` 语句|

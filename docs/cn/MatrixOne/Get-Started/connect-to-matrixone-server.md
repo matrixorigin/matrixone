@@ -8,8 +8,7 @@
 ## **1. 安装MySQL客户端**
    
 
-MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户机程序进行连接。
-Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client or Percona client.
+MatrixOne支持MySQL连接协议，因此您可以使用各种语言通过MySQL客户端程序进行连接。
 目前，MatrixOne只兼容Oracle MySQL客户端，因此一些特性可能无法在MariaDB、Percona客户端下正常工作。
 
 ## **2. 连接至MatrixOne服务器**

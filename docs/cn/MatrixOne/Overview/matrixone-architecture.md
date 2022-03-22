@@ -2,7 +2,7 @@
 
 ## **整体架构**
 
-MatrixOne是一个从0开始打造的全新数据库，其整体架构如下图所示：
+MatrixOne作为一个从零开始打造的全新数据库，其整体架构由多个模块组成。对应架构图如下图所示：
 ![MatrixOne Architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/overall-architecture.png?raw=true)
 
 
@@ -18,7 +18,7 @@ MatrixOne是一个从0开始打造的全新数据库，其整体架构如下图�
 * **缓存(Cache):** 用于查询的数据、索引和元数据的多版本的缓存。  
 
 ## **集群管理层(MatrixCube)**
-MatrixCube是构建分布式系统的基础库，它保证数据库集群的了可靠性、强一致性和可扩展性。它完成了分布式的、有状态应用程序的构建，允许开发人员只需要关注单个节点上的业务逻辑。MatrixCube目前搭建在`multi-raft`之上并实现复制状态机，之后将迁移到`Paxos`，便于适应跨多个数据中心的应用场景。
+MatrixCube是构建分布式系统的基础库，它保证数据库集群的高可靠性、强一致性和可扩展性。它用于保证分布式、有状态的应用程序构建，使开发人员只需要关注单节点的业务逻辑实现即可。MatrixCube目前基于`multi-raft`搭建来提供强一致能力，之后将迁移到`Paxos`，用于更好服务跨数据中心的应用场景。
 
 
 * **调度器(Prophet):** MatrixCube中用于管理、调度MatrixOne集群的工具。
@@ -27,19 +27,19 @@ MatrixCube是构建分布式系统的基础库，它保证数据库集群的了�
 
 ## **存储引擎层(Replicated Storage Layer)**
 
-* **行存(Row Storage):** 存储交易类负载数据、元数据和Catalog
-* **列存(Column Storage):** 存储分析负载类数据与物化视图
+* **行存(Row Storage):** 存储交易类负载数据、元数据和Catalog。
+* **列存(Column Storage):** 存储分析负载类数据与物化视图。
 
-## **Storage Provision Layer**
+## **存储介质层(Storage Provision Layer)**
 
-MatrixOne是“对基础设施无感知”的数据库，可以支持共享存储S3/HDFS，或者本地磁盘、私有数据中心、混合云，甚至是任何智能设备中。
+MatrixOne作为无需绑定底层基础设施的数据库，可以支持共享存储S3/HDFS，或本地磁盘、私有数据中心、混合云，甚至智能设备等存储介质的数据存储。
 
 ## **相关信息**
-本节介绍了MatrixOne的大致架构，若您想了解更详细的技术问题，可阅读：
-[MatrixOne技术架构详解](matrxione-modules.zh.md)  
+本节介绍了MatrixOne的整体架构概览。若您想了解更详细的技术设计问题，可阅读：
+[MatrixOne技术架构详解](matrxione-modules.md)  
 
 其他信息可参见：  
 
-* [安装MatrixOne](../Get-Started/install-standalone-matrixone.zh.md)
-* [MySQL兼容性](mysql-compatibility.zh.md)
-* [最新发布信息](what's-new.zh.md)
+* [安装MatrixOne](../Get-Started/install-standalone-matrixone.md)
+* [MySQL兼容性](mysql-compatibility.md)
+* [最新发布信息](what's-new.md)

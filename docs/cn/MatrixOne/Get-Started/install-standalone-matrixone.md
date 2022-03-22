@@ -27,6 +27,20 @@ $ make build
 ```
 $ ./mo-server system_vars_config.toml
 ```
+
+## **直接下载二进制包**
+从0.3.0版本开始，你可以直接下载MatrixOne的二进制包，在x86_64的Linux环境中直接运行MatrixOne
+#### 1.下载二进制包并解压缩
+```
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.3.0/mo-server-v0.3.0-linux-amd64.zip
+$ unzip mo-server-v0.3.0-linux-amd64.zip
+```
+#### 2.启动MatrixOne服务器
+```
+$./mo-server system_vars_config.toml
+```
+
+
 ## **使用docker**
 
 #### 1. 安装docker
