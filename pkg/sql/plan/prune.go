@@ -203,17 +203,18 @@ func splitNotBinary(e *extend.BinaryExtend) extend.Extend {
 func (b *build) pruneUnaryMinus(e *extend.UnaryExtend) (extend.Extend, error) {
 	switch n := e.E.(type) {
 	case *extend.UnaryExtend:
-		return b.pruneUnaryMinus(n)
+		tempExtend, err := b.pruneUnaryMinus(n)
+		if err == nil {
+			if temp, ok := tempExtend.(*extend.ValueExtend); ok {
+				return Neg(temp)
+			}
+		}
+		return tempExtend, err
 	case *extend.ValueExtend:
 		return Neg(n)
 	default:
 		return e, nil
 	}
-	// v, ok := e.E.(*extend.ValueExtend)
-	// if !ok {
-	// 	return e, nil
-	// }
-	// return Neg(v)
 }
 
 func (b *build) pruneOr(e *extend.BinaryExtend) (extend.Extend, error) {
