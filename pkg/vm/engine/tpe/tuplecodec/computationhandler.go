@@ -538,7 +538,15 @@ type ReadContext struct {
 
 	ParallelReader bool
 
+	//for test
+	ReadCount int
+
 	ParallelReaderContext
 
 	SingleReaderContext
+}
+
+func (rc *ReadContext) AddReadCount() int  {
+	rc.ReadCount++
+	return rc.ReadCount
 }

@@ -212,17 +212,19 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard meta.Shard, req
 		}
 	}
 
-	tsr := driver.TpeScanResponse{
-		Keys:                keys,
-		Values:              values,
-		CompleteInAllShards: completed,
-		NextScanKey:         nextKey,
+	if err != nil {
+		rep = errDriver.ErrorResp(err)
+		return rep, nil
 	}
 
-	if rep, err = json.Marshal(tsr); err != nil {
-		rep = errDriver.ErrorResp(err)
-		return rep, err
+	tsr := pb.TpeScanResponse{
+		Keys:                 keys,
+		Values:               values,
+		CompleteInAllShards:  completed,
+		NextScanKey:          nextKey,
 	}
+
+	rep = protoc.MustMarshal(&tsr)
 
 	return rep, nil
 }
@@ -325,22 +327,19 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard meta.Shar
 		}
 	}
 
-	tsr := driver.TpeScanResponse{
+	if err != nil {
+		rep = errDriver.ErrorResp(err)
+		return rep, nil
+	}
+
+	tsr := pb.TpeScanResponse{
 		Keys:                keys,
 		Values:              values,
 		CompleteInAllShards: completed,
 		NextScanKey:         nextKey,
 	}
 
-	if err != nil {
-		rep = errDriver.ErrorResp(err)
-		return rep, nil
-	}
-
-	if rep, err = json.Marshal(tsr); err != nil {
-		rep = errDriver.ErrorResp(err)
-		return rep, err
-	}
+	rep = protoc.MustMarshal(&tsr)
 
 	return rep, nil
 }
@@ -396,14 +395,12 @@ func (ce *kvExecutor) tpeCheckKeysExistInBatch(readCtx storage.ReadContext, shar
 	}
 
 	var rep []byte
-	tcke := driver.TpeCheckKeysExistInBatchResponse{}
-	tcke.ExistedKeyIndex = existedKeyIndex
-	tcke.ShardID = userReq.GetShardID()
-
-	if rep, err = json.Marshal(tcke); err != nil {
-		logutil.Errorf("tpeCheckKeysExistInBatch marshal response failed. error:%v",err)
-		return nil, err
+	tcke := pb.TpeCheckKeysExistInBatchResponse{
+		ExistedKeyIndex: int32(existedKeyIndex),
+		ShardID:         userReq.GetShardID(),
 	}
+
+	rep = protoc.MustMarshal(&tcke)
 
 	return rep, nil
 }

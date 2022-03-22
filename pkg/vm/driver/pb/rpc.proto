@@ -251,3 +251,15 @@ message BytesSliceResponse {
 message Uint32Response {
   uint32 value = 1;
 }
+
+message TpeScanResponse {
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+  bool completeInAllShards = 3;
+  bytes nextScanKey = 4;
+}
+
+message TpeCheckKeysExistInBatchResponse {
+  int32 existedKeyIndex = 1;
+  uint64 shardID = 2;
+}

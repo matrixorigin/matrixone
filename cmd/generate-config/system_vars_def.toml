@@ -445,7 +445,17 @@ access = ["file"]
 type = "int64"
 domain-type = "range"
 values = ["3", "1", "5"]
-comment = "the count of tries when the set failed. in DedupSetBatch"
+comment = "the count of tries when the set failed in DedupSetBatch"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeSerializer"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["concise","json"]
+comment = "default is concise. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer."
 update-mode = "dynamic"
 
 # Cluster Configs
