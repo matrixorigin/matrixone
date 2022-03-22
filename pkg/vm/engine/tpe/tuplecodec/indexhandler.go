@@ -17,7 +17,9 @@ package tuplecodec
 import (
 	"bytes"
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -452,11 +454,52 @@ func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Ba
 	return nil
 }
 
-func (ihi * IndexHandlerImpl) DeleteFromTable(table *descriptor.RelationDesc, bat *batch.Batch) error {
-	panic("implement me")
+func (ihi * IndexHandlerImpl) DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error {
+	return ihi.DeleteFromIndex(writeCtx, bat)
 }
 
-func (ihi * IndexHandlerImpl) DeleteFromIndex(index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error {
-	panic("implement me")
+func (ihi * IndexHandlerImpl) DeleteFromIndex(writeCtx interface{}, bat *batch.Batch) error {
+	indexWriteCtx, ok := writeCtx.(*WriteContext)
+	if !ok {
+		return errorWriteContextIsInvalid
+	}
+
+	if bat == nil {
+		return nil
+	}
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	var prefix TupleKey
+	prefix,_ = tke.EncodeIndexPrefix(prefix,
+		uint64(indexWriteCtx.DbDesc.ID),
+		uint64(indexWriteCtx.TableDesc.ID),
+		uint64(indexWriteCtx.IndexDesc.ID))
+
+	indexWriteCtx.callback = callbackPackage{
+		prefix: prefix,
+	}
+
+	// get every row of the delete set	
+	n := vector.Length(bat.Vecs[0])
+	row := make([]interface{}, len(bat.Vecs))
+	tuple := NewTupleBatchImpl(bat,row)
+	for j := 0; j < n; j++ { //row index
+		err := GetRow(bat, row, j)
+		if err != nil {
+			return err
+		}
+		key, _, err := ihi.encodePrimaryIndexKey(0, indexWriteCtx, tuple)
+		if err != nil {
+			return err
+		}
+
+		//delete key in the kv storage
+		err = ihi.kv.Delete(key)
+		if err != nil {
+			return err
+		}
+
+	}
+	return nil
 }
 

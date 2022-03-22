@@ -12,22 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package index
+package plan
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
-)
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
-type IndexHandler interface {
-
-	ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error)
-
-	WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error
-
-	WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error
-
-	DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error
-
-	DeleteFromIndex(writeCtx interface{}, bat *batch.Batch) error
+func (b *build) buildUpdatePlan(updateStmt *tree.Update, plan *Update) error {
+	return nil
 }

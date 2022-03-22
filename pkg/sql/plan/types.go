@@ -175,6 +175,14 @@ type Insert struct {
 	Relation engine.Relation
 }
 
+type Delete struct {
+	Qry *Query
+}
+
+type Update struct {
+	Qry *Query
+}
+
 type build struct {
 	flg bool   // use for having clause
 	db  string // name of schema
@@ -589,5 +597,27 @@ func (i Insert) String() string {
 }
 
 func (i Insert) ResultColumns() []*Attribute {
+	return nil
+}
+
+func (d Delete) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("delete from")
+	// TODO: where, Order, Limit
+	return buf.String()
+}
+
+func (d Delete) ResultColumns() []*Attribute {
+	return nil
+}
+
+func (p Update) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("update table")
+	// TODO: where, Order, Limit
+	return buf.String()
+}
+
+func (p Update) ResultColumns() []*Attribute {
 	return nil
 }

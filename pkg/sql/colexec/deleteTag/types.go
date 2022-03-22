@@ -12,22 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package index
+package deleteTag
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"sync"
 )
 
-type IndexHandler interface {
-
-	ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error)
-
-	WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error
-
-	WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error
-
-	DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error
-
-	DeleteFromIndex(writeCtx interface{}, bat *batch.Batch) error
+type Argument struct {
+	Ts 		     uint64
+	Relation     engine.Relation
+	M	  	 	 sync.Mutex
+	AffectedRows uint64
 }

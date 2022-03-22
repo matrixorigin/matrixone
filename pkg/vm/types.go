@@ -36,6 +36,9 @@ const (
 	MergeOffset
 	MergeOrder
 	MergeTop
+
+	DeleteTag
+	UpdateTag
 )
 
 // Instruction contains relational algebra
