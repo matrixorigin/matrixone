@@ -16,7 +16,6 @@ package tuplecodec
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -357,21 +356,16 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 			}
 			checkKeysExistedErrors[cr.ToShard] = cubeErr
 		}else if len(resp) != 0 {
-			tce := driver.TpeCheckKeysExistInBatchResponse{}
-			err := json.Unmarshal(resp, &tce)
-			if err != nil {
-				logutil.Errorf("DedupSetBatch unmarshal response failed.err:%v",err)
-				return
-			}else{
-				if tce.ExistedKeyIndex != -1 {
-					realKeyIndex := shard2keysIndex[tce.ShardID][tce.ExistedKeyIndex]
-					setKeyExistedFunc(tce.ShardID,realKeyIndex)
-					logutil.Errorf("DedupSetBatch response.ExistedKeyIndex %d realKeyIndex %d in shardID %d has key %v ",
-						tce.ExistedKeyIndex,
-						realKeyIndex,
-						tce.ShardID,
-						keys[realKeyIndex])
-				}
+			tce := pb.TpeCheckKeysExistInBatchResponse{}
+			protoc.MustUnmarshal(&tce,resp)
+			if tce.ExistedKeyIndex != -1 {
+				realKeyIndex := shard2keysIndex[tce.ShardID][tce.ExistedKeyIndex]
+				setKeyExistedFunc(tce.ShardID,realKeyIndex)
+				logutil.Errorf("DedupSetBatch response.ExistedKeyIndex %d realKeyIndex %d in shardID %d has key %v ",
+					tce.ExistedKeyIndex,
+					realKeyIndex,
+					tce.ShardID,
+					keys[realKeyIndex])
 			}
 		}else{
 			logutil.Errorf("DedupSetBatch get nil repsonse.")

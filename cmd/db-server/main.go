@@ -306,6 +306,15 @@ func main() {
 			logutil.Infof("there is no such kvType %s \n", configKvTyp)
 			os.Exit(CreateTpeExit)
 		}
+		configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
+		if configSerializeTyp == "concise" {
+			tpeConf.SerialType = tuplecodec.ST_CONCISE
+		}else if configSerializeTyp == "json" {
+			tpeConf.SerialType = tuplecodec.ST_JSON
+		}else{
+			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
+			os.Exit(CreateTpeExit)
+		}
 		te, err := tpeEngine.NewTpeEngine(tpeConf)
 		if err != nil {
 			logutil.Infof("create tpe error:%v\n", err)

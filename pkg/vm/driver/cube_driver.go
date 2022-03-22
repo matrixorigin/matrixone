@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/fagongzi/util/protoc"
 	"strings"
 	"time"
 
@@ -582,11 +583,8 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 		return nil, nil, false, nil, err
 	}
 
-	var tsr TpeScanResponse
-	err = json.Unmarshal(data, &tsr)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
+	var tsr pb.TpeScanResponse
+	protoc.MustUnmarshal(&tsr,data)
 
 	//save keys
 	if needKey {
@@ -677,11 +675,8 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit 
 		return nil, nil, false, nil, err
 	}
 
-	var tsr TpeScanResponse
-	err = json.Unmarshal(data, &tsr)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
+	var tsr pb.TpeScanResponse
+	protoc.MustUnmarshal(&tsr,data)
 
 	return tsr.Keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
@@ -1009,17 +1004,4 @@ func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
 
 func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
-}
-
-// TpeScanResponse is the response to the tpeScan
-type TpeScanResponse struct {
-	Keys                [][]byte `json:"keys"`
-	Values              [][]byte `json:"values"`
-	CompleteInAllShards bool     `json:"CompleteInAllShards,string"`
-	NextScanKey         []byte   `json:"next_scan_key"`
-}
-
-type TpeCheckKeysExistInBatchResponse struct {
-	ExistedKeyIndex int `json:"ExistedKeyIndex,string"`
-	ShardID uint64 `json:"shard_id,string"`
 }
