@@ -1,9 +1,9 @@
 # **Playground**
 [MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)提供了一个交互式教程，可以让您直接通过浏览器来运行MatrixOne的SQL语句等部分功能 。
- 
 
-* 你可以参考[SQL参考指南](../Reference/SQL-Reference/Data-Definition-Statements/create-database.zh.md)来熟悉相关SQL语句
-* 你可以查看[教程](../Get-Started/Tutorial/SSB-test-with-matrixone.zh.md)来学习如何使用MatrixOne来进行SSB、NYC等测试
+
+* 你可以参考[SQL参考指南](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md)来熟悉相关SQL语句
+* 你可以查看[教程](../Get-Started/Tutorial/SSB-test-with-matrixone.md)来学习如何使用MatrixOne来进行SSB、NYC等测试
 
 ## **限制**
 MatixOrigin Playground只能在**只读**模式下进行操作，因此相关DDL命令和部分改变数据的DML命令不可用，具体限制如下：
@@ -83,5 +83,5 @@ order by d_year, p_brand;
 ## **相关信息**
 This page describes the features, limitations, and examples of Playground. For information on other options that are available when trying out MatrixOne, see the following:
 本页面叙述了Playground的特性、限制和示例。有关使用MatrixOne时所需的其他信息，请参阅以下内容：
-* [安装MatrixOne](install-standalone-matrixone.zh.md)
-* [What‘s New](../Overview/what's-new.zh.md)
+* [安装MatrixOne](install-standalone-matrixone.md)
+* [What‘s New](../Overview/what's-new.md)

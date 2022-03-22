@@ -3,7 +3,7 @@ MatrixOne是一个由项目管理者、社区开发者共同维护、改进和�
 本文档主要描述了开发的准则与一般流程，并提供了在编写代码、提交PR过程中需要使用的样式和模板。如果您在参与MatrixOne的贡献过程中遇到任何问题或发现一些错误，请在Github上提出[issue](https://github.com/matrixorigin/matrixone/issues) 或通其他平台联系我们。
 
 ## **前置准备**
-在正式开发之前，请确保您已经阅读了[准备工作](preparation.zh.md), 已经对MatrixOne的核心理念、基础架构有一定了解，并准备好了开发所需要的相应环境、语言、工具等。
+在正式开发之前，请确保您已经阅读了[准备工作](preparation.md), 已经对MatrixOne的核心理念、基础架构有一定了解，并准备好了开发所需要的相应环境、语言、工具等。
 
 
 ## **风格规范指南** <a name="get-familiar-with-style"></a>
@@ -12,7 +12,7 @@ MatrixOne是一个由项目管理者、社区开发者共同维护、改进和�
 * **代码规范**  
 MatrixOne采用了Golang社区建议的编码规范，详情请见 [Effective Go](https://go.dev/doc/effective_go)。
 * **代码注释规范**
-关于代码注释，请参考[代码注释规范](../Code-Style/code-comment-style.zh.md)。
+关于代码注释，请参考[代码注释规范](../Code-Style/code-comment-style.md)。
 * **提交信息 & PR 规范**  
 可参考[提交、PR规范 ](../Code-Style/code-comment-style.md)。
 

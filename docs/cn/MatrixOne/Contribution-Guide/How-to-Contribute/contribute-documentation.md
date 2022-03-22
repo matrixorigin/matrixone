@@ -4,7 +4,7 @@
 
 ## **准备工作**
 
-开始之前请尽量熟悉基本的[Markdown](https://www.markdownguide.org/basic-syntax/)语法并阅读[行为守则](../Code-Style/code-of-conduct.zh.md)和[谷歌开发者文档风格指南](https://developers.google.com/style/)，以便您写出更高质量的文档。
+开始之前请尽量熟悉基本的[Markdown](https://www.markdownguide.org/basic-syntax/)语法并阅读[行为守则](../Code-Style/code-of-conduct.md)和[谷歌开发者文档风格指南](https://developers.google.com/style/)，以便您写出更高质量的文档。
 
 
 

@@ -7,7 +7,7 @@
 | 类型            | 说明                                                  |
 | ------------------------------ | ------------------------------------------------------------ |
 | 报告bug                   | 您可以在GitHub上提出 [issue](https://github.com/matrixorigin/matrixone/issues/new/choose)来报告你在运行或开发MatrixOne时所遇见的bug。|
-| 提交代码              | 同样，你也可以修复已有的bug或者解决GitHub上提出的关键性问题，也可以提出新的功能需求以及设计构思。请参见[代码贡献](contribute-code.zh.md)来了解具体的规范与步骤。 |
+| 提交代码              | 同样，你也可以修复已有的bug或者解决GitHub上提出的关键性问题，也可以提出新的功能需求以及设计构思。请参见[代码贡献](contribute-code.md)来了解具体的规范与步骤。 |
 | 审查与批准 | 你也可以以审查者的身份对MatrixOne中的PR进行评论、审查，为他人提供建议和帮助。 |
 
 ## 完善MatrixOne文档
@@ -15,7 +15,7 @@
 | 类型            | 说明                                                |
 | --------------------------------------------- | ------------------------------------------------------------ |
 | 报告或修复技术文档的问题| 你可以直接点击文档网站上的 *edit the page* 按键，可以直接在当前页面进行修改并[提交PR](https://github.com/matrixorigin/matrixone/pulls)。当然你可以可以在GitHub的[issue]中提出问题，并描述相关信息(https://github.com/matrixorigin/matrixone/issues/new/choose)。|
-| 提交一份新的文档 | 在撰写一份完整的文档之前，请阅读[文档贡献指南](contribute-documentation.zh.md). |
+| 提交一份新的文档 | 在撰写一份完整的文档之前，请阅读[文档贡献指南](contribute-documentation.md). |
 
 ## 其他
 

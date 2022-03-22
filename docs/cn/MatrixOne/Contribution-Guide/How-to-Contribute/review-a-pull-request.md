@@ -38,7 +38,7 @@
 * **完善性**  
   审查代码的完善性主要是关注其是否解决了当时提出的问题，与最初的目的是否契合，你可以查看[GitHub issue](https://github.com/matrixorigin/matrixone/issues/new/choose)来追溯整个问题的前因后果与开发走向。
 * **风格规范**  
-  PR中的代码应该遵相应的[规范](contribute-code.zh.md#get-familiar-with-style)。然而，现有的部分代码可能与风格指南的要求不一致，您应该维护其一致性，或提交一个新的issue来更正它。
+  PR中的代码应该遵相应的[规范](contribute-code.md#get-familiar-with-style)。然而，现有的部分代码可能与风格指南的要求不一致，您应该维护其一致性，或提交一个新的issue来更正它。
 * **必要的文档**  
   如果一个PR改变了用户构建、测试、交互或发布代码的方式，你必须检查它是否也更新了相关文档，如`README.md`。类似地，如果一个PR删除或弃用了一段代码，你必须检查相应的文档是否也应该被删除。
 * **性能**  

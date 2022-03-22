@@ -78,5 +78,5 @@ Add any other context or screenshots about the refactoring request here.
 ## **Good First Issues**
 
 当你首次参与贡献时,你可以选择[`good-first-issue`](https://github.com/matrixorigin/matrixone/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)标签下的问题着手解决，其下的每个问题都是相对来说容易解决的。
-你可以阅读[快速上手](../make-your-first-contribution.zh.md)章节。 
+你可以阅读[快速上手](../make-your-first-contribution.md)章节。 
 

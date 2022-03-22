@@ -1,20 +1,18 @@
 
 MatrixOne的配置文件位于[matrixone/pkg/config/test/system_vars_config.toml](https://github.com/matrixorigin/matrixone/blob/main/pkg/config/test/system_vars_def.toml)。
-0.1.0版本是单机版，因此
-The 0.1.0 version is a standalone version, only the following parameters should be paied attention to. The other settings should remain default.
 
 ### 常规设置
 | 参数  | 数据类型  |  默认值   | 取值范围  | 作用 | 
 |  ----  | ----  |  --------  |  --- | --- |
-| rootpassword  | string | 	""  | string value | root 用户的密码|
-| dumpdatabase  | string | 	default  | string value |  dump database name for backup（用于备份的转储数据库名）|
+| rootpassword  | string | 	""  | string value |  用户的密码|
+| dumpdatabase  | string | 	default  | string value |  用于备份的转储数据库名|
 | port  | int64 | 	6001  | [0 - 65536] | 定义了MO服务器监听以及客户端连接的端口|
 | host  | string | 	0.0.0.0  | [0.0.0.0 - 255.255.255.255]  | 监听IP|
 | sendRow  | bool | false  | [true, false] | send data row while producing  |
 | dumpEnv  | bool | false  | [true, false] | dump Environment with memEngine Null nodes for testing  |
 
 
-### Debug Settings（调试设置？）
+### Debug设置
 
 
 | 参数  | 数据类型  |  默认值   | 取值范围  | 作用 | 
