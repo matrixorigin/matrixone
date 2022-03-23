@@ -1176,14 +1176,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
-			*tree.Insert, *tree.Delete, *tree.Update,
+			*tree.Insert, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
 			*tree.Load,
 			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
-			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
+			*tree.Delete:
 			runBegin := time.Now()
 			/*
 				Step 1: Start

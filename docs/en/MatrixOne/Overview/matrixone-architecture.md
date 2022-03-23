@@ -32,8 +32,9 @@ As an infrastructure agnostic DBMS, MtrixOne stores data in shared storage of S3
 
 
 ## **Learn More**
-This page outlines the architecture design of MatrixOne. For information on other options that are available when trying out MatrixOne, see the following:
+This page outlines the overall architecture design of MatrixOne. For information on other options that are available when trying out MatrixOne, see the following:
 
+* [MatrixOne Tech Design](MatrixOne-Tech-Design/matrixone-techdesign.md)
 * [Install MatrixOne](../Get-Started/install-standalone-matrixone.md)
 * [MySQL Compatibility](mysql-compatibility.md)
-* [What‘s New](what's-new.md)
+* [What‘s New](whats-new.md)

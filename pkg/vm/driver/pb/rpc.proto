@@ -22,7 +22,9 @@ enum Type {
   DelIfNotExist = 7;
   TpePrefixScan = 8;
   TpeScan = 9;
-  TpeDeleteWithPrefix = 10;
+  TpeDeleteBatch = 10;
+  TpeCheckKeysExistInBatch = 11;
+  TpeSetBatch = 12;
 
   Append = 100;
   GetSnapshot = 101;
@@ -50,7 +52,9 @@ message Request {
   AllocIDRequest               allocID = 10 [(gogoproto.nullable) = false];
   TpePrefixScanRequest         tpePrefixScan = 11  [(gogoproto.nullable) = false];
   TpeScanRequest         tpeScan = 12  [(gogoproto.nullable) = false];
-  TpeDeleteWithPrefixRequest TpeDeleteWithPrefix = 13  [(gogoproto.nullable) = false];
+  TpeDeleteBatchRequest tpeDeleteBatch = 13  [(gogoproto.nullable) = false];
+  TpeCheckKeysExistInBatchRequest tpeCheckKeysExistInBatch = 14  [(gogoproto.nullable) = false];
+  TpeSetBatchRequest tpeSetBatch = 15  [(gogoproto.nullable) = false];
 
   AppendRequest append = 100 [(gogoproto.nullable) = false];
   GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
@@ -81,6 +85,15 @@ message SetRequest {
   bytes  key = 1;
   bytes  value = 2;
   int64  ttl = 3 [(gogoproto.customname) = "TTL"];
+  int32 keyIndex = 4; //for TpeAsyncSet
+}
+
+message TpeSetBatchRequest {
+  //the keys/values need to be set
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+  //the shardID
+  uint64 shardID = 3;
 }
 
 // GetRequest get value by key
@@ -119,8 +132,10 @@ message TpePrefixScanRequest {
   bytes        prefixOrStartKey = 1;
   //the prefixOrStartKey[:prefixLength] is the prefix
   int64        prefixLength = 2;
+  //the endKey of the range denoted by the prefix
+  bytes        prefixEnd = 3;
   //the count of key/value wanted at most in the reqeust
-  uint64       limit = 3;
+  uint64       limit = 4;
 }
 
 // TpeScanRequest scan request
@@ -134,11 +149,20 @@ message TpeScanRequest {
   bool         needKey = 4;
 }
 
-message TpeDeleteWithPrefixRequest {
-  //the prefix of the keys to be deleted
-  bytes prefix = 1;
-  //the count of key/value to be deleted per batch
-  uint64 coutPerBatch = 2;
+message TpeDeleteBatchRequest {
+  //the keys wanted to be deleted
+  //if the keys is null,then use the range follow
+  repeated bytes keys = 1;
+  //the range [start,end)
+  bytes        start = 3;
+  bytes        end = 4;
+}
+
+message TpeCheckKeysExistInBatchRequest {
+  //the keys from the same shard
+  repeated bytes keys = 1;
+  //the shardID
+  uint64 shardID = 2;
 }
 
 //AppendRequest appends data in the table.
@@ -228,4 +252,16 @@ message BytesSliceResponse {
 // Uint32Response uint32 response
 message Uint32Response {
   uint32 value = 1;
+}
+
+message TpeScanResponse {
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+  bool completeInAllShards = 3;
+  bytes nextScanKey = 4;
+}
+
+message TpeCheckKeysExistInBatchResponse {
+  int32 existedKeyIndex = 1;
+  uint64 shardID = 2;
 }

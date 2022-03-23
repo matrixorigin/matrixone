@@ -15,8 +15,10 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -59,10 +61,9 @@ func NewIndexHandlerImpl(tch *TupleCodecHandler,
 	}
 }
 
-func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
-	indexReadCtx,ok := readCtx.(*ReadContext)
-	if !ok {
-		return nil, 0, errorReadContextIsInvalid
+func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.Batch, int, error) {
+	if indexReadCtx.CompleteInShard {
+		return nil, 0, nil
 	}
 
 	//check if we need the index key only.
@@ -88,10 +89,18 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 	tkd := ihi.tch.GetDecoder()
 
 	if indexReadCtx.PrefixForScanKey == nil {
-		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(nil, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
-		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
+	}
+
+	if indexReadCtx.ShardNextScanKey == nil {
+		indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+	}
+
+	//nextScanKey will not have
+	if bytes.HasPrefix(indexReadCtx.ShardNextScanKey,indexReadCtx.PrefixForScanKey) {
+		return nil, 0, nil
 	}
 
 	//prepare the batch
@@ -103,19 +112,15 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 
 	//2.prefix read data from kv
 	//get keys with the prefix
-	var lastKey []byte
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, _, _, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,indexReadCtx.LengthOfPrefixForScanKey, uint64(needRead))
+		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithLimit(indexReadCtx.ShardNextScanKey,
+			indexReadCtx.ShardEndKey, uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
 
 		rowRead += len(keys)
-		if len(keys) == 0 {
-			readFinished = true
-			break
-		}
 
 		//1.decode index key
 		//2.get fields wanted
@@ -132,8 +137,6 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			if err != nil {
 				return nil, 0, err
 			}
-
-			lastKey = keys[i]
 		}
 
 		//skip decoding the value
@@ -159,7 +162,12 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 		}
 
 		//get the next prefix
-		indexReadCtx.PrefixForScanKey = SuccessorOfKey(lastKey)
+		indexReadCtx.ShardNextScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInShard = true
+			readFinished = true
+			break
+		}
 	}
 
 	TruncateBatch(bat,int(ihi.kvLimit),rowRead)
@@ -173,6 +181,134 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 			bat = nil
 		}
 	}
+
+	return bat, rowRead, nil
+}
+
+func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
+	indexReadCtx,ok := readCtx.(*ReadContext)
+	if !ok {
+		return nil, 0, errorReadContextIsInvalid
+	}
+
+	if indexReadCtx.ParallelReader {
+		return ihi.parallelReader(indexReadCtx)
+	}
+
+	//check if we need the index key only.
+	//Attributes we want are in the index key only.
+	indexAttrIDs := descriptor.ExtractIndexAttributeIDs(indexReadCtx.IndexDesc.Attributes)
+	amForKey :=&AttributeMap{}
+	amForValue := &AttributeMap{}
+	needKeyOnly := true
+	for i,attr := range indexReadCtx.ReadAttributeDescs {
+		if _,exist := indexAttrIDs[attr.ID]; exist {
+			//id in the key
+			amForKey.Append(int(attr.ID),i)
+		}else{
+			//id is not in the index key
+			//then find it in the value
+			needKeyOnly = false
+			amForValue.Append(int(attr.ID),i)
+		}
+	}
+
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	tkd := ihi.tch.GetDecoder()
+
+	if indexReadCtx.CompleteInAllShards {
+		return nil, 0, nil
+	}else if !indexReadCtx.CompleteInAllShards &&
+			indexReadCtx.PrefixForScanKey == nil {
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+			uint64(indexReadCtx.TableDesc.ID),
+			uint64(indexReadCtx.IndexDesc.ID))
+		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
+		indexReadCtx.PrefixEnd = SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+	}
+
+	//prepare the batch
+	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
+	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
+
+	rowRead := 0
+	readFinished := false
+
+	//2.prefix read data from kv
+	//get keys with the prefix
+	for rowRead < int(ihi.kvLimit) {
+		needRead := int(ihi.kvLimit) - rowRead
+		keys, values, complete, nextScanKey, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,
+			indexReadCtx.LengthOfPrefixForScanKey,
+			indexReadCtx.PrefixEnd,
+			uint64(needRead))
+		if err != nil {
+			return nil, 0, err
+		}
+
+		rowRead += len(keys)
+
+		//1.decode index key
+		//2.get fields wanted
+		for i := 0; i < len(keys); i++ {
+			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
+			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
+			if err != nil {
+				return nil, 0, err
+			}
+
+			//pick wanted fields and save them in the batch
+			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
+				0, dis, amForKey, bat, i)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+
+		//skip decoding the value
+		if !needKeyOnly {
+			//need to update prefix
+			//decode index value
+			for i := 0; i < len(keys); i++ {
+				//decode the name which is in the value
+				data := values[i]
+				_,dis,err := tkd.DecodePrimaryIndexValue(data,
+					indexReadCtx.IndexDesc,0,ihi.serializer)
+				if err != nil {
+					return nil, 0, err
+				}
+
+				//pick wanted fields and save them in the batch
+				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+					0, dis,amForValue, bat, i)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+		}
+
+		//get the next prefix
+		indexReadCtx.PrefixForScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInAllShards = true
+			readFinished = true
+			break
+		}
+	}
+
+	TruncateBatch(bat,int(ihi.kvLimit),rowRead)
+
+	if readFinished {
+		if rowRead == 0 {
+			//there are no data read in this call.
+			//it means there is no data any more.
+			//reset the batch to the null to notify the
+			//computation engine will not read data again.
+			bat = nil
+		}
+	}
+
 	return bat, rowRead, nil
 }
 
@@ -280,12 +416,8 @@ func (ihi * IndexHandlerImpl) callbackForEncodeTupleInBatch(callbackCtx interfac
 		return err
 	}
 
-	//write key,value into the kv storage
-	//failed if the key has existed
-	err = ihi.kv.DedupSet(key,value)
-	if err != nil {
-		return err
-	}
+	writeCtx.keys = append(writeCtx.keys,key)
+	writeCtx.values = append(writeCtx.values,value)
 	return nil
 }
 
@@ -294,6 +426,10 @@ func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Ba
 	if !ok {
 		return errorWriteContextIsInvalid
 	}
+
+	defer func() {
+		indexWriteCtx.resetWriteCache()
+	}()
 
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()
@@ -313,14 +449,60 @@ func (ihi * IndexHandlerImpl) WriteIntoIndex(writeCtx interface{}, bat *batch.Ba
 	if err != nil {
 		return err
 	}
+
+	err = ihi.kv.DedupSetBatch(indexWriteCtx.keys,indexWriteCtx.values)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
-func (ihi * IndexHandlerImpl) DeleteFromTable(table *descriptor.RelationDesc, bat *batch.Batch) error {
-	panic("implement me")
+func (ihi * IndexHandlerImpl) DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error {
+	return ihi.DeleteFromIndex(writeCtx, bat)
 }
 
-func (ihi * IndexHandlerImpl) DeleteFromIndex(index *descriptor.IndexDesc, attrs []descriptor.AttributeDesc, bat *batch.Batch) error {
-	panic("implement me")
+func (ihi * IndexHandlerImpl) DeleteFromIndex(writeCtx interface{}, bat *batch.Batch) error {
+	indexWriteCtx, ok := writeCtx.(*WriteContext)
+	if !ok {
+		return errorWriteContextIsInvalid
+	}
+
+	if bat == nil {
+		return nil
+	}
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	var prefix TupleKey
+	prefix,_ = tke.EncodeIndexPrefix(prefix,
+		uint64(indexWriteCtx.DbDesc.ID),
+		uint64(indexWriteCtx.TableDesc.ID),
+		uint64(indexWriteCtx.IndexDesc.ID))
+
+	indexWriteCtx.callback = callbackPackage{
+		prefix: prefix,
+	}
+
+	// get every row of the delete set	
+	n := vector.Length(bat.Vecs[0])
+	row := make([]interface{}, len(bat.Vecs))
+	tuple := NewTupleBatchImpl(bat,row)
+	for j := 0; j < n; j++ { //row index
+		err := GetRow(bat, row, j)
+		if err != nil {
+			return err
+		}
+		key, _, err := ihi.encodePrimaryIndexKey(0, indexWriteCtx, tuple)
+		if err != nil {
+			return err
+		}
+
+		//delete key in the kv storage
+		err = ihi.kv.Delete(key)
+		if err != nil {
+			return err
+		}
+
+	}
+	return nil
 }
 

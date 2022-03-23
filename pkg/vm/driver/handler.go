@@ -34,6 +34,14 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.CustomType = uint64(pb.Set)
 		req.Write = true
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TpeSetBatch:
+		msg := customReq.TpeSetBatch
+		req.Key = nil
+		req.ToShard = msg.GetShardID()
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.TpeSetBatch)
+		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.SetIfNotExist:
 		msg := customReq.Set
 		req.Key = msg.Key
@@ -53,12 +61,17 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.Group = uint64(customReq.Group)
 		req.CustomType = uint64(pb.DelIfNotExist)
 		req.Write = true
-	case pb.TpeDeleteWithPrefix:
-		msg := customReq.TpeDeleteWithPrefix
-		req.Key = msg.GetPrefix()
+	case pb.TpeDeleteBatch:
+		msg := customReq.TpeDeleteBatch
+		if msg.GetKeys() != nil {
+			req.Key = msg.GetKeys()[0]
+		}else{
+			req.Key = msg.GetStart()
+		}
 		req.Group = uint64(customReq.Group)
-		req.CustomType = uint64(pb.TpeDeleteWithPrefix)
+		req.CustomType = uint64(pb.TpeDeleteBatch)
 		req.Write = true
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Get:
 		msg := customReq.Get
 		req.Key = msg.Key
@@ -84,6 +97,14 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		req.Key = msg.Start
 		req.Group = uint64(customReq.Group)
 		req.CustomType = uint64(pb.TpeScan)
+		req.Read = true
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TpeCheckKeysExistInBatch:
+		msg := customReq.TpeCheckKeysExistInBatch
+		req.Key = nil
+		req.ToShard = msg.GetShardID()
+		req.Group = uint64(customReq.Group)
+		req.CustomType = uint64(pb.TpeCheckKeysExistInBatch)
 		req.Read = true
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.TpePrefixScan:

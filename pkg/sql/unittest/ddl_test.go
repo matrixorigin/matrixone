@@ -32,7 +32,7 @@ func TestTableFunction(t *testing.T) {
 			},
 		}},
 		{sql: "show columns from ddlt2;", res: executeResult{
-			attr: []string{"Filed", "Type", "Null", "Key", "Default", "Extra"},
+			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
 				{"orderId", "varchar(100)", "", "", "NULL", ""},
 				{"uid", 	"int(32)", 		"", "", "NULL", ""},
@@ -40,7 +40,7 @@ func TestTableFunction(t *testing.T) {
 			},
 		}},
 		{sql: "show columns from ddlt2 like 'pri%';", res: executeResult{
-			attr: []string{"Filed", "Type", "Null", "Key", "Default", "Extra"},
+			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
 				{"price",   "float(32)", 	"", "", "NULL", ""},
 			},
@@ -90,3 +90,20 @@ func TestIndexFunction(t *testing.T) {
 	}
 	test(t, testCases)
 }
+
+// Do not support this unit test now, because it for tpe engine which has supported deletion and other engine do not support.
+// TestDeleteFunction is only used to check if the whole process about deletion can be run through
+//func TestDeleteFunction(t *testing.T) {
+//	testCases := []testCase{
+//		{sql: "create table t1 (a int, b int);"},
+//		{sql: "insert into t1 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "delete from t1 where a > 1;"},
+//		{sql: "delete from t1 where a > 1 order by b;"},
+//		{sql: "delete from t1 where a > 1 limit 1;"},
+//		{sql: "delete from t1 where a > 1 order by a limit 1;"},
+//		{sql: "delete from t1 order by a;"},
+//		{sql: "delete from t1 order by a limit 1;"},
+//		{sql: "delete from t1 limit 1;"},
+//	}
+//	test(t, testCases)
+//}

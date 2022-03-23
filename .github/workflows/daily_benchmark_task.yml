@@ -1,0 +1,35 @@
+name: Daily Benchmark Task
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 15 * * *'
+
+
+jobs:
+
+  build:
+    runs-on: self-hosted-benchmark
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.17
+
+    - name: Build MO
+      run: |
+        make config
+        make build
+
+    - name: Start MO
+      run: |
+        nohup ./mo-server ./system_vars_config.toml &> mo-log &
+        sleep 60s
+
+    - name: Run SSB Multi Benchmark
+      run: |
+        cd /mnt/datadisk0/matrixone/routine_performance_test/ssb
+        python -m src.do_test run --espassword=${{ secrets.ESPASSWORD }} --datapath=data_600m --commitid=${GITHUB_SHA::8}
+

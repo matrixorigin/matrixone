@@ -27,4 +27,7 @@ const (
 	Log
 	Ln
 	Ceil
+	Exp
+	Power
+	Pi
 )

@@ -133,6 +133,7 @@ func recreateDir(dir string) (err error) {
 call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
+	//logutil.Infof("removeEpoch %d",epoch)
 	_, err := c.RemoveDeletedTable(epoch)
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
@@ -291,6 +292,10 @@ func main() {
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
 		tpeConf := &tpeEngine.TpeConfig{}
+		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
+		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
+		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY
@@ -301,11 +306,26 @@ func main() {
 			logutil.Infof("there is no such kvType %s \n", configKvTyp)
 			os.Exit(CreateTpeExit)
 		}
-		eng, err = tpeEngine.NewTpeEngine(tpeConf)
+		configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
+		if configSerializeTyp == "concise" {
+			tpeConf.SerialType = tuplecodec.ST_CONCISE
+		}else if configSerializeTyp == "json" {
+			tpeConf.SerialType = tuplecodec.ST_JSON
+		}else{
+			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
+			os.Exit(CreateTpeExit)
+		}
+		te, err := tpeEngine.NewTpeEngine(tpeConf)
 		if err != nil {
 			logutil.Infof("create tpe error:%v\n", err)
 			os.Exit(CreateTpeExit)
 		}
+		err = te.Open()
+		if err != nil {
+			logutil.Infof("open tpe error:%v\n", err)
+			os.Exit(CreateTpeExit)
+		}
+		eng = te
 	} else {
 		eng = aoeEngine.New(c, &cngineConfig)
 	}

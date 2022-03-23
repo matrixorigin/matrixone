@@ -31,13 +31,13 @@ type KVHandler interface {
 	Set(key TupleKey,value TupleValue) error
 
 	// SetBatch writes the batch of key-value (overwrite)
-	SetBatch(keys []TupleKey,values []TupleValue) []error
+	SetBatch(keys []TupleKey, values []TupleValue) error
 
 	// DedupSet writes the key-value. It will fail if the key exists
 	DedupSet(key TupleKey, value TupleValue) error
 
 	// DedupSetBatch writes the batch of keys-values. It will fail if there is one key exists
-	DedupSetBatch(keys []TupleKey, values []TupleValue) []error
+	DedupSetBatch(keys []TupleKey, values []TupleValue) error
 
 	// Delete deletes the key
 	Delete(key TupleKey) error
@@ -54,12 +54,12 @@ type KVHandler interface {
 	// GetRange gets the values among the range [startKey,endKey).
 	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
 
-	// GetRange gets the values from the startKey with limit
+	// GetRangeWithLimit gets the values from the startKey with limit
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetWithPrefix gets the values of the prefix with limit.
@@ -70,9 +70,9 @@ type KVHandler interface {
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
-	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, []byte, error)
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
 	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)
@@ -96,7 +96,23 @@ type ShardInfo struct {
 	node ShardNode
 }
 
+func (si ShardInfo) GetStartKey() []byte {
+	return si.startKey
+}
+
+func (si ShardInfo) GetEndKey() []byte {
+	return si.endKey
+}
+
+func (si ShardInfo) GetShardNode() ShardNode {
+	return si.node
+}
+
 type Shards struct {
 	nodes []ShardNode
 	shardInfos []ShardInfo
+}
+
+func (s Shards) ShardInfos() []ShardInfo {
+	return s.shardInfos
 }

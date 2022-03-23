@@ -18,8 +18,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixcube/metric"
+	"github.com/fagongzi/util/protoc"
+	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/metric"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -45,7 +48,7 @@ import (
 )
 
 var (
-	errorCubeReturnIsNull = errors.New("cube return is null")
+	errorCubeReturnIsNull                 = errors.New("cube return is null")
 	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
 )
 
@@ -70,6 +73,8 @@ type CubeDriver interface {
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
 	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
+	TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error))
+	TpeAsyncSet([]byte, []byte, int, time.Duration, func(server.CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
 	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// Set async set key value in specific group.
@@ -84,9 +89,10 @@ type CubeDriver interface {
 	Delete([]byte) error
 	// DeleteIfExist remove the key from the store if key exists.
 	DeleteIfExist([]byte) error
-	// TpeDeleteWithPrefix will deletes all keys started with the prefix.
-	// countPerBatch : it denotes deleting the keys in every countPerBatch.
-	TpeDeleteWithPrefix(prefix []byte, countPerBatch uint64) error
+	// TpeDeleteBatch deletes keys in the parameter.
+	TpeDeleteBatch(keys [][]byte) error
+	// TpeDeleteBatchWithRange deletes keys in the range [startKey,endKey)
+	TpeDeleteBatchWithRange([]byte, []byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup scan [start,end) data in specific group.
@@ -101,9 +107,12 @@ type CubeDriver interface {
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
+	// TpeCheckKeysExist checks the shard has keys.
+	// return the index of the key that existed in the shard.
+	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error))
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
@@ -119,9 +128,9 @@ type CubeDriver interface {
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
-	//bool: true - the cube has more data
-	//[]byte : the start key for the next scan
-	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
+	//bool: true - the scanner accomplished in all shards.
+	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
+	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -159,6 +168,7 @@ type CubeDriver interface {
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
 	AsyncExecWithGroup(interface{}, pb.Group, func(server.CustomRequest, []byte, error), interface{})
+	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(server.CustomRequest, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
@@ -294,12 +304,15 @@ func (h *driver) Start() error {
 			logutil.Error("wait for available shard timeout")
 			return errDriver.ErrStartupTimeout
 		default:
-			err := h.initShardPool()
+			err = h.initShardPool()
 			if err == nil {
 				if h.cfg.CubeConfig.Metric.Interval > 0 {
 					metric.StartPush(h.cfg.CubeConfig.Metric, logutil.GetGlobalLogger())
 				}
 				return err
+			} else if strings.Contains(err.Error(),"missing job processor") {
+				logutil.Errorf("Startup failed: %v", err)
+				return errDriver.ErrStartupFailed
 			}
 			time.Sleep(time.Millisecond * 100)
 		}
@@ -355,6 +368,32 @@ func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byt
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
 }
 
+func (h *driver) TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
+	req := pb.Request{
+		Type:  pb.TpeSetBatch,
+		Group: pb.KVGroup,
+		TpeSetBatch: pb.TpeSetBatchRequest{
+			Keys:                 keys,
+			Values:               values,
+			ShardID:              shardID,
+		},
+	}
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
+}
+
+func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout time.Duration, cb func(server.CustomRequest, []byte, error), data interface{}) {
+	req := pb.Request{
+		Type:  pb.Set,
+		Group: pb.KVGroup,
+		Set: pb.SetRequest{
+			Key:      key,
+			Value:    value,
+			KeyIndex: int32(keyIndex),
+		},
+	}
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,data)
+}
+
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
 func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
@@ -378,6 +417,10 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequ
 		},
 	}
 	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
+		if err != nil {
+			logutil.Errorf("cube error: %v", err)
+		}
+
 		if bytes != nil || len(bytes) != 0 {
 			err = errors.New(string(bytes))
 		}
@@ -446,13 +489,26 @@ func (h *driver) DeleteIfExist(key []byte) error {
 	return err
 }
 
-func (h *driver) TpeDeleteWithPrefix(prefix []byte, countPerBatch uint64) error {
+func (h *driver) TpeDeleteBatch(keys [][]byte) error {
 	req := pb.Request{
-		Type:  pb.TpeDeleteWithPrefix,
+		Type:  pb.TpeDeleteBatch,
 		Group: pb.KVGroup,
-		TpeDeleteWithPrefix: pb.TpeDeleteWithPrefixRequest{
-			Prefix: prefix,
-			CoutPerBatch: countPerBatch,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys: keys,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	return err
+}
+
+func (h *driver) TpeDeleteBatchWithRange(startKey []byte, endKey []byte) error {
+	req := pb.Request{
+		Type:  pb.TpeDeleteBatch,
+		Group: pb.KVGroup,
+		TpeDeleteBatch: pb.TpeDeleteBatchRequest{
+			Keys:  nil,
+			Start: startKey,
+			End:   endKey,
 		},
 	}
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
@@ -507,9 +563,9 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 		Type:  pb.TpeScan,
 		Group: pb.KVGroup,
 		TpeScan: pb.TpeScanRequest{
-			Start: startKey,
-			End:   endKey,
-			Limit: limit,
+			Start:   startKey,
+			End:     endKey,
+			Limit:   limit,
 			NeedKey: needKey,
 		},
 	}
@@ -527,18 +583,28 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 		return nil, nil, false, nil, err
 	}
 
-	var tsr TpeScanResponse
-	err = json.Unmarshal(data, &tsr)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
+	var tsr pb.TpeScanResponse
+	protoc.MustUnmarshal(&tsr,data)
 
 	//save keys
 	if needKey {
 		keys = tsr.Keys
 	}
 
-	return keys, tsr.Values, tsr.HasMoreData, tsr.NextScanKey, err
+	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
+}
+
+func (h *driver) TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
+	req := pb.Request{
+		Type:  pb.TpeCheckKeysExistInBatch,
+		Group: pb.KVGroup,
+		TpeCheckKeysExistInBatch: pb.TpeCheckKeysExistInBatchRequest{
+			Keys: keys,
+			ShardID: shardID,
+		},
+	}
+
+	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
 }
 
 //PrefixScan scans in KVGroup
@@ -584,7 +650,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	return pairs, err
 }
 
-func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
 	if prefixLength > len(startKeyOrPrefix) {
 		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
@@ -594,6 +660,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit 
 		TpePrefixScan: pb.TpePrefixScanRequest{
 			PrefixOrStartKey: startKeyOrPrefix,
 			PrefixLength:     int64(prefixLength),
+			PrefixEnd: prefixEnd,
 			Limit:            limit,
 		},
 	}
@@ -609,13 +676,10 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit 
 		return nil, nil, false, nil, err
 	}
 
-	var tsr TpeScanResponse
-	err = json.Unmarshal(data, &tsr)
-	if err != nil {
-		return nil, nil, false, nil, err
-	}
+	var tsr pb.TpeScanResponse
+	protoc.MustUnmarshal(&tsr,data)
 
-	return tsr.Keys, tsr.Values, tsr.HasMoreData, tsr.NextScanKey, err
+	return tsr.Keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
 //PrefixKeys scans in KVGroup.
@@ -908,6 +972,12 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(ser
 	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
+func (h *driver) TpeAsyncExecWithGroup(cmd interface{}, group pb.Group, timeout time.Duration, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, timeout)
+}
+
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err error) {
 	t0 := time.Now()
 	defer func() {
@@ -935,12 +1005,4 @@ func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
 
 func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
-}
-
-// TpeScanResponse is the response to the tpeScan
-type TpeScanResponse struct {
-	Keys [][]byte	`json:"keys"`
-	Values [][]byte	`json:"values"`
-	HasMoreData bool `json:"has_more_data,string"`
-	NextScanKey []byte `json:"next_scan_key"`
 }

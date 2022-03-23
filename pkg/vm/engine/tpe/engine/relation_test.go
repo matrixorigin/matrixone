@@ -25,7 +25,7 @@ import (
 
 func TestTpeRelation_Write(t *testing.T) {
 	convey.Convey("table write without primary key",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
 
@@ -62,7 +62,7 @@ func TestTpeRelation_Write(t *testing.T) {
 	})
 
 	convey.Convey("table write with primary key",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 		err := tpe.Create(0, "test", 0)
 		convey.So(err,convey.ShouldBeNil)
 

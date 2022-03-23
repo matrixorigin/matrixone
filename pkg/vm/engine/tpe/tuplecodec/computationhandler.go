@@ -16,14 +16,15 @@ package tuplecodec
 
 import (
 	"errors"
+	"math"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
-	"time"
 )
 
 const (
@@ -32,14 +33,16 @@ const (
 )
 
 var (
-	errorDatabaseExists = errors.New("database has exists")
-	errorTableExists = errors.New("table has exists")
-	errorTableDeletedAlready = errors.New("table is deleted already. It is impossible.")
-	errorWrongDatabaseIDInDatabaseDesc = errors.New("wrong database id in the database desc.  It is impossible.")
-	errorDatabaseDeletedAlready = errors.New("database is deleted already")
-	errorIsNotShards = errors.New("it is not the shards")
-	errorShardsAreNil = errors.New("shards are nil")
-	errorThereAreNotNodesHoldTheTable = errors.New("there are not nodes hold the table")
+	errorDatabaseExists                          = errors.New("database has exists")
+	errorTableExists                             = errors.New("table has exists")
+	errorTableDeletedAlready                     = errors.New("table is deleted already. It is impossible.")
+	errorWrongDatabaseIDInDatabaseDesc           = errors.New("wrong database id in the database desc.  It is impossible.")
+	errorDatabaseDeletedAlready                  = errors.New("database is deleted already")
+	ErrorIsNotShards                             = errors.New("it is not the shards")
+	errorShardsAreNil                            = errors.New("shards are nil")
+	errorThereAreNotNodesHoldTheTable            = errors.New("there are not nodes hold the table")
+	errorCanNotDropTheInternalDatabase           = errors.New("you can not drop the internal database")
+	errorCanNotDropTheTableInTheInternalDatabase = errors.New("you can not drop the table in the internal database")
 )
 
 var _ computation.ComputationHandler = &ComputationHandlerImpl{}
@@ -51,6 +54,7 @@ type ComputationHandlerImpl struct {
 	serializer ValueSerializer
 	indexHandler index.IndexHandler
 	epochHandler * EpochHandler
+	parallelReader bool
 }
 
 func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
@@ -64,14 +68,24 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 }
 
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
-	err := chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	if bat == nil {
+		return nil
+	}
+
+	var err error
+	if len(bat.Zs) != 0 && bat.Zs[0] == -1 {
+		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
+	} else {
+		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	}
+	
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,
 		kv: kv,
@@ -79,6 +93,7 @@ func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tc
 		serializer: serial,
 		indexHandler: ih,
 		epochHandler: epoch,
+		parallelReader: parallelReader,
 	}
 }
 
@@ -129,6 +144,10 @@ func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) er
 		return err
 	}
 
+	if chi.isInternalDatabase(uint64(dbDesc.ID)) {
+		return errorCanNotDropTheInternalDatabase
+	}
+
 	//2. list tables and drop them one by one
 	tableDescs, err := chi.ListTables(uint64(dbDesc.ID))
 	if err != nil {
@@ -174,7 +193,7 @@ func (chi *ComputationHandlerImpl) GetDatabase(dbName string) (*descriptor.Datab
 //callbackForGetDatabaseDesc extracts the databaseDesc
 func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
@@ -264,7 +283,20 @@ func (chi *ComputationHandlerImpl) encodeFieldsIntoValue(epoch,dbID,tableID uint
 	return out,nil
 }
 
+func (chi *ComputationHandlerImpl) isInternalDatabase(dbID uint64) bool {
+	return dbID == InternalDatabaseID
+}
+
+func (chi *ComputationHandlerImpl) isInternalTable(tableID uint64) bool {
+	return tableID == InternalDescriptorTableID ||
+		tableID == InternalAsyncGCTableID
+}
+
 func (chi *ComputationHandlerImpl) DropTable(epoch, dbId uint64, tableName string) (uint64, error) {
+	if chi.isInternalDatabase(dbId) {
+		return 0, errorCanNotDropTheTableInTheInternalDatabase
+	}
+
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByID(dbId)
 	if err != nil {
@@ -281,6 +313,10 @@ func (chi *ComputationHandlerImpl) DropTable(epoch, dbId uint64, tableName strin
 }
 
 func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc *descriptor.RelationDesc) (uint64, error) {
+	if chi.isInternalDatabase(dbId) {
+		return 0, errorCanNotDropTheTableInTheInternalDatabase
+	}
+
 	//check the table is deleted already
 	if tableDesc.Is_deleted {
 		return 0, errorTableDeletedAlready
@@ -309,7 +345,7 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 //callbackForGetTableDesc extracts the tableDesc
 func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
 	//get the name and the desc
-	descAttr := internalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
+	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
 		return nil,errorTypeInValueNotEqualToTypeInAttribute
@@ -384,7 +420,7 @@ func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error)
 	return chi.epochHandler.RemoveDeletedTable(epoch)
 }
 
-func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, error) {
+func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error) {
 	if chi.kv.GetKVType() == KV_MEMORY {
 		var nds = []engine.Node{
 			{
@@ -392,22 +428,22 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 				Addr: "localhost:20000",
 			},
 		}
-		return nds, nil
+		return nds, &Shards{}, nil
 	}
 	tce := chi.tch.GetEncoder()
 	prefix, _ := tce.EncodeIndexPrefix(nil,dbId, uint64(desc.ID),uint64(PrimaryIndexID))
 	ret, err := chi.kv.GetShardsWithPrefix(prefix)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	shards,ok := ret.(*Shards)
 	if !ok {
-		return nil, errorIsNotShards
+		return nil, nil, ErrorIsNotShards
 	}
 
 	if shards == nil {
-		return nil,errorShardsAreNil
+		return nil, nil, errorShardsAreNil
 	}
 
 	var nodes engine.Nodes
@@ -419,10 +455,14 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	}
 
 	if len(nodes) == 0 {
-		return nil, errorThereAreNotNodesHoldTheTable
+		return nil, nil, errorThereAreNotNodesHoldTheTable
 	}
 
-	return nodes, nil
+	return nodes, ret, nil
+}
+
+func (chi *ComputationHandlerImpl) ParallelReader() bool {
+	return chi.parallelReader
 }
 
 type AttributeStateForWrite struct {
@@ -454,6 +494,47 @@ type WriteContext struct {
 	callback callbackPackage
 
 	NodeID uint64
+
+	//to set
+	keys []TupleKey
+	values []TupleValue
+	t0 time.Duration
+}
+
+func (wc *WriteContext) resetWriteCache()  {
+	wc.keys = nil
+	wc.values = nil
+}
+
+//for parallel readers
+type ParallelReaderContext struct {
+	//index in shard info
+	ShardIndex int
+
+	//the startKey of the shard
+	ShardStartKey []byte
+
+	//the endKey of the shard
+	ShardEndKey []byte
+
+	//the next scan key of the shard
+	ShardNextScanKey []byte
+
+	//finished ?
+	CompleteInShard bool
+}
+
+type SingleReaderContext struct {
+	//true -- the scanner has scanned all shards
+	CompleteInAllShards bool
+
+	//for prefix scan in next time
+	PrefixForScanKey []byte
+
+	//the length of the prefix
+	LengthOfPrefixForScanKey int
+
+	PrefixEnd []byte
 }
 
 type ReadContext struct {
@@ -468,9 +549,17 @@ type ReadContext struct {
 	//the attributes for the read
 	ReadAttributeDescs []*descriptor.AttributeDesc
 
-	//for prefix scan in next time
-	PrefixForScanKey []byte
+	ParallelReader bool
 
-	//the length of the prefix
-	LengthOfPrefixForScanKey int
+	//for test
+	ReadCount int
+
+	ParallelReaderContext
+
+	SingleReaderContext
+}
+
+func (rc *ReadContext) AddReadCount() int  {
+	rc.ReadCount++
+	return rc.ReadCount
 }

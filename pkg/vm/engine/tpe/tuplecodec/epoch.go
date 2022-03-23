@@ -73,6 +73,8 @@ func (eh *EpochHandler) RemoveDeletedTable(epoch uint64) (int, error) {
 
 	//2. drop table data on gcItems
 	for _, item := range gcItems {
+		//logutil.Infof("epoch %d saveEpoch %d dbid %d tableid %d",
+		//	epoch,item.Epoch,item.DbID,item.TableID)
 		//delete the data in the table
 		prefixDeleted, _ := tke.EncodeIndexPrefix(nil, item.DbID, item.TableID,uint64(PrimaryIndexID))
 		err = eh.kv.DeleteWithPrefix(prefixDeleted)

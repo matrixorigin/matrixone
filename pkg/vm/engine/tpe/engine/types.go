@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"time"
 )
 
 var _ engine.Engine = &TpeEngine{}
@@ -28,14 +29,24 @@ var _ engine.Relation = &TpeRelation{}
 var _ engine.Reader = &TpeReader{}
 
 type TpeConfig struct {
-	KvType	tuplecodec.KVType
+	KvType     tuplecodec.KVType
+	SerialType tuplecodec.SerializerType
 
 	//cubeKV needs CubeDriver
 	Cube    driver.CubeDriver
+
+	//the count of rows per write or scan
+	KVLimit uint64
+
+	ParallelReader bool
+
+	TpeDedupSetBatchTimeout time.Duration
+	TpeDedupSetBatchTrycount int
 }
 
 type TpeEngine struct {
 	tpeConfig *TpeConfig
+	dh descriptor.DescriptorHandler
 	computeHandler computation.ComputationHandler
 }
 
@@ -51,6 +62,27 @@ type TpeRelation struct {
 	desc *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
 	nodes engine.Nodes
+	shards *tuplecodec.Shards
+}
+
+type ShardNode struct {
+	//the address of the store of the leader replica of the shard
+	Addr string
+	//the id of the store of the leader replica of the shard
+	ID uint64
+	//the bytes of the id
+	IDbytes string
+}
+
+type ShardInfo struct {
+	//the startKey and endKey of the Shard
+	startKey []byte
+	endKey []byte
+	//the key for the next scan
+	nextScanKey []byte
+	//scan shard completely?
+	completeInShard bool
+	node ShardNode
 }
 
 type TpeReader struct {
@@ -58,6 +90,8 @@ type TpeReader struct {
 	tableDesc      *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
 	readCtx *tuplecodec.ReadContext
+	shardInfos []ShardInfo
+	parallelReader bool
 	//for test
 	isDumpReader bool
 }

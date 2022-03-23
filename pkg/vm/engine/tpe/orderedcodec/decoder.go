@@ -252,7 +252,6 @@ func (od *OrderedDecoder) decodeBytes(data []byte,value []byte)([]byte,*DecodedI
 		value = append(value, byteToBeEscaped)
 		data = data[p+2:]
 	}
-	return nil, nil, errorDoNotComeHere
 }
 
 // DecodeString decodes string from the encoded bytes

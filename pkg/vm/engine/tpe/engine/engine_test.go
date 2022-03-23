@@ -23,7 +23,7 @@ import (
 
 func TestTpeEngine_Create(t *testing.T) {
 	convey.Convey("create/delete/list/get database",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 		cnt := 10
 
 		var dbNames []string
@@ -73,7 +73,7 @@ func TestTpeEngine_Create(t *testing.T) {
 	})
 
 	convey.Convey("get node",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{})
+		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
 		ni := tpe.Node("")
 		convey.So(ni.Mcpu,convey.ShouldEqual,1)
 	})
