@@ -33,9 +33,9 @@ jobs:
           fetch-depth: '3'
 
       - name: Set up Go
-          uses: actions/setup-go@v2
-          with:
-            go-version: 1.18
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
 
       - name: Detect non-ascii characters
         run: |
