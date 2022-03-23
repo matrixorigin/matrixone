@@ -133,7 +133,7 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
 				db.SyncLog(index)
-				info:=blk.GetCommit()
+				info := blk.GetCommit()
 				blk.Lock()
 				blk.SetIndexLocked(index.AsSlice())
 				info.SetSize(mockBlockSize)
@@ -1044,17 +1044,6 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, 1, len(view.Database.TableSet))
 
 	sequence = catalog.Sequence
-	catalog.Close()
-	return
-
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
-	assert.Nil(t, err)
-	catalog.Start()
-	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
-	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
-	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
-	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
-	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
 	catalog.Close()
 }
 

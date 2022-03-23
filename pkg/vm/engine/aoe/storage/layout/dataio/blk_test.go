@@ -194,11 +194,19 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 
 func TestIVectorNodeWriter(t *testing.T) {
 	dir := initTestEnv(t)
-	vecType := types.Type{types.T_int32, 4, 4, 0}
+	vecType := types.Type{
+		Oid:       types.T_int32,
+		Size:      4,
+		Width:     4,
+		Precision: 0}
 	capacity := uint64(40)
 	vec0 := vector.NewStdVector(vecType, 4)
 	defer vec0.Close()
-	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, 4)
+	vec1 := vector.NewStrVector(types.Type{
+		Oid:       types.T(types.T_varchar),
+		Size:      24,
+		Width:     0,
+		Precision: 0}, 4)
 	defer vec1.Close()
 	err := vec0.Append(4, []int32{int32(3), int32(1), int32(2), int32(0)})
 	assert.Nil(t, err)
