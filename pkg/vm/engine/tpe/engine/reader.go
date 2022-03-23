@@ -20,8 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	log "github.com/sirupsen/logrus"
-	"time"
 )
 
 var (
@@ -128,13 +126,10 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 		}
 	}
 
-	s0 := time.Now()
 	bat, err = tr.computeHandler.Read(tr.readCtx)
 	if err != nil {
 		return nil, err
 	}
-
-	log.Infof("duration %v readCount %d",time.Since(s0),tr.readCtx.AddReadCount())
 
 	//when bat is null,it means no data anymore.
 	if bat != nil {

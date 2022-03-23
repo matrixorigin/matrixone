@@ -533,6 +533,8 @@ type SingleReaderContext struct {
 
 	//the length of the prefix
 	LengthOfPrefixForScanKey int
+
+	PrefixEnd []byte
 }
 
 type ReadContext struct {

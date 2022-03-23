@@ -31,3 +31,4 @@ pkg/sql/colexec/extend/overload/*.go
 !pkg/sql/colexec/extend/overload/init.go
 pkg/vm/engine/tpe/tuplecodec/clusterstore
 pkg/vm/engine/tpe/tuplecodec/read_profile
+pkg/vm/engine/tpe/engine/read_profile

@@ -513,7 +513,9 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		prefixEnd := SuccessorOfPrefix([]byte(prefix))
+
+		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -525,7 +527,7 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		prefixLen := len(prefix)
 		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen, prefixEnd, uint64(step))
 			convey.So(err,convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
@@ -644,7 +646,9 @@ func TestCubeKV_DeleteWithPrefix(t *testing.T) {
 			convey.So(err,convey.ShouldBeNil)
 		}
 
-		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		prefixEnd := SuccessorOfPrefix([]byte(prefix))
+
+		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		for i, kase := range kases {
@@ -654,7 +658,7 @@ func TestCubeKV_DeleteWithPrefix(t *testing.T) {
 		err = kv.DeleteWithPrefix([]byte(prefix))
 		convey.So(err,convey.ShouldBeNil)
 
-		_, values, _, _, err = kv.GetWithPrefix(TupleKey(prefix), len(prefix), uint64(cnt))
+		_, values, _, _, err = kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
 		convey.So(err,convey.ShouldBeNil)
 
 		convey.So(len(values),convey.ShouldEqual,0)
