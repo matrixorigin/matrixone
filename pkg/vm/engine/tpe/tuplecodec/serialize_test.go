@@ -17,6 +17,7 @@ package tuplecodec
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -25,6 +26,117 @@ import (
 	"reflect"
 	"testing"
 )
+
+func TestDefaultValueSerializer_SerializeValue(t *testing.T) {
+	type args struct {
+		value interface{}
+		valueType byte
+	}
+
+	convey.Convey("serialize value 1",t, func() {
+		kases := []args{
+			{nil,SERIAL_TYPE_NULL},
+			{uint64(0),SERIAL_TYPE_UINT64},
+			{"abc",SERIAL_TYPE_STRING},
+			{[]byte{1,2,3},SERIAL_TYPE_BYTES},
+			{true, SERIAL_TYPE_BOOL},
+			{int8(127), SERIAL_TYPE_INT8},
+			{int16(127), SERIAL_TYPE_INT16},
+			{int32(127), SERIAL_TYPE_INT32},
+			{int64(127), SERIAL_TYPE_INT64},
+			{uint8(127), SERIAL_TYPE_UINT8},
+			{uint16(127), SERIAL_TYPE_UINT16},
+			{uint32(127), SERIAL_TYPE_UINT32},
+			{float32(1.0), SERIAL_TYPE_FLOAT32},
+			{float64(1.0), SERIAL_TYPE_FLOAT64},
+			{types.Date(1), SERIAL_TYPE_DATE},
+			{types.Datetime(1), SERIAL_TYPE_DATETIME},
+		}
+
+		serial := &DefaultValueSerializer{}
+		for _, kase := range kases {
+			data, _, err := serial.SerializeValue(nil,kase.value)
+			convey.So(err,convey.ShouldBeNil)
+
+			//value data
+			marshal, err := json.Marshal(kase.value)
+			convey.So(err,convey.ShouldBeNil)
+
+			var buf [20]byte
+			byteWritten := binary.PutVarint(buf[:],int64(len(marshal)))
+
+			convey.So(data[0],convey.ShouldEqual,kase.valueType)
+			convey.So(data[1:1+byteWritten],should.Resemble,buf[:byteWritten])
+			convey.So(data[1+byteWritten:1+byteWritten+len(marshal)],
+				should.Resemble,
+				marshal)
+		}
+	})
+}
+
+func TestDefaultValueSerializer_DeserializeValue(t *testing.T) {
+	type args struct {
+		value interface{}
+		valueType byte
+	}
+
+	convey.Convey("serialize value 1",t, func() {
+		kases := []args{
+			{nil, byte(orderedcodec.VALUE_TYPE_NULL)},
+			{uint64(0), byte(orderedcodec.VALUE_TYPE_UINT64)},
+			{"abc", byte(orderedcodec.VALUE_TYPE_STRING)},
+			{[]byte{1,2,3}, byte(orderedcodec.VALUE_TYPE_BYTES)},
+			{int8(1), byte(orderedcodec.VALUE_TYPE_INT8)},
+			{int16(2), byte(orderedcodec.VALUE_TYPE_INT16)},
+			{int32(3), byte(orderedcodec.VALUE_TYPE_INT32)},
+			{int64(4), byte(orderedcodec.VALUE_TYPE_INT64)},
+			{uint8(5), byte(orderedcodec.VALUE_TYPE_UINT8)},
+			{uint16(6), byte(orderedcodec.VALUE_TYPE_UINT16)},
+			{uint32(7), byte(orderedcodec.VALUE_TYPE_UINT32)},
+			{float32(1.0), byte(orderedcodec.VALUE_TYPE_FLOAT32)},
+			{float64(2.0), byte(orderedcodec.VALUE_TYPE_FLOAT64)},
+			{types.Date(8), byte(orderedcodec.VALUE_TYPE_DATE)},
+			{types.Datetime(9), byte(orderedcodec.VALUE_TYPE_DATETIME)},
+		}
+
+		serial := &DefaultValueSerializer{}
+		for _, kase := range kases {
+			data, _, err := serial.SerializeValue(nil,kase.value)
+			convey.So(err,convey.ShouldBeNil)
+
+			rest, dis, err := serial.DeserializeValue(data)
+			convey.So(err,convey.ShouldBeNil)
+			convey.So(dis.ValueType,should.Equal,kase.valueType)
+			convey.So(reflect.DeepEqual(dis.Value,kase.value),convey.ShouldBeTrue)
+			convey.So(rest,convey.ShouldBeEmpty)
+		}
+	})
+
+	convey.Convey("serialize value 2",t, func() {
+		kases := []args{
+			{nil, byte(orderedcodec.VALUE_TYPE_NULL)},
+			{uint64(0), byte(orderedcodec.VALUE_TYPE_UINT64)},
+			{"abc", byte(orderedcodec.VALUE_TYPE_STRING)},
+			{[]byte{1,2,3}, byte(orderedcodec.VALUE_TYPE_BYTES)},
+		}
+
+		serial := &DefaultValueSerializer{}
+		var data []byte
+		for _, kase := range kases {
+			res, _, err := serial.SerializeValue(data,kase.value)
+			convey.So(err,convey.ShouldBeNil)
+			data = res
+		}
+
+		for _, kase := range kases {
+			rest, dis, err := serial.DeserializeValue(data)
+			convey.So(err,convey.ShouldBeNil)
+			convey.So(dis.ValueType,should.Equal,kase.valueType)
+			convey.So(reflect.DeepEqual(dis.Value,kase.value),convey.ShouldBeTrue)
+			data = rest
+		}
+	})
+}
 
 func TestConciseSerializer_SerializeValue(t *testing.T) {
 	type args struct {
