@@ -235,6 +235,52 @@ func TestInsertAndSelectFunction(t *testing.T) {
 			},
 		}, com: "issue 1659"},
 
+		{sql: "create table t_issue1653 (a int, b int);"},
+		{sql: "insert into t_issue1653 values (1, 2), (3, 4), (5, 6);"},
+		{sql: "select * from t_issue1653 where not (-0);", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+				{"3", "4"},
+				{"5", "6"},
+			},
+		}, com: "issue 1653"},
+
+		{sql: "create table t_issue1651 (a int);"},
+		{sql: "insert into t_issue1651 values(1), (2), (3);"},
+		{sql: "select * from t_issue1651 where -a;", res: executeResult{
+			attr: []string{"a"},
+			data: [][]string{
+				{"1"},
+				{"2"},
+				{"3"},
+			},
+		}, com: "issue 1651"},
+
+		{sql: "create table t_issue_1641 (id_2 int, col_varchar_2 char(511));"},
+		{sql: "insert into t_issue_1641 (id_2, col_varchar_2) values (-0, 'false'), (1, '-0'), (-0, ''), (65535, 'false'), (1, ''), (-1, '-1'), (-1, '1'), (1, 'false'), (-1, '1'), (65535, ' '), (-1, '-1'), (-1, '2020-02-02 02:02:00'), (-1, '-0'), (65535, '-1'), (1, ' '), (1, '0000-00-00 00:00:00') ;"},
+		{sql: "select t_issue_1641.id_2 as col_1, t_issue_1641.col_varchar_2 as col_2 from t_issue_1641 where not (not 73751114271);", res: executeResult{
+			attr: []string{"col_1", "col_2"},
+			data: [][]string{
+				{"0", "false"},
+				{"1", "-0"},
+				{"0", ""},
+				{"65535", "false"},
+				{"1", ""},
+				{"-1", "-1"},
+				{"-1", "1"},
+				{"1", "false"},
+				{"-1", "1"},
+				{"65535", " "},
+				{"-1", "-1"},
+				{"-1", "2020-02-02 02:02:00"},
+				{"-1", "-0"},
+				{"65535", "-1"},
+				{"1", " "},
+				{"1", "0000-00-00 00:00:00"},
+			},
+		}, com: "issue 1641"},
+
 		{sql: "insert into cha1 values ('1');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into cha2 values ('21');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into iis (i1) values (128);", err: "[22000]Out of range value for column 'i1' at row 1"},
