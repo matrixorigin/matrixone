@@ -26,6 +26,7 @@ const (
 	Abs
 	Log
 	Ln
+	Ceil
 	Exp
 	Power
 	Pi
