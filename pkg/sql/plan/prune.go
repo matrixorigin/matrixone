@@ -110,7 +110,7 @@ func (b *build) pruneConditionNot(e *extend.UnaryExtend) (extend.Extend, error) 
 	}
 	// split not extends
 	ext = logicInverse(ext)
-	return ext, nil
+	return b.pruneExtend(ext, false)
 }
 
 func (b *build) pruneProjectionNot(e *extend.UnaryExtend) (extend.Extend, error) {
