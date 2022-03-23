@@ -15,7 +15,7 @@ FROM table_name
 WHERE columnN LIKE pattern;
 ```
 ## **Examples**
-```
+```sql
 > SELECT * FROM Customers
 WHERE CustomerName LIKE 'a%'; //The following SQL statement selects all customers with a CustomerName starting with "a"
 

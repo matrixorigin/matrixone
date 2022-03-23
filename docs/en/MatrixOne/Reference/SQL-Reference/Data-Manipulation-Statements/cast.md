@@ -16,37 +16,41 @@ The CAST() function converts a value (of any type) into the specified datatype.
 | datatype  | Required. The datatype to convert to |
 
 
-The datatype can be one of the following:
 
-|  Value   | Description  |
-|  ----  | ----  |
-| DATE  | Converts value to DATE. Format: "YYYY-MM-DD" |
-| DATETIME  | Converts value to DATETIME. Format: "YYYY-MM-DD HH:MM:SS" |
-| DECIMAL  | Converts value to DECIMAL. Use the optional M and D parameters to specify the maximum number of digits (M) and the number of digits following the decimal point (D). |
-| TIME  | Converts value to TIME. Format: "HH:MM:SS" |
-| CHAR  | Converts value to CHAR (a fixed length string) |
-| NCHAR  | Converts value to NCHAR (like CHAR, but produces a string with the national character set) |
-| SIGNED  | Converts value to SIGNED (a signed 64-bit integer) |
-| UNSIGNED  | Converts value to UNSIGNED (an unsigned 64-bit integer) |
-| BINARY  | Converts value to BINARY (a binary string) |
-
+Currently, `cast` can support following conversion:
+ * Conversion between numeric types, mainly including SIGNED, UNSIGNED, FLOAT, and DOUBLE type.
+ * Numeric types to character CHAR type.
+ * Numeric character types to numerical types(negative into SIGNED).
 
 ## **Examples**
+
+
+```sql
+> drop table if exists t1;
+> CREATE TABLE t1 (a int,b float,c char(1),d varchar(15));
+> INSERT INTO t1 VALUES (1,1.5,'1','-2');
+> SELECT CAST(a AS FLOAT) a_cast,CAST(b AS UNSIGNED) b_cast,CAST(c AS SIGNED) c_cast, CAST(d AS SIGNED) d_cast from t1;
++--------+--------+--------+--------+
+| a_cast | b_cast | c_cast | d_cast |
++--------+--------+--------+--------+
+| 1.0000 |      1 |      1 |     -2 |
++--------+--------+--------+--------+
+
+> SELECT CAST(a AS CHAR) a_cast, CAST(b AS CHAR) b_cast,CAST(c AS DOUBLE) c_cast, CAST(d AS FLOAT) d_cast from t1;
++--------+--------+--------+---------+
+| a_cast | b_cast | c_cast | d_cast  |
++--------+--------+--------+---------+
+| 1      | 1.5    | 1.0000 | -2.0000 |
++--------+--------+--------+---------+
 ```
 
-#Convert a value to a DATE datatype:
-
-> SELECT CAST("2017-08-29" AS DATE);
-
-#Convert a value to a CHAR datatype:
-
-> SELECT CAST(150 AS CHAR);
-
-#Convert a value to a SIGNED datatype:
-
->SELECT CAST(5-10 AS SIGNED);
-
-```
 
 ## **Constraints**
+Currently, MatrixOne doesn't support select function() without from tables.
+
+* Non-numeric character types cannot be converted to numeric types.
+* Numeric and character types with formats of Data cannot be converted to Date.
+* Date and Datetime types cannot be converted to character types.
+* Date and Datetime cannot be converted to each other.
+
 

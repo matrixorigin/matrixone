@@ -37,3 +37,5 @@ round(-12.345, -1) ----> -10
 round(-12.345) ----> -12
 ```
 
+## Constraints
+Currently, MatrixOne doesn't support select function() without from tables.

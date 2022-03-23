@@ -23,36 +23,43 @@
 
 
 
-!!! note 提示
-    `numbers(N)`是一个用于测试的数值表，仅有一列数据，包含了0至N-1的所有整数。
-
 ```sql
-> SELECT AVG(*) FROM numbers(3);
-+--------+
-| avg(*) |
-+--------+
-|      1 |
-+--------+
+> drop table if exists tbl1,tbl2;
+> create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null);
+> insert into tbl1 values (0,1,1,7,"a");
+> insert into tbl1 values (0,1,2,8,"b");
+> insert into tbl1 values (0,1,3,9,"c");
+> insert into tbl1 values (0,1,4,10,"D");
+> insert into tbl1 values (0,1,5,11,"a");
+> insert into tbl1 values (0,1,6,12,"c");
 
-> SELECT AVG(number) FROM numbers(3);
+> select avg(col_1c) from tbl1;
 +-------------+
-| avg(number) |
+| avg(col_1c) |
 +-------------+
-|           1 |
+|      3.5000 |
 +-------------+
 
-> SELECT AVG(number+1) FROM numbers(3);
-+----------------------+
-| avg(plus(number, 1)) |
-+----------------------+
-|                    2 |
-+----------------------+
+> select sum(col_1d) as s1,avg(col_1d) as a3 from tbl1 group by col_1e order by s1 desc;
++------+---------+
+| s1   | a3      |
++------+---------+
+|   21 | 10.5000 |
+|   18 |  9.0000 |
+|   10 | 10.0000 |
+|    8 |  8.0000 |
++------+---------+
 
-> SELECT AVG(number+1) AS a FROM numbers(3);
-+------+
-| a    |
-+------+
-|    2 |
-+------+
+> select avg(col_1d) as a1 from tbl1 where col_1d < 13 group by col_1e order by a1;
++---------+
+| a1      |
++---------+
+|  8.0000 |
+|  9.0000 |
+| 10.0000 |
+| 10.5000 |
++---------+
 ```
-***
+
+## **限制**
+MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。
