@@ -109,6 +109,7 @@ func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 	tblInfo.Properties = append(tblInfo.Properties, property)
 	return tblInfo
 }
+
 // func TestProperties(t *testing.T) {
 // 	nodeCount := 3
 // 	bucketCount := 9
