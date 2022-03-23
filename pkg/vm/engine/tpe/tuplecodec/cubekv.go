@@ -186,7 +186,6 @@ func (ck * CubeKV) allocateFromPool(typ string,pool *IDPool) (uint64,error) {
 			time.Sleep(time.Millisecond * 10)
 		}
 	}
-	return id, errorCanNotComeHere
 }
 
 // allocateID allocates a id for the typ
@@ -608,7 +607,6 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 		}
 		return retErr
 	}
-	return nil
 }
 
 func (ck * CubeKV) Delete(key TupleKey) error {

@@ -52,7 +52,6 @@ func (m *MemoryItem) Less(than btree.Item) bool {
 		return m.key.Less(x.key)
 	}
 	panic("it is not memoryItem")
-	return false
 }
 
 // MemoryKV for test
