@@ -1,6 +1,6 @@
 # 提交信息&PR 规范
 
-本文档描述了应用于MatrixOrigin的所有存储库的提交消息(commit mesage)和PR(pull request)样式规范。当你进行提交时，务必遵循这种风格，保证提交的质量。
+本文档描述了应用于MatrixOrigin的所有存储库的提交消息(commit mesage)和PR(pull request)的样式规范。当你提交代码时，务必遵循这种规范，保证提交的质量。
 
 ## 一条好的commit message有多重要？
 
@@ -10,7 +10,7 @@
 - 有助于撰写发布公告
 - 帮助其他人了解前因后果
 
-## 什么是好的commit message
+## 什么是好的commit message？
 
 我们认为有以下要素：
 

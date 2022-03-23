@@ -1,6 +1,6 @@
 # **文档贡献指南**
 
-欢迎对MatrixOne文档的提出贡献。MatrixOne社区一直努力让整个贡献过程更加简单直接，为此，我们创建本章节来一步步地指导您完成整个过程。
+欢迎对MatrixOne文档的提出贡献。MatrixOne社区一直在努力简化整个贡献流程，为此，我们创建本节来一步步地指导您完成文档贡献的过程。
 
 ## **准备工作**
 
@@ -44,16 +44,17 @@ MatrixOne文档内容可以分为如下几个模块：
 
 * **Contribution Guide**: 介绍如何为MatrixOne项目做出贡献。
 
-## **提交技术文档**
+## **简易的修改**
 
 如果你发现了错别字或语法错误，可以点击本页面的`Edit this Page`按键直接进行修改。
 
 ## **一般工作流程**
 当您需要更改文档的具体内容但不涉及章节顺序、架构组织的调整时，只需要对`matrixone`进行操作；反之，若您需要调整文档框架，改动`mkdocs.yml`文件时，则需要对`matrixorigin.io`库进行修改。
 以下流程演示的是对二者均做修改的情况，实际情况可以根据您的需求进行简化。
-1. Fork [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) 和 [matrixone](https://github.com/matrixorigin/matrixone) 仓库.
+**1.** 在GitHub上[提出issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，简单介绍您发现的问题。并且使用`/assign`命令认领该问题。
+**2.** Fork [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) 和 [matrixone](https://github.com/matrixorigin/matrixone) 仓库.
 
-2. 克隆[matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io)仓库，使用`--repository`来引用`matrixone`中的内容。
+**3.** 克隆[matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io)仓库，使用`--repository`来引用`matrixone`中的内容。
 ```
 $ git clone --recursive git@github.com:yourusername/matrixorigin.io.git
 ```
@@ -62,7 +63,7 @@ $ git clone --recursive git@github.com:yourusername/matrixorigin.io.git
 $ git clone git@github.com:yourusername/matrixone.git
 ```
 
-3. 在您的本地matrixone文件夹中将`matrixone`仓库添加为远程仓库。
+**4.** 在您的本地matrixone文件夹中将`matrixone`仓库添加为远程仓库。
 ```
 git remote add upstream https://github.com/matrixorigin/matrixone.git
 ```
@@ -71,23 +72,22 @@ git remote add upstream https://github.com/matrixorigin/matrixone.git
 git remote add upstream https://github.com/matrixorigin/matrixorigin.io.git
 ```
 
-4. 本地的matrixorigin.io文件夹中将包含文档所需要的全部文件，因此你可以运行 `mkdocs serve` 命令, 然后在`http://localhost:8000`网址中预览文档，检查整个项目文件是否可以正常运行，并且后续也可以检查您所做的修改是否正确。
+**5.** 本地的matrixorigin.io文件夹中将包含文档所需要的全部文件，因此你可以运行 `mkdocs serve` 命令, 然后在`http://localhost:8000`网址中预览文档，检查整个项目文件是否可以正常运行，并且后续也可以检查您所做的修改是否正确。
 ```
 $ mkdocs serve
 ```
-5. 进行文档的修改和完善，如果您想对  **此处翻译不确定** You can always check `http://localhost:8000` to see if your modification is effective.
+**6.** 进行文档的修改和完善，如果您想对项目的设置进行改动，请使用新的page来更新sitemap，或更新 CI&CD 工作流代码。你也可以通过`http://localhost:8000`来查看你的修改是否有效。  
 如果你对文档内容（.md文件）进行了修改，则需要同步地在`matrixone`仓库中进行改动，否则仅仅更新`matrixorigin.io`仓库中的`docs`子模块是无用的。
 
-6. 确认修改无误后，使用`git add`和`git commit`命令在本地提交修改。
-7. 推送至您Folk的远程仓库`matrixorigin.io` 与 `matrixone` 。
+**7.** 确认修改无误后，使用`git add`和`git commit`命令在本地提交修改，并推送至您Folk的远程仓库`matrixorigin.io` 与 `matrixone` 。  
 我们建议您推送至远程仓库的新分支：
 ```
 git push origin main:NEW_BRANCH
 ```
 
-8. 在Github上相应仓库的`NEW_BRANCH`分支提交Pull Request。 
-9. 一旦你的修改通过，CI 工作流将开始运行并更新文档网站，这可能需要一些时间。
-10.  最后，还有一些善后工作要做，可以保证项目提交历史的清洁。
+**8.** 在Github上相应仓库的`NEW_BRANCH`分支提交Pull Request。 
+**9.** 一旦你的修改通过，CI 工作流将开始运行并更新文档网站，这可能需要一些时间。
+**10.**  最后，还有一些善后工作要做，可以保证项目提交历史的清洁。  
 覆盖本地提交历史： 
 ```
 git pull --force upstream main:main

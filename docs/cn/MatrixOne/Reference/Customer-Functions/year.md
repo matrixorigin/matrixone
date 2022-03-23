@@ -21,11 +21,33 @@
 ## **示例**
 
 
+
 ```sql
-> SELECT YEAR("2017-06-15");
-2017
+> drop table if exists t1;
+> create table t1(a date);
+> insert into t1 values('20211223');
+> insert into t1 values('2021-12-24');
+
+> select toyear(a) from t1;
++---------+
+| year(a) |
++---------+
+|    2021 |
+|    2021 |
++---------+
+
+> select year(a) from t1;
++---------+
+| year(a) |
++---------+
+|    2021 |
+|    2021 |
++---------+
 ```
 
 ## **限制**
 
 目前只支持`yyyy-mm-dd` 和 `yyyymmddd`的数据格式。
+
+## **限制**
+MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。

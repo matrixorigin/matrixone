@@ -49,7 +49,7 @@ The MatrixOne documentation content is planned with 6 main modules.
 
 * **Contribution Guide**: How to contribute to MatrixOne project.
 
-## **Contribute to Technical Documentation**
+## **Lift a finger**
 
 If you are just correcting a typo or grammatical error, feel free to go ahead and [create a pull request](https://github.com/matrixorigin/matrixone/pulls). 
 

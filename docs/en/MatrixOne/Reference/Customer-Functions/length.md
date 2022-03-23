@@ -27,3 +27,7 @@ a       1
 ab      2 
 abc     3 
 ```
+
+## Constraints
+Currently, MatrixOne doesn't support select function() without from tables.
+

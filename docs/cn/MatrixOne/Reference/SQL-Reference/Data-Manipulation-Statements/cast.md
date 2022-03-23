@@ -16,36 +16,35 @@ CAST()函数可以将任何类型的一个值转化为另一个特定类型 。
 | datatype  | 必要参数，目标数据类型 |
 
 
-`datatype ` 可以是如下任何一种数据类型：
-|  取值  | 说明  |
-|  ----  | ----  |
-| DATE  | 转化为日期类型，格式为: "YYYY-MM-DD" |
-| DATETIME  | 转化为日期时间类型. 格式为: "YYYY-MM-DD HH:MM:SS" |
-| DECIMAL  | 转化为定点数，使用可选参数`M`与`D`分别指定数值的最大位数与小数位数|
-| TIME  | 转化为时间类型. 格式为: "HH:MM:SS" |
-| CHAR  | 转化为定长字符串CHAR|
-| NCHAR  | 转化为 NCHAR (与CHAR类似，但使用国家字符集来生成字符串（双字节编码 |
-| SIGNED  | 转化为带符号的64位整数 |
-| UNSIGNED  | 转化为无符号的64位整数 |
-| BINARY  | 转化二进制字符串  |
+目前，`cast` 可以进行如下转换：
+* 数值类型之间转换，主要包括SIGNED，UNSIGNED，FLOAT，DOUBLE类型
+* 数值类型向字符CHAR类型转换
+* 格式为数值的字符类型向数值类型转换（负数需要转换为SIGNED）
 
 
 ## *示例**
-```
+```sql
+> drop table if exists t1;
+> CREATE TABLE t1 (a int,b float,c char(1),d varchar(15));
+> INSERT INTO t1 VALUES (1,1.5,'1','-2');
+> SELECT CAST(a AS FLOAT) a_cast,CAST(b AS UNSIGNED) b_cast,CAST(c AS SIGNED) c_cast, CAST(d AS SIGNED) d_cast from t1;
++--------+--------+--------+--------+
+| a_cast | b_cast | c_cast | d_cast |
++--------+--------+--------+--------+
+| 1.0000 |      1 |      1 |     -2 |
++--------+--------+--------+--------+
 
-#Convert a value to a DATE datatype:
-
-> SELECT CAST("2017-08-29" AS DATE);
-
-#Convert a value to a CHAR datatype:
-
-> SELECT CAST(150 AS CHAR);
-
-#Convert a value to a SIGNED datatype:
-
->SELECT CAST(5-10 AS SIGNED);
-
+> SELECT CAST(a AS CHAR) a_cast, CAST(b AS CHAR) b_cast,CAST(c AS DOUBLE) c_cast, CAST(d AS FLOAT) d_cast from t1;
++--------+--------+--------+---------+
+| a_cast | b_cast | c_cast | d_cast  |
++--------+--------+--------+---------+
+| 1      | 1.5    | 1.0000 | -2.0000 |
++--------+--------+--------+---------+
 ```
 
 ## **限制**
-
+MatrixOne目前只支持在查询表的时候使用函数，不支持单独使用函数。  
+* 非数值的字符类型无法转化为数值类型
+* 日期格式的数值类型、字符类型无法转化为Date类型
+* Date，Datetime类型无法转化为字符类型
+* Date与Datetime暂不能互相转化

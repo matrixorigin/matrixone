@@ -11,15 +11,15 @@
 在技术层面，[SQL参考指南](./../Reference/SQL-Reference/Data-Definition-Statements/create-database.md) 为您提供了详细的SQL语言的参考，其中对语法和示例都有详细解释；同样，[自定义函数](./../Reference/Customer-Functions/year.md)提供了MO中自定义函数的相关解释。
 
 ### 建设情况
-目前，MatrixOne v0.2.0 已经发布了，您可以通过[版本发布指南](./Release-Notes/v0.2.0.md)来了解最新的发布信息，其中包含了最新的修改与优化。
-同时，我们当前正在开发v0.3.0和v0.4.0版本，对应的工作任务在GitHub的milestone[0.3.0](https://github.com/matrixorigin/matrixone/milestone/3)和[0.4.0](https://github.com/matrixorigin/matrixone/milestone/5)中列出。
+目前，MatrixOne v0.3.0 已经发布了，您可以通过[版本发布指南](./Release-Notes/v0.3.0.md)来了解最新的发布信息，其中包含了最新的修改与优化。
+同时，我们当前正在开发 v0.4.0和 v0.5.0版本，对应的工作任务在GitHub的milestone[0.4.0](https://github.com/matrixorigin/matrixone/milestone/5)中列出。
 关于长期的项目规划，请参阅[MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613)。
 
 ## **你可以做些什么？**
 对MatrixOne的贡献可分为以下几类：
-* 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适[issue模板](./Report-Issues.md#issue-templates)，并打上标签。
+* 报告代码中的bug或文档中的谬误。请在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)，并提供问题的详细信息。请记得选取合适的[issue模板](./Report-Issues.md#issue-templates)，并打上标签。
 * 提议新的功能。请在[Feature Request](https://github.com/matrixorigin/matrixone/issues/new/choose)中描述详情并与社区中的开发人员商议。一旦我们的团队认可了您的计划，您就可以按照[工作流程](Contribute-Code.md#workflow)进行具体开发。
-* 实现某个功能活修复既有问题，请按照[工作流程](Contribute-Code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
+* 实现某个功能或修复既有问题，请按照[工作流程](Contribute-Code.md#workflow)完成开发。如果你需要关于某一特定问题的更多背景信息，请就该问题发表评论。
 
 
 ## **工作目录与文件介绍** 
@@ -29,9 +29,28 @@
 | 目录              | 内容                                                  |
 | ------------------------------ | ------------------------------------------------------------ |
 | **/LICENSES** | 相关依赖库的许可 |
-| **/cmd** | The binary entry of Go executables  |
+| **/cmd** | Go的可执行文件的binary entry|
 | **optools** | 测试与部署工具 |
 | **pkg** | MatrixOne项目的主要代码库  |
+
+对于不同的技术模块，`/pkg`喜爱的代码结构如下表所示。详情请参照[MatrixOne技术架构](../../Overview/MatrixOne-Tech-Design/matrixone-techdesign.md)。
+
+| 目录            | 模块    |
+| ------------------------------ | ------------------------------------------------------------ |
+| **frontend/** | SQL前端|
+| **sql/parser** | SQL解析 |
+| **sql/** | MPP SQL Execution  |
+| **sql/vectorize** | SQL的向量化执行   |
+| **catalog/** | 存储元数据的Catalog |
+| **github.com/matrixorigin/matrixcube** | MatrixCube  |
+| **vm/engine** |存储引擎 |
+| **vm/engine/aoe** |  AOE引擎（分析优化引擎） |
+| **vm/engine/tpe** |  TPE引擎（事务处理引擎）  |
+| **buildin/** |  系统的内置函数 |
+
+
+
+
 
 在文档方面，[matrixone](https://github.com/matrixorigin/matrixone), [matrixorigin.io](https://github.com/matrixorigin/matrixorigin.io) 与 [artwork](https://github.com/matrixorigin/artwork)都是在贡献过程中可能使用的库，详情参见[文档贡献](contribute-documentation.md)。
 
@@ -61,14 +80,14 @@ export PATH=$PATH:$GOPATH/bin
 此外，确保您至少已经安装了单机版本的MatrixOne，具体过程可参照 [Install Standalone MatrixOne](./../Get-Started/install-standalone-matrixone.md)。
 
 ## **Github & Git**
-为更好地开发建设MatrixOne，我们采取了开源运营的方式，通过Github为项目维护人员和其他开发者提供了一个协作平台。因此，如果您想参与到MO的开发中来，我们强烈建议您采取Github的渠道。
-若您还未使用过Github或缺少相关开发经验，您首先需要熟悉**GitHub**上的相关操作，并学习基本的**git**命令。
-如果您没有Github帐户，请在[https://github.com](https://github.com)上完成注册。 
-如果你没有SSH密钥，你可以按照GitHub上关于[SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/about-ssh)的教程来生成、添加密钥。
-更多详情请参见[Github Docs](https://docs.github.com/en)。 
+为更好地开发建设MatrixOne，我们采取了开源运营的方式，通过Github为项目维护人员和其他开发者提供了一个协作平台。因此，如果您想参与到MO的开发中来，我们强烈建议您采取Github的渠道。  
+若您还未使用过Github或缺少相关开发经验，您首先需要熟悉**GitHub**上的相关操作，并学习基本的**git**命令。  
+如果您没有Github帐户，请在[https://github.com](https://github.com)上完成注册。  
+如果你没有SSH密钥，你可以按照GitHub上关于[SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/about-ssh)的教程来生成、添加密钥。  
+更多详情请参见[Github Docs](https://docs.github.com/en)。   
 
-此外，我们建议您学习并使用**git**命令来完成github上的各种流程，因为我们提供的相关工作流程大多通过**git**命令完成，这有助于您提高效率。
-您可通过[install git](http://git-scm.com/downloads)安装git环境。
+此外，我们建议您学习并使用**git**命令来完成github上的各种流程，因为我们提供的相关工作流程大多通过**git**命令完成，这有助于您提高效率。  
+您可通过[install git](http://git-scm.com/downloads)安装git环境。  
 并且可以通过以下教程来学习如何使用：
 * [简易版](https://education.github.com/git-cheat-sheet-education.pdf)
 * [详细版](https://git-scm.com/book/en/v2)
