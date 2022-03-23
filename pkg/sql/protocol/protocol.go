@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -2368,10 +2369,10 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
-			r.Dates = data[:n]
+			r.Data = data[:n]
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Dates)
+		r.Sums = encoding.DecodeFloat64Slice(r.Data)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
@@ -3309,14 +3310,14 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		data = data[4:]
 		if n > 0 {
 			var err error
-			r.Dates, err = mheap.Alloc(proc.Mp, int64(n))
+			r.Data, err = mheap.Alloc(proc.Mp, int64(n))
 			if err != nil {
 				return nil, nil, err
 			}
-			copy(r.Dates, data[:n])
+			copy(r.Data, data[:n])
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Dates)
+		r.Sums = encoding.DecodeFloat64Slice(r.Data)
 		// Typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]

@@ -15,13 +15,14 @@
 package variance
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"math"
 )
 
 // VarRing is the ring structure to compute the Overall variance
@@ -30,11 +31,11 @@ type VarRing struct {
 	Typ types.Type
 
 	// attributes for computing the variance
-	Dates []byte    // store all the values' bytes
-	Sums  []float64 // sums of each group, its memory address is same to Dates
+	Data []byte    // store all the sums' bytes
+	Sums []float64 // sums of each group, its memory address is same to Dates
 
-	Values [][]float64	// values of each group
-	NullCounts []int64   // group to record number of the null value
+	Values     [][]float64 // values of each group
+	NullCounts []int64     // group to record number of the null value
 }
 
 func NewVarRing(typ types.Type) *VarRing {
@@ -42,9 +43,9 @@ func NewVarRing(typ types.Type) *VarRing {
 }
 
 func (v *VarRing) Free(m *mheap.Mheap) {
-	if v.Dates != nil {
-		mheap.Free(m, v.Dates)
-		v.Dates = nil
+	if v.Data != nil {
+		mheap.Free(m, v.Data)
+		v.Data = nil
 		v.Sums = nil
 		v.NullCounts = nil
 		v.Values = nil
@@ -60,7 +61,7 @@ func (v *VarRing) Count() int {
 // Size return how much memory space allocated in memory pool by this ring.
 // TODO: it's not exactly now
 func (v *VarRing) Size() int {
-	size := cap(v.Dates)
+	size := cap(v.Data)
 	for _, value := range v.Values {
 		size += cap(value) * 8
 	}
@@ -105,19 +106,19 @@ func (v *VarRing) Grow(m *mheap.Mheap) error {
 		if err != nil {
 			return err
 		}
-		v.Dates = data
+		v.Data = data
 		v.Sums = encoding.DecodeFloat64Slice(data)
 
 		v.NullCounts = make([]int64, 0, 8)
 		v.Values = make([][]float64, 0, 8)
 	} else if n+1 >= cap(v.Sums) {
-		v.Dates = v.Dates[:n*8]
-		data, err := mheap.Grow(m, v.Dates, int64(n+1)*8)
+		v.Data = v.Data[:n*8]
+		data, err := mheap.Grow(m, v.Data, int64(n+1)*8)
 		if err != nil {
 			return err
 		}
-		mheap.Free(m, v.Dates)
-		v.Dates = data
+		mheap.Free(m, v.Data)
+		v.Data = data
 		v.Sums = encoding.DecodeFloat64Slice(data)
 	}
 
@@ -136,20 +137,20 @@ func (v *VarRing) Grows(size int, m *mheap.Mheap) error {
 		if err != nil {
 			return err
 		}
-		v.Dates = data
+		v.Data = data
 		v.Sums = encoding.DecodeFloat64Slice(data)
 
 		v.Values = make([][]float64, 0, size)
 		v.NullCounts = make([]int64, 0, size)
 
 	} else if n+size >= cap(v.Sums) {
-		v.Dates = v.Dates[:n*8]
-		data, err := mheap.Grow(m, v.Dates, int64(n+size)*8)
+		v.Data = v.Data[:n*8]
+		data, err := mheap.Grow(m, v.Data, int64(n+size)*8)
 		if err != nil {
 			return err
 		}
-		mheap.Free(m, v.Dates)
-		v.Dates = data
+		mheap.Free(m, v.Data)
+		v.Data = data
 		v.Sums = encoding.DecodeFloat64Slice(data)
 	}
 
@@ -537,7 +538,7 @@ func (v *VarRing) Eval(zs []int64) *vector.Vector {
 		v.Values = nil
 		v.Sums = nil
 		v.NullCounts = nil
-		v.Dates = nil
+		v.Data = nil
 	}()
 
 	nsp := new(nulls.Nulls)
@@ -550,7 +551,7 @@ func (v *VarRing) Eval(zs []int64) *vector.Vector {
 			var variance float64 = 0
 			avg := v.Sums[i]
 			for _, value := range v.Values[i] {
-				variance += math.Pow(value - avg, 2.0) / float64(n)
+				variance += math.Pow(value-avg, 2.0) / float64(n)
 			}
 			v.Sums[i] = variance
 		}
@@ -558,7 +559,7 @@ func (v *VarRing) Eval(zs []int64) *vector.Vector {
 
 	return &vector.Vector{
 		Nsp:  nsp,
-		Data: v.Dates,
+		Data: v.Data,
 		Col:  v.Sums,
 		Or:   false,
 		Typ:  types.Type{Oid: types.T_float64, Size: 8},
