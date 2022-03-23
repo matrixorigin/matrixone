@@ -1552,7 +1552,7 @@ func TestRing(t *testing.T) {
 		case *variance.VarRing:
 			oriRing := r.(*variance.VarRing)
 			// Sums
-			if string(ExpectRing.Dates) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
 				t.Errorf("Decode varRing Sums failed.")
 				return
 			}
