@@ -16,17 +16,18 @@
 
 set -o nounset
 
-if [[ $# != 2 ]]; then
-	echo "Usage: $0 CaseType BuildOne"
+if [[ $# != 3 ]]; then
+	echo "Usage: $0 CaseType BuildOne CaseVersion"
 	echo "	CaseType: Options are BVT | FVT | RT | PT"
 	echo "	BuildOne: Options are True|False"
+	echo "	CaseVersion: Options are branch name of tester"
 	exit 1
 fi
 
 CASE_TYPE=$1
 MAKE_ONE=$2
+BRANCH=$3
 
-source $HOME/.bash_profile
 source ./utilities.sh
 
 if [[ -z $CASE_TYPE ]] || [[ -z $MAKE_ONE ]]; then
@@ -98,8 +99,8 @@ function start_service(){
 		logger "ERR" "Not found mo-server binary or config file"
 		exit 1
 	fi
-	
-	cd $G_STAGE 
+
+	cd $G_STAGE
 	logger "INF" "Start MatrixOne service"
 	nohup ./$BIN_NAME $config_file > $SRV_LOG 2>&1 &
 
@@ -120,7 +121,7 @@ function start_service(){
 		fi
 		sleep 1
 		if [ $count -ge 120 ]; then
-			logger "ERR" "Server startup timed out" 
+			logger "ERR" "Server startup timed out"
 			exit 1
 		fi
 		((count=count+1))
@@ -131,18 +132,18 @@ function start_service(){
 
 function make_tester(){
 	logger "INF" "Build mysql-tester"
-	cd $G_STAGE && git clone "$URL_TESTER_REPO"
+	cd $G_STAGE && git clone -b "$BRANCH" "$URL_TESTER_REPO"
 	cd $TESTER_REPO && TESTER_COMMIT_ID=$(git rev-parse HEAD)
 	logger "INF" "mysql-tester commit ID: $TESTER_COMMIT_ID"
 	logger "INF" "Build mysql-teser"
-	make 
+	make
 }
 
 function make_one(){
 	if [[ $MAKE_ONE == 'False' ]]; then
 		logger "INF" "Copying MartixOne binary from $BUILD_WKSP"
-		cp -f $BUILD_WKSP/{$BIN_NAME,$CONFIG_NAME} $G_STAGE	
-	else	
+		cp -f $BUILD_WKSP/{$BIN_NAME,$CONFIG_NAME} $G_STAGE
+	else
 		logger "INF" "Making MatrixOne binary"
 		ping -c 5 github.com
 		cd $G_STAGE && git clone $URL_ONE_REPO
@@ -219,8 +220,6 @@ horiz_rule
 echo "#  OS TYPE:	   $G_OSTYPE"
 echo "#  CASE TYPE:    $CASE_TYPE"
 echo "#  BUILD BINARY: $MAKE_ONE"
-echo "#  GO ROOT:	   $GOROOT"
-echo "#  GO PATH:	   $GOPATH"
 echo "#  SRV LOG PATH: $SRV_LOG"
 echo "#  SRS LOG PATH: $SRS_LOG"
 echo "#  TST LOG PATH: $TST_LOG"
