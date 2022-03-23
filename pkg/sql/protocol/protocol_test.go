@@ -17,9 +17,10 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -929,7 +930,7 @@ func TestRing(t *testing.T) {
 		&variance.VarRing{
 			NullCounts: []int64{1, 2, 3},
 			Sums:       []float64{15, 9, 13.5},
-			Values:     [][]float64{
+			Values: [][]float64{
 				{10, 15, 20},
 				{10.5, 15.5, 1},
 				{14, 13},
@@ -1552,7 +1553,7 @@ func TestRing(t *testing.T) {
 		case *variance.VarRing:
 			oriRing := r.(*variance.VarRing)
 			// Sums
-			if string(ExpectRing.Dates) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
 				t.Errorf("Decode varRing Sums failed.")
 				return
 			}
