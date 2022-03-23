@@ -130,7 +130,7 @@ type CubeDriver interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
+	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -650,7 +650,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	return pairs, err
 }
 
-func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
 	if prefixLength > len(startKeyOrPrefix) {
 		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
@@ -660,6 +660,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, limit 
 		TpePrefixScan: pb.TpePrefixScanRequest{
 			PrefixOrStartKey: startKeyOrPrefix,
 			PrefixLength:     int64(prefixLength),
+			PrefixEnd: prefixEnd,
 			Limit:            limit,
 		},
 	}

@@ -72,7 +72,7 @@ type KVHandler interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
+	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
 	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)

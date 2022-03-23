@@ -534,3 +534,11 @@ func EndCpuProfile(cpuf *os.File) {
 	pprof.StopCPUProfile()
 	_ = cpuf.Close()
 }
+
+func BeginTime() time.Time {
+	return time.Now()
+}
+
+func EndTime(s time.Time,info string) {
+	logutil.Infof("%s duration %v",info,time.Since(s))
+}

@@ -186,7 +186,6 @@ func (ck * CubeKV) allocateFromPool(typ string,pool *IDPool) (uint64,error) {
 			time.Sleep(time.Millisecond * 10)
 		}
 	}
-	return id, errorCanNotComeHere
 }
 
 // allocateID allocates a id for the typ
@@ -608,7 +607,6 @@ func (ck * CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 		}
 		return retErr
 	}
-	return nil
 }
 
 func (ck * CubeKV) Delete(key TupleKey) error {
@@ -731,7 +729,7 @@ func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 	return keys, values, complete, nextScanKey, err
 }
 
-func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	if prefixOrStartkey == nil {
 		return nil, nil, false, nil, errorPrefixIsNull
 	}
@@ -753,7 +751,7 @@ func (ck * CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, limit
 
 	for readCnt < limit {
 		needCnt := limit - readCnt
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey,prefixLen,needCnt)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey, prefixLen, prefixEnd, needCnt)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}

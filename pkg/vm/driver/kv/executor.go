@@ -24,15 +24,13 @@ import (
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor"
 	"github.com/matrixorigin/matrixcube/storage/kv"
+	"github.com/matrixorigin/matrixcube/util"
 	"github.com/matrixorigin/matrixcube/util/buf"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
-	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-
-	"github.com/matrixorigin/matrixcube/util"
+	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 )
 
 var (
@@ -281,6 +279,7 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard meta.Shar
 
 	options := []executor.ScanOption{
 		executor.WithScanStartKey(userReq.GetPrefixOrStartKey()),
+		executor.WithScanEndKey(userReq.GetPrefixEnd()),
 		executor.WithScanCountLimit(userReq.GetLimit()),
 		executor.WithScanFilterFunc(prefixFilter),
 	}
