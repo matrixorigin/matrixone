@@ -15,7 +15,6 @@
 package tuplecodec
 
 import (
-	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -88,20 +87,23 @@ func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.
 	tke := ihi.tch.GetEncoder()
 	tkd := ihi.tch.GetDecoder()
 
+	//need table prefix also in parallel read
 	if indexReadCtx.PrefixForScanKey == nil {
 		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(nil, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
+		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
 	}
 
 	if indexReadCtx.ShardNextScanKey == nil {
 		indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
 	}
 
-	//nextScanKey will not have
-	if bytes.HasPrefix(indexReadCtx.ShardNextScanKey,indexReadCtx.PrefixForScanKey) {
-		return nil, 0, nil
-	}
+	//nextScanKey does not have the prefix of the table
+	//TODO: may be wrong,fix it
+	//if bytes.HasPrefix(indexReadCtx.ShardNextScanKey,indexReadCtx.PrefixForScanKey) {
+	//	return nil, 0, nil
+	//}
 
 	//prepare the batch
 	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
@@ -114,8 +116,8 @@ func (ihi * IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.
 	//get keys with the prefix
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithLimit(indexReadCtx.ShardNextScanKey,
-			indexReadCtx.ShardEndKey, uint64(needRead))
+		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithPrefixLimit(indexReadCtx.ShardNextScanKey,
+			indexReadCtx.ShardEndKey, indexReadCtx.PrefixForScanKey, uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}

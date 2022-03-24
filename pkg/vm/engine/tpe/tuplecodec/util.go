@@ -524,6 +524,14 @@ func MaxUint64(a,b uint64) uint64 {
 	}
 }
 
+func Min(a,b int) int {
+	if a < b {
+		return a
+	}else{
+		return b
+	}
+}
+
 func BeginCpuProfile (cpu string) *os.File {
 	cpuf, _ := os.Create(cpu)
 	pprof.StartCPUProfile(cpuf)
