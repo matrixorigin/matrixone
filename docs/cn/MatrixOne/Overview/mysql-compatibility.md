@@ -43,14 +43,14 @@ MatrixOne的SQL语法兼容了MySQL 8.0.23版本。
 |   |   | 不支持`SET` | 
 |   |   | 不支持本地关键词 | 
 |   |   | 只有mo-server上的文件才支持相对路径 | 
-| Database Administration Statements  | SHOW |只支持显示数据库与数据表  | 
+| 数据库管理语句  | SHOW |只支持显示数据库与数据表  | 
 |   |  | 支持`SHOW CREATE TABLE` 和`SHOW CREATE DATABASE` ｜
 |   |  | 部分支持`WHERE`语句  | 
 |   | 其他语法| 暂不支持  |
-| Utility Statements  | USE | `Use database`同MySQL  | 
+| 工具类语句  | USE | `Use database`同MySQL  | 
 |   | Explain | 分析的结果与MySQL有所不同 | 
 |   | Other statements |暂不支持  | 
-| Data Types  | Int/Bigint/Smallint/Tinyint | 同MySQL  | 
+| 数据类型  | Int/Bigint/Smallint/Tinyint | 同MySQL  | 
 |   | char/varchar | 同MySQL  | 
 |   | Float/double | 与MySQL的精度有所不同，将在未来版本调整|
 |   | Date | 只支持`YYYY-MM-DD'`与`YYYYMMDD`形式 | 
