@@ -571,7 +571,6 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 
 	// ctx.AppendResponse(rep)
 	writtenBytes += uint64(16)
-	logutil.Infof("UpdateWriteBatch.writtenbytes %d",writtenBytes)
 	ctx.SetDiffBytes(int64(writtenBytes))
 	ctx.SetWrittenBytes(writtenBytes)
 	return nil
