@@ -62,10 +62,10 @@ the `+`(addition) is defined as merging two `Ring`s groups, the `⋅`(multiplica
 | Shrink                   | Shrink the size of Ring, keep the designated groups             |
 | Eval                     | Return the eventual result of the aggregate function |
 | Fill                     | Update the data of Ring by a row                                 |
-| BulkFill                 | Update all the data of Ring                                   |
-| BatchFill                | Update part of data of Ring                                    |
-| Add                      | Add a couple of groups for two Rings                             |
-| BatchAdd                 | Add several couples of groups for two Rings                           |
+| BulkFill                 | Update the ring data by a whole vector                                   |
+| BatchFill                | Update the ring data by a part of vector                                    |
+| Add                      | Merge a couple of groups for two Rings                             |
+| BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
 
