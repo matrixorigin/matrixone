@@ -2945,140 +2945,140 @@ func TestFilter(t *testing.T) {
 //	inst.Close()
 //}
 
-func TestRepeatCreateAndDropIndex(t *testing.T) {
-	waitTime := time.Duration(100) * time.Millisecond
-	if invariants.RaceEnabled {
-		waitTime *= 2
-	}
-	initTestEnv(t)
-	inst, gen, database := initTestDB1(t)
-	schema := metadata.MockSchema(4)
-	indice := metadata.NewIndexSchema()
-	indice.MakeIndex("idx-0", metadata.NumBsi, 1)
-	createCtx := &CreateTableCtx{
-		DBMutationCtx: *CreateDBMutationCtx(database, gen),
-		Schema:        schema,
-		Indice:        indice,
-	}
-	tblMeta, err := inst.CreateTable(createCtx)
-	assert.Nil(t, err)
-	assert.NotNil(t, tblMeta)
-	tblName := schema.Name
-	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
-	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
-	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
-
-	insertCnt := uint64(3)
-
-	var wg sync.WaitGroup
-	{
-		for i := uint64(0); i < insertCnt; i++ {
-			wg.Add(1)
-			appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-			inst.Append(appendCtx)
-			wg.Done()
-		}
-	}
-	wg.Wait()
-	time.Sleep(waitTime)
-
-	creater := func(i int) func() {
-		return func() {
-			indice := metadata.NewIndexSchema()
-			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
-			ctx := &CreateIndexCtx{
-				DBMutationCtx: *CreateDBMutationCtx(database, gen),
-				Table:         tblName,
-				Indices:       indice,
-			}
-			assert.Nil(t, inst.CreateIndex(ctx))
-		}
-	}
-
-	dropper := func(s, i int) func() {
-		return func() {
-			indexNames := make([]string, 0)
-			for j := s; j < i; j += 1 {
-				indexNames = append(indexNames, fmt.Sprintf("idx-%d", j))
-			}
-			ctx := &DropIndexCtx{
-				DBMutationCtx: *CreateDBMutationCtx(database, gen),
-				Table:         tblName,
-				IndexNames:    indexNames,
-			}
-			assert.Nil(t, inst.DropIndex(ctx))
-		}
-	}
-
-	for i := 0; i < 10; i++ {
-		creater(1)()
-		dropper(1, 2)()
-	}
-
-	tblData, err := inst.GetTableData(tblMeta)
-	assert.Nil(t, err)
-	seg := tblData.StrongRefSegment(uint64(1))
-	holder := seg.GetIndexHolder()
-	//t.Log(holder.StringIndicesRefsNoLock())
-
-	inst.Close()
-
-	inst, _, _ = initTestDB2(t)
-	tblData, err = inst.GetTableData(tblMeta)
-	assert.Nil(t, err)
-	seg = tblData.StrongRefSegment(uint64(1))
-	holder = seg.GetIndexHolder()
-	assert.Equal(t, 5, holder.IndicesCount())
-
-	s := &db.Segment{
-		Data: seg,
-		Ids:  new(atomic.Value),
-	}
-
-	indice = metadata.NewIndexSchema()
-	indice.MakeIndex("idx-1", metadata.NumBsi, 0)
-	indice.MakeIndex("idx-2", metadata.NumBsi, 2)
-	indice.MakeIndex("idx-3", metadata.NumBsi, 3)
-	createIdxCtx := &CreateIndexCtx{
-		DBMutationCtx: *CreateDBMutationCtx(database, gen),
-		Table:         tblMeta.Schema.Name,
-		Indices:       indice,
-	}
-	assert.Nil(t, inst.CreateIndex(createIdxCtx))
-	time.Sleep(100 * time.Millisecond)
-
-	for i := 0; i < 4; i++ {
-		column := fmt.Sprintf("mock_%d", i)
-		filter := s.NewFilter()
-		res, err := filter.Eq(column, int32(100))
-		assert.Nil(t, err)
-		assert.Equal(t, res.ToArray()[0], uint64(100))
-		sparse := s.NewSparseFilter()
-		ret, err := sparse.Eq(column, int32(100))
-		assert.Nil(t, err)
-		rets := decodeBlockIds(ret)
-		assert.Equal(t, strconv.Itoa(1), rets[0])
-		summ := s.NewSummarizer()
-		count, err := summ.Count(column, nil)
-		assert.Equal(t, uint64(4000), count)
-	}
-
-	dropIdxCtx := &DropIndexCtx{
-		DBMutationCtx: *CreateDBMutationCtx(database, gen),
-		Table:         tblMeta.Schema.Name,
-		IndexNames:    []string{"idx-3"},
-	}
-	assert.Nil(t, inst.DropIndex(dropIdxCtx))
-	time.Sleep(50 * time.Millisecond)
-
-	filter := s.NewFilter()
-	_, err = filter.Eq("mock_3", int32(1))
-	assert.NotNil(t, err)
-	_, err = filter.Ge("mock_2", int32(2))
-	assert.Nil(t, err)
-
-	inst.Close()
-}
+//func TestRepeatCreateAndDropIndex(t *testing.T) {
+//	waitTime := time.Duration(100) * time.Millisecond
+//	if invariants.RaceEnabled {
+//		waitTime *= 2
+//	}
+//	initTestEnv(t)
+//	inst, gen, database := initTestDB1(t)
+//	schema := metadata.MockSchema(4)
+//	indice := metadata.NewIndexSchema()
+//	indice.MakeIndex("idx-0", metadata.NumBsi, 1)
+//	createCtx := &CreateTableCtx{
+//		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+//		Schema:        schema,
+//		Indice:        indice,
+//	}
+//	tblMeta, err := inst.CreateTable(createCtx)
+//	assert.Nil(t, err)
+//	assert.NotNil(t, tblMeta)
+//	tblName := schema.Name
+//	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
+//	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
+//	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
+//
+//	insertCnt := uint64(3)
+//
+//	var wg sync.WaitGroup
+//	{
+//		for i := uint64(0); i < insertCnt; i++ {
+//			wg.Add(1)
+//			appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
+//			inst.Append(appendCtx)
+//			wg.Done()
+//		}
+//	}
+//	wg.Wait()
+//	time.Sleep(waitTime)
+//
+//	creater := func(i int) func() {
+//		return func() {
+//			indice := metadata.NewIndexSchema()
+//			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
+//			ctx := &CreateIndexCtx{
+//				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+//				Table:         tblName,
+//				Indices:       indice,
+//			}
+//			assert.Nil(t, inst.CreateIndex(ctx))
+//		}
+//	}
+//
+//	dropper := func(s, i int) func() {
+//		return func() {
+//			indexNames := make([]string, 0)
+//			for j := s; j < i; j += 1 {
+//				indexNames = append(indexNames, fmt.Sprintf("idx-%d", j))
+//			}
+//			ctx := &DropIndexCtx{
+//				DBMutationCtx: *CreateDBMutationCtx(database, gen),
+//				Table:         tblName,
+//				IndexNames:    indexNames,
+//			}
+//			assert.Nil(t, inst.DropIndex(ctx))
+//		}
+//	}
+//
+//	for i := 0; i < 10; i++ {
+//		creater(1)()
+//		dropper(1, 2)()
+//	}
+//
+//	tblData, err := inst.GetTableData(tblMeta)
+//	assert.Nil(t, err)
+//	seg := tblData.StrongRefSegment(uint64(1))
+//	holder := seg.GetIndexHolder()
+//	//t.Log(holder.StringIndicesRefsNoLock())
+//
+//	inst.Close()
+//
+//	inst, _, _ = initTestDB2(t)
+//	tblData, err = inst.GetTableData(tblMeta)
+//	assert.Nil(t, err)
+//	seg = tblData.StrongRefSegment(uint64(1))
+//	holder = seg.GetIndexHolder()
+//	assert.Equal(t, 5, holder.IndicesCount())
+//
+//	s := &db.Segment{
+//		Data: seg,
+//		Ids:  new(atomic.Value),
+//	}
+//
+//	indice = metadata.NewIndexSchema()
+//	indice.MakeIndex("idx-1", metadata.NumBsi, 0)
+//	indice.MakeIndex("idx-2", metadata.NumBsi, 2)
+//	indice.MakeIndex("idx-3", metadata.NumBsi, 3)
+//	createIdxCtx := &CreateIndexCtx{
+//		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+//		Table:         tblMeta.Schema.Name,
+//		Indices:       indice,
+//	}
+//	assert.Nil(t, inst.CreateIndex(createIdxCtx))
+//	time.Sleep(100 * time.Millisecond)
+//
+//	for i := 0; i < 4; i++ {
+//		column := fmt.Sprintf("mock_%d", i)
+//		filter := s.NewFilter()
+//		res, err := filter.Eq(column, int32(100))
+//		assert.Nil(t, err)
+//		assert.Equal(t, res.ToArray()[0], uint64(100))
+//		sparse := s.NewSparseFilter()
+//		ret, err := sparse.Eq(column, int32(100))
+//		assert.Nil(t, err)
+//		rets := decodeBlockIds(ret)
+//		assert.Equal(t, strconv.Itoa(1), rets[0])
+//		summ := s.NewSummarizer()
+//		count, err := summ.Count(column, nil)
+//		assert.Equal(t, uint64(4000), count)
+//	}
+//
+//	dropIdxCtx := &DropIndexCtx{
+//		DBMutationCtx: *CreateDBMutationCtx(database, gen),
+//		Table:         tblMeta.Schema.Name,
+//		IndexNames:    []string{"idx-3"},
+//	}
+//	assert.Nil(t, inst.DropIndex(dropIdxCtx))
+//	time.Sleep(50 * time.Millisecond)
+//
+//	filter := s.NewFilter()
+//	_, err = filter.Eq("mock_3", int32(1))
+//	assert.NotNil(t, err)
+//	_, err = filter.Ge("mock_2", int32(2))
+//	assert.Nil(t, err)
+//
+//	inst.Close()
+//}
 
 func matchStringArray(a, b []string) bool {
 	if len(a) != len(b) {
