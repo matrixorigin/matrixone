@@ -69,7 +69,7 @@ function run_vet(){
 
     if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
     logger "INF" "Test is in progress... "
-    go vet -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
+    go vet -tags matrixone_test -unsafeptr=false ./pkg/... 2>&1 | tee $SCA_REPORT
     logger "INF" "Refer to $SCA_REPORT for details"
 
 }
