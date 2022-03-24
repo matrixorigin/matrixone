@@ -108,7 +108,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if len(ids.Ids) == 0 {
 				continue
 			}
-			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddr
+			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddress
 			storeId := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation

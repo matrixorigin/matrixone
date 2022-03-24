@@ -16,14 +16,23 @@ package driver
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
-	"github.com/fagongzi/util/protoc"
 	"strings"
 	"time"
 
+	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixcube/aware"
+	"github.com/matrixorigin/matrixcube/client"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/metric"
-
+	"github.com/matrixorigin/matrixcube/pb/metapb"
+	"github.com/matrixorigin/matrixcube/pb/rpcpb"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
+	"github.com/matrixorigin/matrixcube/util/stop"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
@@ -35,16 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-
-	"github.com/matrixorigin/matrixcube/aware"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/meta"
-	"github.com/matrixorigin/matrixcube/pb/rpc"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/matrixorigin/matrixcube/server"
-	cstorage "github.com/matrixorigin/matrixcube/storage"
 )
 
 var (
@@ -59,6 +58,24 @@ const (
 	defaultStartupTimeout = time.Second * 300
 )
 
+// CustomRequest custom request
+type CustomRequest struct {
+	// Group used to indicate which group of Shards to send
+	Group uint64
+	// Key the key used to indicate which shard to send
+	Key []byte
+	// ToShard if the field is specified, Key are disabled
+	ToShard uint64
+	// CustomType type of custom request
+	CustomType uint64
+	// Cmd serialized custom request content
+	Cmd []byte
+	// Read read request
+	Read bool
+	// Write write request
+	Write bool
+}
+
 // CubeDriver implements distributed kv and aoe.
 type CubeDriver interface {
 	// Start the driver.
@@ -72,13 +89,13 @@ type CubeDriver interface {
 	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
-	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
-	TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error))
-	TpeAsyncSet([]byte, []byte, int, time.Duration, func(server.CustomRequest, []byte, error), interface{})
+	AsyncSet([]byte, []byte, func(CustomRequest, []byte, error), interface{})
+	TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte, values [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error))
+	TpeAsyncSet([]byte, []byte, int, time.Duration, func(CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
-	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
+	AsyncSetIfNotExist([]byte, []byte, func(CustomRequest, []byte, error), interface{})
 	// Set async set key value in specific group.
-	AsyncSetWithGroup([]byte, []byte, pb.Group, func(server.CustomRequest, []byte, error), interface{})
+	AsyncSetWithGroup([]byte, []byte, pb.Group, func(CustomRequest, []byte, error), interface{})
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
 	// Get returns the value of key.
@@ -112,7 +129,7 @@ type CubeDriver interface {
 	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
 	// TpeCheckKeysExist checks the shard has keys.
 	// return the index of the key that existed in the shard.
-	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error))
+	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error))
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
@@ -138,7 +155,7 @@ type CubeDriver interface {
 	// AllocID allocs id.
 	AllocID([]byte, uint64) (uint64, error)
 	// AsyncAllocID async alloc id.
-	AsyncAllocID([]byte, uint64, func(server.CustomRequest, []byte, error), interface{})
+	AsyncAllocID([]byte, uint64, func(CustomRequest, []byte, error), interface{})
 	// Append appends the data in the table
 	Append(string, uint64, []byte) error
 	//GetSnapshot gets the snapshot from the table.
@@ -163,12 +180,12 @@ type CubeDriver interface {
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
 	// AsyncExec async exec command
-	AsyncExec(interface{}, func(server.CustomRequest, []byte, error), interface{})
+	AsyncExec(interface{}, func(CustomRequest, []byte, error), interface{})
 	// ExecWithGroup exec command with group
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
-	AsyncExecWithGroup(interface{}, pb.Group, func(server.CustomRequest, []byte, error), interface{})
-	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(server.CustomRequest, []byte, error), interface{})
+	AsyncExecWithGroup(interface{}, pb.Group, func(CustomRequest, []byte, error), interface{})
+	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(CustomRequest, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
@@ -179,12 +196,13 @@ type CubeDriver interface {
 }
 
 type driver struct {
-	cfg   *config.Config
-	app   *server.Application
-	store raftstore.Store
-	spool raftstore.ShardsPool
-	aoeDB *aoedb.DB
-	cmds  map[uint64]rpc.CmdType
+	cfg     *config.Config
+	app     client.Client
+	store   raftstore.Store
+	spool   raftstore.ShardsPool
+	aoeDB   *aoedb.DB
+	cmds    map[uint64]rpcpb.CmdType
+	stopper stop.Stopper
 }
 
 // NewCubeDriver returns a aoe request handler
@@ -219,9 +237,10 @@ func NewCubeDriverWithFactory(
 	raftStoreFactory func(*cConfig.Config) (raftstore.Store, error)) (CubeDriver, error) {
 
 	h := &driver{
-		cfg:   c,
-		aoeDB: aoeDataStorage.(*aoe3.Storage).DB,
-		cmds:  make(map[uint64]rpc.CmdType),
+		cfg:     c,
+		aoeDB:   aoeDataStorage.(*aoe3.Storage).DB,
+		cmds:    make(map[uint64]rpcpb.CmdType),
+		stopper: *stop.NewStopper("cube-driver", stop.WithLogger(c.CubeConfig.Logger)),
 	}
 	c.CubeConfig.Storage.DataStorageFactory = func(group uint64) cstorage.DataStorage {
 		switch group {
@@ -239,20 +258,20 @@ func NewCubeDriverWithFactory(
 	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
 	c.CubeConfig.ShardGroups = 2
 
-	c.CubeConfig.Customize.CustomInitShardsFactory = func() []meta.Shard {
-		var initialGroups []meta.Shard
-		initialGroups = append(initialGroups, meta.Shard{
+	c.CubeConfig.Customize.CustomInitShardsFactory = func() []metapb.Shard {
+		var initialGroups []metapb.Shard
+		initialGroups = append(initialGroups, metapb.Shard{
 			Group: uint64(pb.KVGroup),
 		})
 		return initialGroups
 	}
 
-	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) meta.Shard {
+	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) metapb.Shard {
 		disableSplit := false
 		if g == uint64(pb.KVGroup) {
 			disableSplit = true
 		}
-		return meta.Shard{
+		return metapb.Shard{
 			Group:        g,
 			Start:        start,
 			End:          end,
@@ -274,20 +293,7 @@ func NewCubeDriverWithFactory(
 	c.ServerConfig.Store = h.store
 	pConfig.DefaultSchedulers = nil
 
-	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req rpc.Request, cmd server.CustomRequest, proxy raftstore.ShardsProxy) error {
-		if req.Group == uint64(pb.KVGroup) {
-			return proxy.Dispatch(req)
-		}
-		if cmd.Args != nil {
-			args := cmd.Args.(pb.Request)
-			if args.Shard == 0 {
-				return proxy.Dispatch(req)
-			}
-			req.ToShard = args.Shard
-		}
-		return proxy.DispatchTo(req, c.ServerConfig.Store.GetRouter().GetShard(req.ToShard),
-			c.ServerConfig.Store.GetRouter().LeaderReplicaStore(req.ToShard).ClientAddr)
-	})
+	h.app = client.NewClient(c.ServerConfig)
 	return h, nil
 }
 
@@ -310,7 +316,7 @@ func (h *driver) Start() error {
 					metric.StartPush(h.cfg.CubeConfig.Metric, logutil.GetGlobalLogger())
 				}
 				return err
-			} else if strings.Contains(err.Error(),"missing job processor") {
+			} else if strings.Contains(err.Error(), "missing job processor") {
 				logutil.Errorf("Startup failed: %v", err)
 				return errDriver.ErrStartupFailed
 			}
@@ -321,7 +327,7 @@ func (h *driver) Start() error {
 
 //initShardPool creates a shard pool by h.store and record it in h.spool
 func (h *driver) initShardPool() error {
-	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
+	p, err := h.store.CreateShardPool(metapb.ShardPoolJobMeta{Group: uint64(pb.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
 	if err != nil {
 		return err
 	}
@@ -364,24 +370,24 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 }
 
 //AsyncSet sets key and value in KVGroup asynchronously.
-func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
+func (h *driver) AsyncSet(key, value []byte, cb func(CustomRequest, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
 }
 
-func (h *driver) TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte,values [][]byte , timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
+func (h *driver) TpeAsyncSetKeysValuesInbatch(shardID uint64, keys [][]byte, values [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error)) {
 	req := pb.Request{
 		Type:  pb.TpeSetBatch,
 		Group: pb.KVGroup,
 		TpeSetBatch: pb.TpeSetBatchRequest{
-			Keys:                 keys,
-			Values:               values,
-			ShardID:              shardID,
+			Keys:    keys,
+			Values:  values,
+			ShardID: shardID,
 		},
 	}
-	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
+	h.TpeAsyncExecWithGroup(req, pb.KVGroup, timeout, cb, nil)
 }
 
-func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout time.Duration, cb func(server.CustomRequest, []byte, error), data interface{}) {
+func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout time.Duration, cb func(CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.Set,
 		Group: pb.KVGroup,
@@ -391,11 +397,11 @@ func (h *driver) TpeAsyncSet(key []byte, value []byte, keyIndex int, timeout tim
 			KeyIndex: int32(keyIndex),
 		},
 	}
-	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,data)
+	h.TpeAsyncExecWithGroup(req, pb.KVGroup, timeout, cb, data)
 }
 
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
-func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(server.CustomRequest, []byte, error), data interface{}) {
+func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.Set,
 		Group: group,
@@ -407,7 +413,7 @@ func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(se
 	h.AsyncExecWithGroup(req, group, cb, data)
 }
 
-func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
+func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.SetIfNotExist,
 		Group: pb.KVGroup,
@@ -416,7 +422,7 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequ
 			Value: value,
 		},
 	}
-	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
+	h.AsyncExecWithGroup(req, pb.KVGroup, func(i CustomRequest, bytes []byte, err error) {
 		if err != nil {
 			logutil.Errorf("cube error: %v", err)
 		}
@@ -584,7 +590,7 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 	}
 
 	var tsr pb.TpeScanResponse
-	protoc.MustUnmarshal(&tsr,data)
+	protoc.MustUnmarshal(&tsr, data)
 
 	//save keys
 	if needKey {
@@ -594,17 +600,17 @@ func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([
 	return keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
 
-func (h *driver) TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(server.CustomRequest, []byte, error)) {
+func (h *driver) TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error)) {
 	req := pb.Request{
 		Type:  pb.TpeCheckKeysExistInBatch,
 		Group: pb.KVGroup,
 		TpeCheckKeysExistInBatch: pb.TpeCheckKeysExistInBatchRequest{
-			Keys: keys,
+			Keys:    keys,
 			ShardID: shardID,
 		},
 	}
 
-	h.TpeAsyncExecWithGroup(req,pb.KVGroup,timeout,cb,nil)
+	h.TpeAsyncExecWithGroup(req, pb.KVGroup, timeout, cb, nil)
 }
 
 //PrefixScan scans in KVGroup
@@ -660,7 +666,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 		TpePrefixScan: pb.TpePrefixScanRequest{
 			PrefixOrStartKey: startKeyOrPrefix,
 			PrefixLength:     int64(prefixLength),
-			PrefixEnd: prefixEnd,
+			PrefixEnd:        prefixEnd,
 			Limit:            limit,
 		},
 	}
@@ -677,7 +683,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 	}
 
 	var tsr pb.TpeScanResponse
-	protoc.MustUnmarshal(&tsr,data)
+	protoc.MustUnmarshal(&tsr, data)
 
 	return tsr.Keys, tsr.Values, tsr.CompleteInAllShards, tsr.NextScanKey, err
 }
@@ -748,7 +754,7 @@ func (h *driver) AllocID(idkey []byte, batch uint64) (uint64, error) {
 	return resp, nil
 }
 
-func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(server.CustomRequest, []byte, error), param interface{}) {
+func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(CustomRequest, []byte, error), param interface{}) {
 	req := pb.Request{
 		Type:  pb.Incr,
 		Group: pb.KVGroup,
@@ -943,15 +949,32 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 	return rsp, nil
 }
 
+func (h *driver) doExec(ctx context.Context, cr CustomRequest) *client.Future {
+	var routeOp client.Option
+	if cr.ToShard != 0 {
+		routeOp = client.WithShard(cr.ToShard)
+	} else {
+		routeOp = client.WithRouteKey(cr.Key)
+	}
+
+	if cr.Write {
+		return h.app.Write(ctx, cr.CustomType, cr.Cmd, routeOp, client.WithShardGroup(cr.Group))
+	} else if cr.Read {
+		return h.app.Read(ctx, cr.CustomType, cr.Cmd, routeOp, client.WithShardGroup(cr.Group))
+	}
+	return nil
+}
+
 func (h *driver) Exec(cmd interface{}) (res []byte, err error) {
 	t0 := time.Now()
-	cr := &server.CustomRequest{}
-	h.BuildRequest(cr, cmd)
+	cr := CustomRequest{}
+	h.BuildRequest(&cr, cmd)
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
+
 	for i := 0; i < defaultRetryTimes; i++ {
-		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		res, err = h.doExecWithRequest(cr)
 		if err == nil {
 			break
 		}
@@ -960,22 +983,23 @@ func (h *driver) Exec(cmd interface{}) (res []byte, err error) {
 	return
 }
 
-func (h *driver) AsyncExec(cmd interface{}, cb func(server.CustomRequest, []byte, error), arg interface{}) {
-	cr := &server.CustomRequest{}
-	h.BuildRequest(cr, cmd)
-	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
+func (h *driver) AsyncExec(cmd interface{}, cb func(CustomRequest, []byte, error), arg interface{}) {
+	h.AsyncExecWithGroup(cmd, pb.KVGroup, cb, arg)
 }
 
-func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(server.CustomRequest, []byte, error), arg interface{}) {
-	cr := &server.CustomRequest{}
-	h.BuildRequest(cr, cmd)
-	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
+func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(CustomRequest, []byte, error), arg interface{}) {
+	cr := CustomRequest{}
+	cr.Group = uint64(group)
+	h.BuildRequest(&cr, cmd)
+
+	h.doAsyncExecWithGroup(cr, cb, arg)
 }
 
-func (h *driver) TpeAsyncExecWithGroup(cmd interface{}, group pb.Group, timeout time.Duration, cb func(server.CustomRequest, []byte, error), arg interface{}) {
-	cr := &server.CustomRequest{}
-	h.BuildRequest(cr, cmd)
-	h.app.AsyncExec(*cr, cb, timeout)
+func (h *driver) TpeAsyncExecWithGroup(cmd interface{}, group pb.Group, timeout time.Duration, cb func(CustomRequest, []byte, error), arg interface{}) {
+	cr := CustomRequest{}
+	cr.Group = uint64(group)
+	h.BuildRequest(&cr, cmd)
+	h.doAsyncExecWithGroup(cr, cb, arg)
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err error) {
@@ -983,10 +1007,11 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	cr := &server.CustomRequest{}
-	h.BuildRequest(cr, cmd)
+	cr := CustomRequest{}
+	cr.Group = uint64(group)
+	h.BuildRequest(&cr, cmd)
 	for i := 0; i < defaultRetryTimes; i++ {
-		res, err = h.app.Exec(*cr, defaultRPCTimeout)
+		res, err = h.doExecWithRequest(cr)
 		if err == nil {
 			break
 		}
@@ -1000,9 +1025,35 @@ func (h *driver) RaftStore() raftstore.Store {
 }
 
 func (h *driver) AddLabelToShard(shardID uint64, name, value string) error {
-	return h.app.AddLabelToShard(uint64(pb.AOEGroup), shardID, name, value, time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+
+	f := h.app.AddLabelToShard(ctx, name, value, shardID)
+	defer f.Close()
+
+	_, err := f.Get()
+	return err
 }
 
 func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 	return h.store.Prophet().GetClient().AddSchedulingRule(uint64(pb.AOEGroup), ruleName, groupByLabel)
+}
+
+func (h *driver) doAsyncExecWithGroup(cr CustomRequest, cb func(CustomRequest, []byte, error), arg interface{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	f := h.doExec(ctx, cr)
+	h.stopper.RunTask(ctx, func(ctx context.Context) {
+		defer cancel()
+		defer f.Close()
+		resp, err := f.Get()
+		cb(cr, resp, err)
+	})
+}
+
+func (h *driver) doExecWithRequest(cr CustomRequest) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	f := h.doExec(ctx, cr)
+	defer cancel()
+	defer f.Close()
+	return f.Get()
 }

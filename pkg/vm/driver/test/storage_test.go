@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/logdb"
-	"go.etcd.io/etcd/raft/v3"
 	stdLog "log"
 	"math"
 	"os"
@@ -28,11 +26,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/logdb"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -40,6 +39,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"go.etcd.io/etcd/raft/v3"
+
 	// "github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -52,7 +53,7 @@ import (
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cconfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -311,7 +312,7 @@ func TestSnapshot(t *testing.T) {
 	var replicaID uint64
 	replicas := c.RaftCluster.GetShardByID(insertNode, shard.ShardID).Replicas
 	for _, replica := range replicas {
-		if replica.ContainerID == c.RaftCluster.GetStore(insertNode).Meta().ID {
+		if replica.StoreID == c.RaftCluster.GetStore(insertNode).Meta().ID {
 			replicaID = replica.ID
 		}
 	}
@@ -540,9 +541,9 @@ func TestAOEStorage(t *testing.T) {
 
 	stdLog.Printf("driver all started.")
 
-	driver := c.CubeDrivers[0]
+	cubeDriver := c.CubeDrivers[0]
 
-	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard meta.Shard) bool {
+	cubeDriver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard metapb.Shard) bool {
 		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
 		return true
 	})
@@ -553,60 +554,60 @@ func TestAOEStorage(t *testing.T) {
 	require.NoError(t, err)
 	// shardMetaLen := len(shardMetas)
 	//Set Test
-	err = driver.Set([]byte("Hello-"), []byte("World-"))
+	err = cubeDriver.Set([]byte("Hello-"), []byte("World-"))
 	require.NoError(t, err, "Set fail")
 	fmt.Printf("time cost for set is %d ms\n", time.Since(t0).Milliseconds())
 
-	err = driver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist1"))
+	err = cubeDriver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist1"))
 	require.NoError(t, err, "SetIfNotExist fail")
 
-	err = driver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist2"))
+	err = cubeDriver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist2"))
 	require.Equal(t, err, errors.New("key is already existed"), "SetIfNotExist wrong")
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	driver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"), func(i server.CustomRequest, data []byte, err error) {
+	cubeDriver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"), func(i driver.CustomRequest, data []byte, err error) {
 		require.NoError(t, err, "AsyncSet Fail")
 		wg.Done()
 	}, nil)
 	wg.Wait()
 	wg.Add(1)
-	driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist1"), func(i server.CustomRequest, data []byte, err error) {
+	cubeDriver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist1"), func(i driver.CustomRequest, data []byte, err error) {
 		require.NoError(t, err, "AsyncSetIfNotExist fail")
 		wg.Done()
 	}, nil)
 	wg.Wait()
 	wg.Add(1)
-	driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist2"), func(i server.CustomRequest, data []byte, err error) {
+	cubeDriver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist2"), func(i driver.CustomRequest, data []byte, err error) {
 		require.Equal(t, err, errors.New("key is already existed"), "AsyncSetIfNotExist wrong")
 		wg.Done()
 	}, nil)
 	wg.Wait()
 	//Get Test
 	t0 = time.Now()
-	value, err := driver.Get([]byte("Hello-"))
+	value, err := cubeDriver.Get([]byte("Hello-"))
 	require.NoError(t, err, "Get Fail")
 	require.Equal(t, []byte("World-"), value, "Get wrong")
 	fmt.Printf("time cost for get is %d ms\n", time.Since(t0).Milliseconds())
-	value, err = driver.Get([]byte("Hello_IfNotExist"))
+	value, err = cubeDriver.Get([]byte("Hello_IfNotExist"))
 	require.NoError(t, err, "Get2 Fail")
 	require.Equal(t, []byte("World_IfNotExist1"), value, "Get2 wrong")
-	value, err = driver.Get([]byte("Hello_Async"))
+	value, err = cubeDriver.Get([]byte("Hello_Async"))
 	require.NoError(t, err, "Get2 Fail")
 	require.Equal(t, []byte("World_Async"), value, "Get3 wrong")
-	value, err = driver.Get([]byte("Hello_AsyncSetIfNotExist"))
+	value, err = cubeDriver.Get([]byte("Hello_AsyncSetIfNotExist"))
 	require.NoError(t, err, "Get4 Fail")
 	require.Equal(t, []byte("World_AsyncSetIfNotExist1"), value, "Get4 wrong")
-	value, err = driver.Get([]byte("NotExist"))
+	value, err = cubeDriver.Get([]byte("NotExist"))
 	require.NoError(t, err, "Get NotExist Fail")
 	require.Equal(t, "", string(value), "Get NotExist wrong")
-	kvs, err := driver.Scan(nil, nil, 0)
+	kvs, err := cubeDriver.Scan(nil, nil, 0)
 	require.NoError(t, err)
 	// require.Equal(t, 8+shardMetaLen, len(kvs))
 	//Prefix Test
 	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
-		_, err = driver.Exec(pb.Request{
+		_, err = cubeDriver.Exec(pb.Request{
 			Type: pb.Set,
 			Set: pb.SetRequest{
 				Key:   []byte(key),
@@ -617,18 +618,18 @@ func TestAOEStorage(t *testing.T) {
 	}
 
 	t0 = time.Now()
-	keys, err := driver.PrefixKeys([]byte("prefix-"), 0)
+	keys, err := cubeDriver.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(keys))
 	fmt.Printf("time cost for prefix is %d ms\n", time.Since(t0).Milliseconds())
 
-	kvs, err = driver.PrefixScan([]byte("prefix-"), 0)
+	kvs, err = cubeDriver.PrefixScan([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 40, len(kvs))
 
-	err = driver.Delete([]byte("prefix-0"))
+	err = cubeDriver.Delete([]byte("prefix-0"))
 	require.NoError(t, err)
-	keys, err = driver.PrefixKeys([]byte("prefix-"), 0)
+	keys, err = cubeDriver.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 19, len(keys))
 
@@ -637,7 +638,7 @@ func TestAOEStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			_, err = driver.Exec(pb.Request{
+			_, err = cubeDriver.Exec(pb.Request{
 				Type: pb.Set,
 				Set: pb.SetRequest{
 					Key:   []byte(key),
@@ -649,7 +650,7 @@ func TestAOEStorage(t *testing.T) {
 	}
 	fmt.Printf("time cost for 50 set is %d ms\n", time.Since(t0).Milliseconds())
 	t0 = time.Now()
-	kvs, err = driver.Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
+	kvs, err = cubeDriver.Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(kvs))
 	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
@@ -657,7 +658,7 @@ func TestAOEStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			value, err = driver.Exec(pb.Request{
+			value, err = cubeDriver.Exec(pb.Request{
 				Type: pb.Get,
 				Get: pb.GetRequest{
 					Key: []byte(key),
@@ -669,19 +670,19 @@ func TestAOEStorage(t *testing.T) {
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
 	//AllocId Test
-	shard, err := driver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	shard, err := cubeDriver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	_, err = driver.AllocID([]byte("alloc_id"), 0)
+	_, err = cubeDriver.AllocID([]byte("alloc_id"), 0)
 	require.NoError(t, err, "AllocID fail")
 	//CreateTableTest
 	toShard := shard.ShardID
 	stdLog.Printf(">>>toShard %d", toShard)
-	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
+	err = cubeDriver.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
 	require.NoError(t, err)
 
-	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, 101)), toShard, &aoe.TableInfo{Id: 101})
+	err = cubeDriver.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, 101)), toShard, &aoe.TableInfo{Id: 101})
 	require.NotNil(t, err)
-	_, err = driver.TabletNames(toShard)
+	_, err = cubeDriver.TabletNames(toShard)
 	require.NoError(t, err)
 	//AppendTest
 	attrs := helper.Attribute(*tableInfo)
@@ -690,7 +691,7 @@ func TestAOEStorage(t *testing.T) {
 		typs = append(typs, attr.Type)
 	}
 
-	ids, err := driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	ids, err := cubeDriver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(ids.Ids))
 	ibat := mock.MockBatch(typs, blockRows)
@@ -698,31 +699,31 @@ func TestAOEStorage(t *testing.T) {
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
 	for i := 0; i < blockCnt; i++ {
-		err = driver.Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
+		err = cubeDriver.Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
 		if err != nil {
 			stdLog.Printf("%v", err)
 		}
 		require.NoError(t, err, "Append%d fail", i)
-		segmentedIndex, err := driver.GetSegmentedId(toShard)
+		segmentedIndex, err := cubeDriver.GetSegmentedId(toShard)
 		require.NoError(t, err)
 		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
 	}
-	ids, err = driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	ids, err = cubeDriver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
 	require.Equal(t, segmentCnt, len(ids.Ids))
 	//CreateIndexTest
-	err = driver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo, toShard)
+	err = cubeDriver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo, toShard)
 	require.NoError(t, err)
-	err = driver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo, toShard)
+	err = cubeDriver.CreateIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo, toShard)
 	require.NotNil(t, err)
 	//DropIndexTest
-	err = driver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo.Name, toShard)
+	err = cubeDriver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo.Name, toShard)
 	require.NoError(t, err)
-	err = driver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo.Name, toShard)
+	err = cubeDriver.DropIndex(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), idxInfo.Name, toShard)
 	require.NotNil(t, err)
 	//DropTableTest
-	_, err = driver.DropTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	_, err = cubeDriver.DropTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err, "DropTablet fail")
 	time.Sleep(3 * time.Second)
 

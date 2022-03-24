@@ -139,14 +139,14 @@ func (r *relation) update() error {
 			tbl.Name, tbl.ShardId); err != nil {
 			log.Errorf(
 				"get segmentInfos for tablet %s failed, %s",
-				 tbl.Name, err.Error())
+				tbl.Name, err.Error())
 			return err
 		} else {
 			if len(ids.Ids) == 0 {
 				continue
 			}
 			addr := r.catalog.Driver.RaftStore().GetRouter().
-				LeaderReplicaStore(tbl.ShardId).ClientAddr
+				LeaderReplicaStore(tbl.ShardId).ClientAddress
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
@@ -155,11 +155,11 @@ func (r *relation) update() error {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
 			logutil.Debugf(
-				"ClientAddr: %v, shardId: %d, storeId: %d", 
+				"ClientAddr: %v, shardId: %d, storeId: %d",
 				addr, tbl.ShardId, storeId)
 			if !Exist(r.nodes, addr) {
 				r.nodes = append(r.nodes, engine.Node{
-					Id:   string(
+					Id: string(
 						codec.Uint642Bytes(storeId)),
 					Addr: addr,
 				})
@@ -173,14 +173,14 @@ func (r *relation) update() error {
 					"shardId: %d, segment: %d, Id: %d",
 					tbl.ShardId, id, r.catalog.Driver.RaftStore().Meta().ID)
 				r.segments = append(r.segments, SegmentInfo{
-					Version:  ids.Version,
-					Id:       string(codec.Uint642Bytes(id)),
-					GroupId:  string(
+					Version: ids.Version,
+					Id:      string(codec.Uint642Bytes(id)),
+					GroupId: string(
 						codec.Uint642Bytes(tbl.ShardId)),
 					TabletId: string(
 						codec.Uint642Bytes(tbl.ShardId)),
 					Node: engine.Node{
-						Id:   string(
+						Id: string(
 							codec.Uint642Bytes(storeId)),
 						Addr: addr,
 					},

@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
-	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/vfs"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
@@ -204,7 +204,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		// dCfg.ServerConfig.ExternalServer = true
 		d, err := driver.NewCubeDriverWithFactory(c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
 			store := raftstore.NewStore(c)
-			types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
+			types := []metapb.JobType{metapb.JobType_RemoveShard, metapb.JobType_CreateShardPool, metapb.JobType_CustomStartAt}
 			for _, t := range types {
 				if v := c.Prophet.GetJobProcessor(t); v != nil {
 					dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
