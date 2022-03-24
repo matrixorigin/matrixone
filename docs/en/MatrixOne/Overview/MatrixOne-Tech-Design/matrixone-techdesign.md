@@ -3,10 +3,10 @@
 In [MatrixOne Introduction](../matrixone-introduction.md) we have introduced the key features and core concepts of MatrixOne and in [MatrixOne Architecture](../matrixone-architecture.md) we show you the overall architecture of MatrixOne. 
 This chapter will unfold the architecture and explain about the tech design. 
 
-## MatrixOne Architectural Features  
+## **MatrixOne Architectural Features  **
 The current design of MatrixOne is a combination of NewSQL and MPP, and we call it an HTAP DBMS with OLAP enhancement. **Simplicity** is the most important design principle for both usage, deployment and maintenance. Despite being a distributed database, MatrixOne only provides a single binary for deployment, with each node running exactly the same single process.  
 
-### NewSQL
+### **NewSQL**
 As we all know, relational database has existed for more than 30 years with `relational model`, `SQL` and `transaction processing`, until recently NewSQL emerged.   
 
 NewSQL refers to a distributed architecture, starting with Google Spanner, using **Replicate State Machine** as the core, to solve the scalability and high availability problems of traditional standalone relational databases.
@@ -18,7 +18,7 @@ The biggest difference between MatrixOne's design and other NewSQL databases is 
 
 ![Replicate state machine implementation for Raft](https://github.com/matrixorigin/artwork/blob/main/docs/overview/consensus-modules.png?raw=true)
 
-### MPP
+### **MPP**
 MPP(Massively Parallel Processing) is a computing architecture that is used to analyze large-scale data. In simple terms, MPP is to distribute tasks to multiple servers and nodes in parallel. After the computation is completed on each node, the results of each part are aggregated together to obtain the final result. This architecture was adopted by first-generation OLAP databases such as Teradata and Greenplum. MapReduce, the key component for Hadoop, also borrowed from the MPP architecture. However, between Hadoop and MPP OLAP databases, differences are obvious in the amount of data processed, SQL support, data processing types and efficiency. Hadoop is more like a data lake, which can store and process hundreds of PB data, define schema when reading, and store a large amount of unstructured and semi-structured data. However, SQL support, query performance and real-time streaming processing are not ideal. A database solution based on the MPP architecture is more like a relational database with substantially enhanced query capabilities, still with good SQL support and ACID transaction properties.  
 The latest generation of open-source MPP compute engines includes: Clickhouse, Presto, Impala, SparkSQL, Apache Doris, etc.  
 
@@ -26,7 +26,7 @@ MatrixOne also provides great OLAP performance based on the MPP architecture. Bu
 
 ![MPP architecture](https://github.com/matrixorigin/artwork/blob/main/docs/overview/mpp_architecture.png?raw=true)
 
-## MatrixOne's Designed Modules and Current Progress
+## **MatrixOne's Designed Modules and Current Progress**
 MatrixOne is divided into **SQL Frontend**, **Computing Layer**, **Metadata Layer**, **Distributed Framework** and **Storage Layer**.  
 
 ![MatrixOne Modules](https://github.com/matrixorigin/artwork/blob/main/docs/overview/matrixone-modules.png?raw=true)
