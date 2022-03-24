@@ -167,6 +167,13 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard meta.Shard, req
 		executor.WithScanCountLimit(userReq.GetLimit()),
 	}
 
+	if len(userReq.GetPrefix()) != 0 {
+		prefixFilter := func(key []byte) bool {
+			return bytes.HasPrefix(key,userReq.GetPrefix())
+		}
+		options = append(options,executor.WithScanFilterFunc(prefixFilter))
+	}
+
 	needKey := userReq.GetNeedKey()
 	var lastKey []byte = nil
 	var copyValue []byte = nil
@@ -564,6 +571,7 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 
 	// ctx.AppendResponse(rep)
 	writtenBytes += uint64(16)
+	logutil.Infof("UpdateWriteBatch.writtenbytes %d",writtenBytes)
 	ctx.SetDiffBytes(int64(writtenBytes))
 	ctx.SetWrittenBytes(writtenBytes)
 	return nil

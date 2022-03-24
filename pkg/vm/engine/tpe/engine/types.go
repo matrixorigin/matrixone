@@ -94,4 +94,5 @@ type TpeReader struct {
 	parallelReader bool
 	//for test
 	isDumpReader bool
+	id int
 }

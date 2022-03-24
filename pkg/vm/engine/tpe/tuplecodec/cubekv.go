@@ -675,7 +675,7 @@ func (ck * CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	var values []TupleValue
 	lastKey := startKey
 	for {
-		_, retValues, complete, nextScanKey, err := ck.Cube.TpeScan(lastKey, endKey, math.MaxUint64,false)
+		_, retValues, complete, nextScanKey, err := ck.Cube.TpeScan(lastKey, endKey, nil, math.MaxUint64, false)
 		if err != nil {
 			return nil, err
 		}
@@ -707,7 +707,42 @@ func (ck * CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 
 	for readCnt < limit {
 		needCnt := limit - readCnt
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, needCnt, true)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, nil, needCnt, true)
+		if err != nil {
+			return nil, nil, false, nil, err
+		}
+
+		readCnt += uint64(len(scanKeys))
+
+		for i := 0 ; i < len(scanKeys); i ++{
+			keys = append(keys,scanKeys[i])
+			values = append(values,scanValues[i])
+		}
+
+		lastKey = nextScanKey
+		//all shards has been scanned
+		if complete {
+			break
+		}
+	}
+
+	return keys, values, complete, nextScanKey, err
+}
+
+func (ck * CubeKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey, prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+	var keys []TupleKey
+	var values []TupleValue
+	var scanKeys [][]byte
+	var scanValues [][]byte
+	var nextScanKey []byte
+	var err error
+	lastKey := startKey
+	readCnt := uint64(0)
+	complete := false
+
+	for readCnt < limit {
+		needCnt := limit - readCnt
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, prefix, needCnt, true)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}
@@ -779,6 +814,7 @@ func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (inter
 	var stores = make(map[uint64]string)
 
 	callback := func(shard meta.Shard, store meta.Store) bool {
+		logutil.Infof("originshardinfo %v %v",shard.GetStart(),shard.GetEnd())
 		//the shard overlaps the [startKey,endKey)
 		checkRange := Range{startKey: shard.GetStart(), endKey: shard.GetEnd()}
 
@@ -800,6 +836,10 @@ func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (inter
 					ID: store.ID,
 				},
 			})
+
+			info := shardInfos[len(shardInfos) - 1]
+
+			logutil.Infof("shardinfo startKey %v endKey %v",info.GetStartKey(),info.GetEndKey())
 		}
 
 		return true
@@ -819,6 +859,8 @@ func (ck * CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (inter
 	if len(nodes) == 0 {
 		logutil.Warnf("there are no nodes hold the range [%v %v)",startKey,endKey)
 	}
+
+	logutil.Infof("shardinfo count %d ",len(shardInfos))
 
 	sd := &Shards{
 		nodes:      nodes,

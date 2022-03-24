@@ -17,6 +17,8 @@ package engine
 import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -129,6 +131,15 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 	bat, err = tr.computeHandler.Read(tr.readCtx)
 	if err != nil {
 		return nil, err
+	}
+
+	if tr.readCtx.ParallelReader {
+		cnt := 0
+		if bat != nil {
+			cnt = vector.Length(bat.Vecs[0])
+		}
+
+		logutil.Infof("reader %d readCount %d parallelContext %v ", tr.id, cnt, tr.readCtx.ParallelReaderContext)
 	}
 
 	//when bat is null,it means no data anymore.

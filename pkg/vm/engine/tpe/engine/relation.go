@@ -190,31 +190,52 @@ func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
 	var tpeReaders []*TpeReader = make([]*TpeReader,tcnt)
 	//split shards into multiple readers
 	shardInfos := trel.shards.ShardInfos()
-	for i, info := range shardInfos {
-		readIndex := i % tcnt
-		newInfo := ShardInfo{
-			startKey:    info.GetStartKey(),
-			endKey:      info.GetEndKey(),
-			nextScanKey: nil,
-			completeInShard:    false,
-			node:        ShardNode{
-				Addr:    info.GetShardNode().Addr,
-				ID:      info.GetShardNode().ID,
-				IDbytes: info.GetShardNode().IDbytes,
-			},
+	shardInfosCount := len(shardInfos)
+
+	shardCountPerReader := shardInfosCount / tcnt
+
+	if shardInfosCount % tcnt != 0{
+		shardCountPerReader++
+	}
+
+	startIndex := 0
+	for i := 0; i < len(tpeReaders); i++ {
+		endIndex := tuplecodec.Min(startIndex + shardCountPerReader, shardInfosCount)
+		var infos []ShardInfo
+		for j := startIndex; j < endIndex; j++ {
+			info := shardInfos[j]
+			newInfo := ShardInfo{
+				startKey:    info.GetStartKey(),
+				endKey:      info.GetEndKey(),
+				nextScanKey: nil,
+				completeInShard:    false,
+				node:        ShardNode{
+					Addr:    info.GetShardNode().Addr,
+					ID:      info.GetShardNode().ID,
+					IDbytes: info.GetShardNode().IDbytes,
+				},
+			}
+			infos = append(infos,newInfo)
 		}
-		if tpeReaders[readIndex] == nil {
-			tpeReaders[readIndex] = &TpeReader{
+
+		if len(infos) != 0 {
+			tpeReaders[i] = &TpeReader{
 				dbDesc:         trel.dbDesc,
 				tableDesc:      trel.desc,
 				computeHandler: trel.computeHandler,
-				shardInfos: []ShardInfo{newInfo},
+				shardInfos: 	infos,
 				parallelReader: true,
-				isDumpReader: false,
+				isDumpReader: 	false,
+				id: i,
 			}
-		}else{
-			tpeReaders[readIndex].shardInfos = append(tpeReaders[readIndex].shardInfos,newInfo)
+		} else {
+			tpeReaders[i] = &TpeReader{isDumpReader: true,id: i}
 		}
+
+		logutil.Infof("reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
+			i,startIndex,shardCountPerReader,shardInfosCount,endIndex,tpeReaders[i].isDumpReader)
+
+		startIndex += shardCountPerReader
 	}
 
 	for i, reader := range tpeReaders {
@@ -229,6 +250,7 @@ func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
 }
 
 func (trel * TpeRelation) NewReader(cnt int) []engine.Reader {
+	logutil.Infof("newreader cnt %d",cnt)
 	if trel.computeHandler.ParallelReader() {
 		return trel.parallelReader(cnt)
 	}
