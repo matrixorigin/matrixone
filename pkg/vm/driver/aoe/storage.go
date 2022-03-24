@@ -624,36 +624,31 @@ func waitExpect(timeout int, expect func() bool) {
 }
 
 func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
-	if removeData {
-		t0 := time.Now()
-		dbName := aoedb.IdToNameFactory.Encode(shard.ID)
-		db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
-		if err == metadata.DatabaseNotFoundErr {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		s.DB.FlushDatabase(dbName)
-		logIndex := db.GetCheckpointId()
-		defer func() {
-			logutil.Infof(
-				"[S-%d|logIndex:%d,%d]RemoveShard handler cost %d ms",
-				shard.ID, logIndex+1, 0, time.Since(t0).Milliseconds())
-		}()
-
-		ctx := aoedb.DropDBCtx{
-			Id:     logIndex + 1,
-			Offset: 0,
-			Size:   1,
-			DB:     dbName,
-		}
-		_, err = s.DB.DropDatabase(&ctx)
-		if err != nil {
-			return err
-		}
+	t0 := time.Now()
+	dbName := aoedb.IdToNameFactory.Encode(shard.ID)
+	db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
+	if err == metadata.DatabaseNotFoundErr {
+		return nil
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	s.DB.FlushDatabase(dbName)
+	logIndex := db.GetCheckpointId()
+	defer func() {
+		logutil.Infof(
+			"[S-%d|logIndex:%d,%d]RemoveShard handler cost %d ms",
+			shard.ID, logIndex+1, 0, time.Since(t0).Milliseconds())
+	}()
+
+	ctx := aoedb.DropDBCtx{
+		Id:     logIndex + 1,
+		Offset: 0,
+		Size:   1,
+		DB:     dbName,
+	}
+	_, err = s.DB.DropDatabase(&ctx)
+	return err
 }
 
 func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *aoeMeta.Database, dbExisted bool, err error) {
@@ -822,7 +817,7 @@ func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx [
 
 	waitExpect(2500, func() bool {
 		for _, tb := range metaTbls {
-			if tb ==nil {
+			if tb == nil {
 				continue
 			}
 			// logutil.Infof("gc tbl:%v,%v", tb.Schema.Name, tb.IsHardDeleted())
