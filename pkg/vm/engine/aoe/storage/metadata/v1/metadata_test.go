@@ -798,7 +798,7 @@ func TestAppliedIndex(t *testing.T) {
 	tbl := MockTable(db, nil, nil, 0, index)
 	assert.NotNil(t, tbl)
 	indexWal.Checkpoint(index)
-	testutils.WaitExpect(10, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return indexWal.GetShardCheckpointId(0) == index.Id.Id
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -836,7 +836,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	t.Log(snip.String())
 	indexWal.Checkpoint(snip)
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return indexWal.GetShardCheckpointId(0) == index.Id.Id
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -856,7 +856,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(snip)
 
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return index.Id.Id == indexWal.GetShardCheckpointId(0)
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -874,7 +874,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(index)
 
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return index.Id.Id == indexWal.GetShardCheckpointId(0)
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
