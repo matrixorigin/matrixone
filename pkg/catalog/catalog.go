@@ -24,8 +24,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/matrixorigin/matrixcube/server"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
@@ -447,7 +445,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			return tid, err
 		}
 		wg.Add(1)
-		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i server.CustomRequest, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i driver.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -455,7 +453,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			}
 		}, nil)
 		wg.Add(1)
-		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i server.CustomRequest, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i driver.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -1191,7 +1189,7 @@ func (c *Catalog) refreshTableIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(String2Bytes(cTableIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
+	c.Driver.AsyncAllocID(String2Bytes(cTableIDPrefix), idPoolSize, func(i driver.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
@@ -1227,7 +1225,7 @@ func (c *Catalog) refreshDBIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(String2Bytes(cDBIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
+	c.Driver.AsyncAllocID(String2Bytes(cDBIDPrefix), idPoolSize, func(i driver.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
@@ -1263,7 +1261,7 @@ func (c *Catalog) refreshShardIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(String2Bytes(cCatalogShardIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
+	c.Driver.AsyncAllocID(String2Bytes(cCatalogShardIDPrefix), idPoolSize, func(i driver.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh shard id failed, checkpoint is %d, %d", c.sidStart, c.sidEnd)

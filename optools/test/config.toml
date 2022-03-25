@@ -35,9 +35,9 @@
 #        3.1. apply the above 8 steps of prophet genesis node setting
 #        3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
 #   
-#    4. set up pure storage node
+#    4. set up pure prophet node
 #        4.1. make sure the nodeID is unique
-#        4.2. change storage-node to false
+#        4.2. change prophet-node to false
 #        4.3. change the addr-raft ip to the machine ip
 #        4.4. change the addr-client ip to the machine ip
 #        4.5. In the external-etcd attribute, fill the three empty string with the three client-urls of the three prophet node
@@ -462,10 +462,10 @@ rpc-addr = "0.0.0.0:30000"
 rpc-advertise-addr = "HOST:30000"
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 rpc-timeout = "10s"
-# In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
-storage-node = true
+# In a distributed setting, if a node is not a prophet node(i.e., a pure prophet node), set the value prophet-node = false.
+prophet-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
-# If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's client-urls.
+# If a node is not a prophet node(i.e., the above setting prophet-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's client-urls.
 external-etcd = ["", "", ""]
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting

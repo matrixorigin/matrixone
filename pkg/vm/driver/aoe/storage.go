@@ -43,7 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/stats"
 )
@@ -366,7 +366,7 @@ type splitCtx struct {
 }
 
 //SplitCheck checks before the split
-func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
+func (s *Storage) SplitCheck(shard metapb.Shard, size uint64) (currentApproximateSize uint64,
 	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
 	prepareSplitCtx := aoedb.PrepareSplitCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shard.ID),
@@ -432,8 +432,8 @@ func (s *Storage) NewWriteBatch() storage.Resetable {
 	return nil
 }
 
-func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
-	var values []meta.ShardMetadata
+func (s *Storage) GetInitialStates() ([]metapb.ShardMetadata, error) {
+	var values []metapb.ShardMetadata
 	dbs := s.DB.DatabaseNames()
 	for _, db := range dbs {
 		tblNames := s.DB.TableNames(db)
@@ -470,11 +470,11 @@ func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 			shardId := batch.GetVector(bat, sShardId)
 			logIndex := batch.GetVector(bat, sLogIndex)
 			metadate := batch.GetVector(bat, sMetadata)
-			customReq := &meta.ShardLocalState{}
+			customReq := &metapb.ShardLocalState{}
 			offset := metadate.Col.(*types.Bytes).Offsets[vector.Length(metadate)-1]
 			lengths := metadate.Col.(*types.Bytes).Lengths[vector.Length(metadate)-1]
 			protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[offset:offset+lengths])
-			values = append(values, meta.ShardMetadata{
+			values = append(values, metapb.ShardMetadata{
 				ShardID:  shardId.Col.([]uint64)[len(shardId.Col.([]uint64))-1],
 				LogIndex: logIndex.Col.([]uint64)[len(shardId.Col.([]uint64))-1],
 				Metadata: *customReq,
@@ -554,7 +554,7 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 	return rsp, nil
 }
 
-func shardMetadataToBatch(metadata *meta.ShardMetadata) (*batch.Batch, error) {
+func shardMetadataToBatch(metadata *metapb.ShardMetadata) (*batch.Batch, error) {
 	attrs := []string{sShardId, sLogIndex, sMetadata}
 	bat := batch.New(true, attrs)
 	vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
@@ -600,7 +600,7 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 	return &metaTblInfo
 }
 
-func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
+func (s *Storage) SaveShardMetadata(metadatas []metapb.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		err := s.saveShardMetadata(&metadata, false)
 		if err != nil {
@@ -623,7 +623,7 @@ func waitExpect(timeout int, expect func() bool) {
 	}
 }
 
-func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
+func (s *Storage) RemoveShard(shard metapb.Shard, removeData bool) error {
 	t0 := time.Now()
 	dbName := aoedb.IdToNameFactory.Encode(shard.ID)
 	db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
@@ -702,7 +702,7 @@ func (s *Storage) createAOEMetaTableIfNotExist(sid, logIndex uint64, offset, siz
 	return tbl, false, err
 }
 
-func (s *Storage) appendShardMetadata(sid, logIndex uint64, offset, size int, metadata *meta.ShardMetadata) (err error) {
+func (s *Storage) appendShardMetadata(sid, logIndex uint64, offset, size int, metadata *metapb.ShardMetadata) (err error) {
 	dbName := aoedb.IdToNameFactory.Encode(sid)
 	tableName := encodeMetatableName(sid)
 	bat, _ := shardMetadataToBatch(metadata)
@@ -727,7 +727,7 @@ func (s *Storage) appendShardMetadata(sid, logIndex uint64, offset, size int, me
 	return nil
 }
 
-func (s *Storage) saveShardMetadata(metadata *meta.ShardMetadata, dropTable bool) error {
+func (s *Storage) saveShardMetadata(metadata *metapb.ShardMetadata, dropTable bool) error {
 
 	offset := 0
 	size := 3
@@ -765,7 +765,7 @@ func (s *Storage) saveShardMetadata(metadata *meta.ShardMetadata, dropTable bool
 	return nil
 }
 
-func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
+func (s *Storage) Split(old metapb.ShardMetadata, news []metapb.ShardMetadata, ctx []byte) error {
 	oldtableName := sPrefix + strconv.Itoa(int(old.ShardID))
 	newNames := make([]string, len(news))
 	for i, shard := range news {

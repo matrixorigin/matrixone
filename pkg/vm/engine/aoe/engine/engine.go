@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -38,7 +38,7 @@ func New(c *catalog.Catalog, cfg *EngineConfig) *aoeEngine {
 	//3. New Catalog
 	return &aoeEngine{
 		catalog: c,
-		config: cfg,
+		config:  cfg,
 	}
 }
 
@@ -49,11 +49,11 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var ni *engine.NodeInfo
-	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard meta.Shard, store meta.Store) bool {
+	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard metapb.Shard, store metapb.Store) bool {
 		if ni != nil {
 			return false
 		}
-		if strings.HasPrefix(store.ClientAddr, ip) {
+		if strings.HasPrefix(store.ClientAddress, ip) {
 			stats := e.catalog.Driver.RaftStore().GetRouter().GetStoreStats(store.ID)
 			ni = &engine.NodeInfo{
 				Mcpu: len(stats.GetCpuUsages()),
@@ -114,6 +114,6 @@ func (e *aoeEngine) Database(name string) (engine.Database, error) {
 		id:      db.Id,
 		typ:     db.Type,
 		catalog: e.catalog,
-		cfg: e.config,
+		cfg:     e.config,
 	}, nil
 }

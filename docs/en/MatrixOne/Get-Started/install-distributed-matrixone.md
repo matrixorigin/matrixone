@@ -50,9 +50,9 @@ join = ""
 client-urls = "your_ip_address:40000"
 peer-urls = "your_ip_address:50000"
 ```
-6. Set `storage-node` to TRUE, as the prophet store will hold the cluster metadata:
+6. Set `prophet-node` to TRUE, as the prophet store will hold the cluster metadata:
 ```
-storage-node = true
+prophet-node = true
 ```
 7. Set `max-replicas` number to the replica numbers that you want, it can only be `2*N+1` numbers:
 ```
@@ -71,12 +71,12 @@ join = "ip_address_of_store1"
 
 Set up the other two stores as pure storage store. Repeat the same procedure of step1 and step2 for each store. There are three more parameters to be set:
 * Set a unique number for nodeID. 
-* Set `storage-node` to TRUE.
+* Set `prophet-node` to TRUE.
 * Fill the three empty string with the three client-urls of the three prophet node for the `external-etcd` parameter.
 ```
 nodeID = 4/5;
-storage-node = false;
-storage-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","ip_address_of_prophet_store3"]
+prophet-node = false;
+prophet-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","ip_address_of_prophet_store3"]
 ```
 
 To learn more about our distribute system parameters, please refer to [distributed settings](../Reference/System-Parameters/distributed-settings.md). 
