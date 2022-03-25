@@ -89,16 +89,16 @@
     rpc-advertise-addr = "${HOST}:30000"
     ```
 
-* **storage-node**
+* **prophet-node**
     
-    `storage-node`表示节点类型，对于集群中的三个prophet节点来说，该参数为`true`。
+    `prophet-node`表示节点类型，对于集群中的三个prophet节点来说，该参数为`true`。
     ```
-    storage-node = true
+    prophet-node = true
     ```
-    对于存储节点（Pure Storage Node）来说，该参数为`false`。
+    对于存储节点（Pure Prophet Node）来说，该参数为`false`。
 
     ```
-    storage-node = false
+    prophet-node = false
     ```
 
 * **external-etcd**

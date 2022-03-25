@@ -53,9 +53,9 @@ join = ""
 client-urls = "your_ip_address:40000"
 peer-urls = "your_ip_address:50000"
 ```
-**6.** 将`storage-node`设置为`TRUE`，调度节点将存储集群的元数据信息：
+**6.** 将`prophet-node`设置为`TRUE`，调度节点将存储集群的元数据信息：
 ```
-storage-node = true
+prophet-node = true
 ```
 **7.** 设置`max-replicas`参数来指定每个`Shard`需要多少个副本，只能是`2*N+1`：
 ```
@@ -74,12 +74,12 @@ join = "ip_address_of_store1"
 设置其他两个节点为纯存储节点（pure storage store），并重复步骤1与步骤2。有三个额外的参数需要指定：
 
 * Set a unique number for nodeID. 按照nodeID设置相应的number
-* 将`storage-node`设置为TRUE`  
+* 将`prophet-node`设置为TRUE`  
 * 使用三个调度节点的三个`client-urls`参数来当作`external-etcd`参数：
 ```
 nodeID = 4/5;
-storage-node = false;
-storage-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","ip_address_of_prophet_store3"]
+prophet-node = false;
+prophet-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","ip_address_of_prophet_store3"]
 ```
 
 ### 相关信息

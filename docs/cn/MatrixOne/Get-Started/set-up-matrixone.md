@@ -19,9 +19,9 @@
         3.1. apply the above 8 steps of prophet genesis node setting
         3.2. change the prophet join address from empty string to the prophet genesis node's peer-urls
    
-    4. set up pure storage node
+    4. set up pure prophet node
         4.1. make sure the nodeID is unique
-        4.2. change storage-node to false
+        4.2. change prophet-node to false
         4.3. change the addr-raft ip to the machine ip
         4.4. change the addr-client ip to the machine ip
         4.5. In the external-etcd attribute, fill the three empty string with the three client-urls of the three prophet node
