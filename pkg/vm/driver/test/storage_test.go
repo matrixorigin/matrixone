@@ -258,7 +258,7 @@ func TestSnapshot(t *testing.T) {
 				cfg.Raft.RaftLog.CompactThreshold = 1
 				cfg.Replication.CompactLogCheckDuration.Duration = time.Second * 5
 			}),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
