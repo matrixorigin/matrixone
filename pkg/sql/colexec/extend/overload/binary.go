@@ -53,6 +53,12 @@ func BinaryEval(op int, ltyp, rtyp types.T, lc, rc bool, lv, rv *vector.Vector, 
 		ltyp, rtyp = leftCast.Oid, rightCast.Oid
 	}
 
+	if vector.Length(lv) == 1 {
+		lc = true
+	}
+	if vector.Length(rv) == 1 {
+		rc = true
+	}
 	if os, ok := BinOps[op]; ok {
 		for _, o := range os {
 			if binaryCheck(op, o.LeftType, o.RightType, ltyp, rtyp) {
