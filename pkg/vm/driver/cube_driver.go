@@ -126,7 +126,7 @@ type CubeDriver interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
+	TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
 	// TpeCheckKeysExist checks the shard has keys.
 	// return the index of the key that existed in the shard.
 	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error))
@@ -564,13 +564,14 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 	return pairs, err
 }
 
-func (h *driver) TpeScan(startKey, endKey []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error) {
 	req := pb.Request{
 		Type:  pb.TpeScan,
 		Group: pb.KVGroup,
 		TpeScan: pb.TpeScanRequest{
 			Start:   startKey,
 			End:     endKey,
+			Prefix: prefix,
 			Limit:   limit,
 			NeedKey: needKey,
 		},

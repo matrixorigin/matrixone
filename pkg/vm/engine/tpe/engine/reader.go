@@ -131,6 +131,18 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 		return nil, err
 	}
 
+	/*
+	//for test
+	if tr.readCtx.ParallelReader {
+		cnt := 0
+		if bat != nil {
+			cnt = vector.Length(bat.Vecs[0])
+		}
+
+		logutil.Infof("reader %d readCount %d parallelContext %v ", tr.id, cnt, tr.readCtx.ParallelReaderContext)
+	}
+	*/
+
 	//when bat is null,it means no data anymore.
 	if bat != nil {
 		//attach refCnts

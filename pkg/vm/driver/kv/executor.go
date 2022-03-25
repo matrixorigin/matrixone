@@ -168,6 +168,13 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		executor.WithScanCountLimit(userReq.GetLimit()),
 	}
 
+	if len(userReq.GetPrefix()) != 0 {
+		prefixFilter := func(key []byte) bool {
+			return bytes.HasPrefix(key,userReq.GetPrefix())
+		}
+		options = append(options,executor.WithScanFilterFunc(prefixFilter))
+	}
+
 	needKey := userReq.GetNeedKey()
 	var lastKey []byte = nil
 	var copyValue []byte = nil
