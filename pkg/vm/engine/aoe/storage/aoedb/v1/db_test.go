@@ -744,7 +744,7 @@ func TestDropTable2(t *testing.T) {
 }
 
 // Test bsi file flushed with segment file when metadata contains bsi.
-func TestBuildIndex(t *testing.T) {
+func DisabledTestBuildIndex(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -822,7 +822,7 @@ func TestBuildIndex(t *testing.T) {
 	inst.Close()
 }
 
-func TestRebuildIndices(t *testing.T) {
+func DisabledTestRebuildIndices(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
@@ -922,7 +922,7 @@ func TestRebuildIndices(t *testing.T) {
 	inst.Close()
 }
 
-func TestManyLoadAndDrop(t *testing.T) {
+func DisabledTestManyLoadAndDrop(t *testing.T) {
 	waitTime := time.Duration(100) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 2
