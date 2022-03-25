@@ -8,7 +8,7 @@
 
 正如我们对`Raft Group`与`Leader`的解释，`Leader` 代表了一个`Raft Group`，所有的读写操作只由它处理。因此，当我们执行对某些数据行的查询请求时： 
 * 首先，需要定位这些数据行所在的`Shard`。
-* 其次，找到这个`Shard`组中的`Leader Replica`。 
+* 其次，找到这个`Shard`所对应的`Raft Group`中的`Leader Replica`。 
 * 接着，将请求路由到`Leader Replica`所在的`Store`。
 * 最后，`Leader Replica`执行请求并作出响应。 
 
