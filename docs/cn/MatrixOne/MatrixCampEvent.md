@@ -5,14 +5,14 @@
 ## MatrixCamp2022活动
 
 MatrixCamp是一个由MatrixOne社区举办的开发者活动，欢迎对数据库技术感兴趣的开发者们来参与这次为期2周的开发挑战任务。
-MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级别和功能类型，开发者可以挑选自己感兴趣的进行挑战。参与挑战仅需要一些基础的Golang语言编程经验和最基础的数据库和数学知识就够了，另外我们也有详尽的开发指南的耐心的mentor给大家进行服务。
+MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级别和功能类型，开发者可以挑选自己感兴趣的进行挑战。参与挑战仅需要一些基础的Golang语言编程经验就够了，另外我们也有详尽的开发指南的耐心的mentor给大家进行服务。
 
 这次的任务大家将要挑战的是MatrixOne的系统函数和聚合函数，对于刚入门数据库的同学来讲是相对基础但是又不乏挑战的任务。
 
 
-- 系统函数（Built-in function）: 所谓的系统函数就是数据库自带的针对一些基础数据类型进行操作的函数，比如常见的round(), time(), substring()等等。第一周将有25个系统函数作为常规任务发布给大家进行挑战，包含数学类函数，时间日期类函数，字符串类函数，有9个任务非常容易，16个任务稍微有一些难度，只要你有一定的go语言基础，看得懂英文文档，就能快速上手解决哦。
+- 基础任务-系统函数（Built-in function）: 所谓的系统函数就是数据库自带的针对一些基础数据类型进行操作的函数，比如常见的round(), time(), substring()等等。第一周将有25个系统函数作为基础任务发布给大家进行挑战，包含数学类函数，时间日期类函数，字符串类函数，有9个任务非常容易，16个任务稍微有一些难度，只要你有一定的go语言基础，看得懂英文文档，就能快速上手解决哦。
 
--	聚合函数（Aggregate function）：所谓的聚合函数就是需要聚集一部分数据进行运算返回结果的函数，比如常见的sum(),count(),avg()等等。在MatrixOne中，实现聚合函数是要用到我们的大杀器因子化加速能力的，需要对因子化中的“环”数据结构理论有一定理解，实现会有一定复杂度，所以我们将5个聚合函数列为了最难任务。
+- 挑战任务-聚合函数（Aggregate function）：所谓的聚合函数就是需要聚集一部分数据进行运算返回结果的函数，比如常见的sum(),count(),avg()等等。在MatrixOne中，实现聚合函数是要用到我们的大杀器因子化加速能力的，需要对因子化中的“环”数据结构理论有一定理解，实现会有一定复杂度，所以我们将5个聚合函数列为了挑战任务。
 
 
 ## 参与流程
@@ -25,7 +25,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 
 来看下我们的任务列表吧：
 
-### 1. 数学类系统函数
+### 1. 基础任务-数学类系统函数
 
 
 - [ ] https://github.com/matrixorigin/matrixone/issues/1966 Mathematical Built-in function sin() **[容易]**
@@ -36,7 +36,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1971 Mathematical Built-in function acos() **[容易]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1973 Mathematical Built-in function atan() **[容易]**
 
-### 2. 日期时间类系统函数
+### 2. 基础任务-日期时间类系统函数
 
 
 
@@ -52,7 +52,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1983 Datetime Built-in function second() **[中等]**
 
 
-### 3. 字符串类系统函数
+### 3. 基础任务-字符串类系统函数
 
 - [ ] https://github.com/matrixorigin/matrixone/issues/1984 String function lpad() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1985 String function ltrim() **[中等]**
@@ -62,7 +62,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1990 String function space() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1991 String function replace() **[中等]**
 
-### 4. 聚合函数
+### 4. 挑战任务-聚合函数
 
 - [ ] https://github.com/matrixorigin/matrixone/issues/1992 Aggregate function any() **[有挑战]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1993 Aggregate function bit_and() **[有挑战]**
@@ -79,8 +79,8 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 ## 提交代码(Pull Request)要求
 1. 注意在实现功能完成之后一定要写单元测试哦，否则你的PR是不会被社区采纳的。
 2. 完成代码编写之后，按以下格式向MatrixOne提交PR: 
-* PR格式: [MatrixCamp2022] + function name + PR title
-* 标签 ：[MatrixCamp2022]
+* PR格式: [MatrixCamp] + function name + PR title
+* 标签 ：[MatrixCamp]
 * PR内容: 遵循[MatrixOne的PR模版] (https://github.com/matrixorigin/matrixone/blob/main/.github/PULL_REQUEST_TEMPLATE.md)  
 3. 提交PR完成后，在你的PR下面按以下格式评论：
 评论格式: "I have finished Issue #" + PR link id
