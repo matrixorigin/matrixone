@@ -571,7 +571,7 @@ func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey 
 		TpeScan: pb.TpeScanRequest{
 			Start:   startKey,
 			End:     endKey,
-			Prefix: prefix,
+			Prefix:  prefix,
 			Limit:   limit,
 			NeedKey: needKey,
 		},
@@ -852,7 +852,9 @@ func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (
 			TableInfo: info,
 		},
 	}
+	logutil.Infof("before ExecWithGroup")
 	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	logutil.Infof("after ExecWithGroup, err is %v",err)
 	if err != nil {
 		return err
 	}
@@ -1012,7 +1014,9 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err
 	cr.Group = uint64(group)
 	h.BuildRequest(&cr, cmd)
 	for i := 0; i < defaultRetryTimes; i++ {
+		logutil.Infof("before doExecWithRequest")
 		res, err = h.doExecWithRequest(cr)
+		logutil.Infof("after doExecWithRequest, err is %v", err)
 		if err == nil {
 			break
 		}

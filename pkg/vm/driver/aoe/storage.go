@@ -259,7 +259,7 @@ func (s *Storage) createTable(index uint64, offset int, batchsize int, shardId u
 	}
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("[S-%d|logIndex:%d,%d]createTable handler cost %d ms", shardId, index, offset, time.Since(t0).Milliseconds())
+		logutil.Infof("[S-%d|logIndex:%d,%d]createTable handler cost %d ms", shardId, index, offset, time.Since(t0).Milliseconds())
 	}()
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
