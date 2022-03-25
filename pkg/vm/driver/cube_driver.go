@@ -842,6 +842,9 @@ func (h *driver) GetSegmentedId(shardId uint64) (index uint64, err error) {
 }
 
 func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
+	defer func(){
+		logutil.Infof("error is %v",err)
+	}()
 	info, _ := helper.EncodeTable(*tbl)
 	req := pb.Request{
 		Shard: toShard,
