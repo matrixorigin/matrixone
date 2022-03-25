@@ -18,6 +18,8 @@ services:
     environment:
       NAME: node0
       HOST: 172.19.0.2
+    volumes:
+      - ../../log/node0:/log
     restart: on-failure
     tty: true
     networks:
@@ -41,6 +43,8 @@ services:
     environment:
       NAME: node1
       HOST: 172.19.0.3
+    volumes:
+      - ../../log/node1:/log
     restart: on-failure
     tty: true
     networks:
@@ -64,6 +68,8 @@ services:
     environment:
       NAME: node2
       HOST: 172.19.0.4
+    volumes:
+      - ../../log/node2:/log
     restart: on-failure
     tty: true    
     networks:

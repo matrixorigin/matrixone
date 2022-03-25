@@ -441,7 +441,7 @@ shard-state-check-duration = "1m"                   # the period of shard state 
 compact-log-check-duration = "60s"                  # the period of log compaction checking
 disable-shard-split = false                         # to disable shard split, set this value to true
 allow-remove-leader = false                         # to allow leader removal, set this value to true
-shard-capacity-bytes = "96MB"                       # shard capacity
+shard-capacity-bytes = "32MB"                       # shard capacity
 
 [raft]
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
@@ -449,7 +449,7 @@ heartbeat-ticks = 2                                 # how many ticks one raft he
 election-timeout-ticks = 10                         # how many ticks a election timeout has
 max-size-per-msg = 0                                # maximum number of raft log entry one raft message has
 max-inflight-msgs = 512                             # maximum number of raft message on the way of sending(inflight)
-max-entry-bytes = 314572800                         # maximum bytes for one cube write proposal
+max-entry-bytes = 16777216                          # maximum bytes for one cube write proposal
 
 # Prophet Configs
 [prophet]
@@ -522,6 +522,6 @@ block-writers = 8                                   # the maximum parallelism of
 segment-writers = 4                                 # the maximum parallelism of segment flushing
 
 [cache-cfg]
-index-cache-size = 134217728        # 128M          # index shared cache size
-insert-cache-size = 4294967296      # 4G            # mutable data shared cache size
-data-cache-size = 4294967296        # 4G            # immutable data shared cache size
+index-cache-size = 67108864        # 64M          # index shared cache size
+insert-cache-size = 104857600      # 100M            # mutable data shared cache size
+data-cache-size = 104857600        # 100M            # immutable data shared cache size
