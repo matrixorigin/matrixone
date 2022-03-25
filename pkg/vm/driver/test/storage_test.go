@@ -419,7 +419,7 @@ func TestSplit(t *testing.T) {
 				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
 				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
 			}),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
@@ -529,7 +529,7 @@ func TestAOEStorage(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			// raftstore.WithTestClusterNodeCount(1),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
 
 	c.Start()
@@ -760,7 +760,7 @@ func doRestartStorage(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterRecreate(false),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")

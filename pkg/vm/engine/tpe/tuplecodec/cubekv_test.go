@@ -16,17 +16,18 @@ package tuplecodec
 
 import (
 	"fmt"
+	stdLog "log"
+	"os"
+	"reflect"
+	"testing"
+	"time"
+
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/smartystreets/goconvey/convey"
 	"go.uber.org/zap/zapcore"
-	stdLog "log"
-	"os"
-	"reflect"
-	"testing"
-	"time"
 )
 
 const (
@@ -55,29 +56,29 @@ func NewTestCluster(t *testing.T) *testutil.TestAOECluster {
 			return c
 		},
 		/*
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
-			opts := &aoeStorage.Options{}
-			mdCfg := &aoeStorage.MetaCfg{
-				SegmentMaxBlocks: blockCntPerSegment,
-				BlockMaxRows:     blockRows,
-			}
-			opts.CacheCfg = &aoeStorage.CacheCfg{
-				IndexCapacity:  blockRows * blockCntPerSegment * 80,
-				InsertCapacity: blockRows * uint64(colCnt) * 2000,
-				DataCapacity:   blockRows * uint64(colCnt) * 2000,
-			}
-			opts.MetaCleanerCfg = &aoeStorage.MetaCleanerCfg{
-				Interval: time.Duration(1) * time.Second,
-			}
-			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
-		}),*/
+			testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+				opts := &aoeStorage.Options{}
+				mdCfg := &aoeStorage.MetaCfg{
+					SegmentMaxBlocks: blockCntPerSegment,
+					BlockMaxRows:     blockRows,
+				}
+				opts.CacheCfg = &aoeStorage.CacheCfg{
+					IndexCapacity:  blockRows * blockCntPerSegment * 80,
+					InsertCapacity: blockRows * uint64(colCnt) * 2000,
+					DataCapacity:   blockRows * uint64(colCnt) * 2000,
+				}
+				opts.MetaCleanerCfg = &aoeStorage.MetaCleanerCfg{
+					Interval: time.Duration(1) * time.Second,
+				}
+				opts.Meta.Conf = mdCfg
+				return aoe3.NewStorageWithOptions(path, opts)
+			}),*/
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.DebugLevel),
 			raftstore.WithTestClusterDataPath(dataDir)))
 
 	c.Start()
@@ -95,15 +96,15 @@ func TestCubeKV_NextID(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("next id",t, func() {
+	convey.Convey("next id", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		typ := DATABASE_ID
 		for i := 0; i < 100; i++ {
 			id, err := kv.NextID(typ)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(id,convey.ShouldEqual,kv.dbIDPool.idStart)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(id, convey.ShouldEqual, kv.dbIDPool.idStart)
 		}
 	})
 }
@@ -112,16 +113,16 @@ func TestCubeKV_Set(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("set/get/delete",t, func() {
+	convey.Convey("set/get/delete", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
 			value TupleValue
 		}
 
-		genkv := func(a,b string) args {
+		genkv := func(a, b string) args {
 			return args{
 				TupleKey(a),
 				TupleValue(b),
@@ -129,30 +130,30 @@ func TestCubeKV_Set(t *testing.T) {
 		}
 
 		kases := []args{
-			genkv("a","b"),
-			genkv("b","b"),
-			genkv("c","b"),
-			genkv("c","c"),
+			genkv("a", "b"),
+			genkv("b", "b"),
+			genkv("c", "b"),
+			genkv("c", "c"),
 		}
 
 		//set / get
 		for _, kase := range kases {
-			err := kv.Set(kase.key,kase.value)
-			convey.So(err,convey.ShouldBeNil)
+			err := kv.Set(kase.key, kase.value)
+			convey.So(err, convey.ShouldBeNil)
 
 			want, err := kv.Get(kase.key)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(want,convey.ShouldResemble,kase.value)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(want, convey.ShouldResemble, kase.value)
 		}
 
 		//delete / get
 		for _, kase := range kases {
 			err = kv.Delete(kase.key)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			want, err := kv.Get(kase.key)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(want,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(want, convey.ShouldBeNil)
 		}
 	})
 }
@@ -161,16 +162,16 @@ func TestCubeKV_SetBatch(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("setBatch/getBatch",t, func() {
+	convey.Convey("setBatch/getBatch", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
 			value TupleValue
 		}
 
-		genkv := func(a,b string) args {
+		genkv := func(a, b string) args {
 			return args{
 				TupleKey(a),
 				TupleValue(b),
@@ -178,36 +179,35 @@ func TestCubeKV_SetBatch(t *testing.T) {
 		}
 
 		kases := []args{
-			genkv("a","b"),
-			genkv("b","b"),
-			genkv("c","b"),
-			genkv("c","c"),
+			genkv("a", "b"),
+			genkv("b", "b"),
+			genkv("c", "b"),
+			genkv("c", "c"),
 		}
 
 		want := []TupleValue{
-			genkv("a","b").value,
-			genkv("b","b").value,
-			genkv("c","c").value,
-			genkv("c","c").value,
+			genkv("a", "b").value,
+			genkv("b", "b").value,
+			genkv("c", "c").value,
+			genkv("c", "c").value,
 		}
 
 		var keys []TupleKey
 		var values []TupleValue
 		for _, kase := range kases {
-			keys = append(keys,kase.key)
-			values = append(values,kase.value)
+			keys = append(keys, kase.key)
+			values = append(values, kase.value)
 		}
 
 		err = kv.SetBatch(keys, values)
-		convey.So(err,convey.ShouldBeNil)
-
+		convey.So(err, convey.ShouldBeNil)
 
 		gets, err2 := kv.GetBatch(keys)
-		convey.So(err2,convey.ShouldBeNil)
-		convey.So(len(gets),convey.ShouldEqual,len(want))
+		convey.So(err2, convey.ShouldBeNil)
+		convey.So(len(gets), convey.ShouldEqual, len(want))
 
 		for i, get := range gets {
-			convey.So(get,convey.ShouldResemble,want[i])
+			convey.So(get, convey.ShouldResemble, want[i])
 		}
 	})
 }
@@ -216,9 +216,9 @@ func TestCubeKV_DedupSet(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("dedup set",t, func() {
+	convey.Convey("dedup set", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
@@ -226,7 +226,7 @@ func TestCubeKV_DedupSet(t *testing.T) {
 			want  bool
 		}
 
-		genkv := func(a,b string,c bool) args {
+		genkv := func(a, b string, c bool) args {
 			return args{
 				TupleKey(a),
 				TupleValue(b),
@@ -235,22 +235,22 @@ func TestCubeKV_DedupSet(t *testing.T) {
 		}
 
 		kases := []args{
-			genkv("a","b",true),
-			genkv("b","b",true),
-			genkv("c","b",true),
-			genkv("c","c",false),
+			genkv("a", "b", true),
+			genkv("b", "b", true),
+			genkv("c", "b", true),
+			genkv("c", "c", false),
 		}
 
 		for _, kase := range kases {
-			err := kv.DedupSet(kase.key,kase.value)
+			err := kv.DedupSet(kase.key, kase.value)
 			if kase.want {
-				convey.So(err,convey.ShouldBeNil)
+				convey.So(err, convey.ShouldBeNil)
 
 				want, err := kv.Get(kase.key)
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(want,convey.ShouldResemble,kase.value)
-			}else{
-				convey.So(err,convey.ShouldBeError)
+				convey.So(err, convey.ShouldBeNil)
+				convey.So(want, convey.ShouldResemble, kase.value)
+			} else {
+				convey.So(err, convey.ShouldBeError)
 			}
 		}
 	})
@@ -260,9 +260,9 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("dedup set batch",t, func() {
+	convey.Convey("dedup set batch", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
@@ -270,7 +270,7 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 			want  bool
 		}
 
-		genkv := func(a,b string,w bool) args {
+		genkv := func(a, b string, w bool) args {
 			return args{
 				TupleKey(a),
 				TupleValue(b),
@@ -279,65 +279,65 @@ func TestCubeKV_DedupSetBatch(t *testing.T) {
 		}
 
 		kases := []args{
-			genkv("a","b",true),
-			genkv("b","b",true),
-			genkv("c","b",true),
-			genkv("c","c",false),
+			genkv("a", "b", true),
+			genkv("b", "b", true),
+			genkv("c", "b", true),
+			genkv("c", "c", false),
 		}
 
 		want := []TupleValue{
-			genkv("a","b",true).value,
-			genkv("b","b",true).value,
-			genkv("c","b",true).value,
-			genkv("c","b",true).value,
+			genkv("a", "b", true).value,
+			genkv("b", "b", true).value,
+			genkv("c", "b", true).value,
+			genkv("c", "b", true).value,
 		}
 
-		setFunc := func(kases []args, want []TupleValue, exist bool,hasKeys bool) {
+		setFunc := func(kases []args, want []TupleValue, exist bool, hasKeys bool) {
 			var keys []TupleKey
 			var values []TupleValue
 			for _, kase := range kases {
-				keys = append(keys,kase.key)
-				values = append(values,kase.value)
+				keys = append(keys, kase.key)
+				values = append(values, kase.value)
 			}
 
 			err = kv.DedupSetBatch(keys, values)
 			if exist {
-				convey.So(err,convey.ShouldBeError)
-			}else {
-				convey.So(err,convey.ShouldBeNil)
+				convey.So(err, convey.ShouldBeError)
+			} else {
+				convey.So(err, convey.ShouldBeNil)
 			}
 
 			gets, err2 := kv.GetBatch(keys)
-			convey.So(err2,convey.ShouldBeNil)
-			convey.So(len(gets),convey.ShouldEqual,len(want))
+			convey.So(err2, convey.ShouldBeNil)
+			convey.So(len(gets), convey.ShouldEqual, len(want))
 
 			for i, get := range gets {
 				if hasKeys {
-					convey.So(get,convey.ShouldResemble,want[i])
-				}else{
-					convey.So(get,convey.ShouldBeNil)
+					convey.So(get, convey.ShouldResemble, want[i])
+				} else {
+					convey.So(get, convey.ShouldBeNil)
 				}
 			}
 		}
 
-		setFunc(kases,want,true,false)
+		setFunc(kases, want, true, false)
 
 		//
 		kases2 := []args{
-			genkv("a","b",true),
-			genkv("b","b",true),
-			genkv("c","b",true),
+			genkv("a", "b", true),
+			genkv("b", "b", true),
+			genkv("c", "b", true),
 		}
 
 		want2 := []TupleValue{
-			genkv("a","b",true).value,
-			genkv("b","b",true).value,
-			genkv("c","b",true).value,
+			genkv("a", "b", true).value,
+			genkv("b", "b", true).value,
+			genkv("c", "b", true).value,
 		}
 
-		setFunc(kases2,want2,false,true)
+		setFunc(kases2, want2, false, true)
 
-		setFunc(kases2,want2,true,true)
+		setFunc(kases2, want2, true, true)
 	})
 }
 
@@ -345,16 +345,16 @@ func TestCubeKV_GetRange(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get range",t, func() {
+	convey.Convey("get range", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
 			value TupleValue
 		}
 
-		genkv := func(a,b string) args {
+		genkv := func(a, b string) args {
 			return args{
 				TupleKey(a),
 				TupleValue(b),
@@ -362,20 +362,20 @@ func TestCubeKV_GetRange(t *testing.T) {
 		}
 
 		kases := []args{
-			genkv("a","a"),
-			genkv("b","b"),
-			genkv("c","c"),
+			genkv("a", "a"),
+			genkv("b", "b"),
+			genkv("c", "c"),
 		}
 
 		var keys []TupleKey
 		var values []TupleValue
 		for _, kase := range kases {
-			keys = append(keys,kase.key)
-			values = append(values,kase.value)
+			keys = append(keys, kase.key)
+			values = append(values, kase.value)
 		}
 
 		err = kv.SetBatch(keys, values)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args2 struct {
 			start TupleKey
@@ -383,7 +383,7 @@ func TestCubeKV_GetRange(t *testing.T) {
 			want  []TupleValue
 		}
 
-		gen := func(a,b string,w ...TupleValue) args2 {
+		gen := func(a, b string, w ...TupleValue) args2 {
 			return args2{
 				start: TupleKey(a),
 				end:   TupleKey(b),
@@ -392,30 +392,30 @@ func TestCubeKV_GetRange(t *testing.T) {
 		}
 
 		kases2 := []args2{
-			gen("a","c",
+			gen("a", "c",
 				TupleValue("a"),
 				TupleValue("b"),
 				TupleValue("c")),
-			gen("a","b",
+			gen("a", "b",
 				TupleValue("a"),
 				TupleValue("b")),
-			gen("a","a"),
-			gen("b","c",
+			gen("a", "a"),
+			gen("b", "c",
 				TupleValue("b"),
 				TupleValue("c")),
-			gen("b","d",
+			gen("b", "d",
 				TupleValue("b"),
-				TupleValue("c")),//skip "database_id"
+				TupleValue("c")), //skip "database_id"
 		}
 
 		for _, k2 := range kases2 {
 			values, err := kv.GetRange(k2.start, k2.end)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 			if len(k2.want) == 0 {
-				convey.So(values,convey.ShouldBeEmpty)
-			}else{
+				convey.So(values, convey.ShouldBeEmpty)
+			} else {
 				for i := 0; i < len(values); i++ {
-					convey.So(reflect.DeepEqual(values[i],k2.want[i]),
+					convey.So(reflect.DeepEqual(values[i], k2.want[i]),
 						convey.ShouldBeTrue)
 				}
 			}
@@ -427,12 +427,12 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get range with limit",t, func() {
+	convey.Convey("get range with limit", t, func() {
 		prefix := "xyz"
 		cnt := 10
 
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
@@ -440,27 +440,27 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 		}
 
 		var kases []args
-		for i := 0 ; i < cnt; i++ {
-			key := TupleKey(prefix + fmt.Sprintf("%d",i))
-			value := TupleValue(fmt.Sprintf("v%d",i))
+		for i := 0; i < cnt; i++ {
+			key := TupleKey(prefix + fmt.Sprintf("%d", i))
+			value := TupleValue(fmt.Sprintf("v%d", i))
 
-			kases = append(kases,args{
+			kases = append(kases, args{
 				key:   key,
 				value: value,
 			})
 			err := kv.Set(key, value)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		_, values1, _, _, err := kv.GetRangeWithLimit(TupleKey(prefix), nil, uint64(cnt))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//for i, key := range keys1 {
 		//	fmt.Printf("++++> %s \n[%v] \n%s \n",string(key),key,string(values1[i]))
 		//}
 
 		for i, kase := range kases {
-			convey.So(values1[i],convey.ShouldResemble,kase.value)
+			convey.So(values1[i], convey.ShouldResemble, kase.value)
 		}
 
 		step := 2
@@ -468,10 +468,10 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 		readCnt := 0
 		for i := 0; i < cnt; i += step {
 			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, nil, uint64(step))
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
-				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
+				convey.So(values[j-i], convey.ShouldResemble, kases[j].value)
 			}
 
 			readCnt += len(values)
@@ -480,7 +480,7 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 				break
 			}
 		}
-		convey.So(readCnt,convey.ShouldEqual,cnt)
+		convey.So(readCnt, convey.ShouldEqual, cnt)
 	})
 }
 
@@ -488,12 +488,12 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get with prefix",t, func() {
+	convey.Convey("get with prefix", t, func() {
 		prefix := "xyz"
 		cnt := 10
 
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
@@ -501,25 +501,25 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		}
 
 		var kases []args
-		for i := 0 ; i < cnt; i++ {
-			key := TupleKey(prefix + fmt.Sprintf("%d",i))
-			value := TupleValue(fmt.Sprintf("v%d",i))
+		for i := 0; i < cnt; i++ {
+			key := TupleKey(prefix + fmt.Sprintf("%d", i))
+			value := TupleValue(fmt.Sprintf("v%d", i))
 
-			kases = append(kases,args{
+			kases = append(kases, args{
 				key:   key,
 				value: value,
 			})
 			err := kv.Set(key, value)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		prefixEnd := SuccessorOfPrefix([]byte(prefix))
 
 		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i, kase := range kases {
-			convey.So(values[i],convey.ShouldResemble,kase.value)
+			convey.So(values[i], convey.ShouldResemble, kase.value)
 		}
 
 		step := 2
@@ -528,10 +528,10 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 		readCnt := 0
 		for i := 0; i < cnt; i += step {
 			_, values, complete, nextScanKey, err := kv.GetWithPrefix(last, prefixLen, prefixEnd, uint64(step))
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
-				convey.So(values[j - i],convey.ShouldResemble,kases[j].value)
+				convey.So(values[j-i], convey.ShouldResemble, kases[j].value)
 			}
 
 			readCnt += len(values)
@@ -540,7 +540,7 @@ func TestCubeKV_GetWithPrefix(t *testing.T) {
 				break
 			}
 		}
-		convey.So(readCnt,convey.ShouldEqual,cnt)
+		convey.So(readCnt, convey.ShouldEqual, cnt)
 	})
 }
 
@@ -548,34 +548,34 @@ func TestCubeKV_GetShardsWithRange(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get shards with range",t, func() {
+	convey.Convey("get shards with range", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 		cnt := 10
 		for i := 0; i < cnt; i++ {
-			key := fmt.Sprintf("k%d",i)
-			value := fmt.Sprintf("v%d",i)
+			key := fmt.Sprintf("k%d", i)
+			value := fmt.Sprintf("v%d", i)
 			err = kv.Set(TupleKey(key), TupleValue(value))
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		x, err := kv.GetShardsWithRange(nil, nil)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-		shards,ok := x.(*Shards)
-		convey.So(ok,convey.ShouldBeTrue)
+		shards, ok := x.(*Shards)
+		convey.So(ok, convey.ShouldBeTrue)
 
 		for _, node := range shards.nodes {
 			fmt.Printf("%d %v | %s\n",
 				node.ID,
-				node.IDbytes,node.Addr)
+				node.IDbytes, node.Addr)
 		}
 
 		for _, info := range shards.shardInfos {
 			fmt.Printf("%v %v %d %v | %s \n",
-				info.startKey,info.endKey,
+				info.startKey, info.endKey,
 				info.node.ID,
-				info.node.IDbytes,info.node.Addr)
+				info.node.IDbytes, info.node.Addr)
 		}
 	})
 }
@@ -584,35 +584,35 @@ func TestCubeKV_GetShardsWithPrefix(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get shards with prefix",t, func() {
+	convey.Convey("get shards with prefix", t, func() {
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		cnt := 10
 		for i := 0; i < cnt; i++ {
-			key := fmt.Sprintf("k%d",i)
-			value := fmt.Sprintf("v%d",i)
+			key := fmt.Sprintf("k%d", i)
+			value := fmt.Sprintf("v%d", i)
 			err = kv.Set(TupleKey(key), TupleValue(value))
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		x, err := kv.GetShardsWithPrefix(TupleKey("k"))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-		shards,ok := x.(*Shards)
-		convey.So(ok,convey.ShouldBeTrue)
+		shards, ok := x.(*Shards)
+		convey.So(ok, convey.ShouldBeTrue)
 
 		for _, node := range shards.nodes {
 			fmt.Printf("%d %v | %s\n",
 				node.ID,
-				node.IDbytes,node.Addr)
+				node.IDbytes, node.Addr)
 		}
 
 		for _, info := range shards.shardInfos {
 			fmt.Printf("%v %v %d %v | %s \n",
-				info.startKey,info.endKey,
+				info.startKey, info.endKey,
 				info.node.ID,
-				info.node.IDbytes,info.node.Addr)
+				info.node.IDbytes, info.node.Addr)
 		}
 	})
 }
@@ -621,12 +621,12 @@ func TestCubeKV_DeleteWithPrefix(t *testing.T) {
 	tc := NewTestCluster(t)
 	defer CloseTestCluster(tc)
 
-	convey.Convey("get with prefix",t, func() {
+	convey.Convey("get with prefix", t, func() {
 		prefix := "xyz"
 		cnt := 10
 
 		kv, err := NewCubeKV(tc.CubeDrivers[0], 10000, 30, 3)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		type args struct {
 			key   TupleKey
@@ -634,33 +634,33 @@ func TestCubeKV_DeleteWithPrefix(t *testing.T) {
 		}
 
 		var kases []args
-		for i := 0 ; i < cnt; i++ {
-			key := TupleKey(prefix + fmt.Sprintf("%d",i))
-			value := TupleValue(fmt.Sprintf("v%d",i))
+		for i := 0; i < cnt; i++ {
+			key := TupleKey(prefix + fmt.Sprintf("%d", i))
+			value := TupleValue(fmt.Sprintf("v%d", i))
 
-			kases = append(kases,args{
+			kases = append(kases, args{
 				key:   key,
 				value: value,
 			})
 			err := kv.Set(key, value)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		prefixEnd := SuccessorOfPrefix([]byte(prefix))
 
 		_, values, _, _, err := kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i, kase := range kases {
-			convey.So(values[i],convey.ShouldResemble,kase.value)
+			convey.So(values[i], convey.ShouldResemble, kase.value)
 		}
 
 		err = kv.DeleteWithPrefix([]byte(prefix))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		_, values, _, _, err = kv.GetWithPrefix(TupleKey(prefix), len(prefix), prefixEnd, uint64(cnt))
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-		convey.So(len(values),convey.ShouldEqual,0)
+		convey.So(len(values), convey.ShouldEqual, 0)
 	})
 }
