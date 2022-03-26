@@ -30,4 +30,5 @@ const (
 	Exp
 	Power
 	Pi
+	Cos
 )
