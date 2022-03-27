@@ -64,7 +64,7 @@ func Rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 		}
 
 		cursor := offset + xs.Lengths[i] - 1
-		// ignore the leading spaces
+		// ignore the tailing spaces
 		for ; cursor >= offset && xs.Data[cursor] == ' '; cursor-- {
 			if cursor == 0 {
 				break
