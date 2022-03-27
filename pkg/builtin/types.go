@@ -30,4 +30,6 @@ const (
 	Exp
 	Power
 	Pi
+	Ltrim
+	Rtrim
 )
