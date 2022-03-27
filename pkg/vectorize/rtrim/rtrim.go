@@ -53,7 +53,7 @@ func CountSpacesFromRight(xs *types.Bytes) int32 {
 }
 
 func Rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
-	var resultCursor uint32
+	var resultCursor uint32 = 0
 
 	for i, offset := range xs.Offsets {
 		if xs.Lengths[i] == 0 {
@@ -63,15 +63,23 @@ func Rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 			continue
 		}
 
-		cursor := offset
+		cursor := offset + xs.Lengths[i] - 1
 		// ignore the leading spaces
-		for ; cursor < offset+xs.Lengths[i] && xs.Data[cursor] != ' '; cursor++ {
+		for ; cursor >= offset && xs.Data[cursor] == ' '; cursor-- {
+			if cursor == 0 {
+				break
+			}
+
 			continue
 		}
 
 		// copy the non-space characters
-		length := cursor - offset
-		copy(rs.Data[resultCursor:resultCursor+length], xs.Data[offset:cursor])
+		length := cursor - offset + 1
+		if resultCursor+length > uint32(len(rs.Data)) {
+			copy(rs.Data[resultCursor:], xs.Data[offset:offset+length])
+		} else {
+			copy(rs.Data[resultCursor:resultCursor+length], xs.Data[offset:offset+length])
+		}
 		rs.Lengths[i] = length
 		rs.Offsets[i] = resultCursor
 		resultCursor += length

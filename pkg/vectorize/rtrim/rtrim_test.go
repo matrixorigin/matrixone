@@ -37,7 +37,6 @@ func TestCountSpacesFromRight(t *testing.T) {
 	}
 
 	for input, expected := range cases {
-		t.Logf("input: %s, expected: %d", input, expected)
 		actual := CountSpacesFromRight(&types.Bytes{Data: []byte(input), Lengths: []uint32{uint32(len(input))}, Offsets: []uint32{0}})
 		require.Equal(t, expected, actual, input)
 	}
@@ -92,7 +91,6 @@ func TestRtrim(t *testing.T) {
 	multiStringCase.Data = buf.Bytes()
 
 	spacesCount := CountSpacesFromRight(&multiStringCase)
-	t.Logf("multiStringCase length %d, spacesCount: %d", len(multiStringCase.Data), spacesCount)
 	rs := types.Bytes{
 		Data:    make([]byte, len(multiStringCase.Data)-int(spacesCount)),
 		Lengths: make([]uint32, len(multiStringCase.Lengths)),
