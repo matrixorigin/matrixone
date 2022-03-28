@@ -99,7 +99,7 @@ type outputQueue struct {
 	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
-	ep *tree.ExportParam
+	ep     *tree.ExportParam
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -111,7 +111,7 @@ func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *
 		mrs:    mrs,
 		rowIdx: 0,
 		length: length,
-		ep: ep,
+		ep:     ep,
 	}
 }
 
@@ -228,7 +228,17 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	procBatchBegin := time.Now()
 
-	n := vector.Length(bat.Vecs[0])
+	n := 0                              // max vector length
+	vecIsConstant := make(map[int]bool) // vecIsConstant records whether a vector is a constant
+	for i, vec := range bat.Vecs {
+		vecLen := vector.Length(vec)
+		if vecLen > n {
+			n = vecLen
+		}
+		if vecLen == 1 {
+			vecIsConstant[i] = true
+		}
+	}
 
 	if enableProfile {
 		pprof.StartCPUProfile(cpuf)
@@ -236,10 +246,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-				case <- ses.closeRef.stopExportData: {
+			case <-ses.closeRef.stopExportData:
+				{
 					return nil
 				}
-				default:{}
+			default:
+				{
+				}
 			}
 		}
 
@@ -259,171 +272,241 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		for i, vec := range bat.Vecs { //col index
 			switch vec.Typ.Oid { //get col
 			case types.T_int8:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]int8)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int8)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int8)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_uint8:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]uint8)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint8)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint8)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_int16:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]int16)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int16)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int16)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_uint16:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]uint16)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint16)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint16)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_int32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]int32)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int32)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int32)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_uint32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]uint32)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint32)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint32)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_int64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]int64)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int64)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int64)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_uint64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]uint64)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint64)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint64)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_float32:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]float32)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]float32)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]float32)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_float64:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]float64)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]float64)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]float64)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_char:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(int64(rowIndex))
+					row[i] = vs.Get(0)
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						row[i] = vs.Get(int64(rowIndex))
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.(*types.Bytes)
+							row[i] = vs.Get(int64(rowIndex))
+						}
 					}
 				}
 			case types.T_varchar:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(int64(rowIndex))
+					row[i] = vs.Get(0)
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						row[i] = vs.Get(int64(rowIndex))
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.(*types.Bytes)
+							row[i] = vs.Get(int64(rowIndex))
+						}
 					}
 				}
 			case types.T_date:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]types.Date)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]types.Date)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]types.Date)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			case types.T_datetime:
-				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+				if vecIsConstant[i] {
 					vs := vec.Col.([]types.Datetime)
-					row[i] = vs[rowIndex]
+					row[i] = vs[0]
 				} else {
-					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-						row[i] = nil
-					} else {
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]types.Datetime)
+							row[i] = vs[rowIndex]
+						}
 					}
 				}
 			default:
@@ -1160,7 +1243,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 			}
-			
+
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
