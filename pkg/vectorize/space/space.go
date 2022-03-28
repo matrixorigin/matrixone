@@ -84,7 +84,7 @@ func CountSpacesForFloat(originalVecCol interface{}) int64 {
 	return result
 }
 
-func parseStringAsUint64(s string) int64 {
+func parseStringAsInt64(s string) int64 {
 	var result int64
 
 	if len(s) == 0 {
@@ -107,11 +107,11 @@ func parseStringAsUint64(s string) int64 {
 	return result
 }
 
-func CountSpacesForString(originalVecCol *types.Bytes) int64 {
+func CountSpacesForCharVarChar(originalVecCol *types.Bytes) int64 {
 	var result int64
 
 	for i, offset := range originalVecCol.Offsets {
-		result += parseStringAsUint64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
+		result += parseStringAsInt64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
 	}
 
 	return result
@@ -316,7 +316,7 @@ func FillSpacesCharVarChar(originalVecCol, result *types.Bytes) *types.Bytes {
 
 	var bytesWriten uint32 = 0
 	for i, offset := range originalVecCol.Offsets {
-		length := parseStringAsUint64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
+		length := parseStringAsInt64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
 
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = uint32(bytesWriten)

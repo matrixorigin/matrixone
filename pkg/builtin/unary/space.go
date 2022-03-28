@@ -308,7 +308,7 @@ func init() {
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.(*types.Bytes)
 
-				bytesNeed := space.CountSpacesForString(origVecCol)
+				bytesNeed := space.CountSpacesForCharVarChar(origVecCol)
 
 				resultVector, err := process.Get(proc, bytesNeed, types.Type{Oid: types.T_varchar, Size: 24})
 				if err != nil {
@@ -332,7 +332,7 @@ func init() {
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.(*types.Bytes)
 
-				bytesNeed := space.CountSpacesForString(origVecCol)
+				bytesNeed := space.CountSpacesForCharVarChar(origVecCol)
 
 				resultVector, err := process.Get(proc, bytesNeed, types.Type{Oid: types.T_varchar, Size: 24})
 				if err != nil {
