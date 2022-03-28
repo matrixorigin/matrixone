@@ -1,6 +1,6 @@
-**通用问答**
 
-## **产品问题**
+
+## **产品常见问题**
 
 * <font size=4>**MatrixOne是什么?**</font>
   
@@ -40,16 +40,22 @@
   目前，MatrixOne支持Linux与MacOS系统。
 <br>
 
+* <font size=4>**可以参与贡献MatrixOne项目吗?**</font>
+  
+  MatrixOne是一个完全在Github上进行的开源项目，欢迎所有开发者的贡献。可以参考我们的[贡献指南](../Contribution-Guide/make-your-first-contribution.md)
+<br>
 
-## **Deployment FAQs**
+
+## **部署常见问题**
 
 * <font size=4>**MatrixOne对部署硬件的配置要求如何？**</font>
 
   单机推荐配置：4核 X86架构的CPU，32GB内存，CentOS 7.0及以上操作系统
+  
   分布式推荐配置: 3台 * 16核 X86架构的CPU，63GB内存， CentOS 7.0及以上操作系统
 <br>
 
-## **SQL FAQs**
+## **SQL常见问题**
 
 * <font size=4>**MatrixOne中的函数和关键字是否区分大小写？**</font>
 
