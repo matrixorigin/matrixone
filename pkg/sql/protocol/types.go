@@ -69,6 +69,18 @@ const (
 	SumFloatRing
 	// Variance
 	VarianceRing
+	// Any
+	AnyInt8Ring
+	AnyInt32Ring
+	AnyInt16Ring
+	AnyInt64Ring
+	AnyUInt8Ring
+	AnyUInt16Ring
+	AnyUInt32Ring
+	AnyUInt64Ring
+	AnyFloat32Ring
+	AnyFloat64Ring
+	AnyStrRing
 )
 
 // colexec

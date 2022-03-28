@@ -17,6 +17,7 @@ package transformer
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/any"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
@@ -67,6 +68,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_uint64
 	case Variance:
 		return types.T_float64
+	case Any:
+		return typ
 	}
 	return 0
 }
@@ -89,6 +92,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return approxcd.NewApproxCountDistinct(typ), nil
 	case Variance:
 		return variance.NewVarRing(typ), nil
+	case Any:
+		return NewAny(typ)
 	}
 	return nil, nil
 }
@@ -177,4 +182,36 @@ func NewMin(typ types.Type) (ring.Ring, error) {
 		return min.NewDatetime(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support Min", typ))
+}
+
+func NewAny(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_int8:
+		return any.NewInt8(typ), nil
+	case types.T_int16:
+		return any.NewInt16(typ), nil
+	case types.T_int32:
+		return any.NewInt32(typ), nil
+	case types.T_int64:
+		return any.NewInt64(typ), nil
+	case types.T_uint8:
+		return any.NewUInt8(typ), nil
+	case types.T_uint16:
+		return any.NewUInt16(typ), nil
+	case types.T_uint32:
+		return any.NewUInt32(typ), nil
+	case types.T_uint64:
+		return any.NewUInt64(typ), nil
+	case types.T_float32:
+		return any.NewFloat32(typ), nil
+	case types.T_float64:
+		return any.NewFloat64(typ), nil
+	case types.T_char, types.T_varchar:
+		return any.NewStr(typ), nil
+	case types.T_date:
+		return any.NewDate(typ), nil
+	case types.T_datetime:
+		return any.NewDatetime(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support Any", typ))
 }
