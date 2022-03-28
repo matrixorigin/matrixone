@@ -11,24 +11,36 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-package builtin
+package dayofyear
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
-const (
-	Length = iota + overload.NE + 1
-	Year
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	DayOfYear
-)
+func TestDayOfYear(t *testing.T) {
+	testCases := []struct {
+		name string
+		args []types.Date
+		want []uint16
+	}{
+		{
+			args: []types.Date{types.FromCalendar(2021, 8, 13)},
+			want: []uint16{225},
+		},
+		{
+			args: []types.Date{types.FromCalendar(2022, 3, 28)},
+			want: []uint16{87},
+		},
+	}
+
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := make([]uint16, len(c.args))
+			require.Equal(t, c.want, GetDayOfYear(c.args, got))
+		})
+	}
+
+}
