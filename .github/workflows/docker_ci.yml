@@ -1,6 +1,9 @@
 name:  Build and Push images
 
 on:
+  pull_request:
+    branches:
+      - optimize-dockerfile
   schedule:
     - cron: '0 22 * * *'
   release:
