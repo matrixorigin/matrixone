@@ -61,6 +61,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1986 String function rpad() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1987 String function rtrim() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1988 String function repeat() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/1989 String function reverse() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1990 String function space() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1991 String function replace() **[中等]**
 
