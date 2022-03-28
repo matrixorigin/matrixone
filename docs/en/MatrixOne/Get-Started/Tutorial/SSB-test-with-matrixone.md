@@ -23,7 +23,7 @@ With -s 1 dbgen generates 6 million rows (670MB), while while -s 10 it generates
 
 ```
 $ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l`
+$ ./dbgen -s 1 -T l
 $ ./dbgen -s 1 -T p
 $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
@@ -40,7 +40,7 @@ drop table if exists lineorder;
 drop table if exists part;
 drop table if exists supplier;
 drop table if exists customer;
-drop table if exists dim_date;
+drop table if exists dates;
 drop table if exists lineorder_flat;
 
 create table lineorder (
