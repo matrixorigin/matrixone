@@ -273,8 +273,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			switch vec.Typ.Oid { //get col
 			case types.T_int8:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]int8)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int8)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int8)
@@ -290,8 +294,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_uint8:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]uint8)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint8)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint8)
@@ -307,8 +315,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_int16:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]int16)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int16)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int16)
@@ -324,8 +336,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_uint16:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]uint16)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint16)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint16)
@@ -341,8 +357,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_int32:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]int32)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int32)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int32)
@@ -358,8 +378,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_uint32:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]uint32)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint32)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint32)
@@ -375,8 +399,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_int64:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]int64)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]int64)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]int64)
@@ -392,8 +420,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_uint64:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]uint64)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]uint64)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]uint64)
@@ -409,8 +441,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_float32:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]float32)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]float32)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]float32)
@@ -426,8 +462,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_float64:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]float64)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]float64)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]float64)
@@ -443,42 +483,54 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_char:
 				if vecIsConstant[i] {
-					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(0)
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(0)
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(int64(rowIndex))
+						row[i] = vs.Get(rowIndex)
 					} else {
 						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 							row[i] = nil
 						} else {
 							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(int64(rowIndex))
+							row[i] = vs.Get(rowIndex)
 						}
 					}
 				}
 			case types.T_varchar:
 				if vecIsConstant[i] {
-					vs := vec.Col.(*types.Bytes)
-					row[i] = vs.Get(0)
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.(*types.Bytes)
+						row[i] = vs.Get(0)
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
-						row[i] = vs.Get(int64(rowIndex))
+						row[i] = vs.Get(rowIndex)
 					} else {
 						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 							row[i] = nil
 						} else {
 							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(int64(rowIndex))
+							row[i] = vs.Get(rowIndex)
 						}
 					}
 				}
 			case types.T_date:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]types.Date)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Date)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]types.Date)
@@ -494,8 +546,12 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			case types.T_datetime:
 				if vecIsConstant[i] {
-					vs := vec.Col.([]types.Datetime)
-					row[i] = vs[0]
+					if nulls.Contains(vec.Nsp, uint64(0)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Datetime)
+						row[i] = vs[0]
+					}
 				} else {
 					if !nulls.Any(vec.Nsp) { //all data in this column are not null
 						vs := vec.Col.([]types.Datetime)
