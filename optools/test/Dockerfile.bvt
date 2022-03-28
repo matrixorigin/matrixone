@@ -17,7 +17,7 @@ RUN git clone https://github.com/matrixorigin/mysql-tester.git /go/src/github.co
 
 WORKDIR /go/src/github.com/matrixorigin/mysql-tester
 
-RUN go env -w GOPROXY=https://goproxy.cn,direct && go env -w GO111MODULE=on
+RUN go mod download
 
 RUN make build
 
