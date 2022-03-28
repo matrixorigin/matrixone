@@ -56,3 +56,9 @@ func TestParseStringAsInt64(t *testing.T) {
 		require.Equal(t, expected, parseStringAsInt64(input), input)
 	}
 }
+
+func TestCountSpacesForCharVarChar(t *testing.T) {
+	ss := []string{"1", "0", "1.1", "1.5", "-2", " 1", " 1.1", " \t1"}
+
+	require.Equal(t, 6, CountSpacesForCharVarChar(encodeStringSliceToTypeBytes(ss)))
+}

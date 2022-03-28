@@ -117,217 +117,195 @@ func CountSpacesForCharVarChar(originalVecCol *types.Bytes) int64 {
 	return result
 }
 
-func FillSpacesUint8(originalVecCol []uint8, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
+func encodeStringSliceToTypeBytes(ss []string) *types.Bytes {
+	var (
+		offset uint32 = 0
+		result        = &types.Bytes{
+			Lengths: make([]uint32, len(ss)),
+			Offsets: make([]uint32, len(ss)),
+		}
+		buf bytes.Buffer
+	)
 
+	for i, s := range ss {
+		buf.WriteString(s)
+		result.Lengths[i] = uint32(len(s))
+		result.Offsets[i] = offset
+
+		offset += uint32(len(s))
+	}
+	result.Data = buf.Bytes()
+
+	return result
+}
+
+func FillSpacesUint8(originalVecCol []uint8, result *types.Bytes) *types.Bytes {
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j uint8
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesUint16(originalVecCol []uint16, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j uint16
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesUint32(originalVecCol []uint32, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j uint32
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesUint64(originalVecCol []uint64, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j uint64
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesInt8(originalVecCol []int8, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j int8
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesInt16(originalVecCol []int16, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j int16
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesInt32(originalVecCol []int32, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j int32
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesInt64(originalVecCol []int64, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = offset
-
-		var j int64
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesFloat32(originalVecCol []float32, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		roundLen := math.Round(float64(length))
 
 		result.Lengths[i] = uint32(roundLen)
 		result.Offsets[i] = offset
-
-		var j int32
-		for j = 0; j < int32(roundLen); j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(roundLen)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesFloat64(originalVecCol []float64, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
 		roundLen := math.Round(length)
 
 		result.Lengths[i] = uint32(roundLen)
 		result.Offsets[i] = offset
-
-		var j int32
-		for j = 0; j < int32(roundLen); j++ {
-			buf.WriteRune(' ')
-		}
 		offset += uint32(roundLen)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
 
 func FillSpacesCharVarChar(originalVecCol, result *types.Bytes) *types.Bytes {
-	var buf bytes.Buffer
-
 	var bytesWriten uint32 = 0
 	for i, offset := range originalVecCol.Offsets {
 		length := parseStringAsInt64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
 
 		result.Lengths[i] = uint32(length)
 		result.Offsets[i] = uint32(bytesWriten)
-
-		var j int64
-		for j = 0; j < length; j++ {
-			buf.WriteRune(' ')
-		}
 		bytesWriten += uint32(length)
 	}
-	result.Data = buf.Bytes()
+
+	for i := range result.Data {
+		result.Data[i] = ' '
+	}
 
 	return result
 }
