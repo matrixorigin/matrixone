@@ -15,8 +15,6 @@ RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
 WORKDIR /go/src/github.com/matrixorigin/matrixone
 
-RUN go env -w GOPROXY=https://goproxy.cn,direct && go env -w GO111MODULE=on
-
 COPY go.mod go.mod
 COPY go.sum go.sum
 
