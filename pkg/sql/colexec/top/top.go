@@ -82,6 +82,9 @@ func (ctr *Container) process(n *Argument, bat *batch.Batch, proc *process.Proce
 		for i, f := range n.Fs {
 			ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
 		}
+		for i := len(n.Fs); i < len(bat.Vecs); i++ {
+			ctr.cmps = append(ctr.cmps, compare.New(bat.Vecs[i].Typ.Oid, true))
+		}
 	} else {
 		batch.Reorder(bat, ctr.bat.Attrs)
 	}
@@ -134,7 +137,7 @@ func (ctr *Container) sort() {
 func (ctr *Container) processBatch(limit int64, b *batch.Batch, proc *process.Process) error {
 	var start int64
 
-	bLength := int64(vector.Length(b.Vecs[0]))
+	bLength := int64(len(b.Zs))
 	if n := int64(len(ctr.sels)); n < limit {
 		start = limit - n
 		if start > bLength {
