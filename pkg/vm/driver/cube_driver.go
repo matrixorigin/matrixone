@@ -48,7 +48,7 @@ import (
 
 var (
 	errorCubeReturnIsNull                 = errors.New("cube return is null")
-	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
+	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey 2")
 )
 
 const (
@@ -571,7 +571,7 @@ func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey 
 		TpeScan: pb.TpeScanRequest{
 			Start:   startKey,
 			End:     endKey,
-			Prefix: prefix,
+			Prefix:  prefix,
 			Limit:   limit,
 			NeedKey: needKey,
 		},
