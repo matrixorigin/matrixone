@@ -15,6 +15,7 @@
 package atan
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -23,149 +24,129 @@ import (
 func TestAtanUint8(t *testing.T) {
 	//Test values
 	nums := []uint8{0, 1, 2, 55, 44, 33, 22}
-	//Predefined Correct Values
-	atanNums := []float64{0, 0.7853981633974483, 1.1071487177940904, 1.5526165117219182, 1.5480729659532555, 1.5405025668761214, 1.5253730473733196}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanUint8(nums, newNums)
+	atanNums = atanUint8(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanUint16(t *testing.T) {
 	//Test values
 	nums := []uint16{0, 1, 2, 55, 44, 33, 22}
-	//Predefined Correct Values
-	atanNums := []float64{0, 0.7853981633974483, 1.1071487177940904, 1.5526165117219182, 1.5480729659532555, 1.5405025668761214, 1.5253730473733196}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanUint16(nums, newNums)
+	atanNums = atanUint16(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanUint32(t *testing.T) {
 	//Test values
 	nums := []uint32{0, 1, 2, 55, 44, 33, 22}
-	//Predefined Correct Values
-	atanNums := []float64{0, 0.7853981633974483, 1.1071487177940904, 1.5526165117219182, 1.5480729659532555, 1.5405025668761214, 1.5253730473733196}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanUint32(nums, newNums)
+	atanNums = atanUint32(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanUint64(t *testing.T) {
 	//Test values
 	nums := []uint64{0, 1, 2, 55, 44, 33, 22}
-	//Predefined Correct Values
-	atanNums := []float64{0, 0.7853981633974483, 1.1071487177940904, 1.5526165117219182, 1.5480729659532555, 1.5405025668761214, 1.5253730473733196}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanUint64(nums, newNums)
+	atanNums = atanUint64(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanInt8(t *testing.T) {
 	//Test values
 	nums := []int8{-55, -10, -1, 0, 1, 10, 55}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5526165117219182, -1.4711276743037345, -0.7853981633974483, 0, 0.7853981633974483, 1.4711276743037345, 1.5526165117219182}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanInt8(nums, newNums)
+	atanNums = atanInt8(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanInt16(t *testing.T) {
 	//Test values
 	nums := []int16{-55, -10, -1, 0, 1, 10, 55}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5526165117219182, -1.4711276743037345, -0.7853981633974483, 0, 0.7853981633974483, 1.4711276743037345, 1.5526165117219182}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanInt16(nums, newNums)
+	atanNums = atanInt16(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanInt32(t *testing.T) {
 	//Test values
 	nums := []int32{-55, -10, -1, 0, 1, 10, 55}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5526165117219182, -1.4711276743037345, -0.7853981633974483, 0, 0.7853981633974483, 1.4711276743037345, 1.5526165117219182}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanInt32(nums, newNums)
+	atanNums = atanInt32(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanInt64(t *testing.T) {
 	//Test values
 	nums := []int64{-55, -10, -1, 0, 1, 10, 55}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5526165117219182, -1.4711276743037345, -0.7853981633974483, 0, 0.7853981633974483, 1.4711276743037345, 1.5526165117219182}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanInt64(nums, newNums)
+	atanNums = atanInt64(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanFloat32(t *testing.T) {
 	//Test values
 	nums := []float32{-55.66, -10.22, -1.33, 0, 0.77, 11.22, 55.66}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5528320359484806, -1.4732594565525021, -0.9260933110025209, 0, 0.6561787060173309, 1.4819046443245365, 1.5528320359484806}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanFloat32(nums, newNums)
+	atanNums = atanFloat32(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(float64(n)), atanNums[i])
 	}
 }
 
 func TestAtanFloat64(t *testing.T) {
 	//Test values
 	nums := []float64{-55.66, -10.22, -1.33, 0, 0.77, 11.22, 55.66}
-	//Predefined Correct Values
-	atanNums := []float64{-1.5528320359977177, -1.4732594540201849, -0.9260932955034623, 0, 0.6561787179913948, 1.4819046422200983, 1.5528320359977177}
 	//Init a new variable
-	newNums := make([]float64, len(nums))
+	atanNums := make([]float64, len(nums))
 	//Run atan function
-	newNums = atanFloat64(nums, newNums)
+	atanNums = atanFloat64(nums, atanNums)
 
-	for i := range newNums {
-		require.Equal(t, atanNums[i], newNums[i])
+	for i, n := range nums {
+		require.Equal(t, math.Atan(n), atanNums[i])
 	}
 }
