@@ -11,7 +11,7 @@ Writing data.
 
 ## **Examples**
 
-```
+```sql
 > CREATE TABLE test(a int, b varchar(10));
 
 > INSERT INTO test values(123, 'abc');

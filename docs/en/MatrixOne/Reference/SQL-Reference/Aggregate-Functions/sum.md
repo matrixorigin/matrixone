@@ -26,36 +26,35 @@ If there are no matching rows, SUM() returns NULL.
 
 ## **Examples**
 
-Note: numbers(N) – A table for test with the single number column (UInt64) that contains integers from 0 to N-1.
+
+```sql
+> drop table if exists tbl1,tbl2;
+> create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null);
+> insert into tbl1 values (0,1,1,7,"a");
+> insert into tbl1 values (0,1,2,8,"b");
+> insert into tbl1 values (0,1,3,9,"c");
+> insert into tbl1 values (0,1,4,10,"D");
+> insert into tbl1 values (0,1,5,11,"a");
+> insert into tbl1 values (0,1,6,12,"c");
+
+> select sum(col_1c) from tbl1;
++-------------+
+| sum(col_1c) |
++-------------+
+|          21 |
++-------------+
+
+> select sum(col_1d) as c1 from tbl1 where col_1d < 13 group by col_1e order by c1;
++------+
+| c1   |
++------+
+|    8 |
+|   10 |
+|   18 |
+|   21 |
++------+
 
 ```
-> SELECT SUM(*) FROM numbers(3);
-+--------+
-| sum(*) |
-+--------+
-|      3 |
-+--------+
 
-> SELECT SUM(number) FROM numbers(3);
-+-------------+
-| sum(number) |
-+-------------+
-|           3 |
-+-------------+
-
-> SELECT SUM(number) AS sum FROM numbers(3);
-+------+
-| sum  |
-+------+
-|    3 |
-+------+
-
-> SELECT SUM(number+2) AS sum FROM numbers(3);
-+------+
-| sum  |
-+------+
-|    9 |
-+------+
-```
-
-***
+## Constraints
+Currently, MatrixOne doesn't support select function() without from tables.

@@ -96,14 +96,3 @@ const (
 	SERIAL_TYPE_DATETIME byte = SERIAL_TYPE_DATE + 1
 	SERIAL_TYPE_UNKNOWN byte = 255
 )
-
-//ValueSerializer for serializing the value
-type ValueSerializer interface {
-	SerializeValue(data []byte,value interface{})([]byte,*orderedcodec.EncodedItem,error)
-
-	DeserializeValue(data []byte)([]byte,*orderedcodec.DecodedItem,error)
-}
-
-type DefaultValueSerializer struct {
-	ValueSerializer
-}

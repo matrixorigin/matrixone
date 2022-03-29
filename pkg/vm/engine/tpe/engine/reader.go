@@ -79,8 +79,24 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 			IndexDesc:                &tr.tableDesc.Primary_index,
 			ReadAttributesNames:      attrs,
 			ReadAttributeDescs:       readAttrs,
-			PrefixForScanKey:         nil,
-			LengthOfPrefixForScanKey: 0,
+			ParallelReader: tr.parallelReader,
+			ReadCount: 0,
+		}
+
+		if tr.readCtx.ParallelReader {
+			tr.readCtx.ParallelReaderContext = tuplecodec.ParallelReaderContext{
+				ShardIndex: 0,
+				ShardStartKey: tr.shardInfos[0].startKey,
+				ShardEndKey: tr.shardInfos[0].endKey,
+				ShardNextScanKey: tr.shardInfos[0].startKey,
+				CompleteInShard: tr.shardInfos[0].completeInShard,
+			}
+		}else{
+			tr.readCtx.SingleReaderContext = tuplecodec.SingleReaderContext{
+				CompleteInAllShards: false,
+				PrefixForScanKey:         nil,
+				LengthOfPrefixForScanKey: 0,
+			}
 		}
 	}else{
 		//check if these attrs are same as last attrs
@@ -93,12 +109,40 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 				return nil, errorDifferentReadAttributesInSameReader
 			}
 		}
+
+		if tr.readCtx.ParallelReader {
+			//update new shard if needed
+			if tr.readCtx.CompleteInShard {
+				tr.shardInfos[tr.readCtx.ShardIndex].completeInShard = true
+				tr.readCtx.ShardIndex++
+				if tr.readCtx.ShardIndex < len(tr.shardInfos) {
+					tr.readCtx.ShardStartKey = tr.shardInfos[tr.readCtx.ShardIndex].startKey
+					tr.readCtx.ShardEndKey = tr.shardInfos[tr.readCtx.ShardIndex].endKey
+					tr.readCtx.ShardNextScanKey = tr.shardInfos[tr.readCtx.ShardIndex].nextScanKey
+					tr.readCtx.CompleteInShard = false
+				}else{
+					return nil,nil
+				}
+			}
+		}
 	}
 
 	bat, err = tr.computeHandler.Read(tr.readCtx)
 	if err != nil {
 		return nil, err
 	}
+
+	/*
+	//for test
+	if tr.readCtx.ParallelReader {
+		cnt := 0
+		if bat != nil {
+			cnt = vector.Length(bat.Vecs[0])
+		}
+
+		logutil.Infof("reader %d readCount %d parallelContext %v ", tr.id, cnt, tr.readCtx.ParallelReaderContext)
+	}
+	*/
 
 	//when bat is null,it means no data anymore.
 	if bat != nil {

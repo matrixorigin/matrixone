@@ -17,14 +17,17 @@ package helper
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"log"
+
 	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"testing"
 )
 
 func TestAoe(t *testing.T) {
@@ -58,7 +61,7 @@ func NewTableDefs() []engine.TableDef {
 	var defs []engine.TableDef
 
 	defs = append(defs, &engine.IndexTableDef{
-		Typ:   0,
+		Typ:      0,
 		ColNames: []string{"a", "b"},
 	})
 	defs = append(defs, &engine.AttributeDef{
@@ -98,7 +101,11 @@ func NewListPartition() engine.ListPartition {
 }
 
 func NewValue(v float64) extend.Extend {
-	vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+	vec := vector.New(types.Type{
+		Oid:       types.T(types.T_float64),
+		Size:      8,
+		Width:     8,
+		Precision: 0})
 	vs := make([]float64, 10)
 	for i := 0; i < 10; i++ {
 		vs[i] = float64(i)

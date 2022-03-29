@@ -19,6 +19,8 @@ import (
 	"encoding/gob"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
@@ -1580,6 +1582,33 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
+	case *variance.VarRing:
+		buf.WriteByte(VarianceRing)
+		// NullCounts
+		n := len(v.NullCounts)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
+		}
+		// Values
+		for k := 0; k < n; k++ {
+			valueBytes := encoding.EncodeFloat64Slice(v.Values[k])
+			length := len(valueBytes)
+			buf.Write(encoding.EncodeUint32(uint32(length)))
+			if length > 0 {
+				buf.Write(valueBytes)
+			}
+		}
+		// Sums
+		da := encoding.EncodeFloat64Slice(v.Sums)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	}
 	return fmt.Errorf("'%v' ring not yet support", r)
 }
@@ -2312,6 +2341,43 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		return r, data, nil
+	case VarianceRing:
+		r := new(variance.VarRing)
+		data = data[1:]
+
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCounts = make([]int64, n)
+			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Values
+		r.Values = make([][]float64, n)
+		var k uint32 = 0
+		for k = 0; k < n; k++ {
+			length := encoding.DecodeUint32(data)
+			data = data[4:]
+			if length > 0 {
+				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
+				data = data[length:]
+			}
+		}
+		// Sums
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
+			data = data[n:]
+		}
+		r.Sums = encoding.DecodeFloat64Slice(r.Data)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		// return
 		return r, data, nil
 	}
 	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])
@@ -3215,6 +3281,48 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
+		return r, data, nil
+	case VarianceRing:
+		r := new(variance.VarRing)
+		data = data[1:]
+
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCounts = make([]int64, n)
+			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Values
+		r.Values = make([][]float64, n)
+		var k uint32 = 0
+		for k = 0; k < n; k++ {
+			length := encoding.DecodeUint32(data)
+			data = data[4:]
+			if length > 0 {
+				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
+				data = data[length:]
+			}
+		}
+		// Sums
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Data, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Data, data[:n])
+			data = data[n:]
+		}
+		r.Sums = encoding.DecodeFloat64Slice(r.Data)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		// return
 		return r, data, nil
 	}
 	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])

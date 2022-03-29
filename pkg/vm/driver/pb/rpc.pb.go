@@ -26,28 +26,30 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 type Type int32
 
 const (
-	Set                 Type = 0
-	Del                 Type = 1
-	Get                 Type = 2
-	PrefixScan          Type = 3
-	Scan                Type = 4
-	Incr                Type = 5
-	SetIfNotExist       Type = 6
-	DelIfNotExist       Type = 7
-	TpePrefixScan       Type = 8
-	TpeScan             Type = 9
-	TpeDeleteWithPrefix Type = 10
-	Append              Type = 100
-	GetSnapshot         Type = 101
-	CreateTablet        Type = 102
-	DropTablet          Type = 103
-	Relation            Type = 104
-	TabletIds           Type = 105
-	TabletNames         Type = 106
-	GetSegmentIds       Type = 107
-	GetSegmentedId      Type = 108
-	CreateIndex         Type = 109
-	DropIndex           Type = 110
+	Set                      Type = 0
+	Del                      Type = 1
+	Get                      Type = 2
+	PrefixScan               Type = 3
+	Scan                     Type = 4
+	Incr                     Type = 5
+	SetIfNotExist            Type = 6
+	DelIfNotExist            Type = 7
+	TpePrefixScan            Type = 8
+	TpeScan                  Type = 9
+	TpeDeleteBatch           Type = 10
+	TpeCheckKeysExistInBatch Type = 11
+	TpeSetBatch              Type = 12
+	Append                   Type = 100
+	GetSnapshot              Type = 101
+	CreateTablet             Type = 102
+	DropTablet               Type = 103
+	Relation                 Type = 104
+	TabletIds                Type = 105
+	TabletNames              Type = 106
+	GetSegmentIds            Type = 107
+	GetSegmentedId           Type = 108
+	CreateIndex              Type = 109
+	DropIndex                Type = 110
 )
 
 var Type_name = map[int32]string{
@@ -61,7 +63,9 @@ var Type_name = map[int32]string{
 	7:   "DelIfNotExist",
 	8:   "TpePrefixScan",
 	9:   "TpeScan",
-	10:  "TpeDeleteWithPrefix",
+	10:  "TpeDeleteBatch",
+	11:  "TpeCheckKeysExistInBatch",
+	12:  "TpeSetBatch",
 	100: "Append",
 	101: "GetSnapshot",
 	102: "CreateTablet",
@@ -76,28 +80,30 @@ var Type_name = map[int32]string{
 }
 
 var Type_value = map[string]int32{
-	"Set":                 0,
-	"Del":                 1,
-	"Get":                 2,
-	"PrefixScan":          3,
-	"Scan":                4,
-	"Incr":                5,
-	"SetIfNotExist":       6,
-	"DelIfNotExist":       7,
-	"TpePrefixScan":       8,
-	"TpeScan":             9,
-	"TpeDeleteWithPrefix": 10,
-	"Append":              100,
-	"GetSnapshot":         101,
-	"CreateTablet":        102,
-	"DropTablet":          103,
-	"Relation":            104,
-	"TabletIds":           105,
-	"TabletNames":         106,
-	"GetSegmentIds":       107,
-	"GetSegmentedId":      108,
-	"CreateIndex":         109,
-	"DropIndex":           110,
+	"Set":                      0,
+	"Del":                      1,
+	"Get":                      2,
+	"PrefixScan":               3,
+	"Scan":                     4,
+	"Incr":                     5,
+	"SetIfNotExist":            6,
+	"DelIfNotExist":            7,
+	"TpePrefixScan":            8,
+	"TpeScan":                  9,
+	"TpeDeleteBatch":           10,
+	"TpeCheckKeysExistInBatch": 11,
+	"TpeSetBatch":              12,
+	"Append":                   100,
+	"GetSnapshot":              101,
+	"CreateTablet":             102,
+	"DropTablet":               103,
+	"Relation":                 104,
+	"TabletIds":                105,
+	"TabletNames":              106,
+	"GetSegmentIds":            107,
+	"GetSegmentedId":           108,
+	"CreateIndex":              109,
+	"DropIndex":                110,
 }
 
 func (x Type) String() string {
@@ -109,31 +115,33 @@ func (Type) EnumDescriptor() ([]byte, []int) {
 }
 
 type Request struct {
-	ID                   uint64                     `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
-	Type                 Type                       `protobuf:"varint,2,opt,name=type,proto3,enum=pb.Type" json:"type,omitempty"`
-	Group                Group                      `protobuf:"varint,3,opt,name=group,proto3,enum=pb.Group" json:"group,omitempty"`
-	Shard                uint64                     `protobuf:"varint,4,opt,name=shard,proto3" json:"shard,omitempty"`
-	Set                  SetRequest                 `protobuf:"bytes,5,opt,name=set,proto3" json:"set"`
-	Get                  GetRequest                 `protobuf:"bytes,6,opt,name=get,proto3" json:"get"`
-	Delete               DeleteRequest              `protobuf:"bytes,7,opt,name=delete,proto3" json:"delete"`
-	Scan                 ScanRequest                `protobuf:"bytes,8,opt,name=scan,proto3" json:"scan"`
-	PrefixScan           PrefixScanRequest          `protobuf:"bytes,9,opt,name=prefixScan,proto3" json:"prefixScan"`
-	AllocID              AllocIDRequest             `protobuf:"bytes,10,opt,name=allocID,proto3" json:"allocID"`
-	TpePrefixScan        TpePrefixScanRequest       `protobuf:"bytes,11,opt,name=tpePrefixScan,proto3" json:"tpePrefixScan"`
-	TpeScan              TpeScanRequest             `protobuf:"bytes,12,opt,name=tpeScan,proto3" json:"tpeScan"`
-	TpeDeleteWithPrefix  TpeDeleteWithPrefixRequest `protobuf:"bytes,13,opt,name=TpeDeleteWithPrefix,proto3" json:"TpeDeleteWithPrefix"`
-	Append               AppendRequest              `protobuf:"bytes,100,opt,name=append,proto3" json:"append"`
-	GetSnapshot          GetSnapshotRequest         `protobuf:"bytes,101,opt,name=getSnapshot,proto3" json:"getSnapshot"`
-	TabletIds            TabletIDsRequest           `protobuf:"bytes,102,opt,name=tabletIds,proto3" json:"tabletIds"`
-	CreateTablet         CreateTabletRequest        `protobuf:"bytes,103,opt,name=createTablet,proto3" json:"createTablet"`
-	DropTablet           DropTabletRequest          `protobuf:"bytes,104,opt,name=dropTablet,proto3" json:"dropTablet"`
-	GetSegmentIds        GetSegmentIdsRequest       `protobuf:"bytes,105,opt,name=getSegmentIds,proto3" json:"getSegmentIds"`
-	GetSegmentedId       GetSegmentedIdRequest      `protobuf:"bytes,106,opt,name=getSegmentedId,proto3" json:"getSegmentedId"`
-	CreateIndex          CreateIndexRequest         `protobuf:"bytes,107,opt,name=createIndex,proto3" json:"createIndex"`
-	DropIndex            DropIndexRequest           `protobuf:"bytes,108,opt,name=dropIndex,proto3" json:"dropIndex"`
-	XXX_NoUnkeyedLiteral struct{}                   `json:"-"`
-	XXX_unrecognized     []byte                     `json:"-"`
-	XXX_sizecache        int32                      `json:"-"`
+	ID                       uint64                          `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Type                     Type                            `protobuf:"varint,2,opt,name=type,proto3,enum=pb.Type" json:"type,omitempty"`
+	Group                    Group                           `protobuf:"varint,3,opt,name=group,proto3,enum=pb.Group" json:"group,omitempty"`
+	Shard                    uint64                          `protobuf:"varint,4,opt,name=shard,proto3" json:"shard,omitempty"`
+	Set                      SetRequest                      `protobuf:"bytes,5,opt,name=set,proto3" json:"set"`
+	Get                      GetRequest                      `protobuf:"bytes,6,opt,name=get,proto3" json:"get"`
+	Delete                   DeleteRequest                   `protobuf:"bytes,7,opt,name=delete,proto3" json:"delete"`
+	Scan                     ScanRequest                     `protobuf:"bytes,8,opt,name=scan,proto3" json:"scan"`
+	PrefixScan               PrefixScanRequest               `protobuf:"bytes,9,opt,name=prefixScan,proto3" json:"prefixScan"`
+	AllocID                  AllocIDRequest                  `protobuf:"bytes,10,opt,name=allocID,proto3" json:"allocID"`
+	TpePrefixScan            TpePrefixScanRequest            `protobuf:"bytes,11,opt,name=tpePrefixScan,proto3" json:"tpePrefixScan"`
+	TpeScan                  TpeScanRequest                  `protobuf:"bytes,12,opt,name=tpeScan,proto3" json:"tpeScan"`
+	TpeDeleteBatch           TpeDeleteBatchRequest           `protobuf:"bytes,13,opt,name=tpeDeleteBatch,proto3" json:"tpeDeleteBatch"`
+	TpeCheckKeysExistInBatch TpeCheckKeysExistInBatchRequest `protobuf:"bytes,14,opt,name=tpeCheckKeysExistInBatch,proto3" json:"tpeCheckKeysExistInBatch"`
+	TpeSetBatch              TpeSetBatchRequest              `protobuf:"bytes,15,opt,name=tpeSetBatch,proto3" json:"tpeSetBatch"`
+	Append                   AppendRequest                   `protobuf:"bytes,100,opt,name=append,proto3" json:"append"`
+	GetSnapshot              GetSnapshotRequest              `protobuf:"bytes,101,opt,name=getSnapshot,proto3" json:"getSnapshot"`
+	TabletIds                TabletIDsRequest                `protobuf:"bytes,102,opt,name=tabletIds,proto3" json:"tabletIds"`
+	CreateTablet             CreateTabletRequest             `protobuf:"bytes,103,opt,name=createTablet,proto3" json:"createTablet"`
+	DropTablet               DropTabletRequest               `protobuf:"bytes,104,opt,name=dropTablet,proto3" json:"dropTablet"`
+	GetSegmentIds            GetSegmentIdsRequest            `protobuf:"bytes,105,opt,name=getSegmentIds,proto3" json:"getSegmentIds"`
+	GetSegmentedId           GetSegmentedIdRequest           `protobuf:"bytes,106,opt,name=getSegmentedId,proto3" json:"getSegmentedId"`
+	CreateIndex              CreateIndexRequest              `protobuf:"bytes,107,opt,name=createIndex,proto3" json:"createIndex"`
+	DropIndex                DropIndexRequest                `protobuf:"bytes,108,opt,name=dropIndex,proto3" json:"dropIndex"`
+	XXX_NoUnkeyedLiteral     struct{}                        `json:"-"`
+	XXX_unrecognized         []byte                          `json:"-"`
+	XXX_sizecache            int32                           `json:"-"`
 }
 
 func (m *Request) Reset()         { *m = Request{} }
@@ -253,11 +261,25 @@ func (m *Request) GetTpeScan() TpeScanRequest {
 	return TpeScanRequest{}
 }
 
-func (m *Request) GetTpeDeleteWithPrefix() TpeDeleteWithPrefixRequest {
+func (m *Request) GetTpeDeleteBatch() TpeDeleteBatchRequest {
 	if m != nil {
-		return m.TpeDeleteWithPrefix
+		return m.TpeDeleteBatch
 	}
-	return TpeDeleteWithPrefixRequest{}
+	return TpeDeleteBatchRequest{}
+}
+
+func (m *Request) GetTpeCheckKeysExistInBatch() TpeCheckKeysExistInBatchRequest {
+	if m != nil {
+		return m.TpeCheckKeysExistInBatch
+	}
+	return TpeCheckKeysExistInBatchRequest{}
+}
+
+func (m *Request) GetTpeSetBatch() TpeSetBatchRequest {
+	if m != nil {
+		return m.TpeSetBatch
+	}
+	return TpeSetBatchRequest{}
 }
 
 func (m *Request) GetAppend() AppendRequest {
@@ -439,6 +461,7 @@ type SetRequest struct {
 	Key                  []byte   `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
 	Value                []byte   `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	TTL                  int64    `protobuf:"varint,3,opt,name=ttl,proto3" json:"ttl,omitempty"`
+	KeyIndex             int32    `protobuf:"varint,4,opt,name=keyIndex,proto3" json:"keyIndex,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -498,6 +521,78 @@ func (m *SetRequest) GetTTL() int64 {
 	return 0
 }
 
+func (m *SetRequest) GetKeyIndex() int32 {
+	if m != nil {
+		return m.KeyIndex
+	}
+	return 0
+}
+
+type TpeSetBatchRequest struct {
+	//the keys/values need to be set
+	Keys   [][]byte `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	Values [][]byte `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
+	//the shardID
+	ShardID              uint64   `protobuf:"varint,3,opt,name=shardID,proto3" json:"shardID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TpeSetBatchRequest) Reset()         { *m = TpeSetBatchRequest{} }
+func (m *TpeSetBatchRequest) String() string { return proto.CompactTextString(m) }
+func (*TpeSetBatchRequest) ProtoMessage()    {}
+func (*TpeSetBatchRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{3}
+}
+func (m *TpeSetBatchRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TpeSetBatchRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TpeSetBatchRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TpeSetBatchRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TpeSetBatchRequest.Merge(m, src)
+}
+func (m *TpeSetBatchRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *TpeSetBatchRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TpeSetBatchRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TpeSetBatchRequest proto.InternalMessageInfo
+
+func (m *TpeSetBatchRequest) GetKeys() [][]byte {
+	if m != nil {
+		return m.Keys
+	}
+	return nil
+}
+
+func (m *TpeSetBatchRequest) GetValues() [][]byte {
+	if m != nil {
+		return m.Values
+	}
+	return nil
+}
+
+func (m *TpeSetBatchRequest) GetShardID() uint64 {
+	if m != nil {
+		return m.ShardID
+	}
+	return 0
+}
+
 // GetRequest get value by key
 type GetRequest struct {
 	Key                  []byte   `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -510,7 +605,7 @@ func (m *GetRequest) Reset()         { *m = GetRequest{} }
 func (m *GetRequest) String() string { return proto.CompactTextString(m) }
 func (*GetRequest) ProtoMessage()    {}
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{3}
+	return fileDescriptor_77a6da22d6a3feb1, []int{4}
 }
 func (m *GetRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -558,7 +653,7 @@ func (m *DeleteRequest) Reset()         { *m = DeleteRequest{} }
 func (m *DeleteRequest) String() string { return proto.CompactTextString(m) }
 func (*DeleteRequest) ProtoMessage()    {}
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{4}
+	return fileDescriptor_77a6da22d6a3feb1, []int{5}
 }
 func (m *DeleteRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -607,7 +702,7 @@ func (m *AllocIDRequest) Reset()         { *m = AllocIDRequest{} }
 func (m *AllocIDRequest) String() string { return proto.CompactTextString(m) }
 func (*AllocIDRequest) ProtoMessage()    {}
 func (*AllocIDRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{5}
+	return fileDescriptor_77a6da22d6a3feb1, []int{6}
 }
 func (m *AllocIDRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -664,7 +759,7 @@ func (m *ScanRequest) Reset()         { *m = ScanRequest{} }
 func (m *ScanRequest) String() string { return proto.CompactTextString(m) }
 func (*ScanRequest) ProtoMessage()    {}
 func (*ScanRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{6}
+	return fileDescriptor_77a6da22d6a3feb1, []int{7}
 }
 func (m *ScanRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -728,7 +823,7 @@ func (m *PrefixScanRequest) Reset()         { *m = PrefixScanRequest{} }
 func (m *PrefixScanRequest) String() string { return proto.CompactTextString(m) }
 func (*PrefixScanRequest) ProtoMessage()    {}
 func (*PrefixScanRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{7}
+	return fileDescriptor_77a6da22d6a3feb1, []int{8}
 }
 func (m *PrefixScanRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -784,8 +879,10 @@ type TpePrefixScanRequest struct {
 	PrefixOrStartKey []byte `protobuf:"bytes,1,opt,name=prefixOrStartKey,proto3" json:"prefixOrStartKey,omitempty"`
 	//the prefixOrStartKey[:prefixLength] is the prefix
 	PrefixLength int64 `protobuf:"varint,2,opt,name=prefixLength,proto3" json:"prefixLength,omitempty"`
+	//the endKey of the range denoted by the prefix
+	PrefixEnd []byte `protobuf:"bytes,3,opt,name=prefixEnd,proto3" json:"prefixEnd,omitempty"`
 	//the count of key/value wanted at most in the reqeust
-	Limit                uint64   `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit                uint64   `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -795,7 +892,7 @@ func (m *TpePrefixScanRequest) Reset()         { *m = TpePrefixScanRequest{} }
 func (m *TpePrefixScanRequest) String() string { return proto.CompactTextString(m) }
 func (*TpePrefixScanRequest) ProtoMessage()    {}
 func (*TpePrefixScanRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{8}
+	return fileDescriptor_77a6da22d6a3feb1, []int{9}
 }
 func (m *TpePrefixScanRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -838,6 +935,13 @@ func (m *TpePrefixScanRequest) GetPrefixLength() int64 {
 	return 0
 }
 
+func (m *TpePrefixScanRequest) GetPrefixEnd() []byte {
+	if m != nil {
+		return m.PrefixEnd
+	}
+	return nil
+}
+
 func (m *TpePrefixScanRequest) GetLimit() uint64 {
 	if m != nil {
 		return m.Limit
@@ -848,12 +952,13 @@ func (m *TpePrefixScanRequest) GetLimit() uint64 {
 // TpeScanRequest scan request
 type TpeScanRequest struct {
 	//the range [start,end)
-	Start []byte `protobuf:"bytes,1,opt,name=start,proto3" json:"start,omitempty"`
-	End   []byte `protobuf:"bytes,2,opt,name=end,proto3" json:"end,omitempty"`
+	Start  []byte `protobuf:"bytes,1,opt,name=start,proto3" json:"start,omitempty"`
+	End    []byte `protobuf:"bytes,2,opt,name=end,proto3" json:"end,omitempty"`
+	Prefix []byte `protobuf:"bytes,3,opt,name=prefix,proto3" json:"prefix,omitempty"`
 	//the count of key/value wanted at most in the request
-	Limit uint64 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	Limit uint64 `protobuf:"varint,4,opt,name=limit,proto3" json:"limit,omitempty"`
 	//the key needed to be returned
-	NeedKey              bool     `protobuf:"varint,4,opt,name=needKey,proto3" json:"needKey,omitempty"`
+	NeedKey              bool     `protobuf:"varint,5,opt,name=needKey,proto3" json:"needKey,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -863,7 +968,7 @@ func (m *TpeScanRequest) Reset()         { *m = TpeScanRequest{} }
 func (m *TpeScanRequest) String() string { return proto.CompactTextString(m) }
 func (*TpeScanRequest) ProtoMessage()    {}
 func (*TpeScanRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{9}
+	return fileDescriptor_77a6da22d6a3feb1, []int{10}
 }
 func (m *TpeScanRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -906,6 +1011,13 @@ func (m *TpeScanRequest) GetEnd() []byte {
 	return nil
 }
 
+func (m *TpeScanRequest) GetPrefix() []byte {
+	if m != nil {
+		return m.Prefix
+	}
+	return nil
+}
+
 func (m *TpeScanRequest) GetLimit() uint64 {
 	if m != nil {
 		return m.Limit
@@ -920,28 +1032,30 @@ func (m *TpeScanRequest) GetNeedKey() bool {
 	return false
 }
 
-type TpeDeleteWithPrefixRequest struct {
-	//the prefix of the keys to be deleted
-	Prefix []byte `protobuf:"bytes,1,opt,name=prefix,proto3" json:"prefix,omitempty"`
-	//the count of key/value to be deleted per batch
-	CoutPerBatch         uint64   `protobuf:"varint,2,opt,name=coutPerBatch,proto3" json:"coutPerBatch,omitempty"`
+type TpeDeleteBatchRequest struct {
+	//the keys wanted to be deleted
+	//if the keys is null,then use the range follow
+	Keys [][]byte `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	//the range [start,end)
+	Start                []byte   `protobuf:"bytes,3,opt,name=start,proto3" json:"start,omitempty"`
+	End                  []byte   `protobuf:"bytes,4,opt,name=end,proto3" json:"end,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
 }
 
-func (m *TpeDeleteWithPrefixRequest) Reset()         { *m = TpeDeleteWithPrefixRequest{} }
-func (m *TpeDeleteWithPrefixRequest) String() string { return proto.CompactTextString(m) }
-func (*TpeDeleteWithPrefixRequest) ProtoMessage()    {}
-func (*TpeDeleteWithPrefixRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{10}
+func (m *TpeDeleteBatchRequest) Reset()         { *m = TpeDeleteBatchRequest{} }
+func (m *TpeDeleteBatchRequest) String() string { return proto.CompactTextString(m) }
+func (*TpeDeleteBatchRequest) ProtoMessage()    {}
+func (*TpeDeleteBatchRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{11}
 }
-func (m *TpeDeleteWithPrefixRequest) XXX_Unmarshal(b []byte) error {
+func (m *TpeDeleteBatchRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
 }
-func (m *TpeDeleteWithPrefixRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+func (m *TpeDeleteBatchRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	if deterministic {
-		return xxx_messageInfo_TpeDeleteWithPrefixRequest.Marshal(b, m, deterministic)
+		return xxx_messageInfo_TpeDeleteBatchRequest.Marshal(b, m, deterministic)
 	} else {
 		b = b[:cap(b)]
 		n, err := m.MarshalToSizedBuffer(b)
@@ -951,28 +1065,92 @@ func (m *TpeDeleteWithPrefixRequest) XXX_Marshal(b []byte, deterministic bool) (
 		return b[:n], nil
 	}
 }
-func (m *TpeDeleteWithPrefixRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_TpeDeleteWithPrefixRequest.Merge(m, src)
+func (m *TpeDeleteBatchRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TpeDeleteBatchRequest.Merge(m, src)
 }
-func (m *TpeDeleteWithPrefixRequest) XXX_Size() int {
+func (m *TpeDeleteBatchRequest) XXX_Size() int {
 	return m.Size()
 }
-func (m *TpeDeleteWithPrefixRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_TpeDeleteWithPrefixRequest.DiscardUnknown(m)
+func (m *TpeDeleteBatchRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TpeDeleteBatchRequest.DiscardUnknown(m)
 }
 
-var xxx_messageInfo_TpeDeleteWithPrefixRequest proto.InternalMessageInfo
+var xxx_messageInfo_TpeDeleteBatchRequest proto.InternalMessageInfo
 
-func (m *TpeDeleteWithPrefixRequest) GetPrefix() []byte {
+func (m *TpeDeleteBatchRequest) GetKeys() [][]byte {
 	if m != nil {
-		return m.Prefix
+		return m.Keys
 	}
 	return nil
 }
 
-func (m *TpeDeleteWithPrefixRequest) GetCoutPerBatch() uint64 {
+func (m *TpeDeleteBatchRequest) GetStart() []byte {
 	if m != nil {
-		return m.CoutPerBatch
+		return m.Start
+	}
+	return nil
+}
+
+func (m *TpeDeleteBatchRequest) GetEnd() []byte {
+	if m != nil {
+		return m.End
+	}
+	return nil
+}
+
+type TpeCheckKeysExistInBatchRequest struct {
+	//the keys from the same shard
+	Keys [][]byte `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	//the shardID
+	ShardID              uint64   `protobuf:"varint,2,opt,name=shardID,proto3" json:"shardID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) Reset()         { *m = TpeCheckKeysExistInBatchRequest{} }
+func (m *TpeCheckKeysExistInBatchRequest) String() string { return proto.CompactTextString(m) }
+func (*TpeCheckKeysExistInBatchRequest) ProtoMessage()    {}
+func (*TpeCheckKeysExistInBatchRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{12}
+}
+func (m *TpeCheckKeysExistInBatchRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TpeCheckKeysExistInBatchRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TpeCheckKeysExistInBatchRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TpeCheckKeysExistInBatchRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TpeCheckKeysExistInBatchRequest.Merge(m, src)
+}
+func (m *TpeCheckKeysExistInBatchRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *TpeCheckKeysExistInBatchRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_TpeCheckKeysExistInBatchRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TpeCheckKeysExistInBatchRequest proto.InternalMessageInfo
+
+func (m *TpeCheckKeysExistInBatchRequest) GetKeys() [][]byte {
+	if m != nil {
+		return m.Keys
+	}
+	return nil
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) GetShardID() uint64 {
+	if m != nil {
+		return m.ShardID
 	}
 	return 0
 }
@@ -990,7 +1168,7 @@ func (m *AppendRequest) Reset()         { *m = AppendRequest{} }
 func (m *AppendRequest) String() string { return proto.CompactTextString(m) }
 func (*AppendRequest) ProtoMessage()    {}
 func (*AppendRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{11}
+	return fileDescriptor_77a6da22d6a3feb1, []int{13}
 }
 func (m *AppendRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1045,7 +1223,7 @@ func (m *GetSnapshotRequest) Reset()         { *m = GetSnapshotRequest{} }
 func (m *GetSnapshotRequest) String() string { return proto.CompactTextString(m) }
 func (*GetSnapshotRequest) ProtoMessage()    {}
 func (*GetSnapshotRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{12}
+	return fileDescriptor_77a6da22d6a3feb1, []int{14}
 }
 func (m *GetSnapshotRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1093,7 +1271,7 @@ func (m *GetSegmentIdsRequest) Reset()         { *m = GetSegmentIdsRequest{} }
 func (m *GetSegmentIdsRequest) String() string { return proto.CompactTextString(m) }
 func (*GetSegmentIdsRequest) ProtoMessage()    {}
 func (*GetSegmentIdsRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{13}
+	return fileDescriptor_77a6da22d6a3feb1, []int{15}
 }
 func (m *GetSegmentIdsRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1141,7 +1319,7 @@ func (m *GetSegmentedIdRequest) Reset()         { *m = GetSegmentedIdRequest{} }
 func (m *GetSegmentedIdRequest) String() string { return proto.CompactTextString(m) }
 func (*GetSegmentedIdRequest) ProtoMessage()    {}
 func (*GetSegmentedIdRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{14}
+	return fileDescriptor_77a6da22d6a3feb1, []int{16}
 }
 func (m *GetSegmentedIdRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1190,7 +1368,7 @@ func (m *CreateIndexRequest) Reset()         { *m = CreateIndexRequest{} }
 func (m *CreateIndexRequest) String() string { return proto.CompactTextString(m) }
 func (*CreateIndexRequest) ProtoMessage()    {}
 func (*CreateIndexRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{15}
+	return fileDescriptor_77a6da22d6a3feb1, []int{17}
 }
 func (m *CreateIndexRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1246,7 +1424,7 @@ func (m *DropIndexRequest) Reset()         { *m = DropIndexRequest{} }
 func (m *DropIndexRequest) String() string { return proto.CompactTextString(m) }
 func (*DropIndexRequest) ProtoMessage()    {}
 func (*DropIndexRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{16}
+	return fileDescriptor_77a6da22d6a3feb1, []int{18}
 }
 func (m *DropIndexRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1300,7 +1478,7 @@ func (m *TabletIDsRequest) Reset()         { *m = TabletIDsRequest{} }
 func (m *TabletIDsRequest) String() string { return proto.CompactTextString(m) }
 func (*TabletIDsRequest) ProtoMessage()    {}
 func (*TabletIDsRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{17}
+	return fileDescriptor_77a6da22d6a3feb1, []int{19}
 }
 func (m *TabletIDsRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1342,7 +1520,7 @@ func (m *CreateTabletRequest) Reset()         { *m = CreateTabletRequest{} }
 func (m *CreateTabletRequest) String() string { return proto.CompactTextString(m) }
 func (*CreateTabletRequest) ProtoMessage()    {}
 func (*CreateTabletRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{18}
+	return fileDescriptor_77a6da22d6a3feb1, []int{20}
 }
 func (m *CreateTabletRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1397,7 +1575,7 @@ func (m *DropTabletRequest) Reset()         { *m = DropTabletRequest{} }
 func (m *DropTabletRequest) String() string { return proto.CompactTextString(m) }
 func (*DropTabletRequest) ProtoMessage()    {}
 func (*DropTabletRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{19}
+	return fileDescriptor_77a6da22d6a3feb1, []int{21}
 }
 func (m *DropTabletRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1445,7 +1623,7 @@ func (m *ErrorResponse) Reset()         { *m = ErrorResponse{} }
 func (m *ErrorResponse) String() string { return proto.CompactTextString(m) }
 func (*ErrorResponse) ProtoMessage()    {}
 func (*ErrorResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{20}
+	return fileDescriptor_77a6da22d6a3feb1, []int{22}
 }
 func (m *ErrorResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1492,7 +1670,7 @@ func (m *EmptyResponse) Reset()         { *m = EmptyResponse{} }
 func (m *EmptyResponse) String() string { return proto.CompactTextString(m) }
 func (*EmptyResponse) ProtoMessage()    {}
 func (*EmptyResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{21}
+	return fileDescriptor_77a6da22d6a3feb1, []int{23}
 }
 func (m *EmptyResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1533,7 +1711,7 @@ func (m *StringResponse) Reset()         { *m = StringResponse{} }
 func (m *StringResponse) String() string { return proto.CompactTextString(m) }
 func (*StringResponse) ProtoMessage()    {}
 func (*StringResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{22}
+	return fileDescriptor_77a6da22d6a3feb1, []int{24}
 }
 func (m *StringResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1581,7 +1759,7 @@ func (m *BytesResponse) Reset()         { *m = BytesResponse{} }
 func (m *BytesResponse) String() string { return proto.CompactTextString(m) }
 func (*BytesResponse) ProtoMessage()    {}
 func (*BytesResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{23}
+	return fileDescriptor_77a6da22d6a3feb1, []int{25}
 }
 func (m *BytesResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1629,7 +1807,7 @@ func (m *BoolResponse) Reset()         { *m = BoolResponse{} }
 func (m *BoolResponse) String() string { return proto.CompactTextString(m) }
 func (*BoolResponse) ProtoMessage()    {}
 func (*BoolResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{24}
+	return fileDescriptor_77a6da22d6a3feb1, []int{26}
 }
 func (m *BoolResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1677,7 +1855,7 @@ func (m *Uint64Response) Reset()         { *m = Uint64Response{} }
 func (m *Uint64Response) String() string { return proto.CompactTextString(m) }
 func (*Uint64Response) ProtoMessage()    {}
 func (*Uint64Response) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{25}
+	return fileDescriptor_77a6da22d6a3feb1, []int{27}
 }
 func (m *Uint64Response) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1727,7 +1905,7 @@ func (m *BytesSliceResponse) Reset()         { *m = BytesSliceResponse{} }
 func (m *BytesSliceResponse) String() string { return proto.CompactTextString(m) }
 func (*BytesSliceResponse) ProtoMessage()    {}
 func (*BytesSliceResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{26}
+	return fileDescriptor_77a6da22d6a3feb1, []int{28}
 }
 func (m *BytesSliceResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1789,7 +1967,7 @@ func (m *Uint32Response) Reset()         { *m = Uint32Response{} }
 func (m *Uint32Response) String() string { return proto.CompactTextString(m) }
 func (*Uint32Response) ProtoMessage()    {}
 func (*Uint32Response) Descriptor() ([]byte, []int) {
-	return fileDescriptor_77a6da22d6a3feb1, []int{27}
+	return fileDescriptor_77a6da22d6a3feb1, []int{29}
 }
 func (m *Uint32Response) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1825,11 +2003,138 @@ func (m *Uint32Response) GetValue() uint32 {
 	return 0
 }
 
+type TpeScanResponse struct {
+	Keys                 [][]byte `protobuf:"bytes,1,rep,name=keys,proto3" json:"keys,omitempty"`
+	Values               [][]byte `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
+	CompleteInAllShards  bool     `protobuf:"varint,3,opt,name=completeInAllShards,proto3" json:"completeInAllShards,omitempty"`
+	NextScanKey          []byte   `protobuf:"bytes,4,opt,name=nextScanKey,proto3" json:"nextScanKey,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TpeScanResponse) Reset()         { *m = TpeScanResponse{} }
+func (m *TpeScanResponse) String() string { return proto.CompactTextString(m) }
+func (*TpeScanResponse) ProtoMessage()    {}
+func (*TpeScanResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{30}
+}
+func (m *TpeScanResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TpeScanResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TpeScanResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TpeScanResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TpeScanResponse.Merge(m, src)
+}
+func (m *TpeScanResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *TpeScanResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TpeScanResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TpeScanResponse proto.InternalMessageInfo
+
+func (m *TpeScanResponse) GetKeys() [][]byte {
+	if m != nil {
+		return m.Keys
+	}
+	return nil
+}
+
+func (m *TpeScanResponse) GetValues() [][]byte {
+	if m != nil {
+		return m.Values
+	}
+	return nil
+}
+
+func (m *TpeScanResponse) GetCompleteInAllShards() bool {
+	if m != nil {
+		return m.CompleteInAllShards
+	}
+	return false
+}
+
+func (m *TpeScanResponse) GetNextScanKey() []byte {
+	if m != nil {
+		return m.NextScanKey
+	}
+	return nil
+}
+
+type TpeCheckKeysExistInBatchResponse struct {
+	ExistedKeyIndex      int32    `protobuf:"varint,1,opt,name=existedKeyIndex,proto3" json:"existedKeyIndex,omitempty"`
+	ShardID              uint64   `protobuf:"varint,2,opt,name=shardID,proto3" json:"shardID,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) Reset()         { *m = TpeCheckKeysExistInBatchResponse{} }
+func (m *TpeCheckKeysExistInBatchResponse) String() string { return proto.CompactTextString(m) }
+func (*TpeCheckKeysExistInBatchResponse) ProtoMessage()    {}
+func (*TpeCheckKeysExistInBatchResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_77a6da22d6a3feb1, []int{31}
+}
+func (m *TpeCheckKeysExistInBatchResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *TpeCheckKeysExistInBatchResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_TpeCheckKeysExistInBatchResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *TpeCheckKeysExistInBatchResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_TpeCheckKeysExistInBatchResponse.Merge(m, src)
+}
+func (m *TpeCheckKeysExistInBatchResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *TpeCheckKeysExistInBatchResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_TpeCheckKeysExistInBatchResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_TpeCheckKeysExistInBatchResponse proto.InternalMessageInfo
+
+func (m *TpeCheckKeysExistInBatchResponse) GetExistedKeyIndex() int32 {
+	if m != nil {
+		return m.ExistedKeyIndex
+	}
+	return 0
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) GetShardID() uint64 {
+	if m != nil {
+		return m.ShardID
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterEnum("pb.Type", Type_name, Type_value)
 	proto.RegisterType((*Request)(nil), "pb.Request")
 	proto.RegisterType((*Response)(nil), "pb.Response")
 	proto.RegisterType((*SetRequest)(nil), "pb.SetRequest")
+	proto.RegisterType((*TpeSetBatchRequest)(nil), "pb.TpeSetBatchRequest")
 	proto.RegisterType((*GetRequest)(nil), "pb.GetRequest")
 	proto.RegisterType((*DeleteRequest)(nil), "pb.DeleteRequest")
 	proto.RegisterType((*AllocIDRequest)(nil), "pb.AllocIDRequest")
@@ -1837,7 +2142,8 @@ func init() {
 	proto.RegisterType((*PrefixScanRequest)(nil), "pb.PrefixScanRequest")
 	proto.RegisterType((*TpePrefixScanRequest)(nil), "pb.TpePrefixScanRequest")
 	proto.RegisterType((*TpeScanRequest)(nil), "pb.TpeScanRequest")
-	proto.RegisterType((*TpeDeleteWithPrefixRequest)(nil), "pb.TpeDeleteWithPrefixRequest")
+	proto.RegisterType((*TpeDeleteBatchRequest)(nil), "pb.TpeDeleteBatchRequest")
+	proto.RegisterType((*TpeCheckKeysExistInBatchRequest)(nil), "pb.TpeCheckKeysExistInBatchRequest")
 	proto.RegisterType((*AppendRequest)(nil), "pb.AppendRequest")
 	proto.RegisterType((*GetSnapshotRequest)(nil), "pb.GetSnapshotRequest")
 	proto.RegisterType((*GetSegmentIdsRequest)(nil), "pb.GetSegmentIdsRequest")
@@ -1855,96 +2161,110 @@ func init() {
 	proto.RegisterType((*Uint64Response)(nil), "pb.Uint64Response")
 	proto.RegisterType((*BytesSliceResponse)(nil), "pb.BytesSliceResponse")
 	proto.RegisterType((*Uint32Response)(nil), "pb.Uint32Response")
+	proto.RegisterType((*TpeScanResponse)(nil), "pb.TpeScanResponse")
+	proto.RegisterType((*TpeCheckKeysExistInBatchResponse)(nil), "pb.TpeCheckKeysExistInBatchResponse")
 }
 
 func init() { proto.RegisterFile("rpc.proto", fileDescriptor_77a6da22d6a3feb1) }
 
 var fileDescriptor_77a6da22d6a3feb1 = []byte{
-	// 1339 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x57, 0x5f, 0x6f, 0xdb, 0xb6,
-	0x17, 0xad, 0xff, 0xc4, 0x7f, 0x6e, 0x6c, 0x97, 0x61, 0xd3, 0x56, 0x0d, 0x8a, 0x24, 0x3f, 0xe1,
-	0xb7, 0xac, 0x2b, 0xd0, 0x14, 0x4b, 0xb7, 0xa1, 0xc0, 0x80, 0x01, 0x75, 0x5d, 0x18, 0x46, 0x8b,
-	0xb6, 0x90, 0xbd, 0x6e, 0x2f, 0x1b, 0x20, 0x5b, 0x8c, 0xad, 0x46, 0x96, 0x34, 0x89, 0x1e, 0x6a,
-	0x60, 0x5f, 0x64, 0xdf, 0xa8, 0x4f, 0x43, 0x1f, 0xf7, 0x54, 0x6c, 0xf9, 0x24, 0xc3, 0xbd, 0x94,
-	0x4c, 0xd1, 0x76, 0x36, 0x60, 0x7b, 0x23, 0x0f, 0xcf, 0x39, 0xbc, 0xe4, 0x15, 0xef, 0xb5, 0xa1,
-	0x99, 0xc4, 0x93, 0xd3, 0x38, 0x89, 0x64, 0xc4, 0xcb, 0xf1, 0xf8, 0xe0, 0xc1, 0xd4, 0x97, 0xb3,
-	0xc5, 0xf8, 0x74, 0x12, 0xcd, 0x1f, 0x4e, 0xa3, 0x69, 0xf4, 0x90, 0x96, 0xc6, 0x8b, 0x73, 0x9a,
-	0xd1, 0x84, 0x46, 0x4a, 0x72, 0x00, 0x73, 0x21, 0x5d, 0x35, 0xb6, 0x7f, 0x6d, 0x42, 0xdd, 0x11,
-	0x3f, 0x2d, 0x44, 0x2a, 0xf9, 0x2d, 0x28, 0xfb, 0x9e, 0x55, 0x3a, 0x2e, 0xdd, 0xab, 0x76, 0x6b,
-	0x97, 0x1f, 0x8f, 0xca, 0x83, 0x9e, 0x53, 0xf6, 0x3d, 0x7e, 0x17, 0xaa, 0x72, 0x19, 0x0b, 0xab,
-	0x7c, 0x5c, 0xba, 0xd7, 0x39, 0x6b, 0x9c, 0xc6, 0xe3, 0xd3, 0xd1, 0x32, 0x16, 0x0e, 0xa1, 0xfc,
-	0x08, 0x76, 0xa6, 0x49, 0xb4, 0x88, 0xad, 0x0a, 0x2d, 0x37, 0x71, 0xb9, 0x8f, 0x80, 0xa3, 0x70,
-	0xbe, 0x0f, 0x3b, 0xe9, 0xcc, 0x4d, 0x3c, 0xab, 0x8a, 0xce, 0x8e, 0x9a, 0xf0, 0x13, 0xa8, 0xa4,
-	0x42, 0x5a, 0x3b, 0xc7, 0xa5, 0x7b, 0xbb, 0x67, 0x1d, 0x14, 0x0d, 0x85, 0xcc, 0x22, 0xe9, 0x56,
-	0xdf, 0x7f, 0x3c, 0xba, 0xe6, 0x20, 0x01, 0x79, 0x53, 0x21, 0xad, 0x9a, 0xe6, 0xf5, 0x37, 0x78,
-	0x53, 0x21, 0xf9, 0x43, 0xa8, 0x79, 0x22, 0x10, 0x52, 0x58, 0x75, 0xa2, 0xee, 0x21, 0xb5, 0x47,
-	0x88, 0xc9, 0xce, 0x68, 0xfc, 0x33, 0xa8, 0xa6, 0x13, 0x37, 0xb4, 0x1a, 0x44, 0xbf, 0x4e, 0x11,
-	0x4c, 0xdc, 0xd0, 0x24, 0x13, 0x85, 0x7f, 0x0d, 0x10, 0x27, 0xe2, 0xdc, 0x7f, 0x87, 0x04, 0xab,
-	0x49, 0x82, 0x9b, 0x28, 0x78, 0xbd, 0x42, 0x4d, 0x59, 0x81, 0xce, 0xcf, 0xa0, 0xee, 0x06, 0x41,
-	0x34, 0x19, 0xf4, 0x2c, 0x20, 0x25, 0x47, 0xe5, 0x13, 0x05, 0x99, 0xb2, 0x9c, 0xc8, 0x7b, 0xd0,
-	0x96, 0xb1, 0xd0, 0xee, 0xd6, 0x2e, 0x29, 0x2d, 0xba, 0xfa, 0xe2, 0x82, 0xa9, 0x37, 0x45, 0xb8,
-	0xb3, 0x8c, 0x05, 0xe9, 0x5b, 0x7a, 0xe7, 0x91, 0x82, 0xd6, 0x76, 0xce, 0x88, 0xfc, 0x0d, 0xdc,
-	0x18, 0xc5, 0x42, 0xdd, 0xdb, 0x77, 0xbe, 0x9c, 0x29, 0x3b, 0xab, 0x4d, 0xfa, 0xc3, 0x4c, 0xbf,
-	0xbe, 0x6c, 0x7a, 0x6d, 0x33, 0xc0, 0xf4, 0xb8, 0x71, 0x2c, 0x42, 0xcf, 0xf2, 0x74, 0x7a, 0x9e,
-	0x10, 0xb2, 0x96, 0x1e, 0x45, 0xe3, 0xdf, 0xc0, 0xee, 0x54, 0xc8, 0x61, 0xe8, 0xc6, 0xe9, 0x2c,
-	0x92, 0x96, 0x20, 0xd5, 0xad, 0x2c, 0xff, 0x39, 0x6c, 0x4a, 0x8b, 0x02, 0xfe, 0x18, 0x9a, 0xd2,
-	0x1d, 0x07, 0x42, 0x0e, 0xbc, 0xd4, 0x3a, 0x27, 0xf5, 0x3e, 0x85, 0xaf, 0xc0, 0x5e, 0x6a, 0x6a,
-	0x35, 0x99, 0x3f, 0x81, 0xd6, 0x24, 0x11, 0xae, 0x14, 0x8a, 0x6a, 0x4d, 0x49, 0x7c, 0x1b, 0xc5,
-	0x4f, 0x0b, 0xb8, 0xa9, 0x37, 0x24, 0xf8, 0xc1, 0x78, 0x49, 0x14, 0x67, 0x06, 0x33, 0xfd, 0xc1,
-	0xf4, 0x56, 0xe8, 0xda, 0x07, 0xa3, 0xe9, 0x98, 0x7c, 0x3c, 0x88, 0x98, 0xce, 0x45, 0x48, 0xd1,
-	0xfb, 0x3a, 0xf9, 0xfd, 0xe2, 0xc2, 0x5a, 0xf2, 0x0d, 0x11, 0xef, 0x43, 0x47, 0x03, 0xc2, 0x1b,
-	0x78, 0xd6, 0x5b, 0xb2, 0xb9, 0x63, 0xda, 0xe0, 0x8a, 0xe9, 0xb3, 0x26, 0xc3, 0x44, 0xa8, 0xb3,
-	0x0d, 0x42, 0x4f, 0xbc, 0xb3, 0x2e, 0x74, 0x22, 0x9e, 0x6a, 0x78, 0x2d, 0x11, 0x05, 0x01, 0x26,
-	0x02, 0x0f, 0xa7, 0xd4, 0x81, 0x4e, 0x44, 0x2f, 0x07, 0xd7, 0x12, 0xb1, 0x22, 0xdb, 0xbf, 0x55,
-	0xa0, 0xe1, 0x88, 0x34, 0x8e, 0xc2, 0x54, 0xfc, 0xcb, 0xe2, 0xf4, 0x00, 0x76, 0x44, 0x92, 0x44,
-	0x09, 0x15, 0xa7, 0xec, 0xab, 0x7b, 0x86, 0x40, 0xee, 0x9b, 0xed, 0xaa, 0x58, 0xfc, 0x4b, 0x68,
-	0x8e, 0x97, 0x52, 0xa4, 0xb8, 0x4a, 0xe5, 0x2a, 0x93, 0x74, 0x73, 0xb0, 0x20, 0xd1, 0x4c, 0x7e,
-	0x06, 0x8d, 0x71, 0x14, 0x05, 0xa4, 0x52, 0x05, 0x8d, 0x91, 0x2a, 0xc3, 0x0a, 0xa2, 0x15, 0x8f,
-	0x3f, 0x06, 0x58, 0xf8, 0xa1, 0xfc, 0xea, 0x0b, 0x52, 0xd5, 0xf4, 0xfb, 0xfc, 0x76, 0x85, 0x16,
-	0x74, 0x05, 0x6e, 0xae, 0x7c, 0x74, 0x46, 0xca, 0xba, 0xa9, 0x54, 0xe8, 0xba, 0x52, 0xa1, 0xbc,
-	0x07, 0x1d, 0x0a, 0x7a, 0x18, 0xf8, 0x13, 0x41, 0xea, 0x86, 0xce, 0x66, 0xd7, 0x58, 0x29, 0x38,
-	0xac, 0x69, 0x70, 0xff, 0x54, 0x26, 0x7e, 0x38, 0x25, 0x87, 0xa6, 0xde, 0x7f, 0xb8, 0x42, 0x8b,
-	0xfb, 0x6b, 0xae, 0xfd, 0x0a, 0x40, 0x17, 0x79, 0xce, 0xa0, 0x72, 0x21, 0x96, 0x94, 0xd2, 0x96,
-	0x83, 0x43, 0xec, 0x14, 0x3f, 0xbb, 0xc1, 0x42, 0x25, 0xb3, 0xe5, 0xa8, 0x09, 0xbf, 0x03, 0x15,
-	0x29, 0x03, 0xca, 0x60, 0xa5, 0x5b, 0xbf, 0xfc, 0x78, 0x54, 0x19, 0x8d, 0x5e, 0x38, 0x88, 0xd9,
-	0x87, 0x00, 0xfd, 0xbf, 0x31, 0xb4, 0xff, 0x07, 0x6d, 0xa3, 0x05, 0x6c, 0xa1, 0x3c, 0x86, 0x8e,
-	0x59, 0x8b, 0xb7, 0xc7, 0x35, 0x76, 0xe5, 0x64, 0x46, 0x71, 0x55, 0x1d, 0x35, 0xb1, 0x9f, 0xc3,
-	0x6e, 0xa1, 0x90, 0x52, 0x9b, 0x93, 0x6e, 0x22, 0x33, 0xa1, 0x9a, 0xa0, 0x19, 0x16, 0x3d, 0x75,
-	0x20, 0x1c, 0x22, 0x2f, 0xf0, 0xe7, 0xbe, 0xa4, 0x03, 0x55, 0x1d, 0x35, 0xb1, 0x7f, 0x80, 0xbd,
-	0x8d, 0xaa, 0xce, 0x6f, 0x41, 0x4d, 0x35, 0x92, 0xcc, 0x33, 0x9b, 0xf1, 0x03, 0x68, 0x90, 0xfb,
-	0x73, 0xb1, 0xcc, 0x9c, 0x57, 0xf3, 0x2b, 0xec, 0x7f, 0x81, 0xfd, 0x6d, 0x7d, 0x83, 0xdf, 0x07,
-	0xa6, 0x3c, 0x5f, 0x25, 0xc3, 0xdc, 0x51, 0xed, 0xb5, 0x81, 0x73, 0x1b, 0x5a, 0x0a, 0x7b, 0x21,
-	0xc2, 0xa9, 0x54, 0x97, 0x51, 0x71, 0x0c, 0xec, 0x8a, 0xdd, 0x67, 0xd0, 0x31, 0xbb, 0xce, 0x7f,
-	0xbb, 0x2c, 0x6e, 0x41, 0x3d, 0x14, 0xc2, 0xc3, 0x60, 0xf1, 0x91, 0x36, 0x9c, 0x7c, 0x6a, 0x7f,
-	0x0f, 0x07, 0x57, 0xf7, 0xa7, 0x2b, 0xef, 0xd3, 0x86, 0xd6, 0x24, 0x5a, 0xc8, 0xd7, 0x22, 0xe9,
-	0x16, 0xd2, 0x6c, 0x60, 0xf6, 0x53, 0x68, 0x1b, 0xed, 0x8a, 0x1f, 0x02, 0xa8, 0x9e, 0xf1, 0xd2,
-	0x9d, 0x0b, 0x32, 0x6c, 0x3a, 0x05, 0x84, 0x73, 0xa8, 0x7a, 0xae, 0x74, 0xb3, 0xd3, 0xd0, 0xd8,
-	0x3e, 0x01, 0xbe, 0xd9, 0xbd, 0xf0, 0xd8, 0x13, 0x99, 0xc7, 0x84, 0x43, 0xfb, 0x3e, 0xec, 0x6f,
-	0xab, 0xf4, 0xe8, 0x19, 0xea, 0xdd, 0x68, 0x6c, 0x7f, 0x0e, 0x37, 0xb7, 0x96, 0x73, 0xbc, 0x25,
-	0xfa, 0xa9, 0x35, 0xc8, 0xca, 0xa6, 0x93, 0x4f, 0xed, 0x17, 0xc0, 0x37, 0x6b, 0x37, 0xbf, 0x9b,
-	0x75, 0xcc, 0xc2, 0x79, 0x34, 0x80, 0x6e, 0x7e, 0xe8, 0xf9, 0x13, 0x91, 0x66, 0x27, 0xca, 0xa7,
-	0xf6, 0x4b, 0x60, 0xeb, 0xb5, 0xfc, 0x1f, 0xbc, 0xee, 0x42, 0xd3, 0x47, 0x36, 0xad, 0x96, 0xd5,
-	0xea, 0x0a, 0xb0, 0x39, 0xb0, 0xf5, 0x26, 0x6d, 0xf7, 0xe1, 0xc6, 0x96, 0xde, 0xbb, 0xed, 0x3e,
-	0x56, 0x5b, 0x0f, 0xc2, 0xf3, 0x28, 0x0b, 0x55, 0x03, 0xf6, 0xa7, 0xb0, 0xb7, 0xd1, 0x83, 0xb7,
-	0x5e, 0xeb, 0x27, 0xd0, 0x36, 0x1a, 0x05, 0x7e, 0x8a, 0xaa, 0x95, 0x28, 0x96, 0x9a, 0xd8, 0xd7,
-	0xa1, 0xfd, 0x6c, 0x1e, 0xcb, 0x65, 0x4e, 0xb3, 0x4f, 0xa0, 0x63, 0xd6, 0x41, 0x5d, 0xd5, 0x32,
-	0x21, 0x4d, 0xd0, 0xdf, 0xe8, 0x2a, 0x26, 0x2d, 0x2f, 0x7e, 0xf6, 0xff, 0xa1, 0x55, 0x6c, 0x23,
-	0x26, 0xab, 0x91, 0xb3, 0x4e, 0xa0, 0x63, 0xb6, 0x0d, 0x93, 0x57, 0xcd, 0x79, 0x3f, 0x02, 0xdf,
-	0x2c, 0xf3, 0x78, 0xfc, 0x0b, 0xb1, 0x4c, 0xad, 0xd2, 0x71, 0x05, 0xbf, 0x54, 0x1c, 0xe3, 0x53,
-	0x21, 0x09, 0x66, 0x1b, 0xd1, 0x6c, 0x86, 0xb7, 0x1b, 0xb8, 0xa9, 0x7c, 0x43, 0xde, 0xea, 0x51,
-	0x6a, 0x20, 0x8f, 0x43, 0x37, 0x21, 0x33, 0x8e, 0x76, 0x16, 0xc7, 0xfd, 0xdf, 0xcb, 0x50, 0xc5,
-	0x2e, 0xcd, 0xeb, 0x50, 0x19, 0x0a, 0xc9, 0xae, 0xe1, 0xa0, 0x27, 0x02, 0x56, 0xc2, 0x41, 0x5f,
-	0x48, 0x56, 0xe6, 0x1d, 0x00, 0x5d, 0xaf, 0x58, 0x85, 0x37, 0xa0, 0x4a, 0xa3, 0x2a, 0x8e, 0x06,
-	0xe1, 0x24, 0x61, 0x3b, 0x7c, 0x0f, 0xda, 0x43, 0x21, 0x07, 0xe7, 0x2f, 0x23, 0xf9, 0xec, 0x9d,
-	0x9f, 0x4a, 0x56, 0x43, 0xa8, 0x27, 0x82, 0x02, 0x54, 0x47, 0xc8, 0x28, 0x7e, 0xac, 0xc1, 0x77,
-	0xa1, 0x9e, 0x55, 0x24, 0xd6, 0xe4, 0xb7, 0xb7, 0xfe, 0xe6, 0x65, 0xc0, 0x01, 0x6a, 0xea, 0xcd,
-	0x33, 0x8f, 0x5f, 0x87, 0xdd, 0xc2, 0xd3, 0x65, 0x82, 0x33, 0x68, 0x15, 0x3f, 0x49, 0x76, 0x8e,
-	0x11, 0xeb, 0x6f, 0x8b, 0x4d, 0x79, 0x0b, 0x7f, 0xbe, 0x04, 0xae, 0xf4, 0xa3, 0x90, 0xcd, 0x78,
-	0x1b, 0x9a, 0xa3, 0xfc, 0x37, 0x26, 0xf3, 0xd1, 0x6f, 0xb4, 0x2a, 0x16, 0x29, 0x7b, 0x8b, 0x51,
-	0x1a, 0x6f, 0x9e, 0x5d, 0x70, 0x0e, 0x1d, 0xf3, 0x69, 0xb3, 0x00, 0x75, 0x85, 0xb7, 0xcb, 0xe6,
-	0xe8, 0xbb, 0x7a, 0x7e, 0x2c, 0xec, 0xb2, 0x0f, 0x7f, 0x1e, 0x5e, 0x7b, 0x7f, 0x79, 0x58, 0xfa,
-	0x70, 0x79, 0x58, 0xfa, 0xe3, 0xf2, 0xb0, 0x34, 0xae, 0xd1, 0x3f, 0xbd, 0x47, 0x7f, 0x05, 0x00,
-	0x00, 0xff, 0xff, 0x01, 0xdd, 0x9e, 0x86, 0x35, 0x0e, 0x00, 0x00,
+	// 1527 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x9c, 0x58, 0xdd, 0x6e, 0xdc, 0x44,
+	0x14, 0xee, 0xfe, 0x64, 0x7f, 0xce, 0xfe, 0xc4, 0x99, 0xa6, 0xc5, 0xad, 0xa2, 0x24, 0x18, 0x08,
+	0xa1, 0x52, 0x53, 0x48, 0x01, 0x55, 0x42, 0x42, 0x4a, 0xb2, 0xd1, 0x6a, 0xd5, 0xaa, 0x45, 0xde,
+	0xc0, 0x05, 0x12, 0x48, 0xde, 0xf5, 0x64, 0xe3, 0xae, 0xd7, 0x36, 0xeb, 0x09, 0xca, 0xde, 0x21,
+	0xde, 0x80, 0x5b, 0xde, 0x82, 0xb7, 0xe8, 0x15, 0xea, 0x13, 0x54, 0x90, 0x27, 0x41, 0xe7, 0x8c,
+	0xed, 0xf1, 0xec, 0x3a, 0x14, 0x7a, 0x37, 0xf3, 0xcd, 0xf7, 0x9d, 0x39, 0x33, 0x73, 0xf6, 0x7c,
+	0x4e, 0xa0, 0x39, 0x8f, 0xc6, 0x07, 0xd1, 0x3c, 0x14, 0x21, 0x2b, 0x47, 0xa3, 0xfb, 0x0f, 0x27,
+	0x9e, 0xb8, 0xb8, 0x1c, 0x1d, 0x8c, 0xc3, 0xd9, 0xa3, 0x49, 0x38, 0x09, 0x1f, 0xd1, 0xd2, 0xe8,
+	0xf2, 0x9c, 0x66, 0x34, 0xa1, 0x91, 0x94, 0xdc, 0x87, 0x19, 0x17, 0x8e, 0x1c, 0x5b, 0x7f, 0x00,
+	0xd4, 0x6d, 0xfe, 0xd3, 0x25, 0x8f, 0x05, 0xbb, 0x0b, 0x65, 0xcf, 0x35, 0x4b, 0xbb, 0xa5, 0xfd,
+	0xea, 0x71, 0xed, 0xfa, 0xcd, 0x4e, 0x79, 0xd0, 0xb3, 0xcb, 0x9e, 0xcb, 0xb6, 0xa0, 0x2a, 0x16,
+	0x11, 0x37, 0xcb, 0xbb, 0xa5, 0xfd, 0xee, 0x61, 0xe3, 0x20, 0x1a, 0x1d, 0x9c, 0x2d, 0x22, 0x6e,
+	0x13, 0xca, 0x76, 0x60, 0x6d, 0x32, 0x0f, 0x2f, 0x23, 0xb3, 0x42, 0xcb, 0x4d, 0x5c, 0xee, 0x23,
+	0x60, 0x4b, 0x9c, 0x6d, 0xc2, 0x5a, 0x7c, 0xe1, 0xcc, 0x5d, 0xb3, 0x8a, 0x91, 0x6d, 0x39, 0x61,
+	0x7b, 0x50, 0x89, 0xb9, 0x30, 0xd7, 0x76, 0x4b, 0xfb, 0xad, 0xc3, 0x2e, 0x8a, 0x86, 0x5c, 0x24,
+	0x99, 0x1c, 0x57, 0x5f, 0xbd, 0xd9, 0xb9, 0x65, 0x23, 0x01, 0x79, 0x13, 0x2e, 0xcc, 0x9a, 0xe2,
+	0xf5, 0x57, 0x78, 0x13, 0x2e, 0xd8, 0x23, 0xa8, 0xb9, 0xdc, 0xe7, 0x82, 0x9b, 0x75, 0xa2, 0x6e,
+	0x20, 0xb5, 0x47, 0x88, 0xce, 0x4e, 0x68, 0xec, 0x13, 0xa8, 0xc6, 0x63, 0x27, 0x30, 0x1b, 0x44,
+	0x5f, 0xa7, 0x0c, 0xc6, 0x4e, 0xa0, 0x93, 0x89, 0xc2, 0xbe, 0x02, 0x88, 0xe6, 0xfc, 0xdc, 0xbb,
+	0x42, 0x82, 0xd9, 0x24, 0xc1, 0x1d, 0x14, 0x7c, 0x93, 0xa1, 0xba, 0x2c, 0x47, 0x67, 0x87, 0x50,
+	0x77, 0x7c, 0x3f, 0x1c, 0x0f, 0x7a, 0x26, 0x90, 0x92, 0xa1, 0xf2, 0x48, 0x42, 0xba, 0x2c, 0x25,
+	0xb2, 0x1e, 0x74, 0x44, 0xc4, 0x55, 0x74, 0xb3, 0x45, 0x4a, 0x93, 0xae, 0x3e, 0xbf, 0xa0, 0xeb,
+	0x75, 0x11, 0xee, 0x2c, 0x22, 0x4e, 0xfa, 0xb6, 0xda, 0xf9, 0x4c, 0x42, 0x4b, 0x3b, 0x27, 0x44,
+	0xd6, 0x87, 0xae, 0x88, 0xb8, 0xbc, 0xb7, 0x63, 0x47, 0x8c, 0x2f, 0xcc, 0x0e, 0x49, 0xef, 0x25,
+	0xd2, 0xdc, 0x8a, 0x1e, 0x61, 0x49, 0xc6, 0x38, 0x98, 0x22, 0xe2, 0x27, 0x17, 0x7c, 0x3c, 0x7d,
+	0xca, 0x17, 0xf1, 0xe9, 0x95, 0x17, 0x8b, 0x41, 0x20, 0x43, 0x76, 0x29, 0xe4, 0x07, 0x49, 0xc8,
+	0x42, 0x8e, 0x1e, 0xfc, 0xc6, 0x50, 0xec, 0x6b, 0x68, 0x61, 0xea, 0x5c, 0xc8, 0xc8, 0xeb, 0x14,
+	0xf9, 0x6e, 0x7a, 0xce, 0x04, 0xd6, 0x83, 0xe5, 0x05, 0x58, 0x36, 0x4e, 0x14, 0xf1, 0xc0, 0x35,
+	0x5d, 0x55, 0x36, 0x47, 0x84, 0x2c, 0x95, 0x8d, 0xa4, 0xe1, 0x86, 0x13, 0x2e, 0x86, 0x81, 0x13,
+	0xc5, 0x17, 0xa1, 0x30, 0xb9, 0xda, 0xb0, 0xaf, 0xe0, 0xa5, 0x0d, 0x73, 0x02, 0xf6, 0x04, 0x9a,
+	0xc2, 0x19, 0xf9, 0x5c, 0x0c, 0xdc, 0xd8, 0x3c, 0x27, 0xf5, 0x26, 0xa5, 0x2b, 0xc1, 0x5e, 0xac,
+	0x6b, 0x15, 0x99, 0x1d, 0x41, 0x7b, 0x3c, 0xe7, 0x8e, 0xe0, 0x92, 0x6a, 0x4e, 0x48, 0xfc, 0x1e,
+	0x8a, 0x4f, 0x72, 0xb8, 0xae, 0xd7, 0x24, 0x58, 0xc8, 0xee, 0x3c, 0x8c, 0x92, 0x00, 0x17, 0xaa,
+	0x90, 0x7b, 0x19, 0xba, 0x54, 0xc8, 0x8a, 0x8e, 0x45, 0x89, 0x07, 0xe1, 0x93, 0x19, 0x0f, 0x28,
+	0x7b, 0x4f, 0x15, 0x65, 0x3f, 0xbf, 0xb0, 0x54, 0x94, 0x9a, 0x08, 0x0b, 0x4c, 0x01, 0xdc, 0x1d,
+	0xb8, 0xe6, 0x4b, 0x55, 0x60, 0x7d, 0x6d, 0x65, 0xa9, 0xc0, 0x74, 0x19, 0x3e, 0x84, 0x3c, 0xdb,
+	0x20, 0x70, 0xf9, 0x95, 0x39, 0x55, 0x0f, 0x71, 0xa2, 0xe0, 0xa5, 0x87, 0xc8, 0x09, 0xf0, 0x21,
+	0xf0, 0x70, 0x52, 0xed, 0xab, 0x87, 0xe8, 0xa5, 0xe0, 0xd2, 0x43, 0x64, 0x64, 0xeb, 0xcf, 0x0a,
+	0x34, 0x6c, 0x1e, 0x47, 0x61, 0x10, 0xf3, 0x77, 0x6c, 0x9a, 0x0f, 0x61, 0x8d, 0xcf, 0xe7, 0xe1,
+	0x9c, 0x9a, 0x66, 0x52, 0x75, 0xa7, 0x08, 0xa4, 0x71, 0x93, 0x5d, 0x25, 0x8b, 0x7d, 0x01, 0xcd,
+	0xd1, 0x42, 0xf0, 0x18, 0x57, 0xa9, 0x8d, 0x26, 0x92, 0xe3, 0x14, 0xcc, 0x49, 0x14, 0x93, 0x1d,
+	0x42, 0x63, 0x14, 0x86, 0x3e, 0xa9, 0x64, 0xa3, 0x35, 0x48, 0x95, 0x60, 0x39, 0x51, 0xc6, 0x63,
+	0x4f, 0x00, 0x2e, 0xbd, 0x40, 0x7c, 0xf9, 0x39, 0xa9, 0x6a, 0xaa, 0x6f, 0x7c, 0x9b, 0xa1, 0x39,
+	0x5d, 0x8e, 0x9b, 0x2a, 0x1f, 0x1f, 0x92, 0xb2, 0xae, 0x2b, 0x25, 0xba, 0xac, 0x94, 0x28, 0xeb,
+	0x41, 0x97, 0x92, 0x1e, 0xfa, 0xde, 0x98, 0x93, 0xba, 0xa1, 0x5e, 0xf3, 0x58, 0x5b, 0xc9, 0x45,
+	0x58, 0xd2, 0xe0, 0xfe, 0xb1, 0x98, 0x7b, 0xc1, 0x84, 0x22, 0x34, 0xd5, 0xfe, 0xc3, 0x0c, 0xcd,
+	0xef, 0xaf, 0xb8, 0xd6, 0x14, 0x40, 0x99, 0x0f, 0x33, 0xa0, 0x32, 0xe5, 0x0b, 0x7a, 0xd2, 0xb6,
+	0x8d, 0x43, 0x74, 0xb0, 0x9f, 0x1d, 0xff, 0x52, 0x3e, 0x66, 0xdb, 0x96, 0x13, 0x76, 0x0f, 0x2a,
+	0x42, 0xf8, 0xf4, 0x82, 0x95, 0xe3, 0xfa, 0xf5, 0x9b, 0x9d, 0xca, 0xd9, 0xd9, 0x33, 0x1b, 0x31,
+	0x76, 0x1f, 0x1a, 0x53, 0xbe, 0x90, 0xa5, 0x85, 0xcf, 0xb5, 0x66, 0x67, 0x73, 0xeb, 0x7b, 0x60,
+	0xab, 0xad, 0x89, 0x31, 0xa8, 0x4e, 0xf9, 0x22, 0x36, 0x4b, 0xbb, 0x95, 0xfd, 0xb6, 0x4d, 0x63,
+	0x76, 0x17, 0x6a, 0xb4, 0x53, 0x6c, 0x96, 0x09, 0x4d, 0x66, 0xcc, 0x84, 0x3a, 0x79, 0xe8, 0xa0,
+	0x47, 0x9b, 0x57, 0xed, 0x74, 0x6a, 0x6d, 0x03, 0xf4, 0xff, 0xe5, 0x20, 0xd6, 0xfb, 0xd0, 0xd1,
+	0x2c, 0xb1, 0x80, 0xf2, 0x04, 0xba, 0xba, 0x37, 0x15, 0xdf, 0xc7, 0x88, 0xda, 0x6d, 0x59, 0x3a,
+	0x3a, 0x4d, 0xac, 0xa7, 0xd0, 0xca, 0x19, 0x0b, 0xd9, 0xbe, 0x70, 0xe6, 0x22, 0x11, 0xca, 0x09,
+	0x06, 0xc3, 0x66, 0x2b, 0x2f, 0x12, 0x87, 0xc8, 0xf3, 0xbd, 0x99, 0x27, 0x92, 0xb3, 0xc8, 0x89,
+	0xf5, 0x03, 0x6c, 0xac, 0xb8, 0x1c, 0x5e, 0x88, 0x34, 0xd6, 0x24, 0x66, 0x32, 0xc3, 0xeb, 0xa6,
+	0xe8, 0x4f, 0xf9, 0x22, 0x89, 0x9c, 0xcd, 0x6f, 0x08, 0xff, 0x7b, 0x09, 0x36, 0x8b, 0x8c, 0x94,
+	0x3d, 0x00, 0x43, 0x06, 0x7d, 0x31, 0x1f, 0xa6, 0x21, 0xe5, 0x66, 0x2b, 0x38, 0xb3, 0xa0, 0x2d,
+	0xb1, 0x67, 0x3c, 0x98, 0x08, 0x79, 0x1b, 0x15, 0x5b, 0xc3, 0xd8, 0x16, 0x34, 0xe5, 0xfc, 0x34,
+	0x70, 0x29, 0x85, 0xb6, 0xad, 0x00, 0x95, 0x5c, 0x35, 0x9f, 0xdc, 0x2f, 0x25, 0xe8, 0xea, 0x2e,
+	0xfd, 0x9f, 0x2f, 0x53, 0xdd, 0x50, 0x45, 0xbb, 0xa1, 0xc2, 0x8d, 0xb0, 0x90, 0x02, 0xce, 0x5d,
+	0x3c, 0x23, 0xb6, 0x87, 0x86, 0x9d, 0x4e, 0xad, 0x21, 0xdc, 0x29, 0x34, 0xfb, 0xc2, 0x3a, 0xcd,
+	0x92, 0xab, 0x14, 0x24, 0x57, 0xcd, 0x92, 0xb3, 0x5e, 0xc0, 0xce, 0x5b, 0xec, 0xbe, 0x30, 0x7c,
+	0xae, 0xdc, 0xcb, 0x7a, 0xb9, 0x9f, 0x40, 0x47, 0xb3, 0x6a, 0xb6, 0x0d, 0x20, 0xfd, 0xf2, 0xb9,
+	0x33, 0xe3, 0x74, 0x57, 0x4d, 0x3b, 0x87, 0x60, 0x78, 0xd7, 0x11, 0x4e, 0x72, 0x63, 0x34, 0xb6,
+	0xf6, 0x80, 0xad, 0x3a, 0x37, 0x66, 0x3f, 0x16, 0x69, 0x9d, 0xe1, 0xd0, 0x7a, 0x00, 0x9b, 0x45,
+	0x2e, 0x87, 0x31, 0x03, 0xb5, 0x1b, 0x8d, 0xad, 0xcf, 0xe0, 0x4e, 0xa1, 0x95, 0xa9, 0xb3, 0x24,
+	0x96, 0x91, 0x9e, 0xc5, 0xb5, 0x9e, 0x01, 0x5b, 0xf5, 0x2d, 0x2c, 0x1f, 0x4a, 0x3f, 0x77, 0x1e,
+	0x05, 0x60, 0x34, 0x2f, 0x70, 0xbd, 0x31, 0x75, 0x08, 0x4c, 0x34, 0x9d, 0x5a, 0xcf, 0xc1, 0x58,
+	0xf6, 0xb1, 0xb7, 0xc4, 0xda, 0x82, 0xa6, 0x87, 0x6c, 0x5a, 0x2d, 0xcb, 0xd5, 0x0c, 0xb0, 0x18,
+	0x18, 0xcb, 0x1f, 0x28, 0x56, 0x1f, 0x6e, 0x17, 0x7c, 0x77, 0x14, 0xdd, 0x47, 0xb6, 0xf5, 0x20,
+	0x38, 0x0f, 0x93, 0x54, 0x15, 0x60, 0x7d, 0x0c, 0x1b, 0x2b, 0xdf, 0x1f, 0x85, 0xd7, 0xfa, 0x11,
+	0x74, 0x34, 0x93, 0xc4, 0xca, 0x93, 0x36, 0x2a, 0x59, 0x72, 0x62, 0xad, 0x43, 0xe7, 0x74, 0x16,
+	0x89, 0x45, 0x4a, 0xb3, 0xf6, 0xa0, 0xab, 0x7b, 0x80, 0xea, 0xe8, 0x89, 0x90, 0x26, 0x18, 0x5f,
+	0x73, 0x54, 0x9d, 0x96, 0x36, 0x7e, 0xeb, 0x43, 0x68, 0xe7, 0x2d, 0x54, 0x67, 0x35, 0x52, 0xd6,
+	0x1e, 0x74, 0x75, 0xcb, 0xd4, 0x79, 0xd5, 0x94, 0xf7, 0x23, 0xb0, 0x55, 0x8b, 0xfb, 0x5f, 0x7e,
+	0xb0, 0x05, 0x4d, 0xdf, 0x89, 0xc5, 0x77, 0x14, 0x5b, 0xb6, 0x39, 0x05, 0xa4, 0x79, 0x28, 0x03,
+	0xd6, 0xf3, 0xe8, 0xa4, 0x79, 0xfc, 0x56, 0x82, 0xf5, 0xac, 0xeb, 0xbc, 0x43, 0x16, 0x9f, 0xc2,
+	0xed, 0x71, 0x38, 0x8b, 0xb0, 0x63, 0x0c, 0x82, 0x23, 0xdf, 0x1f, 0x62, 0x61, 0xc7, 0x94, 0x4f,
+	0xc3, 0x2e, 0x5a, 0x62, 0xbb, 0xd0, 0x0a, 0xf8, 0x95, 0xc0, 0x1d, 0xb1, 0x05, 0xc9, 0x4e, 0x91,
+	0x87, 0xac, 0x73, 0xd8, 0xbd, 0xb9, 0x63, 0x24, 0x39, 0xee, 0xc3, 0x3a, 0x47, 0x9c, 0x1a, 0x97,
+	0xb4, 0xdc, 0x12, 0x59, 0xee, 0x32, 0x7c, 0x73, 0x23, 0x79, 0xf0, 0x6b, 0x05, 0xaa, 0xf8, 0x75,
+	0xc6, 0xea, 0x50, 0x19, 0x72, 0x61, 0xdc, 0xc2, 0x41, 0x8f, 0xfb, 0x46, 0x09, 0x07, 0x7d, 0x2e,
+	0x8c, 0x32, 0xeb, 0x02, 0x28, 0xbb, 0x30, 0x2a, 0xac, 0x01, 0x55, 0x1a, 0x55, 0x71, 0x34, 0x08,
+	0xc6, 0x73, 0x63, 0x8d, 0x6d, 0x40, 0x67, 0xc8, 0xc5, 0xe0, 0xfc, 0x79, 0x28, 0x28, 0x57, 0xa3,
+	0x86, 0x50, 0x8f, 0xfb, 0x39, 0xa8, 0x8e, 0x90, 0xe6, 0x3d, 0x46, 0x83, 0xb5, 0xa0, 0x9e, 0xdc,
+	0xbd, 0xd1, 0x64, 0x8c, 0xda, 0x7f, 0xae, 0xf9, 0x1a, 0xc0, 0xb6, 0xc0, 0xbc, 0xe9, 0x26, 0x8c,
+	0x16, 0x5b, 0x87, 0x56, 0xee, 0x9b, 0xc2, 0x68, 0x33, 0x80, 0x9a, 0xec, 0x8c, 0x86, 0x8b, 0x8b,
+	0xb9, 0x06, 0x67, 0x70, 0x66, 0x40, 0x3b, 0xff, 0xc3, 0x35, 0xce, 0xf1, 0x6c, 0xea, 0x17, 0x68,
+	0x4c, 0x58, 0x1b, 0x3f, 0x70, 0x7d, 0x47, 0x78, 0x61, 0x60, 0x5c, 0xb0, 0x0e, 0x34, 0xcf, 0xd2,
+	0xbf, 0x42, 0x0c, 0x8f, 0x36, 0xcb, 0x5a, 0x6a, 0x6c, 0xbc, 0xc4, 0xf3, 0x68, 0x9d, 0xd1, 0x98,
+	0xe2, 0x11, 0xf4, 0x06, 0x68, 0xf8, 0xa8, 0xcb, 0x75, 0x38, 0x63, 0x86, 0x71, 0xb3, 0x26, 0x65,
+	0x04, 0xc7, 0xc6, 0xeb, 0xbf, 0xb7, 0x6f, 0xbd, 0xba, 0xde, 0x2e, 0xbd, 0xbe, 0xde, 0x2e, 0xfd,
+	0x75, 0xbd, 0x5d, 0x1a, 0xd5, 0xe8, 0x7f, 0x14, 0x8f, 0xff, 0x09, 0x00, 0x00, 0xff, 0xff, 0xc0,
+	0xd2, 0xb9, 0xe7, 0xef, 0x10, 0x00, 0x00,
 }
 
 func (m *Request) Marshal() (dAtA []byte, err error) {
@@ -2080,7 +2400,27 @@ func (m *Request) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i--
 	dAtA[i] = 0xa2
 	{
-		size, err := m.TpeDeleteWithPrefix.MarshalToSizedBuffer(dAtA[:i])
+		size, err := m.TpeSetBatch.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintRpc(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x7a
+	{
+		size, err := m.TpeCheckKeysExistInBatch.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
+		}
+		i -= size
+		i = encodeVarintRpc(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x72
+	{
+		size, err := m.TpeDeleteBatch.MarshalToSizedBuffer(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
@@ -2323,6 +2663,11 @@ func (m *SetRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.KeyIndex != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.KeyIndex))
+		i--
+		dAtA[i] = 0x20
+	}
 	if m.TTL != 0 {
 		i = encodeVarintRpc(dAtA, i, uint64(m.TTL))
 		i--
@@ -2341,6 +2686,56 @@ func (m *SetRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintRpc(dAtA, i, uint64(len(m.Key)))
 		i--
 		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *TpeSetBatchRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TpeSetBatchRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TpeSetBatchRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.Values) > 0 {
+		for iNdEx := len(m.Values) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Values[iNdEx])
+			copy(dAtA[i:], m.Values[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Values[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
+	}
+	if len(m.Keys) > 0 {
+		for iNdEx := len(m.Keys) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Keys[iNdEx])
+			copy(dAtA[i:], m.Keys[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Keys[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
 	}
 	return len(dAtA) - i, nil
 }
@@ -2571,7 +2966,14 @@ func (m *TpePrefixScanRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.Limit != 0 {
 		i = encodeVarintRpc(dAtA, i, uint64(m.Limit))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x20
+	}
+	if len(m.PrefixEnd) > 0 {
+		i -= len(m.PrefixEnd)
+		copy(dAtA[i:], m.PrefixEnd)
+		i = encodeVarintRpc(dAtA, i, uint64(len(m.PrefixEnd)))
+		i--
+		dAtA[i] = 0x1a
 	}
 	if m.PrefixLength != 0 {
 		i = encodeVarintRpc(dAtA, i, uint64(m.PrefixLength))
@@ -2620,12 +3022,19 @@ func (m *TpeScanRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 			dAtA[i] = 0
 		}
 		i--
-		dAtA[i] = 0x20
+		dAtA[i] = 0x28
 	}
 	if m.Limit != 0 {
 		i = encodeVarintRpc(dAtA, i, uint64(m.Limit))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x20
+	}
+	if len(m.Prefix) > 0 {
+		i -= len(m.Prefix)
+		copy(dAtA[i:], m.Prefix)
+		i = encodeVarintRpc(dAtA, i, uint64(len(m.Prefix)))
+		i--
+		dAtA[i] = 0x1a
 	}
 	if len(m.End) > 0 {
 		i -= len(m.End)
@@ -2644,7 +3053,7 @@ func (m *TpeScanRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *TpeDeleteWithPrefixRequest) Marshal() (dAtA []byte, err error) {
+func (m *TpeDeleteBatchRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
 	n, err := m.MarshalToSizedBuffer(dAtA[:size])
@@ -2654,12 +3063,12 @@ func (m *TpeDeleteWithPrefixRequest) Marshal() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *TpeDeleteWithPrefixRequest) MarshalTo(dAtA []byte) (int, error) {
+func (m *TpeDeleteBatchRequest) MarshalTo(dAtA []byte) (int, error) {
 	size := m.Size()
 	return m.MarshalToSizedBuffer(dAtA[:size])
 }
 
-func (m *TpeDeleteWithPrefixRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+func (m *TpeDeleteBatchRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	i := len(dAtA)
 	_ = i
 	var l int
@@ -2668,17 +3077,69 @@ func (m *TpeDeleteWithPrefixRequest) MarshalToSizedBuffer(dAtA []byte) (int, err
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.CoutPerBatch != 0 {
-		i = encodeVarintRpc(dAtA, i, uint64(m.CoutPerBatch))
+	if len(m.End) > 0 {
+		i -= len(m.End)
+		copy(dAtA[i:], m.End)
+		i = encodeVarintRpc(dAtA, i, uint64(len(m.End)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.Start) > 0 {
+		i -= len(m.Start)
+		copy(dAtA[i:], m.Start)
+		i = encodeVarintRpc(dAtA, i, uint64(len(m.Start)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.Keys) > 0 {
+		for iNdEx := len(m.Keys) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Keys[iNdEx])
+			copy(dAtA[i:], m.Keys[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Keys[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.ShardID))
 		i--
 		dAtA[i] = 0x10
 	}
-	if len(m.Prefix) > 0 {
-		i -= len(m.Prefix)
-		copy(dAtA[i:], m.Prefix)
-		i = encodeVarintRpc(dAtA, i, uint64(len(m.Prefix)))
-		i--
-		dAtA[i] = 0xa
+	if len(m.Keys) > 0 {
+		for iNdEx := len(m.Keys) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Keys[iNdEx])
+			copy(dAtA[i:], m.Keys[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Keys[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
 	}
 	return len(dAtA) - i, nil
 }
@@ -3288,6 +3749,105 @@ func (m *Uint32Response) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *TpeScanResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TpeScanResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TpeScanResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.NextScanKey) > 0 {
+		i -= len(m.NextScanKey)
+		copy(dAtA[i:], m.NextScanKey)
+		i = encodeVarintRpc(dAtA, i, uint64(len(m.NextScanKey)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if m.CompleteInAllShards {
+		i--
+		if m.CompleteInAllShards {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x18
+	}
+	if len(m.Values) > 0 {
+		for iNdEx := len(m.Values) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Values[iNdEx])
+			copy(dAtA[i:], m.Values[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Values[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
+	}
+	if len(m.Keys) > 0 {
+		for iNdEx := len(m.Keys) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.Keys[iNdEx])
+			copy(dAtA[i:], m.Keys[iNdEx])
+			i = encodeVarintRpc(dAtA, i, uint64(len(m.Keys[iNdEx])))
+			i--
+			dAtA[i] = 0xa
+		}
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.ShardID != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.ShardID))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.ExistedKeyIndex != 0 {
+		i = encodeVarintRpc(dAtA, i, uint64(m.ExistedKeyIndex))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintRpc(dAtA []byte, offset int, v uint64) int {
 	offset -= sovRpc(v)
 	base := offset
@@ -3333,7 +3893,11 @@ func (m *Request) Size() (n int) {
 	n += 1 + l + sovRpc(uint64(l))
 	l = m.TpeScan.Size()
 	n += 1 + l + sovRpc(uint64(l))
-	l = m.TpeDeleteWithPrefix.Size()
+	l = m.TpeDeleteBatch.Size()
+	n += 1 + l + sovRpc(uint64(l))
+	l = m.TpeCheckKeysExistInBatch.Size()
+	n += 1 + l + sovRpc(uint64(l))
+	l = m.TpeSetBatch.Size()
 	n += 1 + l + sovRpc(uint64(l))
 	l = m.Append.Size()
 	n += 2 + l + sovRpc(uint64(l))
@@ -3407,6 +3971,36 @@ func (m *SetRequest) Size() (n int) {
 	}
 	if m.TTL != 0 {
 		n += 1 + sovRpc(uint64(m.TTL))
+	}
+	if m.KeyIndex != 0 {
+		n += 1 + sovRpc(uint64(m.KeyIndex))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TpeSetBatchRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Keys) > 0 {
+		for _, b := range m.Keys {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	if len(m.Values) > 0 {
+		for _, b := range m.Values {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	if m.ShardID != 0 {
+		n += 1 + sovRpc(uint64(m.ShardID))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3524,6 +4118,10 @@ func (m *TpePrefixScanRequest) Size() (n int) {
 	if m.PrefixLength != 0 {
 		n += 1 + sovRpc(uint64(m.PrefixLength))
 	}
+	l = len(m.PrefixEnd)
+	if l > 0 {
+		n += 1 + l + sovRpc(uint64(l))
+	}
 	if m.Limit != 0 {
 		n += 1 + sovRpc(uint64(m.Limit))
 	}
@@ -3547,6 +4145,10 @@ func (m *TpeScanRequest) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovRpc(uint64(l))
 	}
+	l = len(m.Prefix)
+	if l > 0 {
+		n += 1 + l + sovRpc(uint64(l))
+	}
 	if m.Limit != 0 {
 		n += 1 + sovRpc(uint64(m.Limit))
 	}
@@ -3559,18 +4161,46 @@ func (m *TpeScanRequest) Size() (n int) {
 	return n
 }
 
-func (m *TpeDeleteWithPrefixRequest) Size() (n int) {
+func (m *TpeDeleteBatchRequest) Size() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
-	l = len(m.Prefix)
+	if len(m.Keys) > 0 {
+		for _, b := range m.Keys {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	l = len(m.Start)
 	if l > 0 {
 		n += 1 + l + sovRpc(uint64(l))
 	}
-	if m.CoutPerBatch != 0 {
-		n += 1 + sovRpc(uint64(m.CoutPerBatch))
+	l = len(m.End)
+	if l > 0 {
+		n += 1 + l + sovRpc(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TpeCheckKeysExistInBatchRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Keys) > 0 {
+		for _, b := range m.Keys {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	if m.ShardID != 0 {
+		n += 1 + sovRpc(uint64(m.ShardID))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -3858,6 +4488,55 @@ func (m *Uint32Response) Size() (n int) {
 	_ = l
 	if m.Value != 0 {
 		n += 1 + sovRpc(uint64(m.Value))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TpeScanResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if len(m.Keys) > 0 {
+		for _, b := range m.Keys {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	if len(m.Values) > 0 {
+		for _, b := range m.Values {
+			l = len(b)
+			n += 1 + l + sovRpc(uint64(l))
+		}
+	}
+	if m.CompleteInAllShards {
+		n += 2
+	}
+	l = len(m.NextScanKey)
+	if l > 0 {
+		n += 1 + l + sovRpc(uint64(l))
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
+func (m *TpeCheckKeysExistInBatchResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.ExistedKeyIndex != 0 {
+		n += 1 + sovRpc(uint64(m.ExistedKeyIndex))
+	}
+	if m.ShardID != 0 {
+		n += 1 + sovRpc(uint64(m.ShardID))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -4242,7 +4921,7 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 13:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field TpeDeleteWithPrefix", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field TpeDeleteBatch", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -4269,7 +4948,73 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if err := m.TpeDeleteWithPrefix.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.TpeDeleteBatch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 14:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TpeCheckKeysExistInBatch", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.TpeCheckKeysExistInBatch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TpeSetBatch", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.TpeSetBatch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
@@ -5028,6 +5773,159 @@ func (m *SetRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field KeyIndex", wireType)
+			}
+			m.KeyIndex = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.KeyIndex |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipRpc(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TpeSetBatchRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowRpc
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TpeSetBatchRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TpeSetBatchRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Keys", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Keys = append(m.Keys, make([]byte, postIndex-iNdEx))
+			copy(m.Keys[len(m.Keys)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Values", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Values = append(m.Values, make([]byte, postIndex-iNdEx))
+			copy(m.Values[len(m.Values)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
+			}
+			m.ShardID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShardID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipRpc(dAtA[iNdEx:])
@@ -5683,6 +6581,40 @@ func (m *TpePrefixScanRequest) Unmarshal(dAtA []byte) error {
 				}
 			}
 		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PrefixEnd", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.PrefixEnd = append(m.PrefixEnd[:0], dAtA[iNdEx:postIndex]...)
+			if m.PrefixEnd == nil {
+				m.PrefixEnd = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Limit", wireType)
 			}
@@ -5821,6 +6753,40 @@ func (m *TpeScanRequest) Unmarshal(dAtA []byte) error {
 			}
 			iNdEx = postIndex
 		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Prefix", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Prefix = append(m.Prefix[:0], dAtA[iNdEx:postIndex]...)
+			if m.Prefix == nil {
+				m.Prefix = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Limit", wireType)
 			}
@@ -5839,7 +6805,7 @@ func (m *TpeScanRequest) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		case 4:
+		case 5:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field NeedKey", wireType)
 			}
@@ -5881,7 +6847,7 @@ func (m *TpeScanRequest) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *TpeDeleteWithPrefixRequest) Unmarshal(dAtA []byte) error {
+func (m *TpeDeleteBatchRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -5904,15 +6870,15 @@ func (m *TpeDeleteWithPrefixRequest) Unmarshal(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: TpeDeleteWithPrefixRequest: wiretype end group for non-group")
+			return fmt.Errorf("proto: TpeDeleteBatchRequest: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: TpeDeleteWithPrefixRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: TpeDeleteBatchRequest: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Prefix", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Keys", wireType)
 			}
 			var byteLen int
 			for shift := uint(0); ; shift += 7 {
@@ -5939,16 +6905,14 @@ func (m *TpeDeleteWithPrefixRequest) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Prefix = append(m.Prefix[:0], dAtA[iNdEx:postIndex]...)
-			if m.Prefix == nil {
-				m.Prefix = []byte{}
-			}
+			m.Keys = append(m.Keys, make([]byte, postIndex-iNdEx))
+			copy(m.Keys[len(m.Keys)-1], dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field CoutPerBatch", wireType)
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Start", wireType)
 			}
-			m.CoutPerBatch = 0
+			var byteLen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return ErrIntOverflowRpc
@@ -5958,7 +6922,158 @@ func (m *TpeDeleteWithPrefixRequest) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.CoutPerBatch |= uint64(b&0x7F) << shift
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Start = append(m.Start[:0], dAtA[iNdEx:postIndex]...)
+			if m.Start == nil {
+				m.Start = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field End", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.End = append(m.End[:0], dAtA[iNdEx:postIndex]...)
+			if m.End == nil {
+				m.End = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipRpc(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TpeCheckKeysExistInBatchRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowRpc
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TpeCheckKeysExistInBatchRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TpeCheckKeysExistInBatchRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Keys", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Keys = append(m.Keys, make([]byte, postIndex-iNdEx))
+			copy(m.Keys[len(m.Keys)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
+			}
+			m.ShardID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShardID |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -7444,6 +8559,264 @@ func (m *Uint32Response) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.Value |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipRpc(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TpeScanResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowRpc
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TpeScanResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TpeScanResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Keys", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Keys = append(m.Keys, make([]byte, postIndex-iNdEx))
+			copy(m.Keys[len(m.Keys)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Values", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Values = append(m.Values, make([]byte, postIndex-iNdEx))
+			copy(m.Values[len(m.Values)-1], dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CompleteInAllShards", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.CompleteInAllShards = bool(v != 0)
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NextScanKey", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthRpc
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NextScanKey = append(m.NextScanKey[:0], dAtA[iNdEx:postIndex]...)
+			if m.NextScanKey == nil {
+				m.NextScanKey = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipRpc(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthRpc
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *TpeCheckKeysExistInBatchResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowRpc
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: TpeCheckKeysExistInBatchResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: TpeCheckKeysExistInBatchResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ExistedKeyIndex", wireType)
+			}
+			m.ExistedKeyIndex = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ExistedKeyIndex |= int32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ShardID", wireType)
+			}
+			m.ShardID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowRpc
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ShardID |= uint64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

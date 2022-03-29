@@ -67,6 +67,8 @@ const (
 	SumIntRing
 	SumUIntRing
 	SumFloatRing
+	// Variance
+	VarianceRing
 )
 
 // colexec

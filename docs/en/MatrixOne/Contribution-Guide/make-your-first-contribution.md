@@ -8,8 +8,6 @@ Before setting about contribution, you need figure out that in what area you can
 
 As your first-ever contribution, it can be selected from the following categories, which require little technical background of the contributor:
 
-* To clarify code, variables, or functions
-
 * To report a bug in the code
 
 * To improve the MatrixOne documentation

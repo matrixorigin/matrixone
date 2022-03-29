@@ -16,6 +16,7 @@ package computation
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 )
 
@@ -45,4 +46,8 @@ type ComputationHandler interface {
 	Write(writeCtx interface{}, bat *batch.Batch) error
 
 	RemoveDeletedTable(epoch uint64) (int, error)
+
+	GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error)
+
+	ParallelReader() bool
 }

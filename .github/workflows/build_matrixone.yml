@@ -13,24 +13,29 @@ on:
 
   # Trigger workflow at 21:00 UTC to cover time-consuming tests
   # schedule:
-    # * is a special character in YAML so you have to quote this string
-    # - cron:  '00 21 * * *'
+  # * is a special character in YAML so you have to quote this string
+  # - cron:  '00 21 * * *'
 
-    
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
 jobs:
   # This workflow contains a single job called "build".
   build:
     # The type of runner that the job will run on.
-    runs-on: self-hosted-main
+    runs-on: ubuntu-latest
     name: Build on CentOS/x64
-    
+
     # Steps represent a sequence of tasks that will be executed as part of the job.
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.17
 
       - name: Detect non-ascii characters
         run: |

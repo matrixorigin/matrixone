@@ -17,6 +17,8 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
+	"reflect"
 	"testing"
 
 	"github.com/axiomhq/hyperloglog"
@@ -924,6 +926,16 @@ func TestRing(t *testing.T) {
 			Vs:  []float64{123.123, 34534.345, 234123.345345},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&variance.VarRing{
+			NullCounts: []int64{1, 2, 3},
+			Sums:       []float64{15, 9, 13.5},
+			Values:     [][]float64{
+				{10, 15, 20},
+				{10.5, 15.5, 1},
+				{14, 13},
+			},
+			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
+		},
 	}
 	for _, r := range ringArray {
 		var buf bytes.Buffer
@@ -1534,6 +1546,27 @@ func TestRing(t *testing.T) {
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
 					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
+		case *variance.VarRing:
+			oriRing := r.(*variance.VarRing)
+			// Sums
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
+				t.Errorf("Decode varRing Sums failed.")
+				return
+			}
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode varRing NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
+					return
+				}
+			}
+			// Values
+			for i, v := range oriRing.Values {
+				if !reflect.DeepEqual(ExpectRing.Values[i], v) {
+					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}

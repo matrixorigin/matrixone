@@ -32,3 +32,6 @@ floor(-12.345, 1) ----> -12.4
 floor(-12.345, -1) ----> -20
 floor(-12.345) ----> -13
 ```
+
+## Constraints
+Currently, MatrixOne doesn't support select function() without from tables.

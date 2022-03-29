@@ -31,7 +31,7 @@ func TestComputationHandlerImpl_CreateDatabase(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		for i := 0; i < 20; i++ {
 			dbName := fmt.Sprintf("test%d",i)
@@ -57,14 +57,14 @@ func TestComputationHandlerImpl_CreateTable(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		dbID, err := chi.CreateDatabase(0,"test",0)
 		convey.So(err,convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -91,14 +91,14 @@ func TestComputationHandlerImpl_DropTable(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		dbID, err := chi.CreateDatabase(0,"test",0)
 		convey.So(err,convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -127,7 +127,7 @@ func TestComputationHandlerImpl_ListTables(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		dbID, err := chi.CreateDatabase(0,"test",0)
 		convey.So(err,convey.ShouldBeNil)
@@ -135,7 +135,7 @@ func TestComputationHandlerImpl_ListTables(t *testing.T) {
 		var tables []*descriptor.RelationDesc
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName
@@ -193,7 +193,7 @@ func TestComputationHandlerImpl_DropDatabase(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 3; i++ {
@@ -207,7 +207,7 @@ func TestComputationHandlerImpl_DropDatabase(t *testing.T) {
 			var tables []*descriptor.RelationDesc
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -254,7 +254,7 @@ func TestComputationHandlerImpl_GetDatabase(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 3; i++ {
@@ -267,7 +267,7 @@ func TestComputationHandlerImpl_GetDatabase(t *testing.T) {
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -309,7 +309,7 @@ func TestComputationHandlerImpl_ListDatabases(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 10; i++ {
@@ -322,7 +322,7 @@ func TestComputationHandlerImpl_ListDatabases(t *testing.T) {
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
-				*table = *internalDescriptorTableDesc
+				*table = *InternalDescriptorTableDesc
 
 				tableName := fmt.Sprintf("A%d",j)
 				table.Name = tableName
@@ -366,14 +366,14 @@ func TestComputationHandlerImpl_GetTable(t *testing.T) {
 		kvLimit := uint64(2)
 		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
 
 		dbID, err := chi.CreateDatabase(0,"test",0)
 		convey.So(err,convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
-			*table = *internalDescriptorTableDesc
+			*table = *InternalDescriptorTableDesc
 
 			tableName := fmt.Sprintf("A%d",i)
 			table.Name = tableName

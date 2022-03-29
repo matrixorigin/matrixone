@@ -1,7 +1,7 @@
 #include "textflag.h" 
 
 // func float32FloorAvx2Asm(xs, rs []float32, scale float32) Requires: AVX
-TEXT ·float32FloorAvx2Asm(SB), NOSPLIT, $0-56
+TEXT ·float32FloorAvx2Asm(SB), NOSPLIT, $0-52
 	MOVQ         xs_base+0(FP), AX
 	MOVQ         rs_base+24(FP), CX
 	MOVSS        scale+48(FP), X0
@@ -116,11 +116,10 @@ float32FloorDone2:
 	RET
 
 
-// func float32FloorAvx2AsmZero(xs, rs []float32, scale float32) Requires: AVX
-TEXT ·float32FloorAvx2AsmZero(SB), NOSPLIT, $0-56
+// func float32FloorAvx2AsmZero(xs, rs []float32) Requires: AVX
+TEXT ·float32FloorAvx2AsmZero(SB), NOSPLIT, $0-48
 	MOVQ         xs_base+0(FP), AX
 	MOVQ         rs_base+24(FP), CX
-	MOVSS        scale+48(FP), X0
 	MOVQ         xs_len+8(FP), DX
 	VBROADCASTSS X0, Y0
 
@@ -312,11 +311,10 @@ float64FloorDone2:
 	RET
 
 
-// func float64FloorAvx2AsmZero(xs, rs []float64, scale float64) Requires: AVX
-TEXT ·float64FloorAvx2AsmZero(SB), NOSPLIT, $0-56
+// func float64FloorAvx2AsmZero(xs, rs []float64) Requires: AVX
+TEXT ·float64FloorAvx2AsmZero(SB), NOSPLIT, $0-48
 	MOVQ         xs_base+0(FP), AX
 	MOVQ         rs_base+24(FP), CX
-	MOVSD        scale+48(FP), X0
 	MOVQ         xs_len+8(FP), DX
 	VBROADCASTSD X0, Y0
 

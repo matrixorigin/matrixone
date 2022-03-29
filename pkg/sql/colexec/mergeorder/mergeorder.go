@@ -112,10 +112,11 @@ func mergeSort(mp *mheap.Mheap, arg *Argument, b *batch.Batch) error {
 	bat1 := arg.ctr.bat
 	bat2 := b
 	// init structures to store result
-	result := batch.New(false, arg.ctr.attrs)
-	for i := 0; i < len(arg.ctr.attrs); i++ {
+	result := batch.New(false, bat2.Attrs)
+	for i := 0; i < len(bat2.Attrs); i++ {
 		result.Vecs[i] = vector.New(bat2.Vecs[i].Typ)
 	}
+
 	// init structures used to do compare work
 	if arg.ctr.cmps[0] == nil {
 		for k := range arg.ctr.cmps {

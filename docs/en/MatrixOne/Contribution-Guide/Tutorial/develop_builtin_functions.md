@@ -176,6 +176,20 @@ func init() {
 }
 
 ```
+some annotations for this code snippet above:
+
+1.process.Get: MatrixOne assigns each query a "virtual process", during the execution of a query, we may need to generate new Vector, allocate memory for it, and we do it using this Get function
+```go
+// proc: the process for this query, size: the memory allocation size  we are asking for, type: the new Vector's type.
+func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error)
+```
+since we need a float32 vector here, its size should be 4 * len(origVecCol), 4 bytes for each float32.
+
+2.encoding.DecodeFloat32Slice: this is just type casting. 
+
+3.Vector.Nsp: MatrixOne uses bitmaps to store the NULL values in a column, Vector.Nsp is a wrap up struct for this bitmap.
+
+4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1), sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go. 
 
 Since the result vector has the same type as the original vector, we could use the original vector to store our result when we don't need our original vector anymore in our execution plan(i.e., the reference count of the original vector is 0 or 1).
 

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
@@ -429,6 +430,30 @@ func (s *Scope) Insert(ts uint64) (uint64, error) {
 	p, _ := s.Plan.(*plan.Insert)
 	defer p.Relation.Close()
 	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
+}
+
+// Delete will delete rows from a single of table
+func (s *Scope) Delete(ts uint64, e engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deleteTag.Argument)
+	arg.Ts = ts
+	defer arg.Relation.Close()
+	if err := s.MergeRun(e); err != nil {
+		return 0, err
+	}
+	return arg.AffectedRows, nil
+}
+
+// Update will update rows from a single of table
+func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
+	s.Magic = Merge
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deleteTag.Argument)
+	arg.Ts = ts
+	defer arg.Relation.Close()
+	if err := s.MergeRun(e); err != nil {
+		return 0, err
+	}
+	return arg.AffectedRows, nil
 }
 
 // Run read data from storage engine and run the instructions of scope.

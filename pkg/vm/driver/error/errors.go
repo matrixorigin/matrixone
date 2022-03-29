@@ -28,6 +28,7 @@ var (
 	ErrDispatchFailed  = errors.New("dispath raft query failed")
 	ErrKeyNotExisted   = errors.New("request key is not existed")
 	ErrStartupTimeout  = errors.New("driver startup timeout")
+	ErrStartupFailed  = errors.New("driver startup failed")
 )
 
 //ErrorResp transforms the error into []byte fomat

@@ -18,6 +18,7 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -46,13 +47,7 @@ func (trel * TpeRelation) ID() string {
 }
 
 func (trel * TpeRelation) Nodes() engine.Nodes {
-	var nds = []engine.Node{
-		{
-			Id:   "0",
-			Addr: "localhost:20000",
-		},
-	}
-	return nds
+	return trel.nodes
 }
 
 func (trel * TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
@@ -61,6 +56,20 @@ func (trel * TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) erro
 
 func (trel * TpeRelation) DropIndex(epoch uint64, name string) error {
 	panic("implement me")
+}
+
+func (trel * TpeRelation) GetHideColDef() *engine.Attribute {
+	for _, attr := range trel.desc.Attributes {
+		if attr.Is_hidden {
+			return &engine.Attribute{
+				Name:    attr.Name,
+				Alg:     0,
+				Type:    attr.TypesType,
+				Default: attr.Default,
+			}
+		}
+	}
+	return nil
 }
 
 func (trel * TpeRelation) TableDefs() []engine.TableDef {
@@ -173,14 +182,103 @@ func (trel * TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
+func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
+	tcnt := cnt
+	if cnt <= 0 {
+		tcnt = 1
+	}
+	var retReaders []engine.Reader = make([]engine.Reader,cnt)
+	var tpeReaders []*TpeReader = make([]*TpeReader,tcnt)
+	//split shards into multiple readers
+	shardInfos := trel.shards.ShardInfos()
+	shardInfosCount := len(shardInfos)
+
+	shardCountPerReader := shardInfosCount / tcnt
+
+	if shardInfosCount % tcnt != 0{
+		shardCountPerReader++
+	}
+
+	startIndex := 0
+	for i := 0; i < len(tpeReaders); i++ {
+		endIndex := tuplecodec.Min(startIndex + shardCountPerReader, shardInfosCount)
+		var infos []ShardInfo
+		for j := startIndex; j < endIndex; j++ {
+			info := shardInfos[j]
+			newInfo := ShardInfo{
+				startKey:    info.GetStartKey(),
+				endKey:      info.GetEndKey(),
+				nextScanKey: nil,
+				completeInShard:    false,
+				node:        ShardNode{
+					Addr:    info.GetShardNode().Addr,
+					ID:      info.GetShardNode().ID,
+					IDbytes: info.GetShardNode().IDbytes,
+				},
+			}
+			infos = append(infos,newInfo)
+		}
+
+		if len(infos) != 0 {
+			tpeReaders[i] = &TpeReader{
+				dbDesc:         trel.dbDesc,
+				tableDesc:      trel.desc,
+				computeHandler: trel.computeHandler,
+				shardInfos: 	infos,
+				parallelReader: true,
+				isDumpReader: 	false,
+				id: i,
+			}
+		} else {
+			tpeReaders[i] = &TpeReader{isDumpReader: true,id: i}
+		}
+
+		logutil.Infof("reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
+			i,startIndex,shardCountPerReader,shardInfosCount,endIndex,tpeReaders[i].isDumpReader)
+
+		startIndex += shardCountPerReader
+	}
+
+	for i, reader := range tpeReaders {
+		if reader != nil {
+			retReaders[i] = reader
+			logutil.Infof("-->reader %v",reader.shardInfos)
+		}else{
+			retReaders[i] = &TpeReader{isDumpReader: true}
+		}
+	}
+	return retReaders
+}
+
 func (trel * TpeRelation) NewReader(cnt int) []engine.Reader {
+	logutil.Infof("newreader cnt %d",cnt)
+	if trel.computeHandler.ParallelReader() {
+		return trel.parallelReader(cnt)
+	}
 	var readers []engine.Reader = make([]engine.Reader,cnt)
-	readers[0] = &TpeReader{
+	tr := &TpeReader{
 		dbDesc:         trel.dbDesc,
 		tableDesc:      trel.desc,
 		computeHandler: trel.computeHandler,
+		parallelReader: false,
 		isDumpReader: false,
 	}
+	shardInfos := trel.shards.ShardInfos()
+	for _, info := range shardInfos {
+		newInfo := ShardInfo{
+			startKey:    info.GetStartKey(),
+			endKey:      info.GetEndKey(),
+			nextScanKey: nil,
+			completeInShard:    false,
+			node:        ShardNode{
+				Addr:    info.GetShardNode().Addr,
+				ID:      info.GetShardNode().ID,
+				IDbytes: info.GetShardNode().IDbytes,
+			},
+		}
+		tr.shardInfos = append(tr.shardInfos,newInfo)
+	}
+	readers[0] = tr
 	for i := 1; i < cnt; i++ {
 		readers[i] = &TpeReader{isDumpReader: true}
 	}

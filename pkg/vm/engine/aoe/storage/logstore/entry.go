@@ -38,8 +38,8 @@ type Entry interface {
 	GetPayload() []byte
 	Unmarshal([]byte) error
 	Marshal() ([]byte, error)
-	ReadFrom(io.Reader) (int, error)
-	WriteTo(StoreFileWriter, sync.Locker) (int, error)
+	ReadFrom(io.Reader) (int64, error)
+	WriteTo(StoreFileWriter, sync.Locker) (int64, error)
 	GetAuxilaryInfo() interface{}
 	SetAuxilaryInfo(info interface{})
 	Free()
@@ -124,9 +124,10 @@ func (meta *EntryMeta) IsCheckpoint() bool {
 	return typ == ETCheckpoint
 }
 
-func (meta *EntryMeta) WriteTo(w io.Writer) (int, error) {
+func (meta *EntryMeta) WriteTo(w io.Writer) (int64, error) {
 	// logutil.Info(meta.String())
-	return w.Write(meta.Buf)
+	n, err := w.Write(meta.Buf)
+	return int64(n), err
 }
 
 func (meta *EntryMeta) String() string {
@@ -134,11 +135,12 @@ func (meta *EntryMeta) String() string {
 	return s
 }
 
-func (meta *EntryMeta) ReadFrom(r io.Reader) (int, error) {
+func (meta *EntryMeta) ReadFrom(r io.Reader) (int64, error) {
 	if meta.Buf == nil {
 		meta.Buf = make([]byte, EntryMetaSize)
 	}
-	return r.Read(meta.Buf)
+	n, err := r.Read(meta.Buf)
+	return int64(n), err
 }
 
 type BaseEntry struct {
@@ -206,13 +208,14 @@ func (e *BaseEntry) Marshal() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {
+func (e *BaseEntry) ReadFrom(r io.Reader) (int64, error) {
 	size := e.Meta.PayloadSize()
 	e.Payload = make([]byte, size)
-	return r.Read(e.Payload)
+	n, err := r.Read(e.Payload)
+	return int64(n), err
 }
 
-func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) {
+func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int64, error) {
 	locker.Lock()
 	defer locker.Unlock()
 	if err := w.PrepareWrite(EntryMetaSize + int(e.Meta.PayloadSize())); err != nil {
@@ -224,11 +227,11 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) 
 	}
 	n2, err := w.Write(e.Payload)
 	if err != nil {
-		return n2, err
+		return int64(n2), err
 	}
 	auxilary := e.GetAuxilaryInfo()
 	if auxilary == nil {
-		return n1 + n2, nil
+		return n1 + int64(n2), nil
 	}
 
 	if e.Meta.IsCheckpoint() {
@@ -238,5 +241,5 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) 
 		id := auxilary.(uint64)
 		w.ApplyCommit(id)
 	}
-	return n1 + n2, err
+	return n1 + int64(n2), err
 }
