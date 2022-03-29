@@ -31,4 +31,7 @@ const (
 	Power
 	Pi
 	Tan
+	Ltrim
+	Rtrim
+	Sin
 )
