@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"reflect"
 	"sync"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 var pool = sync.Pool{
