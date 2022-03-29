@@ -16,65 +16,67 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
+func (b *build) buildWhere(stmt *tree.Where, qry *Query) (extend.Extend, []*JoinCondition, error) {
+	var conds []*JoinCondition
+
 	e, err := b.buildWhereExpr(stmt.Expr, qry)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if e, err = b.pruneExtend(e, false); err != nil {
-		return err
+		return nil, nil, err
 	}
-	if es := extend.AndExtends(e, nil); len(es) > 0 { // push down join condition
-		for i := 0; i < len(es); i++ { // extracting join information
-			if left, right, ok := stripEqual(es[i]); ok {
-				r, rattr, err := qry.getJoinAttribute(false, qry.Rels, left)
-				if err != nil {
-					return err
-				}
-				s, sattr, err := qry.getJoinAttribute(false, qry.Rels, right)
-				if err != nil {
-					return err
-				}
-				if r != s {
-					if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
-						return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", es[i]))
+	/*
+		if !e.IsLogical() {
+			return nil, nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("argument of WHERE must be type boolean"))
+		}
+	*/
+	if jp, ok := qry.Scope.Op.(*Join); ok && jp.Type == CROSS { // push down join condition
+		if es := extend.AndExtends(e, nil); len(es) > 0 {
+			ss := newScopeSet()
+			ss.Scopes = qry.Scope.Children
+			for i := 0; i < len(es); i++ { // extracting join information
+				if left, right, ok := stripEqual(es[i]); ok {
+					li, lname, err := b.getJoinAttribute(getUnresolvedName(left), ss)
+					if err != nil {
+						return nil, nil, err
 					}
-					qry.Conds = append(qry.Conds, &JoinCondition{
-						R:     r,
-						S:     s,
-						Rattr: rattr,
-						Sattr: sattr,
+					ri, rname, err := b.getJoinAttribute(getUnresolvedName(right), ss)
+					if err != nil {
+						return nil, nil, err
+					}
+					ss.Conds = append(ss.Conds, &JoinCondition{
+						R:     li,
+						S:     ri,
+						Rattr: lname,
+						Sattr: rname,
 					})
 					es = append(es[:i], es[i+1:]...)
 					i--
 				}
 			}
-		}
-		if len(es) == 0 {
-			return nil
-		}
-		e = extendsToAndExtend(es)
-	}
-	if es := andExtends(qry, e, nil); len(es) > 0 { // push down restrict
-		for i := 0; i < len(es); i++ {
-			if ok := b.pushDownRestrict(es[i], qry); ok {
-				es = append(es[:i], es[i+1:]...)
-				i--
+			if len(ss.Conds) > 0 {
+				conds = ss.Conds
+				s, err := b.buildQualifiedJoin(INNER, ss)
+				if err != nil {
+					return nil, nil, err
+				}
+				qry.Scope = s
+				if len(es) == 0 {
+					return nil, conds, nil
+				}
+				e = extendsToAndExtend(es)
 			}
 		}
-		if len(es) > 0 {
-			qry.RestrictConds = append(qry.RestrictConds, extendsToAndExtend(es))
-		}
-		return nil
 	}
-	qry.RestrictConds = append(qry.RestrictConds, e)
-	return nil
+	return e, conds, nil
 }
 
 func (b *build) buildWhereExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
@@ -102,31 +104,7 @@ func (b *build) buildWhereExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildWhereExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute0(true, e, qry)
+		return b.buildAttribute(e, qry)
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
-}
-
-func (b *build) pushDownRestrict(e extend.Extend, qry *Query) bool {
-	var name string
-
-	attrs := e.Attributes()
-	mp := make(map[string]int)
-	for _, attr := range attrs {
-		if names, _, err := qry.getAttribute0(false, attr); err != nil {
-			return false
-		} else {
-			for i := 0; i < len(names); i++ {
-				mp[names[i]]++
-				if len(name) == 0 {
-					name = names[i]
-				}
-			}
-		}
-	}
-	if len(mp) == 1 {
-		qry.RelsMap[name].AddRestrict(pruneExtend(e))
-		return true
-	}
-	return false
 }

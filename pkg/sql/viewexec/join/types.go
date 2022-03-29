@@ -12,77 +12,52 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package untransform
+package join
 
 import (
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 const (
 	UnitLimit = 256
 )
 
-const (
-	AQ = iota
-	CAQ
-)
+type view struct {
+	is         []int // subscript in the result attribute
+	ris        []int // subscript in the result ring
+	attrs      []string
+	values     []uint64
+	sels       [][]int64
+	bat        *batch.Batch
+	vecs       []*vector.Vector
+	strHashMap *hashtable.StringHashMap
+}
 
-const (
-	Fill = iota
-	Eval
-)
-
-const (
-	H8 = iota
-	H24
-	H32
-	H40
-	HStr
-)
+type HashTable struct {
+	Sels       [][]int64
+	StrHashMap *hashtable.StringHashMap
+}
 
 type Container struct {
-	sync.Mutex
-	typ           int
-	state         int
-	rows          uint64
-	vars          []string
-	keyOffs       []uint32
-	zKeyOffs      []uint32
-	inserted      []uint8
-	zInserted     []uint8
-	hashes        []uint64
-	strHashStates [][3]uint64
-	values        []uint64
-	intHashMap    *hashtable.Int64HashMap
-	strHashMap    *hashtable.StringHashMap
+	zs []int64
 
-	h8 struct {
-		keys  []uint64
-		zKeys []uint64
-	}
-	h24 struct {
-		keys  [][3]uint64
-		zKeys [][3]uint64
-	}
-	h32 struct {
-		keys  [][4]uint64
-		zKeys [][4]uint64
-	}
-	h40 struct {
-		keys  [][5]uint64
-		zKeys [][5]uint64
-	}
+	attrs []string
+
+	mx0, mx1 [][]int64 // matrix buffer
+
+	strHashStates [][3]uint64
+
+	views []*view
+
 	hstr struct {
 		keys [][]byte
 	}
-	bat *batch.Batch
 }
 
 type Argument struct {
-	Type     int
-	FreeVars []string // free variables
-	ctr      *Container
+	Vars [][]string
+	ctr  *Container
+	Bats []*batch.Batch
 }

@@ -46,47 +46,16 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
-	switch n.Type {
-	case Bare:
-		return n.ctr.processBare(n.FreeVars, proc)
-	default:
+	if n.Type == AQ {
 		if len(n.FreeVars) == 0 {
 			return n.ctr.processBoundVars(proc)
 		}
 		return n.ctr.processFreeVars(n.FreeVars, proc)
 	}
-}
-
-func (ctr *Container) processBare(fvars []string, proc *process.Process) (bool, error) {
-	if len(proc.Reg.MergeReceivers) == 0 {
-		return true, nil
+	if len(n.FreeVars) == 0 {
+		return n.ctr.processBoundVarsWithCAQ(proc)
 	}
-	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		reg := proc.Reg.MergeReceivers[i]
-		bat := <-reg.Ch
-		if bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-			i--
-			continue
-		}
-		if len(bat.Zs) == 0 {
-			i--
-			continue
-		}
-		for i, r := range bat.Rs {
-			bat.Attrs = append(bat.Attrs, bat.As[i])
-			vec := r.Eval(bat.Zs)
-			vec.Ref = bat.Refs[i]
-			bat.Vecs = append(bat.Vecs, vec)
-		}
-		bat.Rs = nil
-		if len(fvars) > 0 {
-			batch.Reduce(bat, fvars, proc.Mp)
-		}
-		proc.Reg.InputBatch = bat
-		return false, nil
-	}
-	return true, nil
+	return n.ctr.processFreeVarsWithCAQ(n.FreeVars, proc)
 }
 
 func (ctr *Container) processBoundVars(proc *process.Process) (bool, error) {
@@ -143,7 +112,63 @@ func (ctr *Container) processBoundVars(proc *process.Process) (bool, error) {
 			return true, nil
 		}
 	}
+}
 
+func (ctr *Container) processBoundVarsWithCAQ(proc *process.Process) (bool, error) {
+	for {
+		switch ctr.state {
+		case Fill:
+			for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+				for {
+					bat := <-proc.Reg.MergeReceivers[i].Ch
+					if bat == nil {
+						break
+					}
+					if len(bat.Zs) == 0 {
+						continue
+					}
+					if ctr.bat == nil {
+						ctr.bat = new(batch.Batch)
+						for k, r := range bat.Rs {
+							ctr.bat.Rs = append(ctr.bat.Rs, r.Dup())
+							ctr.bat.As = append(ctr.bat.As, bat.As[k])
+							ctr.bat.Refs = append(ctr.bat.Refs, bat.Refs[k])
+						}
+						for _, r := range ctr.bat.Rs {
+							if err := r.Grow(proc.Mp); err != nil {
+								return false, err
+							}
+						}
+						ctr.bat.Zs = append(ctr.bat.Zs, 0)
+					}
+					for k, z := range bat.Zs {
+						ctr.bat.Zs[0] += z
+						for j, r := range ctr.bat.Rs {
+							r.Add(bat.Rs[j], 0, int64(k))
+						}
+					}
+					batch.Clean(bat, proc.Mp)
+				}
+			}
+			ctr.state = Eval
+		case Eval:
+			if ctr.bat != nil {
+				for i, r := range ctr.bat.Rs {
+					ctr.bat.Attrs = append(ctr.bat.Attrs, ctr.bat.As[i])
+					vec := r.Eval(ctr.bat.Zs)
+					vec.Ref = ctr.bat.Refs[i]
+					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+				}
+				ctr.bat.Rs = nil
+				for i := range ctr.bat.Zs {
+					ctr.bat.Zs[i] = 1
+				}
+				proc.Reg.InputBatch = ctr.bat
+				ctr.bat = nil
+			}
+			return true, nil
+		}
+	}
 }
 
 func (ctr *Container) processFreeVars(fvars []string, proc *process.Process) (bool, error) {
@@ -169,8 +194,36 @@ func (ctr *Container) processFreeVars(fvars []string, proc *process.Process) (bo
 				for i := range ctr.bat.Zs {
 					ctr.bat.Zs[i] = 1
 				}
-				if len(fvars) > 0 {
-					batch.Reduce(ctr.bat, fvars, proc.Mp)
+				proc.Reg.InputBatch = ctr.bat
+				ctr.bat = nil
+			}
+			return true, nil
+		}
+	}
+}
+
+func (ctr *Container) processFreeVarsWithCAQ(fvars []string, proc *process.Process) (bool, error) {
+	for {
+		switch ctr.state {
+		case Fill:
+			if err := ctr.fillWithCAQ(fvars, proc); err != nil {
+				batch.Clean(ctr.bat, proc.Mp)
+				proc.Reg.InputBatch = nil
+				ctr.state = Eval
+				return true, err
+			}
+			ctr.state = Eval
+		case Eval:
+			if ctr.bat != nil {
+				for i, r := range ctr.bat.Rs {
+					ctr.bat.Attrs = append(ctr.bat.Attrs, ctr.bat.As[i])
+					vec := r.Eval(ctr.bat.Zs)
+					vec.Ref = ctr.bat.Refs[i]
+					ctr.bat.Vecs = append(ctr.bat.Vecs, vec)
+				}
+				ctr.bat.Rs = nil
+				for i := range ctr.bat.Zs {
+					ctr.bat.Zs[i] = 1
 				}
 				proc.Reg.InputBatch = ctr.bat
 				ctr.bat = nil
@@ -210,12 +263,32 @@ func (ctr *Container) fill(fvars []string, proc *process.Process) error {
 	return nil
 }
 
+func (ctr *Container) fillWithCAQ(fvars []string, proc *process.Process) error {
+	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+		for {
+			bat := <-proc.Reg.MergeReceivers[i].Ch
+			if bat == nil {
+				break
+			}
+			if len(bat.Zs) == 0 {
+				continue
+			}
+			if err := ctr.fillBatch(fvars, bat, proc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.Process) error {
 	if len(ctr.vars) == 0 {
-		ctr.vars = append(ctr.vars, bat.Attrs...)
+		ctr.vars = fvars
+		batch.Reorder(bat, fvars)
 		size := 0
-		ctr.bat = batch.New(true, bat.Attrs)
-		for i, vec := range bat.Vecs {
+		ctr.bat = batch.New(true, fvars)
+		for i := 0; i < len(fvars); i++ {
+			vec := bat.Vecs[i]
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			ctr.bat.Vecs[i].Ref = vec.Ref
 			nullable := 0
@@ -280,7 +353,7 @@ func (ctr *Container) fillBatch(fvars []string, bat *batch.Batch, proc *process.
 			ctr.bat.Refs = append(ctr.bat.Refs, bat.Refs[k])
 		}
 	} else {
-		batch.Reorder(bat, ctr.vars)
+		batch.Reorder(bat, fvars)
 	}
 	switch ctr.typ {
 	case H8:

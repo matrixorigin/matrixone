@@ -16,17 +16,19 @@ package plan
 
 import (
 	"fmt"
-	"log"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"log"
 	"testing"
 )
 
 var querys = []string{
-	"select * from R join S using(uid)",
 	"select * from R join S on R.uid = S.uid",
+	"select sum(R.price) from R join S on R.uid = S.uid",
+	"select * from R join S on R.uid = S.uid group by R.uid",
+	"select sum(R.price) from R join S on R.uid = S.uid group by R.uid",
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID;",
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID ORDER BY userID asc;",
 	"SELECT userID, SUM(score) FROM t1 GROUP BY userID ORDER BY userID desc;",
