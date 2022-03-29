@@ -67,6 +67,14 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 	return bat, nil
 }
 
+func (chi *ComputationHandlerImpl) DumpRead(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, error) {
+	result, _, err := chi.indexHandler.DumpReadFromIndex(readCtx, opt)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
 	if bat == nil {
 		return nil

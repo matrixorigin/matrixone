@@ -15,12 +15,13 @@
 package frontend
 
 import (
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"sync"
-	"time"
 )
 
 // Routine handles requests.

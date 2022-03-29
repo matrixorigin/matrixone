@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -312,6 +313,129 @@ func (ihi * IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, 
 	}
 
 	return bat, rowRead, nil
+}
+
+func (ihi * IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, int, error) {
+	indexReadCtx,ok := readCtx.(*ReadContext)
+	if !ok {
+		return nil, 0, errorReadContextIsInvalid
+	}
+
+	//check if we need the index key only.
+	//Attributes we want are in the index key only.
+	indexAttrIDs := descriptor.ExtractIndexAttributeIDs(indexReadCtx.IndexDesc.Attributes)
+	amForKey :=&AttributeMap{}
+	amForValue := &AttributeMap{}
+	needKeyOnly := true
+	for i,attr := range indexReadCtx.ReadAttributeDescs {
+		if _,exist := indexAttrIDs[attr.ID]; exist {
+			//id in the key
+			amForKey.Append(int(attr.ID),i)
+		}else{
+			//id is not in the index key
+			//then find it in the value
+			needKeyOnly = false
+			amForValue.Append(int(attr.ID),i)
+		}
+	}
+
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	tkd := ihi.tch.GetDecoder()
+
+	if indexReadCtx.CompleteInAllShards {
+		return nil, 0, nil
+	}else if !indexReadCtx.CompleteInAllShards &&
+			indexReadCtx.PrefixForScanKey == nil {
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+			uint64(indexReadCtx.TableDesc.ID),
+			uint64(indexReadCtx.IndexDesc.ID))
+		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
+		indexReadCtx.PrefixEnd = SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+	}
+
+	//prepare the batch
+	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
+	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
+
+	rowRead := 0
+	readFinished := false
+
+	//2.prefix read data from kv
+	//get keys with the prefix
+	for rowRead < int(ihi.kvLimit) {
+		needRead := int(ihi.kvLimit) - rowRead
+		keys, values, complete, nextScanKey, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,
+			indexReadCtx.LengthOfPrefixForScanKey,
+			indexReadCtx.PrefixEnd,
+			uint64(needRead))
+		if err != nil {
+			return nil, 0, err
+		}
+
+		rowRead += len(keys)
+
+		//1.decode index key
+		//2.get fields wanted
+		for i := 0; i < len(keys); i++ {
+			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
+			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
+			if err != nil {
+				return nil, 0, err
+			}
+
+			//pick wanted fields and save them in the batch
+			err = ihi.rcc.FillBatchFromDecodedIndexKey(indexReadCtx.IndexDesc,
+				0, dis, amForKey, bat, i)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+
+		//skip decoding the value
+		if !needKeyOnly {
+			//need to update prefix
+			//decode index value
+			for i := 0; i < len(keys); i++ {
+				//decode the name which is in the value
+				data := values[i]
+				_,dis,err := tkd.DecodePrimaryIndexValue(data,
+					indexReadCtx.IndexDesc,0,ihi.serializer)
+				if err != nil {
+					return nil, 0, err
+				}
+
+				//pick wanted fields and save them in the batch
+				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+					0, dis,amForValue, bat, i)
+				if err != nil {
+					return nil, 0, err
+				}
+			}
+		}
+
+		//get the next prefix
+		indexReadCtx.PrefixForScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInAllShards = true
+			readFinished = true
+			break
+		}
+	}
+
+	TruncateBatch(bat,int(ihi.kvLimit),rowRead)
+
+	if readFinished {
+		if rowRead == 0 {
+			//there are no data read in this call.
+			//it means there is no data any more.
+			//reset the batch to the null to notify the
+			//computation engine will not read data again.
+			bat = nil
+		}
+	}
+
+	return nil, rowRead, nil
 }
 
 func (ihi * IndexHandlerImpl) WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error {

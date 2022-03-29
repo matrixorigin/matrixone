@@ -1,0 +1,43 @@
+shard 37, peer count is 1
+shard 29, peer count is 1
+shard 31, peer count is 1
+shard 32, peer count is 1
+shard 8, peer count is 1
+shard 5, peer count is 1
+shard 7, peer count is 1
+shard 14, peer count is 1
+shard 16, peer count is 1
+shard 6, peer count is 1
+shard 30, peer count is 1
+shard 38, peer count is 1
+shard 13, peer count is 1
+shard 22, peer count is 1
+shard 23, peer count is 1
+shard 1001, peer count is 1
+shard 24, peer count is 1
+shard 39, peer count is 1
+shard 15, peer count is 1
+shard 40, peer count is 1
+shard 21, peer count is 1
+ClusterStatus is ok now
+1562
+{1502 ssb 1648124436 12694 false 0 12694 0}
+[{0 a 8 INT {true  true} {} false  false false true true  [] []} {1 b 8 INT {true  true} {} true  false false false false  [] []}]
+&{0x140003c5530 0x140031d0880 0x14002e54550 0x14002e546b0 0x140004accd0 0x140004acd70}
+1563
+{1502 ssb 1648124436 12694 false 0 12694 0}
+[{0 rowid1648124856 3 unexpected type: 0 {false <nil> false} {} false  true false true true implicit primary key [] []} {1 a 8 INT {true  true} {} true  false false false false  [] []} {2 b 8 INT {true  true} {} true  false false false false  [] []}]
+&{0x140003c5530 0x140031d0880 0x14002e54550 0x14002e546b0 0x140004accd0 0x140004acd70}
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+Server Listening on : 0.0.0.0:6001 
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++
