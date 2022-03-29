@@ -200,6 +200,11 @@ func init() {
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
+				if origVec.Ref == 1 || origVec.Ref == 0 {
+					origVec.Ref = 0
+					cos.CosFloat64(origVecCol, origVecCol)
+					return origVec, nil
+				}
 				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
 				if err != nil {
 					return nil, err
