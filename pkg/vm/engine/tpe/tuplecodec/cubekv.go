@@ -260,40 +260,8 @@ func (ck *CubeKV) splitKeysAccordingToShards(keys []TupleKey, keysIndexes []int)
 	return ret
 }
 
-// collectNeedReRouteKeys collects all keys that from the shards which need to be reroute
-func (ck *CubeKV) collectNeedReRouteKeys(needReRouteBoard map[uint64]int8, previousShard2keysIndex map[uint64][]int) []int {
-	var ret []int
-	for shardID, needReRoute := range needReRouteBoard {
-		if needReRoute != 0 {
-			ret = append(ret, previousShard2keysIndex[shardID]...)
-		}
-	}
-	return ret
-}
-
-// mergeShard2keysIndex merges the src into the dest
-func (ck *CubeKV) mergeShard2keysIndexWithoutOrder(dest map[uint64][]int, src map[uint64][]int) {
-	for id, s := range src {
-		if d, exist := dest[id]; !exist {
-			dest[id] = s
-		} else {
-			//dedup
-			var dedup = make(map[int]int8)
-			for _, de := range d {
-				dedup[de] = 0
-			}
-			for _, se := range s {
-				dedup[se] = 0
-			}
-
-			for de, _ := range dedup {
-				dest[id] = append(dest[id], de)
-			}
-		}
-	}
-}
-
-type checkKeysExistedContext struct {
+// cubeShardsOperationContext holds the information for reading/writing the shards from/to the cube
+type cubeShardsOperationContext struct {
 	//keys that want to be checked
 	keys []TupleKey
 
@@ -303,54 +271,132 @@ type checkKeysExistedContext struct {
 	//cubeDriver
 	cube driver.CubeDriver
 
-	//1 - any key existed; 0 - none key existed
-	keyExisted               int32
-	keyExistedInWhichShardID uint64
-	keyExistedIndex          int
-
 	//errors
 	//shardID -> error that from checking the shard
-	errorsFromCheckShards map[uint64]error
+	errorsOfShards map[uint64]error
 
 	//timeout
-	timeoutFromCheckShards map[uint64]int8
+	timeoutOfShards map[uint64]int8
 
 	//needReRoute
-	reRouteFromCheckShards map[uint64]int8
-
-	//needWait
-	needWait bool
+	reRouteOfShards map[uint64]int8
 
 	//wait
 	wg sync.WaitGroup
 }
 
-func (ckec *checkKeysExistedContext) setCubeDriver(cube driver.CubeDriver) {
-	ckec.cube = cube
+func (csoc *cubeShardsOperationContext) setCubeDriver(cube driver.CubeDriver) {
+	csoc.cube = cube
 }
 
-func (ckec *checkKeysExistedContext) setKeys(keys []TupleKey) {
-	ckec.keys = keys
+func (csoc *cubeShardsOperationContext) setKeys(keys []TupleKey) {
+	csoc.keys = keys
 }
 
-func (ckec *checkKeysExistedContext) setShard2keysIndex(shard2keysIndex map[uint64][]int) {
-	ckec.shard2keysIndex = shard2keysIndex
+func (csoc *cubeShardsOperationContext) setShard2keysIndex(shard2keysIndex map[uint64][]int) {
+	csoc.shard2keysIndex = shard2keysIndex
 }
 
 // reset clear all things.
-func (ckec *checkKeysExistedContext) reset() {
-	ckec.cube = nil
-	ckec.resetKeyExisted()
-	ckec.errorsFromCheckShards = make(map[uint64]error)
-	ckec.timeoutFromCheckShards = make(map[uint64]int8)
-	ckec.reRouteFromCheckShards = make(map[uint64]int8)
-	ckec.needWait = false
+func (csoc *cubeShardsOperationContext) reset() {
+	csoc.cube = nil
+	csoc.errorsOfShards = make(map[uint64]error)
+	csoc.timeoutOfShards = make(map[uint64]int8)
+	csoc.reRouteOfShards = make(map[uint64]int8)
 }
 
-func (ckec *checkKeysExistedContext) resetShardError(shardID uint64) {
-	ckec.errorsFromCheckShards[shardID] = nil
-	ckec.timeoutFromCheckShards[shardID] = 0
-	ckec.reRouteFromCheckShards[shardID] = 0
+func (csoc *cubeShardsOperationContext) resetShardError(shardID uint64) {
+	csoc.errorsOfShards[shardID] = nil
+	csoc.timeoutOfShards[shardID] = 0
+	csoc.reRouteOfShards[shardID] = 0
+}
+
+func (csoc *cubeShardsOperationContext) setShardError(shardID uint64, err error) {
+	csoc.errorsOfShards[shardID] = err
+}
+
+func (csoc *cubeShardsOperationContext) setShardTimeout(shardID uint64) {
+	csoc.timeoutOfShards[shardID] = 1
+}
+
+func (csoc *cubeShardsOperationContext) setShardReRoute(shardID uint64) {
+	csoc.reRouteOfShards[shardID] = 1
+}
+
+func (csoc *cubeShardsOperationContext) getRealKeyIndex(shardID uint64, keyIndex int) int {
+	return csoc.shard2keysIndex[shardID][keyIndex]
+}
+
+func (csoc *cubeShardsOperationContext) getKey(realKeyIndex int) TupleKey {
+	return csoc.keys[realKeyIndex]
+}
+
+// collectNeedReRouteKeysIndexes collects all keys from the shards which need to be reroute
+func (csoc *cubeShardsOperationContext) collectNeedReRouteKeysIndexes() []int {
+	var ret []int
+	for shardID, needReRoute := range csoc.reRouteOfShards {
+		if needReRoute != 0 {
+			ret = append(ret, csoc.shard2keysIndex[shardID]...)
+		}
+	}
+	return ret
+}
+
+// collectTimeoutShards collects all shards and keysIndexes that are timeout
+func (csoc *cubeShardsOperationContext) collectTimeoutKeysIndexes() []int {
+	var ret []int
+	for shardID, isTimeout := range csoc.timeoutOfShards {
+		if isTimeout != 0 {
+			ret = append(ret, csoc.shard2keysIndex[shardID]...)
+		}
+	}
+	return ret
+}
+
+func (csoc *cubeShardsOperationContext) done() {
+	csoc.wg.Done()
+}
+
+func (csoc *cubeShardsOperationContext) addWait() {
+	csoc.wg.Add(1)
+}
+
+// wait waits the wait group done
+func (csoc *cubeShardsOperationContext) wait() {
+	csoc.wg.Wait()
+}
+
+func (csoc *cubeShardsOperationContext) checkErrorsFromCheckShards(needAllError bool) error {
+	var e error = nil
+	//check errors
+	for _, err := range csoc.errorsOfShards {
+		if err != nil {
+			if needAllError { //return any error includes the ErrTimeout
+				e = err
+				break
+			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
+				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
+				e = err
+				break
+			}
+		}
+	}
+
+	return e
+}
+
+type checkKeysExistedContext struct {
+	cubeShardsOperationContext
+
+	//1 - any key existed; 0 - none key existed
+	keyExisted               int32
+	keyExistedInWhichShardID uint64
+	keyExistedIndex          int
+}
+
+func (ckec *checkKeysExistedContext) reset() {
+	ckec.cubeShardsOperationContext.reset()
+	ckec.resetKeyExisted()
 }
 
 // resetKeyExisted reset the label of the existed key
@@ -373,93 +419,39 @@ func (ckec *checkKeysExistedContext) setKeyExisted(shardID uint64, keyIdx int) {
 	}
 }
 
-// collectNeedReRouteKeysIndexes collects all keys from the shards which need to be reroute
-func (ckec *checkKeysExistedContext) collectNeedReRouteKeysIndexes() []int {
-	var ret []int
-	for shardID, needReRoute := range ckec.reRouteFromCheckShards {
-		if needReRoute != 0 {
-			ret = append(ret, ckec.shard2keysIndex[shardID]...)
-		}
-	}
-	return ret
-}
-
-// collectTimeoutShards collects all shards and keysIndexes that are timeout
-func (ckec *checkKeysExistedContext) collectTimeoutShardsAndKeysIndexes() ([]uint64, map[uint64][]int) {
-	var ret []uint64
-	var ret2 = make(map[uint64][]int)
-	for shardID, isTimeout := range ckec.timeoutFromCheckShards {
-		if isTimeout != 0 {
-			ret = append(ret, shardID)
-			ret2[shardID] = append(ret2[shardID], ckec.shard2keysIndex[shardID]...)
-		}
-	}
-	return ret, ret2
-}
-
-// collectTimeoutShards collects all shards and keysIndexes that are timeout
-func (ckec *checkKeysExistedContext) collectTimeoutKeysIndexes() []int {
-	var ret []int
-	for shardID, isTimeout := range ckec.timeoutFromCheckShards {
-		if isTimeout != 0 {
-			ret = append(ret, ckec.shard2keysIndex[shardID]...)
-		}
-	}
-	return ret
-}
-
-// SetWait sets the wait
-func (ckec *checkKeysExistedContext) setNeedWait(w bool) {
-	ckec.needWait = w
-}
-
-// GetWait gets the wait
-func (ckec *checkKeysExistedContext) getNeedWait() bool {
-	return ckec.needWait
-}
-
-func (ckec *checkKeysExistedContext) AddWait() {
-	ckec.wg.Add(1)
-}
-
-// wait waits the wait group done
-func (ckec *checkKeysExistedContext) wait() {
-	ckec.wg.Wait()
-}
-
 func (ckec *checkKeysExistedContext) callbackForCheckKeysExisted(cr driver.CustomRequest, resp []byte, cubeErr error) {
 	if cubeErr != nil {
 		if isTimeoutError(cubeErr) {
 			logutil.Errorf("DedupSetBatch cube timeout :%v", cubeErr)
-			ckec.timeoutFromCheckShards[cr.ToShard] = 1
+			ckec.setShardTimeout(cr.ToShard)
 		} else if isNeedReRouteError(cubeErr) {
 			logutil.Errorf("DedupSetBatch cube needreroute :%v", cubeErr)
-			ckec.reRouteFromCheckShards[cr.ToShard] = 1
+			ckec.setShardReRoute(cr.ToShard)
 		} else {
 			logutil.Errorf("DedupSetBatch cube error :%v", cubeErr)
 		}
-		ckec.errorsFromCheckShards[cr.ToShard] = cubeErr
+		ckec.setShardError(cr.ToShard, cubeErr)
 	} else if len(resp) != 0 {
 		tce := pb.TpeCheckKeysExistInBatchResponse{}
 		protoc.MustUnmarshal(&tce, resp)
 		if tce.ExistedKeyIndex != -1 {
-			realKeyIndex := ckec.shard2keysIndex[tce.ShardID][tce.ExistedKeyIndex]
+			realKeyIndex := ckec.getRealKeyIndex(tce.ShardID, int(tce.ExistedKeyIndex))
 			ckec.setKeyExisted(tce.ShardID, realKeyIndex)
 			logutil.Errorf("DedupSetBatch response.ExistedKeyIndex %d realKeyIndex %d in shardID %d has key %v ",
 				tce.ExistedKeyIndex,
 				realKeyIndex,
 				tce.ShardID,
-				ckec.keys[realKeyIndex])
+				ckec.getKey(realKeyIndex))
 		}
 	} else {
 		logutil.Errorf("DedupSetBatch get nil repsonse.")
-		ckec.errorsFromCheckShards[cr.ToShard] = errorAsyncTpeCheckKeysExistGenNilResponse
+		ckec.setShardError(cr.ToShard, errorAsyncTpeCheckKeysExistGenNilResponse)
 	}
-	ckec.wg.Done()
+	ckec.done()
 }
 
-// doCheckKeysExists checks the keys
-func (ckec *checkKeysExistedContext) doCheckKeysExists(timeout time.Duration) {
+// submitCheckKeysExists checks the keys in the cube
+func (ckec *checkKeysExistedContext) submitCheckKeysExists(timeout time.Duration) {
 	for shardID, keyIdxSlice := range ckec.shard2keysIndex {
 		ckec.resetShardError(shardID)
 		var shardkeys [][]byte
@@ -467,29 +459,59 @@ func (ckec *checkKeysExistedContext) doCheckKeysExists(timeout time.Duration) {
 			shardkeys = append(shardkeys, ckec.keys[keyIdx])
 		}
 		if len(shardkeys) != 0 {
-			ckec.AddWait()
-			ckec.cube.TpeAsyncCheckKeysExist(shardID, shardkeys, time.Second*time.Duration(timeout), ckec.callbackForCheckKeysExisted)
+			ckec.addWait()
+			ckec.cube.TpeAsyncCheckKeysExist(shardID, shardkeys, time.Second*timeout, ckec.callbackForCheckKeysExisted)
 		}
 	}
 }
 
-func (ckec *checkKeysExistedContext) checkErrorsFromCheckShards(needAllError bool) error {
-	var e error = nil
-	//check errors
-	for _, err := range ckec.errorsFromCheckShards {
-		if err != nil {
-			if needAllError { //return any error includes the ErrTimeout
-				e = err
-				break
-			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
-				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
-				e = err
-				break
-			}
+type setKeysContext struct {
+	cubeShardsOperationContext
+
+	//values that want to be set
+	values []TupleValue
+}
+
+func (skc *setKeysContext) setValues(values []TupleValue) {
+	skc.values = values
+}
+
+// reset clear all things.
+func (skc *setKeysContext) reset() {
+	skc.cubeShardsOperationContext.reset()
+	skc.values = nil
+}
+
+func (skc *setKeysContext) callbackForAsyncSetKeys(cr driver.CustomRequest, resp []byte, cubeErr error) {
+	if cubeErr != nil {
+		if isTimeoutError(cubeErr) {
+			logutil.Errorf("DedupSetBatch asyncSetKeys cube timeout :%v", cubeErr)
+			skc.setShardTimeout(cr.ToShard)
+		} else if isNeedReRouteError(cubeErr) {
+			logutil.Errorf("DedupSetBatch asyncSetKeys needreroute :%v", cubeErr)
+			skc.setShardReRoute(cr.ToShard)
+		} else {
+			logutil.Errorf("DedupSetBatch asyncSetKeys cube error :%v", cubeErr)
+		}
+		skc.setShardError(cr.ToShard, cubeErr)
+	}
+	skc.done()
+}
+
+func (skc *setKeysContext) submitAsyncSetKeys(timeout time.Duration) {
+	for shardID, keyIdxSlice := range skc.shard2keysIndex {
+		skc.resetShardError(shardID)
+		var shardkeys [][]byte
+		var shardvalues [][]byte
+		for _, keyIdx := range keyIdxSlice {
+			shardkeys = append(shardkeys, skc.keys[keyIdx])
+			shardvalues = append(shardvalues, skc.values[keyIdx])
+		}
+		if len(shardkeys) != 0 {
+			skc.addWait()
+			skc.cube.TpeAsyncSetKeysValuesInbatch(shardID, shardkeys, shardvalues, time.Second*timeout, skc.callbackForAsyncSetKeys)
 		}
 	}
-
-	return e
 }
 
 func isTimeoutError(err error) bool {
@@ -586,7 +608,7 @@ func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 		ctx.setShard2keysIndex(shard2keysIndex)
 
 		//check keys
-		ctx.doCheckKeysExists(ck.tpeDedupSetBatchTimeout)
+		ctx.submitCheckKeysExists(ck.tpeDedupSetBatchTimeout)
 
 		ctx.wait()
 
@@ -612,93 +634,56 @@ func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 		}
 	}
 
-	shard2keysIndex := ck.splitKeysAccordingToShards(keys, keysIndexes)
-
 	//5.AsyncSet keys into the storage
 	configTryCount := ck.tpeDedupSetBatchTryCount
 	//The plan A : async write batch
 	planA := true
 
 	if planA {
-		setKeysErrors := make(map[uint64]error)
-		setKeysTimeoutBoard := make(map[uint64]int8)
-		var setKeysRetErr error = nil
+		for itry := 0; itry < ck.tpeDedupSetBatchTryCount; itry++ {
+			ctx := &setKeysContext{}
 
-		setKeysWg := sync.WaitGroup{}
+			ctx.reset()
+			ctx.setCubeDriver(ck.Cube)
+			ctx.setKeys(keys)
+			ctx.setValues(values)
 
-		callbackAsyncSetKeys := func(cr driver.CustomRequest, resp []byte, cubeErr error) {
-			if cubeErr != nil {
-				if isTimeoutError(cubeErr) {
-					logutil.Errorf("DedupSetBatch asyncSetKeys cube timeout :%v", cubeErr)
-					setKeysTimeoutBoard[cr.ToShard] = 1
-				} else {
-					logutil.Errorf("DedupSetBatch asyncSetKeys cube error :%v", cubeErr)
-				}
-				setKeysErrors[cr.ToShard] = cubeErr
-			}
-			setKeysWg.Done()
-		}
-
-		for shardID, keyIdxSlice := range shard2keysIndex {
-			setKeysErrors[shardID] = nil
-			setKeysTimeoutBoard[shardID] = 0
-			var shardkeys [][]byte
-			var shardvalues [][]byte
-			for _, keyIdx := range keyIdxSlice {
-				shardkeys = append(shardkeys, keys[keyIdx])
-				shardvalues = append(shardvalues, values[keyIdx])
-			}
-			if len(shardkeys) != 0 {
-				setKeysWg.Add(1)
-				ck.Cube.TpeAsyncSetKeysValuesInbatch(shardID, shardkeys, shardvalues, time.Second*time.Duration(ck.tpeDedupSetBatchTimeout), callbackAsyncSetKeys)
-			}
-		}
-		setKeysWg.Wait()
-
-		setKeysRetErr = checkShardsErrorsFunc(setKeysErrors, false)
-		if setKeysRetErr != nil {
-			return setKeysRetErr
-		}
-
-		//try another times
-		for try := 1; try < int(configTryCount); try++ {
-			needWait := false
-			for shardID, keyIdxSlice := range shard2keysIndex {
-				setKeysErrors[shardID] = nil
-				if setKeysTimeoutBoard[shardID] != 0 {
-					setKeysTimeoutBoard[shardID] = 0
-
-					var shardkeys [][]byte
-					var shardvalues [][]byte
-					for _, keyIdx := range keyIdxSlice {
-						shardkeys = append(shardkeys, keys[keyIdx])
-						shardvalues = append(shardvalues, values[keyIdx])
-					}
-					if len(shardkeys) != 0 {
-						needWait = true
-						setKeysWg.Add(1)
-						ck.Cube.TpeAsyncSetKeysValuesInbatch(shardID, shardkeys, shardvalues, time.Second*time.Duration(ck.tpeDedupSetBatchTimeout), callbackAsyncSetKeys)
-					}
-				}
-			}
-			if needWait {
-				logutil.Infof("async_setkeys_wait_try %d times", try+1)
-				setKeysWg.Wait()
-				setKeysRetErr = checkShardsErrorsFunc(setKeysErrors, false)
-				if setKeysRetErr != nil {
-					return setKeysRetErr
-				}
+			if itry == 0 {
+				//use the original keyIndexes
+				lastKeyIndexes = keysIndexes
 			} else {
-				logutil.Infof("async_setkeys_wait_done after try %d times", try+1)
+				//collect keyIndexes from previous timeout or reroute
+				//sort the lastKeyIndexes
+				sort.Slice(lastKeyIndexes, func(i, j int) bool {
+					ki := lastKeyIndexes[i]
+					kj := lastKeyIndexes[j]
+
+					return keys[ki].Less(keys[kj])
+				})
+			}
+			shard2keysIndex := ck.splitKeysAccordingToShards(keys, lastKeyIndexes)
+			ctx.setShard2keysIndex(shard2keysIndex)
+
+			ctx.submitAsyncSetKeys(ck.tpeDedupSetBatchTimeout)
+			ctx.wait()
+
+			//check other errors that can not be skipped at last time
+			needAllError := (itry == ck.tpeDedupSetBatchTryCount-1)
+			err := ctx.checkErrorsFromCheckShards(needAllError)
+			if err != nil {
+				return err
+			}
+
+			needReRouteKeys := ctx.collectNeedReRouteKeysIndexes()
+			timeoutKeys := ctx.collectTimeoutKeysIndexes()
+			lastKeyIndexes = nil
+			lastKeyIndexes = append(lastKeyIndexes, needReRouteKeys...)
+			lastKeyIndexes = append(lastKeyIndexes, timeoutKeys...)
+			if len(lastKeyIndexes) == 0 {
 				break
 			}
 		}
-
-		setKeysRetErr = checkShardsErrorsFunc(setKeysErrors, true)
-		if setKeysRetErr != nil {
-			return setKeysRetErr
-		}
-		return setKeysRetErr
+		return nil
 	} else {
 		//The plan B below : async write key one by one
 
@@ -1025,6 +1010,8 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 	}
 
 	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, callback)
+	//TODO: wait cube to fix
+	//ck.Cube.RaftStore().GetRouter().AscendRange(uint64(pb.KVGroup), startKey, endKey, rpcpb.SelectLeader, callback)
 
 	var nodes []ShardNode
 	for id, addr := range stores {

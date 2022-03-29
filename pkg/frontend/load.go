@@ -15,7 +15,9 @@
 package frontend
 
 import (
+	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -90,7 +92,7 @@ type SharePart struct {
 	//batch
 	batchSize            int
 	maxEntryBytesForCube int64
-	skipWriteBatch bool
+	skipWriteBatch       bool
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
@@ -552,11 +554,7 @@ func isWriteBatchTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
-	es := err.Error()
-	if strings.Index(es, "exec timeout") != -1 {
-		return true
-	}
-	return false
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, row2colChoose bool) error {
@@ -1525,7 +1523,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			batchSize:            curBatchSize,
 			result:               result,
 			maxEntryBytesForCube: ses.Pu.SV.GetCubeMaxEntriesBytes(),
-			skipWriteBatch: ses.Pu.SV.GetLoadDataSkipWritingBatch(),
+			skipWriteBatch:       ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
 		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),
