@@ -30,5 +30,4 @@ const (
 	Exp
 	Power
 	Pi
-	Tan
 )
