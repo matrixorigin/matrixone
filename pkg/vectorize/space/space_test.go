@@ -22,22 +22,28 @@ import (
 )
 
 func TestCountSpacesForUnsignedInt(t *testing.T) {
-	require.Equal(t, 6, CountSpacesForUnsignedInt([]uint8{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForUnsignedInt([]uint16{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForUnsignedInt([]uint32{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForUnsignedInt([]uint64{0, 1, 2, 3}))
+	expect := int64(6)
+
+	require.Equal(t, expect, CountSpacesForUnsignedInt([]uint8{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForUnsignedInt([]uint16{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForUnsignedInt([]uint32{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForUnsignedInt([]uint64{0, 1, 2, 3}))
 }
 
 func TestCountSpacesForSignedInt(t *testing.T) {
-	require.Equal(t, 6, CountSpacesForSignedInt([]int8{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForSignedInt([]int16{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForSignedInt([]int32{0, 1, 2, 3}))
-	require.Equal(t, 6, CountSpacesForSignedInt([]int64{0, 1, 2, 3}))
+	expect := int64(6)
+
+	require.Equal(t, expect, CountSpacesForSignedInt([]int8{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForSignedInt([]int16{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForSignedInt([]int32{0, 1, 2, 3}))
+	require.Equal(t, expect, CountSpacesForSignedInt([]int64{0, 1, 2, 3}))
 }
 
 func TestCountSpacesForFloat(t *testing.T) {
-	require.Equal(t, 6, CountSpacesForFloat([]float32{0, 1.1, 1.5, 3}))
-	require.Equal(t, 6, CountSpacesForFloat([]float64{0, 1.1, 1.5, 3}))
+	expect := int64(6)
+
+	require.Equal(t, expect, CountSpacesForFloat([]float32{0, 1.1, 1.5, 3}))
+	require.Equal(t, expect, CountSpacesForFloat([]float64{0, 1.1, 1.5, 3}))
 }
 
 func TestParseStringAsInt64(t *testing.T) {
@@ -61,12 +67,12 @@ func TestParseStringAsInt64(t *testing.T) {
 func TestCountSpacesForCharVarChar(t *testing.T) {
 	ss := []string{"1", "0", "1.1", "1.5", "-2", " 1", " 1.1", " \t1"}
 
-	require.Equal(t, 6, CountSpacesForCharVarChar(encodeStringSliceToTypeBytes(ss)))
+	require.Equal(t, int64(6), CountSpacesForCharVarChar(encodeStringSliceToTypeBytes(ss)))
 }
 
 func TestFillSpacesUint8(t *testing.T) {
 	cases := []uint8{0, 1, 2, 3}
-	spacesCount := CountSpacesForUnsignedInt(cases)
+	spacesCount := uint64(CountSpacesForUnsignedInt(cases))
 	result := &types.Bytes{
 		Data:    make([]byte, spacesCount),
 		Lengths: make([]uint32, len(cases)),
@@ -79,7 +85,7 @@ func TestFillSpacesUint8(t *testing.T) {
 
 func TestFillSpacesUint16(t *testing.T) {
 	cases := []uint16{0, 1, 2, 3}
-	spacesCount := CountSpacesForUnsignedInt(cases)
+	spacesCount := uint64(CountSpacesForUnsignedInt(cases))
 	result := &types.Bytes{
 		Data:    make([]byte, spacesCount),
 		Lengths: make([]uint32, len(cases)),
@@ -92,7 +98,7 @@ func TestFillSpacesUint16(t *testing.T) {
 
 func TestFillSpacesUint32(t *testing.T) {
 	cases := []uint32{0, 1, 2, 3}
-	spacesCount := CountSpacesForUnsignedInt(cases)
+	spacesCount := uint64(CountSpacesForUnsignedInt(cases))
 	result := &types.Bytes{
 		Data:    make([]byte, spacesCount),
 		Lengths: make([]uint32, len(cases)),
@@ -105,7 +111,7 @@ func TestFillSpacesUint32(t *testing.T) {
 
 func TestFillSpacesUint64(t *testing.T) {
 	cases := []uint64{0, 1, 2, 3}
-	spacesCount := CountSpacesForUnsignedInt(cases)
+	spacesCount := uint64(CountSpacesForUnsignedInt(cases))
 	result := &types.Bytes{
 		Data:    make([]byte, spacesCount),
 		Lengths: make([]uint32, len(cases)),
