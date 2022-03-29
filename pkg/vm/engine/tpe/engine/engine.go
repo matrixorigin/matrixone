@@ -25,6 +25,7 @@ var (
 	errorTheInternalDatabaseHasExisted = errors.New("the internal database has existed")
 	errorTheInternalDescriptorTableHasExisted = errors.New("the internal descriptor table has existed")
 	errorTheInternalAsyncGCTableHasExisted = errors.New("the internal asyncgc table has existed")
+	errorInvalidSerializerType = errors.New("invalid serializer type")
 )
 
 func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
@@ -44,7 +45,15 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 		return nil, errorInvalidKVType
 	}
 
-	serial := &tuplecodec.DefaultValueSerializer{}
+	var serial tuplecodec.ValueSerializer
+	if tc.SerialType == tuplecodec.ST_JSON {
+		serial = &tuplecodec.DefaultValueSerializer{}
+	}else if tc.SerialType == tuplecodec.ST_CONCISE {
+		serial = &tuplecodec.ConciseSerializer{}
+	}else{
+		return nil, errorInvalidSerializerType
+	}
+
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
 	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)

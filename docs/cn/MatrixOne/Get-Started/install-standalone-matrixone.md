@@ -1,6 +1,6 @@
 # **安装单机版MatrixOne**
 
-MatrixOne 目前支持Linux和MacOS系统，你可以直接从[源代码](#使用源代码搭建)搭建单机版本的MatrixOne，也可以使用[docker](#使用docker)。
+作为一款开源数据库，MatrixOne目前支持主流的Linux和MacOS系统。你可以直接从[源代码](#使用源代码搭建)搭建单机版本的MatrixOne，也可以使用[docker](#使用docker)安装部署。
 ## **使用源代码搭建**
 
 #### 1. 安装部署Go语言环境
@@ -22,7 +22,7 @@ $ make config
 $ make build
 ```
 
-#### 4. 启动MatrixOne服务器
+#### 4. 启动MatrixOne服务
 
 ```
 $ ./mo-server system_vars_config.toml

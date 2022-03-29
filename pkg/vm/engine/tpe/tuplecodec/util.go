@@ -524,6 +524,14 @@ func MaxUint64(a,b uint64) uint64 {
 	}
 }
 
+func Min(a,b int) int {
+	if a < b {
+		return a
+	}else{
+		return b
+	}
+}
+
 func BeginCpuProfile (cpu string) *os.File {
 	cpuf, _ := os.Create(cpu)
 	pprof.StartCPUProfile(cpuf)
@@ -533,4 +541,12 @@ func BeginCpuProfile (cpu string) *os.File {
 func EndCpuProfile(cpuf *os.File) {
 	pprof.StopCPUProfile()
 	_ = cpuf.Close()
+}
+
+func BeginTime() time.Time {
+	return time.Now()
+}
+
+func EndTime(s time.Time,info string) {
+	logutil.Infof("%s duration %v",info,time.Since(s))
 }

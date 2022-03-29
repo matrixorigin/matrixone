@@ -107,7 +107,7 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 				cfg.Worker.RaftEventWorkers = uint64(32)
@@ -245,7 +245,7 @@ func TestAOEEngine(t *testing.T) {
 	readers := tb.NewReader(6)
 	for _, reader := range readers {
 		fileter := reader.NewSparseFilter()
-		reader,_ = fileter.Eq("mock_0", int32(0))
+		reader, _ = fileter.Eq("mock_0", int32(0))
 		bat, err := reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
 		if bat != nil {
 			fmt.Printf("bat is %v", bat.Vecs[0].Col.([]int32)[0])
@@ -294,7 +294,7 @@ func doRestartEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {

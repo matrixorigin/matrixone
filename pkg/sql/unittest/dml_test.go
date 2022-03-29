@@ -214,6 +214,73 @@ func TestInsertAndSelectFunction(t *testing.T) {
 				{"1"},
 			},
 		}},
+
+		{sql: "create table issue1660 (a int, b int);"},
+		{sql: "insert into issue1660 values (0, 0), (1, 2);"},
+		{sql: "select * from issue1660 where -a;", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+			},
+		}, com: "issue 1660"},
+
+		{sql: "create table t_issue1659 (a int, b int);"},
+		{sql: "insert into t_issue1659 values (1, 2), (3, 4), (5, 6);"},
+		{sql: "select * from t_issue1659 where (--1);", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+				{"3", "4"},
+				{"5", "6"},
+			},
+		}, com: "issue 1659"},
+
+		{sql: "create table t_issue1653 (a int, b int);"},
+		{sql: "insert into t_issue1653 values (1, 2), (3, 4), (5, 6);"},
+		{sql: "select * from t_issue1653 where not (-0);", res: executeResult{
+			attr: []string{"a", "b"},
+			data: [][]string{
+				{"1", "2"},
+				{"3", "4"},
+				{"5", "6"},
+			},
+		}, com: "issue 1653"},
+
+		{sql: "create table t_issue1651 (a int);"},
+		{sql: "insert into t_issue1651 values(1), (2), (3);"},
+		{sql: "select * from t_issue1651 where -a;", res: executeResult{
+			attr: []string{"a"},
+			data: [][]string{
+				{"1"},
+				{"2"},
+				{"3"},
+			},
+		}, com: "issue 1651"},
+
+		{sql: "create table t_issue_1641 (id_2 int, col_varchar_2 char(511));"},
+		{sql: "insert into t_issue_1641 (id_2, col_varchar_2) values (-0, 'false'), (1, '-0'), (-0, ''), (65535, 'false'), (1, ''), (-1, '-1'), (-1, '1'), (1, 'false'), (-1, '1'), (65535, ' '), (-1, '-1'), (-1, '2020-02-02 02:02:00'), (-1, '-0'), (65535, '-1'), (1, ' '), (1, '0000-00-00 00:00:00') ;"},
+		{sql: "select t_issue_1641.id_2 as col_1, t_issue_1641.col_varchar_2 as col_2 from t_issue_1641 where not (not 73751114271);", res: executeResult{
+			attr: []string{"col_1", "col_2"},
+			data: [][]string{
+				{"0", "false"},
+				{"1", "-0"},
+				{"0", ""},
+				{"65535", "false"},
+				{"1", ""},
+				{"-1", "-1"},
+				{"-1", "1"},
+				{"1", "false"},
+				{"-1", "1"},
+				{"65535", " "},
+				{"-1", "-1"},
+				{"-1", "2020-02-02 02:02:00"},
+				{"-1", "-0"},
+				{"65535", "-1"},
+				{"1", " "},
+				{"1", "0000-00-00 00:00:00"},
+			},
+		}, com: "issue 1641"},
+
 		{sql: "insert into cha1 values ('1');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into cha2 values ('21');", err: "[22000]Data too long for column 'a' at row 1"},
 		{sql: "insert into iis (i1) values (128);", err: "[22000]Out of range value for column 'i1' at row 1"},
@@ -239,11 +306,11 @@ func TestCAQ(t *testing.T) {
 		{sql: "create table output (store_id int, item_id int unsigned, guest_id int, item_num int, output_incomes double);"},
 		{sql: "create table house (item_id int unsigned, item_num int);"},
 		{sql: "insert into store (store_id, store_area, store_type, incomes, duration) values " +
-		"(1, 'shanghai', 0, 2500, 16), (2, 'shanghai', 0, 70000, 40), (3, 'beijing', 1, 10000, 10), (4, 'shenzhen', 1, 0, 5);"},
+			"(1, 'shanghai', 0, 2500, 16), (2, 'shanghai', 0, 70000, 40), (3, 'beijing', 1, 10000, 10), (4, 'shenzhen', 1, 0, 5);"},
 		{sql: "insert into input (store_id, item_id, item_num, input_cost) values " +
-		"(1, 100, 1000, 500), (1, 101, 30, 900), (1, 102, 40, 80), (2, 101, 500, 400), (3, 103, 20, 800), (3, 102, 5, 80), (4, 105, 1005, 2010);"},
+			"(1, 100, 1000, 500), (1, 101, 30, 900), (1, 102, 40, 80), (2, 101, 500, 400), (3, 103, 20, 800), (3, 102, 5, 80), (4, 105, 1005, 2010);"},
 		{sql: "insert into output (store_id, item_id, guest_id, item_num, output_incomes) values " +
-		"(1, 100, 30001, 700, 700), (1, 102, 30001, 1, 20), (2, 101, 30003, 200, 500), (3, 102, 30002, 1, 10);"},
+			"(1, 100, 30001, 700, 700), (1, 102, 30001, 1, 20), (2, 101, 30003, 200, 500), (3, 102, 30002, 1, 10);"},
 		{sql: "insert into house values (101, 5000), (102, 1000), (103, 5000), (104, 100), (105, 1);"},
 
 		{sql: "select count(*) from store join input on store.store_id = input.store_id;", res: executeResult{
@@ -264,25 +331,25 @@ func TestCAQ(t *testing.T) {
 			"store join input on store.store_id = input.store_id " +
 			"group by store_area;",
 			res: executeResult{
-			attr: []string{"store_area", "sum(incomes)"},
-			data: [][]string{
-				{"shanghai", "77500.000000"},
-				{"beijing", "20000.000000"},
-				{"shenzhen", "0.000000"},
-			},
-		}},
+				attr: []string{"store_area", "sum(incomes)"},
+				data: [][]string{
+					{"shanghai", "77500.000000"},
+					{"beijing", "20000.000000"},
+					{"shenzhen", "0.000000"},
+				},
+			}},
 
 		{sql: "select store_area, store_type, sum(incomes) from " +
 			"store join input on store.store_id = input.store_id " +
 			"group by store_area, store_type;",
 			res: executeResult{
-			attr: []string{"store_area", "store_type", "sum(incomes)"},
-			data: [][]string{
-				{"shanghai", "0", "77500.000000"},
-				{"beijing", "1", "20000.000000"},
-				{"shenzhen", "1", "0.000000"},
-			},
-		}},
+				attr: []string{"store_area", "store_type", "sum(incomes)"},
+				data: [][]string{
+					{"shanghai", "0", "77500.000000"},
+					{"beijing", "1", "20000.000000"},
+					{"shenzhen", "1", "0.000000"},
+				},
+			}},
 
 		//{sql: "select store_area, store_type, item_id, sum(incomes) from " +
 		//	"store join input on store.store_id = input.store_id " +
@@ -304,12 +371,12 @@ func TestCAQ(t *testing.T) {
 			" join house on house.item_id = output.item_id" +
 			" group by store_type;",
 			res: executeResult{
-			attr: []string{"store_type", "max(output_incomes)"},
-			data: [][]string{
-				{"0", "500.000000"},
-				{"1", "10.000000"},
-			},
-		}},
+				attr: []string{"store_type", "max(output_incomes)"},
+				data: [][]string{
+					{"0", "500.000000"},
+					{"1", "10.000000"},
+				},
+			}},
 
 		{sql: "select store_type, max(output_incomes) from " +
 			"store join output on store.store_id = output.store_id" +
@@ -317,11 +384,11 @@ func TestCAQ(t *testing.T) {
 			"where store.store_id < 2 " +
 			"group by store_type;",
 			res: executeResult{
-			attr: []string{"store_type", "max(output_incomes)"},
-			data: [][]string{
-				{"0", "20.000000"},
-			},
-		}},
+				attr: []string{"store_type", "max(output_incomes)"},
+				data: [][]string{
+					{"0", "20.000000"},
+				},
+			}},
 
 		{sql: "select store_type, max(output_incomes) from " +
 			"store join output on store.store_id = output.store_id " +
@@ -329,11 +396,11 @@ func TestCAQ(t *testing.T) {
 			"group by store_type " +
 			"having store_type < 1",
 			res: executeResult{
-			attr: []string{"store_type", "max(output_incomes)"},
-			data: [][]string{
-				{"0", "500.000000"},
-			},
-		}},
+				attr: []string{"store_type", "max(output_incomes)"},
+				data: [][]string{
+					{"0", "500.000000"},
+				},
+			}},
 
 		{sql: "select store_id from store join input on store.store_id = input.store_id;", err: "[42701]Column 'store_id' is ambiguous"},
 	}

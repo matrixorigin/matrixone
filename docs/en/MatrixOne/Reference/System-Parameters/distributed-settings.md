@@ -98,19 +98,19 @@ To configurate a distributed setting, following parameters need to be modified i
     rpc-advertise-addr = "${HOST}:30000"
     ```
 
-* **storage-node**
+* **prophet-node**
 
-    `storage-node` is whether the node is a pure storage node.
-    For the three prophet nodes, `storage-node` is `true`.
-
-    ```
-    storage-node = true
-    ```
-
-    For pure storage nodes, `storage-node` is `false`
+    `prophet-node` is whether the node is a pure prophet node.
+    For the three prophet nodes, `prophet-node` is `true`.
 
     ```
-    storage-node = false
+    prophet-node = true
+    ```
+
+    For pure prophet nodes, `prophet-node` is `false`
+
+    ```
+    prophet-node = false
     ```
 
 * **external-etcd**

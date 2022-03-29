@@ -10,7 +10,7 @@ on:
       - main
     
 jobs: 
-  build:
+  distributed-tests:
     runs-on: ubuntu-latest
     name: Matrixone distributed testing
     timeout-minutes: 30
@@ -74,7 +74,14 @@ jobs:
         run: docker run --tty --rm --name mysql-tester --network test_monet matrixorigin/mysql-tester:dt -host 172.19.0.2 -port 6001 -user dump -passwd 111
 
       - name: Move cache
+        if:  ${{ always() }}
         run: |
           docker-compose -f ./optools/test/docker-compose.yaml down --remove-orphans
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+      - name: Step to run on filure or cancelled    
+        if : ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: distributed-tests-log
+          path: log/

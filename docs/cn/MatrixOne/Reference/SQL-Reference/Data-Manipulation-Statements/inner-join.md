@@ -1,7 +1,7 @@
 # **INNER JOIN**
 
 ## **语法说明**
-`INNER JOIN` 选取两个表中具有匹配值的数据记录。
+`INNER JOIN` 选取两个表中具有匹配值的数据记录。（等同于`JOIN`）
 
 
 ## **语法结构**
@@ -19,45 +19,48 @@ ON table1.column_name = table2.column_name;
 
 ## **示例**
 
+```sql
+> drop table if exists t1,t2,t3;
+> create table t1 (libname1 varchar(21) not null primary key, city varchar(20));
+> create table t2 (isbn2 varchar(21) not null primary key, author varchar(20), title varchar(60));
+> create table t3 (isbn3 varchar(21) not null, libname3 varchar(21) not null, quantity int);
+> insert into t2 values ('001','Daffy','Aducklife');
+> insert into t2 values ('002','Bugs','Arabbitlife');
+> insert into t2 values ('003','Cowboy','Lifeontherange');
+> insert into t2 values ('000','Anonymous','Wannabuythisbook?');
+> insert into t2 values ('004','BestSeller','OneHeckuvabook');
+> insert into t2 values ('005','EveryoneBuys','Thisverybook');
+> insert into t2 values ('006','SanFran','Itisasanfranlifestyle');
+> insert into t2 values ('007','BerkAuthor','Cool.Berkley.the.book');
+> insert into t3 values ('000','NewYorkPublicLibra',1);
+> insert into t3 values ('001','NewYorkPublicLibra',2);
+> insert into t3 values ('002','NewYorkPublicLibra',3);
+> insert into t3 values ('003','NewYorkPublicLibra',4);
+> insert into t3 values ('004','NewYorkPublicLibra',5);
+> insert into t3 values ('005','NewYorkPublicLibra',6);
+> insert into t3 values ('006','SanFransiscoPublic',5);
+> insert into t3 values ('007','BerkeleyPublic1',3);
+> insert into t3 values ('007','BerkeleyPublic2',3);
+> insert into t3 values ('001','NYC Lib',8);
+> insert into t1 values ('NewYorkPublicLibra','NewYork');
+> insert into t1 values ('SanFransiscoPublic','SanFran');
+> insert into t1 values ('BerkeleyPublic1','Berkeley');
+> insert into t1 values ('BerkeleyPublic2','Berkeley');
+> insert into t1 values ('NYCLib','NewYork');
 
-Let's look at a selection from the "Orders" table:
+> select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 
-|  OrderID   | CustomerID  | OrderDate | 
-|  ----  | ----  | ---- |
-| 10308  | 2 |  	1996-09-18 |
-| 10309  | 37  | 1996-09-19 |
-| 10310  | 77  | 1996-09-20 |
-
-
-Then, look at a selection from the "Customers" table:
-
-|  CustomerID   | CustomerName  | ContactName | Country |
-|  ----  | ----  | ---- | ---- | 
-| 1  | Alfreds Futterkiste	 |  	Maria Anders	 | Germany | 
-| 2  | Ana Trujillo Emparedados y helados	  | Ana Trujillo	| Mexico | 
-| 3  | Antonio Moreno Taquería	 | Antonio Moreno	 | Mexico |
-
-
-Notice that the "CustomerID" column in the "Orders" table refers to the "CustomerID" in the "Customers" table. The relationship between the two tables above is the "CustomerID" column.
-
-Then, we can create the following SQL statement (that contains an INNER JOIN), that selects records that have matching values in both tables:
++----------+--------------------+------+
+| city     | libname1           | a    |
++----------+--------------------+------+
+| NewYork  | NewYorkPublicLibra |    6 |
+| SanFran  | SanFransiscoPublic |    1 |
+| Berkeley | BerkeleyPublic1    |    1 |
+| Berkeley | BerkeleyPublic2    |    1 |
++----------+--------------------+------+
 
 ```
 
-> SELECT Orders.OrderID, Customers.CustomerName, Orders.OrderDate
-FROM Orders
-INNER JOIN Customers ON Orders.CustomerID=Customers.CustomerID;
 
-```
-
-and it will produce something like this:
-
-|  OrderID   | CustomerName  | OrderDate | 
-|  ----  | ----  | ---- |
-| 10308  | Ana Trujillo Emparedados y helados	 |  	9/18/1996 |
-| 10365  | Antonio Moreno Taquería	  | 	11/27/1996|
-| 10383  | Around the Horn	  | 12/16/1996 |
-| 10355  | Around the Horn	  | 11/15/1996 |
-| 10278  | Berglunds snabbköp		  | 8/12/1996 |
-
-
+## **限制**
+目前， `INNER JOIN`语句在进行某些查询时将导致崩溃（与服务器失去连接）。

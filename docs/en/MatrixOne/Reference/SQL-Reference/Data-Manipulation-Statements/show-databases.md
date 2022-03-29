@@ -9,7 +9,7 @@ Shows the list of databases that exist on the instance.
 > SHOW DATABASES [LIKE expr | WHERE expr]
 ```
 ## **Examples**
-```
+```sql
 > SHOW DATABASES;
 +----------+
 | Database |

@@ -1,63 +1,68 @@
-# **General FAQs**
 
-## **Product FAQs**
 
-* <font size=4>**What is MatrixOne?**</font>
-  MatrixOne is a future-oriented hyperconverged cloud & edge native DBMS that supports transactional, analytical, and streaming workload with a simplified and distributed database engine, across multiple datacenters, clouds, edges and other heterogenous infrastructures.
-  For information about MatrixOne, you can see [MatrixOne Introduction](../Overview/matrixone-introduction.md).
-<br>
-* <font size=4>**What could I do with MatrxOne**</font>
-  MatrixOne provides users with HTAP services to support hybrid workloads: transactional, analytical, streaming, time-series, machine learning, etc. The all-in-one architecture of MO will significantly simplify database management and maintenance, single database can serve multiple data applications.  
-<br>
-* <font size=4>**Is MatrixOne based on MySQL?**</font>
-  Despite compatible with part of MySQL syntax and semantics, MatrixOne is developed independently and in the future there will be more different semantics from MySQL because of we intend to develop MO as a hyperconverged database.  
-  About the compatibility with MySQL, you can see [MySQL-Compatibility](../Overview/mysql-compatibility.md).
-<br>
-* <font size=4>**What's the relationship between MatrixOne and MatrixCube?**</font>
-  MatrixOne is the main schema of our database, including query parser layer, compute layer, and storage layer, and thus it could achieve the functionality of standalone databases. Further, with MatrixCube, we can demploy a disturbted cluster by several servers. In a nutshell, MatrixCube is the module providing distributed system.  
-  For information about MatrixCube, you can see [MatrixCube Introduction](../Overview/matrixcube/matrixcube-introduction.md).
+## **产品常见问题**
+
+* <font size=4>**MatrixOne是什么?**</font>
+  
+  MatrixOne是一款面向未来的超融合异构云原生数据库，通过超融合数据引擎支持事务/分析/流处理等混合工作负载，通过异构云原生架构支持跨机房协同/多地协同/云边协同。MatrixOne希望简化数据系统开发和运维的成本，消减复杂系统间的数据碎片，打破数据融合的各种边界。  
+  想了解更多关于MatrixOne的信息，您可以浏览[MatrixOne简介](../Overview/matrixone-introduction.md)。
 <br>
 
-* <font size=4>**Why MO is so fast?**</font>
-  MatrixOne achieves accelerated queries using patented vectorized execution as well as optimal computation push down strategies through factorization techniques.  
-  Additionally, in a distributed system, the query capability will increase by the number of nodes increases.
+* <font size=4>**MatrxOne支持哪些应用？**</font>
+  
+  MatrixOne为用户提供了极致的HTAP服务，MatrixOne可以被应用在企业数据中台，大数据分析等场景中。
 <br>
 
-* <font size=4>**Which language can I use to work with MO?**</font>
-  Currntly, the primary programming language used for our codes is **Golang**
+* <font size=4>**MatrixOne是基于MySQL或者其他数据库开发的吗?**</font>
+  
+  MatrixOne是一个从零打造的全新数据库。MatrixOne兼容MySQL的部分语法与语义，并且在未来将会产生更多与MySQL不同的语义，以便我们将之打造为一款更强大的超融合数据库。
+  关于与MySQL的兼容性，您可参见[MySQL兼容性](../Overview/mysql-compatibility.md)。
 <br>
 
-* <font size=4>**What platforms does MO support?**</font>
-  MatrixOne supports Linux and MacOS currently and in the future it will surpport more systems.
+* <font size=4>**MatrixOne与MatrixCube有什么关系?**</font>
+  
+  MatrixOne是我们数据库的主体部分，其包括了查询解析层、计算层、存储层，因此它可以实现数据库的基本功能。MatrixCube是我们的分布式框架，它目前是一个独立的仓库，他可以与MatrixOne结合起来形成一个分布式数据库，也可以与其他的存储引擎适配使其具有分布式扩展能力。  
+  若想了解更多关于MatrixCube的信息，您可参见[MatrixCube简介](../Overview/matrixcube/matrixcube-introduction.md)。
 <br>
 
-* <font size=4>**Which engines does MO support?**</font>
-  Currently, there are two storage engines in MatrixOne including **AOE** engine and **Key-Value** engine. The former one is a column-storage engine represents "Append Only Engine", surpport OLAP capability:, and the later one can store `Catalog`(a component that holds the overall metadata of the database).  
-  In the future we will promote **AOE** to upgrade to an HTAP engine providing complete ACID and strong OLAP capability.
+* <font size=4>**为什么MatrixOne的SQL引擎如此高效?**</font>
+  
+  MatrixOne的SQL引擎主要利用了向量化执行与因子化计算技术，来实现更高效的查询。  
 <br>
 
-* <font size=4>**Which MO variables are compatible with MySQL?**</font>
-  You can see [data tpyes in MatrixOne](../Reference/SQL-Reference/data-types.md) to learn more about the data types we surpport.
+* <font size=4>**MatrixOne使用什么编程语言开发的?**</font>
+  
+  目前，我们主要使用**Golang**作为最主要的编程语言。
 <br>
 
-## **Deployment FAQs**
-* <font size=4>Are there any hardware requirements for the server using MO?</font>
-???????
+* <font size=4>**MatrixOne可以在什么操作系统上部署?**</font>
+  
+  目前，MatrixOne支持Linux与MacOS系统。
 <br>
 
-## **SQL FAQs**
-
-* <font size=4>**Whether functions and other keywords are case sensitive？**</font>
-???????
+* <font size=4>**可以参与贡献MatrixOne项目吗?**</font>
+  
+  MatrixOne是一个完全在Github上进行的开源项目，欢迎所有开发者的贡献。可以参考我们的[贡献指南](../Contribution-Guide/make-your-first-contribution.md)
 <br>
 
-* <font size=4>**Does MatrixOne support** `JOIN?`</font>
-  Only `INNER JOIN` with `GROUP BY` and `ORDER BY` is supported in multi table scenarios. And, table alias is not supported in `INNER JOIN`.
+
+## **部署常见问题**
+
+* <font size=4>**MatrixOne对部署硬件的配置要求如何？**</font>
+
+  单机推荐配置：4核 X86架构的CPU，32GB内存，CentOS 7.0及以上操作系统
+  
+  分布式推荐配置: 3台 * 16核 X86架构的CPU，63GB内存， CentOS 7.0及以上操作系统
 <br>
 
-* <font size=4>**What is the maximum number of statements in a transaction?**</font>
+## **SQL常见问题**
+
+* <font size=4>**MatrixOne中的函数和关键字是否区分大小写？**</font>
+
+  不区分大小写。
 <br>
 
-* <font size=4>**How do I export data from MO to a file?**</font>
-  You can use `SELECT INTO OUTFILE` command to export data from MO to a **csv** file (only to the server host, not to the remote client).
-  For this command, you can see [SELECT Reference](../Reference/SQL-Reference/Data-Manipulation-Statements/select.md).  
+* <font size=4>**如何将数据从MatrixOne导出到文件?**</font>
+  
+  你可以使用`SELECT INTO OUTFILE`命令来将数据导出为**csv**文件（只能导出到服务器主机，无法到远程客户端）。  
+  对于该命令，您可查阅[SELECT参考指南](../Reference/SQL-Reference/Data-Manipulation-Statements/select.md)来了解具体用法。  

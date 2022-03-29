@@ -132,8 +132,10 @@ message TpePrefixScanRequest {
   bytes        prefixOrStartKey = 1;
   //the prefixOrStartKey[:prefixLength] is the prefix
   int64        prefixLength = 2;
+  //the endKey of the range denoted by the prefix
+  bytes        prefixEnd = 3;
   //the count of key/value wanted at most in the reqeust
-  uint64       limit = 3;
+  uint64       limit = 4;
 }
 
 // TpeScanRequest scan request
@@ -141,10 +143,11 @@ message TpeScanRequest {
   //the range [start,end)
   bytes        start = 1;
   bytes        end = 2;
+  bytes        prefix = 3;
   //the count of key/value wanted at most in the request
-  uint64       limit = 3;
+  uint64       limit = 4;
   //the key needed to be returned
-  bool         needKey = 4;
+  bool         needKey = 5;
 }
 
 message TpeDeleteBatchRequest {
@@ -250,4 +253,16 @@ message BytesSliceResponse {
 // Uint32Response uint32 response
 message Uint32Response {
   uint32 value = 1;
+}
+
+message TpeScanResponse {
+  repeated bytes keys = 1;
+  repeated bytes values = 2;
+  bool completeInAllShards = 3;
+  bytes nextScanKey = 4;
+}
+
+message TpeCheckKeysExistInBatchResponse {
+  int32 existedKeyIndex = 1;
+  uint64 shardID = 2;
 }

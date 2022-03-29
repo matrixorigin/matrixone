@@ -1,9 +1,9 @@
 # **Playground**
-[MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)提供了一个交互式教程，可以让您直接通过浏览器来运行MatrixOne的SQL语句等部分功能 。
+[MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)提供了一个交互式工作台，可以让您直接通过浏览器来运行MatrixOne的SQL语句等功能，快速体验MatrixOne的最新能力。
  
 
 * 你可以参考[SQL参考指南](../Reference/SQL-Reference/Data-Definition-Statements/create-database.zh.md)来熟悉相关SQL语句
-* 你可以查看[教程](../Get-Started/Tutorial/SSB-test-with-matrixone.zh.md)来学习如何使用MatrixOne来进行SSB、NYC等测试
+* 你可以查看[实践教程](../Get-Started/Tutorial/SSB-test-with-matrixone.zh.md)来学习如何使用MatrixOne来进行SSB、NYC测试等最佳实践。
 
 ## **限制**
 MatixOrigin Playground只能在**只读**模式下进行操作，因此相关DDL命令和部分改变数据的DML命令不可用，具体限制如下：
@@ -18,15 +18,15 @@ MatixOrigin Playground只能在**只读**模式下进行操作，因此相关DDL
 
 * ```call``` 不可用
 
-* 结果最大行**max_result_rows**=2000  
+* 结果最大展示行**max_result_rows**=2000  
   
 ## **示例**
 
-在Playground中，你可以使用不同的教程，现在支持的教程如下:
+在Playground中，你可以使用工作台左侧提供的互动实践教程来快速启动对MatrixOne的体验操作。现在平台支持的互动实践教程如下:
 
-* [**SSB测试**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) 
+* [**用MatrixOne完成SSB测试**](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1) 
      
-此处，我们以**SSB测试** 为例来展示Playground的大致流程。
+此处，我们以**SSB测试实践** 为例来展示Playground的大致流程。
 
 ### **数据准备**  
 
@@ -81,7 +81,7 @@ order by d_year, p_brand;
 
 
 ## **相关信息**
-This page describes the features, limitations, and examples of Playground. For information on other options that are available when trying out MatrixOne, see the following:
-本页面叙述了Playground的特性、限制和示例。有关使用MatrixOne时所需的其他信息，请参阅以下内容：
-* [安装MatrixOne](install-standalone-matrixone.zh.md)
-* [What‘s New](../Overview/what's-new.zh.md)
+本页面介绍了Playground的特性、限制和示例。有关使用MatrixOne时所需的其他更多信息，可参阅以下内容：
+* [安装单机版MatrixOne](install-standalone-matrixone.zh.md)
+* [部署分布式MatrixOne集群](install-distributed-matrixone.md)
+* [产品最新发布](../Overview/what's-new.zh.md)

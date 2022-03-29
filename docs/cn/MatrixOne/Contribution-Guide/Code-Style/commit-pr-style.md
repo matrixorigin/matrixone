@@ -1,23 +1,23 @@
-# 提交信息&PR 规范
+# **提交信息&PR规范**
 
-本文档描述了应用于MatrixOrigin的所有存储库的提交消息(commit mesage)和PR(pull request)样式规范。当你进行提交时，务必遵循这种风格，保证提交的质量。
+本文档描述了应用于MatrixOrigin的所有存储库的提交消息(commit mesage)和PR(pull request)的样式规范。当你提交代码时，务必遵循这种规范，保证提交的质量。
 
-## 一条好的commit message有多重要？
+## **一条好的commit message有多重要？**
 
-- 加速审查流程
-    - 帮助审查者更好地理解PR内容
+- 加速审阅流程
+    - 帮助审阅者更好地理解PR内容
     - 可以忽略不重要的信息
 - 有助于撰写发布公告
 - 帮助其他人了解前因后果
 
-## 什么是好的commit message
+## **什么是好的commit message？**
 
 我们认为有以下要素：
 
 1. **What is your change? (必要)**
 
 
-    它可能修复了一个特定的bug，添加一个feature，提高了性能、可靠性或稳定性，或者只是为了安全性而进行的更改。
+    它可能修复了一个特定的bug，添加了一个feature，提高了性能、可靠性或稳定性，或者只是保障安全性而进行的更改。
 
 2. **Why this change was made? (必要)**
 
@@ -25,14 +25,13 @@
 
 3. **What effect does the commit have? (可选)**
 
-    In addition to the obvious effects, this may include benchmarks, side effects, etc. For short and obvious patches, this part can be omitted.
-    除了必然的影响之外，这可能还包括基准测试、不良影响等。对于简要的补丁，这部分可以省略。
+    除了必然会产生的影响之外，可能还包括基准测试性能变化、对安全性的影响等。对于简要的改动，这部分可以省略。
 
-## 如何写好一条commit message？
+## **如何写好一条commit message**？
 
-要写出一条commit message，我们建议您遵循规定的格式，培养良好的习惯并使用规范的语言。
+要写出一条优质的commit message，我们建议您遵循规定的格式，培养良好的习惯并使用规范的语言。
 
-### 规定的格式
+### **规定的格式**
 
 请在提交时遵循以下格式：
 
@@ -50,11 +49,11 @@
     - 如果该改动影响了三个及以上的模块，请使用`*`，如`*:`。
     - 在冒号后的文本中使用小写字母。例如："media: **update** the DM architecture image"
     - 不要在最后添加句号。
-- 第二行清留白
+- 第二行请留白
 - 第三行“why”部分，如果没有特定的原因，您可以使用以下表述，如"Improve performance", "Improve test coverage."
 - 其他行不超过80个字符。
 
-### 良好的习惯
+### **良好的习惯**
 
 - 进行总结
 - 清楚地描述该方案的逻辑，避免`misc fixes`等表达
@@ -63,7 +62,7 @@
 - 注意代码的证明和测试
 - 交代前因后果
 
-### 规范的语言
+### **规范的语言**
 
 - 在第一行使用祈使句
 - 使用简单的动词 (如"add" not "added")
@@ -74,7 +73,7 @@
 - 非必要不缩写
 
 
-## Pull Request 规范
+## **Pull Request规范**
 
 关于Pull Request中的描述，请参考下面的Pull Request模板，涵盖必要信息：
 

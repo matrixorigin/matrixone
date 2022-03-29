@@ -17,6 +17,7 @@ package transformer
 import (
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring"

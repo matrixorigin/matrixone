@@ -76,7 +76,6 @@ func (oe *OrderedEncoder) EncodeKey(data []byte,value interface{})([]byte,*Encod
 	default:
 		panic(errorDoNotComeHere)
 	}
-	return nil, nil
 }
 
 // EncodeNull encodes the NULL and appends the result to the buffer
@@ -197,7 +196,6 @@ func (oe *OrderedEncoder) EncodeUint64(data []byte,value uint64)([]byte,*Encoded
 			byte(value >> 24), byte(value >> 16),
 			byte(value >> 8), byte(value)),nil
 	}
-	return nil, nil
 }
 
 func (oe *OrderedEncoder) EncodeUint64ForFloat(data []byte,value uint64)([]byte,*EncodedItem) {

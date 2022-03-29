@@ -29,7 +29,8 @@ var _ engine.Relation = &TpeRelation{}
 var _ engine.Reader = &TpeReader{}
 
 type TpeConfig struct {
-	KvType	tuplecodec.KVType
+	KvType     tuplecodec.KVType
+	SerialType tuplecodec.SerializerType
 
 	//cubeKV needs CubeDriver
 	Cube    driver.CubeDriver
@@ -93,4 +94,5 @@ type TpeReader struct {
 	parallelReader bool
 	//for test
 	isDumpReader bool
+	id int
 }

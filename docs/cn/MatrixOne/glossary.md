@@ -7,7 +7,7 @@
 |  术语   | 定义   |
 |  ----  | ----  |
 | A  |  |
-| AST (抽象语法树)  | 抽象语法树是代码的树结构表示形式，是组成编译器工作模式的基本部分|
+| AST  | AST即抽象语法树，是代码的树结构表示形式，是组成编译器工作模式的基本部分|
 | C  |  |
 | Cluster  | MatrixOne的分布式部署形式，由多台主机组成，在逻辑上构成一个整体。|
 | D  |  |
@@ -15,7 +15,7 @@
 | E  |  |
   | Event Notify | 将心跳(Hearbeat)信息同步到所有节点的机制称为Event Notify。|
   | F  |  |
-  | Factorization | 因子化方法使用了基本的因式分解公式把代数式或二次方程简化为更简洁的形式。**MatrixOne在物理层使用紧凑的分解表示，以减少数据冗余并提高查询性能**  |
+  | Factorization | Factorization因子化方法使用了基本的因式分解公式把代数式或二次方程简化为更简洁的形式。MatrixOne使用因子化技术来减少数据冗余并提高查询性能 |
   | H  |  |
   | Heartbeat | 在MatrixOne集群中的每个节点都将周期性地发送自身的状态信息，而这些信息被称作heartbeat。 |
  | M  |  |
@@ -37,7 +37,7 @@
 
 
 
-|  Term   | Definition   |
+|  概念   |定义   |
 |  ----  | ----  |
 | A  |  |
 | Auto-Rebalance  | 在分布式系统中，多个服务器的存储量、读写负载的自动平衡过程称之为Auto-Rebalance。|
@@ -51,16 +51,16 @@
 | JIT Compilation  |使用运行时的LLVM将SQL计划树或中间代码转化为本地程序。|
 | M  |  |
 | Monolitic Engine  | Monolitic Engine即超融合引擎，可支持TP、AP、时序、机器学习等混合工作负载。  |
-| Materialized View  | A materialized view is a pre-computed data set derived from a query specification (the SELECT in the view definition) and stored for later use. Materialized view is usually used for increasing performance and efficiency. |
+| Materialized View  |Materialized View即物化视图，是预先被计算好的数据集，存储下来以便后续使用，通常可以提升查询的运行效率。 |
 | Metadata  | Metadata即元数据，是用于描述数据库中数据的结构信息的数据。|
 | P  |  |
 | Paxos  | Paxos是一种一致性算法，保持一组异步网络通信的分布式计算机之间的一致性。 |
 | R  |  |
-| Raft  | Raft是一种易于理解的一致性协议算法，在容错性与性能上与Paxos相当，它们的不同之处在于，不同之处在于：The difference is that it's decomposed into relatively independent subproblems, and it cleanly addresses all major pieces needed for practical systems. |
+| Raft  | Raft是一种易于理解的一致性协议算法，在容错性与性能上与Paxos相当。 |
 | Raft Group and Leader | Raft在一组中定义了一个leader以及许多followers。一个组代表一个复制状态机，只有leader才可以响应客户端请求，然后将传达给followers。 |
 | S  |  |
 | SIMD instruction | SIMD是Single Instruction/Multiple Data的简写，即单指令多数据流，SIMD操作一般指一种使用一条指令即可处理多条数据的计算方法。 |
 | T  |  |
 | Transaction |  在数据库中执行的一系列满足ACID基本要求的操作。| 
 | V  |  |
-| Vectorized Execution  |Vectorized data processing helps with developing faster analytical query engines by making efficient utilization of CPU cache. Arrow's columnar format allows to use lightweight schemes like dictionary encoding, bit packing, and run length encoding, which favor query performance over compression ratio.|
+| Vectorized Execution  |通过有效利用CPU的缓存，向量化执行提高了分析查询引擎的速度。Arrow 的列式格式可以使用轻量级的架构，如dictionary encoding，bit packing以及run length encoding,这都进一步了提升了查询效率.|

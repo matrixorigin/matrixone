@@ -445,7 +445,17 @@ access = ["file"]
 type = "int64"
 domain-type = "range"
 values = ["3", "1", "5"]
-comment = "the count of tries when the set failed. in DedupSetBatch"
+comment = "the count of tries when the set failed in DedupSetBatch"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeSerializer"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["concise","json"]
+comment = "default is concise. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer."
 update-mode = "dynamic"
 
 # Cluster Configs
@@ -512,10 +522,10 @@ rpc-addr = "localhost:30000"
 rpc-advertise-addr = ""
 # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
 rpc-timeout = "10s"
-# In a distributed setting, if a node is not a prophet node(i.e., a pure storage node), set the value storage-node = false.
-storage-node = true
+# In a distributed setting, if a node is not a prophet node(i.e., a pure prophet node), set the value prophet-node = false.
+prophet-node = true
 # In a distributed setting, if a node is a prophet node, the value external-etcd should be empty.
-# If a node is not a prophet node(i.e., the above setting storage-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's client-urls.
+# If a node is not a prophet node(i.e., the above setting prophet-node = false), the value of external-etcd should be the three prophet node's prophet.embed-etcd's client-urls.
 external-etcd = ["", "", ""]
 
 # In a distributed setting, only the three prophet nodes need to adjust this setting

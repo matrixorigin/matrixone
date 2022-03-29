@@ -1,8 +1,8 @@
 # **LIKE**
 
 ## **语法说明**
-The LIKE operator is used in a WHERE clause to search for a specified pattern in a column.
-`LIKE`在`WHERE`语句中被用作搜寻特定样式的数值。
+LIKE 操作符用于在 WHERE 子句中搜索列中的指定模式。
+
 有两个通配符经常与LIKE操作符一起使用:
 * 百分号(%) 代表了0、1或多个字符。
 * 下划线(_) 代表单个字符。

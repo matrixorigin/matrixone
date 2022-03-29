@@ -18,48 +18,43 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
-	"strconv"
-	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-	"github.com/matrixorigin/matrixone/pkg/sql/handler"
-
-	"github.com/matrixorigin/matrixcube/storage/kv"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
-	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-
-	"github.com/matrixorigin/matrixone/pkg/rpcserver"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver"
-	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
-	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
-	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
-	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/pb/meta"
-	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/client"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
+	"github.com/matrixorigin/matrixcube/storage/kv"
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/handler"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
+	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -138,7 +133,7 @@ func removeEpoch(epoch uint64) {
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
-	if tpe,ok := config.StorageEngine.(*tpeEngine.TpeEngine) ; ok {
+	if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
 		err = tpe.RemoveDeletedTable(epoch)
 		if err != nil {
 			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
@@ -250,7 +245,7 @@ func main() {
 		logutil.Infof("Decode cluster config error:%v\n", err)
 		os.Exit(DecodeClusterConfigExit)
 	}
-	cfg.ServerConfig = server.Cfg{}
+	cfg.ServerConfig = client.Cfg{}
 
 	if !config.GlobalSystemVariables.GetDisablePCI() {
 		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
@@ -299,11 +294,20 @@ func main() {
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY
-		}else if configKvTyp == "cubekv" {
+		} else if configKvTyp == "cubekv" {
 			tpeConf.KvType = tuplecodec.KV_CUBE
 			tpeConf.Cube = a
-		}else{
+		} else {
 			logutil.Infof("there is no such kvType %s \n", configKvTyp)
+			os.Exit(CreateTpeExit)
+		}
+		configSerializeTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeSerializer())
+		if configSerializeTyp == "concise" {
+			tpeConf.SerialType = tuplecodec.ST_CONCISE
+		} else if configSerializeTyp == "json" {
+			tpeConf.SerialType = tuplecodec.ST_JSON
+		} else {
+			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
 			os.Exit(CreateTpeExit)
 		}
 		te, err := tpeEngine.NewTpeEngine(tpeConf)
@@ -389,7 +393,7 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 			if router != nil {
 				nodeCnt := maxReplicas
 				shardCnt := 0
-				router.ForeachShards(uint64(pb.AOEGroup), func(shard meta.Shard) bool {
+				router.ForeachShards(uint64(pb.AOEGroup), func(shard metapb.Shard) bool {
 					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
 					shardCnt++
 					if len(shard.Replicas) < nodeCnt {
@@ -400,7 +404,7 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
 					kvNodeCnt := maxReplicas
 					kvCnt := 0
-					router.ForeachShards(uint64(pb.KVGroup), func(shard meta.Shard) bool {
+					router.ForeachShards(uint64(pb.KVGroup), func(shard metapb.Shard) bool {
 						kvCnt++
 						if len(shard.Replicas) < kvNodeCnt {
 							kvNodeCnt = len(shard.Replicas)

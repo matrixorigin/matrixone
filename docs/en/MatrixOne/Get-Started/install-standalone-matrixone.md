@@ -31,6 +31,24 @@ $ make build
 ```
 $ ./mo-server system_vars_config.toml
 ```
+
+## **Downloading binary packages**
+
+Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux environment.
+
+#### 1. Download binary packages and decompress
+
+```
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.3.0/mo-server-v0.3.0-linux-amd64.zip
+$ unzip mo-server-v0.3.0-linux-amd64.zip
+```
+#### 2.Launch MatrixOne server
+
+```
+$./mo-server system_vars_config.toml
+```
+
+
 ## **Using docker**
 
 #### 1. Install Docker

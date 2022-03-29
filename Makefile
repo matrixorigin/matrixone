@@ -10,6 +10,7 @@ BUILD_TIME=$(shell date)
 MO_Version=$(shell git describe --abbrev=0 --tags)
 TARGET_OS ?=
 TARGET_ARCH ?=
+BVT_BRANCH ?= master
 
 # generate files generated from .template and needs to delete when clean
 GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
@@ -83,9 +84,9 @@ endif
 bvt: mo-server
 	$(info [Build verification testing])
 ifeq ($(UNAME_S),Darwin)
-	@cd optools; ./run_bvt.sh BVT False
+	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
 else
-	@cd optools; timeout 30m ./run_bvt.sh BVT False
+	@cd optools; timeout 30m ./run_bvt.sh BVT False $(BVT_BRANCH)
 endif
 
 # Tear down

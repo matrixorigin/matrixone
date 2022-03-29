@@ -110,7 +110,7 @@ func (b *build) pruneConditionNot(e *extend.UnaryExtend) (extend.Extend, error) 
 	}
 	// split not extends
 	ext = logicInverse(ext)
-	return ext, nil
+	return b.pruneExtend(ext, false)
 }
 
 func (b *build) pruneProjectionNot(e *extend.UnaryExtend) (extend.Extend, error) {
@@ -201,11 +201,20 @@ func splitNotBinary(e *extend.BinaryExtend) extend.Extend {
 }
 
 func (b *build) pruneUnaryMinus(e *extend.UnaryExtend) (extend.Extend, error) {
-	v, ok := e.E.(*extend.ValueExtend)
-	if !ok {
+	switch n := e.E.(type) {
+	case *extend.UnaryExtend:
+		tempExtend, err := b.pruneUnaryMinus(n)
+		if err == nil {
+			if temp, ok := tempExtend.(*extend.ValueExtend); ok {
+				return Neg(temp)
+			}
+		}
+		return tempExtend, err
+	case *extend.ValueExtend:
+		return Neg(n)
+	default:
 		return e, nil
 	}
-	return Neg(v)
 }
 
 func (b *build) pruneOr(e *extend.BinaryExtend) (extend.Extend, error) {

@@ -2,13 +2,13 @@
 
 ## **概述**
 在此，我们给出了使用MatrixOne在不同的硬件和查询条件下进行SSB测试的性能结果。  
-可参见[SSB测试](../Get-Started/Tutorial/SSB test with- MatrixOne.zh.md)来复现整个测试结果，如果未能实现类似结果，可能需要检查硬件、负载或或测试流程是否存在问题，可以在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)来报告具体问题。  
+可参见[SSB测试](../Get-Started/Tutorial/SSB-test-with-matrixone.md)来复现整个测试结果，如果未能实现类似结果，可能需要检查硬件、负载或或测试流程是否存在问题，可以在GitHub上提出[issue](https://github.com/matrixorigin/matrixone/issues/new/choose)来报告具体问题。  
 在v0.2.0中，MatrixOne在单表、多表查询方面均有优异的表现，我们将MatrixOne的性能测试结果与其他数据库产品进行了比较。通过柱状图，可以看出MatrixOne在查询处理时间上有明显的优势。
 
 推荐测试使用的服务器规格型号：x86 CPU，16核，64GB内存，CentOS 7+操作系统。
 
 
-!!! note  "<font size=4>note</font>"
+!!! note  <font size=4>说明</font>
     <font size=3>以下测试结果均取三次最好结果的平均值，以秒为单位</font>  
 
 
@@ -74,5 +74,5 @@ MatrixOne v0.2.0并没有完成所有SSB查询语句，原因如下：
 ## **相关信息**
 
 本节内容展示了使用MatrixOne进行SSB测试的结果。若想获取更多相关信息，请见：  
-* [完成NYC测试](../Get-Started/Tutorial/NYC-test-with-matrixone.zh.md)  
-* [NYC测试结果](NYC Test Performance.zh.md)
+* [完成NYC测试](../Get-Started/Tutorial/NYC-test-with-matrixone.md)  
+* [NYC测试结果](NYC Test Performance.md)

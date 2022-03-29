@@ -15,7 +15,6 @@
 package orderedcodec
 
 type OrderedEncoder struct {
-
 }
 
 type EncodedItem struct {
@@ -24,50 +23,52 @@ type EncodedItem struct {
 }
 
 type OrderedDecoder struct {
-
 }
 
 type ValueType int
+
 const (
-	VALUE_TYPE_UNKOWN ValueType = 0x0
-	VALUE_TYPE_NULL ValueType = 0x1
-	VALUE_TYPE_BOOL ValueType = 0x2
-	VALUE_TYPE_UINT64 ValueType = 0x3
-	VALUE_TYPE_BYTES ValueType = 0x4
-	VALUE_TYPE_STRING ValueType = 0x5
-	VALUE_TYPE_INT8 ValueType = 0x6
-	VALUE_TYPE_INT16 ValueType = 0x7
-	VALUE_TYPE_INT32 ValueType = 0x8
-	VALUE_TYPE_INT64 ValueType = 0x9
-	VALUE_TYPE_UINT8 ValueType = 0xa
-	VALUE_TYPE_UINT16 ValueType = 0xb
-	VALUE_TYPE_UINT32 ValueType = 0xc
-	VALUE_TYPE_FLOAT32 ValueType = 0xd
-	VALUE_TYPE_FLOAT64 ValueType = 0xe
-	VALUE_TYPE_DATE ValueType = 0xf
+	VALUE_TYPE_UNKOWN   ValueType = 0x0
+	VALUE_TYPE_NULL     ValueType = 0x1
+	VALUE_TYPE_BOOL     ValueType = 0x2
+	VALUE_TYPE_UINT64   ValueType = 0x3
+	VALUE_TYPE_BYTES    ValueType = 0x4
+	VALUE_TYPE_STRING   ValueType = 0x5
+	VALUE_TYPE_INT8     ValueType = 0x6
+	VALUE_TYPE_INT16    ValueType = 0x7
+	VALUE_TYPE_INT32    ValueType = 0x8
+	VALUE_TYPE_INT64    ValueType = 0x9
+	VALUE_TYPE_UINT8    ValueType = 0xa
+	VALUE_TYPE_UINT16   ValueType = 0xb
+	VALUE_TYPE_UINT32   ValueType = 0xc
+	VALUE_TYPE_FLOAT32  ValueType = 0xd
+	VALUE_TYPE_FLOAT64  ValueType = 0xe
+	VALUE_TYPE_DATE     ValueType = 0xf
 	VALUE_TYPE_DATETIME ValueType = 0x10
 )
 
 type SectionType int
+
 const (
-	SECTION_TYPE_TABLEID SectionType = 0x0
-	SECTION_TYPE_INDEXID SectionType = 0x1
-	SECTION_TYPE_PRIMARYKEYFIELD SectionType = 0x2
+	SECTION_TYPE_TABLEID           SectionType = 0x0
+	SECTION_TYPE_INDEXID           SectionType = 0x1
+	SECTION_TYPE_PRIMARYKEYFIELD   SectionType = 0x2
 	SECTION_TYPE_SECONDARYKEYFIELD SectionType = 0x3
-	SECTION_TYPE_IMPLICITFIELD SectionType = 0x4
-	SECTION_TYPE_COMPOSITEFIELD SectionType = 0x5
-	SECTION_TYPE_STOREFIELD SectionType = 0x6
-	SECTION_TYPE_COLUMNGROUP SectionType = 0x7
-	SECTION_TYPE_DATABASEID SectionType = 0x8
-	SECTION_TYPE_VALUE SectionType = 0x9
+	SECTION_TYPE_IMPLICITFIELD     SectionType = 0x4
+	SECTION_TYPE_COMPOSITEFIELD    SectionType = 0x5
+	SECTION_TYPE_STOREFIELD        SectionType = 0x6
+	SECTION_TYPE_COLUMNGROUP       SectionType = 0x7
+	SECTION_TYPE_DATABASEID        SectionType = 0x8
+	SECTION_TYPE_VALUE             SectionType = 0x9
 )
 
 type DecodedItem struct {
 	Value                    interface{}
-	ValueType                ValueType // int,uint,uint64,...,float
-	SectionType              SectionType      //belongs to which section
-	OffsetInUndecodedKey     int       //the position in undecoded bytes
-	BytesCountInUndecodedKey int       //the count of bytes in undecoded bytes
+	ValueType                ValueType   // int,uint,uint64,...,float
+	SectionType              SectionType //belongs to which section
+	OffsetInUndecodedKey     int         //the position in undecoded bytes
+	BytesCountInUndecodedKey int         //the count of bytes in undecoded bytes
+	ID                       uint32      //the attribute id
 }
 
 func (di *DecodedItem) IsValueType(vt ValueType) bool {
@@ -82,7 +83,7 @@ func (di *DecodedItem) SetSectionType(st SectionType) {
 	di.SectionType = st
 }
 
-func NewDecodeItem(v interface{}, vt ValueType, st SectionType,oiu int,bciu int) *DecodedItem {
+func NewDecodeItem(v interface{}, vt ValueType, st SectionType, oiu int, bciu int) *DecodedItem {
 	return &DecodedItem{
 		Value:                    v,
 		ValueType:                vt,

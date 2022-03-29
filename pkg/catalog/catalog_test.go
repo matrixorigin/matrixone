@@ -27,12 +27,14 @@ import (
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -109,6 +111,7 @@ func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 	tblInfo.Properties = append(tblInfo.Properties, property)
 	return tblInfo
 }
+
 // func TestProperties(t *testing.T) {
 // 	nodeCount := 3
 // 	bucketCount := 9
@@ -226,7 +229,7 @@ func TestCatalogWithUtil(t *testing.T) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
 			// raftstore.WithTestClusterNodeCount(1),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()

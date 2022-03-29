@@ -1,11 +1,11 @@
 # **NYC性能测试结果**
 
 ## **概述**
-在MatrixOne v0.2.0版本，我们在单机上遵照[相关流程](../Get-Started/Tutorial/NYC-test-with-matrixone.zh.md)实现了**纽约出租车数据测试**，并将测试结果与其他产品相比较，体现了MatrixOne在查询处理时间上的优异性。  
+在MatrixOne v0.2.0版本，我们在单机上遵照[相关流程](../Get-Started/Tutorial/NYC-test-with-matrixone.md)实现了**纽约出租车数据测试**，并将测试结果与其他产品相比较，体现了MatrixOne在查询处理时间上的优异性。  
 
 
 
-!!! note  <font size=4>注意</font>
+!!! note  <font size=4>说明</font>
     <font size=3>以下测试结果均取三次最好结果的平均值，以秒为单位</font>  
 
 
@@ -34,5 +34,5 @@
 ## **相关信息**
 本节内容展示了使用MatrixOne进行纽约出租车数据测试的结果。若想获取更多相关信息，请见：
 
-* [完成SSB测试](../Get-Started/Tutorial/SSB-test-with-matrixone.zh.md)  
-* [SSB测试结果](SSB Test Performance.zh.md)
+* [完成SSB测试](../Get-Started/Tutorial/SSB-test-with-matrixone.md)  
+* [SSB测试结果](SSB Test Performance.md)

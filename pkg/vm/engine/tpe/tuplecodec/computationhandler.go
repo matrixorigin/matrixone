@@ -16,14 +16,15 @@ package tuplecodec
 
 import (
 	"errors"
+	"math"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
-	"time"
 )
 
 const (
@@ -67,7 +68,17 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 }
 
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
-	err := chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	if bat == nil {
+		return nil
+	}
+
+	var err error
+	if len(bat.Zs) != 0 && bat.Zs[0] == -1 {
+		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
+	} else {
+		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	}
+	
 	if err != nil {
 		return err
 	}
@@ -522,6 +533,8 @@ type SingleReaderContext struct {
 
 	//the length of the prefix
 	LengthOfPrefixForScanKey int
+
+	PrefixEnd []byte
 }
 
 type ReadContext struct {
@@ -538,7 +551,15 @@ type ReadContext struct {
 
 	ParallelReader bool
 
+	//for test
+	ReadCount int
+
 	ParallelReaderContext
 
 	SingleReaderContext
+}
+
+func (rc *ReadContext) AddReadCount() int  {
+	rc.ReadCount++
+	return rc.ReadCount
 }
