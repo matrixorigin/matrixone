@@ -21,7 +21,7 @@ $ make
 
 ```
 $ ./dbgen -s 1 -T c
-$ ./dbgen -s 1 -T l`
+$ ./dbgen -s 1 -T l
 $ ./dbgen -s 1 -T p
 $ ./dbgen -s 1 -T s
 $ ./dbgen -s 1 -T d
@@ -36,7 +36,7 @@ drop table if exists lineorder;
 drop table if exists part;
 drop table if exists supplier;
 drop table if exists customer;
-drop table if exists dim_date;
+drop table if exists dates;
 drop table if exists lineorder_flat;
 
 create table lineorder (
@@ -162,17 +162,15 @@ max-entry-bytes = "10GB"
 使用如下命令将数据导入相关表：
 
 ```
-load data infile '/ssb-dbgen-path/supplier.tbl ' into table supplier FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/supplier.tbl' into table supplier FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
-load data infile '/ssb-dbgen-path/customer.tbl ' into table customer FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/customer.tbl' into table customer FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
-load data infile '/ssb-dbgen-path/date.tbl ' into table dim_date FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/date.tbl' into table dates FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
-load data infile '/ssb-dbgen-path/supplier.tbl ' into table supplier FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/part.tbl' into table part FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 
-load data infile '/ssb-dbgen-path/part.tbl ' into table part FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
-
-load data infile '/ssb-dbgen-path/lineorder.tbl ' into table lineorder FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+load data infile '/ssb-dbgen-path/lineorder.tbl  into table lineorder FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 ```
 
 接着你可以在MatrixOne中进行查询操作：  

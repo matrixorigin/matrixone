@@ -32,4 +32,5 @@ const (
 	Pi
 	Ltrim
 	Rtrim
+	Sin
 )
