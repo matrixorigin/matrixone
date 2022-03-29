@@ -55,6 +55,7 @@ func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
 	}
 }
 
+
 var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 	lineSize := ep.LineSize
 	var err error
