@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -273,6 +274,10 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
 		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table delete is supported"))
 	}
+	rel := e.getRelationFromPlanScope(qry.Scope)
+	if rel == nil {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for delete"))
+	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
 		return nil, err
@@ -287,7 +292,7 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op: vm.DeleteTag,
 		Arg: &deleteTag.Argument{
-			Relation:     nil,
+			Relation:     rel,
 			AffectedRows: 0,
 		},
 	})
@@ -298,6 +303,10 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 func (e *Exec) compileUpdate(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
 		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table update is supported"))
+	}
+	rel := e.getRelationFromPlanScope(qry.Scope)
+	if rel == nil {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for update"))
 	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
@@ -313,7 +322,7 @@ func (e *Exec) compileUpdate(qry *plan.Query) (*Scope, error) {
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op: vm.UpdateTag,
 		Arg: &updateTag.Argument{
-			Relation:     nil,
+			Relation:     rel,
 			AffectedRows: 0,
 		},
 	})
@@ -431,6 +440,44 @@ func (e *Exec) checkPlanScope(s *plan.Scope) int {
 		return e.checkPlanScope(s.Children[0])
 	}
 	return BQ
+}
+
+func (e *Exec) getRelationFromPlanScope(s *plan.Scope) engine.Relation {
+	switch op := s.Op.(type) {
+	case *plan.Join:
+		return nil
+	case *plan.Order:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Dedup:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Limit:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Offset:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Restrict:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Projection:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Relation:
+		db, err := e.e.Database(op.Schema)
+		if err != nil {
+			return nil
+		}
+		rel, err := db.Relation(op.Name)
+		if err != nil {
+			return nil
+		}
+		return rel
+	case *plan.DerivedRelation:
+		return nil
+	case *plan.Untransform:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.Rename:
+		return e.getRelationFromPlanScope(s.Children[0])
+	case *plan.ResultProjection:
+		return e.getRelationFromPlanScope(s.Children[0])
+	}
+	return nil
 }
 
 // compileQ builds the scope which sql is a query for single table and without any aggregate functions
