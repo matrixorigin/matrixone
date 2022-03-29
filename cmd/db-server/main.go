@@ -18,10 +18,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/handler"
@@ -140,7 +142,7 @@ func removeEpoch(epoch uint64) {
 	if tpe,ok := config.StorageEngine.(*tpeEngine.TpeEngine) ; ok {
 		err = tpe.RemoveDeletedTable(epoch)
 		if err != nil {
-			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+			// fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
 		}
 	}
 
@@ -171,7 +173,6 @@ func main() {
 
 	configFilePath := args[0]
 	logutil.SetupMOLogger(configFilePath)
-
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
 		logutil.Infof("Initial values error:%v\n", err)
@@ -347,6 +348,11 @@ func main() {
 
 	//test cluster nodes
 	config.ClusterNodes = engine.Nodes{}
+	err = tpe.DumpDatabaseInfo(eng, args)
+	if err != nil {
+		logutil.Infof("%s", err)
+		os.Exit(WaitCubeStartExit)
+	}
 
 	createMOServer(pci)
 

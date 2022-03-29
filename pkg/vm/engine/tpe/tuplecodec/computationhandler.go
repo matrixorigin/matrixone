@@ -16,13 +16,14 @@ package tuplecodec
 
 import (
 	"errors"
+	"math"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
-	"time"
 )
 
 const (
@@ -57,6 +58,14 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 		return nil, err
 	}
 	return bat, nil
+}
+
+func (chi *ComputationHandlerImpl) DumpRead(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, error) {
+	result, _, err := chi.indexHandler.DumpReadFromIndex(readCtx, opt)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {

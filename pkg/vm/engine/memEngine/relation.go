@@ -2,6 +2,7 @@ package memEngine
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"

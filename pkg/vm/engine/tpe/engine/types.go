@@ -15,6 +15,8 @@
 package engine
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
@@ -59,4 +61,43 @@ type TpeReader struct {
 	readCtx *tuplecodec.ReadContext
 	//for test
 	isDumpReader bool
+}
+
+func PrintTpeRelation(r *TpeRelation) {
+	fmt.Println(r.id)
+	fmt.Println(*r.dbDesc)
+	fmt.Println(*&r.desc.Attributes)
+	fmt.Println(r.computeHandler)
+}
+
+func GetReadCtxInfo(r *TpeRelation) *tuplecodec.ReadContext {
+	return &tuplecodec.ReadContext {
+		IndexDesc: &r.desc.Primary_index,
+		ReadAttributeDescs: func(r *TpeRelation) []*descriptor.AttributeDesc {
+			ret := make([]*descriptor.AttributeDesc, 0)
+			for i, _ := range r.desc.Attributes {
+				ret = append(ret, &r.desc.Attributes[i])
+			}
+			return ret
+		}(r),
+		DbDesc:	r.dbDesc,
+		TableDesc:	r.desc,
+	}
+}
+
+func GetTpeReaderInfo(r *TpeRelation, eng *TpeEngine) *TpeReader {
+	return &TpeReader{
+		dbDesc:	r.dbDesc,
+		tableDesc: r.desc,
+		computeHandler: eng.computeHandler,
+	}
+}
+
+func MakeReadParam(r *TpeRelation) (refCnts []uint64, attrs []string) {
+    refCnts = make([]uint64, len(r.desc.Attributes))
+	attrs = make([]string, len(refCnts))
+	for i, attr := range r.desc.Attributes {
+		attrs[i] = attr.Name
+	}
+	return refCnts, attrs
 }

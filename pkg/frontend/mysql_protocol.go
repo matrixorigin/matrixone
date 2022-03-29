@@ -1789,7 +1789,6 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		},
 		SV: SV,
 	}
-
 	mysql.resetPacket()
 
 	return mysql

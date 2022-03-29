@@ -16,6 +16,7 @@ package engine
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -107,4 +108,63 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 		}
 	}
 	return bat,err
+}
+
+func (tr *  TpeReader) DumpRead(refCnts []uint64, attrs []string, opt *batch.DumpOption) (*batch.DumpResult, error) {
+	if tr.isDumpReader {
+		//read nothing
+		return nil, nil
+	}
+	if len(refCnts) == 0 || len(attrs) == 0{
+		return nil,errorInvalidParameters
+	}
+	if len(refCnts) != len(attrs) {
+		return nil,errorMismatchRefcntWithAttributeCnt
+	}
+
+	attrSet := make(map[string]uint32)
+	for _, tableAttr := range tr.tableDesc.Attributes {
+		attrSet[tableAttr.Name] = tableAttr.ID
+	}
+
+	//check if the attribute is in the relation
+	var readAttrs []*descriptor.AttributeDesc
+	for _, attr := range attrs {
+		if attrID,exist := attrSet[attr]; exist {
+			readAttrs = append(readAttrs,&tr.tableDesc.Attributes[attrID])
+		}else{
+			return nil, errorSomeAttributeNamesAreNotInAttributeDesc
+		}
+	}
+
+	var err error
+
+	if tr.readCtx == nil {
+		tr.readCtx = &tuplecodec.ReadContext{
+			DbDesc:                   tr.dbDesc,
+			TableDesc:                tr.tableDesc,
+			IndexDesc:                &tr.tableDesc.Primary_index,
+			ReadAttributesNames:      attrs,
+			ReadAttributeDescs:       readAttrs,
+			PrefixForScanKey:         nil,
+			LengthOfPrefixForScanKey: 0,
+		}
+	}else{
+		//check if these attrs are same as last attrs
+		if len(tr.readCtx.ReadAttributesNames) != len(attrs) {
+			return nil,errorDifferentReadAttributesInSameReader
+		}
+
+		for i := 0; i < len(attrs); i++ {
+			if attrs[i] != tr.readCtx.ReadAttributesNames[i] {
+				return nil, errorDifferentReadAttributesInSameReader
+			}
+		}
+	}
+
+	result, err := tr.computeHandler.DumpRead(tr.readCtx, opt)
+	if err != nil {
+		return nil, err
+	}
+	return result,err
 }

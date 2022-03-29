@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"errors"
+	"sync"
+
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"sync"
 )
 
 type RoutineManager struct {
