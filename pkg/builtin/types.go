@@ -29,4 +29,5 @@ const (
 	Exp
 	Power
 	Pi
+	Now
 )

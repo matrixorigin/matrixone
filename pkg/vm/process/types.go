@@ -16,6 +16,9 @@ package process
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -54,6 +57,45 @@ type Limitation struct {
 	PartitionRows int64
 }
 
+type StatementCtx struct {
+	sync.RWMutex
+	timeZone *time.Location
+	stmtTime *time.Time
+}
+
+func (sc *StatementCtx) GetStatementTime() time.Time {
+	sc.Lock()
+	defer sc.Unlock()
+
+	if sc.stmtTime == nil {
+		now := time.Now()
+		sc.stmtTime = &now
+	}
+	return *sc.stmtTime
+}
+
+func (sc *StatementCtx) SetStatementTime(t time.Time) {
+	sc.Lock()
+	defer sc.Unlock()
+	sc.stmtTime = &t
+}
+
+func (sc *StatementCtx) GetTimeZone() *time.Location {
+	sc.Lock()
+	defer sc.Unlock()
+
+	if sc.timeZone == nil {
+		sc.timeZone = time.Local
+	}
+	return sc.timeZone
+}
+
+func (sc *StatementCtx) SetTimeZone(tz *time.Location) {
+	sc.Lock()
+	defer sc.Unlock()
+	sc.timeZone = tz
+}
+
 // Process contains context used in query execution
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
@@ -65,4 +107,6 @@ type Process struct {
 	Mp  *mheap.Mheap
 
 	Cancel context.CancelFunc
+
+	Statement StatementCtx
 }

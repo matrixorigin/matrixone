@@ -4387,6 +4387,29 @@ function_call_aggregate:
             Type: $3,
         }
     }
+|   NOW '(' INTEGRAL ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        ival, errStr := util.GetInt64($3)
+        if errStr != "" {
+            yylex.Error(errStr)
+            return 1
+        }
+        expr := tree.NewNumValWithResInt(constant.MakeInt64(ival), util.IntToString(ival), false, ival)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{expr},
+        }
+    }
+|   NOW '(' ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        expr := tree.NewNumValWithResInt(constant.MakeInt64(0), "", false, 0)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{expr},
+        }
+    }
 |   SUM '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))

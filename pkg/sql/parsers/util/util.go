@@ -14,7 +14,10 @@
 
 package util
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 func GetUint64(num interface{}) uint64 {
 	switch v := num.(type) {
@@ -32,4 +35,8 @@ func GetInt64(num interface{}) (int64, string) {
 		return v, ""
 	}
 	return -1, fmt.Sprintf("%d is out of range int64", num)
+}
+
+func IntToString(value int64) string {
+	return strconv.FormatInt(value, 10)
 }
