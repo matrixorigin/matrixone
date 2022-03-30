@@ -39,13 +39,14 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("])")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, arg interface{}) error {
+	n := arg.(*Argument)
+	n.ctr = new(Container)
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
-	n.ctr = new(Container)
 	if n.Type == AQ {
 		if len(n.FreeVars) == 0 {
 			return n.ctr.processBoundVars(proc)

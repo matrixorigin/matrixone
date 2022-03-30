@@ -1005,10 +1005,10 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 		ss[i].Proc.Lim = s.Proc.Lim
 		{
 			for _, in := range s.Instructions {
-				if in.Op == vm.Connector {
+				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
+				if in.Op == vm.Join {
 					break
 				}
-				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
 			}
 		}
 	}
@@ -1016,11 +1016,11 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 		j := 0
 		for k, in := range s.Instructions {
 			j = k
-			if in.Op == vm.Connector {
+			if in.Op == vm.Join {
 				break
 			}
-			s.Instructions = s.Instructions[j:]
 		}
+		s.Instructions = s.Instructions[j+1:]
 	}
 	rs := &Scope{Magic: Merge}
 	rs.PreScopes = ss
