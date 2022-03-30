@@ -236,15 +236,8 @@ func UntransferTransformArg(arg TransformArgument) *transform.Argument {
 	}
 }
 
-type TimesArgument struct {
-	IsBare   bool
-	R        string
-	Rvars    []string
-	Ss       []string
-	Svars    []string
-	FreeVars []string
-	VarsMap  map[string]int
-	Arg      TransformArgument
+type JoinArgument struct {
+	Vars [][]string
 }
 
 type UntransformArgument struct {

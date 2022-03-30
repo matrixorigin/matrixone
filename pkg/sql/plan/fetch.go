@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -41,7 +40,23 @@ func (b *build) buildFetch(fetch *tree.Limit, qry *Query) error {
 		if v.V.Typ.Oid != types.T_int64 {
 			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 		}
-		qry.Offset = v.V.Col.([]int64)[0]
+		s := &Scope{
+			Name:     qry.Scope.Name,
+			Children: []*Scope{qry.Scope},
+		}
+		{ // construct result
+			s.Result.AttrsMap = make(map[string]*Attribute)
+			for _, attr := range qry.Scope.Result.Attrs {
+				s.Result.Attrs = append(s.Result.Attrs, attr)
+				s.Result.AttrsMap[attr] = &Attribute{
+					Name: attr,
+					Type: qry.Scope.Result.AttrsMap[attr].Type,
+				}
+			}
+		}
+		s.Op = &Offset{v.V.Col.([]int64)[0]}
+		qry.Scope = s
+
 	}
 	if fetch.Count != nil {
 		e, err := b.buildFetchExpr(fetch.Count, qry)
@@ -58,7 +73,22 @@ func (b *build) buildFetch(fetch *tree.Limit, qry *Query) error {
 		if v.V.Typ.Oid != types.T_int64 {
 			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 		}
-		qry.Limit = v.V.Col.([]int64)[0]
+		s := &Scope{
+			Name:     qry.Scope.Name,
+			Children: []*Scope{qry.Scope},
+		}
+		{ // construct result
+			s.Result.AttrsMap = make(map[string]*Attribute)
+			for _, attr := range qry.Scope.Result.Attrs {
+				s.Result.Attrs = append(s.Result.Attrs, attr)
+				s.Result.AttrsMap[attr] = &Attribute{
+					Name: attr,
+					Type: qry.Scope.Result.AttrsMap[attr].Type,
+				}
+			}
+		}
+		s.Op = &Limit{v.V.Col.([]int64)[0]}
+		qry.Scope = s
 	}
 	return nil
 }
@@ -69,6 +99,8 @@ func (b *build) buildFetchExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 		return buildValue(e.Value)
 	case *tree.ParenExpr:
 		return b.buildFetchExpr(e.Expr, qry)
+	case *tree.OrExpr:
+		return b.buildOr(e, qry, b.buildFetchExpr)
 	case *tree.NotExpr:
 		return b.buildNot(e, qry, b.buildFetchExpr)
 	case *tree.AndExpr:
@@ -86,7 +118,7 @@ func (b *build) buildFetchExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildFetchExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute0(false, e, qry)
+		return b.buildAttribute(e, qry)
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", tree.String(n, dialect.MYSQL)))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

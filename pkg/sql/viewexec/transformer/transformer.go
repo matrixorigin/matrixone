@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/any"
 
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
-
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
