@@ -35,4 +35,5 @@ const (
 	Ltrim
 	Rtrim
 	Sin
+  Atan
 )
