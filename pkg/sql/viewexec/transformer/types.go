@@ -23,6 +23,7 @@ const (
 	StarCount
 	ApproxCountDistinct
 	Variance
+	Bit_or
 )
 
 var TransformerNames = [...]string{
@@ -33,6 +34,7 @@ var TransformerNames = [...]string{
 	Count:               "count",
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
+	Bit_or:              "bit_or",
 	// Variance:			 "var", // just sample implement of aggregate function for contributor.
 }
 
