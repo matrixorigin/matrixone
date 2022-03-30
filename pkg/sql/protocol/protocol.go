@@ -1609,7 +1609,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
 	case *bit_or.UInt8Ring:
-		buf.WriteByte(MaxUInt8Ring)
+		buf.WriteByte(Bit_orUInt8Ring)
 		// Ns
 		n := len(v.Ns)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1627,7 +1627,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
 	case *bit_or.UInt16Ring:
-		buf.WriteByte(MaxUInt16Ring)
+		buf.WriteByte(Bit_orUInt16Ring)
 		// Ns
 		n := len(v.Ns)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1645,7 +1645,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
 	case *bit_or.UInt32Ring:
-		buf.WriteByte(MaxUInt32Ring)
+		buf.WriteByte(Bit_orUInt32Ring)
 		// Ns
 		n := len(v.Ns)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1663,7 +1663,7 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
 	case *bit_or.UInt64Ring:
-		buf.WriteByte(MaxUInt64Ring)
+		buf.WriteByte(Bit_orUInt64Ring)
 		// Ns
 		n := len(v.Ns)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
