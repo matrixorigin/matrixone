@@ -22,30 +22,34 @@ Returns the maximum value of expr. MAX() may take a string argument, in such cas
 
 ## **Examples**
 
-Note: numbers(N) – A table for test with the single number column (UInt64) that contains integers from 0 to N-1.
+```sql
+> drop table if exists tbl1,tbl2;
+> create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null);
+> insert into tbl1 values (0,1,1,7,"a");
+> insert into tbl1 values (0,1,2,8,"b");
+> insert into tbl1 values (0,1,3,9,"c");
+> insert into tbl1 values (0,1,4,10,"D");
+> insert into tbl1 values (0,1,5,11,"a");
+> insert into tbl1 values (0,1,6,12,"c");
 
-```
-> SELECT MAX(*) FROM numbers(3);
-+--------+
-| max(*) |
-+--------+
-|      2 |
-+--------+
-
-> SELECT MAX(number) FROM numbers(3);
+> select max(col_1d) from tbl1;
 +-------------+
-| max(number) |
+| max(col_1d) |
 +-------------+
-|           2 |
+|          12 |
 +-------------+
 
-> SELECT MAX(number) AS max FROM numbers(3);
+> select max(col_1c) as m1 from tbl1 where col_1d<12 group by col_1e;
 +------+
-| max  |
+| m1   |
 +------+
+|    5 |
 |    2 |
+|    3 |
+|    4 |
 +------+
 ```
 
 
-***
+## Constraints
+Currently, MatrixOne doesn't support select function() without from tables.

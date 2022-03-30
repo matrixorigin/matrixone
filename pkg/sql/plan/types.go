@@ -17,17 +17,24 @@ package plan
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-type Plan interface {
-	fmt.Stringer
-	ResultColumns() []*Attribute
-}
+const (
+	FULL = iota
+	LEFT
+	SEMI
+	ANTI
+	INNER
+	CROSS
+	RIGHT
+	NATURAL
+	RELATION
+)
 
 // Direction for ordering results.
 type Direction int8
@@ -39,18 +46,9 @@ const (
 	Descending
 )
 
-type Aggregation struct {
-	Ref   int     // reference count
-	Op    int     // opcode of aggregation function
-	Type  types.T // return type of aggregation function
-	Name  string  // name of attribute
-	Alias string
-}
-
-type ProjectionExtend struct {
-	Ref   int // reference count
-	Alias string
-	E     extend.Extend
+type Plan interface {
+	fmt.Stringer
+	ResultColumns() []*Attribute
 }
 
 type Attribute struct {
@@ -59,16 +57,80 @@ type Attribute struct {
 	Type types.Type // type of attribute
 }
 
+type Aggregation struct {
+	Op    int     //  opcode of aggregation function
+	Ref   int     // reference count
+	Type  types.T //  return type of aggregation function
+	Name  string  //  name of attribute
+	Alias string
+	E     extend.Extend
+}
+
 type Relation struct {
-	Alias             string
-	Name              string // table name
-	Schema            string // schema name
-	Query             *Query // relation may be a subquery
-	Attrs             []string
-	AttrsMap          map[string]*Attribute
-	Aggregations      []*Aggregation
-	RestrictConds     []extend.Extend
-	ProjectionExtends []*ProjectionExtend
+	Rows   int64
+	Name   string                // table name
+	Schema string                // schema name
+	Attrs  map[string]*Attribute // table's column information
+
+	Flg  bool // indicate if transform is required
+	Proj Projection
+	Cond extend.Extend
+
+	FreeVars  []string
+	BoundVars []*Aggregation
+}
+
+type DerivedRelation struct {
+	Proj Projection
+	Cond extend.Extend
+
+	Flg       bool // indicate if transform is required
+	FreeVars  []string
+	BoundVars []*Aggregation
+}
+
+type SymbolTable struct {
+	Entries map[string]*Attribute
+}
+
+type ResultAttributes struct {
+	Attrs    []string
+	AttrsMap map[string]*Attribute
+}
+
+type Scope struct {
+	Name     string
+	Children []*Scope
+	Op       interface{}
+	Result   ResultAttributes
+}
+
+// R.Rattr = S.Sattr
+type JoinCondition struct {
+	R     int
+	S     int
+	Rattr string
+	Sattr string
+
+	Alias int
+}
+
+type ScopeSet struct {
+	JoinType int
+	Scopes   []*Scope
+	Conds    []*JoinCondition
+}
+
+type Query struct {
+	Flg        bool // rebuild flag
+	Scope      *Scope
+	Result     []string
+	Stack      []*ScopeSet
+	Aggs       []*Aggregation
+	RenameRels map[string]*Scope
+	Rels       map[string]map[string]*Scope
+
+	Children []*Scope // subquery
 }
 
 type Field struct {
@@ -76,27 +138,69 @@ type Field struct {
 	Type Direction
 }
 
-type JoinCondition struct {
-	// join condition is R.Rattr = S.Sattr
-	R     string
-	S     string
-	Rattr string
-	Sattr string
+type Join struct {
+	Type int // join type
+	Vars [][]int
 }
 
-type Query struct {
-	Distinct          bool
-	Limit             int64
-	Offset            int64
-	FreeAttrs         []string
-	Rels              []string
-	RelsMap           map[string]*Relation
-	Fields            []*Field
-	RestrictConds     []extend.Extend
-	Conds             []*JoinCondition
-	ProjectionExtends []*ProjectionExtend
-	ResultAttributes  []*Attribute
-	VarsMap           map[string]int
+type Dedup struct {
+}
+
+type Order struct {
+	Fs []*Field
+}
+
+type Limit struct {
+	Limit int64
+}
+
+type Offset struct {
+	Offset int64
+}
+
+type Restrict struct {
+	E extend.Extend
+}
+
+type Untransform struct {
+	FreeVars []string
+}
+
+type Rename struct {
+	Rs []uint64 // reference count list
+	As []string // alias name list
+	Es []extend.Extend
+}
+
+type Projection struct {
+	Rs []uint64 // reference count list
+	As []string // alias name list
+	Es []extend.Extend
+}
+
+type ResultProjection struct {
+	Rs []uint64 // reference count list
+	As []string // alias name list
+	Es []extend.Extend
+}
+
+type Edge struct {
+	Vs []int
+}
+
+type Graph struct {
+	Es []*Edge
+}
+
+type VertexSet struct {
+	Is []int
+	Es []*Edge
+}
+
+type EdgeSet struct {
+	W      int // weight
+	I1, I2 int // subscript for E1 and E2
+	E1, E2 *Edge
 }
 
 type CreateDatabase struct {
@@ -191,183 +295,18 @@ type build struct {
 }
 
 func (qry *Query) ResultColumns() []*Attribute {
-	return qry.ResultAttributes
-}
-
-func (qry *Query) reduce() {
-	for i := range qry.Rels {
-		rel := qry.RelsMap[qry.Rels[i]]
-		for j := 0; j < len(rel.Attrs); j++ {
-			attr := rel.Attrs[j]
-			if rel.AttrsMap[attr].Ref == 0 {
-				delete(rel.AttrsMap, attr)
-				rel.Attrs = append(rel.Attrs[:j], rel.Attrs[j+1:]...)
-				j--
-			}
-		}
+	attrs := make([]*Attribute, len(qry.Result))
+	for i, attr := range qry.Result {
+		attrs[i] = qry.Scope.Result.AttrsMap[attr]
 	}
-}
-
-func (qry *Query) Name() string {
-	var buf bytes.Buffer
-
-	for i, rel := range qry.Rels {
-		if i > 0 {
-			buf.WriteString("_")
-		}
-		buf.WriteString(rel)
-	}
-	return buf.String()
+	return attrs
 }
 
 func (qry *Query) String() string {
 	var buf bytes.Buffer
 
-	buf.WriteString(fmt.Sprintf("result attributes: %v\n", qry.ResultAttributes))
-	buf.WriteString(fmt.Sprintf("variables: %v\n", qry.VarsMap))
-	buf.WriteString(fmt.Sprintf("free attributes: %v\n", qry.FreeAttrs))
-	buf.WriteString(fmt.Sprintf("relations: %v\n", qry.Rels))
-	for _, rel := range qry.Rels {
-		buf.WriteString(fmt.Sprintf("\t%s = %s\n", rel, qry.RelsMap[rel]))
-	}
-	switch {
-	case qry.Limit != -1 && qry.Offset != -1:
-		buf.WriteString(fmt.Sprintf("Limit %v, %v\n", qry.Offset, qry.Limit))
-	case qry.Limit != -1 && qry.Offset == -1:
-		buf.WriteString(fmt.Sprintf("Limit %v\n", qry.Limit))
-	}
-	buf.WriteString("join conditions\n")
-	for _, cond := range qry.Conds {
-		buf.WriteString(fmt.Sprintf("\t%s\n", cond))
-	}
-	buf.WriteString(fmt.Sprintf("restrict conditions\n"))
-	for _, cond := range qry.RestrictConds {
-		buf.WriteString(fmt.Sprintf("\t%s\n", cond))
-	}
-	buf.WriteString("extend projection\n")
-	for _, e := range qry.ProjectionExtends {
-		buf.WriteString(fmt.Sprintf("\t%s\n", e))
-	}
-	buf.WriteString("order by\n")
-	for _, f := range qry.Fields {
-		buf.WriteString(fmt.Sprintf("\t%s\n", f))
-	}
+	printScopes(nil, []*Scope{qry.Scope}, &buf)
 	return buf.String()
-}
-
-func (rel *Relation) ExistProjection(name string) int {
-	for i, e := range rel.ProjectionExtends {
-		if e.Alias == name {
-			return i
-		}
-	}
-	return -1
-}
-
-func (rel *Relation) ExistAggregation(name string) int {
-	for i, agg := range rel.Aggregations {
-		if agg.Alias == name {
-			return i
-		}
-	}
-	return -1
-}
-
-func (rel *Relation) ExistAggregations(names []string) bool {
-	for _, name := range names {
-		if rel.ExistAggregation(name) >= 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (rel *Relation) AddRestrict(e extend.Extend) {
-	rel.RestrictConds = append(rel.RestrictConds, pruneExtendAttribute(e))
-}
-
-func (rel *Relation) AddProjection(e *ProjectionExtend) {
-	e.E = pruneExtendAttribute(e.E)
-	rel.ProjectionExtends = append(rel.ProjectionExtends, e)
-}
-
-func (rel *Relation) AddAggregation(agg *Aggregation) {
-	rel.Aggregations = append(rel.Aggregations, agg)
-}
-
-func (rel *Relation) GetAttributes() []*Attribute {
-	attrs := make([]*Attribute, len(rel.Attrs))
-	for i, attr := range rel.Attrs {
-		attrs[i] = rel.AttrsMap[attr]
-	}
-	return attrs
-}
-
-func (rel *Relation) String() string {
-	var buf bytes.Buffer
-
-	if rel.Query != nil {
-		buf.WriteString(fmt.Sprintf("%s -> %s\n", rel.Query, rel.Alias))
-	} else {
-		buf.WriteString(fmt.Sprintf("%s.%s -> %s\n", rel.Schema, rel.Name, rel.Alias))
-	}
-	buf.WriteString(fmt.Sprintf("\tattributes: %v\n", rel.Attrs))
-	for _, attr := range rel.Attrs {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", rel.AttrsMap[attr]))
-	}
-	buf.WriteString("\trestrict conditions\n")
-	for _, cond := range rel.RestrictConds {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", cond))
-	}
-	buf.WriteString("\textend projection\n")
-	for _, e := range rel.ProjectionExtends {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", e))
-	}
-	buf.WriteString("\tAggregation functions\n")
-	for _, agg := range rel.Aggregations {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", agg))
-	}
-	return buf.String()
-}
-
-func (attr *Attribute) IncRef() {
-	attr.Ref++
-}
-
-func (attr *Attribute) DecDef() {
-	attr.Ref--
-}
-
-func (attr *Attribute) String() string {
-	return fmt.Sprintf("%s:%s:%v", attr.Name, attr.Type, attr.Ref)
-}
-
-func (cond *JoinCondition) String() string {
-	return fmt.Sprintf("%s.%s = %s.%s", cond.R, cond.Rattr, cond.S, cond.Sattr)
-}
-
-func (e *ProjectionExtend) IncRef() {
-	e.Ref++
-}
-
-func (e *ProjectionExtend) DecRef() {
-	e.Ref--
-}
-
-func (e *ProjectionExtend) String() string {
-	return fmt.Sprintf("'%s[%T] as %s' = %v", e.E, e.E, e.Alias, e.Ref)
-}
-
-func (agg *Aggregation) IncRef() {
-	agg.Ref++
-}
-
-func (agg *Aggregation) DecRef() {
-	agg.Ref--
-}
-
-func (agg *Aggregation) String() string {
-	return fmt.Sprintf("'%s(%s)' = %v -> %v", transformer.TransformerNames[agg.Op], agg.Name, agg.Ref, agg.Alias)
 }
 
 func (n *Field) String() string {
@@ -376,6 +315,10 @@ func (n *Field) String() string {
 		s += " " + n.Type.String()
 	}
 	return s
+}
+
+func (attr *Attribute) String() string {
+	return attr.Name
 }
 
 var directionName = [...]string{

@@ -15,36 +15,36 @@
 package driver
 
 import (
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 )
 
-func (h *driver) addShardCallback(shard meta.Shard) error {
+func (h *driver) addShardCallback(shard metapb.Shard) error {
 	return nil
 }
 
-func (h *driver) Created(shard meta.Shard) {
+func (h *driver) Created(shard metapb.Shard) {
 
 }
 
-func (h *driver) Updated(meta.Shard){
-	
-}
-
-func (h *driver) Splited(shard meta.Shard) {
+func (h *driver) Updated(metapb.Shard) {
 
 }
 
-func (h *driver) Destroyed(shard meta.Shard) {
-}
-
-func (h *driver) BecomeLeader(shard meta.Shard) {
+func (h *driver) Splited(shard metapb.Shard) {
 
 }
 
-func (h *driver) BecomeFollower(shard meta.Shard) {
+func (h *driver) Destroyed(shard metapb.Shard) {
+}
+
+func (h *driver) BecomeLeader(shard metapb.Shard) {
 
 }
 
-func (h *driver) SnapshotApplied(shard meta.Shard) {
+func (h *driver) BecomeFollower(shard metapb.Shard) {
+
+}
+
+func (h *driver) SnapshotApplied(shard metapb.Shard) {
 
 }

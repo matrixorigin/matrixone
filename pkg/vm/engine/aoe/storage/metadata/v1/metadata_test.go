@@ -133,7 +133,7 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
 				db.SyncLog(index)
-				info:=blk.GetCommit()
+				info := blk.GetCommit()
 				blk.Lock()
 				blk.SetIndexLocked(index.AsSlice())
 				info.SetSize(mockBlockSize)
@@ -798,7 +798,7 @@ func TestAppliedIndex(t *testing.T) {
 	tbl := MockTable(db, nil, nil, 0, index)
 	assert.NotNil(t, tbl)
 	indexWal.Checkpoint(index)
-	testutils.WaitExpect(10, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return indexWal.GetShardCheckpointId(0) == index.Id.Id
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -836,7 +836,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	t.Log(snip.String())
 	indexWal.Checkpoint(snip)
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return indexWal.GetShardCheckpointId(0) == index.Id.Id
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -856,7 +856,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(snip)
 
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return index.Id.Id == indexWal.GetShardCheckpointId(0)
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -874,7 +874,7 @@ func TestAppliedIndex(t *testing.T) {
 	snip = blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(index)
 
-	testutils.WaitExpect(20, func() bool {
+	testutils.WaitExpect(50, func() bool {
 		return index.Id.Id == indexWal.GetShardCheckpointId(0)
 	})
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
@@ -1044,17 +1044,6 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, 1, len(view.Database.TableSet))
 
 	sequence = catalog.Sequence
-	catalog.Close()
-	return
-
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
-	assert.Nil(t, err)
-	catalog.Start()
-	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
-	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
-	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
-	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
-	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
 	catalog.Close()
 }
 

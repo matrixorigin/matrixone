@@ -62,10 +62,10 @@ the `+`(addition) is defined as merging two `Ring`s groups, the `⋅`(multiplica
 | Shrink                   | Shrink the size of Ring, keep the designated groups             |
 | Eval                     | Return the eventual result of the aggregate function |
 | Fill                     | Update the data of Ring by a row                                 |
-| BulkFill                 | Update all the data of Ring                                   |
-| BatchFill                | Update part of data of Ring                                    |
-| Add                      | Add a couple of groups for two Rings                             |
-| BatchAdd                 | Add several couples of groups for two Rings                           |
+| BulkFill                 | Update the ring data by a whole vector                                   |
+| BatchFill                | Update the ring data by a part of vector                                    |
+| Add                      | Merge a couple of groups for two Rings                             |
+| BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
 
@@ -81,7 +81,7 @@ of `Ring`.
 
 There are two different scenarios for aggregation functions with `Ring`s.
 
-1. Query with single table.
+*1. Query with single table.*
 
 In the single table scenario, when we run the below query, it generates one or several `Ring`s, 
 depending on the storage blocks the `T1` table is stored. The number of blocks depends on the storage strategy. Each `Ring` will 
@@ -124,7 +124,7 @@ Then the `Add` method of `Ring` will be called to merge two groups together, and
 |  three |  18+20+21+24+19 |
 ```
 
-2. Query with joining multiple tables.
+*2. Query with joining multiple tables.*
 
 In the multiple tables join scenario, we have two tables `Tc` and `Ts`. The query looks like the following.
 
@@ -246,7 +246,7 @@ As we calculate the overall variance, we need to calculate:
 
 *2. Implement the functions of `Ring` interface*
 
-You can checkout the full implmetation at https://github.com/matrixorigin/matrixone/blob/main/pkg/container/ring/variance/variance.go.
+You can checkout the full implmetation at [variance.go](https://github.com/matrixorigin/matrixone/blob/main/pkg/container/ring/variance/variance.go).
 
    ```go
    func (v *VarRing) Grow(m *mheap.Mheap) error {
@@ -282,8 +282,9 @@ You can checkout the full implmetation at https://github.com/matrixorigin/matrix
    	return nil
    }
    ```
-   ```go
-// Add merge ring2 group Y into ring1's group X
+   
+```go
+	// Add merge ring2 group Y into ring1's group X
 func (v *VarRing) Add(a interface{}, x, y int64) {
 	v2 := a.(*VarRing)
 	v.Sums[x] += v2.Sums[y]
@@ -291,7 +292,8 @@ func (v *VarRing) Add(a interface{}, x, y int64) {
 	v.Values[x] = append(v.Values[x], v2.Values[y]...)
 }
 ```
-   ```go
+   
+```go
 func (v *VarRing) Mul(a interface{}, x, y, z int64) {
 	v2 := a.(*VarRing)
 	{
@@ -303,7 +305,8 @@ func (v *VarRing) Mul(a interface{}, x, y, z int64) {
 	}
 }
 ```
-   ```go
+
+```go
 func (v *VarRing) Eval(zs []int64) *vector.Vector {
 	defer func() {
 		v.Values = nil
@@ -341,6 +344,7 @@ func (v *VarRing) Eval(zs []int64) *vector.Vector {
 
 *3. Implement encoding and decoding for `VarRing`*
 
+
 In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization and deserialization of `VarRing`. 
 
 
@@ -348,9 +352,11 @@ In the `pkg/sql/protocol/protocol.go` file, implement the code for serialization
    | ------------------ | ----------------------------------- |
    | EncodeRing         | DecodeRing<br>DecodeRingWithProcess |
 
+
 Serialization: 
 
-   ```go
+
+```go
    case *variance.VarRing:
    		buf.WriteByte(VarianceRing)
    		// NullCounts
@@ -378,10 +384,11 @@ Serialization:
    		// Typ
    		buf.Write(encoding.EncodeType(v.Typ))
    		return nil
-   ```
+```
+
 Deserialization:
 
-   ```go
+```go
    case VarianceRing:
    		r := new(variance.VarRing)
    		data = data[1:]
@@ -419,9 +426,10 @@ Deserialization:
    		r.Typ = typ
    		// return
    		return r, data, nil
-   ```
+```
 
 Here we go. Now we can fire up MatrixOne and try with our `var()` function.
+
 
 ## **Compile and run MatrixOne**
 
@@ -452,17 +460,21 @@ Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the Matrix
 !!! info 
 	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
 
+
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
 
 user: dump
 password: 111
+
 ```
 $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
+
 Step4: Test your function behavior with some data. Below is an example. You can check if you get the right mathematical variance result. 
 You can also try an `inner join` and check the result, if the result is correct, the factorisation is valid. 
+
 
 ```sql
 mysql>select * from variance;

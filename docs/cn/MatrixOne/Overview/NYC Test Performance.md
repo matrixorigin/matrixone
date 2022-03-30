@@ -5,7 +5,7 @@
 
 
 
-!!! note  <font size=4>注意</font>
+!!! note  <font size=4>说明</font>
     <font size=3>以下测试结果均取三次最好结果的平均值，以秒为单位</font>  
 
 

@@ -312,6 +312,9 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 	return keys, values, complete, nextScanKey, nil
 }
 
+func (m *MemoryKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey,prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+	return nil, nil, false, nil, errorUnsupportedInMemoryKV
+}
 
 func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	m.rwLock.RLock()

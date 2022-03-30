@@ -15,8 +15,8 @@
 package config
 
 import (
+	server "github.com/matrixorigin/matrixcube/client"
 	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/server"
 )
 
 type Config struct {

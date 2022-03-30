@@ -26,8 +26,8 @@ const (
 )
 
 const (
-	Bare = iota
-	FreeVarsAndBoundVars
+	AQ = iota
+	CAQ
 )
 
 const (

@@ -143,10 +143,11 @@ message TpeScanRequest {
   //the range [start,end)
   bytes        start = 1;
   bytes        end = 2;
+  bytes        prefix = 3;
   //the count of key/value wanted at most in the request
-  uint64       limit = 3;
+  uint64       limit = 4;
   //the key needed to be returned
-  bool         needKey = 4;
+  bool         needKey = 5;
 }
 
 message TpeDeleteBatchRequest {

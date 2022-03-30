@@ -17,15 +17,13 @@ package driver
 import (
 	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 )
 
-
 //BuildRequest build the request according to the command
-func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error {
-	req.Args = cmd
+func (h *driver) BuildRequest(req *CustomRequest, cmd interface{}) error {
 	customReq := cmd.(pb.Request)
+	req.ToShard = customReq.Shard
 	switch customReq.Type {
 	case pb.Set:
 		msg := customReq.Set
@@ -65,7 +63,7 @@ func (h *driver) BuildRequest(req *server.CustomRequest, cmd interface{}) error 
 		msg := customReq.TpeDeleteBatch
 		if msg.GetKeys() != nil {
 			req.Key = msg.GetKeys()[0]
-		}else{
+		} else {
 			req.Key = msg.GetStart()
 		}
 		req.Group = uint64(customReq.Group)

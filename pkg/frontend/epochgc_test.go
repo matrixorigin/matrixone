@@ -111,7 +111,7 @@ func TestEpochGC(t *testing.T) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
 			// raftstore.WithTestClusterNodeCount(1),
-			raftstore.WithTestClusterLogLevel(zapcore.WarnLevel),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()

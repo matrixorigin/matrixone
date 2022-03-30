@@ -26,8 +26,13 @@ const (
 	Abs
 	Log
 	Ln
+	Ceil
 	Exp
 	Power
 	Pi
 	Now
+	Tan
+	Ltrim
+	Rtrim
+	Sin
 )
