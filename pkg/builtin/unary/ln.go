@@ -30,7 +30,7 @@ import (
 )
 
 func init() {
-	negative_number_error := "Invalid argument for logarithm"
+	negativeNumberError := "Invalid argument for logarithm"
 
 	extend.FunctionRegistry["ln"] = builtin.Ln
 	extend.UnaryReturnTypes[builtin.Ln] = func(extend extend.Extend) types.T {
@@ -58,7 +58,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnUint8(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -84,7 +84,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnUint16(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -110,7 +110,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnUint32(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -136,7 +136,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnUint64(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -162,7 +162,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnInt8(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -188,7 +188,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnInt16(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -214,7 +214,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnInt32(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -240,7 +240,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnInt64(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -266,7 +266,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnFloat32(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {
@@ -292,7 +292,7 @@ func init() {
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				lnResult := ln.LnFloat64(origVecCol, results)
 				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negative_number_error)
+					logutil.Warn(negativeNumberError)
 					if !nulls.Any(resultVector.Nsp) {
 						resultVector.Nsp = lnResult.Nsp
 					} else {

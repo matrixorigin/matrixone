@@ -31,4 +31,8 @@ const (
 	Power
 	Pi
 	UTCTimestamp
+	Tan
+	Ltrim
+	Rtrim
+	Sin
 )

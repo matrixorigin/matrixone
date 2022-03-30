@@ -15,6 +15,8 @@
 package plan
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -33,4 +35,23 @@ func getColumnName(expr tree.Expr) (string, bool) {
 	default: // 4
 		return e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
 	}
+}
+
+func getUnresolvedName(name string) *tree.UnresolvedName {
+	e := new(tree.UnresolvedName)
+	xs := strings.Split(name, ".")
+	switch len(xs) {
+	case 1:
+		e.NumParts = 1
+		e.Parts[0] = xs[0]
+	case 2:
+		e.NumParts = 2
+		e.Parts[0] = xs[1]
+		e.Parts[1] = xs[0]
+	default:
+		e.NumParts = 2
+		e.Parts[0] = xs[1]
+		e.Parts[1] = xs[0]
+	}
+	return e
 }
