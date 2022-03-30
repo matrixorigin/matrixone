@@ -22,7 +22,6 @@ const (
 	Count
 	StarCount
 	ApproxCountDistinct
-	Variance
 )
 
 var TransformerNames = [...]string{
@@ -33,7 +32,6 @@ var TransformerNames = [...]string{
 	Count:               "count",
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
-	// Variance:			 "var", // just sample implement of aggregate function for contributor.
 }
 
 var TransformerNamesMap map[string]int

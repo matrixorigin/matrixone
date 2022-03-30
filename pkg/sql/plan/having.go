@@ -20,21 +20,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *build) buildHaving(stmt *tree.Where, qry *Query) error {
+func (b *build) buildHaving(stmt *tree.Where, qry *Query) (extend.Extend, error) {
 	e, err := b.buildHavingExpr(stmt.Expr, qry)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if e, err = b.pruneExtend(e, false); err != nil {
-		return err
+		return nil, err
 	}
-	b.flg = true
-	qry.RestrictConds = append(qry.RestrictConds, e)
-	return nil
+	/*
+		if !e.IsLogical() {
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("argument of WHERE must be type boolean"))
+		}
+	*/
+	return e, nil
 }
 
 func (b *build) buildHavingExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
@@ -56,13 +58,13 @@ func (b *build) buildHavingExpr(n tree.Expr, qry *Query) (extend.Extend, error) 
 	case *tree.ComparisonExpr:
 		return b.buildComparison(e, qry, b.buildHavingExpr)
 	case *tree.FuncExpr:
-		return b.buildHavingFunc(e, qry, b.buildHavingExpr)
+		return b.buildFunc(true, e, qry, b.buildHavingExpr)
 	case *tree.CastExpr:
 		return b.buildCast(e, qry, b.buildHavingExpr)
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildHavingExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute2(b.flg, e, qry)
+		return b.buildAttribute(e, qry)
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", tree.String(n, dialect.MYSQL)))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
