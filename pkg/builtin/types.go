@@ -30,6 +30,7 @@ const (
 	Exp
 	Power
 	Pi
+	Tan
 	Ltrim
 	Rtrim
 	Sin
