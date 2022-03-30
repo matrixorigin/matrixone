@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"strconv"
@@ -42,6 +43,7 @@ const (
 )
 
 //ValueSerializer for serializing the value
+//Stateless is better
 type ValueSerializer interface {
 	SerializeValue(data []byte, value interface{}) ([]byte, *orderedcodec.EncodedItem, error)
 
@@ -133,6 +135,7 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte) ([]byte, *order
 	switch vt {
 	case orderedcodec.VALUE_TYPE_NULL:
 		if string(actualData) != "null" {
+			logutil.Errorf("vt 5 %d", vt)
 			return nil, nil, errorWrongValueType
 		}
 		value = nil
@@ -142,6 +145,7 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte) ([]byte, *order
 		} else if string(actualData) == "false" {
 			value = false
 		} else {
+			logutil.Errorf("vt 4 %d", vt)
 			return nil, nil, errorWrongValueType
 		}
 	case orderedcodec.VALUE_TYPE_INT8:
@@ -225,6 +229,7 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte) ([]byte, *order
 		value = sliceValue
 	case orderedcodec.VALUE_TYPE_STRING:
 		if len(actualData) < 2 {
+			logutil.Errorf("vt 3 %d", vt)
 			return nil, nil, errorWrongValueType
 		}
 		value = string(actualData[1 : len(actualData)-1])
@@ -244,7 +249,6 @@ func (dvs *DefaultValueSerializer) DeserializeValue(data []byte) ([]byte, *order
 }
 
 type ConciseSerializer struct {
-	bufReader bytes.Reader
 }
 
 func (cs *ConciseSerializer) SerializeValue(data []byte, value interface{}) ([]byte, *orderedcodec.EncodedItem, error) {
@@ -281,7 +285,7 @@ func (cs *ConciseSerializer) DeserializeValue(data []byte) ([]byte, *orderedcode
 		return nil, nil, err
 	}
 
-	cs.bufReader.Reset(actualData)
+	bufReader := bytes.NewReader(actualData)
 
 	//unmarshal value
 	var value interface{}
@@ -292,91 +296,91 @@ func (cs *ConciseSerializer) DeserializeValue(data []byte) ([]byte, *orderedcode
 		value = nil
 	case orderedcodec.VALUE_TYPE_BOOL:
 		var x bool
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_INT8:
 		var x int8
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_INT16:
 		var x int16
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_INT32:
 		var x int32
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_INT64:
 		var x int64
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_UINT8:
 		var x uint8
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_UINT16:
 		var x uint16
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_UINT32:
 		var x uint32
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_UINT64:
 		var x uint64
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_FLOAT32:
 		var x float32
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_FLOAT64:
 		var x float64
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = x
 	case orderedcodec.VALUE_TYPE_DATE:
 		var x int32
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
 		value = types.Date(x)
 	case orderedcodec.VALUE_TYPE_DATETIME:
 		var x int64
-		err := binary.Read(&cs.bufReader, binary.BigEndian, &x)
+		err := binary.Read(bufReader, binary.BigEndian, &x)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -386,6 +390,7 @@ func (cs *ConciseSerializer) DeserializeValue(data []byte) ([]byte, *orderedcode
 	case orderedcodec.VALUE_TYPE_STRING:
 		value = string(actualData)
 	default:
+		logutil.Errorf("vt 1 %d", vt)
 		return nil, nil, errorWrongValueType
 	}
 
@@ -499,6 +504,7 @@ func extractActualData(data []byte) ([]byte, int64, int, orderedcodec.ValueType,
 	case SERIAL_TYPE_BYTES:
 		vt = orderedcodec.VALUE_TYPE_BYTES
 	default:
+		logutil.Errorf("vt 2 %d", vt)
 		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorWrongValueType
 	}
 

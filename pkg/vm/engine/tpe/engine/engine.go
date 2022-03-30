@@ -21,11 +21,11 @@ import (
 )
 
 var (
-	errorInvalidKVType = errors.New("invalid kv type")
-	errorTheInternalDatabaseHasExisted = errors.New("the internal database has existed")
+	errorInvalidKVType                        = errors.New("invalid kv type")
+	errorTheInternalDatabaseHasExisted        = errors.New("the internal database has existed")
 	errorTheInternalDescriptorTableHasExisted = errors.New("the internal descriptor table has existed")
-	errorTheInternalAsyncGCTableHasExisted = errors.New("the internal asyncgc table has existed")
-	errorInvalidSerializerType = errors.New("invalid serializer type")
+	errorTheInternalAsyncGCTableHasExisted    = errors.New("the internal asyncgc table has existed")
+	errorInvalidSerializerType                = errors.New("invalid serializer type")
 )
 
 func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
@@ -36,27 +36,28 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	var err error
 	if tc.KvType == tuplecodec.KV_MEMORY {
 		kv = tuplecodec.NewMemoryKV()
-	}else if tc.KvType == tuplecodec.KV_CUBE{
+	} else if tc.KvType == tuplecodec.KV_CUBE {
 		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit), tc.TpeDedupSetBatchTimeout, tc.TpeDedupSetBatchTrycount)
 		if err != nil {
 			return nil, err
 		}
-	}else{
+	} else {
 		return nil, errorInvalidKVType
 	}
 
 	var serial tuplecodec.ValueSerializer
 	if tc.SerialType == tuplecodec.ST_JSON {
 		serial = &tuplecodec.DefaultValueSerializer{}
-	}else if tc.SerialType == tuplecodec.ST_CONCISE {
+	} else if tc.SerialType == tuplecodec.ST_CONCISE {
 		serial = &tuplecodec.ConciseSerializer{}
-	}else{
+	} else {
 		return nil, errorInvalidSerializerType
 	}
 
-	dh := tuplecodec.NewDescriptorHandlerImpl(tch,kv,serial,uint64(kvLimit))
+	dh := tuplecodec.NewDescriptorHandlerImpl(tch, kv, serial, uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
-	ihi := tuplecodec.NewIndexHandlerImpl(tch,nil,kv,uint64(kvLimit),serial,rcc)
+	ihi := tuplecodec.NewIndexHandlerImpl(tch, nil, kv, uint64(kvLimit), serial, rcc)
+	ihi.PBKV = tc.PBKV
 	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
 	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch, tc.ParallelReader)
 	te.computeHandler = ch
@@ -64,7 +65,7 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	return te, nil
 }
 
-func (te * TpeEngine) Delete(epoch uint64, name string) error {
+func (te *TpeEngine) Delete(epoch uint64, name string) error {
 	err := te.computeHandler.DropDatabase(epoch, name)
 	if err != nil {
 		return err
@@ -72,42 +73,42 @@ func (te * TpeEngine) Delete(epoch uint64, name string) error {
 	return nil
 }
 
-func (te * TpeEngine) Create(epoch uint64, name string, typ int) error {
-	_, err := te.computeHandler.CreateDatabase(epoch,name,typ)
+func (te *TpeEngine) Create(epoch uint64, name string, typ int) error {
+	_, err := te.computeHandler.CreateDatabase(epoch, name, typ)
 	if err != nil {
 		return err
 	}
 	return err
 }
 
-func (te * TpeEngine) Databases() []string {
+func (te *TpeEngine) Databases() []string {
 	var names []string
-	if dbDescs,err := te.computeHandler.ListDatabases(); err == nil {
+	if dbDescs, err := te.computeHandler.ListDatabases(); err == nil {
 		for _, desc := range dbDescs {
-			names = append(names,desc.Name)
+			names = append(names, desc.Name)
 		}
 	}
 	return names
 }
 
-func (te * TpeEngine) Database(name string) (engine.Database, error) {
+func (te *TpeEngine) Database(name string) (engine.Database, error) {
 	dbDesc, err := te.computeHandler.GetDatabase(name)
 	if err != nil {
 		return nil, err
 	}
 	return &TpeDatabase{
-		id: uint64(dbDesc.ID),
-		desc: dbDesc,
-		computeHandler: te.computeHandler,
-	},
-	nil
+			id:             uint64(dbDesc.ID),
+			desc:           dbDesc,
+			computeHandler: te.computeHandler,
+		},
+		nil
 }
 
-func (te * TpeEngine) Node(s string) *engine.NodeInfo {
+func (te *TpeEngine) Node(s string) *engine.NodeInfo {
 	return &engine.NodeInfo{Mcpu: 1}
 }
 
-func (te * TpeEngine) RemoveDeletedTable(epoch uint64) error {
+func (te *TpeEngine) RemoveDeletedTable(epoch uint64) error {
 	_, err := te.computeHandler.RemoveDeletedTable(epoch)
 	if err != nil {
 		return err
@@ -116,10 +117,10 @@ func (te * TpeEngine) RemoveDeletedTable(epoch uint64) error {
 }
 
 //Bootstrap initializes the tpe
-func (te * TpeEngine) Bootstrap() error {
+func (te *TpeEngine) Bootstrap() error {
 	//create internal database 'system'
 	_, err := te.dh.LoadDatabaseDescByID(tuplecodec.InternalDatabaseID)
-	if err == nil {//it denotes the 'system' exists
+	if err == nil { //it denotes the 'system' exists
 		return errorTheInternalDatabaseHasExisted
 	}
 
@@ -135,7 +136,7 @@ func (te * TpeEngine) Bootstrap() error {
 		return errorTheInternalDescriptorTableHasExisted
 	}
 
-	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID,tuplecodec.InternalDescriptorTableID,tuplecodec.InternalDescriptorTableDesc)
+	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID, tuplecodec.InternalDescriptorTableID, tuplecodec.InternalDescriptorTableDesc)
 	if err != nil {
 		return err
 	}
@@ -146,7 +147,7 @@ func (te * TpeEngine) Bootstrap() error {
 		return errorTheInternalAsyncGCTableHasExisted
 	}
 
-	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID,tuplecodec.InternalAsyncGCTableID,tuplecodec.InternalAsyncGCTableDesc)
+	err = te.dh.StoreRelationDescByID(tuplecodec.InternalDatabaseID, tuplecodec.InternalAsyncGCTableID, tuplecodec.InternalAsyncGCTableDesc)
 	if err != nil {
 		return err
 	}
@@ -155,15 +156,15 @@ func (te * TpeEngine) Bootstrap() error {
 }
 
 //Destroy delete the tpe
-func (te * TpeEngine) Destroy() error {
+func (te *TpeEngine) Destroy() error {
 	return nil
 }
 
-func (te * TpeEngine) Open() error {
+func (te *TpeEngine) Open() error {
 	_ = te.Bootstrap()
 	return nil
 }
 
-func (te * TpeEngine)  Close() error {
+func (te *TpeEngine) Close() error {
 	return nil
 }
