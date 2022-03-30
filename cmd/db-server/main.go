@@ -287,6 +287,7 @@ func main() {
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
 		tpeConf := &tpeEngine.TpeConfig{}
+		tpeConf.PBKV = kvs
 		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
