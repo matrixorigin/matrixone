@@ -28,19 +28,19 @@ func lpadVarcharPure(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes {
 	var res *types.Bytes = &types.Bytes{}
 	//in fact,the length of three slice is the same with each other
 	for i := 0; i < len(a.Lengths); i++ {
-		if a.Lengths[i] > uint32(b[i]) { //length less
+		if a.Lengths[i] > uint32(b[0]) { //length less
 			res.Offsets = append(res.Offsets, uint32(len(res.Data)))
-			res.Data = append(res.Data, a.Data[a.Offsets[i]:a.Offsets[i]+uint32(b[i])]...)
-			res.Lengths = append(res.Lengths, uint32(b[i]))
+			res.Data = append(res.Data, a.Data[a.Offsets[i]:a.Offsets[i]+uint32(b[0])]...)
+			res.Lengths = append(res.Lengths, uint32(b[0]))
 		} else {
-			lens := uint32(b[i]) - a.Lengths[i]
-			t1 := lens / c.Lengths[i]
-			t2 := lens % c.Lengths[i]
+			lens := uint32(b[0]) - a.Lengths[i]
+			t1 := lens / c.Lengths[0]
+			t2 := lens % c.Lengths[0]
 			temp := []byte{}
 			for j := 0; j < int(t1); j++ {
-				temp = append(temp, c.Data[c.Offsets[i]:c.Offsets[i]+c.Lengths[i]]...)
+				temp = append(temp, c.Data[c.Offsets[0]:c.Offsets[0]+c.Lengths[0]]...)
 			}
-			temp = append(temp, c.Data[c.Offsets[i]:c.Offsets[i]+t2]...)
+			temp = append(temp, c.Data[c.Offsets[0]:c.Offsets[0]+t2]...)
 			temp = append(temp, a.Data[a.Offsets[i]:a.Offsets[i]+a.Lengths[i]]...)
 
 			res.Offsets = append(res.Offsets, uint32(len(res.Data)))

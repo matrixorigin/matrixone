@@ -29,7 +29,7 @@ import (
 )
 
 var ArgAndRets_Lpad = []argsAndRet{
-	{[]types.T{types.T_varchar, types.T_int64, types.T_varchar}, types.T_uint8},
+	{[]types.T{types.T_varchar, types.T_int64, types.T_varchar}, types.T_varchar},
 }
 
 func init() {
@@ -55,7 +55,7 @@ func init() {
 				vs := vecs[0].Col.(*types.Bytes) //Get the first arg
 
 				if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
-					return nil, errors.New("The second argument of the lpad function must be an int32 constant")
+					return nil, errors.New("The second argument of the lpad function must be an int64 constant")
 				} else if !cs[2] || vecs[2].Typ.Oid != types.T_varchar {
 					return nil, errors.New("The third argument of the lpad function must be an string constant")
 				}
@@ -69,10 +69,13 @@ func init() {
 				//use vecs[0] as return
 				if vecs[0].Ref == 1 || vecs[0].Ref == 0 {
 					vecs[0].Ref = 0
-					// temp := lpad.LpadVarchar(vs, lens, padds)
-					// copy(vs.Data, temp.Data)
-					// copy(vs.Lengths, temp.Lengths)
-					// copy(vs.Offsets, temp.Offsets)
+					temp := lpad.LpadVarchar(vs, lens, padds)
+					vs.Data = make([]byte, len(temp.Data))
+					vs.Lengths = make([]uint32, len(temp.Lengths))
+					vs.Offsets = make([]uint32, len(temp.Offsets))
+					copy(vs.Data, temp.Data)
+					copy(vs.Lengths, temp.Lengths)
+					copy(vs.Offsets, temp.Offsets)
 					return vecs[0], nil
 				}
 

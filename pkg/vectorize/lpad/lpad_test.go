@@ -26,21 +26,22 @@ func TestLpadVarchar(t *testing.T) {
 	// origins := []string{"hi", "hi","hishjajsa","hish&sa*(#jsa","hish&sa*(#jsa","hishjajsa"}
 
 	origins := &types.Bytes{
-		Data:    []byte("hihihishjajsahish&sa*(#jsahish&sa*(#jsahishjajsa"),
-		Offsets: []uint32{0, 2, 4, 13, 26, 39},
-		Lengths: []uint32{2, 2, 9, 13, 13, 9},
+		Data:    []byte("hihihishjajsahish&sa*(#jsahish&sa*(#jsahishjajsaabc"),
+		Offsets: []uint32{0, 2, 4, 13, 26, 39, 48},
+		Lengths: []uint32{2, 2, 9, 13, 13, 9, 3},
 	}
 
-	origins_int64 := []int64{4, 1, 7, 5, 17, 47}
+	origins_int64 := []int64{22}
 
 	// origins_padd := []string{"??", "??", "??saso","?^^%$so","?^^%$so","^%so"}
 	origins_padd := &types.Bytes{
-		Data:    []byte("??????saso?^^%$so?^^%$so^%so"),
-		Offsets: []uint32{0, 2, 4, 10, 17, 24},
-		Lengths: []uint32{2, 2, 6, 7, 7, 4},
+		Data:    []byte("??so"),
+		Offsets: []uint32{0},
+		Lengths: []uint32{4},
 	}
 	//Predefined Correct Values
-	results := []string{"??hi", "h", "hishjaj", "hish&", "?^^%hish&sa*(#jsa", "^%so^%so^%so^%so^%so^%so^%so^%so^%so^%hishjajsa"}
+	results := []string{"??so??so??so??so??sohi", "??so??so??so??so??sohi", "??so??so??so?hishjajsa",
+	"??so??so?hish&sa*(#jsa","??so??so?hish&sa*(#jsa", "??so??so??so?hishjajsa","??so??so??so??so??sabc"}
 
 	or := LpadVarchar(origins, origins_int64, origins_padd)
 
