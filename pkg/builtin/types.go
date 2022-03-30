@@ -31,4 +31,8 @@ const (
 	Power
 	Pi
 	Space
+	Tan
+	Ltrim
+	Rtrim
+	Sin
 )

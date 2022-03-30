@@ -22,27 +22,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/ln"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/tan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {
-	negativeNumberError := "Invalid argument for logarithm"
-
-	extend.FunctionRegistry["ln"] = builtin.Ln
-	extend.UnaryReturnTypes[builtin.Ln] = func(extend extend.Extend) types.T {
+	extend.FunctionRegistry["tan"] = builtin.Tan
+	extend.UnaryReturnTypes[builtin.Tan] = func(extend extend.Extend) types.T {
 		return types.T_float64
 	}
 
-	extend.UnaryStrings[builtin.Ln] = func(e extend.Extend) string {
-		return fmt.Sprintf("ln(%s)", e)
+	extend.UnaryStrings[builtin.Tan] = func(e extend.Extend) string {
+		return fmt.Sprintf("tan(%s)", e)
 	}
 
-	overload.OpTypes[builtin.Ln] = overload.Unary
-	overload.UnaryOps[builtin.Ln] = []*overload.UnaryOp{
+	overload.OpTypes[builtin.Tan] = overload.Unary
+	overload.UnaryOps[builtin.Tan] = []*overload.UnaryOp{
 		{ // T_uint8
 			Typ:        types.T_uint8,
 			ReturnType: types.T_float64,
@@ -56,16 +53,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnUint8(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanUint8(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -82,16 +70,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnUint16(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanUint16(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -108,16 +87,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnUint32(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanUint32(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -134,16 +104,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnUint64(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanUint64(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -160,16 +121,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnInt8(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanInt8(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -186,16 +138,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnInt16(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanInt16(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -212,16 +155,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnInt32(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanInt32(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -238,16 +172,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnInt64(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanInt64(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -264,16 +189,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnFloat32(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanFloat32(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -282,6 +198,11 @@ func init() {
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
+				if origVec.Ref == 1 || origVec.Ref == 0 {
+					origVec.Ref = 0
+					tan.TanFloat64(origVecCol, origVecCol)
+					return origVec, nil
+				}
 				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
 				if err != nil {
 					return nil, err
@@ -290,16 +211,7 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				lnResult := ln.LnFloat64(origVecCol, results)
-				if nulls.Any(lnResult.Nsp) {
-					logutil.Warn(negativeNumberError)
-					if !nulls.Any(resultVector.Nsp) {
-						resultVector.Nsp = lnResult.Nsp
-					} else {
-						resultVector.Nsp.Or(lnResult.Nsp)
-					}
-				}
-				vector.SetCol(resultVector, results)
+				vector.SetCol(resultVector, tan.TanFloat64(origVecCol, results))
 				return resultVector, nil
 			},
 		},
