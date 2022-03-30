@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
+	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey 3")
 )
 
 // Storage memory storage
@@ -170,9 +170,9 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 
 	if len(userReq.GetPrefix()) != 0 {
 		prefixFilter := func(key []byte) bool {
-			return bytes.HasPrefix(key,userReq.GetPrefix())
+			return bytes.HasPrefix(key, userReq.GetPrefix())
 		}
-		options = append(options,executor.WithScanFilterFunc(prefixFilter))
+		options = append(options, executor.WithScanFilterFunc(prefixFilter))
 	}
 
 	needKey := userReq.GetNeedKey()

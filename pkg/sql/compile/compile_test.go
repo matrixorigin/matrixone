@@ -42,6 +42,11 @@ var querys = []string{
 	"INSERT INTO table1 values(12);",
 	"DROP TABLE table1;",
 	"DROP DATABASE IF EXISTS db;",
+	"select * from R join S on R.uid = S.uid",
+	"select sum(R.price) from R join S on R.uid = S.uid",
+	"select * from R join S on R.uid = S.uid group by R.uid",
+	"select sum(R.price) from R join S on R.uid = S.uid group by R.uid",
+
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID;",
 	"SELECT userID, MIN(score) FROM t1 GROUP BY userID ORDER BY userID asc;",
 	"SELECT userID, SUM(score) FROM t1 GROUP BY userID ORDER BY userID desc;",

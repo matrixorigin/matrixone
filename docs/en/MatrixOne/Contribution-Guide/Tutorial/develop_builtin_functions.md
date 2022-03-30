@@ -189,6 +189,7 @@ since we need a float32 vector here, its size should be 4 * len(origVecCol), 4 b
 
 3.Vector.Nsp: MatrixOne uses bitmaps to store the NULL values in a column, Vector.Nsp is a wrap up struct for this bitmap.
 
+4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1), sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go. 
 
 Since the result vector has the same type as the original vector, we could use the original vector to store our result when we don't need our original vector anymore in our execution plan(i.e., the reference count of the original vector is 0 or 1).
 

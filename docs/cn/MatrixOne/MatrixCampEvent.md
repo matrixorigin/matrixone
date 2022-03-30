@@ -16,8 +16,10 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 
 
 ## 参与流程
-1. 选择很重要！加小助手微信“MatrixOrigin001”填写活动注册表https://www.wjx.top/vm/Ys1rz1I.aspx，选择你想要完成的函数任务，并加入MatrixOne社区群。
-2. 登陆Github，在你选择的函数issue留下你的comment，小助手会将相关issue分配给你。
+
+在开始之前，先给MatrixOne项目Star, Fork, Watch一下吧。
+1. 选择很重要！加小助手微信“MatrixOrigin001”填写活动注册表https://www.wjx.top/vm/Ys1rz1I.aspx 选择你想要完成的函数任务，并加入MatrixOne社区群。
+2. 登陆Github，在你选择的函数issue留下你的comment，比如“I'd like to work on this issue”, 小助手会将相关issue分配给你。
 3. 开始只属于你的函数体验任务。如有任何问题，MatrixOne社区群里的技术大牛全程在线支持。
 
 > 请注意：1个开发者可以选择多个挑战任务，但是1个任务只能由1个开发者完成
@@ -59,6 +61,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1986 String function rpad() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1987 String function rtrim() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1988 String function repeat() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/1989 String function reverse() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1990 String function space() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1991 String function replace() **[中等]**
 
