@@ -143,7 +143,6 @@ func (r *UInt16Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64
 	vs := vec.Col.([]uint16)
 	for i := range os {
 		j := vps[i] - 1
-		vs[int64(i)+start]
 		r.Vs[j] |= vs[int64(i)+start]
 	}
 	if nulls.Any(vec.Nsp) {
