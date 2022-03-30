@@ -39,7 +39,7 @@ func (r *ApproxCountDistinctRing) Marshal(w io.Writer) error {
 	w.Write(encoding.EncodeUint32(uint32(n)))
 	// data & values
 	if n > 0 {
-		// in some tests Data is nil, encode Vs anyway
+		// in some tests Data is nil, encode Values anyway
 		w.Write(encoding.EncodeUint64Slice(r.Vs))
 	}
 	// sketches

@@ -20,92 +20,143 @@ import (
 )
 
 type Int8Ring struct {
-	Da  []byte
-	Vs  []int8
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []int8
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type Int16Ring struct {
-	Da  []byte
-	Vs  []int16
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []int16
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type Int32Ring struct {
-	Da  []byte
-	Vs  []int32
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []int32
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type Int64Ring struct {
-	Da  []byte
-	Vs  []int64
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []int64
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type UInt8Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []uint8
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []uint8
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type UInt16Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []uint16
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []uint16
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type UInt32Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []uint32
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []uint32
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type UInt64Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []uint64
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []uint64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type Float32Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []float32
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []float32
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type Float64Ring struct {
-	Da  []byte
-	Ns  []int64
-	Vs  []float64
+	// Data store all the value's bytes
+	Data []byte
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group,its memory address is same to Data
+	Values []float64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type StrRing struct {
-	Es  []bool // isEmpty
-	Ns  []int64
-	Vs  [][]byte
+	Empty []bool // isEmpty
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Values store value of each group
+	Values [][]byte
+	// Typ is vector's value type
 	Typ types.Type
 	Mp  *mheap.Mheap
 }
 type DateRing struct {
-	Da  []byte
-	Vs  []types.Date
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []types.Date
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }
 
 type DatetimeRing struct {
-	Da  []byte
-	Vs  []types.Datetime
-	Ns  []int64
+	// Data store all the value's bytes
+	Data []byte
+	// Values store value of each group,its memory address is same to Data
+	Values []types.Datetime
+	// NullCounts is group to record number of the null value
+	NullCounts []int64
+	// Typ is vector's value type
 	Typ types.Type
 }

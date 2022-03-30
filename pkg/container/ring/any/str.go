@@ -31,16 +31,16 @@ func NewStr(typ types.Type) *StrRing {
 }
 
 func (r *StrRing) String() string {
-	return fmt.Sprintf("%v-%v", r.Vs, r.Ns)
+	return fmt.Sprintf("%v-%v", r.Values, r.NullCounts)
 }
 
 func (r *StrRing) Free(m *mheap.Mheap) {
-	r.Vs = nil
-	r.Ns = nil
+	r.Values = nil
+	r.NullCounts = nil
 }
 
 func (r *StrRing) Count() int {
-	return len(r.Vs)
+	return len(r.Values)
 }
 
 func (r *StrRing) Size() int {
@@ -58,20 +58,20 @@ func (r *StrRing) Type() types.Type {
 }
 
 func (r *StrRing) SetLength(n int) {
-	r.Vs = r.Vs[:n]
-	r.Ns = r.Ns[:n]
-	r.Es = r.Es[:n]
+	r.Values = r.Values[:n]
+	r.NullCounts = r.NullCounts[:n]
+	r.Empty = r.Empty[:n]
 }
 
 func (r *StrRing) Shrink(sels []int64) {
 	for i, sel := range sels {
-		r.Vs[i] = r.Vs[sel]
-		r.Ns[i] = r.Ns[sel]
-		r.Es[i] = r.Es[sel]
+		r.Values[i] = r.Values[sel]
+		r.NullCounts[i] = r.NullCounts[sel]
+		r.Empty[i] = r.Empty[sel]
 	}
-	r.Vs = r.Vs[:len(sels)]
-	r.Ns = r.Ns[:len(sels)]
-	r.Es = r.Es[:len(sels)]
+	r.Values = r.Values[:len(sels)]
+	r.NullCounts = r.NullCounts[:len(sels)]
+	r.Empty = r.Empty[:len(sels)]
 }
 
 func (r *StrRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
@@ -82,14 +82,14 @@ func (r *StrRing) Grow(m *mheap.Mheap) error {
 	if r.Mp == nil {
 		r.Mp = m
 	}
-	if len(r.Vs) == 0 {
-		r.Es = make([]bool, 0, 8)
-		r.Ns = make([]int64, 0, 8)
-		r.Vs = make([][]byte, 0, 8)
+	if len(r.Values) == 0 {
+		r.Empty = make([]bool, 0, 8)
+		r.NullCounts = make([]int64, 0, 8)
+		r.Values = make([][]byte, 0, 8)
 	}
-	r.Ns = append(r.Ns, 0)
-	r.Es = append(r.Es, true)
-	r.Vs = append(r.Vs, make([]byte, 0, 4))
+	r.NullCounts = append(r.NullCounts, 0)
+	r.Empty = append(r.Empty, true)
+	r.Values = append(r.Values, make([]byte, 0, 4))
 	return nil
 }
 
@@ -97,27 +97,27 @@ func (r *StrRing) Grows(size int, m *mheap.Mheap) error {
 	if r.Mp == nil {
 		r.Mp = m
 	}
-	if len(r.Vs) == 0 {
-		r.Es = make([]bool, 0, size)
-		r.Ns = make([]int64, 0, size)
-		r.Vs = make([][]byte, 0, size)
+	if len(r.Values) == 0 {
+		r.Empty = make([]bool, 0, size)
+		r.NullCounts = make([]int64, 0, size)
+		r.Values = make([][]byte, 0, size)
 	}
 	for i := 0; i < size; i++ {
-		r.Ns = append(r.Ns, 0)
-		r.Es = append(r.Es, true)
-		r.Vs = append(r.Vs, make([]byte, 0, 4))
+		r.NullCounts = append(r.NullCounts, 0)
+		r.Empty = append(r.Empty, true)
+		r.Values = append(r.Values, make([]byte, 0, 4))
 	}
 	return nil
 }
 
 func (r *StrRing) Fill(i int64, sel, z int64, vec *vector.Vector) {
 	v := vec.Col.(*types.Bytes).Get(sel)
-	if r.Es[i] {
-		r.Es[i] = false
-		r.Vs[i] = append(r.Vs[i][:0], v...)
+	if r.Empty[i] {
+		r.Empty[i] = false
+		r.Values[i] = append(r.Values[i][:0], v...)
 	}
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i] += z
+		r.NullCounts[i] += z
 	}
 }
 
@@ -126,16 +126,16 @@ func (r *StrRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, v
 	for i := range os {
 		j := vps[i] - 1
 		v := vs.Get(int64(i) + start)
-		if r.Es[j] {
-			r.Es[j] = false
-			r.Vs[j] = append(r.Vs[j][:0], v...)
+		if r.Empty[j] {
+			r.Empty[j] = false
+			r.Values[j] = append(r.Values[j][:0], v...)
 		}
 		break
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
 			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
+				r.NullCounts[vps[i]-1] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -145,16 +145,16 @@ func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.(*types.Bytes)
 	for j := range zs {
 		v := vs.Get(int64(j))
-		if r.Es[i] {
-			r.Es[i] = false
-			r.Vs[i] = append(r.Vs[i][:0], v...)
+		if r.Empty[i] {
+			r.Empty[i] = false
+			r.Values[i] = append(r.Values[i][:0], v...)
 		}
 		break
 	}
 	if nulls.Any(vec.Nsp) {
 		for j := range zs {
 			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
+				r.NullCounts[i] += zs[j]
 			}
 		}
 	}
@@ -162,32 +162,32 @@ func (r *StrRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *StrRing) Add(a interface{}, x, y int64) {
 	ar := a.(*StrRing)
-	if r.Es[x] {
-		r.Es[x] = false
-		r.Vs[x] = ar.Vs[y]
+	if r.Empty[x] {
+		r.Empty[x] = false
+		r.Values[x] = ar.Values[y]
 	}
-	r.Ns[x] += ar.Ns[y]
+	r.NullCounts[x] += ar.NullCounts[y]
 }
 
 func (r *StrRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*StrRing)
 	for i := range os {
 		j := vps[i] - 1
-		if r.Es[j] {
-			r.Es[j] = false
-			r.Vs[j] = ar.Vs[int64(i)+start]
+		if r.Empty[j] {
+			r.Empty[j] = false
+			r.Values[j] = ar.Values[int64(i)+start]
 		}
-		r.Ns[j] += ar.Ns[int64(i)+start]
+		r.NullCounts[j] += ar.NullCounts[int64(i)+start]
 	}
 }
 
 func (r *StrRing) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*StrRing)
-	if r.Es[x] {
-		r.Es[x] = false
-		r.Vs[x] = ar.Vs[y]
+	if r.Empty[x] {
+		r.Empty[x] = false
+		r.Values[x] = ar.Values[y]
 	}
-	r.Ns[x] += ar.Ns[y] * z
+	r.NullCounts[x] += ar.NullCounts[y] * z
 }
 
 func (r *StrRing) Eval(zs []int64) *vector.Vector {
@@ -195,12 +195,12 @@ func (r *StrRing) Eval(zs []int64) *vector.Vector {
 	var os, ns []uint32
 
 	defer func() {
-		r.Vs = nil
-		r.Ns = nil
+		r.Values = nil
+		r.NullCounts = nil
 	}()
 	{
 		o := uint32(0)
-		for _, v := range r.Vs {
+		for _, v := range r.Values {
 			os = append(os, o)
 			data = append(data, v...)
 			o += uint32(len(v))
@@ -212,7 +212,7 @@ func (r *StrRing) Eval(zs []int64) *vector.Vector {
 	}
 	nsp := new(nulls.Nulls)
 	for i, z := range zs {
-		if z-r.Ns[i] == 0 {
+		if z-r.NullCounts[i] == 0 {
 			nulls.Add(nsp, uint64(i))
 		}
 	}

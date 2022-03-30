@@ -938,59 +938,59 @@ func TestRing(t *testing.T) {
 			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
 		},
 		&any.Int8Ring{
-			Ns:  []int64{123123123, 123123908950, 9089374534},
-			Vs:  []int8{6, 6, 8, 0},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{123123123, 123123908950, 9089374534},
+			Values:     []int8{6, 6, 8, 0},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.Int16Ring{
-			Ns:  []int64{567567, 123123908950, 9089374534},
-			Vs:  []int16{62, 62, 8, 01},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{567567, 123123908950, 9089374534},
+			Values:     []int16{62, 62, 8, 01},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.Int32Ring{
-			Ns:  []int64{789789, 123123908950, 9089374534},
-			Vs:  []int32{612, 632, 81, 0423},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{789789, 123123908950, 9089374534},
+			Values:     []int32{612, 632, 81, 0423},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.Int64Ring{
-			Ns:  []int64{178923123, 123123908950, 9089374534},
-			Vs:  []int64{6123, 123126, 2323328, 02342342},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{178923123, 123123908950, 9089374534},
+			Values:     []int64{6123, 123126, 2323328, 02342342},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.UInt8Ring{
-			Ns:  []int64{123123123, 123123908950, 9089374534},
-			Vs:  []uint8{6, 6, 8, 0},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{123123123, 123123908950, 9089374534},
+			Values:     []uint8{6, 6, 8, 0},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.UInt16Ring{
-			Ns:  []int64{45634564, 123123908950, 9089374534},
-			Vs:  []uint16{6123, 1236, 8123, 12310},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{45634564, 123123908950, 9089374534},
+			Values:     []uint16{6123, 1236, 8123, 12310},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.UInt32Ring{
-			Ns:  []int64{56784567, 123123908950, 9089374534},
-			Vs:  []uint32{6123, 3454346, 345348, 345340},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{56784567, 123123908950, 9089374534},
+			Values:     []uint32{6123, 3454346, 345348, 345340},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.UInt64Ring{
-			Ns:  []int64{8902345, 123123908950, 9089374534},
-			Vs:  []uint64{6112323, 34542345346, 234, 23412312},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{8902345, 123123908950, 9089374534},
+			Values:     []uint64{6112323, 34542345346, 234, 23412312},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.Float32Ring{
-			Ns:  []int64{3246457, 123123908950, 9089374534},
-			Vs:  []float32{123.123, 34534.345, 234123.345345},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{3246457, 123123908950, 9089374534},
+			Values:     []float32{123.123, 34534.345, 234123.345345},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.Float64Ring{
-			Ns:  []int64{996674, 123123908950, 9089374534},
-			Vs:  []float64{123.123, 34534.345, 234123.345345},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{996674, 123123908950, 9089374534},
+			Values:     []float64{123.123, 34534.345, 234123.345345},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&any.StrRing{
-			Ns:  []int64{1231245234, 123123123908950, 123},
-			Vs:  [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{1231245234, 123123123908950, 123},
+			Values:     [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 	}
 	for _, r := range ringArray {
@@ -1009,78 +1009,78 @@ func TestRing(t *testing.T) {
 		switch ExpectRing := resultRing.(type) {
 		case *avg.AvgRing:
 			oriRing := r.(*avg.AvgRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *count.CountRing:
 			oriRing := r.(*count.CountRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *starcount.CountRing:
 			oriRing := r.(*starcount.CountRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *approxcd.ApproxCountDistinctRing:
 			oriRing := r.(*approxcd.ApproxCountDistinctRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
@@ -1092,516 +1092,516 @@ func TestRing(t *testing.T) {
 
 		case *max.Int8Ring:
 			oriRing := r.(*max.Int8Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.Int16Ring:
 			oriRing := r.(*max.Int16Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.Int32Ring:
 			oriRing := r.(*max.Int32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.Int64Ring:
 			oriRing := r.(*max.Int64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.UInt8Ring:
 			oriRing := r.(*max.UInt8Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.UInt16Ring:
 			oriRing := r.(*max.UInt16Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.UInt32Ring:
 			oriRing := r.(*max.UInt32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.UInt64Ring:
 			oriRing := r.(*max.UInt64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.Float32Ring:
 			oriRing := r.(*max.Float32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.Float64Ring:
 			oriRing := r.(*max.Float64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *max.StrRing:
 			oriRing := r.(*max.StrRing)
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if string(ExpectRing.Vs[i]) != string(v) {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
 					return
 				}
 			}
 		case *min.Int8Ring:
 			oriRing := r.(*min.Int8Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.Int16Ring:
 			oriRing := r.(*min.Int16Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.Int32Ring:
 			oriRing := r.(*min.Int32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.Int64Ring:
 			oriRing := r.(*min.Int64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.UInt8Ring:
 			oriRing := r.(*min.UInt8Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.UInt16Ring:
 			oriRing := r.(*min.UInt16Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.UInt32Ring:
 			oriRing := r.(*min.UInt32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.UInt64Ring:
 			oriRing := r.(*min.UInt64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.Float32Ring:
 			oriRing := r.(*min.Float32Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.Float64Ring:
 			oriRing := r.(*min.Float64Ring)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *min.StrRing:
 			oriRing := r.(*min.StrRing)
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if string(ExpectRing.Vs[i]) != string(v) {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
 					return
 				}
 			}
 		case *sum.IntRing:
 			oriRing := r.(*sum.IntRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *sum.UIntRing:
 			oriRing := r.(*sum.UIntRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
 		case *sum.FloatRing:
 			oriRing := r.(*sum.FloatRing)
-			// Da
+			// Data
 			if string(ExpectRing.Da) != string(encoding.EncodeFloat64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
+			// NullCounts
 			for i, n := range oriRing.Ns {
 				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
 					return
 				}
 			}
-			// Vs
+			// Values
 			for i, v := range oriRing.Vs {
 				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}
@@ -1628,227 +1628,227 @@ func TestRing(t *testing.T) {
 			}
 		case *any.Int8Ring:
 			oriRing := r.(*any.Int8Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeInt8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeInt8Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.Int16Ring:
 			oriRing := r.(*any.Int16Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeInt16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeInt16Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.Int32Ring:
 			oriRing := r.(*any.Int32Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeInt32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeInt32Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.Int64Ring:
 			oriRing := r.(*any.Int64Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeInt64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeInt64Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.UInt8Ring:
 			oriRing := r.(*any.UInt8Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeUint8Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint8Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.UInt16Ring:
 			oriRing := r.(*any.UInt16Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeUint16Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint16Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.UInt32Ring:
 			oriRing := r.(*any.UInt32Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeUint32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint32Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.UInt64Ring:
 			oriRing := r.(*any.UInt64Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeUint64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.Float32Ring:
 			oriRing := r.(*any.Float32Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeFloat32Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat32Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.Float64Ring:
 			oriRing := r.(*any.Float64Ring)
-			// Da
-			if string(ExpectRing.Da) != string(encoding.EncodeFloat64Slice(oriRing.Vs)) {
-				t.Errorf("Decode ring Da failed.")
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
 				return
 			}
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if ExpectRing.Vs[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
 		case *any.StrRing:
 			oriRing := r.(*any.StrRing)
-			// Ns
-			for i, n := range oriRing.Ns {
-				if ExpectRing.Ns[i] != n {
-					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
 					return
 				}
 			}
-			// Vs
-			for i, v := range oriRing.Vs {
-				if string(ExpectRing.Vs[i]) != string(v) {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
+			// Values
+			for i, v := range oriRing.Values {
+				if string(ExpectRing.Values[i]) != string(v) {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Values[i]))
 					return
 				}
 			}

@@ -29,24 +29,24 @@ func NewInt16(typ types.Type) *Int16Ring {
 }
 
 func (r *Int16Ring) String() string {
-	return fmt.Sprintf("%v-%v", r.Vs, r.Ns)
+	return fmt.Sprintf("%v-%v", r.Values, r.NullCounts)
 }
 
 func (r *Int16Ring) Free(m *mheap.Mheap) {
-	if r.Da != nil {
-		mheap.Free(m, r.Da)
-		r.Da = nil
-		r.Vs = nil
-		r.Ns = nil
+	if r.Data != nil {
+		mheap.Free(m, r.Data)
+		r.Data = nil
+		r.Values = nil
+		r.NullCounts = nil
 	}
 }
 
 func (r *Int16Ring) Count() int {
-	return len(r.Vs)
+	return len(r.Values)
 }
 
 func (r *Int16Ring) Size() int {
-	return cap(r.Da)
+	return cap(r.Data)
 }
 
 func (r *Int16Ring) Dup() ring.Ring {
@@ -60,17 +60,17 @@ func (r *Int16Ring) Type() types.Type {
 }
 
 func (r *Int16Ring) SetLength(n int) {
-	r.Vs = r.Vs[:n]
-	r.Ns = r.Ns[:n]
+	r.Values = r.Values[:n]
+	r.NullCounts = r.NullCounts[:n]
 }
 
 func (r *Int16Ring) Shrink(sels []int64) {
 	for i, sel := range sels {
-		r.Vs[i] = r.Vs[sel]
-		r.Ns[i] = r.Ns[sel]
+		r.Values[i] = r.Values[sel]
+		r.NullCounts[i] = r.NullCounts[sel]
 	}
-	r.Vs = r.Vs[:len(sels)]
-	r.Ns = r.Ns[:len(sels)]
+	r.Values = r.Values[:len(sels)]
+	r.NullCounts = r.NullCounts[:len(sels)]
 }
 
 func (r *Int16Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
@@ -78,63 +78,63 @@ func (r *Int16Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
 }
 
 func (r *Int16Ring) Grow(m *mheap.Mheap) error {
-	n := len(r.Vs)
+	n := len(r.Values)
 	if n == 0 {
 		data, err := mheap.Alloc(m, 8*2)
 		if err != nil {
 			return err
 		}
-		r.Da = data
-		r.Ns = make([]int64, 0, 8)
-		r.Vs = encoding.DecodeInt16Slice(data)
-	} else if n+1 >= cap(r.Vs) {
-		r.Da = r.Da[:n*2]
-		data, err := mheap.Grow(m, r.Da, int64(n+1)*2)
+		r.Data = data
+		r.NullCounts = make([]int64, 0, 8)
+		r.Values = encoding.DecodeInt16Slice(data)
+	} else if n+1 >= cap(r.Values) {
+		r.Data = r.Data[:n*2]
+		data, err := mheap.Grow(m, r.Data, int64(n+1)*2)
 		if err != nil {
 			return err
 		}
-		mheap.Free(m, r.Da)
-		r.Da = data
-		r.Vs = encoding.DecodeInt16Slice(data)
+		mheap.Free(m, r.Data)
+		r.Data = data
+		r.Values = encoding.DecodeInt16Slice(data)
 	}
-	r.Vs = r.Vs[:n+1]
-	r.Vs[n] = 0
-	r.Ns = append(r.Ns, 0)
+	r.Values = r.Values[:n+1]
+	r.Values[n] = 0
+	r.NullCounts = append(r.NullCounts, 0)
 	return nil
 }
 
 func (r *Int16Ring) Grows(size int, m *mheap.Mheap) error {
-	n := len(r.Vs)
+	n := len(r.Values)
 	if n == 0 {
 		data, err := mheap.Alloc(m, int64(size*2))
 		if err != nil {
 			return err
 		}
-		r.Da = data
-		r.Ns = make([]int64, 0, size)
-		r.Vs = encoding.DecodeInt16Slice(data)
-	} else if n+size >= cap(r.Vs) {
-		r.Da = r.Da[:n*2]
-		data, err := mheap.Grow(m, r.Da, int64(n+size)*2)
+		r.Data = data
+		r.NullCounts = make([]int64, 0, size)
+		r.Values = encoding.DecodeInt16Slice(data)
+	} else if n+size >= cap(r.Values) {
+		r.Data = r.Data[:n*2]
+		data, err := mheap.Grow(m, r.Data, int64(n+size)*2)
 		if err != nil {
 			return err
 		}
-		mheap.Free(m, r.Da)
-		r.Da = data
-		r.Vs = encoding.DecodeInt16Slice(data)
+		mheap.Free(m, r.Data)
+		r.Data = data
+		r.Values = encoding.DecodeInt16Slice(data)
 	}
-	r.Vs = r.Vs[:n+size]
+	r.Values = r.Values[:n+size]
 	for i := 0; i < size; i++ {
-		r.Ns = append(r.Ns, 0)
-		r.Vs[i+n] = 0
+		r.NullCounts = append(r.NullCounts, 0)
+		r.Values[i+n] = 0
 	}
 	return nil
 }
 
 func (r *Int16Ring) Fill(i int64, sel, z int64, vec *vector.Vector) {
-	r.Vs[i] = vec.Col.([]int16)[sel]
+	r.Values[i] = vec.Col.([]int16)[sel]
 	if nulls.Contains(vec.Nsp, uint64(sel)) {
-		r.Ns[i] += z
+		r.NullCounts[i] += z
 	}
 }
 
@@ -142,13 +142,13 @@ func (r *Int16Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 	vs := vec.Col.([]int16)
 	for i := range os {
 		j := vps[i] - 1
-		r.Vs[j] = vs[int64(i)+start]
+		r.Values[j] = vs[int64(i)+start]
 		break
 	}
 	if nulls.Any(vec.Nsp) {
 		for i := range os {
 			if nulls.Contains(vec.Nsp, uint64(start)+uint64(i)) {
-				r.Ns[vps[i]-1] += zs[int64(i)+start]
+				r.NullCounts[vps[i]-1] += zs[int64(i)+start]
 			}
 		}
 	}
@@ -157,13 +157,13 @@ func (r *Int16Ring) BatchFill(start int64, os []uint8, vps []uint64, zs []int64,
 func (r *Int16Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	vs := vec.Col.([]int16)
 	for _, v := range vs {
-		r.Vs[i] = v
+		r.Values[i] = v
 		break
 	}
 	if nulls.Any(vec.Nsp) {
 		for j := range vs {
 			if nulls.Contains(vec.Nsp, uint64(j)) {
-				r.Ns[i] += zs[j]
+				r.NullCounts[i] += zs[j]
 			}
 		}
 	}
@@ -171,41 +171,41 @@ func (r *Int16Ring) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 
 func (r *Int16Ring) Add(a interface{}, x, y int64) {
 	ar := a.(*Int16Ring)
-	r.Vs[x] = ar.Vs[y]
-	r.Ns[x] += ar.Ns[y]
+	r.Values[x] = ar.Values[y]
+	r.NullCounts[x] += ar.NullCounts[y]
 }
 
 func (r *Int16Ring) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	ar := a.(*Int16Ring)
 	for i := range os {
 		j := vps[i] - 1
-		r.Vs[j] = ar.Vs[int64(i)+start]
-		r.Ns[j] += ar.Ns[int64(i)+start]
+		r.Values[j] = ar.Values[int64(i)+start]
+		r.NullCounts[j] += ar.NullCounts[int64(i)+start]
 	}
 }
 
 func (r *Int16Ring) Mul(a interface{}, x, y, z int64) {
 	ar := a.(*Int16Ring)
-	r.Vs[x] = ar.Vs[y]
-	r.Ns[x] += ar.Ns[y] * z
+	r.Values[x] = ar.Values[y]
+	r.NullCounts[x] += ar.NullCounts[y] * z
 }
 
 func (r *Int16Ring) Eval(zs []int64) *vector.Vector {
 	defer func() {
-		r.Da = nil
-		r.Vs = nil
-		r.Ns = nil
+		r.Data = nil
+		r.Values = nil
+		r.NullCounts = nil
 	}()
 	nsp := new(nulls.Nulls)
 	for i, z := range zs {
-		if z-r.Ns[i] == 0 {
+		if z-r.NullCounts[i] == 0 {
 			nulls.Add(nsp, uint64(i))
 		}
 	}
 	return &vector.Vector{
 		Nsp:  nsp,
-		Data: r.Da,
-		Col:  r.Vs,
+		Data: r.Data,
+		Col:  r.Values,
 		Or:   false,
 		Typ:  r.Typ,
 	}
