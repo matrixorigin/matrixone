@@ -30,5 +30,9 @@ const (
 	Exp
 	Power
 	Pi
-	Atan
+	Tan
+	Ltrim
+	Rtrim
+	Sin
+  Atan
 )

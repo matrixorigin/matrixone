@@ -45,6 +45,13 @@ const (
 	Update
 )
 
+const (
+	BQ  = iota // bare query
+	AQ         // aggregation query
+	CQ         // conjunctive query
+	CAQ        // conjunctive aggregation query
+)
+
 var Address string
 
 // Source contains information of a relation which will be used in execution,

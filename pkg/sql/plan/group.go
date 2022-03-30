@@ -24,66 +24,35 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *build) buildGroupBy(exprs tree.GroupBy, qry *Query) error {
-	for _, expr := range exprs {
-		e, err := b.buildGroupByExpr(expr, qry)
-		if err != nil {
-			return err
-		}
-		if e, err = b.pruneExtend(e, false); err != nil {
-			return err
-		}
-		{
-			var rel string
+func (b *build) buildGroupBy(exprs tree.GroupBy, proj0, proj *Projection, qry *Query) ([]string, error) {
+	var err error
+	var fvars []string
+	var e extend.Extend
 
-			attrs := e.Attributes()
-			mp := make(map[string]int) // relations map
-			for _, attr := range attrs {
-				rels, _, err := qry.getAttribute1(false, attr)
-				if err != nil {
-					return err
-				}
-				for i := range rels {
-					if len(rel) == 0 {
-						rel = rels[i]
-					}
-					mp[rels[i]]++
-				}
+	for _, expr := range exprs {
+		fvar := tree.String(expr, dialect.MYSQL)
+		for i := range proj0.As {
+			if fvar == proj0.As[i] {
+				proj.Rs = append(proj.Rs, 0)
+				proj.As = append(proj.As, fvar)
+				proj.Es = append(proj.Es, proj0.Es[i])
+				goto OUT
 			}
-			if len(mp) == 0 {
-				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in group by", e))
-			}
-			if len(mp) > 1 {
-				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the group by must belong to the same relation"))
-			}
-			if _, ok := e.(*extend.Attribute); !ok {
-				if i := qry.RelsMap[rel].ExistProjection(e.String()); i == -1 {
-					qry.RelsMap[rel].AddProjection(&ProjectionExtend{
-						E:     e,
-						Ref:   1,
-						Alias: e.String(),
-					})
-					{
-						for _, attr := range attrs {
-							_, _, err = qry.getAttribute1(true, attr)
-							if err != nil {
-								return err
-							}
-						}
-					}
-				} else {
-					qry.RelsMap[rel].ProjectionExtends[i].Ref++
-				}
-			} else {
-				_, _, err = qry.getAttribute1(true, e.(*extend.Attribute).Name)
-				if err != nil {
-					return err
-				}
-			}
-			qry.FreeAttrs = append(qry.FreeAttrs, e.String())
 		}
+		if e, err = b.buildGroupByExpr(expr, qry); err != nil {
+			return nil, err
+		}
+		if e, err = b.pruneExtend(e, true); err != nil {
+			return nil, err
+		}
+		fvar = e.String()
+		proj.Rs = append(proj.Rs, 0)
+		proj.Es = append(proj.Es, e)
+		proj.As = append(proj.As, fvar)
+	OUT:
+		fvars = append(fvars, fvar)
 	}
-	return nil
+	return fvars, nil
 }
 
 func (b *build) buildGroupByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
@@ -111,7 +80,7 @@ func (b *build) buildGroupByExpr(n tree.Expr, qry *Query) (extend.Extend, error)
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildGroupByExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute1(false, e, qry)
+		return b.buildAttribute(e, qry)
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", tree.String(n, dialect.MYSQL)))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

@@ -16,7 +16,9 @@ package top
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 // Direction for ordering results.
@@ -34,6 +36,8 @@ type Container struct {
 	sels  []int64
 	attrs []string
 	cmps  []compare.Compare
+
+	bat *batch.Batch
 }
 
 type Field struct {
@@ -68,22 +72,21 @@ func (i Direction) String() string {
 	return directionName[i]
 }
 
-func (ctr *Container) compare(i, j int64) int {
+func (ctr *Container) compare(vi, vj int, i, j int64) int {
 	for k := 0; k < ctr.n; k++ {
-		if r := ctr.cmps[k].Compare(0, 0, i, j); r != 0 {
+		if r := ctr.cmps[k].Compare(vi, vj, i, j); r != 0 {
 			return r
 		}
 	}
 	return 0
 }
 
-// maximum heap
 func (ctr *Container) Len() int {
 	return len(ctr.sels)
 }
 
 func (ctr *Container) Less(i, j int) bool {
-	return ctr.compare(ctr.sels[i], ctr.sels[j]) > 0
+	return ctr.compare(0, 0, ctr.sels[i], ctr.sels[j]) > 0
 }
 
 func (ctr *Container) Swap(i, j int) {
