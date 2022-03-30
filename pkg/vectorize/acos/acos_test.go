@@ -28,11 +28,11 @@ func TestAcosFloat32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosFloat32(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosFloat32(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -44,11 +44,11 @@ func TestAcosFloat64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosFloat64(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosFloat64(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -60,11 +60,11 @@ func TestAcosUint8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosUint8(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosUint8(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -76,11 +76,11 @@ func TestAcosUint16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosUint16(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosUint16(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -92,11 +92,11 @@ func TestAcosUint32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosUint32(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosUint32(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -108,11 +108,11 @@ func TestAcosUint64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosUint64(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosUint64(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -124,11 +124,11 @@ func TestAcosInt8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosInt8(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosInt8(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -140,11 +140,11 @@ func TestAcosInt16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosInt16(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosInt16(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -156,11 +156,11 @@ func TestAcosInt32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosInt32(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosInt32(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }
 
@@ -172,10 +172,10 @@ func TestAcosInt64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run acos function
-	LogResult := acosInt64(nums, newNums)
-	require.Equal(t, nulls.Any(LogResult.Nsp), false)
+	AcosResult := acosInt64(nums, newNums)
+	require.Equal(t, nulls.Any(AcosResult.Nsp), false)
 
-	for i := range LogResult.Result {
-		require.Equal(t, acosNums[i], LogResult.Result[i])
+	for i := range AcosResult.Result {
+		require.Equal(t, acosNums[i], AcosResult.Result[i])
 	}
 }

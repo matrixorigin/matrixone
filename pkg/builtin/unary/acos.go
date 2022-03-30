@@ -51,8 +51,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosUint8(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosUint8(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_uint16
@@ -68,8 +75,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosUint16(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosUint16(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_uint32
@@ -85,8 +99,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosUint32(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosUint32(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_uint64
@@ -102,8 +123,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosUint64(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosUint64(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_int8
@@ -119,8 +147,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosInt8(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosInt8(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_int16
@@ -136,8 +171,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosInt16(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosInt16(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_int32
@@ -153,8 +195,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosInt32(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosInt32(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_int64
@@ -170,8 +219,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosInt64(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosInt64(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_float32
@@ -187,8 +243,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosFloat32(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosFloat32(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 		{ // T_float64
@@ -196,11 +259,6 @@ func init() {
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
-				if origVec.Ref == 1 || origVec.Ref == 0 {
-					origVec.Ref = 0
-					acos.AcosFloat64(origVecCol, origVecCol)
-					return origVec, nil
-				}
 				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
 				if err != nil {
 					return nil, err
@@ -209,8 +267,15 @@ func init() {
 				results = results[:len(origVecCol)]
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, acos.AcosFloat64(origVecCol, results))
-				return resultVector, nil
+				acosResult := acos.AcosFloat64(origVecCol, results)
+				if nulls.Any(acosResult.Nsp) {
+					if !nulls.Any(origVec.Nsp) {
+						resultVector.Nsp = acosResult.Nsp
+					} else {
+						resultVector.Nsp.Or(acosResult.Nsp)
+					}
+				}
+				return resultVector, err
 			},
 		},
 	}

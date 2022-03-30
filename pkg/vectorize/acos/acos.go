@@ -20,16 +20,16 @@ import (
 )
 
 var (
-	acosUint8   func([]uint8, []float64) LogResult
-	acosUint16  func([]uint16, []float64) LogResult
-	acosUint32  func([]uint32, []float64) LogResult
-	acosUint64  func([]uint64, []float64) LogResult
-	acosInt8    func([]int8, []float64) LogResult
-	acosInt16   func([]int16, []float64) LogResult
-	acosInt32   func([]int32, []float64) LogResult
-	acosInt64   func([]int64, []float64) LogResult
-	acosFloat32 func([]float32, []float64) LogResult
-	acosFloat64 func([]float64, []float64) LogResult
+	acosUint8   func([]uint8, []float64) AcosResult
+	acosUint16  func([]uint16, []float64) AcosResult
+	acosUint32  func([]uint32, []float64) AcosResult
+	acosUint64  func([]uint64, []float64) AcosResult
+	acosInt8    func([]int8, []float64) AcosResult
+	acosInt16   func([]int16, []float64) AcosResult
+	acosInt32   func([]int32, []float64) AcosResult
+	acosInt64   func([]int64, []float64) AcosResult
+	acosFloat32 func([]float32, []float64) AcosResult
+	acosFloat64 func([]float64, []float64) AcosResult
 )
 
 func init() {
@@ -45,17 +45,17 @@ func init() {
 	acosFloat64 = acosFloat64Pure
 }
 
-type LogResult struct {
+type AcosResult struct {
 	Result []float64
 	Nsp    *nulls.Nulls
 }
 
-func AcosUint8(xs []uint8, rs []float64) LogResult {
+func AcosUint8(xs []uint8, rs []float64) AcosResult {
 	return acosUint8(xs, rs)
 }
 
-func acosUint8Pure(xs []uint8, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosUint8Pure(xs []uint8, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -66,12 +66,12 @@ func acosUint8Pure(xs []uint8, rs []float64) LogResult {
 	return result
 }
 
-func AcosUint16(xs []uint16, rs []float64) LogResult {
+func AcosUint16(xs []uint16, rs []float64) AcosResult {
 	return acosUint16(xs, rs)
 }
 
-func acosUint16Pure(xs []uint16, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosUint16Pure(xs []uint16, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -82,12 +82,12 @@ func acosUint16Pure(xs []uint16, rs []float64) LogResult {
 	return result
 }
 
-func AcosUint32(xs []uint32, rs []float64) LogResult {
+func AcosUint32(xs []uint32, rs []float64) AcosResult {
 	return acosUint32(xs, rs)
 }
 
-func acosUint32Pure(xs []uint32, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosUint32Pure(xs []uint32, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -98,12 +98,12 @@ func acosUint32Pure(xs []uint32, rs []float64) LogResult {
 	return result
 }
 
-func AcosUint64(xs []uint64, rs []float64) LogResult {
+func AcosUint64(xs []uint64, rs []float64) AcosResult {
 	return acosUint64(xs, rs)
 }
 
-func acosUint64Pure(xs []uint64, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosUint64Pure(xs []uint64, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -114,12 +114,12 @@ func acosUint64Pure(xs []uint64, rs []float64) LogResult {
 	return result
 }
 
-func AcosInt8(xs []int8, rs []float64) LogResult {
+func AcosInt8(xs []int8, rs []float64) AcosResult {
 	return acosInt8(xs, rs)
 }
 
-func acosInt8Pure(xs []int8, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosInt8Pure(xs []int8, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -130,12 +130,12 @@ func acosInt8Pure(xs []int8, rs []float64) LogResult {
 	return result
 }
 
-func AcosInt16(xs []int16, rs []float64) LogResult {
+func AcosInt16(xs []int16, rs []float64) AcosResult {
 	return acosInt16(xs, rs)
 }
 
-func acosInt16Pure(xs []int16, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosInt16Pure(xs []int16, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -146,12 +146,12 @@ func acosInt16Pure(xs []int16, rs []float64) LogResult {
 	return result
 }
 
-func AcosInt32(xs []int32, rs []float64) LogResult {
+func AcosInt32(xs []int32, rs []float64) AcosResult {
 	return acosInt32(xs, rs)
 }
 
-func acosInt32Pure(xs []int32, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosInt32Pure(xs []int32, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -162,12 +162,12 @@ func acosInt32Pure(xs []int32, rs []float64) LogResult {
 	return result
 }
 
-func AcosInt64(xs []int64, rs []float64) LogResult {
+func AcosInt64(xs []int64, rs []float64) AcosResult {
 	return acosInt64(xs, rs)
 }
 
-func acosInt64Pure(xs []int64, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosInt64Pure(xs []int64, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -178,12 +178,12 @@ func acosInt64Pure(xs []int64, rs []float64) LogResult {
 	return result
 }
 
-func AcosFloat32(xs []float32, rs []float64) LogResult {
+func AcosFloat32(xs []float32, rs []float64) AcosResult {
 	return acosFloat32(xs, rs)
 }
 
-func acosFloat32Pure(xs []float32, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosFloat32Pure(xs []float32, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
@@ -194,12 +194,12 @@ func acosFloat32Pure(xs []float32, rs []float64) LogResult {
 	return result
 }
 
-func AcosFloat64(xs []float64, rs []float64) LogResult {
+func AcosFloat64(xs []float64, rs []float64) AcosResult {
 	return acosFloat64(xs, rs)
 }
 
-func acosFloat64Pure(xs []float64, rs []float64) LogResult {
-	result := LogResult{Result: rs, Nsp: new(nulls.Nulls)}
+func acosFloat64Pure(xs []float64, rs []float64) AcosResult {
+	result := AcosResult{Result: rs, Nsp: new(nulls.Nulls)}
 	for i, n := range xs {
 		if n < -1 || n > 1 {
 			nulls.Add(result.Nsp, uint64(i))
