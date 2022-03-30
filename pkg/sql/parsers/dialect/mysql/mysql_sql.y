@@ -271,8 +271,8 @@ import (
 // Built-in function
 %token <str> ADDDATE BIT_AND BIT_OR BIT_XOR CAST COUNT APPROX_COUNT_DISTINCT
 %token <str> APPROX_PERCENTILE CURDATE CURTIME DATE_ADD DATE_SUB EXTRACT
-%token <str> GROUP_CONCAT MAX MID MIN NOW POSITION SESSION_USER STD STDDEV
-%token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE
+%token <str> GROUP_CONCAT MAX MID MIN POSITION SESSION_USER STD STDDEV
+%token <str> STDDEV_POP STDDEV_SAMP SUBDATE SUBSTR SUBSTRING SUM SYSDATE NOW
 %token <str> SYSTEM_USER TRANSLATE TRIM VARIANCE VAR_POP VAR_SAMP AVG
 
 // Insert
@@ -4387,29 +4387,6 @@ function_call_aggregate:
             Type: $3,
         }
     }
-|   NOW '(' INTEGRAL ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        ival, errStr := util.GetInt64($3)
-        if errStr != "" {
-            yylex.Error(errStr)
-            return 1
-        }
-        expr := tree.NewNumValWithResInt(constant.MakeInt64(ival), util.IntToString(ival), false, ival)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{expr},
-        }
-    }
-|   NOW '(' ')'
-    {
-        name := tree.SetUnresolvedName(strings.ToLower($1))
-        expr := tree.NewNumValWithResInt(constant.MakeInt64(0), "", false, 0)
-        $$ = &tree.FuncExpr{
-            Func: tree.FuncName2ResolvableFunctionReference(name),
-            Exprs: tree.Exprs{expr},
-        }
-    }
 |   SUM '(' func_type_opt expression ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
@@ -4463,6 +4440,14 @@ std_dev_pop:
 
 function_call_generic:
     ID '(' expression_list_opt ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
+    }
+|   NOW '(' expression_list_opt ')'
     {
         name := tree.SetUnresolvedName(strings.ToLower($1))
         $$ = &tree.FuncExpr{
@@ -5941,7 +5926,6 @@ not_keyword:
 |   MAX
 |   MID
 |   MIN
-|   NOW
 |   POSITION
 |   SESSION_USER
 |   STD
@@ -5953,6 +5937,7 @@ not_keyword:
 |   SUBSTRING
 |   SUM
 |   SYSDATE
+|   NOW
 |   SYSTEM_USER
 |   TRANSLATE
 |   TRIM
