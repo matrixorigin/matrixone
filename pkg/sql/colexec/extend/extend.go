@@ -177,6 +177,18 @@ func AndExtends(e Extend, es []Extend) []Extend {
 		case overload.GE:
 			return append(es, v)
 		case overload.And:
+			switch {
+			case isOrExtend(v.Left) && isOrExtend(v.Right):
+				es = append(es, v.Left)
+				es = append(es, v.Right)
+				return es
+			case !isOrExtend(v.Left) && isOrExtend(v.Right):
+				es = AndExtends(v.Left, es)
+				return append(es, v.Right)
+			case isOrExtend(v.Left) && !isOrExtend(v.Right):
+				es = AndExtends(v.Right, es)
+				return append(es, v.Left)
+			}
 			left, right := AndExtends(v.Left, es), AndExtends(v.Right, es)
 			if left == nil || right == nil {
 				return nil
@@ -185,4 +197,12 @@ func AndExtends(e Extend, es []Extend) []Extend {
 		}
 	}
 	return nil
+}
+
+func isOrExtend(e Extend) bool {
+	v, ok := e.(*BinaryExtend)
+	if !ok {
+		return false
+	}
+	return v.Op == overload.Or
 }

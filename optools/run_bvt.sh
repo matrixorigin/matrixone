@@ -15,6 +15,7 @@
 # limitations under the License.
 
 set -o nounset
+set -x
 
 if [[ $# != 3 ]]; then
 	echo "Usage: $0 CaseType BuildOne CaseVersion"

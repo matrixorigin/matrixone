@@ -17,7 +17,6 @@ package transformer
 import (
 	"errors"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
 
@@ -91,8 +90,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case ApproxCountDistinct:
 		return approxcd.NewApproxCountDistinct(typ), nil
 	case Variance:
-		return variance.NewVarRing(typ), nil
-	case Bit_or:
+		return variance.NewVarianceRing(typ), nil
+  case Bit_or:
 		return NewBit_or(typ)
 	}
 	return nil, nil

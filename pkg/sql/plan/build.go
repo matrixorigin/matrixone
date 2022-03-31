@@ -29,33 +29,22 @@ func New(db string, sql string, e engine.Engine) *build {
 		e:   e,
 		db:  db,
 		sql: sql,
-		flg: true,
 	}
 }
 
 func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		qry := &Query{
-			Limit:   -1,
-			Offset:  -1,
-			RelsMap: make(map[string]*Relation),
-		}
+		qry := &Query{}
 		if err := b.buildSelect(stmt, qry); err != nil {
 			return nil, err
 		}
-		qry.backFill()
 		return qry, nil
 	case *tree.ParenSelect:
-		qry := &Query{
-			Limit:   -1,
-			Offset:  -1,
-			RelsMap: make(map[string]*Relation),
-		}
+		qry := &Query{}
 		if err := b.buildSelect(stmt.Select, qry); err != nil {
 			return nil, err
 		}
-		qry.backFill()
 		return qry, nil
 	case *tree.Insert:
 		plan := &Insert{}

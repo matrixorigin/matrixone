@@ -140,14 +140,14 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 
 		}
 	}
-	logutil.Infof("nodes is %v", r.nodes)
+	logutil.Infof("nodes: %v, tablets len: %d", r.nodes, len(tablets))
 	return r, nil
 }
 
-func Exist(nodes engine.Nodes, iter string) bool {
+func Exist(nodes engine.Nodes, addr string) bool {
 	exist := false
 	for _, node := range nodes {
-		if node.Id == iter {
+		if node.Addr == addr {
 			exist = true
 		}
 	}

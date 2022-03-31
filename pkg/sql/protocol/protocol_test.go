@@ -17,10 +17,11 @@ package protocol
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
-	"reflect"
+	
+  "reflect"
 	"testing"
+  "github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -46,9 +47,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
@@ -97,38 +98,9 @@ func TestInstruction(t *testing.T) {
 			},
 		},
 		vm.Instruction{
-			Op: vm.Times,
-			Arg: &times.Argument{
-				IsBare:  false,
-				R:       "vm times test",
-				Rvars:   []string{"vm", "times", "test"},
-				Ss:      []string{"decode", "ins", "buf"},
-				Svars:   []string{"we", "consider", "foreach"},
-				VarsMap: map[string]int{"key1": 1111, "key2": 2222},
-				Bats: []*batch.Batch{
-					&batch.Batch{
-						Ro:       true,
-						SelsData: []byte("invocation"),
-						Sels:     []int64{123, 98789, 3456456},
-						Attrs:    []string{"the", "first", "loop"},
-						Zs:       []int64{123, 98789, 3456456},
-						As:       []string{"the", "first", "loop"},
-						Refs:     []uint64{123, 98789, 3456456},
-					},
-				},
-				Arg: &transform.Argument{
-					Typ:      12312312,
-					IsMerge:  false,
-					FreeVars: []string{"vm", "times", "test"},
-					BoundVars: []transformer.Transformer{
-						transformer.Transformer{
-							Op:    1231,
-							Ref:   897897,
-							Name:  "happening",
-							Alias: "method",
-						},
-					},
-				},
+			Op: vm.Join,
+			Arg: &join.Argument{
+				Vars: [][]string{[]string{"x"}, []string{"y"}},
 			},
 		},
 		vm.Instruction{
@@ -256,65 +228,18 @@ func TestInstruction(t *testing.T) {
 				t.Errorf("Decode arg Typ failed.")
 				return
 			}
-		case vm.Times:
-			expectArg := resultIns.Arg.(*times.Argument)
-			actualArg := ins.Arg.(*times.Argument)
-			// IsBare
-			if expectArg.IsBare != actualArg.IsBare {
-				t.Errorf("Decode arg IsBare failed.")
-				return
-			}
-			// R
-			if expectArg.R != actualArg.R {
-				t.Errorf("Decode arg R failed.")
-				return
-			}
-			// RVars
-			for i, ar := range actualArg.Rvars {
-				if expectArg.Rvars[i] != ar {
-					t.Errorf("Decode arg Rvars failed.")
-					return
+		case vm.Join:
+			expectArg := resultIns.Arg.(*join.Argument)
+			actualArg := ins.Arg.(*join.Argument)
+			// Vars
+			for i, ar := range actualArg.Vars {
+				as := expectArg.Vars[i]
+				for j, a := range ar {
+					if a != as[j] {
+						t.Errorf("Decode arg vars failed.")
+						return
+					}
 				}
-			}
-			// Ss
-			for i, ar := range actualArg.Ss {
-				if expectArg.Ss[i] != ar {
-					t.Errorf("Decode arg Ss failed.")
-					return
-				}
-			}
-			// Svars
-			for i, ar := range actualArg.Svars {
-				if expectArg.Svars[i] != ar {
-					t.Errorf("Decode arg Svars failed.")
-					return
-				}
-			}
-			// FreeVars
-			for i, ar := range actualArg.FreeVars {
-				if expectArg.FreeVars[i] != ar {
-					t.Errorf("Decode arg FreeVars failed.")
-					return
-				}
-			}
-			// VarsMap
-			for k, v := range actualArg.VarsMap {
-				if expectArg.VarsMap[k] != v {
-					t.Errorf("Decode arg FreeVars failed.")
-					return
-				}
-			}
-			// Bats
-			//for i, b := range actualArg.Bats {
-			//	if !IsEqualBatch(expectArg.Bats[i], b) {
-			//		t.Errorf("Decode arg Bats failed.")
-			//		return
-			//	}
-			//}
-			// Arg
-			if expectArg.Arg.BoundVars[0].Alias != actualArg.Arg.BoundVars[0].Alias {
-				t.Errorf("Decode arg Arg failed.")
-				return
 			}
 		case vm.Merge:
 			if ins.Op != resultIns.Op {
@@ -929,12 +854,8 @@ func TestRing(t *testing.T) {
 		},
 		&variance.VarRing{
 			NullCounts: []int64{1, 2, 3},
-			Sums:       []float64{15, 9, 13.5},
-			Values:     [][]float64{
-				{10, 15, 20},
-				{10.5, 15.5, 1},
-				{14, 13},
-			},
+			SumX:       []float64{4, 9, 13},
+			SumX2: []float64{16, 81, 169},
 			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
 		},
 		&bit_or.UInt8Ring{
@@ -1572,8 +1493,8 @@ func TestRing(t *testing.T) {
 			}
 		case *variance.VarRing:
 			oriRing := r.(*variance.VarRing)
-			// Sums
-			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
+			// Sumx
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.SumX)) {
 				t.Errorf("Decode varRing Sums failed.")
 				return
 			}
@@ -1584,10 +1505,10 @@ func TestRing(t *testing.T) {
 					return
 				}
 			}
-			// Values
-			for i, v := range oriRing.Values {
-				if !reflect.DeepEqual(ExpectRing.Values[i], v) {
-					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
+			// Sumx2
+			for i, v := range oriRing.SumX2 {
+				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
+					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
 					return
 				}
 			}
