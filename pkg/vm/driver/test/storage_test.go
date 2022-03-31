@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log"
 	stdLog "log"
 	"math"
 	"os"
@@ -26,7 +27,11 @@ import (
 	"testing"
 	"time"
 
+	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/logdb"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -39,25 +44,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"go.etcd.io/etcd/raft/v3"
-
-	// "github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"go.uber.org/zap/zapcore"
-
-	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	cconfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/metapb"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	// "go.etcd.io/etcd/raft/v3"
+	"go.etcd.io/etcd/raft/v3"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -234,7 +230,7 @@ func TestSnapshot(t *testing.T) {
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -249,12 +245,12 @@ func TestSnapshot(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			feature.ForceCompactCount = 1
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
-				cfg.Raft.RaftLog.ForceCompactCount = 1
 				cfg.Raft.RaftLog.CompactThreshold = 1
 				cfg.Replication.CompactLogCheckDuration.Duration = time.Second * 5
 			}),
@@ -393,7 +389,7 @@ func TestSplit(t *testing.T) {
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -409,15 +405,16 @@ func TestSplit(t *testing.T) {
 			}
 			opts.Meta.Conf = mdCfg
 			opts.EventListener = ctlgListener
-			return aoe3.NewStorageWithOptions(path, opts)
+			feature.ShardSplitCheckBytes = 10000
+			feature.ShardCapacityBytes = 10000
+			feature.ShardSplitCheckDuration = 8 * time.Second
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
-				cfg.Replication.ShardSplitCheckBytes = typeutil.ByteSize(10000)
-				cfg.Replication.ShardCapacityBytes = typeutil.ByteSize(10000)
-				cfg.Replication.ShardSplitCheckDuration.Duration = 8 * time.Second
+
 			}),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath(clusterDataPath)))
@@ -509,7 +506,7 @@ func TestAOEStorage(t *testing.T) {
 			// c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -524,7 +521,7 @@ func TestAOEStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
@@ -740,7 +737,7 @@ func doRestartStorage(t *testing.T) {
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -755,7 +752,7 @@ func doRestartStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterNodeCount(1),
