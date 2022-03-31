@@ -184,9 +184,68 @@ From the above example, you can see that the `Ring` performs some pre calculatio
 only simple `Add` or `Multiplication` is needed to get the result, which is called a push down calculation in `factorisation`. With the help of this push down, we no longer need to 
 deal with costly Cartesian product. As the joined table number increases, the factorisation allow us to take linear cost performing that, instead of exponential increase.
 
+Take the implementation of `Variance` function as an example. 
+
+The variance formula is as below:
+```
+Variance = Σ [(xi - x̅)^2]/n
+
+Example: xi = 10,8,6,12,14, x̅ = 10
+Calculation: ((10-10)^2+(8-10)^2+(6-10)^2+(12-10)^2+(14-10)^2)/5 = 8
+``` 
+
+If we proceed implementation with this formula, we have to record all values of each group, and keep maintaining these values 
+with `Add` and `Mul` operations of `Ring`. Eventual result is calculated in `Eval()` function. This implementation has a drawback of high memory cost,
+as we store all values during processing.
+
+But in the `Avg` implementation, it doesn't store all values in the `Ring`. Instead it stores only the `sum` of each group and the null numbers.  It returns the final result with a simple division. This method saves a lot of memory space.
+
+Now let's turn the `Variance` formula a bit to a different form:
+```
+Variance = Σ (xi^2)/n-x̅^2
+
+Example: xi = 10,8,6,12,14, x̅ = 10
+Calculation: (10^2+8^2+6^2+12^2+14^2)/5-10^2 = 8
+``` 
+
+This formula's result is actually exactly the same as the previous one, but we only have to record the values sum of `xi^2` and the sum of `xi`. We can largely reduce the memory space 
+with this kind of reformulation.
+
+To conclude, every aggregate function needs to find a way to record as little values as possible in order to reduce memory cost.
+Below is two different implementation for `Variance` (the second one has a better performance):
+
+```go
+   //Implementation1
+
+   type VarRing struct {
+    // Typ is vector's value type
+    Typ types.Type
+   
+    // attributes for computing the variance
+    Data []byte    // store all the Sums' bytes
+    Sums  []float64 // sums of each group, its memory address is same to Data
+   
+    Values [][]float64  // values of each group
+    NullCounts []int64   // group to record number of the null value
+   }
+   
+   //Implementation2
+   type VarRing struct {
+   	// Typ is vector's value type
+   	Typ types.Type
+   
+   	// attributes for computing the variance
+   	Data  []byte
+   	SumX  []float64 // sum of x, its memory address is same to Data, because we will use it to store result finally.
+   	SumX2 []float64 // sum of x^2
+   
+   	NullCounts []int64 // group to record number of the null value
+   }
+```
+
 ## **Develop an var() function**
 
-In this tutorial, we walk you through the implementation of var (get the standard overall variance value) aggregate function as an example.
+In this tutorial, we walk you through the complete implementation of Variance (get the standard overall variance value) aggregate function as an example with two different methods. 
 
 Step 1: register function
 
@@ -196,7 +255,7 @@ and we assign each operator a distinct integer number.
 To add a new function `var()`, add a new const `Variance` in the const declaration and `var` in the name declaration.
 
 
-   ```go
+```go
    const (
    	Sum = iota
    	Avg
@@ -218,128 +277,197 @@ To add a new function `var()`, add a new const `Variance` in the const declarati
    	ApproxCountDistinct: "approx_count_distinct",
    	Variance:			 "var",
    }
-   ```
+```
 
 Step2: implement the `Ring` interface
 
 *1. Define `Ring` structure*
 
-    Create `variance.go` under `pkg/container/ring`, and define a structure of `VarRing`.
+Create `variance.go` under `pkg/container/ring`, and define a structure of `VarRing`.
+
 As we calculate the overall variance, we need to calculate:
+
 * The numeric `Sums` and the null value numbers of each group, to calculate the average.
 * Values of each group, to calculate the variance. 
 
-   ```go
-   // VarRing is the ring structure to compute the Overall variance
+```go
+   //Implementation1
+
+   type VarRing struct {
+    // Typ is vector's value type
+    Typ types.Type
+   
+    // attributes for computing the variance
+    Data []byte    // store all the Sums' bytes
+    Sums  []float64 // sums of each group, its memory address is same to Data
+   
+    Values [][]float64  // values of each group
+    NullCounts []int64   // group to record number of the null value
+   }
+   
+   //Implementation2
    type VarRing struct {
    	// Typ is vector's value type
    	Typ types.Type
    
    	// attributes for computing the variance
-   	Data []byte    // store all the Sums' bytes
-   	Sums  []float64 // sums of each group, its memory address is same to Dates
+   	Data  []byte
+   	SumX  []float64 // sum of x, its memory address is same to Data, because we will use it to store result finally.
+   	SumX2 []float64 // sum of x^2
    
-   	Values [][]float64	// values of each group
-   	NullCounts []int64   // group to record number of the null value
+   	NullCounts []int64 // group to record number of the null value
    }
-   ```
+```
 
 *2. Implement the functions of `Ring` interface*
 
 You can checkout the full implmetation at [variance.go](https://github.com/matrixorigin/matrixone/blob/main/pkg/container/ring/variance/variance.go).
 
-   ```go
-   func (v *VarRing) Grow(m *mheap.Mheap) error {
-   	n := len(v.Sums)
-   
-   	if n == 0 {
-   		// The first time memory is allocated,
-   		// more space is allocated to avoid the performance loss caused by multiple allocations.
-   		data, err := mheap.Alloc(m, 64)
-   		if err != nil {
-   			return err
-   		}
-   		v.Datas = data
-   		v.Sums = encoding.DecodeFloat64Slice(data)
-   
-   		v.NullCounts = make([]int64, 0, 8)
-   		v.Values = make([][]float64, 0, 8)
-   	} else if n+1 >= cap(v.Sums) {
-   		v.Datas = v.Datas[:n*8]
-   		data, err := mheap.Grow(m, v.Datas, int64(n+1)*8)
-   		if err != nil {
-   			return err
-   		}
-   		mheap.Free(m, v.Datas)
-   		v.Datas = data
-   		v.Sums = encoding.DecodeFloat64Slice(data)
-   	}
-   
-   	v.Sums = v.Sums[:n+1]
-   	v.Sums[n] = 0
-   	v.NullCounts = append(v.NullCounts, 0)
-   	v.Values = append(v.Values, make([]float64, 0, 16))
-   	return nil
-   }
-   ```
-   
-```go
-	// Add merge ring2 group Y into ring1's group X
-func (v *VarRing) Add(a interface{}, x, y int64) {
-	v2 := a.(*VarRing)
-	v.Sums[x] += v2.Sums[y]
-	v.NullCounts[x] += v2.NullCounts[y]
-	v.Values[x] = append(v.Values[x], v2.Values[y]...)
-}
-```
-   
-```go
-func (v *VarRing) Mul(a interface{}, x, y, z int64) {
-	v2 := a.(*VarRing)
-	{
-		v.Sums[x] += v2.Sums[y] * float64(z)
-		v.NullCounts[x] += v2.NullCounts[y] * z
-		for k := z; k > 0; k-- {
-			v.Values[x] = append(v.Values[x], v2.Values[y]...)
-		}
-	}
-}
-```
+* `Fill` function
 
 ```go
-func (v *VarRing) Eval(zs []int64) *vector.Vector {
-	defer func() {
-		v.Values = nil
-		v.Sums = nil
-		v.NullCounts = nil
-		v.Data = nil
-	}()
+      //Implementation1
 
-	nsp := new(nulls.Nulls)
-	for i, z := range zs {
-		if n := z - v.NullCounts[i]; n == 0 {
-			nulls.Add(nsp, uint64(i))
-		} else {
-			v.Sums[i] /= float64(n)
+    func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
+       	var value float64 = 0
+      
+       	switch vec.Typ.Oid {
+       	case types.T_int8:
+       		value = float64(vec.Col.([]int8)[j])
+       	case ...
+       	}
+       	for k := z; k > 0; k-- {
+       		v.Values[i] = append(v.Values[i], value)
+       	}
+      
+       	v.Sums[i] += value * float64(z)
+      
+       	if nulls.Contains(vec.Nsp, uint64(z)) {
+       		v.NullCounts[i] += z
+       	}
+       }
 
-			var variance float64 = 0
-			avg := v.Sums[i]
-			for _, value := range v.Values[i] {
-				variance += math.Pow(value-avg, 2.0) / float64(n)
-			}
-			v.Sums[i] = variance
-		}
-	}
+       //Implementation2
 
-	return &vector.Vector{
-		Nsp:  nsp,
-		Data: v.Data,
-		Col:  v.Sums,
-		Or:   false,
-		Typ:  types.Type{Oid: types.T_float64, Size: 8},
-	}
-}
+    func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
+      	var value float64 = 0
+      
+      	switch vec.Typ.Oid {
+      	case types.T_int8:
+      		value = float64(vec.Col.([]int8)[j])
+      	case ...
+      	}
+      
+      	v.SumX[i] += value * float64(z)
+      	v.SumX2[i] += math.Pow(value, 2) * float64(z)
+      
+      	if nulls.Contains(vec.Nsp, uint64(z)) {
+      		v.NullCounts[i] += z
+      	}
+      }
 ```
+
+* `Add` function   
+
+```go
+
+      //Implementation1
+      func (v *VarRing) Add(a interface{}, x, y int64) {
+          v2 := a.(*VarRing)
+          v.Sums[x] += v2.Sums[y]
+          v.NullCounts[x] += v2.NullCounts[y]
+          v.Values[x] = append(v.Values[x], v2.Values[y]...)
+      }
+      
+      //Implementation2
+      func (v *VarRing) Add(a interface{}, x, y int64) {
+      	v2 := a.(*VarRing)
+      	v.SumX[x] += v2.SumX[y]
+      	v.SumX2[x] += v2.SumX2[y]
+      	v.NullCounts[x] += v2.NullCounts[y]
+      }
+
+```
+
+* `Mul` function   
+
+```go
+
+      //Implementation1
+      func (v *VarRing) Mul(a interface{}, x, y, z int64) {
+          v2 := a.(*VarRing)
+          {
+              v.Sums[x] += v2.Sums[y] * float64(z)
+              v.NullCounts[x] += v2.NullCounts[y] * z
+              for k := z; k > 0; k-- {
+                  v.Values[x] = append(v.Values[x], v2.Values[y]...)
+              }
+          }
+      }
+      
+      //Implementation2
+      func (v *VarRing) Mul(a interface{}, x, y, z int64) {
+      	v2 := a.(*VarRing)
+      	{
+      		v.SumX[x] += v2.SumX[y] * float64(z)
+      		v.SumX2[x] += v2.SumX2[y] * float64(z)
+      		v.NullCounts[x] += v2.NullCounts[y] * z
+      	}
+      }
+
+```
+* `Eval` function  
+
+```go
+         //Implementation1
+      func (v *VarRing) Eval(zs []int64) *vector.Vector {
+          defer func() {
+              ...
+          }()
+      
+          nsp := new(nulls.Nulls)
+          for i, z := range zs {
+              if n := z - v.NullCounts[i]; n == 0 {
+                  nulls.Add(nsp, uint64(i))
+              } else {
+                  v.Sums[i] /= float64(n)
+      
+                  var variance float64 = 0
+                  avg := v.Sums[i]
+                  for _, value := range v.Values[i] {
+                      variance += math.Pow(value-avg, 2.0) / float64(n)
+                  }
+                  v.Sums[i] = variance
+              }
+          }
+      
+          return ...
+      }
+      
+       //Implementation2
+      func (v *VarRing) Eval(zs []int64) *vector.Vector {
+      	defer func() {
+      		...
+      	}()
+      
+      	nsp := new(nulls.Nulls)
+      	for i, z := range zs {
+      		if n := z - v.NullCounts[i]; n == 0 {
+      			nulls.Add(nsp, uint64(i))
+      		} else {
+      			v.SumX[i] /= float64(n)  // compute E(x)
+      			v.SumX2[i] /= float64(n) // compute E(x^2)
+      
+      			variance := v.SumX2[i] - math.Pow(v.SumX[i], 2)
+      
+      			v.SumX[i] = variance // using v.SumX to record the result and return.
+      		}
+      	}
+      
+      	return ...
+      }
+```
+
 
 
 *3. Implement encoding and decoding for `VarRing`*
@@ -365,17 +493,14 @@ Serialization:
    		if n > 0 {
    			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
    		}
-   		// Values
-   		for k := 0; k < n; k++ {
-   			valueBytes := encoding.EncodeFloat64Slice(v.Values[k])
-   			length := len(valueBytes)
-   			buf.Write(encoding.EncodeUint32(uint32(length)))
-   			if length > 0 {
-   				buf.Write(valueBytes)
-   			}
+   		// Sumx2
+   		n = len(v.SumX2)
+   		buf.Write(encoding.EncodeUint32(uint32(n)))
+   		if n > 0 {
+   			buf.Write(encoding.EncodeFloat64Slice(v.SumX2))
    		}
-   		// Sums
-   		da := encoding.EncodeFloat64Slice(v.Sums)
+   		// Sumx
+   		da := encoding.EncodeFloat64Slice(v.SumX)
    		n = len(da)
    		buf.Write(encoding.EncodeUint32(uint32(n)))
    		if n > 0 {
@@ -389,7 +514,7 @@ Serialization:
 Deserialization:
 
 ```go
-   case VarianceRing:
+  case VarianceRing:
    		r := new(variance.VarRing)
    		data = data[1:]
    
@@ -401,26 +526,23 @@ Deserialization:
    			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
    			data = data[n*8:]
    		}
-   		// decode Values
-   		r.Values = make([][]float64, n)
-   		var k uint32 = 0
-   		for k = 0; k < n; k++ {
-   			length := encoding.DecodeUint32(data)
-   			data = data[4:]
-   			if length > 0 {
-   				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
-   				data = data[length:]
-   			}
-   		}
-   		// Sums
+   		// decode Sumx2
    		n = encoding.DecodeUint32(data[:4])
    		data = data[4:]
    		if n > 0 {
-   			r.Datas = data[:n]
+   			r.SumX2 = make([]float64, n)
+   			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+   			data = data[n*8:]
+   		}
+   		// decode Sumx
+   		n = encoding.DecodeUint32(data[:4])
+   		data = data[4:]
+   		if n > 0 {
+   			r.Data = data[:n]
    			data = data[n:]
    		}
-   		r.Sums = encoding.DecodeFloat64Slice(r.Datas)
-   		// Typ
+   		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+   		// decode typ
    		typ := encoding.DecodeType(data[:encoding.TypeSize])
    		data = data[encoding.TypeSize:]
    		r.Typ = typ
@@ -562,79 +684,71 @@ func TestVariance(t *testing.T) {
 Step2: Implement the `TestVariance` function with some predefined values.
 
 ```go
-// TestVariance just for verify varRing related process
-func TestVariance(t *testing.T) {
-	// verify that if we can calculate
-	// the variance of {1, 2, null, 0, 3, 4} and {2, 3, null, null, 4, 5} correctly
-
-	// 1. make the test case
-	v1 := NewVarRing(types.Type{Oid: types.T_float64})
-	v2 := v1.Dup().(*VarRing)
-	{ // first 3 rows.
-		v1.Sums = []float64{1+2, 2+3}
-		v1.Values = [][]float64 {
-			{1, 2}, // 1, 2, null
-			{2, 3}, // 2, 3, null
-		}
-		v1.NullCounts = []int64{1, 1}
-	}
-	{ // last 3 rows.
-		v2.Sums = []float64{0+3+4, 4+5}
-		v2.Values = [][]float64 {
-			{0, 3, 4}, // 0, 3, 4
-			{4, 5},	// null, 4, 5
-		}
-		v2.NullCounts = []int64{0, 1}
-	}
-	v1.Add(v2, 0, 0)
-	v1.Add(v2, 1, 1)
-
-	result := v1.Eval([]int64{6, 6})
-
-	expected := []float64{2.0, 1.25}
-	if !reflect.DeepEqual(result.Col, expected) {
-		t.Errorf(fmt.Sprintf("TestVariance wrong, expected %v, but got %v", expected, result.Col))
-	}
-}
+  func TestVariance(t *testing.T) {
+   	// verify that if we can calculate
+   	// the variance of {1, 2, null, 0, 3, 4} and {2, 3, null, null, 4, 5} correctly
+   
+   	// 1. make the test case
+   	v1 := NewVarianceRing(types.Type{Oid: types.T_float64})
+   	v2 := v1.Dup().(*VarRing)
+   	{
+   		// first 3 rows.
+   		// column1: {1, 2, null}, column2: {2, 3, null}
+   		v1.SumX = []float64{1+2, 2+3}
+   		v1.SumX2 = []float64{1*1+2*2, 2*2+3*3}
+   		v1.NullCounts = []int64{1, 1}
+   	}
+   	{
+   		// last 3 rows.
+   		// column1: {0, 3, 4}, column2: {null, 4, 5}
+   		v2.SumX = []float64{0+3+4, 4+5}
+   		v2.SumX2 = []float64{3*3+4*4, 4*4+5*5}
+   		v2.NullCounts = []int64{0, 1}
+   	}
+   	v1.Add(v2, 0, 0)
+   	v1.Add(v2, 1, 1)
+   
+   	result := v1.Eval([]int64{6, 6})
+   
+   	expected := []float64{2.0, 1.25}
+   	if !reflect.DeepEqual(result.Col, expected) {
+   		t.Errorf(fmt.Sprintf("TestVariance wrong, expected %v, but got %v", expected, result.Col))
+   	}
+   }
 ```
 
 Step3: Complete the unit test for Serialization and Deserialization in the function `TestRing` in the file `pkg/sql/protocol/protocol_test.go`.
 You can check the complete test code of `VarRing` there.
 
 ```go
-		&variance.VarRing{
-			NullCounts: []int64{1, 2, 3},
-			Sums:       []float64{15, 9, 13.5},
-			Values:     [][]float64{
-				{10, 15, 20},
-				{10.5, 15.5, 1},
-				{14, 13},
-			},
-			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
-		},
-    
-
-    case *variance.VarRing:
-			oriRing := r.(*variance.VarRing)
-			// Sums
-			if string(ExpectRing.Dates) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
-				t.Errorf("Decode varRing Sums failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode varRing NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if !reflect.DeepEqual(ExpectRing.Values[i], v) {
-					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
+  &variance.VarRing{
+   			NullCounts: []int64{1, 2, 3},
+   			SumX:       []float64{4, 9, 13},
+   			SumX2: []float64{16, 81, 169},
+   			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
+   }
+   
+   case *variance.VarRing:
+   			oriRing := r.(*variance.VarRing)
+   			// Sumx
+   			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.SumX)) {
+   				t.Errorf("Decode varRing Sums failed.")
+   				return
+   			}
+   			// NullCounts
+   			for i, n := range oriRing.NullCounts {
+   				if ExpectRing.NullCounts[i] != n {
+   					t.Errorf("Decode varRing NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
+   					return
+   				}
+   			}
+   			// Sumx2
+   			for i, v := range oriRing.SumX2 {
+   				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
+   					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
+   					return
+   				}
+   			}
 
 ```
 
@@ -651,3 +765,85 @@ If you are getting a `PASS`, you are passing the unit test.
 
 In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your make a pull request to the code base, the test will automatically run.
 You code will be merged only if the `bvt` test pass.
+
+
+## **Conduct a Performance Test**
+
+Aggregate function is an important feature of a database system, with queries on hundreds of millions of data rows, the time consumption of aggregate function is quite significant.
+So we recommend you to run a performance test. 
+
+Step1: Download the standard test dataset.
+
+We have prepared a single table SSB query dataset with 10 million rows of data. The raw data file size is about 4GB, 500MB after being zipped.  You can get the data files directly:
+
+> https://pan.baidu.com/s/1dCpcKsygdVuHzd-H-RWHFA
+> code: k1rs
+
+Step2: Unzip the file and Load the data into MatrixOne. 
+
+With the following SQL you can create the database and table, and load the `lineorder_flat.tbl` into MatrixOne.
+
+```sql
+create database if not exists ssb;
+use ssb;
+drop table if exists lineorder_flat;
+CREATE TABLE lineorder_flat(
+  LO_ORDERKEY bigint primary key,
+  LO_LINENUMBER int,
+  LO_CUSTKEY int,
+  LO_PARTKEY int,
+  LO_SUPPKEY int,
+  LO_ORDERDATE date,
+  LO_ORDERPRIORITY char(15),
+  LO_SHIPPRIORITY tinyint,
+  LO_QUANTITY double,
+  LO_EXTENDEDPRICE double,
+  LO_ORDTOTALPRICE double,
+  LO_DISCOUNT double,
+  LO_REVENUE int unsigned,
+  LO_SUPPLYCOST int unsigned,
+  LO_TAX double,
+  LO_COMMITDATE date,
+  LO_SHIPMODE char(10),
+  C_NAME varchar(25),
+  C_ADDRESS varchar(25),
+  C_CITY char(10),
+  C_NATION char(15),
+  C_REGION char(12),
+  C_PHONE char(15),
+  C_MKTSEGMENT char(10),
+  S_NAME char(25),
+  S_ADDRESS varchar(25),
+  S_CITY char(10),
+  S_NATION char(15),
+  S_REGION char(12),
+  S_PHONE char(15),
+  P_NAME varchar(22),
+  P_MFGR char(6),
+  P_CATEGORY char(7),
+  P_BRAND char(9),
+  P_COLOR varchar(11),
+  P_TYPE varchar(25),
+  P_SIZE int,
+  P_CONTAINER char(10)
+);
+
+load data infile '/Users/YOURPATH/lineorder_flat.tbl' into table lineorder_flat FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
+
+```
+
+If you load successfully this dataset, you are normally getting a result as:
+
+```
+Query OK, 10272594 rows affected (1 min 7.09 sec)
+```
+
+Step3: Run your aggregate function and `sum()`, `avg()` on the column `LO_SUPPKEY` respectively to check the performance.
+
+```sql
+select avg(LO_SUPPKEY) from lineorder_flat;
+select sum(LO_SUPPKEY) from lineorder_flat;
+select yourfunction(LO_SUPPKEY) from lineorder_flat;
+```
+
+Step4: When you submit your PR, please submit these performance results in your PR comment as well. 
