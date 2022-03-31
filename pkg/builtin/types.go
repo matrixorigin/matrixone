@@ -36,5 +36,7 @@ const (
 	Rtrim
 	Sin
   Atan
+	Atan
+	Month
   Cos
 )

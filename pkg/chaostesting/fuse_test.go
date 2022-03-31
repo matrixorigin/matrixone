@@ -24,12 +24,12 @@ func TestFuse(t *testing.T) {
 	}, func() IsTesting {
 		return true
 	}).Call(func(
-		dir TempDir,
+		getTempDir GetTempDir,
 		cleanup Cleanup,
 	) {
 		defer cleanup()
 
-		testFS(t, string(dir))
+		testFS(t, string(getTempDir()))
 
 	})
 }

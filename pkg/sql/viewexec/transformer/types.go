@@ -22,6 +22,7 @@ const (
 	Count
 	StarCount
 	ApproxCountDistinct
+	Variance
 )
 
 var TransformerNames = [...]string{
@@ -32,6 +33,7 @@ var TransformerNames = [...]string{
 	Count:               "count",
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
+	Variance:            "var",
 }
 
 var TransformerNamesMap map[string]int
