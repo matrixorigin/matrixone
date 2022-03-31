@@ -30,5 +30,11 @@ const (
 	Exp
 	Power
 	Pi
+	UTCTimestamp
+	Tan
+	Ltrim
+	Rtrim
+	Sin
+  Atan
 	Lpad
 )

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 )
 

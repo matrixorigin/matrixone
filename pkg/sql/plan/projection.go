@@ -17,7 +17,6 @@ package plan
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -25,109 +24,57 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
-	es := make([]*ProjectionExtend, 0, len(exprs))
+func (b *build) buildProjection(exprs tree.SelectExprs, proj *Projection, qry *Query) (*ResultProjection, error) {
+	op := new(ResultProjection)
 	for _, expr := range exprs {
 		if _, ok := expr.Expr.(tree.UnqualifiedStar); ok {
-			for _, rel := range qry.Rels {
-				attrs := qry.RelsMap[rel].GetAttributes()
-				for _, attr := range attrs {
-					names, _, err := qry.getAttribute0(false, attr.Name)
-					if err != nil {
-						return err
-					}
-					attr.IncRef()
-					if len(names) > 1 {
-						qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
-							Type: attr.Type,
-							Name: rel + "." + attr.Name,
-						})
-					} else {
-						qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
-							Name: attr.Name,
-							Type: attr.Type,
-						})
-					}
-				}
+			for _, attr := range qry.Scope.Result.Attrs {
+				proj.Rs = append(proj.Rs, 0)
+				proj.Es = append(proj.Es, &extend.Attribute{
+					Name: attr,
+					Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
+				})
+				proj.As = append(proj.As, attr)
+				op.Rs = append(op.Rs, 0)
+				op.Es = append(op.Es, &extend.Attribute{
+					Name: attr,
+					Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
+				})
+				op.As = append(op.As, attr)
 			}
 			continue
 		}
 		e, err := b.buildProjectionExpr(expr.Expr, qry)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if e, err = b.pruneExtend(e, true); err != nil {
-			return err
+			return nil, err
 		}
-		{
-			if len(expr.As) > 0 {
-				qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
-					Name: string(expr.As),
-					Type: types.Type{Oid: e.ReturnType()},
-				})
-			} else {
-				qry.ResultAttributes = append(qry.ResultAttributes, &Attribute{
-					Name: e.String(),
-					Type: types.Type{Oid: e.ReturnType()},
-				})
-
-			}
+		if len(e.Attributes()) == 0 {
+			return nil, errors.New(errno.FeatureNotSupported, "projection attributes is empty")
 		}
+		proj.Rs = append(proj.Rs, 0)
+		proj.Es = append(proj.Es, e)
 		if len(expr.As) > 0 {
-			es = append(es, &ProjectionExtend{
-				Ref:   1,
-				E:     e,
-				Alias: string(expr.As),
+			proj.As = append(proj.As, string(expr.As))
+			op.Rs = append(op.Rs, 0)
+			op.Es = append(op.Es, &extend.Attribute{
+				Name: string(expr.As),
+				Type: e.ReturnType(),
 			})
-		} else if _, ok := e.(*extend.Attribute); !ok {
-			es = append(es, &ProjectionExtend{
-				Ref:   1,
-				E:     e,
-				Alias: e.String(),
+			op.As = append(op.As, string(expr.As))
+		} else {
+			proj.As = append(proj.As, e.String())
+			op.Rs = append(op.Rs, 0)
+			op.Es = append(op.Es, &extend.Attribute{
+				Name: e.String(),
+				Type: e.ReturnType(),
 			})
+			op.As = append(op.As, tree.String(&expr, dialect.MYSQL))
 		}
 	}
-	{ // check duplicate column
-		mp := make(map[string]uint8)
-		for _, attr := range qry.ResultAttributes {
-			mp[attr.Name]++
-		}
-		for k, v := range mp {
-			if v > 1 {
-				return errors.New(errno.DuplicateColumn, fmt.Sprintf("Duplicate column name '%s'", k))
-			}
-		}
-	}
-	for i := 0; i < len(es); i++ {
-		{
-			var rn string
-
-			attrs := es[i].E.Attributes()
-			mp := make(map[string]int) // relations map
-			for _, attr := range attrs {
-				rns, _, err := qry.getAttribute2(false, attr)
-				if err != nil {
-					return err
-				}
-				for i := range rns {
-					if len(rn) == 0 {
-						rn = rns[i]
-					}
-					mp[rns[i]]++
-				}
-			}
-			if len(mp) == 1 {
-				rel := qry.RelsMap[rn]
-				if ok := rel.ExistAggregations(attrs); !ok {
-					rel.AddProjection(es[i])
-					es = append(es[:i], es[i+1:]...)
-					i--
-				}
-			}
-		}
-	}
-	qry.ProjectionExtends = es
-	return nil
+	return op, nil
 }
 
 func (b *build) buildProjectionExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
@@ -155,7 +102,36 @@ func (b *build) buildProjectionExpr(n tree.Expr, qry *Query) (extend.Extend, err
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildProjectionExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute0(true, e, qry)
+		return b.buildAttribute(e, qry)
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", tree.String(n, dialect.MYSQL)))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+}
+
+func pruneAggregation(aggs []*Aggregation) []*Aggregation {
+	for i := 0; i < len(aggs); i++ {
+		for j := i + 1; j < len(aggs); j++ {
+			if aggs[i].Op == aggs[j].Op && aggs[i].Type == aggs[j].Type &&
+				aggs[i].Name == aggs[j].Name && aggs[i].Alias == aggs[j].Alias {
+				aggs = append(aggs[:i], aggs[i+1:]...)
+				i--
+				break
+			}
+		}
+	}
+	return aggs
+}
+
+func pruneProjection(proj *Projection) *Projection {
+	for i := 0; i < len(proj.Es); i++ {
+		for j := i + 1; j < len(proj.Es); j++ {
+			if proj.As[i] == proj.As[j] {
+				proj.As = append(proj.As[:i], proj.As[i+1:]...)
+				proj.Es = append(proj.Es[:i], proj.Es[i+1:]...)
+				proj.Rs = append(proj.Rs[:i], proj.Rs[i+1:]...)
+				i--
+				break
+			}
+		}
+	}
+	return proj
 }

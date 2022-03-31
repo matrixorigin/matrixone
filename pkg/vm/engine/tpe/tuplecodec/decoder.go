@@ -23,12 +23,12 @@ import (
 
 var (
 	errorUnmatchedTenantPrefix = errors.New("unmatched prefix")
-	errorUnmatchedValueType = errors.New("unmatched value type")
+	errorUnmatchedValueType    = errors.New("unmatched value type 1")
 )
 
 func NewTupleKeyDecoder(tenantID uint64) *TupleKeyDecoder {
 	od := orderedcodec.NewOrderedDecoder()
-	tkd := &TupleKeyDecoder{od:od}
+	tkd := &TupleKeyDecoder{od: od}
 	return tkd
 }
 
@@ -37,18 +37,18 @@ func (tkd *TupleKeyDecoder) GetTenantPrefix() TupleKey {
 }
 
 // SkipTenantPrefix skips the tenant prefix wanted and returns the rest.
-func (tkd *TupleKeyDecoder) SkipTenantPrefix(key TupleKey)(TupleKey,error) {
+func (tkd *TupleKeyDecoder) SkipTenantPrefix(key TupleKey) (TupleKey, error) {
 	tp := tkd.GetTenantPrefix()
-	if !bytes.HasPrefix(key,tp) {
-		return nil,errorUnmatchedTenantPrefix
+	if !bytes.HasPrefix(key, tp) {
+		return nil, errorUnmatchedTenantPrefix
 	}
 
 	return key[len(tp):], nil
 }
 
 // DecodeDatabasePrefix decodes database ID and returns the rest.
-func (tkd *TupleKeyDecoder) DecodeDatabasePrefix(key TupleKey)(TupleKey, *orderedcodec.DecodedItem,error) {
-	tk,err := tkd.SkipTenantPrefix(key)
+func (tkd *TupleKeyDecoder) DecodeDatabasePrefix(key TupleKey) (TupleKey, *orderedcodec.DecodedItem, error) {
+	tk, err := tkd.SkipTenantPrefix(key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -60,16 +60,16 @@ func (tkd *TupleKeyDecoder) DecodeDatabasePrefix(key TupleKey)(TupleKey, *ordere
 		return nil, nil, errorUnmatchedValueType
 	}
 	di.SetSectionType(orderedcodec.SECTION_TYPE_DATABASEID)
-	return rest,di,err
+	return rest, di, err
 }
 
 // DecodeTablePrefix decodes table ID and returns the rest.
-func (tkd *TupleKeyDecoder) DecodeTablePrefix(key TupleKey)(TupleKey, []*orderedcodec.DecodedItem,error) {
-	rest,di,err := tkd.DecodeDatabasePrefix(key)
+func (tkd *TupleKeyDecoder) DecodeTablePrefix(key TupleKey) (TupleKey, []*orderedcodec.DecodedItem, error) {
+	rest, di, err := tkd.DecodeDatabasePrefix(key)
 	if err != nil {
 		return nil, nil, err
 	}
-	rest2,di2,err2 := tkd.od.DecodeUint64(rest)
+	rest2, di2, err2 := tkd.od.DecodeUint64(rest)
 	if err2 != nil {
 		return nil, nil, err2
 	}
@@ -77,38 +77,38 @@ func (tkd *TupleKeyDecoder) DecodeTablePrefix(key TupleKey)(TupleKey, []*ordered
 		return nil, nil, errorUnmatchedValueType
 	}
 	di2.SetSectionType(orderedcodec.SECTION_TYPE_TABLEID)
-	return rest2,[]*orderedcodec.DecodedItem{di,di2},err2
+	return rest2, []*orderedcodec.DecodedItem{di, di2}, err2
 }
 
 // DecodeIndexPrefix decodes database ID, table ID and index ID and returns the rest.
-func (tkd *TupleKeyDecoder) DecodeIndexPrefix(key TupleKey)(TupleKey,[] *orderedcodec.DecodedItem,error) {
-	rest,di,err := tkd.DecodeTablePrefix(key)
-	if err!= nil {
+func (tkd *TupleKeyDecoder) DecodeIndexPrefix(key TupleKey) (TupleKey, []*orderedcodec.DecodedItem, error) {
+	rest, di, err := tkd.DecodeTablePrefix(key)
+	if err != nil {
 		return nil, nil, err
 	}
-	rest2,di2,err2 := tkd.od.DecodeUint64(rest)
-	if err2!= nil {
+	rest2, di2, err2 := tkd.od.DecodeUint64(rest)
+	if err2 != nil {
 		return nil, nil, err2
 	}
 	if !di2.IsValueType(orderedcodec.VALUE_TYPE_UINT64) {
 		return nil, nil, errorUnmatchedValueType
 	}
 	di2.SetSectionType(orderedcodec.SECTION_TYPE_INDEXID)
-	di = append(di,di2)
-	return rest2,di,err2
+	di = append(di, di2)
+	return rest2, di, err2
 }
 
 // DecodePrimaryIndexKey decodes fields of the primary index and returns the rest.
 // The dbID,tableID and Index ID have been decoded.
-func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor.IndexDesc)(TupleKey,[] *orderedcodec.DecodedItem,error) {
+func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey, index *descriptor.IndexDesc) (TupleKey, []*orderedcodec.DecodedItem, error) {
 	if index.ID != PrimaryIndexID {
-		return nil,nil,errorPrimaryIndexIDIsNotOne
+		return nil, nil, errorPrimaryIndexIDIsNotOne
 	}
 
 	var retDis []*orderedcodec.DecodedItem
 	//needs attribute type
 	rest := key
-	for _,attr := range index.Attributes {
+	for _, attr := range index.Attributes {
 		rest2, di, err := tkd.od.DecodeKey(rest, attr.Type)
 		if err != nil {
 			return nil, nil, err
@@ -117,7 +117,7 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor
 			di.Value = string(di.Value.([]byte))
 			di.ValueType = attr.Type
 		}
-		retDis = append(retDis,di)
+		retDis = append(retDis, di)
 		rest = rest2
 	}
 	return rest, retDis, nil
@@ -125,7 +125,7 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey,index *descriptor
 
 // DecodePrimaryIndexValue decodes the values of the primary index and return the rest.
 // Now,it decodes all tuple.
-func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue,index *descriptor.IndexDesc,columnGroupID uint64,serializer ValueSerializer)(TupleValue,[] *orderedcodec.DecodedItem,error) {
+func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue, index *descriptor.IndexDesc, columnGroupID uint64, serializer ValueSerializer) (TupleValue, []*orderedcodec.DecodedItem, error) {
 	rest := value
 	var retDis []*orderedcodec.DecodedItem
 	for len(rest) > 0 {
@@ -133,7 +133,7 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexValue(value TupleValue,index *desc
 		if err != nil {
 			return nil, nil, err
 		}
-		retDis = append(retDis,di)
+		retDis = append(retDis, di)
 		rest = rest2
 	}
 	return rest, retDis, nil

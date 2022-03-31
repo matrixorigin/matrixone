@@ -16,9 +16,9 @@ package vm
 
 const (
 	Top = iota
+	Join
 	Plus
 	Limit
-	Times
 	Merge
 	Dedup
 	Order
