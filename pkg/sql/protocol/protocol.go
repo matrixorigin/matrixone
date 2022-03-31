@@ -3448,8 +3448,6 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		}
 		// Values
 		r.Vs = encoding.DecodeUint16Slice(r.Da)
-		// Typ
-=======
 		// decode Sumx2
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
