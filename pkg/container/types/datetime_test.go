@@ -98,34 +98,34 @@ func TestParseDatetime(t *testing.T) {
 		},
 		// 3. out of range
 		{
-			name: "out of range 1",
-			args: "1987-13-12 00:00:00",
+			name:    "out of range 1",
+			args:    "1987-13-12 00:00:00",
 			wantErr: true,
 		},
 		{
-			name: "out of range 2",
-			args: "1987-11-31 00:00:00",
+			name:    "out of range 2",
+			args:    "1987-11-31 00:00:00",
 			wantErr: true,
 		},
 		{
-			name: "out of range 3",
-			args: "1987-08-25 24:00:00",
+			name:    "out of range 3",
+			args:    "1987-08-25 24:00:00",
 			wantErr: true,
 		},
 		{
-			name: "out of range 4",
-			args: "1987-13-12 23:60:00",
+			name:    "out of range 4",
+			args:    "1987-13-12 23:60:00",
 			wantErr: true,
 		},
 		{
-			name: "out of range 5",
-			args: "1987-13-12 23:59:60",
+			name:    "out of range 5",
+			args:    "1987-13-12 23:59:60",
 			wantErr: true,
 		},
 		// 4. wrong format
 		{
-			name: "wrong format",
-			args: "1987-12-12 11:20:3",
+			name:    "wrong format",
+			args:    "1987-12-12 11:20:3",
 			wantErr: true,
 		},
 	}
@@ -143,5 +143,14 @@ func TestParseDatetime(t *testing.T) {
 				t.Errorf("ParseDatetime() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestUTC(t *testing.T) {
+	args, _ := ParseDatetime("1987-08-25 00:00:00")
+	utc := args.UTC()
+	_, offset := time.Now().Local().Zone()
+	if args.sec()-utc.sec() != localTZ {
+		t.Errorf("UTC() args %v got %v and time zone UTC+%v", args, utc, offset/secsPerHour)
 	}
 }

@@ -1532,17 +1532,14 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		if n > 0 {
 			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
 		}
-		// Values
-		for k := 0; k < n; k++ {
-			valueBytes := encoding.EncodeFloat64Slice(v.Values[k])
-			length := len(valueBytes)
-			buf.Write(encoding.EncodeUint32(uint32(length)))
-			if length > 0 {
-				buf.Write(valueBytes)
-			}
+		// Sumx2
+		n = len(v.SumX2)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.SumX2))
 		}
-		// Sums
-		da := encoding.EncodeFloat64Slice(v.Sums)
+		// Sumx
+		da := encoding.EncodeFloat64Slice(v.SumX)
 		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
@@ -2296,26 +2293,23 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
 			data = data[n*8:]
 		}
-		// decode Values
-		r.Values = make([][]float64, n)
-		var k uint32 = 0
-		for k = 0; k < n; k++ {
-			length := encoding.DecodeUint32(data)
-			data = data[4:]
-			if length > 0 {
-				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
-				data = data[length:]
-			}
+		// decode Sumx2
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
 		}
-		// Sums
+		// decode Sumx
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
 			r.Data = data[:n]
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Data)
-		// Typ
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
@@ -3236,31 +3230,23 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
 			data = data[n*8:]
 		}
-		// decode Values
-		r.Values = make([][]float64, n)
-		var k uint32 = 0
-		for k = 0; k < n; k++ {
-			length := encoding.DecodeUint32(data)
-			data = data[4:]
-			if length > 0 {
-				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
-				data = data[length:]
-			}
-		}
-		// Sums
+		// decode Sumx2
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
-			var err error
-			r.Data, err = mheap.Alloc(proc.Mp, int64(n))
-			if err != nil {
-				return nil, nil, err
-			}
-			copy(r.Data, data[:n])
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Data)
-		// Typ
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
