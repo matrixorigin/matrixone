@@ -41,7 +41,7 @@ addr-client = "your_ip_address:20000"
 
 **3.** 设置`Shard`的容量限制，超过这个容量`Shard`将会自动分裂：
 ```
-shard-capacity-bytes = "96MB"
+shard-capacity-bytes = "4096MB"
 ```
 
 **4.** 设置`rpc-addr`来接收集群中的心跳信息：

@@ -31,4 +31,10 @@ const (
 	Power
 	Pi
 	Reverse
+	UTCTimestamp
+	Tan
+	Ltrim
+	Rtrim
+	Sin
+  Atan
 )

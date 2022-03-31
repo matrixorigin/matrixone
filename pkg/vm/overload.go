@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
@@ -32,9 +33,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,11 +43,11 @@ import (
 
 var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Top:         top.String,
+	Join:        join.String,
 	Plus:        plus.String,
 	Limit:       limit.String,
 	Dedup:       dedup.String,
 	Order:       order.String,
-	Times:       times.String,
 	Merge:       merge.String,
 	Oplus:       oplus.String,
 	Output:      output.String,
@@ -57,22 +58,22 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Projection:  projection.String,
 	UnTransform: untransform.String,
 
-	MergeDedup: mergededup.String,
-	MergeLimit: mergelimit.String,
+	MergeDedup:  mergededup.String,
+	MergeLimit:  mergelimit.String,
 	MergeOffset: mergeoffset.String,
-	MergeOrder: mergeorder.String,
-	MergeTop: mergetop.String,
+	MergeOrder:  mergeorder.String,
+	MergeTop:    mergetop.String,
 
 	DeleteTag: deleteTag.String,
 }
 
 var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Top:         top.Prepare,
+	Join:        join.Prepare,
 	Plus:        plus.Prepare,
 	Limit:       limit.Prepare,
 	Dedup:       dedup.Prepare,
 	Order:       order.Prepare,
-	Times:       times.Prepare,
 	Merge:       merge.Prepare,
 	Oplus:       oplus.Prepare,
 	Output:      output.Prepare,
@@ -83,22 +84,22 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Projection:  projection.Prepare,
 	UnTransform: untransform.Prepare,
 
-	MergeDedup: mergededup.Prepare,
-	MergeLimit: mergelimit.Prepare,
+	MergeDedup:  mergededup.Prepare,
+	MergeLimit:  mergelimit.Prepare,
 	MergeOffset: mergeoffset.Prepare,
-	MergeOrder: mergeorder.Prepare,
-	MergeTop: mergetop.Prepare,
+	MergeOrder:  mergeorder.Prepare,
+	MergeTop:    mergetop.Prepare,
 
 	DeleteTag: deleteTag.Prepare,
 }
 
 var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Top:         top.Call,
+	Join:        join.Call,
 	Plus:        plus.Call,
 	Limit:       limit.Call,
 	Dedup:       dedup.Call,
 	Order:       order.Call,
-	Times:       times.Call,
 	Merge:       merge.Call,
 	Oplus:       oplus.Call,
 	Output:      output.Call,
@@ -109,11 +110,11 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Projection:  projection.Call,
 	UnTransform: untransform.Call,
 
-	MergeDedup: mergededup.Call,
-	MergeLimit: mergelimit.Call,
+	MergeDedup:  mergededup.Call,
+	MergeLimit:  mergelimit.Call,
 	MergeOffset: mergeoffset.Call,
-	MergeOrder: mergeorder.Call,
-	MergeTop: mergetop.Call,
+	MergeOrder:  mergeorder.Call,
+	MergeTop:    mergetop.Call,
 
 	DeleteTag: deleteTag.Call,
 }
