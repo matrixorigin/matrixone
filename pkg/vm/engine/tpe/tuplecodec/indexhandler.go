@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -489,7 +490,7 @@ func (ihi * IndexHandlerImpl) DeleteFromIndex(writeCtx interface{}, bat *batch.B
 	row := make([]interface{}, len(bat.Vecs))
 	tuple := NewTupleBatchImpl(bat,row)
 	for j := 0; j < n; j++ { //row index
-		err := GetRow(bat, row, j)
+		err := GetRow(indexWriteCtx, bat, row, j)
 		if err != nil {
 			return err
 		}
