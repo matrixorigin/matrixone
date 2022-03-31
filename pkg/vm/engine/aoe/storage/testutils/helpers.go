@@ -22,7 +22,7 @@ import (
 )
 
 func WaitExpect(timeout int, expect func() bool) {
-	timeout *= 3
+	timeout *= 8
 	end := time.Now().Add(time.Duration(timeout) * time.Millisecond)
 	interval := time.Duration(timeout) * time.Millisecond / 400
 	for time.Now().Before(end) && !expect() {

@@ -30,5 +30,11 @@ const (
 	Exp
 	Power
 	Pi
-	DayOfYear
+	UTCTimestamp
+	Tan
+	Ltrim
+	Rtrim
+	Sin
+  Atan
+  DayOfYear
 )

@@ -94,7 +94,7 @@ func TestPlusOperator(t *testing.T) {
 		}},
 		{sql: "select f1 + 1.0, 1.0 + f1, f1 - 2.0, 2.0 - f1, f1 * 3.0, 3.0 * f1, f1 / 0.5, 0.5 / f1 from ffs;", res: executeResult{
 			null: false,
-			attr: []string{"f1 + 1", "1 + f1", "f1 - 2", "2 - f1", "f1 * 3", "3 * f1", "f1 / 0.5", "0.5 / f1"},
+			attr: []string{"f1 + 1.0", "1.0 + f1", "f1 - 2.0", "2.0 - f1", "f1 * 3.0", "3.0 * f1", "f1 / 0.5", "0.5 / f1"},
 			data: [][]string{{"23.200001", "23.200001", "20.200001", "-20.200001", "66.600002", "66.600002", "44.400002", "0.022523"}, {"null", "null", "null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;", res: executeResult{
@@ -104,7 +104,7 @@ func TestPlusOperator(t *testing.T) {
 		}},
 		{sql: "select f2 + 1.0, 1.0 + f2, f2 - 2.0, 2.0 - f2, f2 * 3.0, 3.0 * f2, f2 / 0.5, 0.5 / f2 from ffs;", res: executeResult{
 			null: false,
-			attr: []string{"f2 + 1", "1 + f2", "f2 - 2", "2 - f2", "f2 * 3", "3 * f2", "f2 / 0.5", "0.5 / f2"},
+			attr: []string{"f2 + 1.0", "1.0 + f2", "f2 - 2.0", "2.0 - f2", "f2 * 3.0", "3.0 * f2", "f2 / 0.5", "0.5 / f2"},
 			data: [][]string{[]string{"223.222000", "223.222000", "220.222000", "-220.222000", "666.666000", "666.666000", "444.444000", "0.002250"}, []string{"null", "null", "null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i11 + i12, i21 + i22, i31 + i32, i41 + i42 from iis2;", res: executeResult{
@@ -697,7 +697,7 @@ func TestCastOperator(t *testing.T) {
 		{sql: "insert into ccs3 values ('123', '123456');"},
 
 		{sql: "select CAST(i1 AS signed), CAST(i1 AS unsigned), CAST(i1 AS float(1)), CAST(i1 AS double), CAST(i1 AS char(10)) from iis;", res: executeResult{
-			attr: []string{"cast(i1 as BIGINT)", "cast(i1 as BIGINT UNSIGNED)", "cast(i1 as FLOAT)", "cast(i1 as DOUBLE)", "cast(i1 as VARCHAR)"},
+			attr: []string{"cast(i1 as signed)", "cast(i1 as unsigned unsigned)", "cast(i1 as float(1))", "cast(i1 as double)", "cast(i1 as char(10))"},
 			data: [][]string{
 				{"1", "1", "1.000000", "1.000000", "1"}, {"null", "null", "null", "null", "null"},
 			},
@@ -836,7 +836,7 @@ func TestNotOperator(t *testing.T) {
 		{sql: "insert into tk values (1, 1, 1), (2, 2, 2), (3, 3, 3), (4, 4, 4);"},
 
 		{sql: "select not i1, not i2, not i3, not i4 from iis;", res: executeResult{
-			attr: []string{"not(i1)", "not(i2)", "not(i3)", "not(i4)"},
+			attr: []string{"not i1", "not i2", "not i3", "not i4"},
 			data: [][]string{
 				{"0", "0", "0", "0"},
 				{"1", "1", "1", "1"},
