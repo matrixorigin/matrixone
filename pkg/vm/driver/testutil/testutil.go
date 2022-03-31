@@ -43,7 +43,7 @@ type TestAOEClusterOption func(opts *testAOEClusterOptions)
 
 type testAOEClusterOptions struct {
 	raftOptions    []raftstore.TestClusterOption
-	aoeFactoryFunc func(path string) (*aoe2.Storage, error)
+	aoeFactoryFunc func(path string, feature storage.Feature) (*aoe2.Storage, error)
 	// metaFactoryFunc   func(path string) (storage.MetadataStorage, error)
 	kvDataFactoryFunc func(path string) (storage.DataStorage, error)
 	usePebble         bool
@@ -64,7 +64,7 @@ func WithTestAOEClusterRaftClusterOptions(values ...raftstore.TestClusterOption)
 }
 
 // WithTestAOEClusterAOEStorageFunc set aoe storage func
-func WithTestAOEClusterAOEStorageFunc(value func(path string) (*aoe2.Storage, error)) TestAOEClusterOption {
+func WithTestAOEClusterAOEStorageFunc(value func(path string, feature storage.Feature) (*aoe2.Storage, error)) TestAOEClusterOption {
 	return func(opts *testAOEClusterOptions) {
 		opts.aoeFactoryFunc = value
 	}
@@ -175,7 +175,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 			c.DataStorages = append(c.DataStorages, data)
 		}
 
-		aoe, err := c.opts.aoeFactoryFunc(fmt.Sprintf("%s/aoe", cfg.DataPath))
+		aoe, err := c.opts.aoeFactoryFunc(fmt.Sprintf("%s/aoe", cfg.DataPath), storage.Feature{})
 		assert.NoError(c.t, err)
 		if len(c.AOEStorages) > node {
 			c.AOEStorages[node] = aoe

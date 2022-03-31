@@ -855,12 +855,8 @@ func TestRing(t *testing.T) {
 		},
 		&variance.VarRing{
 			NullCounts: []int64{1, 2, 3},
-			Sums:       []float64{15, 9, 13.5},
-			Values: [][]float64{
-				{10, 15, 20},
-				{10.5, 15.5, 1},
-				{14, 13},
-			},
+			SumX:       []float64{4, 9, 13},
+			SumX2: []float64{16, 81, 169},
 			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
 		},
 		&any.Int8Ring{
@@ -1533,8 +1529,8 @@ func TestRing(t *testing.T) {
 			}
 		case *variance.VarRing:
 			oriRing := r.(*variance.VarRing)
-			// Sums
-			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.Sums)) {
+			// Sumx
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.SumX)) {
 				t.Errorf("Decode varRing Sums failed.")
 				return
 			}
@@ -1545,10 +1541,10 @@ func TestRing(t *testing.T) {
 					return
 				}
 			}
-			// Values
-			for i, v := range oriRing.Values {
-				if !reflect.DeepEqual(ExpectRing.Values[i], v) {
-					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
+			// Sumx2
+			for i, v := range oriRing.SumX2 {
+				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
+					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
 					return
 				}
 			}

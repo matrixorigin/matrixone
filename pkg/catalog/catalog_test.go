@@ -22,24 +22,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zapcore"
-
 	cconfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
-
-	"github.com/matrixorigin/matrixcube/raftstore"
-
-	"github.com/fagongzi/log"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -198,7 +191,6 @@ func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 // }
 func TestCatalogWithUtil(t *testing.T) {
 	os.Remove("test")
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
@@ -206,7 +198,7 @@ func TestCatalogWithUtil(t *testing.T) {
 			// c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -221,7 +213,7 @@ func TestCatalogWithUtil(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
