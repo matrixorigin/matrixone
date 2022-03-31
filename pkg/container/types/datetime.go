@@ -190,3 +190,7 @@ func (dt Datetime) sec() int64 {
 func (dt Datetime) Year() uint16 {
 	return dt.ToDate().Year()
 }
+
+func (dt Datetime) Month() uint8 {
+	return dt.ToDate().Month()
+}

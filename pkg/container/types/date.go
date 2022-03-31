@@ -16,10 +16,11 @@ package types
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"regexp"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 const (
@@ -77,19 +78,19 @@ func ParseDate(s string) (Date, error) {
 		return -1, errIncorrectDateValue
 	}
 
-	y = int32(s[0]-'0') * 1000 + int32(s[1]-'0') * 100 + int32(s[2]-'0') * 10 + int32(s[3]-'0')
+	y = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
-		if len(s) != 10 || s[7] != '-'{
+		if len(s) != 10 || s[7] != '-' {
 			return -1, errIncorrectDateValue
 		}
-		m = (s[5]-'0') * 10 + (s[6]-'0')
-		d = (s[8]-'0') * 10 + (s[9]-'0')
+		m = (s[5]-'0')*10 + (s[6] - '0')
+		d = (s[8]-'0')*10 + (s[9] - '0')
 	} else {
 		if len(s) != 8 {
 			return -1, errIncorrectDateValue
 		}
-		m = (s[4]-'0') * 10 + (s[5]-'0')
-		d = (s[6]-'0') * 10 + (s[7]-'0')
+		m = (s[4]-'0')*10 + (s[5] - '0')
+		d = (s[6]-'0')*10 + (s[7] - '0')
 	}
 
 	if validDate(y, m, d) {
@@ -365,4 +366,9 @@ func isLeap(year int32) bool {
 
 func (d Date) ToTime() Datetime {
 	return Datetime(int64(d)*secsPerDay-localTZ) << 20
+}
+
+func (d Date) Month() uint8 {
+	_, month, _, _ := d.Calendar(true)
+	return month
 }

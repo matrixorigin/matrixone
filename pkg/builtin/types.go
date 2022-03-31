@@ -35,5 +35,6 @@ const (
 	Ltrim
 	Rtrim
 	Sin
-  Atan
+	Atan
+	Month
 )
