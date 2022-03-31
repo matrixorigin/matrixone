@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixcube/aware"
 	"github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor/simple"
@@ -95,41 +95,41 @@ func (_ Def2) Nodes(
 				DataStorageFactory: func(group uint64) storage.DataStorage {
 					return dataStorage
 				},
-				ForeachDataStorageFunc: func(fn func(storage.DataStorage)) {
-					fn(dataStorage)
+				ForeachDataStorageFunc: func(fn func(n uint64, _ storage.DataStorage)) {
+					fn(0, dataStorage)
 				},
 			}
 		}()
 
 		conf.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 			return &shardStateAware{
-				created: func(shard meta.Shard) {
+				created: func(shard metapb.Shard) {
 					node.Cond.L.Lock()
 					node.Created = true
 					node.Cond.L.Unlock()
 					node.Cond.Broadcast()
 				},
-				updated: func(shard meta.Shard) {
+				updated: func(shard metapb.Shard) {
 				},
-				splited: func(shard meta.Shard) {
+				splited: func(shard metapb.Shard) {
 				},
-				destroyed: func(shard meta.Shard) {
+				destroyed: func(shard metapb.Shard) {
 				},
-				becomeLeader: func(shard meta.Shard) {
+				becomeLeader: func(shard metapb.Shard) {
 					node.Cond.L.Lock()
 					node.IsLeader = true
 					node.IsFollower = false
 					node.Cond.L.Unlock()
 					node.Cond.Broadcast()
 				},
-				becomeFollower: func(shard meta.Shard) {
+				becomeFollower: func(shard metapb.Shard) {
 					node.Cond.L.Lock()
 					node.IsLeader = false
 					node.IsFollower = true
 					node.Cond.L.Unlock()
 					node.Cond.Broadcast()
 				},
-				snapshotApplied: func(shard meta.Shard) {
+				snapshotApplied: func(shard metapb.Shard) {
 				},
 			}
 		}
