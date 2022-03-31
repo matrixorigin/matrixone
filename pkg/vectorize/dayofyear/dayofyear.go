@@ -11,31 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package dayofyear
 
-package builtin
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+var (
+	getDayOfYear func([]types.Date, []uint16) []uint16
 )
 
-const (
-	Length = iota + overload.NE + 1
-	Year
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	UTCTimestamp
-	Tan
-	Ltrim
-	Rtrim
-	Sin
-	DayOfYear
-	Atan
-	Month
-)
+func init() {
+	getDayOfYear = GetDayOfYear
+}
+
+func GetDayOfYear(xs []types.Date, rs []uint16) []uint16 {
+	for i, d := range xs {
+		rs[i] = d.DayOfYear()
+	}
+	return rs
+}
