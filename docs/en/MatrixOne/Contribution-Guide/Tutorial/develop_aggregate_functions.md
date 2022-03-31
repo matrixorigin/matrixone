@@ -241,7 +241,7 @@ Below is two different implementation for `Variance` (the second one has a bette
    
    	NullCounts []int64 // group to record number of the null value
    }
-   ```
+```
 
 ## **Develop an var() function**
 
@@ -255,7 +255,7 @@ and we assign each operator a distinct integer number.
 To add a new function `var()`, add a new const `Variance` in the const declaration and `var` in the name declaration.
 
 
-   ```go
+```go
    const (
    	Sum = iota
    	Avg
@@ -277,7 +277,7 @@ To add a new function `var()`, add a new const `Variance` in the const declarati
    	ApproxCountDistinct: "approx_count_distinct",
    	Variance:			 "var",
    }
-   ```
+```
 
 Step2: implement the `Ring` interface
 
@@ -288,7 +288,7 @@ As we calculate the overall variance, we need to calculate:
 * The numeric `Sums` and the null value numbers of each group, to calculate the average.
 * Values of each group, to calculate the variance. 
 
-   ```go
+```go
    //Implementation1
 
    type VarRing struct {
@@ -315,7 +315,7 @@ As we calculate the overall variance, we need to calculate:
    
    	NullCounts []int64 // group to record number of the null value
    }
-   ```
+```
 
 *2. Implement the functions of `Ring` interface*
 
@@ -323,7 +323,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
 
 * `Fill` function
 
-   ```go
+```go
       //Implementation1
 
     func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
@@ -363,10 +363,11 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       		v.NullCounts[i] += z
       	}
       }
-   ```
+```
+
 * `Add` function   
 
-   ```go
+```go
 
       //Implementation1
       func (v *VarRing) Add(a interface{}, x, y int64) {
@@ -384,11 +385,11 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       	v.NullCounts[x] += v2.NullCounts[y]
       }
 
-   ```
+```
 
-   * `Mul` function   
+* `Mul` function   
 
-   ```go
+```go
 
       //Implementation1
       func (v *VarRing) Mul(a interface{}, x, y, z int64) {
@@ -412,10 +413,10 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       	}
       }
 
-   ```
-   * `Eval` function  
+```
+* `Eval` function  
 
-   ```go
+```go
          //Implementation1
       func (v *VarRing) Eval(zs []int64) *vector.Vector {
           defer func() {
@@ -463,7 +464,7 @@ You can checkout the full implmetation at [variance.go](https://github.com/matri
       
       	return ...
       }
-    ```
+```
 
 
 
@@ -838,11 +839,9 @@ Query OK, 10272594 rows affected (1 min 7.09 sec)
 Step3: Run your aggregate function and `sum()`, `avg()` on the column `LO_SUPPKEY` respectively to check the performance.
 
 ```sql
-
 select avg(LO_SUPPKEY) from lineorder_flat;
 select sum(LO_SUPPKEY) from lineorder_flat;
 select yourfunction(LO_SUPPKEY) from lineorder_flat;
-
 ```
 
 Step4: When you submit your PR, please submit these performance results in your PR comment as well. 
