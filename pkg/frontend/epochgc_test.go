@@ -24,22 +24,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/smartystreets/goconvey/convey"
-	"github.com/stretchr/testify/require"
-
-	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/storage"
-	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-
 	stdLog "log"
 
-	"go.uber.org/zap/zapcore"
-
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
+	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -47,9 +44,6 @@ var DC *DebugCounter = NewDebugCounter(32)
 var preAllocShardNum = uint64(20)
 
 func TestEpochGC(t *testing.T) {
-	log.SetLevelByString("info")
-	log.SetHighlighting(false)
-
 	defer func() {
 		err := cleanupTmpDir()
 		if err != nil {
@@ -88,7 +82,7 @@ func TestEpochGC(t *testing.T) {
 			c.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pcis[node]
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &aoeStorage.Options{}
 			mdCfg := &aoeStorage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -103,7 +97,7 @@ func TestEpochGC(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
