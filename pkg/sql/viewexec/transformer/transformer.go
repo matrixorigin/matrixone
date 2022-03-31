@@ -17,6 +17,7 @@ package transformer
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
@@ -63,6 +64,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_int64
 	case ApproxCountDistinct:
 		return types.T_uint64
+	case Variance:
+		return types.T_float64
 	}
 	return 0
 }
@@ -83,6 +86,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return starcount.NewCount(typ), nil
 	case ApproxCountDistinct:
 		return approxcd.NewApproxCountDistinct(typ), nil
+	case Variance:
+		return variance.NewVarianceRing(typ), nil
 	}
 	return nil, nil
 }
