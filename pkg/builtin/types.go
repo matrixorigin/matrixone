@@ -43,4 +43,5 @@ const (
 	Month
 	Weekday
 	Lpad
+	Date
 )
