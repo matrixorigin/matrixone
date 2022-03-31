@@ -11,25 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package dayofyear
 
-package fz
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-import (
-	"testing"
+var (
+	getDayOfYear func([]types.Date, []uint16) []uint16
 )
 
-func TestFuse(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "fuse"
-	}, func() IsTesting {
-		return true
-	}).Call(func(
-		getTempDir GetTempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
+func init() {
+	getDayOfYear = GetDayOfYear
+}
 
-		testFS(t, string(getTempDir()))
-
-	})
+func GetDayOfYear(xs []types.Date, rs []uint16) []uint16 {
+	for i, d := range xs {
+		rs[i] = d.DayOfYear()
+	}
+	return rs
 }
