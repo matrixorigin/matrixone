@@ -16,11 +16,12 @@ package types
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"strconv"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 const (
@@ -70,31 +71,31 @@ func ParseDatetime(s string) (Datetime, error) {
 	var month, day, hour, minute, second uint8
 	var msec uint32 = 0
 
-	year = int32(s[0]-'0') * 1000 + int32(s[1]-'0') * 100 + int32(s[2]-'0') * 10 + int32(s[3]-'0')
+	year = int32(s[0]-'0')*1000 + int32(s[1]-'0')*100 + int32(s[2]-'0')*10 + int32(s[3]-'0')
 	if s[4] == '-' {
 		if len(s) < 19 {
 			return -1, errIncorrectDatetimeValue
 		}
-		month = (s[5]-'0') * 10 + (s[6]-'0')
+		month = (s[5]-'0')*10 + (s[6] - '0')
 		if s[7] != '-' {
 			return -1, errIncorrectDatetimeValue
 		}
-		day = (s[8]-'0') * 10 + (s[9]-'0')
+		day = (s[8]-'0')*10 + (s[9] - '0')
 		if s[10] != ' ' {
 			return -1, errIncorrectDatetimeValue
 		}
 		if !validDate(year, month, day) {
 			return -1, errIncorrectDatetimeValue
 		}
-		hour = (s[11]-'0') * 10 + (s[12]-'0')
+		hour = (s[11]-'0')*10 + (s[12] - '0')
 		if s[13] != ':' {
 			return -1, errIncorrectDatetimeValue
 		}
-		minute = (s[14]-'0') * 10 + (s[15]-'0')
+		minute = (s[14]-'0')*10 + (s[15] - '0')
 		if s[16] != ':' {
 			return -1, errIncorrectDatetimeValue
 		}
-		second = (s[17]-'0') * 10 + (s[18]-'0')
+		second = (s[17]-'0')*10 + (s[18] - '0')
 		if !validTimeInDay(hour, minute, second) {
 			return -1, errIncorrectDatetimeValue
 		}
@@ -110,11 +111,11 @@ func ParseDatetime(s string) (Datetime, error) {
 			}
 		}
 	} else {
-		month = (s[4]-'0') * 10 + (s[5]-'0')
-		day = (s[6]-'0') * 10 + (s[7]-'0')
-		hour = (s[8]-'0') * 10 + (s[9]-'0')
-		minute = (s[10]-'0') * 10 + (s[11]-'0')
-		second = (s[12]-'0') * 10 + (s[13]-'0')
+		month = (s[4]-'0')*10 + (s[5] - '0')
+		day = (s[6]-'0')*10 + (s[7] - '0')
+		hour = (s[8]-'0')*10 + (s[9] - '0')
+		minute = (s[10]-'0')*10 + (s[11] - '0')
+		second = (s[12]-'0')*10 + (s[13] - '0')
 		if len(s) > 14 {
 			if len(s) > 15 && s[14] == '.' {
 				m, err := strconv.ParseUint(s[15:], 10, 32)
@@ -142,6 +143,11 @@ func validTimeInDay(h, m, s uint8) bool {
 		return false
 	}
 	return true
+}
+
+// UTC turn local datetime to utc datetime
+func (dt Datetime) UTC() Datetime {
+	return Datetime((dt.sec() - localTZ) << 20)
 }
 
 func Now() Datetime {
