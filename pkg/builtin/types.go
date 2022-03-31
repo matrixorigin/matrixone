@@ -31,11 +31,12 @@ const (
 	Power
 	Pi
 	UTCTimestamp
-	Tan
 	Ltrim
 	Rtrim
 	Sin
-	DayOfYear
+	Cos
+	Tan
 	Atan
+	DayOfYear
 	Month
 )
