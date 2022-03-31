@@ -255,8 +255,6 @@ func NewCubeDriverWithFactory(
 		cb(uint64(pb.KVGroup), kvDataStorage)
 		cb(uint64(pb.AOEGroup), aoeDataStorage)
 	}
-	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
-	c.CubeConfig.ShardGroups = 2
 
 	c.CubeConfig.Customize.CustomInitShardsFactory = func() []metapb.Shard {
 		var initialGroups []metapb.Shard
