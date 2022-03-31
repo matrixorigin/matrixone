@@ -35,7 +35,7 @@ const (
 	Ltrim
 	Rtrim
 	Sin
-  DayOfYear
+	DayOfYear
 	Atan
 	Month
 )
