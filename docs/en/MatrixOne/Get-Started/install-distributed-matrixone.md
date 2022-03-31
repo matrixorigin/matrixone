@@ -35,7 +35,7 @@ addr-client = "your_ip_address:20000"
 
 3. Set the size limit of a `Shard`:
 ```
-shard-capacity-bytes = "96MB"
+shard-capacity-bytes = "4096MB"
 ```
 
 4. Set `rpc-addr` to receive heartbeats from the whole cluster:

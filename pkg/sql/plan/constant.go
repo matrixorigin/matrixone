@@ -17,12 +17,12 @@ package plan
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"math"
 )
 
 func Neg(x *extend.ValueExtend) (extend.Extend, error) {

@@ -70,7 +70,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 			vm.Run(p.instructions, proc)
 		}
 	}()
-	r = exportRestrict(r, p.instructions)
+	//	r = exportRestrict(r, p.instructions)
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}

@@ -78,12 +78,12 @@ type batData struct {
 	dds []*bytes.Buffer
 	use bool
 	id  int8
+	zs  []int64
 }
 
 type worker struct {
 	id           int32
 	bufferCount  int
-	zs           []int64
 	batDatas     []*batData
 	blocks       []aoe.Block
 	storeReader  *store

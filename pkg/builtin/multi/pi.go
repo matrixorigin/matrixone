@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package multi
 
 import (
@@ -36,7 +37,6 @@ func init() {
 		return fmt.Sprintf("pi()")
 	}
 	overload.AppendFunctionRets(builtin.Pi, []types.T{}, types.T_float64)
-	//logutil.Warn("negative_number_error")
 	overload.MultiOps[builtin.Pi] = []*overload.MultiOp{
 		{
 			Min: 0,
