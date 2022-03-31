@@ -520,7 +520,7 @@ func (ihi *IndexHandlerImpl) DeleteFromIndex(writeCtx interface{}, bat *batch.Ba
 	row := make([]interface{}, len(bat.Vecs))
 	tuple := NewTupleBatchImpl(bat, row)
 	for j := 0; j < n; j++ { //row index
-		err := GetRow(bat, row, j)
+		err := GetRow(indexWriteCtx, bat, row, j)
 		if err != nil {
 			return err
 		}
