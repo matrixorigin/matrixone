@@ -283,8 +283,10 @@ Step2: implement the `Ring` interface
 
 *1. Define `Ring` structure*
 
-    Create `variance.go` under `pkg/container/ring`, and define a structure of `VarRing`.
+Create `variance.go` under `pkg/container/ring`, and define a structure of `VarRing`.
+
 As we calculate the overall variance, we need to calculate:
+
 * The numeric `Sums` and the null value numbers of each group, to calculate the average.
 * Values of each group, to calculate the variance. 
 
