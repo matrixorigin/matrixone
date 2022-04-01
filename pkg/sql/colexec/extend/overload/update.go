@@ -12,37 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package deleteTag
+package overload
 
 import (
-	"bytes"
-
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func String(arg interface{}, buf *bytes.Buffer) {
-	buf.WriteString("delete rows")
-}
-
-func Prepare(_ *process.Process, _ interface{}) error {
-	return nil
-}
-
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	p := arg.(*Argument)
-	bat := proc.Reg.InputBatch
-	if bat == nil || len(bat.Zs) == 0 {
-		return false, nil
+func UpdateEval(typ, toTyp types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
+	if rule, ok := binaryOpsNeedCast(EQ, toTyp, typ); ok {
+		var err error
+		rightCast := rule.targetTypes[1]
+		if !v.Typ.Eq(rightCast) {
+			v, err = BinaryEval(Typecast, typ, rightCast.Oid, c, false, v, vector.New(rightCast), p)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
-
-	bat.Zs = []int64{-1, -1}
-	if err := p.Relation.Write(p.Ts, bat); err != nil {
-		return false, err
-	}
-	affectedRows := uint64(vector.Length(bat.Vecs[0]))
-	p.M.Lock()
-	p.AffectedRows += affectedRows
-	p.M.Unlock()
-	return false, nil
+	return v, nil
 }

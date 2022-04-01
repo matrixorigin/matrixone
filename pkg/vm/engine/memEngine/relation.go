@@ -34,6 +34,10 @@ func (r *relation) Nodes() engine.Nodes {
 	return engine.Nodes{r.n}
 }
 
+func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 func (r *relation) TableDefs() []engine.TableDef {
 	defs := make([]engine.TableDef, len(r.md.Attrs)+len(r.md.Index))
 	for i, attr := range r.md.Attrs {

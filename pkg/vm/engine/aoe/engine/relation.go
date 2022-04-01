@@ -232,6 +232,10 @@ func (r *relation) Nodes() engine.Nodes {
 	return r.nodes
 }
 
+func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 func (r *relation) TableDefs() []engine.TableDef {
 	_, _, _, _, defs, _ := helper.UnTransfer(*r.tbl)
 	return defs

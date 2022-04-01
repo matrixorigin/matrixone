@@ -21,7 +21,7 @@ import (
 
 func (b *build) buildDeletePlan(deleteStmt *tree.Delete, plan *Delete) error {
 	selectStmt := buildSelectStmtFromDelete(deleteStmt)
-	selectStmt = rewrite.Rewrite(selectStmt)
+	//selectStmt = rewrite.Rewrite(selectStmt)
 	selectStmt = rewrite.AstRewrite(selectStmt)
 
 	queryPlan, err := b.BuildStatement(selectStmt)

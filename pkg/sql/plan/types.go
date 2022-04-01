@@ -285,7 +285,10 @@ type Delete struct {
 }
 
 type Update struct {
-	Qry *Query
+	Qry 	    *Query
+	UpdateList  []extend.UpdateExtend
+	UpdateAttrs []string
+	OtherAttrs  []string
 }
 
 type build struct {

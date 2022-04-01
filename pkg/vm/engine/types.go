@@ -15,12 +15,11 @@
 package engine
 
 import (
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 type Nodes []Node
@@ -142,6 +141,8 @@ type Relation interface {
 	CreateIndex(epoch uint64, defs []TableDef) error
 	DropIndex(epoch uint64, name string) error
 	TableDefs() []TableDef
+	// true: primary key, false: hide key
+	GetPriKeyOrHideKey() ([]Attribute, bool)
 
 	Write(uint64, *batch.Batch) error
 
