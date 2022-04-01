@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixcube/pb/rpc"
+	"github.com/matrixorigin/matrixcube/pb/rpcpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/util/uuid"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
@@ -47,7 +47,7 @@ func (_ Def) NewKV(
 	return func(node *Node) *KV {
 
 		type ReqInfo struct {
-			Req    rpc.Request
+			Req    rpcpb.Request
 			Result chan []byte
 			Error  chan error
 		}
@@ -68,7 +68,7 @@ func (_ Def) NewKV(
 
 			proxy.SetCallback(
 
-				func(resp rpc.Response) {
+				func(resp rpcpb.Response) {
 					reqInfosLock.Lock()
 					defer reqInfosLock.Unlock()
 					info, ok := reqInfos[uuid.UUID(*(*[16]byte)(resp.ID))]
@@ -89,7 +89,7 @@ func (_ Def) NewKV(
 				},
 			)
 
-			proxy.SetRetryController(RetryFunc(func(id []byte) (req rpc.Request, retry bool) {
+			proxy.SetRetryController(RetryFunc(func(id []byte) (req rpcpb.Request, retry bool) {
 				reqInfosLock.Lock()
 				defer reqInfosLock.Unlock()
 				info, ok := reqInfos[uuid.UUID(*(*[16]byte)(id))]
@@ -111,11 +111,11 @@ func (_ Def) NewKV(
 				defer task.End()
 				trace.Logf(ctx, "kv", "set %v -> %v", key, value)
 
-				req := rpc.Request{}
+				req := rpcpb.Request{}
 				id := uuid.NewV4()
 				req.ID = id.Bytes()
 				req.CustomType = OpSet
-				req.Type = rpc.CmdType_Write
+				req.Type = rpcpb.Write
 				keyBuf := new(bytes.Buffer)
 				ce(sb.Copy(sb.Marshal(key), sb.Encode(keyBuf)))
 				req.Key = keyBuf.Bytes()
@@ -139,7 +139,7 @@ func (_ Def) NewKV(
 				}()
 
 				for {
-					req.StopAt = time.Now().Add(timeout).Unix()
+					// set timeout
 					err = proxy.Dispatch(req)
 					if err != nil {
 						var tryAgain *raftstore.ErrTryAgain
@@ -171,11 +171,11 @@ func (_ Def) NewKV(
 				defer task.End()
 				trace.Logf(ctx, "kv", "get %v", key)
 
-				req := rpc.Request{}
+				req := rpcpb.Request{}
 				id := uuid.NewV4()
 				req.ID = id.Bytes()
 				req.CustomType = OpGet
-				req.Type = rpc.CmdType_Read
+				req.Type = rpcpb.Read
 				keyBuf := new(bytes.Buffer)
 				ce(sb.Copy(sb.Marshal(key), sb.Encode(keyBuf)))
 				req.Key = keyBuf.Bytes()
@@ -196,7 +196,7 @@ func (_ Def) NewKV(
 				}()
 
 				for {
-					req.StopAt = time.Now().Add(timeout).Unix()
+					//TODO set deadline
 					err = proxy.Dispatch(req)
 					if err != nil {
 						var tryAgain *raftstore.ErrTryAgain
@@ -232,10 +232,10 @@ func (_ Def) NewKV(
 
 }
 
-type RetryFunc func(id []byte) (rpc.Request, bool)
+type RetryFunc func(id []byte) (rpcpb.Request, bool)
 
 var _ raftstore.RetryController = RetryFunc(nil)
 
-func (r RetryFunc) Retry(reqID []byte) (rpc.Request, bool) {
+func (r RetryFunc) Retry(reqID []byte) (rpcpb.Request, bool) {
 	return r(reqID)
 }

@@ -73,7 +73,7 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	}
 
 	var err error
-	if len(bat.Zs) != 0 && bat.Zs[0] == -1 {
+	if len(bat.Zs) == 2 && bat.Zs[0] == -1 && bat.Zs[1] == -1 {
 		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
 	} else {
 		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)

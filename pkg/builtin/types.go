@@ -30,11 +30,15 @@ const (
 	Exp
 	Power
 	Pi
+	Reverse
 	UTCTimestamp
-	Tan
 	Ltrim
 	Rtrim
 	Sin
+	Cos
+	Tan
 	Atan
-	Lpad
+	DayOfYear
+	Month
+  Lpad
 )

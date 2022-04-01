@@ -33,14 +33,10 @@ func (_ Def) RandomizeCubeConfig() RandomizeCubeConfig {
 			time.Second*1, time.Second*2)
 		fz.RandBetween(&config.Replication.StoreHeartbeatDuration.Duration,
 			time.Second*1, time.Second*2)
-		fz.RandBetween(&config.Replication.ShardSplitCheckDuration.Duration,
-			time.Second*1, time.Second*2)
 		fz.RandBetween(&config.Replication.ShardStateCheckDuration.Duration,
 			time.Second*1, time.Second*2)
 		fz.RandBetween(&config.Replication.CompactLogCheckDuration.Duration,
 			time.Second*1, time.Second*2)
-		fz.RandBetween(&config.Replication.ShardCapacityBytes,
-			128, 1024)
 
 		// raft
 		fz.RandBetween(&config.Raft.TickInterval.Duration,

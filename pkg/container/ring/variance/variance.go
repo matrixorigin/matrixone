@@ -462,9 +462,9 @@ func (v *VarRing) Add(a interface{}, x, y int64) {
 func (v *VarRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	v2 := a.(*VarRing)
 	for i := range os {
-		v.SumX[vps[os[i]]-1] += v2.SumX[start+int64(i)]
-		v.SumX2[vps[os[i]]-1] += v2.SumX2[start+int64(i)]
-		v.NullCounts[vps[os[i]]-1] += v2.NullCounts[start+int64(i)]
+		v.SumX[vps[i]-1] += v2.SumX[start+int64(i)]
+		v.SumX2[vps[i]-1] += v2.SumX2[start+int64(i)]
+		v.NullCounts[vps[i]-1] += v2.NullCounts[start+int64(i)]
 	}
 }
 

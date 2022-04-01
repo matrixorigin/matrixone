@@ -20,9 +20,9 @@ import (
 )
 
 type number interface {
-  ~int | ~int8 | ~int16 | ~int32 | ~int64 |
-  ~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
-  ~float32 | ~float64
+	~int | ~int8 | ~int16 | ~int32 | ~int64 |
+		~uint | ~uint8 | ~uint16 | ~uint32 | ~uint64 |
+		~float32 | ~float64
 }
 
 func RandBetween[T number, T2 number](target *T, lower T2, upper T2) {
@@ -31,7 +31,7 @@ func RandBetween[T number, T2 number](target *T, lower T2, upper T2) {
 		return
 	}
 	if lower > upper {
-		panic(fmt.Errorf("bad argument: %d %d", lower, upper))
+		panic(fmt.Errorf("bad argument: %v %v", lower, upper))
 	}
 	gap := upper - lower
 	i := rand.Intn(int(gap + 1))
