@@ -185,6 +185,7 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 					Direction: 0,
 					ID:        uint32(columnIdx),
 					Type:      tuplecodec.EngineTypeToTpeType(&attr.Attr.Type),
+					TypesType: attr.Attr.Type,
 				}
 				pkDesc.Attributes = append(pkDesc.Attributes,indexDesc)
 			}

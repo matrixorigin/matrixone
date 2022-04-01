@@ -16,6 +16,7 @@ package engine
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -80,6 +81,8 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 			ReadAttributeDescs:       readAttrs,
 			ParallelReader: tr.parallelReader,
 			ReadCount: 0,
+			Opt: tr.opt,
+			DumpData: tr.dumpData,
 		}
 
 		if tr.readCtx.ParallelReader {

@@ -129,7 +129,7 @@ func (od *OrderedDecoder) DecodeInt64(data []byte) ([]byte, *DecodedItem, error)
 		value = (value << 8)
 		value |= int64(^t)
 	}
-	return data[l:], NewDecodeItem(^value, VALUE_TYPE_UINT64, 0, 0, l+1), nil
+	return data[l:], NewDecodeItem(uint64(^value), VALUE_TYPE_UINT64, 0, 0, l+1), nil
 }
 
 // DecodeUint64  decodes the uint64 with the variable length encoding

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe"
 	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -135,7 +136,7 @@ func removeEpoch(epoch uint64) {
 	if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
 		err = tpe.RemoveDeletedTable(epoch)
 		if err != nil {
-			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+			// fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
 		}
 	}
 
@@ -325,6 +326,12 @@ func main() {
 
 	//test cluster nodes
 	config.ClusterNodes = engine.Nodes{}
+	err = tpe.DumpDatabaseInfo(eng, args)
+	if err != nil {
+		fmt.Println("wangjian sqlerr is", err)
+		logutil.Infof("%s", err)
+		os.Exit(WaitCubeStartExit)
+	}
 
 	createMOServer(pci)
 

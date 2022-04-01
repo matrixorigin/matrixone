@@ -16,6 +16,7 @@ package engine
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -31,7 +32,8 @@ var (
 )
 
 func (trel * TpeRelation) Rows() int64 {
-	panic("implement me")
+	// panic("implement me")
+	return 1
 }
 
 func (trel * TpeRelation) Size(s string) int64 {

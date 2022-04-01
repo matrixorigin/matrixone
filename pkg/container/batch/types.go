@@ -15,6 +15,8 @@
 package batch
 
 import (
+	"bufio"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -41,4 +43,40 @@ type Batch struct {
 	Refs []uint64 // reference count
 	Rs   []ring.Ring
 	Ht   interface{} // hash table
+	Result *DumpResult
 }
+
+type DumpOption struct {
+    Db_name 		[]string      // 数据库名称
+    Table_name 		[]string   // 表名称
+    Keys 			bool
+    Values 			bool
+    Decode_key 		bool
+    Decode_value 	bool
+    Limit 			[]uint64
+    Filename 		string
+    Max_file_size 	int64
+	Writer 			*bufio.Writer
+	PrimaryKey 		[]byte
+	ReadCnt			uint64
+	UseKey 			bool
+	PrimaryValue 	[]string
+	UseValue 		bool
+}
+
+type DumpKey []byte
+type DumpValue []byte
+type DumpDecodeItem []interface{}
+type DecodeItem struct {
+	// Attrs column name list
+	Attrs []string
+	// column data, origin Data
+	Vecs []DumpDecodeItem
+}
+
+type DumpResult struct {
+    Keys []DumpKey
+    Values []DumpValue
+    Decode_keys DecodeItem
+    Decode_values DecodeItem
+} 
