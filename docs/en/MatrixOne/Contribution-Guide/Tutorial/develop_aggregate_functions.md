@@ -776,11 +776,9 @@ Step1: Download the standard test dataset.
 
 We have prepared a single table SSB query dataset with 10 million rows of data. The raw data file size is about 4GB, 500MB after being zipped.  You can get the data files directly:
 
-> https://pan.baidu.com/s/1dCpcKsygdVuHzd-H-RWHFA
-> code: k1rs
-
-> https://share.weiyun.com/rF3HjsSR 
-> code: 9u8xz8
+```
+https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
+```
 
 Step2: Unzip the file and Load the data into MatrixOne. 
 
