@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/axiomhq/hyperloglog"
@@ -854,8 +855,28 @@ func TestRing(t *testing.T) {
 		&variance.VarRing{
 			NullCounts: []int64{1, 2, 3},
 			SumX:       []float64{4, 9, 13},
-			SumX2: []float64{16, 81, 169},
-			Typ: types.Type{Oid: types.T(types.T_float64), Size: 8},
+			SumX2:      []float64{16, 81, 169},
+			Typ:        types.Type{Oid: types.T(types.T_float64), Size: 8},
+		},
+		&bitand.NumericRing{
+			NullCnt:      []int64{123123123, 123123908950, 9089374534},
+			BitAndResult: []uint64{6, 6, 8, 0},
+			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
+		&bitand.NumericRing{
+			NullCnt:      []int64{45634564, 123123908950, 9089374534},
+			BitAndResult: []uint64{6123, 1236, 8123, 12310},
+			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
+		&bitand.NumericRing{
+			NullCnt:      []int64{56784567, 123123908950, 9089374534},
+			BitAndResult: []uint64{6123, 3454346, 345348, 345340},
+			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
+		&bitand.NumericRing{
+			NullCnt:      []int64{8902345, 123123908950, 9089374534},
+			BitAndResult: []uint64{6112323, 34542345346, 234, 23412312},
+			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 	}
 	for _, r := range ringArray {
@@ -872,6 +893,27 @@ func TestRing(t *testing.T) {
 		}
 
 		switch ExpectRing := resultRing.(type) {
+		case *bitand.NumericRing:
+			oriRing := r.(*bitand.NumericRing)
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.BitAndResult)) {
+				t.Errorf("Decode bit_and numeric ring data failed")
+				return
+			}
+			// NullCnt
+			for i, n := range oriRing.NullCnt {
+				if ExpectRing.NullCnt[i] != n {
+					t.Errorf("Decode bit_and int ring NullCnt failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCnt[i])
+					return
+				}
+			}
+			// BitAndResult
+			for i, v := range oriRing.BitAndResult {
+				if ExpectRing.BitAndResult[i] != v {
+					t.Errorf("Decode bit_and int ring BitAndResult failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.BitAndResult[i])
+					return
+				}
+			}
 		case *avg.AvgRing:
 			oriRing := r.(*avg.AvgRing)
 			// Da
