@@ -30,5 +30,14 @@ const (
 	Exp
 	Power
 	Pi
+	UTCTimestamp
+	Ltrim
+	Rtrim
+	Sin
+	Cos
+	Tan
+	Atan
+	DayOfYear
+	Month
 	Acos
 )
