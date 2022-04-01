@@ -115,7 +115,7 @@ endif
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOROOT)/bin v1.43.0
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOROOT)/bin v1.45.2
 
 # TODO: switch to the following two lists after some major cleanups
 # TODO: switch to a more recent version of golangci-lint, currently on v1.23.8
