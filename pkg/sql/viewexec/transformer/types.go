@@ -23,6 +23,7 @@ const (
 	StarCount
 	ApproxCountDistinct
 	Variance
+	BitAnd
 	Bit_or
 )
 
@@ -35,6 +36,7 @@ var TransformerNames = [...]string{
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
 	Variance:            "var",
+	BitAnd:              "bit_and",
 	Bit_or:              "bit_or",
 }
 
