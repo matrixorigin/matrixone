@@ -39,7 +39,8 @@ jobs:
 
       - name: Build Verification Testing
         run: |
-          make bvt BVT_BRANCH=${{ github.event.pull_request.title }}
+          export branch=$(echo "${{ github.event.pull_request.title }}" | awk -F " " '{print $NF}')
+          make bvt BVT_BRANCH="$branch"
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}

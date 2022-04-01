@@ -39,5 +39,5 @@ const (
 	Atan
 	DayOfYear
 	Month
-	Acos
+  Acos
 )

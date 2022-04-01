@@ -16,13 +16,14 @@ package tuplecodec
 
 import (
 	"fmt"
+	"math"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/smartystreets/goconvey/convey"
-	"math"
-	"reflect"
-	"testing"
 )
 
 func TestBatchAdapter_ForEach(t *testing.T) {
@@ -76,7 +77,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 			return nil
 		}
 		err := ba.ForEachTuple(nil, callback)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err,convey.ShouldNotBeNil)
 	})
 }
 
@@ -166,7 +167,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 
 		ba := NewBatchAdapter(bat)
 		err := ba.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err,convey.ShouldNotBeNil)
 
 		bat2 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
@@ -182,7 +183,7 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 
 		ba2 := NewBatchAdapter(bat2)
 		err = ba2.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err,convey.ShouldNotBeNil)
 
 		bat3 := MakeBatch(cnt,names,attrs)
 		for i := 0; i < cnt; i++ {
@@ -227,6 +228,6 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 
 		ba3 := NewBatchAdapter(bat3)
 		err = ba3.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err,convey.ShouldNotBeNil)
 	})
 }

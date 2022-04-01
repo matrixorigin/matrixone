@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixcube/pb/meta"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/transport"
 	fz "github.com/matrixorigin/matrixone/pkg/chaostesting"
 )
@@ -40,10 +40,10 @@ func (_ Def) NewInterceptableTransport() (
 
 	newTransport = func(upstream transport.Trans, getNodes func() fz.Nodes) transport.Trans {
 
-		msgIsBlocked := func(msg meta.RaftMessage) bool {
+		msgIsBlocked := func(msg metapb.RaftMessage) bool {
 
-			fromStoreID := msg.From.ContainerID
-			toStoreID := msg.To.ContainerID
+			fromStoreID := msg.From.StoreID
+			toStoreID := msg.To.StoreID
 			var fromNodeID fz.NodeID = -1
 			var toNodeID fz.NodeID = -1
 			nodes := getNodes()
@@ -77,21 +77,21 @@ func (_ Def) NewInterceptableTransport() (
 
 		return &TransportProxy{
 
-			send: func(msg meta.RaftMessage) bool {
+			send: func(msg metapb.RaftMessage) bool {
 				if msgIsBlocked(msg) {
 					return false
 				}
 				return upstream.Send(msg)
 			},
 
-			sendSnapshot: func(msg meta.RaftMessage) bool {
+			sendSnapshot: func(msg metapb.RaftMessage) bool {
 				if msgIsBlocked(msg) {
 					return false
 				}
 				return upstream.SendSnapshot(msg)
 			},
 
-			setFilter: func(fn func(meta.RaftMessage) bool) {
+			setFilter: func(fn func(metapb.RaftMessage) bool) {
 				upstream.SetFilter(fn)
 			},
 
@@ -121,9 +121,9 @@ func (_ Def) NewInterceptableTransport() (
 }
 
 type TransportProxy struct {
-	send                 func(meta.RaftMessage) bool
-	sendSnapshot         func(meta.RaftMessage) bool
-	setFilter            func(fn func(meta.RaftMessage) bool)
+	send                 func(metapb.RaftMessage) bool
+	sendSnapshot         func(metapb.RaftMessage) bool
+	setFilter            func(fn func(metapb.RaftMessage) bool)
 	sendingSnapshotCount func() uint64
 	start                func() error
 	close                func() error
@@ -131,15 +131,15 @@ type TransportProxy struct {
 
 var _ transport.Trans = new(TransportProxy)
 
-func (t *TransportProxy) Send(msg meta.RaftMessage) bool {
+func (t *TransportProxy) Send(msg metapb.RaftMessage) bool {
 	return t.send(msg)
 }
 
-func (t *TransportProxy) SendSnapshot(msg meta.RaftMessage) bool {
+func (t *TransportProxy) SendSnapshot(msg metapb.RaftMessage) bool {
 	return t.sendSnapshot(msg)
 }
 
-func (t *TransportProxy) SetFilter(fn func(meta.RaftMessage) bool) {
+func (t *TransportProxy) SetFilter(fn func(metapb.RaftMessage) bool) {
 	t.setFilter(fn)
 }
 

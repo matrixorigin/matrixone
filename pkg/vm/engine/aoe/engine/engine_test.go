@@ -32,15 +32,15 @@ import (
 	//"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"sync"
 
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
 	vengine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 
 	"testing"
@@ -87,7 +87,7 @@ func TestAOEEngine(t *testing.T) {
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -102,7 +102,7 @@ func TestAOEEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
@@ -275,7 +275,7 @@ func doRestartEngine(t *testing.T) {
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string, feature cstorage.Feature) (*aoe3.Storage, error) {
 			opts := &storage.Options{}
 			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -290,7 +290,7 @@ func doRestartEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe3.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, feature, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(

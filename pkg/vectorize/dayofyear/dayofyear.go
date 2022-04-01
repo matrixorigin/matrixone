@@ -11,20 +11,21 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package dayofyear
 
-package ftree
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-import "github.com/matrixorigin/matrixone/pkg/sql/plan"
+var (
+	getDayOfYear func([]types.Date, []uint16) []uint16
+)
 
-// For each relation in Q, its variables lie along the same root-to-leaf path in F
-func buildPath(rn string, qry *plan.Query, conds []*plan.JoinCondition) []*FNode {
-	rel := qry.RelsMap[rn]
-	frel := buildRelation(rel)
-	reorder(frel, append(getVariables(rn, conds), getFreeVariables(rel, qry.FreeAttrs)...))
-	fs := make([]*FNode, 0, len(rel.Attrs)+1)
-	for _, v := range frel.Vars {
-		fs = append(fs, &FNode{Root: frel.VarsMap[v]})
+func init() {
+	getDayOfYear = GetDayOfYear
+}
+
+func GetDayOfYear(xs []types.Date, rs []uint16) []uint16 {
+	for i, d := range xs {
+		rs[i] = d.DayOfYear()
 	}
-	fs = append(fs, &FNode{Root: frel})
-	return fs
+	return rs
 }
