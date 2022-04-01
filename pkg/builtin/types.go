@@ -35,7 +35,10 @@ const (
 	Ltrim
 	Rtrim
 	Sin
-	Cot
 	Atan
+	DayOfYear
 	Month
+	Cos
+	Tan
+	Cot
 )

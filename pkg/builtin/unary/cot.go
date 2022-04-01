@@ -27,36 +27,17 @@ import (
 )
 
 
-var argAndRets = []argsAndRet {
-	{[]types.T{types.T_uint8}, types.T_float64},
-	{[]types.T{types.T_uint16}, types.T_float64},
-	{[]types.T{types.T_uint32}, types.T_float64},
-	{[]types.T{types.T_uint64}, types.T_float64},
-
-	{[]types.T{types.T_int8}, types.T_float64},
-	{[]types.T{types.T_int16}, types.T_float64},
-	{[]types.T{types.T_int32}, types.T_float64},
-	{[]types.T{types.T_int64}, types.T_float64},
-
-	{[]types.T{types.T_float32}, types.T_float64},
-	{[]types.T{types.T_float64}, types.T_float64},
-}
-
 func init() {
 	extend.FunctionRegistry["cot"] = builtin.Cot	
-
-	for _, item := range argAndRets {
-		overload.AppendFunctionRets(builtin.Cot, item.args, item.ret)	
-	}
 	extend.UnaryReturnTypes[builtin.Cot] = func(extend extend.Extend) types.T {
-		return getUnaryReturnType(builtin.Cot, extend)	
+		return types.T_float64	
 	}
 
 	extend.UnaryStrings[builtin.Cot] = func(e extend.Extend) string {	
 		return fmt.Sprintf("cot(%s)", e)
 	}
-	overload.OpTypes[builtin.Cot] = overload.Unary	
 
+	overload.OpTypes[builtin.Cot] = overload.Unary	
 	overload.UnaryOps[builtin.Cot] = []*overload.UnaryOp {
 		{
 			Typ: types.T_float32,
@@ -80,6 +61,11 @@ func init() {
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
+				if origVec.Ref == 1 || origVec.Ref == 0{
+					origVec.Ref = 0
+					cot.CotFloat64(origVecCol,origVecCol)
+					return origVec, nil
+				}
 				resultVector, err := process.Get(proc, 8*int64(len(origVecCol)), types.Type{Oid: types.T_float64, Size: 8})
 				if err != nil {
 					return nil, err
