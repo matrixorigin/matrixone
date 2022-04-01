@@ -19,14 +19,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/executor"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/util"
-	"github.com/matrixorigin/matrixcube/util/buf"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
@@ -35,21 +33,23 @@ import (
 )
 
 var (
-	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey")
+	errorPrefixLengthIsLongerThanStartKey = errors.New("the preifx length is longer than the startKey 3")
 )
 
 // Storage memory storage
 type kvExecutor struct {
-	kv    storage.KVStorage
-	attrs map[string]interface{}
+	kv     storage.KVStorage
+	attrs  map[string]interface{}
+	malloc *bytesMalloc
 }
 
 var _ storage.Executor = (*kvExecutor)(nil)
 
 func NewkvExecutor(kv storage.KVStorage) storage.Executor {
 	return &kvExecutor{
-		attrs: make(map[string]interface{}),
-		kv:    kv,
+		attrs:  make(map[string]interface{}),
+		kv:     kv,
+		malloc: NewBytesMalloc(true),
 	}
 }
 
@@ -138,18 +138,15 @@ func (ce *kvExecutor) scan(shard metapb.Shard, req storage.Request) ([]byte, err
 	return rep, nil
 }
 
-func (ce *kvExecutor) clone(value []byte, buffer *buf.ByteBuf) ([]byte, error) {
-	if buffer == nil {
-		v := make([]byte, len(value))
-		copy(v, value)
-		return v, nil
-	}
-	buffer.MarkWrite()
-	write, err := buffer.Write(value)
-	if err != nil || write != len(value) {
-		return nil, err
-	}
-	return buffer.WrittenDataAfterMark().Data(), nil
+func (ce *kvExecutor) clone(value []byte) []byte {
+	v := make([]byte, len(value))
+	copy(v, value)
+	return v
+}
+
+func (ce *kvExecutor) copy(dst, src []byte) []byte {
+	copy(dst, src)
+	return dst[:len(src)]
 }
 
 func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, req storage.Request) ([]byte, error) {
@@ -170,9 +167,9 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 
 	if len(userReq.GetPrefix()) != 0 {
 		prefixFilter := func(key []byte) bool {
-			return bytes.HasPrefix(key,userReq.GetPrefix())
+			return bytes.HasPrefix(key, userReq.GetPrefix())
 		}
-		options = append(options,executor.WithScanFilterFunc(prefixFilter))
+		options = append(options, executor.WithScanFilterFunc(prefixFilter))
 	}
 
 	needKey := userReq.GetNeedKey()
@@ -180,20 +177,24 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 	var copyValue []byte = nil
 	var err error = nil
 
+	nf := mallocedBuffers{}
+	defer func() {
+		//!!!NOTE return the buffer to pool
+		ce.malloc.freeMallocedBuffers(&nf)
+	}()
+
 	callback := func(key []byte, value []byte) error {
-		lastKey, err = ce.clone(key, readCtx.ByteBuf())
-		if err != nil {
-			return err
-		}
+		keyBuf := ce.malloc.malloc(len(key))
+		nf.collect(keyBuf)
+		lastKey = ce.copy(keyBuf, key)
 
 		if needKey {
 			keys = append(keys, lastKey)
 		}
 
-		copyValue, err = ce.clone(value, readCtx.ByteBuf())
-		if err != nil {
-			return err
-		}
+		valueBuf := ce.malloc.malloc(len(value))
+		nf.collect(valueBuf)
+		copyValue = ce.copy(valueBuf, value)
 
 		values = append(values, copyValue)
 		return nil
@@ -212,9 +213,9 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		case executor.None:
 			nextKey = nil
 		case executor.GenWithResultLastKey:
-			nextKey = kv.NextKey(lastKey, readCtx.ByteBuf())
+			nextKey = kv.NextKey(lastKey, nil)
 		case executor.UseShardEnd:
-			nextKey, err = ce.clone(shard.GetEnd(), readCtx.ByteBuf())
+			nextKey = ce.clone(shard.GetEnd())
 		}
 	}
 
@@ -298,19 +299,22 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard metapb.Sh
 	var keys [][]byte
 	var values [][]byte
 	var copyValue []byte
+	nf := mallocedBuffers{}
+	defer func() {
+		//!!!NOTE return buffer to the pool
+		ce.malloc.freeMallocedBuffers(&nf)
+	}()
 
 	callback := func(key []byte, value []byte) error {
-		lastKey, err = ce.clone(key, readCtx.ByteBuf())
-		if err != nil {
-			return err
-		}
+		keyBuf := ce.malloc.malloc(len(key))
+		nf.collect(keyBuf)
+		lastKey = ce.copy(keyBuf, key)
 
 		keys = append(keys, lastKey)
 
-		copyValue, err = ce.clone(value, readCtx.ByteBuf())
-		if err != nil {
-			return err
-		}
+		valueBuf := ce.malloc.malloc(len(value))
+		nf.collect(valueBuf)
+		copyValue = ce.copy(valueBuf, value)
 
 		values = append(values, copyValue)
 		return nil
@@ -328,9 +332,9 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard metapb.Sh
 		case executor.None:
 			nextKey = nil
 		case executor.GenWithResultLastKey:
-			nextKey = kv.NextKey(lastKey, readCtx.ByteBuf())
+			nextKey = kv.NextKey(lastKey, nil)
 		case executor.UseShardEnd:
-			nextKey, err = ce.clone(shard.GetEnd(), readCtx.ByteBuf())
+			nextKey = ce.clone(shard.GetEnd())
 		}
 	}
 
@@ -367,9 +371,9 @@ func (ce *kvExecutor) tpeCheckKeysExistInBatch(readCtx storage.ReadContext, shar
 
 	keyCnt := len(userReq.GetKeys())
 
-	startKey := kv.EncodeShardStart(userReq.GetKeys()[0], readCtx.ByteBuf())
-	endKey := kv.NextKey(userReq.GetKeys()[keyCnt-1], readCtx.ByteBuf())
-	endKey = kv.EncodeShardEnd(endKey, readCtx.ByteBuf())
+	startKey := kv.EncodeShardStart(userReq.GetKeys()[0], nil)
+	endKey := kv.NextKey(userReq.GetKeys()[keyCnt-1], nil)
+	endKey = kv.EncodeShardEnd(endKey, nil)
 
 	copyKeyValue := false
 	keyIndex := 0

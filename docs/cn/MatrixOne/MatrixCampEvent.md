@@ -25,7 +25,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 > 请注意：1个开发者可以选择多个挑战任务，但是1个任务只能由1个开发者完成
 
 
-来看下我们的任务列表吧：
+来看下我们的任务列表吧，其中已经被assign的任务请查看[英文版活动说明](https://github.com/matrixorigin/matrixone/issues/1997)：
 
 ### 1. 基础任务-数学类系统函数
 
@@ -43,16 +43,16 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 
 
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1974 Datetime Built-in function date() **[容易]**
-- [ ]  https://github.com/matrixorigin/matrixone/issues/1975 Datetime Built-in function utc_time() **[容易]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1976 Datetime Built-in function utc_timestamp() **[容易]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1977 Datetime Built-in function datediff() **[中等]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1978 Datetime Built-in function dayofmonth() **[中等]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1979 Datetime Built-in function dayofweek() **[中等]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1980 Datetime Built-in function dayofyear() **[中等]**
-- [ ]  https://github.com/matrixorigin/matrixone/issues/1981 Datetime Built-in function hour() **[中等]**
-- [ ]  https://github.com/matrixorigin/matrixone/issues/1982 Datetime Built-in function minute() **[中等]**
-- [ ]  https://github.com/matrixorigin/matrixone/issues/1983 Datetime Built-in function second() **[中等]**
-
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2049 Datetime Built-in function month() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2046 Datetime Built-in function weekday() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2047 Datetime Built-in function yearweek() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2048 Datetime Built-in function week() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/1830 Datetime Built-in function now() **[中等]**
 
 ### 3. 基础任务-字符串类系统函数
 
@@ -61,6 +61,7 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1986 String function rpad() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1987 String function rtrim() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1988 String function repeat() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/1989 String function reverse() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1990 String function space() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1991 String function replace() **[中等]**
 
@@ -86,3 +87,45 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 * PR内容: 遵循[MatrixOne的PR模版] (https://github.com/matrixorigin/matrixone/blob/main/.github/PULL_REQUEST_TEMPLATE.md)  
 3. 提交PR完成后，在你的PR下面按以下格式评论：
 评论格式: "I have finished Issue #" + PR link id
+
+## 常见问题
+
+**Q: 必须先领任务才能开始么，可以直接提PR吗？**
+A:  是的，参与开发者都需要在issue下面评论认领后再开始任务，不建议直接提PR。这样是为了避免多名开发者针对同一问题重复劳动。
+
+**Q: 为什么`select abs(-1);`和`select d, abs(-1) from t;`这样的语句会出问题？**
+A: 目前MatrixOne还不支持无表及常数参数的SQL语句，因此`select abs(-1);`和`select abs(-1) from table1;`这样的语句均会出错。正确的SQL语句是需要创建一张表，导入一些数据，然后再将列名作为参数运行built-in函数。如以下例子：
+```sql
+select abs(a) from t; 
+```
+**Q: 我提交的PR在自动测试阶段失败了，这个是什么原因？**
+A：MatrixOne会在PR提交之后自动进行一系列CI及BVT测试，开发者在提交之后可以看到测试的进展及日志，如果是与函数功能相关的测试没有通过，请修改code后重新提交。如果是其他与函数无关的测试问题，可以在PR中进行评论，社区将会查询问题所在，不会影响本次函数任务的判定结果。目前MatrixOne的CI测试有一定的不稳定程度，因此可能有一些与函数无关的CI测试会fail。
+
+**Q: MatrixOne服务启动之后的日志信息有点太多了，怎么能关掉?**
+A: 目前MatrixOne的默认日志级别是`DEBUG`级，所以信息是会比较多的。控制这个日志级别的是系统配置文件`system_vars_config.toml`，可以在调试的时候将该文件的`cubeLogLevel`与`level`两个参数设置成`ERROR`级别，这样打印的信息会少很多。
+```
+cubeLogLevel = "error"
+level = "error"
+```
+
+**Q: 如果我对认领的函数实现有一些疑问，我应该向谁询问?**
+A：如果是针对MatrixOne本身的测试和行为发现bug，欢迎向MatrixOne社区提出issue，我们有相应的模版帮助说明如何写issue，社区会对issue进行处理。如果是针对函数本身的实现有问题，可以直接在认领的issue下面评论你的想法和疑问，MatrixOne社区的mentor会及时回复。
+
+**Q: 我启动了MatrixOne服务，并且用MySQL进行连接，但是好像没有获得正确的结果，如何才知道是否成功连接?**
+A: 如果你的MySQL客户端连接MatrixOne后打印如下信息，就说明已经成功连接： 
+```
+Welcome to the MySQL monitor.  Commands end with ; or \g.
+Your MySQL connection id is 1002
+Server version: 0.3.0 MatrixOne
+
+Copyright (c) 2000, 2020, Oracle and/or its affiliates. All rights reserved.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type 'help;' or '\h' for help. Type '\c' to clear the current input statement. 
+```
+
+**Q: Mentor要求我对提交的代码格式进行缩进，这个如何做？**
+A：可以通过Golang语言自带的gofmt工具在命令行中进行操作，或者在一些常见的IDE如VS Code和GoLand中也均有相应的设置。

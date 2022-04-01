@@ -309,19 +309,36 @@ func (ctr *Container) processFreeVarsUnit(proc *process.Process, arg *Argument) 
 				batch.Clean(bat, proc.Mp)
 				return false, err
 			}
+			if err := bat.Rs[i].Grows(len(bat.Zs), proc.Mp); err != nil {
+				bat.Rs = bat.Rs[:i]
+				batch.Clean(bat, proc.Mp)
+				return false, err
+			}
+			if cap(ctr.inserted) < len(bat.Zs) {
+				ctr.inserted = make([]uint8, len(bat.Zs))
+			}
+			ctr.inserted = ctr.inserted[:len(bat.Zs)]
+			if cap(ctr.values) < len(bat.Zs) {
+				ctr.values = make([]uint64, len(bat.Zs))
+			}
+			ctr.values = ctr.values[:len(bat.Zs)]
+			for i := range ctr.values {
+				ctr.values[i] = uint64(i + 1)
+			}
+			bat.Rs[i].BatchFill(0, ctr.inserted, ctr.values, bat.Zs, bat.Vecs[ctr.Is[i]])
 		}
 	}
 	return false, err
 }
 
 func preprocess(proc *process.Process, arg *Argument) error {
-	if arg.Restrict != nil {
-		if _, err := restrict.Call(proc, arg.Restrict); err != nil {
+	if arg.Projection != nil {
+		if _, err := projection.Call(proc, arg.Projection); err != nil {
 			return err
 		}
 	}
-	if arg.Projection != nil {
-		if _, err := projection.Call(proc, arg.Projection); err != nil {
+	if arg.Restrict != nil {
+		if _, err := restrict.Call(proc, arg.Restrict); err != nil {
 			return err
 		}
 	}
@@ -1799,32 +1816,42 @@ func (ctr *Container) constructContainer(n *Argument, bat *batch.Batch) {
 	for i, attr := range bat.Attrs {
 		mp[attr] = i
 	}
-	{
-		mq := make(map[string]int)
-		for _, bvar := range n.BoundVars {
-			mq[bvar.Name]++
-			ctr.Is = append(ctr.Is, mp[bvar.Name])
+	for _, bvar := range n.BoundVars {
+		ctr.Is = append(ctr.Is, mp[bvar.Name])
+	}
+
+	/*
+		mp := make(map[string]int)
+		for i, attr := range bat.Attrs {
+			mp[attr] = i
 		}
-		for k, v := range mq {
-			vec := batch.GetVector(bat, k)
-			if int(vec.Ref) == v {
-				delete(mp, k)
+		{
+			mq := make(map[string]int)
+			for _, bvar := range n.BoundVars {
+				mq[bvar.Name]++
+				ctr.Is = append(ctr.Is, mp[bvar.Name])
+			}
+			for k, v := range mq {
+				vec := batch.GetVector(bat, k)
+				if int(vec.Ref) == v {
+					delete(mp, k)
+				}
 			}
 		}
-	}
-	for _, fvar := range n.FreeVars {
-		delete(mp, fvar)
-	}
-	for i, attr := range bat.Attrs {
-		if _, ok := mp[attr]; !ok {
-			continue
+		for _, fvar := range n.FreeVars {
+			delete(mp, fvar)
 		}
-		n.BoundVars = append(n.BoundVars, transformer.Transformer{
-			Name:  attr,
-			Alias: attr,
-			Op:    transformer.Max,
-			Ref:   int(bat.Vecs[i].Ref),
-		})
-		ctr.Is = append(ctr.Is, i)
-	}
+		for i, attr := range bat.Attrs {
+			if _, ok := mp[attr]; !ok {
+				continue
+			}
+			n.BoundVars = append(n.BoundVars, transformer.Transformer{
+				Name:  attr,
+				Alias: attr,
+				Op:    transformer.Max,
+				Ref:   int(bat.Vecs[i].Ref),
+			})
+			ctr.Is = append(ctr.Is, i)
+		}
+	*/
 }

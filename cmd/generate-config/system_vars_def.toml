@@ -501,7 +501,7 @@ shard-state-check-duration = "1m"                   # the period of shard state 
 compact-log-check-duration = "60s"                  # the period of log compaction checking
 disable-shard-split = false                         # to disable shard split, set this value to true
 allow-remove-leader = false                         # to allow leader removal, set this value to true
-shard-capacity-bytes = "96MB"                       # shard capacity
+shard-capacity-bytes = "4096MB"                       # shard capacity
 
 [raft]
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
