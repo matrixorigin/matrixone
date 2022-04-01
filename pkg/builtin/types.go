@@ -30,6 +30,7 @@ const (
 	Exp
 	Power
 	Pi
+	Reverse
 	UTCTimestamp
 	Ltrim
 	Rtrim
@@ -39,5 +40,6 @@ const (
 	Atan
 	DayOfYear
 	Month
+	Weekday
   Acos
 )
