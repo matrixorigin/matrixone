@@ -49,7 +49,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosUint8(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -59,6 +58,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -73,7 +73,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosUint16(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -83,6 +82,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -97,7 +97,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosUint32(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -107,6 +106,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -121,7 +121,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosUint64(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -131,6 +130,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -145,7 +145,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosInt8(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -155,6 +154,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -169,7 +169,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosInt16(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -179,6 +178,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -193,7 +193,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosInt32(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -203,6 +202,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -217,7 +217,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosInt64(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -227,6 +226,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -241,7 +241,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosFloat32(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -251,6 +250,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
@@ -265,7 +265,6 @@ func init() {
 				}
 				results := encoding.DecodeFloat64Slice(resultVector.Data)
 				results = results[:len(origVecCol)]
-				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
 				acosResult := acos.AcosFloat64(origVecCol, results)
 				if nulls.Any(acosResult.Nsp) {
@@ -275,6 +274,7 @@ func init() {
 						resultVector.Nsp.Or(acosResult.Nsp)
 					}
 				}
+				resultVector.Col = acosResult.Result
 				return resultVector, err
 			},
 		},
