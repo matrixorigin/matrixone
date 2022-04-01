@@ -132,3 +132,4 @@ static-check:
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
+  
