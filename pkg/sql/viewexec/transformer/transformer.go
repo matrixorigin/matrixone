@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
@@ -67,6 +68,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_uint64
 	case Variance:
 		return types.T_float64
+	case BitAnd:
+		return types.T_uint64
 	case Bit_or:
 		return typ
 	}
@@ -91,6 +94,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return approxcd.NewApproxCountDistinct(typ), nil
 	case Variance:
 		return variance.NewVarianceRing(typ), nil
+	case BitAnd:
+		return NewBitAnd(typ)
 	case Bit_or:
 		return NewBit_or(typ)
 	}
@@ -123,6 +128,13 @@ func NewBit_or(typ types.Type) (ring.Ring, error) {
 	return nil, errors.New(fmt.Sprintf("'%v' not support bit_or", typ))
 }
 
+func NewBitAnd(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+		return bitand.NewNumeric(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support BitAnd", typ))
+}
 
 func NewSum(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
