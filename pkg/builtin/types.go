@@ -35,6 +35,6 @@ const (
 	Ltrim
 	Rtrim
 	Sin
-  Atan
+  	Atan
 	Lpad
 )
