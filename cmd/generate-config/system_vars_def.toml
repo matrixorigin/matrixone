@@ -404,8 +404,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["memorykv","cubekv"]
-comment = "default is memorykv. Chose memory or cube as the KV storage."
+values = ["cubekv","memorykv"]
+comment = "default is cubekv. Chose memory or cube as the KV storage."
 update-mode = "dynamic"
 
 [[parameter]]

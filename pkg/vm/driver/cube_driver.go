@@ -140,14 +140,16 @@ type CubeDriver interface {
 	//	But from the second time, the startKeyOrPrefix is the next scan key
 	//	that generated from results in the previous TpePrefixScan.
 	//b. prefixLength : it denotes startKeyOrPrefix[:prefixLength] is the real prefix.
-	//c. limit: if it is the math.MaxUint64,
+	//c. prefixEnd : the next key of the keys started with the prefix
+	//d. needKeyOnly: only return the keys without theirs values
+	//e. limit: if it is the math.MaxUint64,
 	//	        it means there is not limitation on the count of keys.
 	//return parameters:
 	//[][]byte : return keys
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
+	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -648,7 +650,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	return pairs, err
 }
 
-func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
 	if prefixLength > len(startKeyOrPrefix) {
 		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
@@ -659,6 +661,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 			PrefixOrStartKey: startKeyOrPrefix,
 			PrefixLength:     int64(prefixLength),
 			PrefixEnd:        prefixEnd,
+			NeedKeyOnly:      needKeyOnly,
 			Limit:            limit,
 		},
 	}
