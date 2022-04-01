@@ -9,7 +9,6 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/hanwen/go-fuse/v2 v2.1.1-0.20220112183258-f57e95bda82d
 	github.com/hugelgupf/p9 v0.2.0
-	github.com/matrixorigin/matrixcube v0.2.1-0.20220121062436-27caca6aaf2c
 	github.com/reusee/dscope v0.0.0-20220214071500-aeb731ef45cc
 	github.com/reusee/e4 v0.0.0-20211111112921-a1e3637d4313
 	github.com/reusee/sb v0.0.0-20220208031045-2aad8080739f
@@ -25,6 +24,7 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20210503173641-1387689d3d7c // indirect
 	github.com/emicklei/dot v0.16.0 // indirect
 	github.com/google/pprof v0.0.0-20211214055906-6f57359322fd // indirect
+	github.com/matrixorigin/matrixcube v0.3.1-0.20220331073250-cf0f44268764 // indirect
 	github.com/mattn/go-colorable v0.1.2 // indirect
 	github.com/mattn/go-isatty v0.0.9 // indirect
 	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
@@ -68,7 +68,7 @@ require (
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lni/goutils v1.3.0 // indirect
-	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
+	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f
 	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

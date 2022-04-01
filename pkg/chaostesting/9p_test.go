@@ -28,12 +28,12 @@ func Test9P(t *testing.T) {
 	}, func() Debug9P {
 		return false
 	}).Call(func(
-		dir TempDir,
+		getTempDir GetTempDir,
 		cleanup Cleanup,
 	) {
 		defer cleanup()
 
-		testFS(t, string(dir))
+		testFS(t, string(getTempDir()))
 
 	})
 }
