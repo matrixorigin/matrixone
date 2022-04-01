@@ -779,6 +779,9 @@ We have prepared a single table SSB query dataset with 10 million rows of data. 
 > https://pan.baidu.com/s/1dCpcKsygdVuHzd-H-RWHFA
 > code: k1rs
 
+> https://share.weiyun.com/rF3HjsSR 
+> code: 9u8xz8
+
 Step2: Unzip the file and Load the data into MatrixOne. 
 
 With the following SQL you can create the database and table, and load the `lineorder_flat.tbl` into MatrixOne.
