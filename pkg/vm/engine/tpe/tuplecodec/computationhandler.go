@@ -85,6 +85,24 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
+func (chi *ComputationHandlerImpl) DumpRead(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, error) {
+	var result *batch.DumpResult
+	var err error
+	if opt.UseKey || opt.UseValue {
+		if opt.UseKey && opt.UseValue {
+			return nil, errors.New("can not use key and value together")
+		}
+		result, _, err = chi.indexHandler.DumpRangeReadFromIndex(readCtx, opt)
+	} else {
+		result, _, err = chi.indexHandler.DumpReadFromIndex(readCtx, opt)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh: dh,

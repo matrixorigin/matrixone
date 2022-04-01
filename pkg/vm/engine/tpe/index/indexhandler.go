@@ -25,6 +25,10 @@ type IndexHandler interface {
 
 	WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error
 
+	DumpReadFromIndex(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, int, error)
+
+	DumpRangeReadFromIndex(readCtx interface{}, opt *batch.DumpOption) (*batch.DumpResult, int, error)
+
 	WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error
 
 	DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error

@@ -16,6 +16,7 @@ package engine
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -152,3 +153,94 @@ func (tr *  TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, err
 	}
 	return bat,err
 }
+
+func (tr *  TpeReader) DumpRead(refCnts []uint64, attrs []string, opt *batch.DumpOption) (*batch.DumpResult, error) {
+	if tr.isDumpReader {
+		//read nothing
+		return nil, nil
+	}
+	if len(refCnts) == 0 || len(attrs) == 0{
+		return nil,errorInvalidParameters
+	}
+	if len(refCnts) != len(attrs) {
+		return nil,errorMismatchRefcntWithAttributeCnt
+	}
+
+	attrSet := make(map[string]uint32)
+	for _, tableAttr := range tr.tableDesc.Attributes {
+		attrSet[tableAttr.Name] = tableAttr.ID
+	}
+
+	//check if the attribute is in the relation
+	var readAttrs []*descriptor.AttributeDesc
+	for _, attr := range attrs {
+		if attrID,exist := attrSet[attr]; exist {
+			readAttrs = append(readAttrs,&tr.tableDesc.Attributes[attrID])
+		}else{
+			return nil, errorSomeAttributeNamesAreNotInAttributeDesc
+		}
+	}
+
+	var err error
+
+	if tr.readCtx == nil {
+		tr.readCtx = &tuplecodec.ReadContext{
+			DbDesc:                   tr.dbDesc,
+			TableDesc:                tr.tableDesc,
+			IndexDesc:                &tr.tableDesc.Primary_index,
+			ReadAttributesNames:      attrs,
+			ReadAttributeDescs:       readAttrs,
+			ParallelReader: tr.parallelReader,
+			ReadCount: 0,
+		}
+
+		if tr.readCtx.ParallelReader {
+			tr.readCtx.ParallelReaderContext = tuplecodec.ParallelReaderContext{
+				ShardIndex: 0,
+				ShardStartKey: tr.shardInfos[0].startKey,
+				ShardEndKey: tr.shardInfos[0].endKey,
+				ShardNextScanKey: tr.shardInfos[0].startKey,
+				CompleteInShard: tr.shardInfos[0].completeInShard,
+			}
+		}else{
+			tr.readCtx.SingleReaderContext = tuplecodec.SingleReaderContext{
+				CompleteInAllShards: false,
+				PrefixForScanKey:         nil,
+				LengthOfPrefixForScanKey: 0,
+			}
+		}
+	}else{
+		//check if these attrs are same as last attrs
+		if len(tr.readCtx.ReadAttributesNames) != len(attrs) {
+			return nil,errorDifferentReadAttributesInSameReader
+		}
+
+		for i := 0; i < len(attrs); i++ {
+			if attrs[i] != tr.readCtx.ReadAttributesNames[i] {
+				return nil, errorDifferentReadAttributesInSameReader
+			}
+		}
+
+		if tr.readCtx.ParallelReader {
+			//update new shard if needed
+			if tr.readCtx.CompleteInShard {
+				tr.shardInfos[tr.readCtx.ShardIndex].completeInShard = true
+				tr.readCtx.ShardIndex++
+				if tr.readCtx.ShardIndex < len(tr.shardInfos) {
+					tr.readCtx.ShardStartKey = tr.shardInfos[tr.readCtx.ShardIndex].startKey
+					tr.readCtx.ShardEndKey = tr.shardInfos[tr.readCtx.ShardIndex].endKey
+					tr.readCtx.ShardNextScanKey = tr.shardInfos[tr.readCtx.ShardIndex].nextScanKey
+					tr.readCtx.CompleteInShard = false
+				}else{
+					return nil,nil
+				}
+			}
+		}
+	}
+
+	result, err := tr.computeHandler.DumpRead(tr.readCtx, opt)
+	if err != nil {
+		return nil, err
+	}
+	return result,err
+} 
