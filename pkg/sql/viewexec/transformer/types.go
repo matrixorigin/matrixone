@@ -23,6 +23,7 @@ const (
 	StarCount
 	ApproxCountDistinct
 	Variance
+	Bit_or
 )
 
 var TransformerNames = [...]string{
@@ -34,6 +35,7 @@ var TransformerNames = [...]string{
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
 	Variance:            "var",
+	Bit_or:              "bit_or",
 }
 
 var TransformerNamesMap map[string]int
