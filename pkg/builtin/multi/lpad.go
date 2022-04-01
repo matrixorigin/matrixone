@@ -54,16 +54,27 @@ func init() {
 			Fn: func(vecs []*vector.Vector, proc *process.Process, cs []bool) (*vector.Vector, error) {
 				vs := vecs[0].Col.(*types.Bytes) //Get the first arg
 
-				if !cs[1] || vecs[1].Typ.Oid != types.T_int64 {
+				if !cs[1] && vecs[1].Typ.Oid != types.T_int64 {
 					return nil, errors.New("The second argument of the lpad function must be an int64 constant")
-				} else if !cs[2] || vecs[2].Typ.Oid != types.T_varchar {
+				}
+				if !cs[2] && vecs[2].Typ.Oid != types.T_varchar {
 					return nil, errors.New("The third argument of the lpad function must be an string constant")
 				}
 				lens := vecs[1].Col.([]int64)
 				padds := vecs[2].Col.(*types.Bytes)
 				for _, num := range lens {
 					if num < 0 {
-						return nil, errors.New("The second argument cant't be negative")
+						vec, err := process.Get(proc, 24*int64(len(vs.Lengths)), types.Type{Oid: types.T_varchar, Size: 24})
+						if err != nil {
+							return nil, err
+						}
+						nulls.Set(vec.Nsp, vecs[0].Nsp)
+						var res *types.Bytes = &types.Bytes{}
+						res.Data = []byte{'N', 'U', 'L', 'L'}
+						res.Lengths = []uint32{4}
+						res.Offsets = []uint32{0}
+						vector.SetCol(vec, res)
+						return vec, nil
 					}
 				}
 				//use vecs[0] as return
