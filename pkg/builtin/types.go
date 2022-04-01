@@ -30,11 +30,11 @@ const (
 	Exp
 	Power
 	Pi
-	Reverse
 	UTCTimestamp
 	Ltrim
 	Rtrim
 	Sin
+	Sinh
 	Cos
 	Tan
 	Atan
