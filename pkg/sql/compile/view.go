@@ -19,300 +19,297 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 )
 
 const (
 	UnitLimit = 256
 )
 
-func constructViews(bats []*batch.Batch, fvars []string) {
-	for i, fvar := range fvars {
-		constructView(bats[i], fvar)
+func constructViews(bats []*batch.Batch, vars [][]string) {
+	for i := range vars {
+		constructView(bats[i], vars[i])
 	}
 }
 
-func constructView(bat *batch.Batch, fvar string) {
-	ht := &hashtable.Int64HashMap{}
-	ht.Init()
-	hashes := make([]uint64, UnitLimit)
+func constructView(bat *batch.Batch, vars []string) {
+	var rows uint64
+
+	ht := &join.HashTable{
+		StrHashMap: &hashtable.StringHashMap{},
+	}
+	ht.StrHashMap.Init()
+	keys := make([][]byte, UnitLimit)
 	values := make([]uint64, UnitLimit)
-	keys := make([]uint64, UnitLimit)
-	vec := batch.GetVector(bat, fvar)
-	switch vec.Typ.Oid {
-	case types.T_int8:
-		vs := vec.Col.([]int8)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+	strHashStates := make([][3]uint64, UnitLimit)
+	batch.Reorder(bat, vars)
+	vecs := make([]*vector.Vector, len(vars))
+	{ // fill vectors
+		for i := range vars {
+			vecs[i] = batch.GetVector(bat, vars[i])
+		}
+	}
+	count := int64(len(bat.Zs))
+	for i := int64(0); i < count; i += UnitLimit {
+		n := count - i
+		if n > UnitLimit {
+			n = UnitLimit
+		}
+		for j, vec := range vecs {
+			switch vec.Typ.Oid {
+			case types.T_int8:
+				vs := vecs[j].Col.([]int8)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_int16:
-		vs := vec.Col.([]int16)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_uint8:
+				vs := vecs[j].Col.([]uint8)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*1)[:len(vs)*1]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*1:(i+k+1)*1]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_int32:
-		vs := vec.Col.([]int32)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_int16:
+				vs := vecs[j].Col.([]int16)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_date:
-		vs := vec.Col.([]types.Date)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_uint16:
+				vs := vecs[j].Col.([]uint16)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*2)[:len(vs)*2]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*2:(i+k+1)*2]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_int64:
-		vs := vec.Col.([]int64)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_int32:
+				vs := vecs[j].Col.([]int32)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_datetime:
-		vs := vec.Col.([]types.Datetime)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_uint32:
+				vs := vecs[j].Col.([]uint32)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_uint8:
-		vs := vec.Col.([]uint8)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_float32:
+				vs := vecs[j].Col.([]float32)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_uint16:
-		vs := vec.Col.([]uint16)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_date:
+				vs := vecs[j].Col.([]types.Date)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*4)[:len(vs)*4]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*4:(i+k+1)*4]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_uint32:
-		vs := vec.Col.([]uint32)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_int64:
+				vs := vecs[j].Col.([]int64)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_uint64:
-		vs := vec.Col.([]uint64)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_uint64:
+				vs := vecs[j].Col.([]uint64)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_float32:
-		vs := vec.Col.([]float32)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_float64:
+				vs := vecs[j].Col.([]float64)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_float64:
-		vs := vec.Col.([]float64)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			{
-				for k := 0; k < n; k++ {
-					keys[k] = uint64(vs[int(i)+k])
+			case types.T_datetime:
+				vs := vecs[j].Col.([]types.Datetime)
+				data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*8)[:len(vs)*8]
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], data[(i+k)*8:(i+k+1)*8]...)
+						}
+					}
 				}
-			}
-			hashes[0] = 0
-			ht.InsertBatch(n, hashes, unsafe.Pointer(&keys[0]), values)
-		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
-		}
-	case types.T_char, types.T_varchar:
-		ht := &hashtable.StringHashMap{}
-		ht.Init()
-		var strKeys [UnitLimit][]byte
-		var strKeys16 [UnitLimit][16]byte
-		var zStrKeys16 [UnitLimit][16]byte
-		var states [UnitLimit][3]uint64
-		vs := vec.Col.(*types.Bytes)
-		count := int64(len(bat.Zs))
-		for i := int64(0); i < count; i += UnitLimit {
-			n := int(count - i)
-			if n > UnitLimit {
-				n = UnitLimit
-			}
-			var padded int
-			{
-				for k := 0; k < n; k++ {
-					if vs.Lengths[i+int64(k)] < 16 {
-						copy(strKeys16[padded][:], vs.Get(i+int64(k)))
-						strKeys[k] = strKeys16[padded][:]
-						padded++
-					} else {
-						strKeys[k] = vs.Get(i + int64(k))
+			case types.T_char, types.T_varchar:
+				vs := vecs[j].Col.(*types.Bytes)
+				if !nulls.Any(vecs[j].Nsp) {
+					for k := int64(0); k < n; k++ {
+						keys[k] = append(keys[k], byte(0))
+						keys[k] = append(keys[k], vs.Get(i+k)...)
+					}
+				} else {
+					for k := int64(0); k < n; k++ {
+						if vecs[j].Nsp.Np.Contains(uint64(i + k)) {
+							keys[k] = append(keys[k], byte(1))
+						} else {
+							keys[k] = append(keys[k], byte(0))
+							keys[k] = append(keys[k], vs.Get(i+k)...)
+						}
 					}
 				}
 			}
-			ht.InsertStringBatch(states[:], strKeys[:n], values)
-			copy(strKeys16[:padded], zStrKeys16[:padded])
 		}
-		if len(bat.Zs) == int(ht.Cardinality()) {
-			bat.Ht = ht
-			return
+		for k := int64(0); k < n; k++ {
+			if l := len(keys[k]); l < 16 {
+				keys[k] = append(keys[k], hashtable.StrKeyPadding[l:]...)
+			}
+		}
+		ht.StrHashMap.InsertStringBatch(strHashStates, keys[:n], values)
+		{
+			for k, v := range values[:n] {
+				if v > rows {
+					ht.Sels = append(ht.Sels, make([]int64, 0, 8))
+				}
+				ai := int64(v) - 1
+				ht.Sels[ai] = append(ht.Sels[ai], i+int64(k))
+			}
 		}
 	}
-	bat.Ht = nil
+	bat.Ht = ht
 }

@@ -11,37 +11,36 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-
-package ftree
+package dayofyear
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
-func New() *build {
-	return &build{}
-}
+func TestDayOfYear(t *testing.T) {
+	testCases := []struct {
+		name string
+		args []types.Date
+		want []uint16
+	}{
+		{
+			args: []types.Date{types.FromCalendar(2021, 8, 13)},
+			want: []uint16{225},
+		},
+		{
+			args: []types.Date{types.FromCalendar(2022, 3, 28)},
+			want: []uint16{87},
+		},
+	}
 
-func (b *build) Build(qry *plan.Query) (*FTree, error) {
-	if len(qry.Rels) == 1 {
-		return &FTree{
-			Qry:      qry,
-			FreeVars: qry.FreeAttrs,
-			Roots:    buildPath(qry.Rels[0], qry, nil),
-		}, nil
+	for _, c := range testCases {
+		t.Run(c.name, func(t *testing.T) {
+			got := make([]uint16, len(c.args))
+			require.Equal(t, c.want, GetDayOfYear(c.args, got))
+		})
 	}
-	rn, err := selectRoot(qry)
-	if err != nil {
-		return nil, err
-	}
-	roots, err := buildNodes(qry.RelsMap[rn], qry)
-	if err != nil {
-		return nil, err
-	}
-	f := &FTree{
-		Qry:      qry,
-		Roots:    roots,
-		FreeVars: qry.FreeAttrs,
-	}
-	return f, f.check(qry)
+
 }

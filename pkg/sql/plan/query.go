@@ -14,274 +14,29 @@
 
 package plan
 
-import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
-)
-
-func (qry *Query) backFill() {
-	qry.VarsMap = make(map[string]int)
-	for _, rn := range qry.Rels {
-		rel := qry.RelsMap[rn]
-		for _, attr := range rel.Attrs {
-			qry.VarsMap[attr]++
-		}
-		for _, agg := range rel.Aggregations {
-			_, name := util.SplitTableAndColumn(agg.Alias)
-			qry.VarsMap[name]++
-			if agg.Op == transformer.StarCount {
-				for j, attr := range rel.Attrs {
-					if j == len(rel.Attrs)-1 {
-						agg.Name = attr
-						rel.AttrsMap[agg.Name].Ref++
-						break
-					}
-					if rel.AttrsMap[attr].Ref > 0 {
-						agg.Name = attr
-						rel.AttrsMap[agg.Name].Ref++
-						break
-					}
-				}
-			}
-		}
-		for _, e := range rel.ProjectionExtends {
-			_, name := util.SplitTableAndColumn(e.Alias)
-			qry.VarsMap[name]++
-		}
-	}
-	for _, e := range qry.ProjectionExtends {
-		_, name := util.SplitTableAndColumn(e.Alias)
-		qry.VarsMap[name]++
-	}
-	qry.reduce()
+func newScopeSet() *ScopeSet {
+	return &ScopeSet{}
 }
 
-// If flg is set, then it will increase the reference count
-// 	. only the original attributes will be looked up
-func (qry *Query) getAttribute0(flg bool, col string) ([]string, *types.Type, error) {
-	var typ *types.Type
-	var names []string
-
-	tbl, name := util.SplitTableAndColumn(col)
-	if len(tbl) > 0 {
-		for i := 0; i < len(qry.Rels); i++ {
-			if qry.Rels[i] == tbl {
-				rel := qry.RelsMap[tbl]
-				if attr, ok := rel.AttrsMap[name]; ok {
-					if flg {
-						attr.IncRef()
-					}
-					if typ == nil {
-						typ = &attr.Type
-					}
-					names = append(names, qry.Rels[i])
-				}
-			}
-		}
-	} else {
-		for i := 0; i < len(qry.Rels); i++ {
-			rel := qry.RelsMap[qry.Rels[i]]
-			if attr, ok := rel.AttrsMap[name]; ok {
-				if flg {
-					attr.IncRef()
-				}
-				if typ == nil {
-					typ = &attr.Type
-				}
-				names = append(names, qry.Rels[i])
-			}
-		}
-	}
-	return names, typ, nil
+func (qry *Query) IsEmpty() bool {
+	return len(qry.Stack) == 0
 }
 
-// If flg is set, then it will increase the reference count
-// 	. original attributes will be looked up
-//  . projection will be looked up
-func (qry *Query) getAttribute1(flg bool, col string) ([]string, *types.Type, error) {
-	var typ *types.Type
-	var names []string
-
-	tbl, name := util.SplitTableAndColumn(col)
-	if len(tbl) > 0 {
-		for i := 0; i < len(qry.Rels); i++ {
-			if qry.Rels[i] == tbl {
-				rel := qry.RelsMap[tbl]
-				if j := rel.ExistProjection(name); j >= 0 {
-					if flg {
-						rel.ProjectionExtends[j].IncRef()
-					}
-					if typ == nil {
-						typ = &types.Type{Oid: rel.ProjectionExtends[j].E.ReturnType()}
-					}
-					names = append(names, qry.Rels[i])
-				} else if attr, ok := rel.AttrsMap[name]; ok {
-					if flg {
-						attr.IncRef()
-					}
-					if typ == nil {
-						typ = &attr.Type
-					}
-					names = append(names, qry.Rels[i])
-				}
-			}
-		}
-	} else {
-		for i := 0; i < len(qry.Rels); i++ {
-			rel := qry.RelsMap[qry.Rels[i]]
-			if j := rel.ExistProjection(name); j >= 0 {
-				if flg {
-					rel.ProjectionExtends[j].IncRef()
-				}
-				if typ == nil {
-					typ = &types.Type{Oid: rel.ProjectionExtends[j].E.ReturnType()}
-				}
-				names = append(names, qry.Rels[i])
-
-			} else if attr, ok := rel.AttrsMap[name]; ok {
-				if flg {
-					attr.IncRef()
-				}
-				if typ == nil {
-					typ = &attr.Type
-				}
-				names = append(names, qry.Rels[i])
-			}
-		}
-	}
-	return names, typ, nil
+func (qry *Query) Clear() {
+	qry.Stack = make([]*ScopeSet, 0, 4)
 }
 
-// If flg is set, then it will increase the reference count
-// 	. original attributes will be looked up
-//  . projection will be looked up
-//  . aggregation will be looke up
-func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, error) {
-	var typ *types.Type
-	var names []string
-
-	tbl, name := util.SplitTableAndColumn(col)
-	if len(tbl) > 0 { // scope of relation
-		for i := 0; i < len(qry.Rels); i++ {
-			if qry.Rels[i] == tbl {
-				rel := qry.RelsMap[tbl]
-				if j := rel.ExistAggregation(name); j >= 0 {
-					if flg {
-						rel.Aggregations[j].IncRef()
-					}
-					if typ == nil {
-						typ = &types.Type{Oid: rel.Aggregations[j].Type}
-					}
-					names = append(names, qry.Rels[i])
-				} else if j := rel.ExistProjection(name); j >= 0 {
-					if flg {
-						rel.ProjectionExtends[j].IncRef()
-					}
-					if typ == nil {
-						typ = &types.Type{Oid: rel.ProjectionExtends[j].E.ReturnType()}
-					}
-					names = append(names, qry.Rels[i])
-				} else if attr, ok := rel.AttrsMap[name]; ok {
-					if flg {
-						attr.IncRef()
-					}
-					if typ == nil {
-						typ = &attr.Type
-					}
-					names = append(names, qry.Rels[i])
-				}
-			}
-		}
-	} else {
-		for i := 0; i < len(qry.Rels); i++ {
-			rel := qry.RelsMap[qry.Rels[i]]
-			if j := rel.ExistAggregation(name); j >= 0 {
-				if flg {
-					rel.Aggregations[j].IncRef()
-				}
-				if typ == nil {
-					typ = &types.Type{Oid: rel.Aggregations[j].Type}
-				}
-				names = append(names, qry.Rels[i])
-			} else if j := rel.ExistProjection(name); j >= 0 {
-				if flg {
-					rel.ProjectionExtends[j].IncRef()
-				}
-				if typ == nil {
-					typ = &types.Type{Oid: rel.ProjectionExtends[j].E.ReturnType()}
-				}
-				names = append(names, qry.Rels[i])
-
-			} else if attr, ok := rel.AttrsMap[name]; ok {
-				if flg {
-					attr.IncRef()
-				}
-				if typ == nil {
-					typ = &attr.Type
-				}
-				names = append(names, qry.Rels[i])
-			}
-		}
-	}
-	if len(names) == 0 { // scope of query
-		for i, e := range qry.ProjectionExtends {
-			if e.Alias == name {
-				if flg {
-					qry.ProjectionExtends[i].IncRef()
-				}
-				if typ == nil {
-					typ = &types.Type{Oid: e.E.ReturnType()}
-				}
-				if e.Alias == col {
-					names = append(names, qry.Name())
-				}
-			}
-		}
-	}
-	return names, typ, nil
+func (qry *Query) Top() *ScopeSet {
+	return qry.Stack[len(qry.Stack)-1]
 }
 
-// If flg is set, then it will increase the reference count
-func (qry *Query) getJoinAttribute(flg bool, tbls []string, col string) (string, string, error) {
-	var names []string
+func (qry *Query) Push(ss *ScopeSet) {
+	qry.Stack = append(qry.Stack, ss)
+}
 
-	tbl, name := util.SplitTableAndColumn(col)
-	if len(tbl) > 0 {
-		for i := 0; i < len(tbls); i++ {
-			if tbls[i] == tbl {
-				attr, ok := qry.RelsMap[tbl].AttrsMap[name]
-				if !ok {
-					return "", "", errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Column '%s' doesn't exist", col))
-				}
-				if flg {
-					attr.IncRef()
-				}
-				names = append(names, tbls[i])
-			}
-		}
-		if len(names) == 0 {
-			return "", "", errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Table '%s' doesn't exist", tbl))
-		}
-	} else {
-		for i := 0; i < len(tbls); i++ {
-			if attr, ok := qry.RelsMap[tbls[i]].AttrsMap[name]; ok {
-				if flg {
-					attr.IncRef()
-				}
-				names = append(names, tbls[i])
-			}
-		}
-	}
-	if len(names) == 0 {
-		return "", "", errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unknown column '%s' in 'from clause'", col))
-	}
-	if len(names) > 1 {
-		return "", "", errors.New(errno.DuplicateColumn, fmt.Sprintf("Column '%s' in on clause is ambiguous", col))
-	}
-	return names[0], name, nil
+func (qry *Query) Pop() *ScopeSet {
+	n := len(qry.Stack) - 1
+	ss := qry.Stack[n]
+	qry.Stack = qry.Stack[:n]
+	return ss
 }

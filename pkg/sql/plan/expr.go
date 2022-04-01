@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
@@ -105,9 +106,6 @@ func (b *build) buildBetween(e *tree.RangeCond, qry *Query, fn func(tree.Expr, *
 	left, err := fn(e.Left, qry)
 	if err != nil {
 		return nil, err
-	}
-	{ // inc reference
-		fn(e.Left, qry)
 	}
 	from, err := fn(e.From, qry)
 	if err != nil {
@@ -188,6 +186,12 @@ func (b *build) buildCast(e *tree.CastExpr, qry *Query, fn func(tree.Expr, *Quer
 	case defines.MYSQL_TYPE_DOUBLE:
 		typ.Size = 8
 		typ.Oid = types.T_float64
+	case defines.MYSQL_TYPE_DATE:
+		typ.Size = 4
+		typ.Oid = types.T_date
+	case defines.MYSQL_TYPE_DATETIME:
+		typ.Size = 8
+		typ.Oid = types.T_datetime
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING:
 		typ.Size = 24
 		typ.Oid = types.T_varchar
@@ -242,35 +246,10 @@ func (b *build) buildFunc(flg bool, e *tree.FuncExpr, qry *Query, fn func(tree.E
 		if len(e.Exprs) > 1 {
 			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Illegal function call '%s'", e))
 		}
+		if e.Type == tree.FUNC_TYPE_DISTINCT || e.Type == tree.FUNC_TYPE_ALL {
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function type not support now"))
+		}
 		return b.buildAggregation(op, funcName, e.Exprs[0], qry, fn)
-	}
-	args := make([]extend.Extend, len(e.Exprs))
-	{
-		var err error
-
-		for i, expr := range e.Exprs {
-			if args[i], err = fn(expr, qry); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return buildFunctionExtend(&extend.FuncExtend{Name: funcName, Args: args})
-}
-
-// flg indicates whether the aggregation function is accepted
-func (b *build) buildHavingFunc(e *tree.FuncExpr, qry *Query, fn func(tree.Expr, *Query) (extend.Extend, error)) (extend.Extend, error) {
-	name, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
-	if !ok {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
-	}
-	funcName := strings.ToLower(name.Parts[0])
-	if op, ok := transformer.TransformerNamesMap[funcName]; ok {
-		if len(e.Exprs) > 1 {
-			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Illegal function call '%s'", e))
-		}
-		b.flg = false
-		defer func() { b.flg = true }()
-		return b.buildHavingAggregation(op, funcName, e.Exprs[0], qry, fn)
 	}
 	args := make([]extend.Extend, len(e.Exprs))
 	{
@@ -427,111 +406,61 @@ func (b *build) buildComparison(e *tree.ComparisonExpr, qry *Query, fn func(tree
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
 
-// If flg is set, then it will increase the reference count
-// 	. only the original attributes will be looked up
-func (b *build) buildAttribute0(flg bool, e *tree.UnresolvedName, qry *Query) (extend.Extend, error) {
-	var name string
-
+func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Extend, error) {
 	if e.Star {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 	}
-	switch {
-	case e.NumParts == 1:
-		name = e.Parts[0]
-	case e.NumParts == 2:
-		name = e.Parts[1] + "." + e.Parts[0]
-	case e.NumParts == 3:
-		name = e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
+	switch e.NumParts {
+	case 1:
+		for _, attr := range qry.Scope.Result.Attrs {
+			if attr == e.Parts[0] {
+				return &extend.Attribute{
+					Name: attr,
+					Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
+				}, nil
+			}
+		}
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unknown column '%v'", tree.String(e, dialect.MYSQL)))
+	case 2:
+		if e.Parts[1] != qry.Scope.Name {
+			name := e.Parts[1] + "." + e.Parts[0]
+			for _, attr := range qry.Scope.Result.Attrs {
+				if attr == name {
+					return &extend.Attribute{
+						Name: attr,
+						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
+					}, nil
+				}
+			}
+		} else {
+			for _, attr := range qry.Scope.Result.Attrs {
+				if attr == e.Parts[0] {
+					return &extend.Attribute{
+						Name: attr,
+						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
+					}, nil
+				}
+			}
+		}
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unknown column '%v'", tree.String(e, dialect.MYSQL)))
 	default:
-		name = e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
-	}
-	rels, typ, err := qry.getAttribute0(flg, name)
-	if err != nil {
-		return nil, err
-	}
-	if len(rels) == 0 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Column '%s' doesn't exist", name))
-	}
-	if len(rels) > 1 {
-		return nil, errors.New(errno.DuplicateColumn, fmt.Sprintf("Column '%s' is ambiguous", name))
-	}
-	return &extend.Attribute{Name: name, Type: typ.Oid}, nil
-}
-
-// If flg is set, then it will increase the reference count
-// 	. only the original attributes will be looked up
-//  . projection will be looked up
-func (b *build) buildAttribute1(flg bool, e *tree.UnresolvedName, qry *Query) (extend.Extend, error) {
-	var name string
-
-	if e.Star {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 	}
-	switch {
-	case e.NumParts == 1:
-		name = e.Parts[0]
-	case e.NumParts == 2:
-		name = e.Parts[1] + "." + e.Parts[0]
-	case e.NumParts == 3:
-		name = e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
-	default:
-		name = e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
-	}
-	rels, typ, err := qry.getAttribute1(flg, name)
-	if err != nil {
-		return nil, err
-	}
-	if len(rels) == 0 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Column '%s' doesn't exist", name))
-	}
-	if len(rels) > 1 {
-		return nil, errors.New(errno.DuplicateColumn, fmt.Sprintf("Column '%s' is ambiguous", name))
-	}
-	return &extend.Attribute{Name: name, Type: typ.Oid}, nil
-}
-
-// If flg is set, then it will increase the reference count
-// 	. only the original attributes will be looked up
-//  . projection will be looked up
-//  . aggregation will be looke up
-func (b *build) buildAttribute2(flg bool, e *tree.UnresolvedName, qry *Query) (extend.Extend, error) {
-	var name string
-
-	if e.Star {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
-	}
-	switch {
-	case e.NumParts == 1:
-		name = e.Parts[0]
-	case e.NumParts == 2:
-		name = e.Parts[1] + "." + e.Parts[0]
-	case e.NumParts == 3:
-		name = e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
-	default:
-		name = e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0]
-	}
-	rels, typ, err := qry.getAttribute2(flg, name)
-	if err != nil {
-		return nil, err
-	}
-	if len(rels) == 0 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Column '%s' doesn't exist", name))
-	}
-	if len(rels) > 1 {
-		return nil, errors.New(errno.DuplicateColumn, fmt.Sprintf("Column '%s' is ambiguous", name))
-	}
-	return &extend.Attribute{Name: name, Type: typ.Oid}, nil
 }
 
 func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, fn func(tree.Expr, *Query) (extend.Extend, error)) (extend.Extend, error) {
-	var rel string
-
-	if _, ok := n.(*tree.NumVal); ok && op == transformer.StarCount { // count(*)
-		qry.RelsMap[qry.Rels[0]].AddAggregation(&Aggregation{
+	if _, ok := n.(*tree.NumVal); ok && op == transformer.Count { // count(*)
+		name := qry.Scope.Result.Attrs[0]
+		qry.Aggs = append(qry.Aggs, &Aggregation{
 			Ref:   1,
-			Op:    op,
+			Name:  name,
 			Alias: "count(*)",
 			Type:  types.T_int64,
+			Op:    transformer.StarCount,
+			E: &extend.Attribute{
+				Name: name,
+				Type: qry.Scope.Result.AttrsMap[name].Type.Oid,
+			},
 		})
 		return &extend.Attribute{
 			Name: "count(*)",
@@ -542,38 +471,11 @@ func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, f
 	if err != nil {
 		return nil, err
 	}
-	attrs := e.Attributes()
-	mp := make(map[string]int) // relations map
-	for _, attr := range attrs {
-		rels, _, err := qry.getAttribute0(false, attr)
-		if err != nil {
-			return nil, err
-		}
-		for i := range rels {
-			if len(rel) == 0 {
-				rel = rels[i]
-			}
-			mp[rels[i]]++
-		}
-	}
-	if len(mp) == 0 {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in aggregation", e))
-	}
-	if len(mp) > 1 {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the aggregation must belong to the same relation"))
-	}
 	alias := fmt.Sprintf("%s(%s)", name, e)
-	e = pruneExtendAttribute(e)
-	if _, ok := e.(*extend.Attribute); !ok {
-		qry.RelsMap[rel].AddProjection(&ProjectionExtend{
-			Ref:   1,
-			E:     e,
-			Alias: e.String(),
-		})
-	}
-	qry.RelsMap[rel].AddAggregation(&Aggregation{
-		Ref:   1,
+	qry.Aggs = append(qry.Aggs, &Aggregation{
+		E:     e,
 		Op:    op,
+		Ref:   1,
 		Name:  e.String(),
 		Alias: alias,
 		Type:  transformer.ReturnType(op, e.ReturnType()),
@@ -581,34 +483,6 @@ func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, f
 	return &extend.Attribute{
 		Name: alias,
 		Type: transformer.ReturnType(op, e.ReturnType()),
-	}, nil
-}
-
-func (b *build) buildHavingAggregation(op int, name string, n tree.Expr, qry *Query, fn func(tree.Expr, *Query) (extend.Extend, error)) (extend.Extend, error) {
-	if _, ok := n.(*tree.NumVal); ok && op == transformer.StarCount { // count(*)
-		return &extend.Attribute{
-			Name: "count(*)",
-			Type: transformer.ReturnType(op, types.T_any),
-		}, nil
-	}
-	e, err := fn(n, qry)
-	if err != nil {
-		return nil, err
-	}
-	col := fmt.Sprintf("%s(%s)", name, e)
-	rels, typ, err := qry.getAttribute2(true, col)
-	if err != nil {
-		return nil, err
-	}
-	if len(rels) == 0 {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in having clause", e))
-	}
-	if len(rels) > 1 {
-		return nil, errors.New(errno.DuplicateColumn, fmt.Sprintf("Column '%s' in having clause is ambiguous", col))
-	}
-	return &extend.Attribute{
-		Name: col,
-		Type: typ.Oid,
 	}, nil
 }
 
@@ -957,41 +831,10 @@ func pruneExtend(e extend.Extend) extend.Extend {
 	return e
 }
 
-func andExtends(qry *Query, e extend.Extend, es []extend.Extend) []extend.Extend {
-	if extendRelations(qry, e) == 1 {
-		return append(es, e)
-	}
-	switch v := e.(type) {
-	case *extend.UnaryExtend:
-		return nil
-	case *extend.ParenExtend:
-		return andExtends(qry, v.E, es)
-	case *extend.Attribute:
-		return es
-	case *extend.ValueExtend:
-		return es
-	case *extend.BinaryExtend:
-		switch v.Op {
-		case overload.EQ:
-			return append(es, v)
-		case overload.NE:
-			return append(es, v)
-		case overload.LT:
-			return append(es, v)
-		case overload.LE:
-			return append(es, v)
-		case overload.GT:
-			return append(es, v)
-		case overload.GE:
-			return append(es, v)
-		case overload.And:
-			return append(andExtends(qry, v.Left, es), andExtends(qry, v.Right, es)...)
-		}
-	}
-	return nil
-}
-
 func extendsToAndExtend(es []extend.Extend) extend.Extend {
+	if len(es) == 0 {
+		return nil
+	}
 	if len(es) == 1 {
 		return es[0]
 	}
@@ -1000,16 +843,4 @@ func extendsToAndExtend(es []extend.Extend) extend.Extend {
 		Left:  es[0],
 		Right: extendsToAndExtend(es[1:]),
 	}
-}
-
-func extendRelations(qry *Query, e extend.Extend) int {
-	attrs := e.Attributes()
-	mp := make(map[string]uint8)
-	for _, attr := range attrs {
-		rns, _, _ := qry.getAttribute0(false, attr)
-		for _, rn := range rns {
-			mp[rn]++
-		}
-	}
-	return len(mp)
 }

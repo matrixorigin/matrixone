@@ -24,107 +24,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func (b *build) buildOrderBy(orders tree.OrderBy, qry *Query) error {
-	for _, order := range orders {
-		e, err := b.buildOrderByExpr(order.Expr, qry)
-		if err != nil {
-			return err
-		}
-		if e, err = b.pruneExtend(e, false); err != nil {
-			return err
-		}
-		{
-			var rel string
+func (b *build) buildOrderBy(orders tree.OrderBy, proj0, proj *Projection, qry *Query) ([]*Field, error) {
+	var err error
+	var fs []*Field
+	var e extend.Extend
 
-			attrs := e.Attributes()
-			mp := make(map[string]int) // relations map
-			for _, attr := range attrs {
-				rels, _, err := qry.getAttribute2(false, attr)
-				if err != nil {
-					return err
-				}
-				for i := range rels {
-					if len(rel) == 0 {
-						rel = rels[i]
-					}
-					mp[rels[i]]++
-				}
-			}
-			if len(mp) == 0 {
-				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in group by", e))
-			}
-			if _, ok := e.(*extend.Attribute); !ok {
-				if len(mp) == 1 {
-					b.stripOrderByRelation(rel, e, qry)
-				} else {
-					b.stripOrderByQuery(e, qry)
-				}
-			} else {
-				name := e.(*extend.Attribute).Name
-				flg := true
-				for i, e := range qry.ProjectionExtends {
-					if e.Alias == name {
-						qry.ProjectionExtends[i].IncRef()
-						flg = false
-						break
-					}
-				}
-				if flg {
-					qry.getAttribute2(true, e.(*extend.Attribute).Name)
-				}
+	for _, order := range orders {
+		ovar := tree.String(order.Expr, dialect.MYSQL)
+		for i := range proj0.As {
+			if ovar == proj0.As[i] {
+				proj.Rs = append(proj.Rs, 0)
+				proj.As = append(proj.As, ovar)
+				proj.Es = append(proj.Es, proj0.Es[i])
+				goto OUT
 			}
 		}
-		qry.Fields = append(qry.Fields, &Field{
-			Attr: e.String(),
+		if e, err = b.buildOrderByExpr(order.Expr, qry); err != nil {
+			return nil, err
+		}
+		if e, err = b.pruneExtend(e, true); err != nil {
+			return nil, err
+		}
+		ovar = e.String()
+		proj.Rs = append(proj.Rs, 0)
+		proj.Es = append(proj.Es, e)
+		proj.As = append(proj.As, e.String())
+	OUT:
+		fs = append(fs, &Field{
+			Attr: ovar,
 			Type: Direction(order.Direction),
 		})
 	}
-	return nil
-}
-
-func (b *build) stripOrderByQuery(e extend.Extend, qry *Query) error {
-	for i := range qry.ProjectionExtends {
-		if qry.ProjectionExtends[i].Alias == e.String() {
-			qry.ProjectionExtends[i].IncRef()
-			return nil
-		}
-	}
-	attrs := e.Attributes()
-	for _, attr := range attrs {
-		qry.getAttribute2(true, attr)
-	}
-	if _, ok := e.(*extend.Attribute); !ok {
-		qry.ProjectionExtends = append(qry.ProjectionExtends, &ProjectionExtend{
-			Ref:   1,
-			E:     e,
-			Alias: e.String(),
-		})
-	}
-	return nil
-}
-
-func (b *build) stripOrderByRelation(name string, e extend.Extend, qry *Query) error {
-	rel := qry.RelsMap[name]
-	if i := rel.ExistProjection(e.String()); i >= 0 {
-		rel.ProjectionExtends[i].IncRef()
-		return nil
-	}
-	if i := rel.ExistAggregation(e.String()); i >= 0 {
-		rel.Aggregations[i].IncRef()
-		return nil
-	}
-	attrs := e.Attributes()
-	for _, attr := range attrs {
-		qry.getAttribute2(true, attr)
-	}
-	if _, ok := e.(*extend.Attribute); !ok {
-		rel.ProjectionExtends = append(rel.ProjectionExtends, &ProjectionExtend{
-			Ref:   1,
-			E:     e,
-			Alias: e.String(),
-		})
-	}
-	return nil
+	return fs, nil
 }
 
 func (b *build) buildOrderByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
@@ -152,7 +83,7 @@ func (b *build) buildOrderByExpr(n tree.Expr, qry *Query) (extend.Extend, error)
 	case *tree.RangeCond:
 		return b.buildBetween(e, qry, b.buildOrderByExpr)
 	case *tree.UnresolvedName:
-		return b.buildAttribute2(false, e, qry)
+		return b.buildAttribute(e, qry)
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", tree.String(n, dialect.MYSQL)))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
