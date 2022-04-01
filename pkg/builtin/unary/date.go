@@ -1,3 +1,17 @@
+// Copyright 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package unary
 
 import (
@@ -24,13 +38,18 @@ func init() {
 		return fmt.Sprintf("date(%s)", e)
 	}
 	overload.OpTypes[builtin.Date] = overload.Unary
-	overload.UnaryOps[builtin.Abs] = []*overload.UnaryOp{
+	overload.UnaryOps[builtin.Date] = []*overload.UnaryOp{
 		{
 			Typ:        types.T_date,
 			ReturnType: types.T_date,
 			Fn: func(lv *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				lvs := lv.Col.([]types.Date)
 				size := types.T(types.T_date).TypeLen()
+				if lv.Ref == 1 || lv.Ref == 0 {
+					lv.Ref = 0
+					date.DateToDate(lvs, lvs)
+					return lv, nil
+				}
 				vec, err := process.Get(proc, int64(size)*int64(len(lvs)), types.Type{Oid: types.T_date, Size: int32(size)})
 				if err != nil {
 					return nil, err

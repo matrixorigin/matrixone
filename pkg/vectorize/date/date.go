@@ -20,8 +20,7 @@ func DateTimeToDate(xs []types.Datetime, rs []types.Date) []types.Date {
 }
 
 func dateToDatePure(xs []types.Date, rs []types.Date) []types.Date {
-	copy(rs, xs)
-	return rs
+	return xs
 }
 
 func datetimeToDatePure(xs []types.Datetime, rs []types.Date) []types.Date {
