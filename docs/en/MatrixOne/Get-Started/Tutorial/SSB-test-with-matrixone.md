@@ -181,8 +181,7 @@ load data infile '/ssb-dbgen-path/lineorder.tbl' into table lineorder FIELDS TER
 
 Then you can query data in MatrixOne with the created table. 
 If you want to run a single table SSB query test, there is still one more data files needed for lineorder_flat. You can get the data files directly:
-> <https://pan.baidu.com/s/1dCpcKsygdVuHzd-H-RWHFA>  
-> code: k1rs
+> https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/lineorder_flat.tar.bz2
 
 Load data into lineorder_flat.
 
