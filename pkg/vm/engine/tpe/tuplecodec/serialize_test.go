@@ -347,7 +347,7 @@ func TestDefaultValueLayoutSerializer_Serialize(t *testing.T) {
 			return tuple
 		}
 
-		layout := &DefaultValueLayoutSerializer{
+		layout := &CompactValueLayoutSerializer{
 			needColumnGroup:         false,
 			needAttributeIDInFormat: false,
 			serializer:              &ConciseSerializer{},
@@ -361,7 +361,7 @@ func TestDefaultValueLayoutSerializer_Serialize(t *testing.T) {
 			ColumnGroup:     0,
 		}
 
-		got, err := layout.Serialize(ctx)
+		got, err := layout.Serialize(nil, ctx)
 		convey.So(err, convey.ShouldBeNil)
 
 		var want []byte
@@ -451,15 +451,26 @@ func TestDefaultValueLayoutSerializer_Serialize(t *testing.T) {
 
 		convey.So(got, convey.ShouldResemble, want)
 
-		rest, dis, err := layout.Deserialize(want)
+		am := AttributeMap{}
+
+		for i, attr := range relDesc.Attributes {
+			if i == 0 {
+				continue
+			}
+			am.Append(int(attr.ID), i, i)
+		}
+		am.BuildPositionInDecodedItemArray()
+
+		rest, _, vdis, err := layout.Deserialize(want, &am)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(len(rest), convey.ShouldBeZeroValue)
-		convey.So(len(dis), convey.ShouldEqual, offsetArrayLen)
-		for i := 0; i < len(dis); i++ {
-			di := dis[i]
-			off := offsetArr.Get(i)
-			convey.So(di.ID, convey.ShouldEqual, off.id())
-			convey.So(di.OffsetInUndecodedKey, convey.ShouldEqual, off.adjustBytesOffset(adjust))
+		convey.So(len(vdis), convey.ShouldEqual, offsetArrayLen)
+		for i := 0; i < len(vdis); i++ {
+			_, err := vdis[i].DecodeValue()
+			convey.So(err, convey.ShouldBeNil)
+			//off := offsetArr.Get(i)
+			//convey.So(di.ID, convey.ShouldEqual, off.id())
+			//convey.So(di.OffsetInUndecodedKey, convey.ShouldEqual, off.adjustBytesOffset(adjust))
 		}
 	})
 }

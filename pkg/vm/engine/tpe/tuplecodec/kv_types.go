@@ -18,17 +18,17 @@ type KVType int
 
 const (
 	KV_MEMORY KVType = iota
-	KV_CUBE KVType = iota + 1
+	KV_CUBE   KVType = iota + 1
 )
 
 type KVHandler interface {
 	GetKVType() KVType
 
 	// NextID gets the next id of the type
-	NextID(typ string) (uint64,error)
+	NextID(typ string) (uint64, error)
 
 	// Set writes the key-value (overwrite)
-	Set(key TupleKey,value TupleValue) error
+	Set(key TupleKey, value TupleValue) error
 
 	// SetBatch writes the batch of key-value (overwrite)
 	SetBatch(keys []TupleKey, values []TupleValue) error
@@ -46,10 +46,10 @@ type KVHandler interface {
 	DeleteWithPrefix(prefix TupleKey) error
 
 	// Get gets the value of the key
-	Get(key TupleKey)(TupleValue, error)
+	Get(key TupleKey) (TupleValue, error)
 
 	// GetBatch gets the values of the keys
-	GetBatch(keys []TupleKey)([]TupleValue, error)
+	GetBatch(keys []TupleKey) ([]TupleValue, error)
 
 	// GetRange gets the values among the range [startKey,endKey).
 	GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, error)
@@ -62,7 +62,7 @@ type KVHandler interface {
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
 	GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
-	GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey,prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
+	GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey, prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetWithPrefix gets the values of the prefix with limit.
 	// The prefixLen denotes the prefix[:prefixLen] is the real prefix.
@@ -74,7 +74,7 @@ type KVHandler interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
+	GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error)
 
 	// GetShardsWithRange get the shards that holds the range [startKey,endKey)
 	GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interface{}, error)
@@ -94,8 +94,8 @@ type ShardNode struct {
 
 type ShardInfo struct {
 	startKey []byte
-	endKey []byte
-	node ShardNode
+	endKey   []byte
+	node     ShardNode
 }
 
 func (si ShardInfo) GetStartKey() []byte {
@@ -111,7 +111,7 @@ func (si ShardInfo) GetShardNode() ShardNode {
 }
 
 type Shards struct {
-	nodes []ShardNode
+	nodes      []ShardNode
 	shardInfos []ShardInfo
 }
 

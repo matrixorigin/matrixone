@@ -15,7 +15,6 @@
 package tuplecodec
 
 import (
-	"bytes"
 	"errors"
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -23,13 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"sync"
 )
 
 var (
-	errorRowIndexDifferentInKeyAndValue = errors.New("the rowIndexForkey != rowIndexForValue")
-	errorWriteContextIsInvalid          = errors.New("the write context is invalid")
-	errorReadContextIsInvalid           = errors.New("the read context is invalid")
+	errorRowIndexDifferentInKeyAndValue  = errors.New("the rowIndexForkey != rowIndexForValue")
+	errorWriteContextIsInvalid           = errors.New("the write context is invalid")
+	errorReadContextIsInvalid            = errors.New("the read context is invalid")
+	errorAttributeDoesNotHaveThePosition = errors.New("the attribute does not have the position")
 )
 
 var _ index.IndexHandler = &IndexHandlerImpl{}
@@ -39,13 +38,15 @@ type callbackPackage struct {
 }
 
 type IndexHandlerImpl struct {
-	tch        *TupleCodecHandler
-	dbDesc     *descriptor.DatabaseDesc
-	kv         KVHandler
-	kvLimit    uint64
-	serializer ValueSerializer
-	rcc        RowColumnConverter
-	PBKV       *pebble.Storage
+	tch              *TupleCodecHandler
+	dbDesc           *descriptor.DatabaseDesc
+	kv               KVHandler
+	kvLimit          uint64
+	serializer       ValueSerializer
+	rcc              RowColumnConverter
+	PBKV             *pebble.Storage
+	useLayout        bool
+	layoutSerializer ValueLayoutSerializer
 }
 
 func NewIndexHandlerImpl(tch *TupleCodecHandler,
@@ -61,6 +62,10 @@ func NewIndexHandlerImpl(tch *TupleCodecHandler,
 		kvLimit:    kvLimit,
 		serializer: serial,
 		rcc:        rcc,
+		useLayout:  true,
+		layoutSerializer: &DefaultValueLayoutSerializer{
+			serializer: serial,
+		},
 	}
 }
 
@@ -78,12 +83,12 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	for i, attr := range indexReadCtx.ReadAttributeDescs {
 		if _, exist := indexAttrIDs[attr.ID]; exist {
 			//id in the key
-			amForKey.Append(int(attr.ID), i)
+			amForKey.Append(int(attr.ID), i, -1)
 		} else {
 			//id is not in the index key
 			//then find it in the value
 			needKeyOnly = false
-			amForValue.Append(int(attr.ID), i)
+			amForValue.Append(int(attr.ID), i, -1)
 		}
 	}
 
@@ -191,32 +196,14 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	return bat, rowRead, nil
 }
 
-type errorStorage struct {
-	mu     sync.Mutex
-	keys   []TupleKey
-	values []TupleValue
-}
-
-func (es *errorStorage) append(k TupleKey, v TupleValue) {
-	es.mu.Lock()
-	defer es.mu.Unlock()
-
-	es.keys = append(es.keys, k)
-	es.values = append(es.values, v)
-}
-
-func (es *errorStorage) getKey(k TupleKey) TupleValue {
-	es.mu.Lock()
-	defer es.mu.Unlock()
-	for i, key := range es.keys {
-		if bytes.Equal(key, k) {
-			return es.values[i]
-		}
+//decodePrimaryIndexValue decodes the value
+func (ihi *IndexHandlerImpl) decodePrimaryIndexValue(data []byte, ctx *ReadContext, amForValue *AttributeMap) ([]*ValueDecodedItem, error) {
+	_, _, vdis, err := ihi.layoutSerializer.Deserialize(data, amForValue)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	return vdis, nil
 }
-
-var ES errorStorage
 
 func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
 	indexReadCtx, ok := readCtx.(*ReadContext)
@@ -234,17 +221,31 @@ func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, i
 	amForKey := &AttributeMap{}
 	amForValue := &AttributeMap{}
 	needKeyOnly := true
+	var positionsInValue map[uint32]int
+	if ihi.useLayout {
+		positionsInValue = ihi.layoutSerializer.GetPositionsOfAttributesInTheValue(indexReadCtx.TableDesc, indexReadCtx.IndexDesc)
+	}
+	var exist2 bool
 	for i, attr := range indexReadCtx.ReadAttributeDescs {
-		if _, exist := indexAttrIDs[attr.ID]; exist {
+		if positionInIndex, exist := indexAttrIDs[attr.ID]; exist {
 			//id in the key
-			amForKey.Append(int(attr.ID), i)
+			amForKey.Append(int(attr.ID), positionInIndex, i)
 		} else {
 			//id is not in the index key
 			//then find it in the value
 			needKeyOnly = false
-			amForValue.Append(int(attr.ID), i)
+			positionInValue := i
+			if ihi.useLayout {
+				if positionInValue, exist2 = positionsInValue[attr.ID]; !exist2 {
+					return nil, 0, errorInvalidAttributePosition
+				}
+			}
+
+			amForValue.Append(int(attr.ID), positionInValue, i)
 		}
 	}
+	amForKey.BuildPositionInDecodedItemArray()
+	amForValue.BuildPositionInDecodedItemArray()
 
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()
@@ -272,10 +273,7 @@ func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, i
 	//get keys with the prefix
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, complete, nextScanKey, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,
-			indexReadCtx.LengthOfPrefixForScanKey,
-			indexReadCtx.PrefixEnd,
-			uint64(needRead))
+		keys, values, complete, nextScanKey, err := ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey, indexReadCtx.LengthOfPrefixForScanKey, indexReadCtx.PrefixEnd, needKeyOnly, uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
@@ -306,17 +304,32 @@ func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, i
 			for i := 0; i < len(keys); i++ {
 				//decode the name which is in the value
 				data := values[i]
-				_, dis, err := tkd.DecodePrimaryIndexValue(data,
-					indexReadCtx.IndexDesc, 0, ihi.serializer)
-				if err != nil {
-					return nil, 0, err
-				}
 
-				//pick wanted fields and save them in the batch
-				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
-					0, dis, amForValue, bat, i)
-				if err != nil {
-					return nil, 0, err
+				if ihi.useLayout {
+					vdis, err := ihi.decodePrimaryIndexValue(data, indexReadCtx, amForValue)
+					if err != nil {
+						return nil, 0, err
+					}
+
+					//fill the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue2(indexReadCtx.IndexDesc,
+						0, vdis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
+				} else {
+					_, dis, err := tkd.DecodePrimaryIndexValue(data,
+						indexReadCtx.IndexDesc, 0, ihi.serializer)
+					if err != nil {
+						return nil, 0, err
+					}
+
+					//pick wanted fields and save them in the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+						0, dis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
 				}
 			}
 		}
@@ -408,29 +421,42 @@ func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(columnGroupID uint64, write
 	var value interface{}
 	var err error
 	var serialized []byte
-
-	//fill value into the row from the tuple
-	for _, state := range writeCtx.AttributeStates {
-		//the logic for implicit primary key or default expr
-		if state.NeedGenerated {
-			if state.AttrDesc.Default.Exist { //default expr
-				value = state.AttrDesc.Default.Value
-			} else {
-				//get the implicit primary key
-				value = state.ImplicitPrimaryKey
-			}
-		} else {
-			value, err = tuple.GetValue(uint32(state.PositionInBatch))
-			if err != nil {
-				return nil, nil, err
-			}
+	if ihi.useLayout {
+		ctx := ValueLayoutContext{
+			TableDesc:       writeCtx.TableDesc,
+			IndexDesc:       writeCtx.IndexDesc,
+			AttributeStates: writeCtx.AttributeStates,
+			Tuple:           tuple,
+			ColumnGroup:     columnGroupID,
 		}
-		//serial value
-		serialized, _, err = serializer.SerializeValue(out, value)
+		out, err = ihi.layoutSerializer.Serialize(out, &ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out = serialized
+	} else {
+		//fill value into the row from the tuple
+		for _, state := range writeCtx.AttributeStates {
+			//the logic for implicit primary key or default expr
+			if state.NeedGenerated {
+				if state.AttrDesc.Default.Exist { //default expr
+					value = state.AttrDesc.Default.Value
+				} else {
+					//get the implicit primary key
+					value = state.ImplicitPrimaryKey
+				}
+			} else {
+				value, err = tuple.GetValue(uint32(state.PositionInBatch))
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+			//serial value
+			serialized, _, err = serializer.SerializeValue(out, value)
+			if err != nil {
+				return nil, nil, err
+			}
+			out = serialized
+		}
 	}
 
 	return out, nil, nil
