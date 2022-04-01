@@ -42,5 +42,6 @@ const (
 	Atan
 	DayOfYear
 	Month
+	Weekday
 	Cot
 )
