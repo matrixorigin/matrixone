@@ -15,7 +15,6 @@
 package engine
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -66,6 +65,7 @@ type NodeInfo struct {
 type Statistics interface {
 	Rows() int64
 	Size(string) int64
+	Cardinality(string) int64
 }
 
 type ListPartition struct {
@@ -138,8 +138,7 @@ type Relation interface {
 	ID() string
 
 	Nodes() Nodes
-	CreateIndex(epoch uint64, defs []TableDef) error
-	DropIndex(epoch uint64, name string) error
+
 	TableDefs() []TableDef
 	// true: primary key, false: hide key
 	GetPriKeyOrHideKey() ([]Attribute, bool)
@@ -155,34 +154,6 @@ type Relation interface {
 
 type Reader interface {
 	Read([]uint64, []string) (*batch.Batch, error)
-}
-
-type Filter interface {
-	Eq(string, interface{}) (*roaring.Bitmap, error)
-	Ne(string, interface{}) (*roaring.Bitmap, error)
-	Lt(string, interface{}) (*roaring.Bitmap, error)
-	Le(string, interface{}) (*roaring.Bitmap, error)
-	Gt(string, interface{}) (*roaring.Bitmap, error)
-	Ge(string, interface{}) (*roaring.Bitmap, error)
-	Btw(string, interface{}, interface{}) (*roaring.Bitmap, error)
-}
-
-type Summarizer interface {
-	Count(string, *roaring.Bitmap) (uint64, error)
-	NullCount(string, *roaring.Bitmap) (uint64, error)
-	Max(string, *roaring.Bitmap) (interface{}, error)
-	Min(string, *roaring.Bitmap) (interface{}, error)
-	Sum(string, *roaring.Bitmap) (int64, uint64, error)
-}
-
-type SparseFilter interface {
-	Eq(string, interface{}) (Reader, error)
-	Ne(string, interface{}) (Reader, error)
-	Lt(string, interface{}) (Reader, error)
-	Le(string, interface{}) (Reader, error)
-	Gt(string, interface{}) (Reader, error)
-	Ge(string, interface{}) (Reader, error)
-	Btw(string, interface{}, interface{}) (Reader, error)
 }
 
 type Database interface {

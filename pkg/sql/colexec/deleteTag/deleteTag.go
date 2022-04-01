@@ -16,6 +16,7 @@ package deleteTag
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -37,6 +38,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 
 	bat.Zs = []int64{-1, -1}
+	{
+		fmt.Printf("*******delete %v\n", bat)
+	}
 	if err := p.Relation.Write(p.Ts, bat); err != nil {
 		return false, err
 	}

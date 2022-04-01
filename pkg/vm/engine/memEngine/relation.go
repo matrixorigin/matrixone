@@ -26,7 +26,7 @@ func (_ *relation) Size(_ string) int64 {
 	return 0
 }
 
-func (_ *relation) CardinalNumber(_ string) int64 {
+func (_ *relation) Cardinality(_ string) int64 {
 	return 0
 }
 

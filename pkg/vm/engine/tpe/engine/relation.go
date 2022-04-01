@@ -52,6 +52,10 @@ func (trel *TpeRelation) Size(s string) int64 {
 	return size
 }
 
+func (trel *TpeRelation) Cardinality(_ string) int64 {
+	return 1
+}
+
 func (trel *TpeRelation) Close() {
 }
 
@@ -66,15 +70,7 @@ func (trel *TpeRelation) Nodes() engine.Nodes {
 	return trel.nodes
 }
 
-func (trel *TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
-	panic("implement me")
-}
-
-func (trel *TpeRelation) DropIndex(epoch uint64, name string) error {
-	panic("implement me")
-}
-
-func (trel * TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+func (trel *TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
 	var attrs []engine.Attribute
 	hasPriKey := false
 	for _, attr := range trel.desc.Attributes {
@@ -277,7 +273,6 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 
 		logutil.Infof("store id %d reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
 			trel.storeID, i, startIndex, shardCountPerReader, shardInfosCount, endIndex, tpeReaders[i].isDumpReader)
-
 		startIndex += shardCountPerReader
 	}
 

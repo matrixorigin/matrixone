@@ -96,7 +96,12 @@ func (s *Scope) CreateIndex(ts uint64) error {
 	}
 
 	defer o.Relation.Close()
-	return o.Relation.CreateIndex(ts, o.Defs)
+	for _, def := range o.Defs {
+		if err := o.Relation.AddTableDef(ts, def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DropDatabase do drop database work according to drop index plan
@@ -108,7 +113,8 @@ func (s *Scope) DropDatabase(ts uint64) error {
 		}
 		return err
 	}
-	return p.E.Delete(ts, p.Id)
+	return nil
+	//	return p.E.Delete(ts, p.Id)
 }
 
 // DropTable do drop table work according to drop table plan
@@ -145,7 +151,8 @@ func (s *Scope) DropIndex(ts uint64) error {
 	}
 
 	defer p.Relation.Close()
-	return p.Relation.DropIndex(ts, p.Id)
+	//return p.Relation.DropIndex(ts, p.Id)
+	return nil
 }
 
 // ShowDatabases fill batch with all database names

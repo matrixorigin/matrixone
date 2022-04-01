@@ -288,23 +288,6 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	if rel == nil {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for delete")
 	}
-	//  It will get the definition of primary key if exists or get the definition of hide column
-	colKeys, isPrimaryKey := rel.GetPriKeyOrHideKey()
-	if colKeys == nil {
-		return nil, errors.New(errno.CaseNotFound, fmt.Sprintf("cannot find primary key or hide key"))
-	}
-	if !isPrimaryKey {
-		colName := colKeys[0].Name
-		qry.Result = append(qry.Result, colName)
-		qry.Scope.Result.Attrs = append(qry.Scope.Result.Attrs, colName)
-		qry.Scope.Result.AttrsMap[colName] = &plan.Attribute{Name: colName, Type: colKeys[0].Type}
-	}
-	// TODO: projection can be prune
-	//attrsMap := make(map[string]uint64)
-	//for _, key := range colKeys {
-	//	attrsMap[key] = 1
-	//}
-	//qry.Scope.Prune(attrsMap, nil)
 
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
@@ -348,11 +331,11 @@ func (e *Exec) compileUpdate(qry *plan.Update) (*Scope, error) {
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op: vm.UpdateTag,
 		Arg: &updateTag.Argument{
-			Relation:     rel,
-			AffectedRows: 0,
-			UpdateList: qry.UpdateList,
-			UpdateAttrs: qry.UpdateAttrs,
-			OtherAttrs: qry.OtherAttrs,
+			Relation:        rel,
+			AffectedRows:    0,
+			UpdateList:      qry.UpdateList,
+			UpdateAttrs:     qry.UpdateAttrs,
+			OtherAttrs:      qry.OtherAttrs,
 			HasModifyPriKey: true,
 		},
 	})

@@ -285,17 +285,18 @@ type Delete struct {
 }
 
 type Update struct {
-	Qry 	    *Query
+	Qry         *Query
 	UpdateList  []extend.UpdateExtend
 	UpdateAttrs []string
 	OtherAttrs  []string
 }
 
 type build struct {
-	flg bool   // use for having clause
-	db  string // name of schema
-	sql string
-	e   engine.Engine
+	flg      bool // use for having clause
+	isModify bool
+	db       string // name of schema
+	sql      string
+	e        engine.Engine
 }
 
 func (qry *Query) ResultColumns() []*Attribute {

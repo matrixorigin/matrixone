@@ -25,13 +25,14 @@ import (
 )
 
 func (b *build) buildUpdatePlan(updateStmt *tree.Update, plan *Update) error {
-	selectStmt, err :=  buildSelectStmtFromUpdate(updateStmt)
+	selectStmt, err := buildSelectStmtFromUpdate(updateStmt)
 	if err != nil {
 		return err
 	}
-	selectStmt = rewrite.Rewrite(selectStmt)
+	//selectStmt = rewrite.Rewrite(selectStmt)
 	selectStmt = rewrite.AstRewrite(selectStmt)
 
+	b.isModify = true
 	queryPlan, err := b.BuildStatement(selectStmt)
 	if err != nil {
 		return err
@@ -43,7 +44,7 @@ func (b *build) buildUpdatePlan(updateStmt *tree.Update, plan *Update) error {
 	return nil
 }
 
-func (b *build)buildUpdateList(exprs tree.UpdateExprs, plan *Update) error {
+func (b *build) buildUpdateList(exprs tree.UpdateExprs, plan *Update) error {
 	var err error
 	attrs := make(map[string]struct{})
 	qry := *plan.Qry
@@ -92,13 +93,13 @@ func buildSelectStmtFromUpdate(p *tree.Update) (tree.Statement, error) {
 	}
 	s := &tree.SelectClause{
 		Exprs: exprs,
-		From: &tree.From{Tables: tree.TableExprs{p.Table}},
+		From:  &tree.From{Tables: tree.TableExprs{p.Table}},
 		Where: p.Where,
 	}
 	return &tree.Select{
-		Select: s,
+		Select:  s,
 		OrderBy: p.OrderBy,
-		Limit:	p.Limit,
+		Limit:   p.Limit,
 	}, nil
 }
 

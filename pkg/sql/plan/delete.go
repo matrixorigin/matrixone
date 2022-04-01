@@ -24,6 +24,7 @@ func (b *build) buildDeletePlan(deleteStmt *tree.Delete, plan *Delete) error {
 	//selectStmt = rewrite.Rewrite(selectStmt)
 	selectStmt = rewrite.AstRewrite(selectStmt)
 
+	b.isModify = true
 	queryPlan, err := b.BuildStatement(selectStmt)
 	if err != nil {
 		return err
@@ -40,17 +41,17 @@ func buildStarProjection() tree.SelectExprs {
 }
 
 func buildSelectStmtFromDelete(d *tree.Delete) tree.Statement {
-	if len(d.OrderBy) > 0 && (d.Where == nil && d.Limit == nil){
+	if len(d.OrderBy) > 0 && (d.Where == nil && d.Limit == nil) {
 		d.OrderBy = nil
 	}
 	s := &tree.SelectClause{
 		Exprs: buildStarProjection(),
-		From: &tree.From{Tables: tree.TableExprs{d.Table}},
+		From:  &tree.From{Tables: tree.TableExprs{d.Table}},
 		Where: d.Where,
 	}
 	return &tree.Select{
-		Select: s,
+		Select:  s,
 		OrderBy: d.OrderBy,
-		Limit:	d.Limit,
+		Limit:   d.Limit,
 	}
 }

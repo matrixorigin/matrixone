@@ -12,7 +12,7 @@ type Segment interface {
 	ID() string
 	Blocks() []string
 	Block(string) Block
-	NewSparseFilter() SparseFilter
+	//	NewSparseFilter() SparseFilter
 }
 
 type Block interface {

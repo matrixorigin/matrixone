@@ -15,12 +15,12 @@
 package db
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"sync/atomic"
 )
 
 // Segment is a high-level wrapper of the segment type in memory. It
@@ -67,6 +67,7 @@ func (seg *Segment) Block(id string) aoe.Block {
 	return blk
 }
 
+/*
 // NewFilter generates a Filter for segment.
 func (seg *Segment) NewFilter() engine.Filter {
 	return NewSegmentFilter(seg)
@@ -81,6 +82,7 @@ func (seg *Segment) NewSummarizer() engine.Summarizer {
 func (seg *Segment) NewSparseFilter() aoe.SparseFilter {
 	return NewSegmentSparseFilter(seg)
 }
+*/
 
 // Rows returns how many rows this segment contains currently.
 func (seg *Segment) Rows() int64 {
@@ -90,4 +92,8 @@ func (seg *Segment) Rows() int64 {
 // Size returns the memory usage of the certain column in a segment.
 func (seg *Segment) Size(attr string) int64 {
 	return int64(seg.Data.Size(attr))
+}
+
+func (seg *Segment) Cardinality(_ string) int64 {
+	return 0
 }
