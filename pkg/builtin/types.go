@@ -40,5 +40,6 @@ const (
 	Atan
 	DayOfYear
 	Month
+	Weekday
   Lpad
 )
