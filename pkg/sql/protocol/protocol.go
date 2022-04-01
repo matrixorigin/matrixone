@@ -44,9 +44,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
-	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -70,7 +70,7 @@ func init() {
 	gob.Register(PlusArgument{})
 	gob.Register(TransformArgument{})
 	gob.Register(Transformer{})
-	gob.Register(TimesArgument{})
+	gob.Register(JoinArgument{})
 	gob.Register(UntransformArgument{})
 
 	gob.Register(Source{})
@@ -212,43 +212,16 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
 		return nil
-	case vm.Times:
-		arg := in.Arg.(*times.Argument)
-		var transArg TransformArgument
-		if arg.Arg != nil {
-			transArg = TransferTransformArg(arg.Arg)
-		}
-		data, err := encoding.Encode(TimesArgument{
-			IsBare:   arg.IsBare,
-			R:        arg.R,
-			Rvars:    arg.Rvars,
-			Ss:       arg.Ss,
-			Svars:    arg.Svars,
-			FreeVars: arg.FreeVars,
-			VarsMap:  arg.VarsMap,
-			Arg:      transArg,
+	case vm.Join:
+		arg := in.Arg.(*join.Argument)
+		data, err := encoding.Encode(JoinArgument{
+			Vars: arg.Vars,
 		})
 		if err != nil {
 			return err
 		}
 		buf.Write(encoding.EncodeUint32(uint32(len(data))))
 		buf.Write(data)
-
-		if arg.Arg != nil {
-			if arg.Arg.Restrict != nil {
-				if err = EncodeExtend(arg.Arg.Restrict.E, buf); err != nil {
-					return err
-				}
-			}
-			if arg.Arg.Projection != nil {
-				buf.Write(encoding.EncodeUint32(uint32(len(arg.Arg.Projection.Es))))
-				for _, e := range arg.Arg.Projection.Es {
-					if err = EncodeExtend(e, buf); err != nil {
-						return err
-					}
-				}
-			}
-		}
 		return nil
 	case vm.Merge:
 		// arg := in.Arg.(*merge.Argument)
@@ -422,51 +395,20 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			Limit: arg.Limit,
 		}
 		data = data[n:]
-	case vm.Times:
-		var arg TimesArgument
+	case vm.Join:
+		var arg JoinArgument
+
 		data = data[4:]
 		n := encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if err := encoding.Decode(data[:n], &arg); err != nil {
 			return in, nil, err
 		}
-		timeArg := &times.Argument{
-			IsBare:   arg.IsBare,
-			R:        arg.R,
-			Rvars:    arg.Rvars,
-			Ss:       arg.Ss,
-			Svars:    arg.Svars,
-			FreeVars: arg.FreeVars,
-			VarsMap:  arg.VarsMap,
-			Arg:      UntransferTransformArg(arg.Arg),
+		joinArg := &join.Argument{
+			Vars: arg.Vars,
 		}
 		data = data[n:]
-
-		if timeArg.Arg != nil {
-			if timeArg.Arg.Restrict != nil {
-				e, d, err := DecodeExtend(data)
-				if err != nil {
-					return in, nil, err
-				}
-				data = d
-				timeArg.Arg.Restrict.E = e
-			}
-			if timeArg.Arg.Projection != nil {
-				n = encoding.DecodeUint32(data[:4])
-				data = data[4:]
-				es := make([]extend.Extend, n)
-				for i := uint32(0); i < n; i++ {
-					e, d, err := DecodeExtend(data)
-					if err != nil {
-						return in, nil, err
-					}
-					es[i] = e
-					data = d
-				}
-				timeArg.Arg.Projection.Es = es
-			}
-		}
-		in.Arg = timeArg
+		in.Arg = joinArg
 	case vm.Merge:
 		var arg MergeArgument
 		data = data[4:]
@@ -1590,17 +1532,14 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		if n > 0 {
 			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
 		}
-		// Values
-		for k := 0; k < n; k++ {
-			valueBytes := encoding.EncodeFloat64Slice(v.Values[k])
-			length := len(valueBytes)
-			buf.Write(encoding.EncodeUint32(uint32(length)))
-			if length > 0 {
-				buf.Write(valueBytes)
-			}
+		// Sumx2
+		n = len(v.SumX2)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.SumX2))
 		}
-		// Sums
-		da := encoding.EncodeFloat64Slice(v.Sums)
+		// Sumx
+		da := encoding.EncodeFloat64Slice(v.SumX)
 		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
 		if n > 0 {
@@ -2354,26 +2293,23 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
 			data = data[n*8:]
 		}
-		// decode Values
-		r.Values = make([][]float64, n)
-		var k uint32 = 0
-		for k = 0; k < n; k++ {
-			length := encoding.DecodeUint32(data)
-			data = data[4:]
-			if length > 0 {
-				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
-				data = data[length:]
-			}
+		// decode Sumx2
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
 		}
-		// Sums
+		// decode Sumx
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
 			r.Data = data[:n]
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Data)
-		// Typ
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
@@ -3294,31 +3230,23 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
 			data = data[n*8:]
 		}
-		// decode Values
-		r.Values = make([][]float64, n)
-		var k uint32 = 0
-		for k = 0; k < n; k++ {
-			length := encoding.DecodeUint32(data)
-			data = data[4:]
-			if length > 0 {
-				r.Values[k] = encoding.DecodeFloat64Slice(data[:length])
-				data = data[length:]
-			}
-		}
-		// Sums
+		// decode Sumx2
 		n = encoding.DecodeUint32(data[:4])
 		data = data[4:]
 		if n > 0 {
-			var err error
-			r.Data, err = mheap.Alloc(proc.Mp, int64(n))
-			if err != nil {
-				return nil, nil, err
-			}
-			copy(r.Data, data[:n])
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
 			data = data[n:]
 		}
-		r.Sums = encoding.DecodeFloat64Slice(r.Data)
-		// Typ
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
 		typ := encoding.DecodeType(data[:encoding.TypeSize])
 		data = data[encoding.TypeSize:]
 		r.Typ = typ

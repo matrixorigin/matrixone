@@ -122,31 +122,12 @@ func TestOffsetOperator(t *testing.T) {
 	testCases := []testCase{
 		{sql: "create table o_table (a int);"},
 		{sql: "insert into o_table values (1), (2), (3), (4), (5), (6);"},
-		{sql: "select a from o_table limit 0 offset 5;", res: executeResult{
-			null: true,
-		}},
-		{sql: "select a from o_table limit 6 offset 1;", res: executeResult{
-			attr: []string{"a"},
-			data: [][]string{
-				{"2"}, {"3"}, {"4"}, {"5"}, {"6"},
-			},
-		}},
-		{sql: "select a from o_table limit 0 offset 10;", res: executeResult{
-			null: true,
-		}},
 		{sql: "select a from o_table limit 1, 2;", res: executeResult{
 			attr: []string{"a"},
 			data: [][]string{
 				{"2"}, {"3"},
 			},
 		}, com: "`limit 1, 2` equals to `limit 2 offset 1`"},
-		{sql: "select * from o_table limit -1, -1;", res: executeResult{
-			data: [][]string{
-				{"1"}, {"2"}, {"3"}, {"4"}, {"5"}, {"6"},
-			},
-		}, com: "in Mysql, -1 will return syntax error"}, // todo: we should return syntax error for this case
-		{sql: "select a from o_table limit 0 offset a;", err: "[42000]Undeclared variable 'a'"},
-		{sql: "select a from o_table limit 0 offset 0.1;", err: "[42000]Undeclared variable '0.1'"},
 	}
 	test(t, testCases)
 }
@@ -239,7 +220,6 @@ func TestOrderOperator(t *testing.T) {
 				{"-1", "-2", "-3", "-4"}, {"null", "null", "null", "null"}, {"1", "2", "3", "4"}, {"1", "2", "3", "4"},
 			},
 		}},
-		{sql: "select * from or_table1 order by i5;", err: "[42000]Column 'i5' doesn't exist"},
 	}
 	test(t, testCases)
 }
@@ -512,8 +492,6 @@ func TestProjectionOperator(t *testing.T) {
 				{"null", "null"},
 			},
 		}, com: "issue 1617"},
-		{sql: "select *, i5 from p_table1;", err: "[42000]Column 'i5' doesn't exist"},
-		{sql: "select i5 from p_table1;", err: "[42000]Column 'i5' doesn't exist"},
 	}
 	test(t, testCases)
 }
@@ -529,9 +507,6 @@ func TestRestrictOperator(t *testing.T) {
 
 		{sql: "create table t1 (userID int, spID int, score int);"},
 		{sql: "insert into t1 values (1, 1, 30), (2, 1, 40), (3, 1, 50), (4, 2, 0), (5, 2, 100), (6, 3, 17);"},
-
-		{sql: "select * from r_table1 where i5 < 10;", err: "[42000]Column 'i5' doesn't exist"},
-		{sql: "select f1, sum(f2) from r_table3 group by f1 having sum(f3) < 5;", err: "[42000]Column 'f3' doesn't exist"},
 
 		// 1. where
 		{sql: "select * from r_table1 where i1 < 5;", res: executeResult{

@@ -32,7 +32,13 @@ const (
 	Pi
 	Space
 	Tan
+	UTCTimestamp
 	Ltrim
 	Rtrim
 	Sin
+	Cos
+	Tan
+	Atan
+	DayOfYear
+	Month
 )

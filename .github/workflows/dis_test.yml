@@ -78,7 +78,8 @@ jobs:
         run: |
           docker-compose -f ./optools/test/docker-compose.yaml down --remove-orphans
           rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          # mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+          rm -rf /tmp/.buildx-cache-new
       - name: Step to run on filure or cancelled    
         if : ${{ failure() || cancelled() }}
         uses: actions/upload-artifact@v2

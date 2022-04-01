@@ -17,6 +17,7 @@ package projection
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
@@ -87,16 +88,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		rbat.Vecs[i].Ref = n.Rs[i]
 	}
-	if bat.Ro {
-		batch.Cow(bat)
-	}
-	for i := range rbat.Vecs {
-		bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
-		bat.Attrs = append(bat.Attrs, rbat.Attrs[i])
-	}
 	for _, e := range n.Es {
 		batch.Reduce(bat, e.Attributes(), proc.Mp)
 	}
+	bat.Vecs = rbat.Vecs
+	bat.Attrs = append(bat.Attrs[:0], rbat.Attrs...)
 	proc.Reg.InputBatch = bat
 	return false, nil
 }
