@@ -85,8 +85,14 @@ type Ring interface {
 	BulkFill(i int64, zs []int64, v *vector.Vector)
 
 	// BatchFill use part of the vector to update the data of ring's group
-	// ring's (vps[os[i]]-1)th group is related to vector's (offset+i)th row.
-	// zs[i] is count number of the row[i]
+	// 		os(origin-s) records information about which groups need to be updated
+	//		if length of os is N, we use first N of vps to do update work.
+	//		And if os[i] > 0, it means the ring's (vps[i]-1)th group is a new one (never been assigned a value),
+	//		Maybe this feature can help us to do some optimization work.
+	//		So we use the os as an argument but not len(os).
+	//
+	// 		ring's (vps[i]-1)th group is related to vector's (offset+i)th row.
+	// 		zs[i] is count number of the row[i]
 	// For a more detailed introduction of zs, please refer to comments of Function Fill.
 	BatchFill(offset int64, os []uint8, vps []uint64, zs []int64, v *vector.Vector)
 
@@ -96,7 +102,8 @@ type Ring interface {
 	Add(ring2 interface{}, i int64, j int64)
 
 	// BatchAdd merges multi groups of ring1 and ring2
-	// ring1's (vps[os[i]]-1)th group is related to ring2's (start+i)th group
+	// 	ring1's (vps[i]-1)th group is related to ring2's (start+i)th group
+	// For more introduction of os, please refer to comments of Function BatchFill.
 	BatchAdd(ring2 interface{}, start int64, os []uint8, vps []uint64)
 
 	// Mul is the function to merge 2 rings when join
