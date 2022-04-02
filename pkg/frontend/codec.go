@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+
 	"github.com/fagongzi/goetty/buf"
 	"github.com/fagongzi/goetty/codec"
 )
@@ -31,9 +32,9 @@ type sqlCodec struct {
 }
 
 type Packet struct {
-	Length int32
+	Length     int32
 	SequenceID int8
-	Payload []byte
+	Payload    []byte
 }
 
 func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
@@ -46,7 +47,7 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 	length := int32(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
 	sequenceID := int8(header[3])
 
-	if readable < int(length) + PacketHeaderLength {
+	if readable < int(length)+PacketHeaderLength {
 		return false, nil, nil
 	}
 
@@ -68,7 +69,7 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 		return false, nil, err
 	}
 
-	_, payload, err := in.ReadMarkedBytes()
+	_, payload, _ := in.ReadMarkedBytes()
 
 	packet := &Packet{
 		Length:     length,
