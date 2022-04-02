@@ -108,3 +108,28 @@ ifneq ($(wildcard $(BUILD_CFG)),)
 	$(info Remove file $(BUILD_CFG))
 	@rm -f $(BUILD_CFG)
 endif
+
+###############################################################################
+# static checks
+###############################################################################
+
+.PHONY: install-static-check-tools
+install-static-check-tools:
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOROOT)/bin v1.45.2
+
+# TODO: switch to the following two lists after some major cleanups
+# TODO: switch to a more recent version of golangci-lint, currently on v1.23.8
+# PKGS=$(shell go list ./...)
+# DIRS=$(subst $(PKGNAME), ,$(subst $(PKGNAME)/, ,$(CHECKED_PKGS))) .
+DIRS=pkg/... \
+	 cmd/...
+
+EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconvert \
+	-E prealloc -E gofmt -E stylecheck
+
+.PHONY: static-check
+static-check:
+	@for p in $(DIRS); do \
+    golangci-lint run $(EXTRA_LINTERS) $$p; \
+  done;
+  

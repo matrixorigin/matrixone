@@ -919,7 +919,7 @@ func (ck *CubeKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey, pr
 	return keys, values, complete, nextScanKey, err
 }
 
-func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	if prefixOrStartkey == nil {
 		return nil, nil, false, nil, errorPrefixIsNull
 	}
@@ -950,7 +950,7 @@ func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefix
 			logutil.Warnf("the lastKey does not has the prefix anymore. quit")
 			break
 		}
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey, prefixLen, prefixEnd, needCnt)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey, prefixLen, prefixEnd, needKeyOnly, needCnt)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}

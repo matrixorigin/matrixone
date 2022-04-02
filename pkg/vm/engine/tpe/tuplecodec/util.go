@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
@@ -34,16 +35,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )
 
-func MakeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
+func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 	var names []string
 	var attrs []*engine.AttributeDef
 	var name string
 
-	gen_attr := func(name string,t types.T) *engine.AttributeDef {
+	gen_attr := func(name string, t types.T) *engine.AttributeDef {
 		return &engine.AttributeDef{Attr: engine.Attribute{
-			Name:    name,
-			Alg:     0,
-			Type:    types.Type{
+			Name: name,
+			Alg:  0,
+			Type: types.Type{
 				Oid:       t,
 				Size:      0,
 				Width:     0,
@@ -85,17 +86,17 @@ func MakeAttributes(ts ...types.T)([]string, []*engine.AttributeDef){
 			panic("unsupported vector type")
 		}
 
-		names = append(names,name)
-		attrs = append(attrs,gen_attr(name,t))
+		names = append(names, name)
+		attrs = append(attrs, gen_attr(name, t))
 	}
 	return names, attrs
 }
 
 //MakeBatch allocates a batch for test
-func MakeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *batch.Batch {
+func MakeBatch(batchSize int, attrName []string, cols []*engine.AttributeDef) *batch.Batch {
 	batchData := batch.New(true, attrName)
 
-	batchData.Zs = make([]int64,batchSize)
+	batchData.Zs = make([]int64, batchSize)
 	for i := 0; i < batchSize; i++ {
 		batchData.Zs[i] = 1
 	}
@@ -143,7 +144,7 @@ func MakeBatch(batchSize int,attrName []string,cols []*engine.AttributeDef) *bat
 	return batchData
 }
 
-func randomLines(rowCnt int, attrName []string, cols []*engine.AttributeDef) [][]string{
+func randomLines(rowCnt int, attrName []string, cols []*engine.AttributeDef) [][]string {
 	var lines [][]string
 
 	for i := 0; i < rowCnt; i++ {
@@ -153,17 +154,17 @@ func randomLines(rowCnt int, attrName []string, cols []*engine.AttributeDef) [][
 			var d interface{}
 			switch cols[j].Attr.Type.Oid {
 			case types.T_int8:
-				d = rand.Int31n((1 << 7 -1))
+				d = rand.Int31n((1<<7 - 1))
 			case types.T_int16:
-				d = rand.Int31n((1 << 15 -1))
+				d = rand.Int31n((1<<15 - 1))
 			case types.T_int32:
 				d = rand.Int31()
 			case types.T_int64:
 				d = rand.Int63()
 			case types.T_uint8:
-				d = rand.Int31n((1 << 8 -1))
+				d = rand.Int31n((1<<8 - 1))
 			case types.T_uint16:
-				d = rand.Int31n((1 << 16 -1))
+				d = rand.Int31n((1<<16 - 1))
 			case types.T_uint32:
 				d = rand.Int31()
 			case types.T_uint64:
@@ -181,16 +182,16 @@ func randomLines(rowCnt int, attrName []string, cols []*engine.AttributeDef) [][
 			default:
 				panic("unsupported type")
 			}
-			field = fmt.Sprintf("%v",d)
-			line = append(line,field)
+			field = fmt.Sprintf("%v", d)
+			line = append(line, field)
 		}
-		lines = append(lines,line)
+		lines = append(lines, line)
 	}
 
 	return lines
 }
 
-func fillBatch(lines [][]string,batchData *batch.Batch) {
+func fillBatch(lines [][]string, batchData *batch.Batch) {
 	for i, line := range lines {
 		rowIdx := i
 		for j, field := range line {
@@ -368,7 +369,7 @@ func fillBatch(lines [][]string,batchData *batch.Batch) {
 	}
 }
 
-func TruncateBatch(bat *batch.Batch,batchSize, needLen int) {
+func TruncateBatch(bat *batch.Batch, batchSize, needLen int) {
 	if needLen >= batchSize {
 		return
 	}
@@ -425,39 +426,53 @@ func TruncateBatch(bat *batch.Batch,batchSize, needLen int) {
 	bat.Zs = bat.Zs[:needLen]
 }
 
-func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc)([]string,[]*engine.AttributeDef) {
+func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc) ([]string, []*engine.AttributeDef) {
 	var names []string
 	var defs []*engine.AttributeDef
 	for _, attr := range attrs {
-		names = append(names,attr.Name)
+		names = append(names, attr.Name)
 		//make type
-		defs = append(defs,&engine.AttributeDef{Attr:engine.Attribute{
+		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
 			Name:    attr.Name,
 			Alg:     0,
 			Type:    TpeTypeToEngineType(attr.Ttype),
 			Default: engine.DefaultExpr{},
 		}})
 	}
-	return names,defs
+	return names, defs
 }
 
 func TpeTypeToEngineType(Ttype orderedcodec.ValueType) types.Type {
 	t := types.Type{}
 	switch Ttype {
-	case orderedcodec.VALUE_TYPE_UINT64      :  t.Oid = types.T_uint64
-	case orderedcodec.VALUE_TYPE_BYTES      :   t.Oid = types.T_char
-	case orderedcodec.VALUE_TYPE_STRING      :  t.Oid = types.T_char
-	case orderedcodec.VALUE_TYPE_INT8      :    t.Oid = types.T_int8
-	case orderedcodec.VALUE_TYPE_INT16      :   t.Oid = types.T_int16
-	case orderedcodec.VALUE_TYPE_INT32      :   t.Oid = types.T_int32
-	case orderedcodec.VALUE_TYPE_INT64      :   t.Oid = types.T_int64
-	case orderedcodec.VALUE_TYPE_UINT8      :   t.Oid = types.T_uint8
-	case orderedcodec.VALUE_TYPE_UINT16      :  t.Oid = types.T_uint16
-	case orderedcodec.VALUE_TYPE_UINT32      :  t.Oid = types.T_uint32
-	case orderedcodec.VALUE_TYPE_FLOAT32      : t.Oid = types.T_float32
-	case orderedcodec.VALUE_TYPE_FLOAT64      : t.Oid = types.T_float64
-	case orderedcodec.VALUE_TYPE_DATE      :    t.Oid = types.T_date
-	case orderedcodec.VALUE_TYPE_DATETIME      :t.Oid = types.T_datetime
+	case orderedcodec.VALUE_TYPE_UINT64:
+		t.Oid = types.T_uint64
+	case orderedcodec.VALUE_TYPE_BYTES:
+		t.Oid = types.T_char
+	case orderedcodec.VALUE_TYPE_STRING:
+		t.Oid = types.T_char
+	case orderedcodec.VALUE_TYPE_INT8:
+		t.Oid = types.T_int8
+	case orderedcodec.VALUE_TYPE_INT16:
+		t.Oid = types.T_int16
+	case orderedcodec.VALUE_TYPE_INT32:
+		t.Oid = types.T_int32
+	case orderedcodec.VALUE_TYPE_INT64:
+		t.Oid = types.T_int64
+	case orderedcodec.VALUE_TYPE_UINT8:
+		t.Oid = types.T_uint8
+	case orderedcodec.VALUE_TYPE_UINT16:
+		t.Oid = types.T_uint16
+	case orderedcodec.VALUE_TYPE_UINT32:
+		t.Oid = types.T_uint32
+	case orderedcodec.VALUE_TYPE_FLOAT32:
+		t.Oid = types.T_float32
+	case orderedcodec.VALUE_TYPE_FLOAT64:
+		t.Oid = types.T_float64
+	case orderedcodec.VALUE_TYPE_DATE:
+		t.Oid = types.T_date
+	case orderedcodec.VALUE_TYPE_DATETIME:
+		t.Oid = types.T_datetime
 	default:
 		panic("unsupported tpe type")
 	}
@@ -465,23 +480,37 @@ func TpeTypeToEngineType(Ttype orderedcodec.ValueType) types.Type {
 	return t
 }
 
-func EngineTypeToTpeType(t * types.Type) orderedcodec.ValueType {
+func EngineTypeToTpeType(t *types.Type) orderedcodec.ValueType {
 	var vt orderedcodec.ValueType
 	switch t.Oid {
-	case types.T_uint64   : vt =  orderedcodec.VALUE_TYPE_UINT64
-	case types.T_char     : vt =  orderedcodec.VALUE_TYPE_BYTES
-	case types.T_varchar  : vt =  orderedcodec.VALUE_TYPE_STRING
-	case types.T_int8     : vt =  orderedcodec.VALUE_TYPE_INT8
-	case types.T_int16    : vt =  orderedcodec.VALUE_TYPE_INT16
-	case types.T_int32    : vt =  orderedcodec.VALUE_TYPE_INT32
-	case types.T_int64    : vt =  orderedcodec.VALUE_TYPE_INT64
-	case types.T_uint8    : vt =  orderedcodec.VALUE_TYPE_UINT8
-	case types.T_uint16   : vt =  orderedcodec.VALUE_TYPE_UINT16
-	case types.T_uint32   : vt =  orderedcodec.VALUE_TYPE_UINT32
-	case types.T_float32  : vt =  orderedcodec.VALUE_TYPE_FLOAT32
-	case types.T_float64  : vt =  orderedcodec.VALUE_TYPE_FLOAT64
-	case types.T_date     : vt =  orderedcodec.VALUE_TYPE_DATE
-	case types.T_datetime : vt =  orderedcodec.VALUE_TYPE_DATETIME
+	case types.T_uint64:
+		vt = orderedcodec.VALUE_TYPE_UINT64
+	case types.T_char:
+		vt = orderedcodec.VALUE_TYPE_BYTES
+	case types.T_varchar:
+		vt = orderedcodec.VALUE_TYPE_STRING
+	case types.T_int8:
+		vt = orderedcodec.VALUE_TYPE_INT8
+	case types.T_int16:
+		vt = orderedcodec.VALUE_TYPE_INT16
+	case types.T_int32:
+		vt = orderedcodec.VALUE_TYPE_INT32
+	case types.T_int64:
+		vt = orderedcodec.VALUE_TYPE_INT64
+	case types.T_uint8:
+		vt = orderedcodec.VALUE_TYPE_UINT8
+	case types.T_uint16:
+		vt = orderedcodec.VALUE_TYPE_UINT16
+	case types.T_uint32:
+		vt = orderedcodec.VALUE_TYPE_UINT32
+	case types.T_float32:
+		vt = orderedcodec.VALUE_TYPE_FLOAT32
+	case types.T_float64:
+		vt = orderedcodec.VALUE_TYPE_FLOAT64
+	case types.T_date:
+		vt = orderedcodec.VALUE_TYPE_DATE
+	case types.T_datetime:
+		vt = orderedcodec.VALUE_TYPE_DATETIME
 	default:
 		panic("unsupported types.Type")
 	}
@@ -489,11 +518,11 @@ func EngineTypeToTpeType(t * types.Type) orderedcodec.ValueType {
 }
 
 //for rowid
-var startTime int64 = time.Date(2022,1,1,0,0,0,0,time.UTC).UnixNano()
+var startTime int64 = time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
 
 const interval = uint64(10 * time.Microsecond)
 
-var rowID struct{
+var rowID struct {
 	sync.Mutex
 	previous uint64
 }
@@ -504,11 +533,11 @@ func GetRowID(nodeID uint64) uint64 {
 		nano = startTime
 	}
 
-	ts := uint64(nano - startTime) / interval
+	ts := uint64(nano-startTime) / interval
 
 	rowID.Lock()
 	if ts <= rowID.previous {
-		ts = rowID.previous+1
+		ts = rowID.previous + 1
 	}
 	rowID.previous = ts
 	rowID.Unlock()
@@ -516,23 +545,23 @@ func GetRowID(nodeID uint64) uint64 {
 	return (ts << 15) ^ nodeID
 }
 
-func MaxUint64(a,b uint64) uint64 {
+func MaxUint64(a, b uint64) uint64 {
 	if a < b {
 		return b
-	}else{
+	} else {
 		return a
 	}
 }
 
-func Min(a,b int) int {
+func Min(a, b int) int {
 	if a < b {
 		return a
-	}else{
+	} else {
 		return b
 	}
 }
 
-func BeginCpuProfile (cpu string) *os.File {
+func BeginCpuProfile(cpu string) *os.File {
 	cpuf, _ := os.Create(cpu)
 	pprof.StartCPUProfile(cpuf)
 	return cpuf
@@ -547,6 +576,33 @@ func BeginTime() time.Time {
 	return time.Now()
 }
 
-func EndTime(s time.Time,info string) {
-	logutil.Infof("%s duration %v",info,time.Since(s))
+func EndTime(s time.Time, info string) {
+	logutil.Infof("%s duration %v", info, time.Since(s))
 }
+
+type errorStorage struct {
+	mu     sync.Mutex
+	keys   []TupleKey
+	values []TupleValue
+}
+
+func (es *errorStorage) append(k TupleKey, v TupleValue) {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	es.keys = append(es.keys, k)
+	es.values = append(es.values, v)
+}
+
+func (es *errorStorage) getKey(k TupleKey) TupleValue {
+	es.mu.Lock()
+	defer es.mu.Unlock()
+	for i, key := range es.keys {
+		if bytes.Equal(key, k) {
+			return es.values[i]
+		}
+	}
+	return nil
+}
+
+var ES errorStorage
