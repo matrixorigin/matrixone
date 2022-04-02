@@ -67,8 +67,53 @@ type DecodedItem struct {
 	ValueType                ValueType   // int,uint,uint64,...,float
 	SectionType              SectionType //belongs to which section
 	OffsetInUndecodedKey     int         //the position in undecoded bytes
+	RawBytes                 []byte      //the byte that holds the item
 	BytesCountInUndecodedKey int         //the count of bytes in undecoded bytes
 	ID                       uint32      //the attribute id
+}
+
+func (di *DecodedItem) GetValue() interface{} {
+	return di.Value
+}
+
+func (di *DecodedItem) SetValue(v interface{}) {
+	di.Value = v
+}
+
+func (di *DecodedItem) GetValueType() ValueType {
+	return di.ValueType
+}
+
+func (di *DecodedItem) SetValueType(vt ValueType) {
+	di.ValueType = vt
+}
+
+func (di *DecodedItem) GetSectionType() SectionType {
+	return di.SectionType
+}
+
+func (di *DecodedItem) GetOffsetInUndecodedKey() int {
+	return di.OffsetInUndecodedKey
+}
+
+func (di *DecodedItem) SetOffsetInUndecodedKey(o int) {
+	di.OffsetInUndecodedKey = o
+}
+
+func (di *DecodedItem) GetBytesCountInUndecodedKey() int {
+	return di.BytesCountInUndecodedKey
+}
+
+func (di *DecodedItem) SetBytesCountInUndecodedKey(b int) {
+	di.BytesCountInUndecodedKey = b
+}
+
+func (di *DecodedItem) GetID() uint32 {
+	return di.ID
+}
+
+func (di *DecodedItem) SetID(id uint32) {
+	di.ID = id
 }
 
 func (di *DecodedItem) IsValueType(vt ValueType) bool {

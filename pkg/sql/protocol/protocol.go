@@ -19,6 +19,7 @@ import (
 	"encoding/gob"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
 
@@ -968,6 +969,24 @@ func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, [
 
 func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 	switch v := r.(type) {
+	case *bitand.NumericRing:
+		buf.WriteByte(BitAndNumericRing)
+		// nsp
+		n := len(v.NullCnt)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.NullCnt))
+		}
+		// BitAndResult
+		data := encoding.EncodeUint64Slice(v.BitAndResult)
+		n = len(data)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(data)
+		}
+		// typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *avg.AvgRing:
 		buf.WriteByte(AvgRing)
 		// Ns
@@ -1717,6 +1736,30 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 
 func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 	switch data[0] {
+	case BitAndNumericRing:
+		r := new(bitand.NumericRing)
+		data = data[1:]
+		// NullCnt
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCnt = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// Data
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
+			data = data[n:]
+		}
+		// BitAndResult
+		r.BitAndResult = encoding.DecodeUint64Slice(r.Data)
+		//Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case AvgRing:
 		r := new(avg.AvgRing)
 		data = data[1:]
@@ -2700,6 +2743,36 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 
 func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byte, error) {
 	switch data[0] {
+	case BitAndNumericRing:
+		r := new(bitand.NumericRing)
+		data = data[1:]
+		// NullCnt
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCnt = make([]int64, n)
+			copy(r.NullCnt, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// Data
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			r.Data, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(r.Data, data[:n])
+			data = data[n:]
+		}
+		// BitAndResult
+		r.BitAndResult = encoding.DecodeUint64Slice(r.Data)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		return r, data, nil
 	case AvgRing:
 		r := new(avg.AvgRing)
 		data = data[1:]
