@@ -42,4 +42,5 @@ const (
 	DayOfYear
 	Month
 	Weekday
+	Lpad
 )
