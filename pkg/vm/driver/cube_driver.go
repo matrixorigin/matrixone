@@ -251,12 +251,10 @@ func NewCubeDriverWithFactory(
 		}
 		return nil
 	}
-	c.CubeConfig.Storage.ForeachDataStorageFunc = func(cb func(cstorage.DataStorage)) {
-		cb(kvDataStorage)
-		cb(aoeDataStorage)
+	c.CubeConfig.Storage.ForeachDataStorageFunc = func(cb func(uint64, cstorage.DataStorage)) {
+		cb(uint64(pb.KVGroup), kvDataStorage)
+		cb(uint64(pb.AOEGroup), aoeDataStorage)
 	}
-	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
-	c.CubeConfig.ShardGroups = 2
 
 	c.CubeConfig.Customize.CustomInitShardsFactory = func() []metapb.Shard {
 		var initialGroups []metapb.Shard
@@ -267,16 +265,11 @@ func NewCubeDriverWithFactory(
 	}
 
 	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) metapb.Shard {
-		disableSplit := false
-		if g == uint64(pb.KVGroup) {
-			disableSplit = true
-		}
 		return metapb.Shard{
-			Group:        g,
-			Start:        start,
-			End:          end,
-			Unique:       unique,
-			DisableSplit: disableSplit,
+			Group:  g,
+			Start:  start,
+			End:    end,
+			Unique: unique,
 		}
 	}
 
@@ -289,16 +282,14 @@ func NewCubeDriverWithFactory(
 		return nil, err
 	}
 	h.store = store
-
-	c.ServerConfig.Store = h.store
 	pConfig.DefaultSchedulers = nil
-
-	h.app = client.NewClient(c.ServerConfig)
 	return h, nil
 }
 
 //Start starts h.app add initial the shard pool
 func (h *driver) Start() error {
+	h.store.Start()
+	h.app = client.NewClient(client.Cfg{Store: h.store})
 	err := h.app.Start()
 	if err != nil {
 		return err

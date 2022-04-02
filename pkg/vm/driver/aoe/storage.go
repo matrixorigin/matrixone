@@ -57,8 +57,9 @@ const (
 
 // Storage memory storage
 type Storage struct {
-	DB    *aoedb.DB
-	stats stats.Stats
+	DB      *aoedb.DB
+	stats   stats.Stats
+	feature storage.Feature
 }
 
 func (s *Storage) Sync(ids []uint64) error {
@@ -73,24 +74,53 @@ func (s *Storage) Sync(ids []uint64) error {
 }
 
 // NewStorage returns pebble kv store on a default options
-func NewStorage(dir string) (*Storage, error) {
-	return NewStorageWithOptions(dir, &store.Options{})
+func NewStorage(dir string, feature storage.Feature) (*Storage, error) {
+	return NewStorageWithOptions(dir, feature, &store.Options{})
 }
 
 // NewStorageWithOptions returns badger kv store
-func NewStorageWithOptions(dir string, opts *store.Options) (*Storage, error) {
+func NewStorageWithOptions(dir string, feature storage.Feature, opts *store.Options) (*Storage, error) {
 	db, err := aoedb.Open(dir, opts)
 	if err != nil {
 		return nil, err
 	}
-	return &Storage{
-		DB: db,
-	}, nil
+	s := &Storage{
+		DB:      db,
+		feature: feature,
+	}
+	s.adjustFeature()
+	return s, nil
+}
+
+func (s *Storage) adjustFeature() {
+	if s.feature.ShardSplitCheckDuration == 0 {
+		s.feature.ShardSplitCheckDuration = time.Minute
+	}
+
+	if s.feature.ShardCapacityBytes == 0 {
+		s.feature.ShardCapacityBytes = 96 * 1024 * 1024 * 1024
+	}
+
+	if s.feature.ShardSplitCheckBytes == 0 {
+		s.feature.ShardSplitCheckBytes = s.feature.ShardCapacityBytes * 80 / 100
+	}
+
+	if s.feature.ForceCompactCount == 0 {
+		s.feature.ForceCompactCount = s.feature.ShardCapacityBytes * 1024 * 1024 * 3 / 4 / 1024
+	}
+
+	if s.feature.ForceCompactBytes == 0 {
+		s.feature.ForceCompactBytes = s.feature.ShardCapacityBytes * 3 / 4
+	}
 }
 
 //Stats returns the stats of the Storage
 func (s *Storage) Stats() stats.Stats {
 	return s.stats
+}
+
+func (s *Storage) Feature() storage.Feature {
+	return s.feature
 }
 
 func (s *Storage) createIndex(index uint64, offset int, batchSize int, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {

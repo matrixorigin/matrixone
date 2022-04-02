@@ -35,7 +35,7 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 			serializer: serial,
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_char,types.T_char)
+		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
 
 		cnt := 10
 
@@ -85,7 +85,7 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 			rcc:        &RowColumnConverterImpl{},
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_char,types.T_char)
+		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
 
 		cnt := 10
 
@@ -161,7 +161,7 @@ func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
 			rcc:        &RowColumnConverterImpl{},
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_char,types.T_char)
+		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
 
 		cnt := 10
 

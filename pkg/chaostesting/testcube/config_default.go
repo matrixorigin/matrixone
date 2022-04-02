@@ -31,7 +31,6 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 	return func(i fz.NodeID) *config.Config {
 
 		pConfig := prophetconfig.NewConfig()
-		pConfig.StorageNode = true
 		pConfig.Name = fmt.Sprintf("prophet-%d", i)
 		pConfig.EmbedEtcd = prophetconfig.EmbedEtcdConfig{
 			TickInterval:            typeutil.NewDuration(time.Millisecond * 30),
@@ -45,6 +44,7 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 			MaxReplicas:          3,
 			EnablePlacementRules: true,
 		}
+		pConfig.ProphetNode = true
 
 		return &config.Config{
 
@@ -56,19 +56,14 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 			},
 			Capacity:           1000 * 1024 * 1024 * 1024,
 			UseMemoryAsStorage: false,
-			ShardGroups:        uint64(3),
 
 			Replication: config.ReplicationConfig{
 				MaxPeerDownTime:         typeutil.NewDuration(time.Minute * 3),
 				ShardHeartbeatDuration:  typeutil.NewDuration(time.Millisecond * 100),
 				StoreHeartbeatDuration:  typeutil.NewDuration(time.Millisecond * 100),
-				ShardSplitCheckDuration: typeutil.NewDuration(time.Millisecond * 100),
 				ShardStateCheckDuration: typeutil.NewDuration(time.Millisecond * 100),
 				CompactLogCheckDuration: typeutil.NewDuration(time.Millisecond * 100),
-				DisableShardSplit:       false,
 				AllowRemoveLeader:       false,
-				ShardCapacityBytes:      16 * 1024 * 1024,
-				ShardSplitCheckBytes:    16 * 1024 * 1024,
 			},
 
 			Raft: config.RaftConfig{
@@ -84,8 +79,6 @@ func (_ Def) DefaultCubeConfig() DefaultCubeConfig {
 					DisableSync:         false,
 					CompactThreshold:    256,
 					MaxAllowTransferLag: 4,
-					ForceCompactCount:   2048,
-					ForceCompactBytes:   128 * 1024 * 1024,
 				},
 			},
 
