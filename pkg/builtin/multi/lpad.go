@@ -69,10 +69,24 @@ func init() {
 							return nil, err
 						}
 						nulls.Set(vec.Nsp, vecs[0].Nsp)
-						var res *types.Bytes = &types.Bytes{}
-						res.Data = []byte{'N', 'U', 'L', 'L'}
-						res.Lengths = []uint32{4}
-						res.Offsets = []uint32{0}
+						temp := ""
+						lengths_temp := []uint32{}
+						offsets_temp := []uint32{}
+						for k := 0; k < len(vs.Lengths); k++ {
+							temp += "NULL"
+							lengths_temp = append(lengths_temp, 4)
+							if len(offsets_temp) == 0 {
+								offsets_temp = append(offsets_temp, 0)
+							} else {
+								offsets_temp = append(offsets_temp, offsets_temp[len(offsets_temp)-1]+4)
+							}
+
+						}
+						res := &types.Bytes{
+							Data:    []byte(temp),
+							Lengths: lengths_temp,
+							Offsets: offsets_temp,
+						}
 						vector.SetCol(vec, res)
 						return vec, nil
 					}
