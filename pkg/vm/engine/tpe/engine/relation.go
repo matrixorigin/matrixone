@@ -26,40 +26,39 @@ import (
 
 var (
 	errorBatchAttributeDoNotExistInTheRelation = errors.New("batch attribute do not exist in the relation")
-	errorNotHiddenPrimaryKey = errors.New("it is not hidden primary key")
-	errorDuplicateAttributeNameInBatch = errors.New("duplicate attribute name in the batch")
-	errorDoNotGetValidValueForTheAttribute = errors.New("can not get the value for the attribute")
+	errorNotHiddenPrimaryKey                   = errors.New("it is not hidden primary key")
+	errorDuplicateAttributeNameInBatch         = errors.New("duplicate attribute name in the batch")
+	errorDoNotGetValidValueForTheAttribute     = errors.New("can not get the value for the attribute")
 )
 
-func (trel * TpeRelation) Rows() int64 {
-	// panic("implement me")
+func (trel *TpeRelation) Rows() int64 {
 	return 1
 }
 
-func (trel * TpeRelation) Size(s string) int64 {
-	panic("implement me")
+func (trel *TpeRelation) Size(s string) int64 {
+	return 1
 }
 
-func (trel * TpeRelation) Close() {
+func (trel *TpeRelation) Close() {
 }
 
-func (trel * TpeRelation) ID() string {
+func (trel *TpeRelation) ID() string {
 	return trel.desc.Name
 }
 
-func (trel * TpeRelation) Nodes() engine.Nodes {
+func (trel *TpeRelation) Nodes() engine.Nodes {
 	return trel.nodes
 }
 
-func (trel * TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
+func (trel *TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
 	panic("implement me")
 }
 
-func (trel * TpeRelation) DropIndex(epoch uint64, name string) error {
+func (trel *TpeRelation) DropIndex(epoch uint64, name string) error {
 	panic("implement me")
 }
 
-func (trel * TpeRelation) GetHideColDef() *engine.Attribute {
+func (trel *TpeRelation) GetHideColDef() *engine.Attribute {
 	for _, attr := range trel.desc.Attributes {
 		if attr.Is_hidden {
 			return &engine.Attribute{
@@ -73,14 +72,14 @@ func (trel * TpeRelation) GetHideColDef() *engine.Attribute {
 	return nil
 }
 
-func (trel * TpeRelation) TableDefs() []engine.TableDef {
+func (trel *TpeRelation) TableDefs() []engine.TableDef {
 	var defs []engine.TableDef
 	var pkNames []string
 	for _, attr := range trel.desc.Attributes {
 		//skip hidden attribute ?
 		if !attr.Is_hidden {
 			if attr.Is_primarykey {
-				pkNames = append(pkNames,attr.Name)
+				pkNames = append(pkNames, attr.Name)
 			}
 			def := &engine.AttributeDef{Attr: engine.Attribute{
 				Name:    attr.Name,
@@ -89,23 +88,23 @@ func (trel * TpeRelation) TableDefs() []engine.TableDef {
 				Default: attr.Default,
 				Primary: attr.Is_primarykey,
 			}}
-			defs = append(defs,def)
+			defs = append(defs, def)
 		}
 	}
 
 	if len(pkNames) != 0 {
-		defs = append(defs,&engine.PrimaryIndexDef{
-			Names:    pkNames,
+		defs = append(defs, &engine.PrimaryIndexDef{
+			Names: pkNames,
 		})
 	}
 
 	if len(trel.desc.Comment) != 0 {
-		defs = append(defs,&engine.CommentDef{Comment: trel.desc.Comment})
+		defs = append(defs, &engine.CommentDef{Comment: trel.desc.Comment})
 	}
 	return defs
 }
 
-func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
+func (trel *TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	//attribute set
 	attrSet := make(map[string]uint32)
 	for _, attr := range trel.desc.Attributes {
@@ -116,15 +115,15 @@ func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	var attrDescs []descriptor.AttributeDesc
 	batchAttrSet := make(map[string]int)
 	for posInBatch, batchAttrName := range batch.Attrs {
-		if _,ok := batchAttrSet[batchAttrName]; ok {
+		if _, ok := batchAttrSet[batchAttrName]; ok {
 			return errorDuplicateAttributeNameInBatch
-		}else{
+		} else {
 			batchAttrSet[batchAttrName] = posInBatch
 		}
 
-		if _,ok := attrSet[batchAttrName]; ok {
-			attrDescs = append(attrDescs,trel.desc.Attributes[posInBatch])
-		}else{
+		if _, ok := attrSet[batchAttrName]; ok {
+			attrDescs = append(attrDescs, trel.desc.Attributes[posInBatch])
+		} else {
 			return errorBatchAttributeDoNotExistInTheRelation
 		}
 	}
@@ -133,7 +132,7 @@ func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	//to the attribute in the batch.
 	//Then, it is convenient to get the right data from the batch
 	//in encoding and serialization.
-	writeStates := make([]tuplecodec.AttributeStateForWrite,len(trel.desc.Attributes))
+	writeStates := make([]tuplecodec.AttributeStateForWrite, len(trel.desc.Attributes))
 
 	//find the attributes not covered by the batch in the relation
 	for attrIdx, attrDesc := range trel.desc.Attributes {
@@ -141,31 +140,31 @@ func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 		writeStates[attrIdx].PositionInBatch = -1
 		writeStates[attrIdx].NeedGenerated = false
 		//attribute not in the batch
-		if posInBatch,exist := batchAttrSet[attrDesc.Name]; !exist {
+		if posInBatch, exist := batchAttrSet[attrDesc.Name]; !exist {
 			//hidden primary key
 			if attrDesc.Is_hidden && attrDesc.Is_primarykey {
 				//it is hidden primary key
 				writeStates[attrIdx].PositionInBatch = -1
 				writeStates[attrIdx].NeedGenerated = true
-			}else if attrDesc.Default.Exist { //default expr
+			} else if attrDesc.Default.Exist { //default expr
 				writeStates[attrIdx].PositionInBatch = -1
 				writeStates[attrIdx].NeedGenerated = true
-			}else{
+			} else {
 				return errorDoNotGetValidValueForTheAttribute
 			}
-		}else{
+		} else {
 			writeStates[attrIdx].PositionInBatch = posInBatch
 			writeStates[attrIdx].NeedGenerated = false
 		}
 	}
 
 	writeCtx := &tuplecodec.WriteContext{
-		DbDesc: trel.dbDesc,
-		TableDesc: trel.desc,
-		IndexDesc: &trel.desc.Primary_index,
+		DbDesc:          trel.dbDesc,
+		TableDesc:       trel.desc,
+		IndexDesc:       &trel.desc.Primary_index,
 		BatchAttrs:      attrDescs,
 		AttributeStates: writeStates,
-		NodeID:          0,//now for test
+		NodeID:          0, //now for test
 	}
 
 	err := trel.computeHandler.Write(writeCtx, batch)
@@ -175,49 +174,49 @@ func (trel * TpeRelation) Write(_ uint64, batch *batch.Batch) error {
 	return nil
 }
 
-func (trel * TpeRelation) AddTableDef(u uint64, def engine.TableDef) error {
+func (trel *TpeRelation) AddTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
-func (trel * TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
+func (trel *TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
-func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
+func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 	tcnt := cnt
 	if cnt <= 0 {
 		tcnt = 1
 	}
-	var retReaders []engine.Reader = make([]engine.Reader,cnt)
-	var tpeReaders []*TpeReader = make([]*TpeReader,tcnt)
+	var retReaders []engine.Reader = make([]engine.Reader, cnt)
+	var tpeReaders []*TpeReader = make([]*TpeReader, tcnt)
 	//split shards into multiple readers
 	shardInfos := trel.shards.ShardInfos()
 	shardInfosCount := len(shardInfos)
 
 	shardCountPerReader := shardInfosCount / tcnt
 
-	if shardInfosCount % tcnt != 0{
+	if shardInfosCount%tcnt != 0 {
 		shardCountPerReader++
 	}
 
 	startIndex := 0
 	for i := 0; i < len(tpeReaders); i++ {
-		endIndex := tuplecodec.Min(startIndex + shardCountPerReader, shardInfosCount)
+		endIndex := tuplecodec.Min(startIndex+shardCountPerReader, shardInfosCount)
 		var infos []ShardInfo
 		for j := startIndex; j < endIndex; j++ {
 			info := shardInfos[j]
 			newInfo := ShardInfo{
-				startKey:    info.GetStartKey(),
-				endKey:      info.GetEndKey(),
-				nextScanKey: nil,
-				completeInShard:    false,
-				node:        ShardNode{
+				startKey:        info.GetStartKey(),
+				endKey:          info.GetEndKey(),
+				nextScanKey:     nil,
+				completeInShard: false,
+				node: ShardNode{
 					Addr:    info.GetShardNode().Addr,
 					ID:      info.GetShardNode().ID,
 					IDbytes: info.GetShardNode().IDbytes,
 				},
 			}
-			infos = append(infos,newInfo)
+			infos = append(infos, newInfo)
 		}
 
 		if len(infos) != 0 {
@@ -225,17 +224,17 @@ func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
 				dbDesc:         trel.dbDesc,
 				tableDesc:      trel.desc,
 				computeHandler: trel.computeHandler,
-				shardInfos: 	infos,
+				shardInfos:     infos,
 				parallelReader: true,
-				isDumpReader: 	false,
-				id: i,
+				isDumpReader:   false,
+				id:             i,
 			}
 		} else {
-			tpeReaders[i] = &TpeReader{isDumpReader: true,id: i}
+			tpeReaders[i] = &TpeReader{isDumpReader: true, id: i}
 		}
 
 		logutil.Infof("reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
-			i,startIndex,shardCountPerReader,shardInfosCount,endIndex,tpeReaders[i].isDumpReader)
+			i, startIndex, shardCountPerReader, shardInfosCount, endIndex, tpeReaders[i].isDumpReader)
 
 		startIndex += shardCountPerReader
 	}
@@ -243,41 +242,41 @@ func (trel * TpeRelation) parallelReader(cnt int) []engine.Reader {
 	for i, reader := range tpeReaders {
 		if reader != nil {
 			retReaders[i] = reader
-			logutil.Infof("-->reader %v",reader.shardInfos)
-		}else{
+			logutil.Infof("-->reader %v", reader.shardInfos)
+		} else {
 			retReaders[i] = &TpeReader{isDumpReader: true}
 		}
 	}
 	return retReaders
 }
 
-func (trel * TpeRelation) NewReader(cnt int) []engine.Reader {
-	logutil.Infof("newreader cnt %d",cnt)
+func (trel *TpeRelation) NewReader(cnt int) []engine.Reader {
+	logutil.Infof("newreader cnt %d", cnt)
 	if trel.computeHandler.ParallelReader() {
 		return trel.parallelReader(cnt)
 	}
-	var readers []engine.Reader = make([]engine.Reader,cnt)
+	var readers []engine.Reader = make([]engine.Reader, cnt)
 	tr := &TpeReader{
 		dbDesc:         trel.dbDesc,
 		tableDesc:      trel.desc,
 		computeHandler: trel.computeHandler,
 		parallelReader: false,
-		isDumpReader: false,
+		isDumpReader:   false,
 	}
 	shardInfos := trel.shards.ShardInfos()
 	for _, info := range shardInfos {
 		newInfo := ShardInfo{
-			startKey:    info.GetStartKey(),
-			endKey:      info.GetEndKey(),
-			nextScanKey: nil,
-			completeInShard:    false,
-			node:        ShardNode{
+			startKey:        info.GetStartKey(),
+			endKey:          info.GetEndKey(),
+			nextScanKey:     nil,
+			completeInShard: false,
+			node: ShardNode{
 				Addr:    info.GetShardNode().Addr,
 				ID:      info.GetShardNode().ID,
 				IDbytes: info.GetShardNode().IDbytes,
 			},
 		}
-		tr.shardInfos = append(tr.shardInfos,newInfo)
+		tr.shardInfos = append(tr.shardInfos, newInfo)
 	}
 	readers[0] = tr
 	for i := 1; i < cnt; i++ {

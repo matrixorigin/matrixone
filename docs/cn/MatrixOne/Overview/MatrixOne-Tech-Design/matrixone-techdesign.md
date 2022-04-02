@@ -51,6 +51,7 @@ MatrixOne整体分为前端，计算层，元数据层，分布式框架和存�
 接下来我们整体介绍MatrixOne的代码仓库结构，以便各位开发者对感兴趣的部分进行深入研究或者参与贡献。    
 
 MatrixOne的内核代码都在`matrixone/pkg/ ` 这个文件夹下面。与上述架构图中对应的模块代码库位置：
+
 * SQL Frontend：frontend/
 * SQL Parser：sql/parser
 * MPP SQL Execution：sql/

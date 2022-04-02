@@ -47,8 +47,8 @@ type Batch struct {
 }
 
 type DumpOption struct {
-    Db_name 		[]string      // 数据库名称
-    Table_name 		[]string   // 表名称
+    Db_name 		[]string	// 数据库名称
+    Table_name 		[]string   	// 表名称
     Keys 			bool
     Values 			bool
     Decode_key 		bool

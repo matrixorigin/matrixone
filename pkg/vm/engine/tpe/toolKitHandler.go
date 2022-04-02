@@ -18,8 +18,8 @@ func DumpDatabaseInfo(eng vm_engine.Engine, args []string) error {
     if len(args) < 2 {
         return nil
     }
-    var opt batch.DumpOption
-    err := getParamFromCommand(&opt, args)
+    opt := &batch.DumpOption{}
+    err := getParamFromCommand(opt, args)
     if err != nil {
         return err
     }
@@ -32,7 +32,7 @@ func DumpDatabaseInfo(eng vm_engine.Engine, args []string) error {
         defer file.Close()
         opt.Writer = bufio.NewWriter(file)
     }
-    err = DumpTableInfo(eng, &opt)
+    _, err = DumpTableInfo(eng, opt)
     if err != nil {
         return err
     }
@@ -42,27 +42,27 @@ func DumpDatabaseInfo(eng vm_engine.Engine, args []string) error {
 func getParamFromCommand(opt *batch.DumpOption, args []string) error {
     for i := 1; i < len(args); i++ {
         str := strings.ToLower(args[i])
-        if str == "db" {
+        if str == "-db" {
             if i + 1 >= len(args) {
                 return errors.New("the dbname do not input")
             }
             opt.Db_name = []string{args[i + 1]}
             i++
-        } else if str == "table" {
+        } else if str == "-table" {
             if i + 1 >= len(args) {
                 return errors.New("the table do not input")
             }
             opt.Table_name = []string{args[i + 1]}
             i++
-        } else if str == "keys" {
+        } else if str == "-keys" {
             opt.Keys = true
-        } else if str == "values" {
+        } else if str == "-values" {
             opt.Values = true
-        } else if str == "decode_key" {
+        } else if str == "-decode_key" {
             opt.Decode_key = true
-        } else if str == "decode_value" {
+        } else if str == "-decode_value" {
             opt.Decode_value = true
-        } else if str == "limit" {
+        } else if str == "-limit" {
             if i + 1 >= len(args) {
                 return errors.New("the limit param do not input")
             }
@@ -78,13 +78,13 @@ func getParamFromCommand(opt *batch.DumpOption, args []string) error {
                 opt.Limit = append(opt.Limit, n)
             }
             i++
-        } else if str == "export" {
+        } else if str == "-export" {
             if i + 1 >= len(args) {
                 return errors.New("the export filename do not input")
             }
             opt.Filename = args[i + 1]
             i++
-        } else if str == "getvalueofkey" {
+        } else if str == "-getvalueofkey" {
             if i + 1 >= len(args) {
                 return errors.New("the getValueofKey param do not input")
             }
@@ -102,7 +102,7 @@ func getParamFromCommand(opt *batch.DumpOption, args []string) error {
             opt.UseKey = true
             opt.ReadCnt = math.MaxUint64
             i++
-        } else if str == "getvalueoforiginkey" {
+        } else if str == "-getvalueoforiginkey" {
             opt.UseValue = true
             if i + 1 >= len(args) {
                 return errors.New("the getValueofOriginKey param do not input")
@@ -117,23 +117,22 @@ func getParamFromCommand(opt *batch.DumpOption, args []string) error {
     return nil
 }
 
-func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) error {
+func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.DumpResult, error) {
+    var result *batch.DumpResult
     tpe_eng, ok := eng.(*engine.TpeEngine)
     if !ok {
-        return errors.New("TpeEngine convert failed")
+        return nil, errors.New("TpeEngine convert failed")
     }
-
     if opt.Db_name == nil {
         opt.Db_name = tpe_eng.Databases()
     }
-
     for _, db_name := range opt.Db_name {
         if db_name == "system" {
             continue
         }
         db, err := eng.Database(db_name)
         if err != nil {
-            return err
+            return nil, err
         }
         if opt.Table_name == nil {
             opt.Table_name = db.Relations()
@@ -142,43 +141,48 @@ func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) error {
         for _, table_name := range opt.Table_name {
             table, err := db.Relation(table_name)
             if err != nil {
-                return err
+                return nil, err
             }
             tpe_relation, ok := table.(*engine.TpeRelation)
             if !ok {
-                return errors.New("TpeRelation convert failed")
+                return nil, errors.New("TpeRelation convert failed")
             }
-
             var reader *engine.TpeReader = engine.GetTpeReaderInfo(tpe_relation, tpe_eng, opt)
 
             refCnts, attrs := engine.MakeReadParam(tpe_relation)
 
-            err = getTableData(reader, refCnts, attrs, opt)
+            result, err = getTableData(reader, refCnts, attrs, opt)
             if err != nil {
-                return err
+                return nil, err
             }
         }
     }
-    return nil
+    return result, nil
 }
 
-func getTableData(tr *engine.TpeReader, refCnts []uint64, attrs []string, opt* batch.DumpOption) error {
+func getTableData(tr *engine.TpeReader, refCnts []uint64, attrs []string, opt* batch.DumpOption) (*batch.DumpResult, error) {
     bat, err := tr.Read(refCnts, attrs)
     if err != nil {
-        return err
+        return nil, err
     }
     result := bat.Result
     if result == nil {
-        return nil
+        return nil, nil
     }
 
     if opt.Limit != nil && len(opt.Limit) == 2 {
         if opt.Limit[0] + opt.Limit[1] > uint64(len(result.Keys)) {
-            return errors.New("The limit range is out of the result")
+            return nil, errors.New("The limit range is out of the result")
         }
         // truncate the result vec
         result.Keys = result.Keys[opt.Limit[0]:opt.Limit[0] + opt.Limit[1]]
         result.Values = result.Values[opt.Limit[0]:opt.Limit[0] + opt.Limit[1]]
+        for i := 0; i < len(result.Decode_keys.Vecs); i++ {
+            result.Decode_keys.Vecs[i] = result.Decode_keys.Vecs[i][opt.Limit[0]:opt.Limit[0] + opt.Limit[1]]
+        }
+        for i := 0; i < len(result.Decode_values.Vecs); i++ {
+            result.Decode_values.Vecs[i] = result.Decode_values.Vecs[i][opt.Limit[0]:opt.Limit[0] + opt.Limit[1]]
+        }
     }
 
     if opt.Filename == "" {
@@ -186,7 +190,7 @@ func getTableData(tr *engine.TpeReader, refCnts []uint64, attrs []string, opt* b
     } else {
         dumpTableDataToFile(opt, result)
     }
-    return nil
+    return result, nil
 }
 
 func getDumpDataHeader(opt* batch.DumpOption, result *batch.DumpResult) string {
@@ -204,27 +208,13 @@ func getDumpDataHeader(opt* batch.DumpOption, result *batch.DumpResult) string {
         if header != "" {
             header += "\t\t\t\t"
         }
-        header += "["
-        for i, attr := range result.Decode_keys.Attrs {
-            header += attr
-            if i != len(result.Decode_keys.Attrs) - 1 {
-                header += ","
-            }
-        }
-        header += "]"
+        header += fmt.Sprintf("%v", result.Decode_keys.Attrs)
     }
     if opt.Decode_value {
         if header != "" {
             header += "\t\t\t\t"
         }
-        header += "["
-        for i, attr := range result.Decode_values.Attrs {
-            header += attr
-            if i != len(result.Decode_values.Attrs) - 1 {
-                header += ","
-            }
-        }
-        header += "]"
+        header += fmt.Sprintf("%v", result.Decode_values.Attrs)
     }
     return header
 }
@@ -253,63 +243,46 @@ func outputOneLine(opt* batch.DumpOption, str interface{}) error {
     return nil
 }
 
-func getDumpDataBody(opt* batch.DumpOption, result *batch.DumpResult, i int) error {
-    first := true
+func getDumpDataBody(opt* batch.DumpOption, result *batch.DumpResult, i int) string {
+    var body string
     if opt.Keys {
-        if err := outputOneLine(opt, result.Keys[i]); err != nil {
-            return err
-        }
-        first = false
+        body += fmt.Sprintf("%v", result.Keys[i])
     }
     if opt.Values {
-        if !first {
-            if err := outputOneLine(opt, "\t"); err != nil {
-                return err
-            }
+        if body != "" {
+            body += "\t"
         }
-        if err := outputOneLine(opt, result.Values[i]); err != nil {
-            return err
-        }
-        first = false
+        body += fmt.Sprintf("%v", result.Values[i])
     }
 
     if opt.Decode_key {
-        if !first {
-            if err := outputOneLine(opt, "\t"); err != nil {
-                return err
-            }
+        if body != "" {
+            body += "\t"
         }
-        body := ""
+        tmp := ""
         for j, _ := range result.Decode_keys.Attrs {
-            body += fmt.Sprintf("%v", result.Decode_keys.Vecs[j][i])
+            tmp += fmt.Sprintf("%v", result.Decode_keys.Vecs[j][i])
             if j != len(result.Decode_keys.Attrs) - 1 {
-                body += ","
+                tmp += ","
             }
         }
-        if err := outputOneLine(opt, body); err != nil {
-            return err
-        }
-        first = false
+        body += tmp
     }
 
     if opt.Decode_value {
-        if !first {
-            if err := outputOneLine(opt, "\t"); err != nil {
-                return err
-            }
+        if body != "" {
+            body += "\t"
         }
-        body := ""
+        tmp := ""
         for j, _ := range result.Decode_values.Attrs {
-            body += fmt.Sprintf("%v", result.Decode_values.Vecs[j][i])
+            tmp += fmt.Sprintf("%v", result.Decode_values.Vecs[j][i])
             if j != len(result.Decode_values.Attrs) - 1 {
-                body += ","
+                tmp += ","
             }
         }
-        if err := outputOneLine(opt, body); err != nil {
-            return err
-        }
+        body += tmp
     }
-    return nil
+    return body
 }
 
 func dumpTableDataToshell(opt* batch.DumpOption, result *batch.DumpResult) error {
@@ -318,11 +291,8 @@ func dumpTableDataToshell(opt* batch.DumpOption, result *batch.DumpResult) error
     fmt.Println(header)
 
     for i := 0; i < len(result.Keys); i++ {
-        err := getDumpDataBody(opt, result, i)
-        if err != nil {
-            return err
-        }
-        fmt.Println()
+        body := getDumpDataBody(opt, result, i)
+        fmt.Println(body)
     }
     return nil
 }
@@ -335,11 +305,8 @@ func dumpTableDataToFile(opt* batch.DumpOption, result *batch.DumpResult) error 
     }
 
     for i := 0; i < len(result.Keys); i++ {
-        err := getDumpDataBody(opt, result, i)
-        if err != nil {
-            return err
-        }
-        err = opt.Writer.WriteByte('\n')
+        body := getDumpDataBody(opt, result, i) + "\n"
+        _, err = opt.Writer.WriteString(body)
         if err != nil {
             return err
         }

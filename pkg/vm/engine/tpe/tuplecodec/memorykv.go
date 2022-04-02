@@ -27,12 +27,12 @@ var _ KVHandler = &MemoryKV{}
 var _ btree.Item = &MemoryItem{}
 
 var (
-	errorKeyIsNull = errors.New("the key is null")
-	errorPrefixIsNull = errors.New("the prefix is null")
+	errorKeyIsNull                      = errors.New("the key is null")
+	errorPrefixIsNull                   = errors.New("the prefix is null")
 	errorKeysCountNotEqualToValuesCount = errors.New("the count of keys is not equal to the count of values")
-	errorKeyExists = errors.New("key exists")
-	errorIsNotMemoryItem = errors.New("it is not the memory item")
-	errorUnsupportedInMemoryKV = errors.New("unsupported in memory kv")
+	errorKeyExists                      = errors.New("key exists")
+	errorIsNotMemoryItem                = errors.New("it is not the memory item")
+	errorUnsupportedInMemoryKV          = errors.New("unsupported in memory kv")
 )
 
 type MemoryItem struct {
@@ -40,7 +40,7 @@ type MemoryItem struct {
 	value TupleValue
 }
 
-func NewMemoryItem(key TupleKey,value TupleValue) *MemoryItem {
+func NewMemoryItem(key TupleKey, value TupleValue) *MemoryItem {
 	return &MemoryItem{
 		key:   key,
 		value: value,
@@ -48,7 +48,7 @@ func NewMemoryItem(key TupleKey,value TupleValue) *MemoryItem {
 }
 
 func (m *MemoryItem) Less(than btree.Item) bool {
-	if x,ok := than.(*MemoryItem) ; ok {
+	if x, ok := than.(*MemoryItem); ok {
 		return m.key.Less(x.key)
 	}
 	panic("it is not memoryItem")
@@ -56,7 +56,7 @@ func (m *MemoryItem) Less(than btree.Item) bool {
 
 // MemoryKV for test
 type MemoryKV struct {
-	rwLock sync.RWMutex
+	rwLock    sync.RWMutex
 	container *btree.BTree
 }
 
@@ -73,22 +73,22 @@ func (m *MemoryKV) GetKVType() KVType {
 func (m *MemoryKV) NextID(typ string) (uint64, error) {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
-	value := m.container.Get(NewMemoryItem(TupleKey(typ),nil))
+	value := m.container.Get(NewMemoryItem(TupleKey(typ), nil))
 	var buf [8]byte
 	var nextID uint64
 	if value != nil {
 		//add id + 1
-		if x,ok := value.(*MemoryItem); ok {
+		if x, ok := value.(*MemoryItem); ok {
 			nextID = binary.BigEndian.Uint64(x.value)
-		}else{
+		} else {
 			return 0, errorIsNotMemoryItem
 		}
-	}else{
+	} else {
 		//id = 3, return 2
 		nextID = UserTableIDOffset
 	}
-	binary.BigEndian.PutUint64(buf[:],nextID+1)
-	x := NewMemoryItem(TupleKey(typ),buf[:])
+	binary.BigEndian.PutUint64(buf[:], nextID+1)
+	x := NewMemoryItem(TupleKey(typ), buf[:])
 	m.container.ReplaceOrInsert(x)
 	return nextID, nil
 }
@@ -99,7 +99,7 @@ func (m *MemoryKV) Set(key TupleKey, value TupleValue) error {
 	if key == nil {
 		return errorKeyIsNull
 	}
-	m.container.ReplaceOrInsert(NewMemoryItem(key,value))
+	m.container.ReplaceOrInsert(NewMemoryItem(key, value))
 	return nil
 }
 
@@ -115,8 +115,8 @@ func (m *MemoryKV) SetBatch(keys []TupleKey, values []TupleValue) error {
 	for i := 0; i < kl; i++ {
 		if keys[i] == nil {
 			return errorKeyIsNull
-		}else{
-			m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
+		} else {
+			m.container.ReplaceOrInsert(NewMemoryItem(keys[i], values[i]))
 		}
 	}
 	return nil
@@ -128,10 +128,10 @@ func (m *MemoryKV) DedupSet(key TupleKey, value TupleValue) error {
 	if key == nil {
 		return errorKeyIsNull
 	}
-	if m.container.Has(NewMemoryItem(key,nil)) {
+	if m.container.Has(NewMemoryItem(key, nil)) {
 		return errorKeyExists
 	}
-	m.container.ReplaceOrInsert(NewMemoryItem(key,value))
+	m.container.ReplaceOrInsert(NewMemoryItem(key, value))
 	return nil
 }
 
@@ -151,10 +151,10 @@ func (m *MemoryKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 			return errorKeyIsNull
 		}
 
-		if m.container.Has(NewMemoryItem(keys[i],nil)) {
+		if m.container.Has(NewMemoryItem(keys[i], nil)) {
 			return errorKeyExists
 		}
-		m.container.ReplaceOrInsert(NewMemoryItem(keys[i],values[i]))
+		m.container.ReplaceOrInsert(NewMemoryItem(keys[i], values[i]))
 	}
 	return err
 }
@@ -163,7 +163,7 @@ func (m *MemoryKV) Delete(key TupleKey) error {
 	m.rwLock.Lock()
 	defer m.rwLock.Unlock()
 
-	m.container.Delete(NewMemoryItem(key,nil))
+	m.container.Delete(NewMemoryItem(key, nil))
 	return nil
 }
 
@@ -173,12 +173,12 @@ func (m *MemoryKV) DeleteWithPrefix(prefix TupleKey) error {
 
 	var keys []TupleKey
 	iter := func(i btree.Item) bool {
-		if x,ok := i.(*MemoryItem); ok {
-			if bytes.HasPrefix(x.key,prefix) {
-				keys = append(keys,x.key)
+		if x, ok := i.(*MemoryItem); ok {
+			if bytes.HasPrefix(x.key, prefix) {
+				keys = append(keys, x.key)
 			}
-		}else{
-			keys = append(keys,nil)
+		} else {
+			keys = append(keys, nil)
 		}
 		return true
 	}
@@ -186,7 +186,7 @@ func (m *MemoryKV) DeleteWithPrefix(prefix TupleKey) error {
 	m.container.Ascend(iter)
 
 	for _, key := range keys {
-		m.container.Delete(NewMemoryItem(key,nil))
+		m.container.Delete(NewMemoryItem(key, nil))
 	}
 
 	return nil
@@ -198,9 +198,9 @@ func (m *MemoryKV) Get(key TupleKey) (TupleValue, error) {
 	if key == nil {
 		return nil, errorKeyIsNull
 	}
-	item := m.container.Get(NewMemoryItem(key,nil))
-	if x,ok := item.(*MemoryItem) ; ok {
-		return x.value,nil
+	item := m.container.Get(NewMemoryItem(key, nil))
+	if x, ok := item.(*MemoryItem); ok {
+		return x.value, nil
 	}
 	return nil, nil
 }
@@ -219,11 +219,11 @@ func (m *MemoryKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
 
 	var values []TupleValue
 	for i := 0; i < kl; i++ {
-		item := m.container.Get(NewMemoryItem(keys[i],nil))
-		if x,ok := item.(*MemoryItem); ok {
-			values = append(values,x.value)
-		}else{
-			values = append(values,nil)
+		item := m.container.Get(NewMemoryItem(keys[i], nil))
+		if x, ok := item.(*MemoryItem); ok {
+			values = append(values, x.value)
+		} else {
+			values = append(values, nil)
 		}
 	}
 	return values, nil
@@ -234,17 +234,17 @@ func (m *MemoryKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, e
 	defer m.rwLock.RUnlock()
 	var values []TupleValue
 	iter := func(i btree.Item) bool {
-		if x,ok := i.(*MemoryItem); ok {
-			values = append(values,x.value)
-		}else{
-			values = append(values,nil)
+		if x, ok := i.(*MemoryItem); ok {
+			values = append(values, x.value)
+		} else {
+			values = append(values, nil)
 		}
 		return true
 	}
 
 	m.container.AscendRange(
-		NewMemoryItem(startKey,nil),
-		NewMemoryItem(endKey,nil),
+		NewMemoryItem(startKey, nil),
+		NewMemoryItem(endKey, nil),
 		iter)
 	return values, nil
 }
@@ -260,23 +260,23 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 			return false
 		}
 
-		if x,ok := i.(*MemoryItem); ok {
+		if x, ok := i.(*MemoryItem); ok {
 			//endKey <= key
-			if endKey != nil && bytes.Compare(endKey,x.key) <= 0 {
+			if endKey != nil && bytes.Compare(endKey, x.key) <= 0 {
 				return false
 			}
-			keys = append(keys,x.key)
-			values = append(values,x.value)
-		}else{
-			keys = append(keys,nil)
-			values = append(values,nil)
+			keys = append(keys, x.key)
+			values = append(values, x.value)
+		} else {
+			keys = append(keys, nil)
+			values = append(values, nil)
 		}
 		cnt++
 		return true
 	}
 
 	m.container.AscendGreaterOrEqual(
-		NewMemoryItem(startKey,nil),
+		NewMemoryItem(startKey, nil),
 		iter)
 
 	complete := false
@@ -284,18 +284,18 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 	if len(keys) != 0 {
 		more := 0
 		checkMoreDataIter := func(i btree.Item) bool {
-			if x,ok := i.(*MemoryItem); ok {
+			if x, ok := i.(*MemoryItem); ok {
 				//endKey <= key
-				if endKey != nil && bytes.Compare(endKey,x.key) <= 0 {
+				if endKey != nil && bytes.Compare(endKey, x.key) <= 0 {
 					return false
 				}
 				more++
 			}
 			return true
 		}
-		checkKey := SuccessorOfKey(keys[len(keys) - 1])
+		checkKey := SuccessorOfKey(keys[len(keys)-1])
 		m.container.AscendGreaterOrEqual(
-			NewMemoryItem(checkKey,nil),
+			NewMemoryItem(checkKey, nil),
 			checkMoreDataIter)
 
 		if more > 0 {
@@ -305,18 +305,18 @@ func (m *MemoryKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit u
 			complete = true
 			nextScanKey = nil
 		}
-	}else{
+	} else {
 		complete = true
 		nextScanKey = nil
 	}
 	return keys, values, complete, nextScanKey, nil
 }
 
-func (m *MemoryKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey,prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+func (m *MemoryKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey, prefix TupleKey, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	return nil, nil, false, nil, errorUnsupportedInMemoryKV
 }
 
-func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
+func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([]TupleKey, []TupleValue, bool, TupleKey, error) {
 	m.rwLock.RLock()
 	defer m.rwLock.RUnlock()
 	if prefixOrStartkey == nil {
@@ -335,27 +335,27 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefi
 			return false
 		}
 		cnt++
-		if x,ok := i.(*MemoryItem); ok {
+		if x, ok := i.(*MemoryItem); ok {
 			if !bytes.HasPrefix(x.key, prefixOrStartkey[:prefixLen]) {
 				return false
 			}
-			keys = append(keys,x.key)
-			values = append(values,x.value)
-		}else{
-			keys = append(keys,nil)
-			values = append(values,nil)
+			keys = append(keys, x.key)
+			values = append(values, x.value)
+		} else {
+			keys = append(keys, nil)
+			values = append(values, nil)
 		}
 		return true
 	}
 
-	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey,nil),iter)
+	m.container.AscendGreaterOrEqual(NewMemoryItem(prefixOrStartkey, nil), iter)
 
 	complete := false
 	nextScanKey := []byte{}
 	if len(keys) != 0 {
 		more := 0
 		checkMoreDataIter := func(i btree.Item) bool {
-			if x,ok := i.(*MemoryItem); ok {
+			if x, ok := i.(*MemoryItem); ok {
 				if !bytes.HasPrefix(x.key, prefixOrStartkey[:prefixLen]) {
 					return false
 				}
@@ -363,9 +363,9 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefi
 			}
 			return true
 		}
-		checkKey := SuccessorOfKey(keys[len(keys) - 1])
+		checkKey := SuccessorOfKey(keys[len(keys)-1])
 		m.container.AscendGreaterOrEqual(
-			NewMemoryItem(checkKey,nil),
+			NewMemoryItem(checkKey, nil),
 			checkMoreDataIter)
 
 		if more > 0 {
@@ -375,7 +375,7 @@ func (m *MemoryKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefi
 			complete = true
 			nextScanKey = nil
 		}
-	}else{
+	} else {
 		complete = true
 		nextScanKey = nil
 	}
@@ -391,9 +391,9 @@ func (m *MemoryKV) GetShardsWithPrefix(prefix TupleKey) (interface{}, error) {
 	return nil, errorUnsupportedInMemoryKV
 }
 
-func (m *MemoryKV) PrintKeys()  {
+func (m *MemoryKV) PrintKeys() {
 	iter := func(i btree.Item) bool {
-		if x,ok := i.(*MemoryItem); ok {
+		if x, ok := i.(*MemoryItem); ok {
 			fmt.Println(x.key)
 		}
 		return true

@@ -328,9 +328,7 @@ func main() {
 	config.ClusterNodes = engine.Nodes{}
 	err = tpe.DumpDatabaseInfo(eng, args)
 	if err != nil {
-		fmt.Println("wangjian sqlerr is", err)
-		logutil.Infof("%s", err)
-		os.Exit(WaitCubeStartExit)
+		logutil.Errorf("%s", err)
 	}
 
 	createMOServer(pci)
