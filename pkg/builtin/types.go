@@ -32,13 +32,16 @@ const (
 	Pi
 	Space
 	Tan
+	Reverse
 	UTCTimestamp
 	Ltrim
 	Rtrim
 	Sin
 	Cos
-	Tan
 	Atan
+	Cot
 	DayOfYear
 	Month
+	Weekday
+	Lpad
 )

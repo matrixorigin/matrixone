@@ -5,7 +5,7 @@
 ## MatrixCamp2022活动
 
 MatrixCamp是一个由MatrixOne社区举办的开发者活动，欢迎对数据库技术感兴趣的开发者们来参与这次为期2周的开发挑战任务。
-MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级别和功能类型，开发者可以挑选自己感兴趣的进行挑战。参与挑战仅需要一些基础的Golang语言编程经验就够了，另外我们也有详尽的开发指南的耐心的mentor给大家进行服务。
+MatrixOne社区一共准备了4个类别的56个任务，有不同的难度级别和功能类型，开发者可以挑选自己感兴趣的进行挑战。参与挑战仅需要一些基础的Golang语言编程经验就够了，另外我们也有详尽的开发指南的耐心的mentor给大家进行服务。
 
 这次的任务大家将要挑战的是MatrixOne的系统函数和聚合函数，对于刚入门数据库的同学来讲是相对基础但是又不乏挑战的任务。
 
@@ -37,6 +37,16 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1970 Mathematical Built-in function asin() **[容易]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1971 Mathematical Built-in function acos() **[容易]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1973 Mathematical Built-in function atan() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2094 Mathematical Built-in function sinh() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2095 Mathematical Built-in function cosh() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2096 Mathematical Built-in function crc32() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2097 Mathematical Built-in function sqrt() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2098 Mathematical Built-in function cbrt() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2099 Mathematical Built-in function rand() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2100 Mathematical Built-in function degrees() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2101 Mathematical Built-in function radians() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2102 Mathematical Built-in function sign() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2103 Mathematical Built-in function hypot() **[中等]**
 
 ### 2. 基础任务-日期时间类系统函数
 
@@ -53,6 +63,8 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ]  https://github.com/matrixorigin/matrixone/issues/2047 Datetime Built-in function yearweek() **[中等]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/2048 Datetime Built-in function week() **[中等]**
 - [ ]  https://github.com/matrixorigin/matrixone/issues/1830 Datetime Built-in function now() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2104 Datetime Built-in function quarter() **[中等]**
+- [ ]  https://github.com/matrixorigin/matrixone/issues/2105 Datetime Built-in function timestamp() **[中等]**
 
 ### 3. 基础任务-字符串类系统函数
 
@@ -64,6 +76,19 @@ MatrixOne社区一共准备了4个类别的55个任务，有不同的难度级�
 - [ ] https://github.com/matrixorigin/matrixone/issues/1989 String function reverse() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1990 String function space() **[中等]**
 - [ ] https://github.com/matrixorigin/matrixone/issues/1991 String function replace() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2106 String function ascii() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2107 String function bit_length() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2108 String function empty() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2109 String function notEmpty() **[容易]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2110 String function bin() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2111 String function concat() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2112 String function hex() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2113 String function insert() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2114 String function locate() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2115 String function oct() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2116 String function lengthUTF8() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2117 String function startsWith() **[中等]**
+- [ ] https://github.com/matrixorigin/matrixone/issues/2118 String function endsWith() **[中等]**
 
 ### 4. 挑战任务-聚合函数
 
@@ -129,3 +154,16 @@ Type 'help;' or '\h' for help. Type '\c' to clear the current input statement.
 
 **Q: Mentor要求我对提交的代码格式进行缩进，这个如何做？**
 A：可以通过Golang语言自带的gofmt工具在命令行中进行操作，或者在一些常见的IDE如VS Code和GoLand中也均有相应的设置。
+
+**Q: 如何理解MatrixOne的Vector数据结构？**
+A：Vector是MatrixOne中表示一列数据的结构，是MatrixOne最重要的数据结构体之一。它其中的不同变量含义：
+```
+// Vector.Or: 表示这个Vector是否是从磁盘读取的原始Vector
+// Link: 这个Vector拥有的软链接个数
+// Data: 内存中保存的原始数据
+// Typ: Vector的类型
+// Col: 内存中经过序列化编码的数据，它与Vector.Data共享内存位置，但是会被转换到某个专门的类型，比如int32
+// Nsp: 存储一列中所有NULL的位图
+```
+
+

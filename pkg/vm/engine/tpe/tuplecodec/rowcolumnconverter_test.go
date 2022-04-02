@@ -27,8 +27,8 @@ import (
 )
 
 func TestBatchAdapter_ForEach(t *testing.T) {
-	convey.Convey("for each",t, func() {
-		names,attrs := MakeAttributes(
+	convey.Convey("for each", t, func() {
+		names, attrs := MakeAttributes(
 			types.T_int8,
 			types.T_int16,
 			types.T_int32,
@@ -45,20 +45,20 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 
 		cnt := 10
 
-		bat := MakeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt, names, attrs)
 
-		lines := randomLines(cnt,names,attrs)
+		lines := randomLines(cnt, names, attrs)
 
-		fillBatch(lines,bat)
+		fillBatch(lines, bat)
 
 		ba := NewBatchAdapter(bat)
 
 		rowIdx := 0
 		callback := func(callbackCtx interface{}, tuple Tuple) error {
-			colcnt,_ := tuple.GetAttributeCount()
+			colcnt, _ := tuple.GetAttributeCount()
 			for i := uint32(0); i < colcnt; i++ {
-				v,_ := tuple.GetValue(i)
-				tv := fmt.Sprintf("%v",v)
+				v, _ := tuple.GetValue(i)
+				tv := fmt.Sprintf("%v", v)
 				typ, _, err := tuple.GetAttribute(i)
 				if err != nil {
 					return err
@@ -77,62 +77,62 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 			return nil
 		}
 		err := ba.ForEachTuple(nil, callback)
-		convey.So(err,convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
 
 func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
-	convey.Convey("fill batch",t, func() {
+	convey.Convey("fill batch", t, func() {
 		type args struct {
-			typ types.T
+			typ    types.T
 			valueT orderedcodec.ValueType
-			value interface{}
+			value  interface{}
 		}
 
-		dateValue,_ := types.ParseDate("2022-02-23")
-		datetimeValue,_ := types.ParseDatetime("2022-02-23 00:00:00")
+		dateValue, _ := types.ParseDate("2022-02-23")
+		datetimeValue, _ := types.ParseDatetime("2022-02-23 00:00:00")
 
 		kases := []args{
-			{types.T_int8,        orderedcodec.VALUE_TYPE_INT8,    int8(math.MaxInt8),           },
-			{types.T_int16,       orderedcodec.VALUE_TYPE_INT16,   int16(math.MaxInt16),         },
-			{types.T_int32,       orderedcodec.VALUE_TYPE_INT32,   int32(math.MaxInt32),         },
-			{types.T_int64,       orderedcodec.VALUE_TYPE_INT64,   int64(math.MaxInt64),         },
-			{types.T_uint8,       orderedcodec.VALUE_TYPE_UINT8,   uint8(math.MaxUint8),         },
-			{types.T_uint16,      orderedcodec.VALUE_TYPE_UINT16,  uint16(math.MaxUint16),       },
-			{types.T_uint32,      orderedcodec.VALUE_TYPE_UINT32,  uint32(math.MaxUint32),       },
-			{types.T_uint64,      orderedcodec.VALUE_TYPE_UINT64,  uint64(math.MaxUint64),       },
-			{types.T_float32,     orderedcodec.VALUE_TYPE_FLOAT32, float32(math.MaxFloat32),     },
-			{types.T_float64,     orderedcodec.VALUE_TYPE_FLOAT64, float64(math.MaxFloat64),     },
-			{types.T_char,        orderedcodec.VALUE_TYPE_BYTES,   []byte("abc"),                },
-			{types.T_varchar,     orderedcodec.VALUE_TYPE_BYTES,  []byte("abc"),                },
-			{types.T_date,        orderedcodec.VALUE_TYPE_DATE,    dateValue,                    },
-			{types.T_datetime,    orderedcodec.VALUE_TYPE_DATETIME,datetimeValue,                },
+			{types.T_int8, orderedcodec.VALUE_TYPE_INT8, int8(math.MaxInt8)},
+			{types.T_int16, orderedcodec.VALUE_TYPE_INT16, int16(math.MaxInt16)},
+			{types.T_int32, orderedcodec.VALUE_TYPE_INT32, int32(math.MaxInt32)},
+			{types.T_int64, orderedcodec.VALUE_TYPE_INT64, int64(math.MaxInt64)},
+			{types.T_uint8, orderedcodec.VALUE_TYPE_UINT8, uint8(math.MaxUint8)},
+			{types.T_uint16, orderedcodec.VALUE_TYPE_UINT16, uint16(math.MaxUint16)},
+			{types.T_uint32, orderedcodec.VALUE_TYPE_UINT32, uint32(math.MaxUint32)},
+			{types.T_uint64, orderedcodec.VALUE_TYPE_UINT64, uint64(math.MaxUint64)},
+			{types.T_float32, orderedcodec.VALUE_TYPE_FLOAT32, float32(math.MaxFloat32)},
+			{types.T_float64, orderedcodec.VALUE_TYPE_FLOAT64, float64(math.MaxFloat64)},
+			{types.T_char, orderedcodec.VALUE_TYPE_BYTES, []byte("abc")},
+			{types.T_varchar, orderedcodec.VALUE_TYPE_BYTES, []byte("abc")},
+			{types.T_date, orderedcodec.VALUE_TYPE_DATE, dateValue},
+			{types.T_datetime, orderedcodec.VALUE_TYPE_DATETIME, datetimeValue},
 		}
 
 		var typs []types.T
 		for _, kase := range kases {
-			typs = append(typs,kase.typ)
+			typs = append(typs, kase.typ)
 		}
-		names,attrs := MakeAttributes(typs...)
+		names, attrs := MakeAttributes(typs...)
 
 		cnt := 10
 
-		bat := MakeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt, names, attrs)
 
 		var iattrs []descriptor.IndexDesc_Attribute
 		var dis []*orderedcodec.DecodedItem
 		am := &AttributeMap{}
 		for i, kase := range kases {
-			iattrs = append(iattrs,descriptor.IndexDesc_Attribute{
+			iattrs = append(iattrs, descriptor.IndexDesc_Attribute{
 				Name:      names[i],
 				Direction: 0,
-				ID: uint32(i),
+				ID:        uint32(i),
 				Type:      kase.valueT,
 			})
 
-			am.Append(i,i)
+			am.Append(i, i, i)
 
-			dis = append(dis,&orderedcodec.DecodedItem{
+			dis = append(dis, &orderedcodec.DecodedItem{
 				Value:                    kase.value,
 				ValueType:                kase.valueT,
 				SectionType:              0,
@@ -140,8 +140,8 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				BytesCountInUndecodedKey: 0,
 			})
 		}
-		indexDesc  := &descriptor.IndexDesc{Attributes: iattrs}
-
+		indexDesc := &descriptor.IndexDesc{Attributes: iattrs}
+		am.BuildPositionInDecodedItemArray()
 		rcc := &RowColumnConverterImpl{}
 		for i := 0; i < cnt; i++ {
 			err := rcc.FillBatchFromDecodedIndexKey(indexDesc,
@@ -151,25 +151,25 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				bat,
 				i,
 			)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		callbackForCheck := func(callbackCtx interface{}, tuple Tuple) error {
-			colcnt,_ := tuple.GetAttributeCount()
+			colcnt, _ := tuple.GetAttributeCount()
 			for i := uint32(0); i < colcnt; i++ {
-				v,_ := tuple.GetValue(i)
+				v, _ := tuple.GetValue(i)
 				typ, _, _ := tuple.GetAttribute(i)
-				convey.So(typ.Oid,convey.ShouldEqual,kases[i].typ)
-				convey.So(reflect.DeepEqual(v,kases[i].value),convey.ShouldBeTrue)
+				convey.So(typ.Oid, convey.ShouldEqual, kases[i].typ)
+				convey.So(reflect.DeepEqual(v, kases[i].value), convey.ShouldBeTrue)
 			}
 			return nil
 		}
 
 		ba := NewBatchAdapter(bat)
-		err := ba.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldNotBeNil)
+		err := ba.ForEachTuple(nil, callbackForCheck)
+		convey.So(err, convey.ShouldNotBeNil)
 
-		bat2 := MakeBatch(cnt,names,attrs)
+		bat2 := MakeBatch(cnt, names, attrs)
 		for i := 0; i < cnt; i++ {
 			err = rcc.FillBatchFromDecodedIndexValue(indexDesc,
 				0,
@@ -178,23 +178,27 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				bat2,
 				i,
 			)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		}
 
 		ba2 := NewBatchAdapter(bat2)
-		err = ba2.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldNotBeNil)
+		err = ba2.ForEachTuple(nil, callbackForCheck)
+		convey.So(err, convey.ShouldNotBeNil)
 
-		bat3 := MakeBatch(cnt,names,attrs)
+		bat3 := MakeBatch(cnt, names, attrs)
 		for i := 0; i < cnt; i++ {
 			am2 := &AttributeMap{
-				attributeID: am.attributeID[:4],
-				attributePosition: am.attributePosition[:4],
+				attributeID:              am.attributeID[:4],
+				attributePositionInValue: am.attributePositionInValue[:4],
+				attributeOutputPosition:  am.attributePositionInValue[:4],
 			}
+			am2.BuildPositionInDecodedItemArray()
 			am3 := &AttributeMap{
-				attributeID: am.attributeID[4:],
-				attributePosition: am.attributePosition[4:],
+				attributeID:              am.attributeID[4:],
+				attributePositionInValue: am.attributePositionInValue[4:],
+				attributeOutputPosition:  am.attributePositionInValue[4:],
 			}
+			am3.BuildPositionInDecodedItemArray()
 			err = rcc.FillBatchFromDecodedIndexKeyValue(indexDesc,
 				0,
 				dis,
@@ -204,16 +208,20 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				bat3,
 				i,
 			)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			am4 := &AttributeMap{
-				attributeID: am.attributeID[:5],
-				attributePosition: am.attributePosition[:5],
+				attributeID:              am.attributeID[:5],
+				attributePositionInValue: am.attributePositionInValue[:5],
+				attributeOutputPosition:  am.attributePositionInValue[:5],
 			}
+			am4.BuildPositionInDecodedItemArray()
 			am5 := &AttributeMap{
-				attributeID: am.attributeID[4:],
-				attributePosition: am.attributePosition[4:],
+				attributeID:              am.attributeID[4:],
+				attributePositionInValue: am.attributePositionInValue[4:],
+				attributeOutputPosition:  am.attributePositionInValue[4:],
 			}
+			am5.BuildPositionInDecodedItemArray()
 			err = rcc.FillBatchFromDecodedIndexKeyValue(indexDesc,
 				0,
 				dis,
@@ -223,11 +231,11 @@ func TestRowColumnConverterImpl_FillBatchFromDecodedIndexKey(t *testing.T) {
 				bat3,
 				i,
 			)
-			convey.So(err,convey.ShouldBeError)
+			convey.So(err, convey.ShouldBeError)
 		}
 
 		ba3 := NewBatchAdapter(bat3)
-		err = ba3.ForEachTuple(nil,callbackForCheck)
-		convey.So(err,convey.ShouldNotBeNil)
+		err = ba3.ForEachTuple(nil, callbackForCheck)
+		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
