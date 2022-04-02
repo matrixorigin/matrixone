@@ -1,20 +1,19 @@
-# **YEAR()**
+# **MONTH()**
 
 ## **Description**
 
-The YEAR() or TOYEAR() function returns the year part for a given date (a number from 1000 to 9999).
+The MONTH() function returns the month part for a given date (a number from 1 to 12).
 
 
 ## **Syntax**
 
 ```
-> YEAR(date)
-> TOYEAR(date)
+> MONTH(date)
 ```
 ## **Arguments**
 |  Arguments   | Description  |
 |  ----  | ----  |
-| date  | Required.  The date/datetime to extract the year from |
+| date  | Required.  The date/datetime to extract the month from |
 
 
 
@@ -27,21 +26,13 @@ The YEAR() or TOYEAR() function returns the year part for a given date (a number
 > insert into t1 values('20211223');
 > insert into t1 values('2021-12-24');
 
-> select toyear(a) from t1;
-+---------+
-| year(a) |
-+---------+
-|    2021 |
-|    2021 |
-+---------+
-
-> select year(a) from t1;
-+---------+
-| year(a) |
-+---------+
-|    2021 |
-|    2021 |
-+---------+
+> select month(a) from t1;
++----------+
+| month(a) |
++----------+
+|       12 |
+|       12 |
++----------+
 ```
 
 ## **Constraints**
