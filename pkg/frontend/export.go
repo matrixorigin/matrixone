@@ -17,7 +17,7 @@ var OpenFile = os.OpenFile
 
 type CloseExportData struct {
 	stopExportData chan interface{}
-	onceClose    sync.Once
+	onceClose      sync.Once
 }
 
 func NewCloseExportData() *CloseExportData {
@@ -42,10 +42,10 @@ func initExportFileParam(ep *tree.ExportParam, mrs *MysqlResultSet) {
 		return
 	}
 	ep.Symbol = make([]string, n)
-	for i := 0; i < n - 1; i++ {
+	for i := 0; i < n-1; i++ {
 		ep.Symbol[i] = ep.Fields.Terminated
 	}
-	ep.Symbol[n - 1] = ep.Lines.TerminatedBy
+	ep.Symbol[n-1] = ep.Lines.TerminatedBy
 	ep.ColumnFlag = make([]bool, len(mrs.Name2Index))
 	for i := 0; i < len(ep.ForceQuote); i++ {
 		col, ok := mrs.Name2Index[ep.ForceQuote[i]]
@@ -60,7 +60,7 @@ var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 	var err error
 	ep.CurFileSize = 0
 	filePath := getExportFilePath(ep.FilePath, ep.FileCnt)
-	ep.File, err = OpenFile(filePath, os.O_RDWR | os.O_EXCL | os.O_CREATE, 0o666)
+	ep.File, err = OpenFile(filePath, os.O_RDWR|os.O_EXCL|os.O_CREATE, 0o666)
 	if err != nil {
 		return err
 	}
@@ -71,10 +71,10 @@ var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 		if n == 0 {
 			return nil
 		}
-		for i := 0; i < n - 1; i++ {
+		for i := 0; i < n-1; i++ {
 			header += mrs.Columns[i].Name() + ep.Fields.Terminated
 		}
-		header += mrs.Columns[n - 1].Name() + ep.Lines.TerminatedBy
+		header += mrs.Columns[n-1].Name() + ep.Lines.TerminatedBy
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
 			return errors.New("the header line size is over the maxFileSize")
 		}
@@ -130,7 +130,7 @@ var Flush = func(ep *tree.ExportParam) error {
 }
 
 var Seek = func(ep *tree.ExportParam) (int64, error) {
-	return ep.File.Seek(int64(ep.CurFileSize - ep.LineSize), io.SeekStart)
+	return ep.File.Seek(int64(ep.CurFileSize-ep.LineSize), io.SeekStart)
 }
 
 var Read = func(ep *tree.ExportParam) (int, error) {
@@ -151,9 +151,9 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 }
 
 func writeToCSVFile(oq *outputQueue, output []byte) error {
-	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize + uint64(len(output)) > oq.ep.MaxFileSize {
+	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
 		if oq.ep.Rows == 0 {
-			return errors.New("The OneLine size is over the maxFileSize")
+			return errors.New("the OneLine size is over the maxFileSize")
 		}
 		oq.ep.FileCnt++
 		if err := Flush(oq.ep); err != nil {
@@ -200,7 +200,6 @@ var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 	ep.CurFileSize += uint64(len(output))
 	return nil
 }
-
 
 func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
@@ -263,7 +262,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				}
 			} else {
 				if value, err2 := oq.mrs.GetInt64(0, i); err2 != nil {
-					return  err2
+					return err2
 				} else {
 					if err := formatOutputString(oq, []byte(fmt.Sprintf("%d", value)), []byte(oq.ep.Symbol[i]), oq.ep.Fields.EnclosedBy, oq.ep.ColumnFlag[i]); err != nil {
 						return err
@@ -302,4 +301,4 @@ func exportDataToCSVFile(oq *outputQueue) error {
 	}
 	oq.ep.Rows++
 	return nil
-} 
+}

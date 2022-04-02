@@ -1769,26 +1769,26 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		kases := []kase{
-			kase{
+			{
 				data: []byte{1, 2, 3, 4},
 				len:  HeaderLengthOfTheProtocol + 4,
 			},
-			kase{
+			{
 				data: data16MB(1),
 				len:  HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol,
 			},
-			kase{
+			{
 				data: data16MB(2),
 				len:  HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol + int(MaxPayloadSize) + HeaderLengthOfTheProtocol,
 			},
-			kase{
+			{
 				data: data16MB(3),
 				len: HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol,
 			},
-			kase{
+			{
 				data: data16MB(4),
 				len: HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
 					HeaderLengthOfTheProtocol + int(MaxPayloadSize) +
