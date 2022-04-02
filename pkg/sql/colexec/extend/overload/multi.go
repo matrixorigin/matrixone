@@ -22,6 +22,11 @@ import (
 )
 
 func MultiEval(op int, typ types.T, bs []bool, vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	for i, vec := range vecs {
+		if vector.Length(vec) == 1 {
+			bs[i] = true
+		}
+	}
 	if os, ok := MultiOps[op]; ok {
 		for _, o := range os {
 			if o.Typ == typ {

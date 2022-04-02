@@ -31,6 +31,7 @@ import (
 
 func init() {
 	extend.FunctionRegistry["ceil"] = builtin.Ceil
+	extend.FunctionRegistry["ceiling"] = builtin.Ceil
 	for _, item := range argsAndRets {
 		overload.AppendFunctionRets(builtin.Ceil, item.args, item.ret)
 	}

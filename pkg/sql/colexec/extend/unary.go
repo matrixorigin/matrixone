@@ -49,7 +49,11 @@ func (e *UnaryExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vec
 	if err != nil {
 		return nil, 0, err
 	}
-	vec, err := overload.UnaryEval(e.Op, typ, e.E.IsConstant(), vs, proc)
+	vsIsConstant := false
+	if vector.Length(vs) == 1 {
+		vsIsConstant = true
+	}
+	vec, err := overload.UnaryEval(e.Op, typ, vsIsConstant, vs, proc)
 	if err != nil {
 		return nil, 0, err
 	}
