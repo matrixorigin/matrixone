@@ -27,13 +27,13 @@ type DatabaseDesc struct {
 
 	Update_time int64 `json:"update_time"`
 
-	Create_epoch uint64	`json:"create_epoch,string"`
+	Create_epoch uint64 `json:"create_epoch,string"`
 
 	Is_deleted bool `json:"is_deleted,string"`
 
 	Drop_epoch uint64 `json:"drop_epoch,string"`
 
-	Max_access_epoch        uint64                `json:"max_access_epoch,string"`
+	Max_access_epoch uint64 `json:"max_access_epoch,string"`
 
 	Typ int `json:"typ,string"`
 }
@@ -177,6 +177,7 @@ type AttributeGroupDesc_Attribute struct {
 }
 
 type IndexDirectionType int
+
 const (
 	ASC  IndexDirectionType = 0
 	DESC IndexDirectionType = 1
@@ -211,7 +212,7 @@ type IndexDesc struct {
 }
 
 type IndexDesc_Attribute struct {
-	Name string	`json:"name"`
+	Name string `json:"name"`
 
 	Direction IndexDirectionType `json:"direction"`
 
@@ -223,10 +224,10 @@ type IndexDesc_Attribute struct {
 	TypesType types.Type `json:"types_type,string"`
 }
 
-func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int8 {
-	ids := make(map[uint32]int8)
-	for _, attr := range attrs {
-		ids[attr.ID] = 1
+func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int {
+	ids := make(map[uint32]int)
+	for posInIndex, attr := range attrs {
+		ids[attr.ID] = posInIndex
 	}
 	return ids
 }
@@ -234,14 +235,14 @@ func ExtractIndexAttributeIDs(attrs []IndexDesc_Attribute) map[uint32]int8 {
 func ExtractIndexAttributeDescIDs(attrs []*AttributeDesc) []int {
 	var ids []int
 	for _, attr := range attrs {
-		ids = append(ids,int(attr.ID))
+		ids = append(ids, int(attr.ID))
 	}
 	return ids
 }
 
 type EpochGCItem struct {
-	Epoch uint64
-	DbID uint64
+	Epoch   uint64
+	DbID    uint64
 	TableID uint64
 }
 
@@ -249,13 +250,13 @@ type EpochGCItem struct {
 type DescriptorHandler interface {
 
 	//LoadRelationDescByName gets the descriptor of the table by the name of the table
-	LoadRelationDescByName(parentID uint64, name string)(*RelationDesc,error)
+	LoadRelationDescByName(parentID uint64, name string) (*RelationDesc, error)
 
 	//LoadRelationDescByID gets the descriptor of the table by the tableid
 	LoadRelationDescByID(parentID uint64, tableID uint64) (*RelationDesc, error)
 
 	//StoreRelationDescByName first gets the descriptor of the table by name, then save the descriptor.
-	StoreRelationDescByName(parentID uint64, name string,tableDesc *RelationDesc) error
+	StoreRelationDescByName(parentID uint64, name string, tableDesc *RelationDesc) error
 
 	//StoreRelationDescByID saves the descriptor
 	StoreRelationDescByID(parentID uint64, tableID uint64, table *RelationDesc) error
@@ -265,11 +266,11 @@ type DescriptorHandler interface {
 
 	LoadDatabaseDescByName(name string) (*DatabaseDesc, error)
 
-	LoadDatabaseDescByID(dbID uint64)(*DatabaseDesc,error)
+	LoadDatabaseDescByID(dbID uint64) (*DatabaseDesc, error)
 
 	StoreDatabaseDescByName(name string, db *DatabaseDesc) error
 
-	StoreDatabaseDescByID(dbID uint64,db *DatabaseDesc) error
+	StoreDatabaseDescByID(dbID uint64, db *DatabaseDesc) error
 
 	//DeleteDatabaseDescByID deletes the database
 	DeleteDatabaseDescByID(dbID uint64) error

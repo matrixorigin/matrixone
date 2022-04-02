@@ -38,8 +38,10 @@ const (
 	Cos
 	Tan
 	Atan
+	Cot
 	DayOfYear
 	Month
 	Weekday
+	Lpad
   Acos
 )
