@@ -26,70 +26,74 @@ import (
 )
 
 func TestTpeDatabase_Create(t *testing.T) {
-	convey.Convey("create table with none primary key ",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
+	convey.Convey("create table with none primary key ", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
 
 		dbName := "test"
-		err := tpe.Create(0,dbName,0)
-		convey.So(err,convey.ShouldBeNil)
+		err = tpe.Create(0, dbName, 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		dbDesc, err := tpe.Database(dbName)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
 		//(uint64,uint64,uint64)
-		_,attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_uint64)
-
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_uint64)
 
 		attrNames := []string{
-			"a","b","c",
+			"a", "b", "c",
 		}
 		var defs []engine.TableDef
 		for i, def := range attrDefs {
 			def.Attr.Name = attrNames[i]
-			defs = append(defs,def)
+			defs = append(defs, def)
 		}
 
-		defs = append(defs,&engine.CommentDef{
+		defs = append(defs, &engine.CommentDef{
 			Comment: "A(a,b,c)",
 		})
 
 		cnt := 10
 		var tableNames []string
 		for i := 0; i < cnt; i++ {
-			tableName := fmt.Sprintf("A%d",i)
-			tableNames = append(tableNames,tableName)
+			tableName := fmt.Sprintf("A%d", i)
+			tableNames = append(tableNames, tableName)
 
 			err = dbDesc.Create(0, tableName, defs)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			table, err := dbDesc.Relation(tableName)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			checkTable := func(table engine.Relation) {
-				tableDesc,ok := table.(*TpeRelation)
-				convey.So(ok,convey.ShouldBeTrue)
-				convey.So(tableDesc.id,convey.ShouldEqual,3+i)
-				convey.So(tableDesc.desc.ID,convey.ShouldEqual,3+i)
-				convey.So(tableDesc.desc.Name,convey.ShouldEqual,tableName)
+				tableDesc, ok := table.(*TpeRelation)
+				convey.So(ok, convey.ShouldBeTrue)
+				convey.So(tableDesc.id, convey.ShouldEqual, 3+i)
+				convey.So(tableDesc.desc.ID, convey.ShouldEqual, 3+i)
+				convey.So(tableDesc.desc.Name, convey.ShouldEqual, tableName)
 
 				pkAttrs := tableDesc.desc.Primary_index.Attributes
-				convey.So(len(pkAttrs),convey.ShouldEqual,1)
+				convey.So(len(pkAttrs), convey.ShouldEqual, 1)
 				pkAttr := pkAttrs[0]
-				convey.So(pkAttr.ID,convey.ShouldEqual,0)
-				convey.So(strings.HasPrefix(pkAttr.Name,"rowid"),convey.ShouldBeTrue)
-				convey.So(pkAttr.Type,convey.ShouldEqual,orderedcodec.VALUE_TYPE_UINT64)
+				convey.So(pkAttr.ID, convey.ShouldEqual, 0)
+				convey.So(strings.HasPrefix(pkAttr.Name, "rowid"), convey.ShouldBeTrue)
+				convey.So(pkAttr.Type, convey.ShouldEqual, orderedcodec.VALUE_TYPE_UINT64)
 
-				convey.So(len(attrDefs)+1,convey.ShouldEqual,len(tableDesc.desc.Attributes))
+				convey.So(len(attrDefs)+1, convey.ShouldEqual, len(tableDesc.desc.Attributes))
 
-				attrs :=tableDesc.desc.Attributes
+				attrs := tableDesc.desc.Attributes
 				for i, attr := range attrs {
 					if attr.Is_primarykey {
 						continue
 					}
-					convey.So(attr.ID,convey.ShouldEqual,i)
-					convey.So(attr.Ttype,convey.ShouldEqual,orderedcodec.VALUE_TYPE_UINT64)
-					convey.So(attr.TypesType.Oid,convey.ShouldEqual,types.T_uint64)
+					convey.So(attr.ID, convey.ShouldEqual, i)
+					convey.So(attr.Ttype, convey.ShouldEqual, orderedcodec.VALUE_TYPE_UINT64)
+					convey.So(attr.TypesType.Oid, convey.ShouldEqual, types.T_uint64)
 				}
 			}
 
@@ -98,101 +102,106 @@ func TestTpeDatabase_Create(t *testing.T) {
 
 		wantNames := dbDesc.Relations()
 		for i := 0; i < cnt; i++ {
-			convey.So(wantNames[i],convey.ShouldEqual,tableNames[i])
+			convey.So(wantNames[i], convey.ShouldEqual, tableNames[i])
 		}
 
 		var restNames []string
 		for i := 0; i < cnt; i++ {
-			if i % 2 == 0 {
+			if i%2 == 0 {
 				err = dbDesc.Delete(0, tableNames[i])
-				convey.So(err,convey.ShouldBeNil)
-			}else{
-				restNames = append(restNames,tableNames[i])
+				convey.So(err, convey.ShouldBeNil)
+			} else {
+				restNames = append(restNames, tableNames[i])
 			}
 		}
 		wantNames = dbDesc.Relations()
-		convey.So(wantNames,convey.ShouldResemble,restNames)
+		convey.So(wantNames, convey.ShouldResemble, restNames)
 
 		//recreate the dropped table
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Create(0,tableNames[i],defs)
+				err = dbDesc.Create(0, tableNames[i], defs)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 	})
 
-	convey.Convey("create table with primary key ",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
+	convey.Convey("create table with primary key ", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
 
 		dbName := "test"
-		err := tpe.Create(0,dbName,0)
-		convey.So(err,convey.ShouldBeNil)
+		err = tpe.Create(0, dbName, 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		dbDesc, err := tpe.Database(dbName)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c,primary key(a,b))
 		//(uint64,uint64,uint64)
-		_,attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_uint64)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_uint64)
 		attrNames := []string{
-			"a","b","c",
+			"a", "b", "c",
 		}
 		var defs []engine.TableDef
 		for i, def := range attrDefs {
 			def.Attr.Name = attrNames[i]
-			defs = append(defs,def)
+			defs = append(defs, def)
 		}
 
 		pkDefs := []*engine.PrimaryIndexDef{
 			{Names: []string{
-				"a","b",
+				"a", "b",
 			}},
 		}
 
-		defs = append(defs,pkDefs[0])
+		defs = append(defs, pkDefs[0])
 
-		defs = append(defs,&engine.CommentDef{
+		defs = append(defs, &engine.CommentDef{
 			Comment: "A(a,b,c)",
 		})
 
 		cnt := 10
 		var tableNames []string
 		for i := 0; i < cnt; i++ {
-			tableName := fmt.Sprintf("A%d",i)
-			tableNames = append(tableNames,tableName)
+			tableName := fmt.Sprintf("A%d", i)
+			tableNames = append(tableNames, tableName)
 
 			err = dbDesc.Create(0, tableName, defs)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			table, err := dbDesc.Relation(tableName)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			checkTable := func(table engine.Relation) {
-				tableDesc,ok := table.(*TpeRelation)
-				convey.So(ok,convey.ShouldBeTrue)
-				convey.So(tableDesc.id,convey.ShouldEqual,3+i)
-				convey.So(tableDesc.desc.ID,convey.ShouldEqual,3+i)
-				convey.So(tableDesc.desc.Name,convey.ShouldEqual,tableName)
+				tableDesc, ok := table.(*TpeRelation)
+				convey.So(ok, convey.ShouldBeTrue)
+				convey.So(tableDesc.id, convey.ShouldEqual, 3+i)
+				convey.So(tableDesc.desc.ID, convey.ShouldEqual, 3+i)
+				convey.So(tableDesc.desc.Name, convey.ShouldEqual, tableName)
 
 				pkAttrs := tableDesc.desc.Primary_index.Attributes
-				convey.So(len(pkAttrs),convey.ShouldEqual,2)
+				convey.So(len(pkAttrs), convey.ShouldEqual, 2)
 				for j, pkAttr := range pkAttrs {
-					convey.So(pkAttr.ID,convey.ShouldEqual,j)
-					convey.So(pkAttr.Name,convey.ShouldEqual,pkDefs[0].Names[j])
-					convey.So(pkAttr.Type,convey.ShouldEqual,orderedcodec.VALUE_TYPE_UINT64)
+					convey.So(pkAttr.ID, convey.ShouldEqual, j)
+					convey.So(pkAttr.Name, convey.ShouldEqual, pkDefs[0].Names[j])
+					convey.So(pkAttr.Type, convey.ShouldEqual, orderedcodec.VALUE_TYPE_UINT64)
 				}
 
-				convey.So(len(attrDefs),convey.ShouldEqual,len(tableDesc.desc.Attributes))
+				convey.So(len(attrDefs), convey.ShouldEqual, len(tableDesc.desc.Attributes))
 
-				attrs :=tableDesc.desc.Attributes
+				attrs := tableDesc.desc.Attributes
 				for i, attr := range attrs {
 					if attr.Is_primarykey {
 						continue
 					}
-					convey.So(attr.ID,convey.ShouldEqual,i)
-					convey.So(attr.Ttype,convey.ShouldEqual,orderedcodec.VALUE_TYPE_UINT64)
-					convey.So(attr.TypesType.Oid,convey.ShouldEqual,types.T_uint64)
+					convey.So(attr.ID, convey.ShouldEqual, i)
+					convey.So(attr.Ttype, convey.ShouldEqual, orderedcodec.VALUE_TYPE_UINT64)
+					convey.So(attr.TypesType.Oid, convey.ShouldEqual, types.T_uint64)
 				}
 			}
 
@@ -201,25 +210,25 @@ func TestTpeDatabase_Create(t *testing.T) {
 
 		wantNames := dbDesc.Relations()
 		for i := 0; i < cnt; i++ {
-			convey.So(wantNames[i],convey.ShouldEqual,tableNames[i])
+			convey.So(wantNames[i], convey.ShouldEqual, tableNames[i])
 		}
 
 		var restNames []string
 		for i := 0; i < cnt; i++ {
-			if i % 2 == 0 {
+			if i%2 == 0 {
 				err = dbDesc.Delete(0, tableNames[i])
-				convey.So(err,convey.ShouldBeNil)
-			}else{
-				restNames = append(restNames,tableNames[i])
+				convey.So(err, convey.ShouldBeNil)
+			} else {
+				restNames = append(restNames, tableNames[i])
 			}
 		}
 		wantNames = dbDesc.Relations()
-		convey.So(wantNames,convey.ShouldResemble,restNames)
+		convey.So(wantNames, convey.ShouldResemble, restNames)
 
 		//recreate the dropped table
 		for i := 0; i < cnt; i++ {
 			if i%2 == 0 {
-				err = dbDesc.Create(0,tableNames[i],defs)
+				err = dbDesc.Create(0, tableNames[i], defs)
 				convey.So(err, convey.ShouldBeNil)
 			}
 		}

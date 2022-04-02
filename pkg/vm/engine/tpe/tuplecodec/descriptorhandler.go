@@ -75,7 +75,7 @@ func NewDescriptorHandlerImpl(codec *TupleCodecHandler,
 		kvLimit:      limit,
 		useLayout:    false,
 		layoutSerializer: &CompactValueLayoutSerializer{
-			serializer: vs,
+			Serializer: vs,
 		},
 	}
 }

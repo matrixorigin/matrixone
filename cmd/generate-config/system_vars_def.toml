@@ -454,8 +454,18 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["concise","json"]
-comment = "default is concise. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer."
+values = ["flat","concise","json"]
+comment = "default is flat. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer. flat: binary de/serializer"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeValueLayoutSerializer"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["default","compact"]
+comment = "default is 'default'. default : attributes in value without offset array. compact: attributes in value with offset array"
 update-mode = "dynamic"
 
 # Cluster Configs
