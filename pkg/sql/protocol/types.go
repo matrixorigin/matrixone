@@ -69,6 +69,8 @@ const (
 	SumFloatRing
 	// Variance
 	VarianceRing
+	// BitAnd
+	BitAndNumericRing
 	//Bitor
 	Bit_orInt8Ring
 	Bit_orInt32Ring
