@@ -16,7 +16,6 @@ package logutil
 
 import (
 	"go.uber.org/zap"
-	"net/http"
 )
 
 func Debug(msg string, fields ...zap.Field) {
@@ -73,14 +72,15 @@ func Fatalf(msg string, fields ...interface{}) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
 }
 
-func handleLevelChange(port string, pattern string, level zap.AtomicLevel) {
-	http.HandleFunc(pattern, level.ServeHTTP)
-	go func() {
-		if err := http.ListenAndServe(port, nil); err != nil {
-			panic(err)
-		}
-	}()
-}
+// TODO: uncomment the function when changing log level at runtime is required
+//func handleLevelChange(port string, pattern string, level zap.AtomicLevel) {
+//	http.HandleFunc(pattern, level.ServeHTTP)
+//	go func() {
+//		if err := http.ListenAndServe(port, nil); err != nil {
+//			panic(err)
+//		}
+//	}()
+//}
 
 
 type GoettyLogger struct{}
