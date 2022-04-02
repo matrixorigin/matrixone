@@ -388,15 +388,15 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 				simdCsvLineArray: make([][]string, 100)},
 		}
 		handler.closeRef.stopLoadData <- 1
-		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
+		gostub.StubFunc(&saveLinesToStorage, nil)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
 
 		handler.closeRef.stopLoadData <- 1
-		stubs = gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
+		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
 
 		getParsedLinesChan(handler.simdCsvGetParsedLinesChan)
-		stubs = gostub.StubFunc(&saveLinesToStorage, nil)
+		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
 		defer stubs.Reset()
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
 

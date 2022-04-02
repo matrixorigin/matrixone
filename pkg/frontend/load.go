@@ -52,19 +52,19 @@ type DebugTime struct {
 	writeBatch time.Duration
 	resetBatch time.Duration
 
-	prefix     time.Duration
-	skip_bytes time.Duration
+	// prefix time.Duration
+	// skip_bytes time.Duration
 
-	process_field     time.Duration
-	split_field       time.Duration
-	split_before_loop time.Duration
-	wait_loop         time.Duration
-	handler_get       time.Duration
-	wait_switch       time.Duration
-	field_first_byte  time.Duration
-	field_enclosed    time.Duration
-	field_without     time.Duration
-	field_skip_bytes  time.Duration
+	// process_field     time.Duration
+	// split_field       time.Duration
+	// split_before_loop time.Duration
+	// wait_loop         time.Duration
+	// handler_get       time.Duration
+	// wait_switch       time.Duration
+	// field_first_byte  time.Duration
+	// field_enclosed    time.Duration
+	// field_without     time.Duration
+	// field_skip_bytes  time.Duration
 
 	callback       time.Duration
 	asyncChan      time.Duration
@@ -566,10 +566,10 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 
 	countOfLineArray := handler.lineIdx
 	if !forceConvert {
-		//if countOfLineArray != handler.batchSize {
-		//	logutil.Infof("---->countOfLineArray %d batchSize %d ",countOfLineArray,handler.batchSize)
-		//	panic("-----write a batch")
-		//}
+		if countOfLineArray != handler.batchSize {
+			//	logutil.Infof("---->countOfLineArray %d batchSize %d ",countOfLineArray,handler.batchSize)
+			panic("-----write a batch")
+		}
 	}
 
 	batchData := handler.batchData

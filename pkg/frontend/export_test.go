@@ -19,7 +19,7 @@ func Test_initExportFileParam(t *testing.T) {
 	var oq *outputQueue = &outputQueue{
 		mrs: &MysqlResultSet{},
 		ep: &tree.ExportParam{
-			Lines: &tree.Lines{},
+			Lines:  &tree.Lines{},
 			Fields: &tree.Fields{},
 		},
 	}
@@ -42,9 +42,9 @@ func Test_openNewFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 			},
 		}
@@ -57,9 +57,9 @@ func Test_openNewFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
 			},
@@ -79,7 +79,7 @@ func Test_openNewFile(t *testing.T) {
 		defer stubs.Reset()
 
 		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldBeNil)
-	})	
+	})
 }
 
 func Test_formatOutputString(t *testing.T) {
@@ -87,9 +87,9 @@ func Test_formatOutputString(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
 			},
@@ -109,12 +109,12 @@ func Test_writeToCSVFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
-				Writer: &bufio.Writer{},
+				Writer:   &bufio.Writer{},
 			},
 		}
 		var output []byte = []byte{'1', '2'}
@@ -177,12 +177,12 @@ func Test_writeDataToCSVFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
-				Writer: &bufio.Writer{},
+				Writer:   &bufio.Writer{},
 			},
 		}
 		var output []byte = []byte{'1', '2'}
@@ -203,18 +203,18 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
-				Writer: &bufio.Writer{},
+				Writer:   &bufio.Writer{},
 			},
 		}
 
 		var col []*MysqlColumn = []*MysqlColumn{
-			&MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}, 
-			&MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{}, &MysqlColumn{},
+			{}, {}, {}, {}, {},
+			{}, {}, {}, {}, {},
 		}
 		col[5].flag = 0
 		col[6].flag = 1 << 5
@@ -249,21 +249,19 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		var oq *outputQueue = &outputQueue{
 			mrs: &MysqlResultSet{},
 			ep: &tree.ExportParam{
-				Lines: &tree.Lines{},
-				Fields: &tree.Fields{},
-				Header: true,
+				Lines:    &tree.Lines{},
+				Fields:   &tree.Fields{},
+				Header:   true,
 				FilePath: "test/export.csv",
 				LineSize: 1,
-				Writer: &bufio.Writer{},
+				Writer:   &bufio.Writer{},
 			},
 		}
-		var col []*MysqlColumn = []*MysqlColumn{
-			&MysqlColumn{},
-		}
+		var col []MysqlColumn = make([]MysqlColumn, 10)
 		var colType = []uint8{defines.MYSQL_TYPE_TIMESTAMP}
 		for i := 0; i < len(col); i++ {
 			col[i].SetColumnType(colType[i])
-			oq.mrs.AddColumn(col[i])
+			oq.mrs.AddColumn(&col[i])
 		}
 
 		var data = make([]interface{}, len(col))
@@ -275,4 +273,4 @@ func Test_exportDataToCSVFile(t *testing.T) {
 
 		convey.So(exportDataToCSVFile(oq), convey.ShouldNotBeNil)
 	})
-} 
+}
