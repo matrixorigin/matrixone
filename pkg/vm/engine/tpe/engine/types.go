@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
@@ -29,40 +30,42 @@ var _ engine.Relation = &TpeRelation{}
 var _ engine.Reader = &TpeReader{}
 
 type TpeConfig struct {
-	KvType     tuplecodec.KVType
-	SerialType tuplecodec.SerializerType
+	KvType                    tuplecodec.KVType
+	SerialType                tuplecodec.SerializerType
+	ValueLayoutSerializerType string
 
 	//cubeKV needs CubeDriver
-	Cube    driver.CubeDriver
+	Cube driver.CubeDriver
 
 	//the count of rows per write or scan
 	KVLimit uint64
 
 	ParallelReader bool
 
-	TpeDedupSetBatchTimeout time.Duration
+	TpeDedupSetBatchTimeout  time.Duration
 	TpeDedupSetBatchTrycount int
+	PBKV                     *pebble.Storage
 }
 
 type TpeEngine struct {
-	tpeConfig *TpeConfig
-	dh descriptor.DescriptorHandler
+	tpeConfig      *TpeConfig
+	dh             descriptor.DescriptorHandler
 	computeHandler computation.ComputationHandler
 }
 
 type TpeDatabase struct {
-	id uint64
-	desc *descriptor.DatabaseDesc
+	id             uint64
+	desc           *descriptor.DatabaseDesc
 	computeHandler computation.ComputationHandler
 }
 
 type TpeRelation struct {
-	id uint64
-	dbDesc *descriptor.DatabaseDesc
-	desc *descriptor.RelationDesc
+	id             uint64
+	dbDesc         *descriptor.DatabaseDesc
+	desc           *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
-	nodes engine.Nodes
-	shards *tuplecodec.Shards
+	nodes          engine.Nodes
+	shards         *tuplecodec.Shards
 }
 
 type ShardNode struct {
@@ -77,22 +80,22 @@ type ShardNode struct {
 type ShardInfo struct {
 	//the startKey and endKey of the Shard
 	startKey []byte
-	endKey []byte
+	endKey   []byte
 	//the key for the next scan
 	nextScanKey []byte
 	//scan shard completely?
 	completeInShard bool
-	node ShardNode
+	node            ShardNode
 }
 
 type TpeReader struct {
 	dbDesc         *descriptor.DatabaseDesc
 	tableDesc      *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
-	readCtx *tuplecodec.ReadContext
-	shardInfos []ShardInfo
+	readCtx        *tuplecodec.ReadContext
+	shardInfos     []ShardInfo
 	parallelReader bool
 	//for test
 	isDumpReader bool
-	id int
+	id           int
 }

@@ -17,11 +17,12 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"time"
 )
 
 var (
@@ -117,6 +118,7 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 			ID: uint32(columnIdx),
 			Name:              pkFieldName,
 			Ttype:             orderedcodec.VALUE_TYPE_UINT64,
+			TypesType:                 tuplecodec.TpeTypeToEngineType(orderedcodec.VALUE_TYPE_UINT64),
 			Is_null:           false,
 			Default_value:     "",
 			Is_hidden:         true,

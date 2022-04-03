@@ -73,10 +73,10 @@ func (w *worker) Start(refCount []uint64, attrs []string) {
 			panic("error")
 		}
 		n := vector.Length(bat.Vecs[0])
-		if n > cap(w.zs) {
-			w.zs = make([]int64, n)
+		if n > cap(data.zs) {
+			data.zs = make([]int64, n)
 		}
-		bat.Zs = w.zs[:n]
+		bat.Zs = data.zs[:n]
 		for i := 0; i < n; i++ {
 			bat.Zs[i] = 1
 		}

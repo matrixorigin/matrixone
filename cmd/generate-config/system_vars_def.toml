@@ -404,8 +404,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["memorykv","cubekv"]
-comment = "default is memorykv. Chose memory or cube as the KV storage."
+values = ["cubekv","memorykv"]
+comment = "default is cubekv. Chose memory or cube as the KV storage."
 update-mode = "dynamic"
 
 [[parameter]]
@@ -454,8 +454,18 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["concise","json"]
-comment = "default is concise. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer."
+values = ["flat","concise","json"]
+comment = "default is flat. concise : just use the go encoding/binary as the de/serializer. json: json de/serializer. flat: binary de/serializer"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeValueLayoutSerializer"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["default","compact"]
+comment = "default is 'default'. default : attributes in value without offset array. compact: attributes in value with offset array"
 update-mode = "dynamic"
 
 # Cluster Configs
@@ -496,12 +506,9 @@ labels = [
 max-peer-down-time = "30m"                          # the maximum time a node is allowed to leave
 shard-heartbeat-duration = "10s"                    # the period for this raft group to report information to scheduler
 store-heartbeat-duration = "10s"                     # the period for this node to report information to scheduler
-shard-split-check-duration = "30s"                  # the period of shard split checking
 shard-state-check-duration = "1m"                   # the period of shard state checking
 compact-log-check-duration = "60s"                  # the period of log compaction checking
-disable-shard-split = false                         # to disable shard split, set this value to true
 allow-remove-leader = false                         # to allow leader removal, set this value to true
-shard-capacity-bytes = "96MB"                       # shard capacity
 
 [raft]
 tick-interval = "1s"                                # In a distributed setting, adjust this setting according to you network status. For poor network connections, set this value larger.
@@ -584,3 +591,19 @@ segment-writers = 4                                 # the maximum parallelism of
 index-cache-size = 134217728        # 128M          # index shared cache size
 insert-cache-size = 4294967296      # 4G            # mutable data shared cache size
 data-cache-size = 4294967296        # 4G            # immutable data shared cache size
+
+[kv-feature]
+# duration to check if the Shard needs to be split
+shard-split-check-duration = "30s"
+# the size of the data managed by each Shard, beyond which the Shard needs to be split
+shard-capacity-bytes = "96MB"
+# disable shard split
+disable-shard-split = false
+
+[aoe-feature]
+# duration to check if the Shard needs to be split
+shard-split-check-duration = "1m"
+# the size of the data managed by each Shard, beyond which the Shard needs to be split
+shard-capacity-bytes = "4GB"
+# disable shard split
+disable-shard-split = false

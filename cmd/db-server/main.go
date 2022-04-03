@@ -28,9 +28,8 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
-	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/client"
 	"github.com/matrixorigin/matrixcube/pb/metapb"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
@@ -191,8 +190,6 @@ func main() {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
-	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
-
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 
@@ -207,52 +204,16 @@ func main() {
 		os.Exit(RecreateDirExit)
 	}
 
-	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", nil, &pebble.Options{
-		FS:                          vfs.NewPebbleFS(vfs.Default),
-		MemTableSize:                1024 * 1024 * 128,
-		MemTableStopWritesThreshold: 4,
-	})
-	kvBase := kv.NewBaseStorage(kvs, vfs.Default)
-	pebbleDataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
+	cfg := parseConfig(configFilePath, targetDir)
 
-	var aoeDataStorage *aoeDriver.Storage
-
-	opt := aoeStorage.Options{}
-	_, err = toml.DecodeFile(configFilePath, &opt)
-	if err != nil {
-		logutil.Infof("Decode aoe config error:%v\n", err)
-		os.Exit(DecodeAoeConfigExit)
-	}
+	kvs, kvStorage := getKVDataStorage(targetDir, cfg)
+	defer kvStorage.Close()
 
 	catalogListener := catalog.NewCatalogListener()
-	opt.EventListener = catalogListener
-	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
-	if err != nil {
-		logutil.Infof("Create aoe driver error, %v\n", err)
-		os.Exit(CreateAoeExit)
-	}
+	aoeStorage := getAOEDataStorage(configFilePath, targetDir, catalogListener, cfg)
+	defer aoeStorage.Close()
 
-	cfg := dConfig.Config{}
-	_, err = toml.DecodeFile(configFilePath, &cfg.CubeConfig)
-	if err != nil {
-		logutil.Infof("Decode cube config error:%v\n", err)
-		os.Exit(DecodeCubeConfigExit)
-	}
-	cfg.CubeConfig.DataPath = targetDir + "/cube"
-
-	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
-	if err != nil {
-		logutil.Infof("Decode cluster config error:%v\n", err)
-		os.Exit(DecodeClusterConfigExit)
-	}
-	cfg.ServerConfig = client.Cfg{}
-
-	if !config.GlobalSystemVariables.GetDisablePCI() {
-		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
-	}
-	cfg.CubeConfig.Logger = logutil.GetGlobalLogger()
-
-	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := driver.NewCubeDriverWithOptions(kvStorage, aoeStorage, &cfg)
 	if err != nil {
 		logutil.Infof("Create cube driver failed, %v", err)
 		os.Exit(CreateCubeExit)
@@ -262,6 +223,7 @@ func main() {
 		logutil.Infof("Start cube driver failed, %v", err)
 		os.Exit(StartCubeExit)
 	}
+	defer a.Close()
 
 	addr := cfg.CubeConfig.AdvertiseClientAddr
 	if len(addr) != 0 {
@@ -287,10 +249,12 @@ func main() {
 	enableTpe := config.GlobalSystemVariables.GetEnableTpe()
 	if enableTpe {
 		tpeConf := &tpeEngine.TpeConfig{}
+		tpeConf.PBKV = kvs
 		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
 		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY
@@ -306,6 +270,8 @@ func main() {
 			tpeConf.SerialType = tuplecodec.ST_CONCISE
 		} else if configSerializeTyp == "json" {
 			tpeConf.SerialType = tuplecodec.ST_JSON
+		} else if configSerializeTyp == "flat" {
+			tpeConf.SerialType = tuplecodec.ST_FLAT
 		} else {
 			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
 			os.Exit(CreateTpeExit)
@@ -375,9 +341,6 @@ func main() {
 	waitSignal()
 	//srv.Stop()
 	serverShutdown(true)
-	a.Close()
-	aoeDataStorage.Close()
-	pebbleDataStorage.Close()
 
 	cleanup()
 }
@@ -421,4 +384,69 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 			time.Sleep(time.Millisecond * 10)
 		}
 	}
+}
+
+func parseConfig(configFilePath, targetDir string) dConfig.Config {
+	cfg := dConfig.Config{}
+	_, err := toml.DecodeFile(configFilePath, &cfg.CubeConfig)
+	if err != nil {
+		logutil.Infof("Decode cube config error:%v\n", err)
+		os.Exit(DecodeCubeConfigExit)
+	}
+	_, err = toml.DecodeFile(configFilePath, &cfg.FeaturesConfig)
+	if err != nil {
+		logutil.Infof("Decode cube config error:%v\n", err)
+		os.Exit(DecodeCubeConfigExit)
+	}
+
+	cfg.CubeConfig.DataPath = targetDir + "/cube"
+	_, err = toml.DecodeFile(configFilePath, &cfg.ClusterConfig)
+	if err != nil {
+		logutil.Infof("Decode cluster config error:%v\n", err)
+		os.Exit(DecodeClusterConfigExit)
+	}
+
+	if !config.GlobalSystemVariables.GetDisablePCI() {
+		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+	}
+	cfg.CubeConfig.Logger = logutil.GetGlobalLogger()
+	return cfg
+}
+
+func getKVDataStorage(targetDir string, cfg dConfig.Config) (*cPebble.Storage, storage.DataStorage) {
+	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", nil, &pebble.Options{
+		FS:                          vfs.NewPebbleFS(vfs.Default),
+		MemTableSize:                1024 * 1024 * 128,
+		MemTableStopWritesThreshold: 4,
+	})
+	if err != nil {
+		logutil.Infof("create kv data storage error, %v\n", err)
+		os.Exit(CreateAoeExit)
+	}
+
+	kvBase := kv.NewBaseStorage(kvs, vfs.Default)
+	return kvs, kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs),
+		kv.WithLogger(cfg.CubeConfig.Logger),
+		kv.WithFeature(cfg.FeaturesConfig.KV.Feature()))
+}
+
+func getAOEDataStorage(configFilePath, targetDir string,
+	catalogListener *catalog.CatalogListener,
+	cfg dConfig.Config) storage.DataStorage {
+	var aoeDataStorage *aoeDriver.Storage
+	opt := aoeStorage.Options{}
+	_, err := toml.DecodeFile(configFilePath, &opt)
+	if err != nil {
+		logutil.Infof("Decode aoe config error:%v\n", err)
+		os.Exit(DecodeAoeConfigExit)
+	}
+
+	opt.EventListener = catalogListener
+	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe",
+		cfg.FeaturesConfig.AOE.Feature(), &opt)
+	if err != nil {
+		logutil.Infof("Create aoe driver error, %v\n", err)
+		os.Exit(CreateAoeExit)
+	}
+	return aoeDataStorage
 }

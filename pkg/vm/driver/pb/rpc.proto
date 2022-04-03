@@ -134,8 +134,10 @@ message TpePrefixScanRequest {
   int64        prefixLength = 2;
   //the endKey of the range denoted by the prefix
   bytes        prefixEnd = 3;
+  //return the keys without their values
+  bool needKeyOnly = 4;
   //the count of key/value wanted at most in the reqeust
-  uint64       limit = 4;
+  uint64       limit = 5;
 }
 
 // TpeScanRequest scan request

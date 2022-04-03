@@ -15,30 +15,31 @@
 package variance
 
 import (
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"math"
 )
 
 // VarRing is the ring structure to compute the Overall variance
+// we use E(x^2) - E(x)^2 to compute the result,
+// so we need the average of x and sum of x ^ 2
 type VarRing struct {
 	// Typ is vector's value type
 	Typ types.Type
 
 	// attributes for computing the variance
-	Data []byte    // store all the sums' bytes
-	Sums []float64 // sums of each group, its memory address is same to Dates
+	Data  []byte
+	SumX  []float64 // sum of x, its memory address is same to Data, because we will use it to store result finally.
+	SumX2 []float64 // sum of x^2
 
-	Values     [][]float64 // values of each group
-	NullCounts []int64     // group to record number of the null value
+	NullCounts []int64 // group to record number of the null value
 }
 
-func NewVarRing(typ types.Type) *VarRing {
+func NewVarianceRing(typ types.Type) *VarRing {
 	return &VarRing{Typ: typ}
 }
 
@@ -46,72 +47,73 @@ func (v *VarRing) Free(m *mheap.Mheap) {
 	if v.Data != nil {
 		mheap.Free(m, v.Data)
 		v.Data = nil
-		v.Sums = nil
+		v.SumX = nil
+		v.SumX2 = nil
 		v.NullCounts = nil
-		v.Values = nil
 	}
 	return
 }
 
+func (v *VarRing) String() string {
+	return "variance ring"
+}
+
 // Count return group number of this ring.
 func (v *VarRing) Count() int {
-	return len(v.Sums)
+	return len(v.SumX)
 }
 
-// Size return how much memory space allocated in memory pool by this ring.
-// TODO: it's not exactly now
+// Size return size of memory which was allocated in memory pool by this ring.
 func (v *VarRing) Size() int {
 	size := cap(v.Data)
-	for _, value := range v.Values {
-		size += cap(value) * 8
-	}
 	return size
-}
-
-// Dup will make a new VarRing with the same type.
-func (v *VarRing) Dup() ring.Ring {
-	return NewVarRing(v.Typ)
 }
 
 func (v *VarRing) Type() types.Type {
 	return v.Typ
 }
 
+// Dup will make a new VarRing with the same type.
+func (v *VarRing) Dup() ring.Ring {
+	return NewVarianceRing(v.Typ)
+}
+
 func (v *VarRing) SetLength(n int) {
 	// first n group will be kept.
-	v.Sums = v.Sums[:n]
-	v.Values = v.Values[:n]
+	v.SumX = v.SumX[:n]
+	v.SumX2 = v.SumX2[:n]
 	v.NullCounts = v.NullCounts[:n]
 }
 
 func (v *VarRing) Shrink(selectIndexes []int64) {
-	// move the data according to the list of index numbers.
+	// move the data according to the list of index numbers. And free others.
 	for i, index := range selectIndexes {
-		v.Sums[i] = v.Sums[index]
-		v.Values[i] = v.Values[index]
+		v.SumX[i] = v.SumX[index]
+		v.SumX2[i] = v.SumX2[index]
 		v.NullCounts[i] = v.NullCounts[index]
 	}
-	v.Sums = v.Sums[:len(selectIndexes)]
-	v.Values = v.Values[:len(selectIndexes)]
+	v.SumX = v.SumX[:len(selectIndexes)]
+	v.SumX2 = v.SumX2[:len(selectIndexes)]
 	v.NullCounts = v.NullCounts[:len(selectIndexes)]
 }
 
+// Grow adds a new group to the ring.
 func (v *VarRing) Grow(m *mheap.Mheap) error {
-	n := len(v.Sums)
+	n := len(v.SumX)
 
 	if n == 0 {
 		// The first time memory is allocated,
-		// more space is allocated to avoid the performance loss caused by multiple allocations.
+		// more space is required to avoid the performance loss caused by multiple allocations.
 		data, err := mheap.Alloc(m, 64)
 		if err != nil {
 			return err
 		}
 		v.Data = data
-		v.Sums = encoding.DecodeFloat64Slice(data)
+		v.SumX = encoding.DecodeFloat64Slice(data)
 
 		v.NullCounts = make([]int64, 0, 8)
-		v.Values = make([][]float64, 0, 8)
-	} else if n+1 >= cap(v.Sums) {
+		v.SumX2 = make([]float64, 0, 8)
+	} else if n+1 >= cap(v.SumX) {
 		v.Data = v.Data[:n*8]
 		data, err := mheap.Grow(m, v.Data, int64(n+1)*8)
 		if err != nil {
@@ -119,49 +121,51 @@ func (v *VarRing) Grow(m *mheap.Mheap) error {
 		}
 		mheap.Free(m, v.Data)
 		v.Data = data
-		v.Sums = encoding.DecodeFloat64Slice(data)
+		v.SumX2 = encoding.DecodeFloat64Slice(data)
 	}
 
-	v.Sums = v.Sums[:n+1]
-	v.Sums[n] = 0
+	v.SumX = v.SumX[:n+1]
+	v.SumX[n] = 0
+	v.SumX2 = append(v.SumX2, 0)
 	v.NullCounts = append(v.NullCounts, 0)
-	v.Values = append(v.Values, make([]float64, 0, 16))
 	return nil
 }
 
-func (v *VarRing) Grows(size int, m *mheap.Mheap) error {
-	n := len(v.Sums)
+// Grows adds N new groups to the ring.
+func (v *VarRing) Grows(N int, m *mheap.Mheap) error {
+	n := len(v.SumX)
 
 	if n == 0 {
-		data, err := mheap.Alloc(m, int64(size*8))
+		data, err := mheap.Alloc(m, int64(N*8))
 		if err != nil {
 			return err
 		}
 		v.Data = data
-		v.Sums = encoding.DecodeFloat64Slice(data)
+		v.SumX = encoding.DecodeFloat64Slice(data)
 
-		v.Values = make([][]float64, 0, size)
-		v.NullCounts = make([]int64, 0, size)
+		v.SumX2 = make([]float64, 0, N)
+		v.NullCounts = make([]int64, 0, N)
 
-	} else if n+size >= cap(v.Sums) {
+	} else if n+N >= cap(v.SumX) {
 		v.Data = v.Data[:n*8]
-		data, err := mheap.Grow(m, v.Data, int64(n+size)*8)
+		data, err := mheap.Grow(m, v.Data, int64(n+N)*8)
 		if err != nil {
 			return err
 		}
 		mheap.Free(m, v.Data)
 		v.Data = data
-		v.Sums = encoding.DecodeFloat64Slice(data)
+		v.SumX = encoding.DecodeFloat64Slice(data)
 	}
 
-	v.Sums = v.Sums[:n+size]
-	for i := 0; i < size; i++ {
+	v.SumX = v.SumX[:n+N]
+	for i := 0; i < N; i++ {
 		v.NullCounts = append(v.NullCounts, 0)
-		v.Values = append(v.Values, make([]float64, 0, 16))
+		v.SumX2 = append(v.SumX2, 0)
 	}
 	return nil
 }
 
+// Fill use row j of vector to update the ring's group i
 func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
 	var value float64 = 0
 
@@ -187,108 +191,79 @@ func (v *VarRing) Fill(i, j int64, z int64, vec *vector.Vector) {
 	case types.T_float64:
 		value = vec.Col.([]float64)[j]
 	}
-	for k := z; k > 0; k-- {
-		v.Values[i] = append(v.Values[i], value)
-	}
 
-	v.Sums[i] += value * float64(z)
+	v.SumX[i] += value * float64(z)
+	v.SumX2[i] += math.Pow(value, 2) * float64(z)
 
 	if nulls.Contains(vec.Nsp, uint64(z)) {
 		v.NullCounts[i] += z
 	}
 }
 
+// BatchFill use parts of vector to update the ring
+// For each item o of os
+// ring's group `vps[o]-1` is related to vector's row `start+o`
 func (v *VarRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_int16:
 		vs := vec.Col.([]int16)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_int32:
 		vs := vec.Col.([]int32)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_uint8:
 		vs := vec.Col.([]uint8)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_uint16:
 		vs := vec.Col.([]uint16)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_uint32:
 		vs := vec.Col.([]uint32)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_uint64:
 		vs := vec.Col.([]uint64)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_float32:
 		vs := vec.Col.([]float32)
 		for i := range os {
-			v.Sums[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], float64(vs[int64(i)+start]))
-			}
+			v.SumX[vps[i]-1] += float64(vs[int64(i)+start]) * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(float64(vs[int64(i)+start]), 2) * float64(zs[int64(i)+start])
 		}
 	case types.T_float64:
 		vs := vec.Col.([]float64)
 		for i := range os {
-			v.Sums[vps[i]-1] += vs[int64(i)+start] * float64(zs[int64(i)+start])
-
-			for k := zs[int64(i)+start]; k > 0; k-- {
-				v.Values[vps[i]-1] = append(v.Values[vps[i]-1], vs[int64(i)+start])
-			}
+			v.SumX[vps[i]-1] += vs[int64(i)+start] * float64(zs[int64(i)+start])
+			v.SumX2[vps[i]-1] += math.Pow(vs[int64(i)+start], 2) * float64(zs[int64(i)+start])
 		}
 	}
 	if nulls.Any(vec.Nsp) {
@@ -300,6 +275,7 @@ func (v *VarRing) BatchFill(start int64, os []uint8, vps []uint64, zs []int64, v
 	}
 }
 
+// BulkFill use whole vector to update the ring's group i
 func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 	switch v.Typ.Oid {
 	case types.T_int8:
@@ -309,17 +285,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_int16:
@@ -329,17 +302,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_int32:
@@ -349,17 +319,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_int64:
@@ -369,17 +336,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_uint8:
@@ -389,17 +353,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_uint16:
@@ -409,17 +370,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_uint32:
@@ -429,17 +387,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_uint64:
@@ -449,17 +404,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_float32:
@@ -469,17 +421,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], float64(value))
-					}
+					v.SumX[i] += float64(value) * float64(zs[j])
+					v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += float64(value) * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], float64(value))
-				}
+				v.SumX[i] += float64(value) * float64(zs[j])
+				v.SumX2[i] += math.Pow(float64(value), 2) * float64(zs[j])
 			}
 		}
 	case types.T_float64:
@@ -489,17 +438,14 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 				if nulls.Contains(vec.Nsp, uint64(j)) {
 					v.NullCounts[i] += zs[j]
 				} else {
-					for k := zs[j]; k > 0; k-- {
-						v.Values[i] = append(v.Values[i], value)
-					}
+					v.SumX[i] += value * float64(zs[j])
+					v.SumX2[i] += math.Pow(value, 2) * float64(zs[j])
 				}
 			}
 		} else {
 			for j, value := range values {
-				v.Sums[i] += value * float64(zs[j])
-				for k := zs[j]; k > 0; k-- {
-					v.Values[i] = append(v.Values[i], value)
-				}
+				v.SumX[i] += value * float64(zs[j])
+				v.SumX2[i] += math.Pow(value, 2) * float64(zs[j])
 			}
 		}
 	}
@@ -508,35 +454,34 @@ func (v *VarRing) BulkFill(i int64, zs []int64, vec *vector.Vector) {
 // Add merge ring2 group Y into ring1's group X
 func (v *VarRing) Add(a interface{}, x, y int64) {
 	v2 := a.(*VarRing)
-	v.Sums[x] += v2.Sums[y]
+	v.SumX[x] += v2.SumX[y]
+	v.SumX2[x] += v2.SumX2[y]
 	v.NullCounts[x] += v2.NullCounts[y]
-	v.Values[x] = append(v.Values[x], v2.Values[y]...)
 }
 
 func (v *VarRing) BatchAdd(a interface{}, start int64, os []uint8, vps []uint64) {
 	v2 := a.(*VarRing)
 	for i := range os {
-		v.Sums[vps[os[i]]-1] += v2.Sums[start+int64(i)]
-		v.NullCounts[vps[os[i]]-1] += v2.NullCounts[start+int64(i)]
-		v.Values[vps[os[i]]-1] = append(v.Values[vps[os[i]]-1], v2.Values[start+int64(i)]...)
+		v.SumX[vps[i]-1] += v2.SumX[start+int64(i)]
+		v.SumX2[vps[i]-1] += v2.SumX2[start+int64(i)]
+		v.NullCounts[vps[i]-1] += v2.NullCounts[start+int64(i)]
 	}
 }
 
 func (v *VarRing) Mul(a interface{}, x, y, z int64) {
 	v2 := a.(*VarRing)
 	{
-		v.Sums[x] += v2.Sums[y] * float64(z)
+		v.SumX[x] += v2.SumX[y] * float64(z)
+		v.SumX2[x] += v2.SumX2[y] * float64(z)
 		v.NullCounts[x] += v2.NullCounts[y] * z
-		for k := z; k > 0; k-- {
-			v.Values[x] = append(v.Values[x], v2.Values[y]...)
-		}
 	}
 }
 
+// Eval returns the variance result using result = E(x^2) - E(x)^2
 func (v *VarRing) Eval(zs []int64) *vector.Vector {
 	defer func() {
-		v.Values = nil
-		v.Sums = nil
+		v.SumX = nil
+		v.SumX2 = nil
 		v.NullCounts = nil
 		v.Data = nil
 	}()
@@ -546,31 +491,25 @@ func (v *VarRing) Eval(zs []int64) *vector.Vector {
 		if n := z - v.NullCounts[i]; n == 0 {
 			nulls.Add(nsp, uint64(i))
 		} else {
-			v.Sums[i] /= float64(n)
+			v.SumX[i] /= float64(n)  // compute E(x)
+			v.SumX2[i] /= float64(n) // compute E(x^2)
 
-			var variance float64 = 0
-			avg := v.Sums[i]
-			for _, value := range v.Values[i] {
-				variance += math.Pow(value-avg, 2.0) / float64(n)
-			}
-			v.Sums[i] = variance
+			variance := v.SumX2[i] - math.Pow(v.SumX[i], 2)
+
+			v.SumX[i] = variance // using v.SumX to record the result and return.
 		}
 	}
 
 	return &vector.Vector{
 		Nsp:  nsp,
 		Data: v.Data,
-		Col:  v.Sums,
+		Col:  v.SumX,
 		Or:   false,
 		Typ:  types.Type{Oid: types.T_float64, Size: 8},
 	}
 }
 
-// useless functions for VarRing and just implement it
-func (v *VarRing) String() string {
-	return "var-ring"
-}
-
+// Shuffle is unused now and just implement it
 func (v *VarRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }

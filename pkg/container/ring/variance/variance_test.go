@@ -27,22 +27,20 @@ func TestVariance(t *testing.T) {
 	// the variance of {1, 2, null, 0, 3, 4} and {2, 3, null, null, 4, 5} correctly
 
 	// 1. make the test case
-	v1 := NewVarRing(types.Type{Oid: types.T_float64})
+	v1 := NewVarianceRing(types.Type{Oid: types.T_float64})
 	v2 := v1.Dup().(*VarRing)
-	{ // first 3 rows.
-		v1.Sums = []float64{1+2, 2+3}
-		v1.Values = [][]float64 {
-			{1, 2}, // 1, 2, null
-			{2, 3}, // 2, 3, null
-		}
+	{
+		// first 3 rows.
+		// column1: {1, 2, null}, column2: {2, 3, null}
+		v1.SumX = []float64{1+2, 2+3}
+		v1.SumX2 = []float64{1*1+2*2, 2*2+3*3}
 		v1.NullCounts = []int64{1, 1}
 	}
-	{ // last 3 rows.
-		v2.Sums = []float64{0+3+4, 4+5}
-		v2.Values = [][]float64 {
-			{0, 3, 4}, // 0, 3, 4
-			{4, 5},	// null, 4, 5
-		}
+	{
+		// last 3 rows.
+		// column1: {0, 3, 4}, column2: {null, 4, 5}
+		v2.SumX = []float64{0+3+4, 4+5}
+		v2.SumX2 = []float64{3*3+4*4, 4*4+5*5}
 		v2.NullCounts = []int64{0, 1}
 	}
 	v1.Add(v2, 0, 0)

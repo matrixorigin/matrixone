@@ -29,7 +29,7 @@ import (
 
 const (
 	DATABASE_ID = "database_id"
-	TABLE_ID = "table_id"
+	TABLE_ID    = "table_id"
 )
 
 var (
@@ -48,12 +48,12 @@ var (
 var _ computation.ComputationHandler = &ComputationHandlerImpl{}
 
 type ComputationHandlerImpl struct {
-	dh descriptor.DescriptorHandler
-	kv KVHandler
-	tch *TupleCodecHandler
-	serializer ValueSerializer
-	indexHandler index.IndexHandler
-	epochHandler * EpochHandler
+	dh             descriptor.DescriptorHandler
+	kv             KVHandler
+	tch            *TupleCodecHandler
+	serializer     ValueSerializer
+	indexHandler   index.IndexHandler
+	epochHandler   *EpochHandler
 	parallelReader bool
 }
 
@@ -73,12 +73,12 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	}
 
 	var err error
-	if len(bat.Zs) != 0 && bat.Zs[0] == -1 {
+	if len(bat.Zs) == 2 && bat.Zs[0] == -1 && bat.Zs[1] == -1 {
 		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
 	} else {
 		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)
 	}
-	
+
 	if err != nil {
 		return err
 	}
@@ -87,12 +87,12 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 
 func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
-		dh: dh,
-		kv: kv,
-		tch: tch,
-		serializer: serial,
-		indexHandler: ih,
-		epochHandler: epoch,
+		dh:             dh,
+		kv:             kv,
+		tch:            tch,
+		serializer:     serial,
+		indexHandler:   ih,
+		epochHandler:   epoch,
 		parallelReader: parallelReader,
 	}
 }
@@ -105,7 +105,7 @@ func (chi *ComputationHandlerImpl) CreateDatabase(epoch uint64, dbName string, t
 			return 0, err
 		}
 		//do not find the desc
-	}else{
+	} else {
 		return 0, errorDatabaseExists
 	}
 
@@ -119,14 +119,14 @@ func (chi *ComputationHandlerImpl) CreateDatabase(epoch uint64, dbName string, t
 
 	//3. Save the descriptor
 	desc := &descriptor.DatabaseDesc{
-		ID: uint32(id),
+		ID:               uint32(id),
 		Name:             dbName,
 		Update_time:      time.Now().Unix(),
 		Create_epoch:     epoch,
 		Is_deleted:       false,
 		Drop_epoch:       0,
 		Max_access_epoch: epoch,
-		Typ: typ,
+		Typ:              typ,
 	}
 
 	err = chi.dh.StoreDatabaseDescByID(id, desc)
@@ -137,7 +137,7 @@ func (chi *ComputationHandlerImpl) CreateDatabase(epoch uint64, dbName string, t
 	return id, nil
 }
 
-func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) error {
+func (chi *ComputationHandlerImpl) DropDatabase(epoch uint64, dbName string) error {
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByName(dbName)
 	if err != nil {
@@ -155,7 +155,7 @@ func (chi *ComputationHandlerImpl)  DropDatabase(epoch uint64, dbName string) er
 	}
 
 	for _, desc := range tableDescs {
-		_, err := chi.DropTableByDesc(epoch, uint64(dbDesc.ID),desc)
+		_, err := chi.DropTableByDesc(epoch, uint64(dbDesc.ID), desc)
 		if err != nil {
 			return err
 		}
@@ -179,28 +179,28 @@ func (chi *ComputationHandlerImpl) GetDatabase(dbName string) (*descriptor.Datab
 	//1. check database exists
 	dbDesc, err := chi.dh.LoadDatabaseDescByName(dbName)
 	if err != nil {
-		return nil,err
+		return nil, err
 	}
 
 	//2. check it is deleted
 	if dbDesc.Is_deleted {
-		return nil,errorDatabaseDeletedAlready
+		return nil, errorDatabaseDeletedAlready
 	}
 
-	return dbDesc,nil
+	return dbDesc, nil
 }
 
 //callbackForGetDatabaseDesc extracts the databaseDesc
-func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
+func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error) {
 	//get the name and the desc
 	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
-		return nil,errorTypeInValueNotEqualToTypeInAttribute
+		return nil, errorTypeInValueNotEqualToTypeInAttribute
 	}
 
 	//deserialize the desc
-	if bytesInValue,ok := descDI.Value.([]byte); ok {
+	if bytesInValue, ok := descDI.Value.([]byte); ok {
 		dbDesc, err := UnmarshalDatabaseDesc(bytesInValue)
 		if err != nil {
 			return nil, err
@@ -209,7 +209,7 @@ func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx inter
 		if dbDesc.Is_deleted {
 			return nil, nil
 		}
-		if out,ok2 := callbackCtx.(*[]*descriptor.DatabaseDesc) ; ok2 {
+		if out, ok2 := callbackCtx.(*[]*descriptor.DatabaseDesc); ok2 {
 			*out = append(*out, dbDesc)
 		}
 	}
@@ -219,10 +219,10 @@ func (chi *ComputationHandlerImpl) callbackForGetDatabaseDesc (callbackCtx inter
 func (chi *ComputationHandlerImpl) ListDatabases() ([]*descriptor.DatabaseDesc, error) {
 	var dbDescs []*descriptor.DatabaseDesc
 	_, err := chi.dh.GetValuesWithPrefix(math.MaxUint64, &dbDescs, chi.callbackForGetDatabaseDesc)
-	if err != nil  && err != errorDoNotFindTheDesc{
+	if err != nil && err != errorDoNotFindTheDesc {
 		return nil, err
 	}
-	return dbDescs,nil
+	return dbDescs, nil
 }
 
 func (chi *ComputationHandlerImpl) CreateTable(epoch, dbId uint64, tableDesc *descriptor.RelationDesc) (uint64, error) {
@@ -240,7 +240,7 @@ func (chi *ComputationHandlerImpl) CreateTable(epoch, dbId uint64, tableDesc *de
 			return 0, err
 		}
 		//do no find the desc
-	}else {
+	} else {
 		return 0, errorTableExists
 	}
 
@@ -256,31 +256,12 @@ func (chi *ComputationHandlerImpl) CreateTable(epoch, dbId uint64, tableDesc *de
 	tableDesc.Create_time = time.Now().Unix()
 	tableDesc.Max_access_epoch = epoch
 
-	err = chi.dh.StoreRelationDescByID(dbId,id,tableDesc)
+	err = chi.dh.StoreRelationDescByID(dbId, id, tableDesc)
 	if err != nil {
 		return 0, err
 	}
 
-	return id,nil
-}
-
-// encodeFieldsIntoValue encodes the value(epoch,dbid,tableid)
-func (chi *ComputationHandlerImpl) encodeFieldsIntoValue(epoch,dbID,tableID uint64) (TupleValue,error) {
-	//serialize the value(epoch,dbid,tableid)
-	var fields []interface{}
-	fields = append(fields,epoch)
-	fields = append(fields,dbID)
-	fields = append(fields,tableID)
-
-	out := TupleValue{}
-	for i := 0; i < len(fields); i++ {
-		serialized, _, err := chi.serializer.SerializeValue(out,fields[i])
-		if err != nil {
-			return nil, err
-		}
-		out = serialized
-	}
-	return out,nil
+	return id, nil
 }
 
 func (chi *ComputationHandlerImpl) isInternalDatabase(dbID uint64) bool {
@@ -309,7 +290,7 @@ func (chi *ComputationHandlerImpl) DropTable(epoch, dbId uint64, tableName strin
 		return 0, err
 	}
 
-	return chi.DropTableByDesc(epoch,dbId,tableDesc)
+	return chi.DropTableByDesc(epoch, dbId, tableDesc)
 }
 
 func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc *descriptor.RelationDesc) (uint64, error) {
@@ -339,20 +320,20 @@ func (chi *ComputationHandlerImpl) DropTableByDesc(epoch, dbId uint64, tableDesc
 	if err != nil {
 		return 0, err
 	}
-	return uint64(tableDesc.ID),nil
+	return uint64(tableDesc.ID), nil
 }
 
 //callbackForGetTableDesc extracts the tableDesc
-func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interface{},dis []*orderedcodec.DecodedItem)([]byte,error) {
+func (chi *ComputationHandlerImpl) callbackForGetTableDesc(callbackCtx interface{}, dis []*orderedcodec.DecodedItem) ([]byte, error) {
 	//get the name and the desc
 	descAttr := InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_desc_ID]
 	descDI := dis[InternalDescriptorTable_desc_ID]
 	if !(descDI.IsValueType(descAttr.Ttype)) {
-		return nil,errorTypeInValueNotEqualToTypeInAttribute
+		return nil, errorTypeInValueNotEqualToTypeInAttribute
 	}
 
 	//deserialize the desc
-	if bytesInValue,ok := descDI.Value.([]byte); ok {
+	if bytesInValue, ok := descDI.Value.([]byte); ok {
 		tableDesc, err := UnmarshalRelationDesc(bytesInValue)
 		if err != nil {
 			return nil, err
@@ -361,8 +342,8 @@ func (chi *ComputationHandlerImpl) callbackForGetTableDesc (callbackCtx interfac
 		if tableDesc.Is_deleted {
 			return nil, nil
 		}
-		if out,ok2 := callbackCtx.(*[]*descriptor.RelationDesc) ; ok2 {
-			*out = append(*out,tableDesc)
+		if out, ok2 := callbackCtx.(*[]*descriptor.RelationDesc); ok2 {
+			*out = append(*out, tableDesc)
 		}
 	}
 	return nil, nil
@@ -384,11 +365,11 @@ func (chi *ComputationHandlerImpl) ListTables(dbId uint64) ([]*descriptor.Relati
 	// tenantID,dbID,tableID,indexID + parentID(dbId here) + ID + Name + Bytes
 	var tableDescs []*descriptor.RelationDesc
 	_, err = chi.dh.GetValuesWithPrefix(dbId, &tableDescs, chi.callbackForGetTableDesc)
-	if err != nil  && err != errorDoNotFindTheDesc{
+	if err != nil && err != errorDoNotFindTheDesc {
 		return nil, err
 	}
 
-	return tableDescs,nil
+	return tableDescs, nil
 }
 
 func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descriptor.RelationDesc, error) {
@@ -404,16 +385,16 @@ func (chi *ComputationHandlerImpl) GetTable(dbId uint64, name string) (*descript
 	}
 
 	//2. Get the table
-	tableDesc, err := chi.dh.LoadRelationDescByName(dbId,name)
+	tableDesc, err := chi.dh.LoadRelationDescByName(dbId, name)
 	if err != nil {
 		return nil, err
 	}
 
 	//3. check the table is deleted
 	if tableDesc.Is_deleted {
-		return nil,errorTableDeletedAlready
+		return nil, errorTableDeletedAlready
 	}
-	return tableDesc,nil
+	return tableDesc, nil
 }
 
 func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error) {
@@ -431,13 +412,13 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 		return nds, &Shards{}, nil
 	}
 	tce := chi.tch.GetEncoder()
-	prefix, _ := tce.EncodeIndexPrefix(nil,dbId, uint64(desc.ID),uint64(PrimaryIndexID))
+	prefix, _ := tce.EncodeIndexPrefix(nil, dbId, uint64(desc.ID), uint64(PrimaryIndexID))
 	ret, err := chi.kv.GetShardsWithPrefix(prefix)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	shards,ok := ret.(*Shards)
+	shards, ok := ret.(*Shards)
 	if !ok {
 		return nil, nil, ErrorIsNotShards
 	}
@@ -448,9 +429,9 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 
 	var nodes engine.Nodes
 	for _, node := range shards.nodes {
-		nodes = append(nodes,engine.Node{
+		nodes = append(nodes, engine.Node{
 			Id:   node.IDbytes,
-			Addr:	node.Addr,
+			Addr: node.Addr,
 		})
 	}
 
@@ -481,7 +462,7 @@ type AttributeStateForWrite struct {
 
 type WriteContext struct {
 	//target database,table and index
-	DbDesc *descriptor.DatabaseDesc
+	DbDesc    *descriptor.DatabaseDesc
 	TableDesc *descriptor.RelationDesc
 	IndexDesc *descriptor.IndexDesc
 
@@ -496,12 +477,12 @@ type WriteContext struct {
 	NodeID uint64
 
 	//to set
-	keys []TupleKey
+	keys   []TupleKey
 	values []TupleValue
-	t0 time.Duration
+	t0     time.Duration
 }
 
-func (wc *WriteContext) resetWriteCache()  {
+func (wc *WriteContext) resetWriteCache() {
 	wc.keys = nil
 	wc.values = nil
 }
@@ -539,7 +520,7 @@ type SingleReaderContext struct {
 
 type ReadContext struct {
 	//target database,table and index
-	DbDesc *descriptor.DatabaseDesc
+	DbDesc    *descriptor.DatabaseDesc
 	TableDesc *descriptor.RelationDesc
 	IndexDesc *descriptor.IndexDesc
 
@@ -559,7 +540,7 @@ type ReadContext struct {
 	SingleReaderContext
 }
 
-func (rc *ReadContext) AddReadCount() int  {
+func (rc *ReadContext) AddReadCount() int {
 	rc.ReadCount++
 	return rc.ReadCount
 }
