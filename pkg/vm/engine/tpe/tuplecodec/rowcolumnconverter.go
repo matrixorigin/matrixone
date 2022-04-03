@@ -35,6 +35,7 @@ var (
 	errorInvalidAttributePosition                          = errors.New("attribute position is invalid")
 	errorUnsupportedType                                   = errors.New("unsupported type")
 	errorDuplicateAttributeInKeyAttributeAndValueAttribute = errors.New("duplicate attribute in thye key attribute and the value attribute")
+	errorUnsupported                                       = errors.New("unsupported")
 )
 
 var _ RowColumnConverter = &RowColumnConverterImpl{}
@@ -167,7 +168,7 @@ func (tbi *TupleBatchImpl) GetValue(colIdx uint32) (interface{}, error) {
 }
 
 func (tbi *TupleBatchImpl) GetInt(colIdx uint32) (int, error) {
-	panic("implement me")
+	return 0, errorUnsupported
 }
 
 type RowColumnConverterImpl struct{}
@@ -575,11 +576,11 @@ func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKey(
 }
 
 func (tbi *RowColumnConverterImpl) GetTupleFromBatch(bat *batch.Batch, rowID int) (Tuple, error) {
-	panic("implement me")
+	return nil, errorUnsupported
 }
 
 func (tbi *RowColumnConverterImpl) GetTuplesFromBatch(bat *batch.Batch) (Tuples, error) {
-	panic("implement me")
+	return nil, errorUnsupported
 }
 
 // BatchAdapter for convenient access to the batch

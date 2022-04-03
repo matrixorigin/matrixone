@@ -49,23 +49,16 @@ type IndexHandlerImpl struct {
 	layoutSerializer ValueLayoutSerializer
 }
 
-func NewIndexHandlerImpl(tch *TupleCodecHandler,
-	db *descriptor.DatabaseDesc,
-	kv KVHandler,
-	kvLimit uint64,
-	serial ValueSerializer,
-	rcc RowColumnConverter) *IndexHandlerImpl {
+func NewIndexHandlerImpl(tch *TupleCodecHandler, db *descriptor.DatabaseDesc, kv KVHandler, kvLimit uint64, serial ValueSerializer, vls ValueLayoutSerializer, rcc RowColumnConverter) *IndexHandlerImpl {
 	return &IndexHandlerImpl{
-		tch:        tch,
-		dbDesc:     db,
-		kv:         kv,
-		kvLimit:    kvLimit,
-		serializer: serial,
-		rcc:        rcc,
-		useLayout:  true,
-		layoutSerializer: &DefaultValueLayoutSerializer{
-			serializer: serial,
-		},
+		tch:              tch,
+		dbDesc:           db,
+		kv:               kv,
+		kvLimit:          kvLimit,
+		serializer:       serial,
+		rcc:              rcc,
+		useLayout:        true,
+		layoutSerializer: vls,
 	}
 }
 

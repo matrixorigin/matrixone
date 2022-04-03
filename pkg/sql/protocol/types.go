@@ -71,6 +71,8 @@ const (
 	VarianceRing
 	// BitAnd
 	BitAndNumericRing
+	// StdDevPop
+	StdDevPopRing
 )
 
 // colexec

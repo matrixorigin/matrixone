@@ -18,17 +18,17 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
-
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/min"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/starcount"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/sum"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -70,6 +70,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_float64
 	case BitAnd:
 		return types.T_uint64
+	case StdDevPop:
+		return types.T_float64
 	}
 	return 0
 }
@@ -94,6 +96,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return variance.NewVarianceRing(typ), nil
 	case BitAnd:
 		return NewBitAnd(typ)
+	case StdDevPop:
+		return stddevpop.NewStdDevPopRing(typ), nil
 	}
 	return nil, nil
 }

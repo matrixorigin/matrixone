@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/axiomhq/hyperloglog"
@@ -878,6 +879,12 @@ func TestRing(t *testing.T) {
 			BitAndResult: []uint64{6112323, 34542345346, 234, 23412312},
 			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&stddevpop.StdDevPopRing{
+			NullCounts: []int64{1, 2, 3},
+			SumX:       []float64{4, 9, 13},
+			SumX2:      []float64{16, 81, 169},
+			Typ:        types.Type{Oid: types.T(types.T_float64), Size: 8},
+		},
 	}
 	for _, r := range ringArray {
 		var buf bytes.Buffer
@@ -1530,6 +1537,27 @@ func TestRing(t *testing.T) {
 			for i, v := range oriRing.SumX2 {
 				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
 					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
+					return
+				}
+			}
+		case *stddevpop.StdDevPopRing:
+			oriRing := r.(*stddevpop.StdDevPopRing)
+			// Sumx
+			if string(ExpectRing.Data) != string(encoding.EncodeFloat64Slice(oriRing.SumX)) {
+				t.Errorf("Decode stdDevPopRing Sums failed.")
+				return
+			}
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode stdDevPopRing NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
+					return
+				}
+			}
+			// Sumx2
+			for i, v := range oriRing.SumX2 {
+				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
+					t.Errorf("Decode stdDevPopRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
 					return
 				}
 			}
