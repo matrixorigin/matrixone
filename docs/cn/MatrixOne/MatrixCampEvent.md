@@ -123,6 +123,22 @@ A: 目前MatrixOne还不支持无表及常数参数的SQL语句，因此`select 
 ```sql
 select abs(a) from t; 
 ```
+
+**Q: 为什么每次PR完成之后，我的仓库总是会比MatrixOne领先？**
+A: MatrixOne对所有pr的合并都要求是squash and merge，因此pr合并后跟主干会不一致。这里推荐采用的git流程，可以保持本地git，远端git仓库与MatrixOne仓库保持一致的方法：
+```
+1. 首先Fork MatrixOne的仓库。
+2. clone自己的仓库到本地: git clone https://github.com/YOUR_NAME/matrixone.git
+3. 将MatrixOne主仓库添加为remote仓库: git remote add upstream https://github.com/matrixorigin/matrixone.git
+4. 在本地修改代码，合并冲突，etc.
+5. push到一个新的分支: git push origin main:NEW_BRANCH
+6. 到自己仓库的NEW_BRANCH分支提PR，等待合并
+7. PR合并之后，覆盖本地提交历史: git pull --force upstream main:main
+8. 再次提交到自己的远端仓库：git push --force origin main:main
+```
+
+
+
 **Q: 我提交的PR在自动测试阶段失败了，这个是什么原因？**
 A：MatrixOne会在PR提交之后自动进行一系列CI及BVT测试，开发者在提交之后可以看到测试的进展及日志，如果是与函数功能相关的测试没有通过，请修改code后重新提交。如果是其他与函数无关的测试问题，可以在PR中进行评论，社区将会查询问题所在，不会影响本次函数任务的判定结果。目前MatrixOne的CI测试有一定的不稳定程度，因此可能有一些与函数无关的CI测试会fail。
 
@@ -151,6 +167,12 @@ owners.
 
 Type 'help;' or '\h' for help. Type '\c' to clear the current input statement. 
 ```
+
+Q: 我的MatrixOne服务启动了，但是我的MySQL客户端始终连接不上，这个应该怎么解决？
+A: 这个可能由各种原因导致，首先请关注错误的日志信息来定位问题，目前在MatrixOne中有两种常见错误：
+1. 端口冲突：有的时候因为端口被其他程序占用会有冲突，比如50000端口经常被占用。可以通过一下`lsof -i:50000`命令来查找是哪个进程在占用这个端口。从这个命令中可以获得这个进程的PID，再通过`kill -9 PIDNAME`关闭这个进程。
+2. 存储不兼容：有的时候如果你从新的代码库拉取了最新的代码，但是存储数据是之前版本导入的数据，你可能也会面临连接失败问题。你可以尝试先将MatrixOne目录下的`Store`目录清空并重启MatrixOne服务。
+
 
 **Q: Mentor要求我对提交的代码格式进行缩进，这个如何做？**
 A：可以通过Golang语言自带的gofmt工具在命令行中进行操作，或者在一些常见的IDE如VS Code和GoLand中也均有相应的设置。

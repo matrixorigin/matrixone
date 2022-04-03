@@ -254,6 +254,7 @@ func main() {
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
 		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY
@@ -269,6 +270,8 @@ func main() {
 			tpeConf.SerialType = tuplecodec.ST_CONCISE
 		} else if configSerializeTyp == "json" {
 			tpeConf.SerialType = tuplecodec.ST_JSON
+		} else if configSerializeTyp == "flat" {
+			tpeConf.SerialType = tuplecodec.ST_FLAT
 		} else {
 			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
 			os.Exit(CreateTpeExit)

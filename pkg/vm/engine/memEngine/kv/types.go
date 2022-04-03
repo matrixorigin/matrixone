@@ -3,7 +3,7 @@ package kv
 import "errors"
 
 var (
-	NotExist = errors.New("not exist")
+	ErrNotExist = errors.New("not exist")
 )
 
 type KV struct {
