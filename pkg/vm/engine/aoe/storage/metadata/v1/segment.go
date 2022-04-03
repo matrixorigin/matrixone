@@ -136,9 +136,7 @@ func (e *Segment) fillView(filter *Filter) *Segment {
 	}
 	e.RLock()
 	blks := make([]*Block, 0, len(e.BlockSet))
-	for _, blk := range e.BlockSet {
-		blks = append(blks, blk)
-	}
+	blks = append(blks, e.BlockSet...)
 	e.RUnlock()
 	for _, blk := range blks {
 		blkView := blk.fillView(filter)
@@ -163,7 +161,7 @@ func (e *Segment) toLogEntry(info *CommitInfo) *segmentLogEntry {
 	}
 	return &segmentLogEntry{
 		BaseEntry: &BaseEntry{
-			Id: e.Id,
+			Id:         e.Id,
 			CommitInfo: info.Clone()},
 		TableId:    e.Table.Id,
 		DatabaseId: e.Table.Database.Id,
@@ -216,7 +214,6 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 		if !e.IsSoftDeletedLocked() {
 			panic("logic error")
 		}
-		break
 	default:
 		panic("not supported")
 	}

@@ -145,7 +145,7 @@ func (d *DB) DropTable(ctx *DropTableCtx) (*metadata.Table, error) {
 
 	meta := database.SimpleGetTableByName(ctx.Table)
 	if meta == nil {
-		err = metadata.TableNotFoundErr
+		err = metadata.ErrTableNotFound
 		return nil, err
 	}
 
@@ -183,7 +183,7 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 	}
 	meta := database.SimpleGetTableByName(ctx.Table)
 	if meta == nil {
-		err = metadata.TableNotFoundErr
+		err = metadata.ErrTableNotFound
 		return err
 	}
 
@@ -255,7 +255,7 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	}
 	meta := database.SimpleGetTableByName(ctx.Table)
 	if meta == nil {
-		err = metadata.TableNotFoundErr
+		err = metadata.ErrTableNotFound
 		return err
 	}
 
@@ -321,16 +321,16 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 			return
 		}
 		index, err = d.TableIdempotenceCheckAndIndexRewrite(meta, index)
-		if err == metadata.IdempotenceErr {
+		if err == metadata.ErrIdempotence {
 			return
 		}
 		if meta.IsDeleted() {
-			return metadata.TableNotFoundErr
+			return metadata.ErrTableNotFound
 		}
 	} else {
 		meta = database.SimpleGetTableByName(ctx.Table)
 		if meta == nil {
-			return metadata.TableNotFoundErr
+			return metadata.ErrTableNotFound
 		}
 	}
 	if err = d.Wal.SyncLog(index); err != nil {

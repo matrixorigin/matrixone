@@ -37,7 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+	aoedb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -657,7 +657,7 @@ func (s *Storage) RemoveShard(shard metapb.Shard, removeData bool) error {
 	t0 := time.Now()
 	dbName := aoedb.IdToNameFactory.Encode(shard.ID)
 	db, err := s.DB.Store.Catalog.GetDatabaseByName(dbName)
-	if err == metadata.DatabaseNotFoundErr {
+	if err == metadata.ErrDatabaseNotFound {
 		return nil
 	}
 	if err != nil {
@@ -687,7 +687,7 @@ func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size
 	if db != nil {
 		return db, true, err
 	}
-	if err != nil && err != aoeMeta.DatabaseNotFoundErr {
+	if err != nil && err != aoeMeta.ErrDatabaseNotFound {
 		return nil, false, err
 	}
 	if logIndex == math.MaxUint64 {
@@ -712,7 +712,7 @@ func (s *Storage) createAOEMetaTableIfNotExist(sid, logIndex uint64, offset, siz
 	if tbl != nil {
 		return tbl, true, err
 	}
-	if err != nil && err != aoeMeta.TableNotFoundErr {
+	if err != nil && err != aoeMeta.ErrTableNotFound {
 		return nil, false, err
 	}
 	metaTblInfo := createMetadataTableInfo(sid)

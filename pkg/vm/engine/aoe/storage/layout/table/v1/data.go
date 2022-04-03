@@ -370,7 +370,7 @@ func (td *tableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	}
 	meta := td.meta.SimpleGetSegment(id)
 	if meta == nil {
-		return nil, metadata.SegmentNotFoundErr
+		return nil, metadata.ErrSegmentNotFound
 	}
 	upgradeSeg, err := old.CloneWithUpgrade(td, meta)
 	if err != nil {
@@ -520,7 +520,7 @@ func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) 
 	ts.Lock()
 	defer ts.Unlock()
 	if meta.IsCloseLocked() {
-		return nil, metadata.TableNotFoundErr
+		return nil, metadata.ErrTableNotFound
 	}
 	if err := ts.CreateTableNoLock(tbl); err != nil {
 		tbl.Unref()
@@ -563,7 +563,7 @@ func (ts *Tables) ForTablesLocked(fn func(iface.ITableData) error) error {
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
-		return metadata.DuplicateErr
+		return metadata.ErrDuplicate
 	}
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl

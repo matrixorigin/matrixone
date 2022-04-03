@@ -123,7 +123,7 @@ func (d *DB) TableIdempotenceCheckAndIndexRewrite(meta *metadata.Table, index *L
 	idempotentIdx, ok := meta.ConsumeIdempotentIndex(index)
 	if !ok || (idempotentIdx != nil && idempotentIdx.IsApplied()) {
 		logutil.Infof("Table %s | %s | %s | Stale Index", meta.Repr(false), index.String(), idempotentIdx.String())
-		return index, metadata.IdempotenceErr
+		return index, metadata.ErrIdempotence
 	}
 	if idempotentIdx == nil {
 		return index, nil
@@ -148,7 +148,7 @@ func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, err
 		tableData, err := d.Store.DataTables.RegisterTable(meta)
 		if err == nil {
 			handle = tableData.MakeMutationHandle()
-		} else if err == metadata.DuplicateErr {
+		} else if err == metadata.ErrDuplicate {
 			handle, err = d.Store.DataTables.MakeTableMutationHandle(meta.Id)
 		}
 		if err != nil {

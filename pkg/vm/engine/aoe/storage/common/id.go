@@ -138,10 +138,7 @@ func (id *ID) NextSegment() ID {
 }
 
 func (id *ID) IsTransient() bool {
-	if id.TableID >= TRANSIENT_TABLE_START_ID {
-		return true
-	}
-	return false
+	return id.TableID >= TRANSIENT_TABLE_START_ID
 }
 
 func (id *ID) ToPartFileName() string {

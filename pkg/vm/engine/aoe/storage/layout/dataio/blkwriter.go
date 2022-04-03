@@ -154,12 +154,12 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *metadata.Block) (*os.Fil
 }
 
 func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *metadata.Block) error {
-	err := mergesort.SortBlockColumns(data,meta.Segment.Table.Schema.PrimaryKey)
+	err := mergesort.SortBlockColumns(data, meta.Segment.Table.Schema.PrimaryKey)
 	return err
 }
 
 func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
-	var indices []index.Index
+	indices := make([]index.Index, len(meta.Segment.Table.Schema.ColDefs))
 	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
 		typ := colDef.Type
 		isPrimary := idx == meta.Segment.Table.Schema.PrimaryKey
@@ -167,7 +167,7 @@ func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *me
 		if err != nil {
 			return err
 		}
-		indices = append(indices, zmi)
+		indices[idx] = zmi
 	}
 	buf, err := index.DefaultRWHelper.WriteIndices(indices)
 	if err != nil {
@@ -226,7 +226,7 @@ func (bw *BlockWriter) executeIVecs() error {
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
 	stat, _ := os.Stat(filename)
-	logutil.Infof("filename is %v",filename)
+	logutil.Infof("filename is %v", filename)
 	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }
@@ -348,7 +348,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		}
 	}
 	// flush indices
-	var indices []index.Index
+	indices:=make([]index.Index,len(meta.Segment.Table.Schema.ColDefs))
 	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
 		typ := colDef.Type
 		isPrimary := idx == meta.Segment.Table.Schema.PrimaryKey
@@ -356,7 +356,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		if err != nil {
 			return err
 		}
-		indices = append(indices, zmi)
+		indices[idx] = zmi
 	}
 	ibuf, err := index.DefaultRWHelper.WriteIndices(indices)
 	if err != nil {
@@ -366,49 +366,50 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 	return err
 }
 
-func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
-	var (
-		err error
-		buf bytes.Buffer
-	)
-	algo := uint8(compress.None)
-	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
-		return err
-	}
-	colCnt := len(meta.Segment.Table.Schema.ColDefs)
-	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
-		return err
-	}
-	var colBufs [][]byte
-	for idx := 0; idx < colCnt; idx++ {
-		colBuf, err := data[idx].Show()
-		if err != nil {
-			return err
-		}
-		colSize := len(colBuf)
-		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
-		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
-			return err
-		}
-		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
-			return err
-		}
-		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
-			return err
-		}
-		colBufs = append(colBufs, colBuf)
-		// log.Infof("idx=%d, size=%d, osize=%d", idx, len(cbuf), colSize)
-	}
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return err
-	}
-	for idx := 0; idx < colCnt; idx++ {
-		if _, err := w.Write(colBufs[idx]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// Unused
+// func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
+// 	var (
+// 		err error
+// 		buf bytes.Buffer
+// 	)
+// 	algo := uint8(compress.None)
+// 	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+// 		return err
+// 	}
+// 	colCnt := len(meta.Segment.Table.Schema.ColDefs)
+// 	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
+// 		return err
+// 	}
+// 	var colBufs [][]byte
+// 	for idx := 0; idx < colCnt; idx++ {
+// 		colBuf, err := data[idx].Show()
+// 		if err != nil {
+// 			return err
+// 		}
+// 		colSize := len(colBuf)
+// 		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+// 		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+// 			return err
+// 		}
+// 		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+// 			return err
+// 		}
+// 		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+// 			return err
+// 		}
+// 		colBufs = append(colBufs, colBuf)
+// 		// log.Infof("idx=%d, size=%d, osize=%d", idx, len(cbuf), colSize)
+// 	}
+// 	if _, err := w.Write(buf.Bytes()); err != nil {
+// 		return err
+// 	}
+// 	for idx := 0; idx < colCnt; idx++ {
+// 		if _, err := w.Write(colBufs[idx]); err != nil {
+// 			return err
+// 		}
+// 	}
+// 	return nil
+// }
 
 func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.Block) error {
 	var (

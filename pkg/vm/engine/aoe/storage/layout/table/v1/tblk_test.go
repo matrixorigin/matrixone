@@ -38,14 +38,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testProcessor struct {
-	t  *testing.T
-	fn func(batch.IBatch)
-}
+// Unused
+// type testProcessor struct {
+// 	// t  *testing.T // Unused
+// 	fn func(batch.IBatch)
+// }
 
-func (p *testProcessor) execute(bat batch.IBatch) {
-	p.fn(bat)
-}
+// Unused
+// func (p *testProcessor) execute(bat batch.IBatch) {
+// 	p.fn(bat)
+// }
 
 func TestTBlock(t *testing.T) {
 	dir := testutils.InitTestEnv(moduleName, t)

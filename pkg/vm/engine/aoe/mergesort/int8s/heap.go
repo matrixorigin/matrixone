@@ -47,30 +47,32 @@ func heapPop(h *heapSlice) heapElem {
 	return res
 }
 
+// Unused
 // Remove removes and returns the element at index i from the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapRemove(h *heapSlice, i int) heapElem {
-	n := len(*h) - 1
-	if n != i {
-		h.Swap(i, n)
-		if !down(*h, i, n) {
-			up(*h, i)
-		}
-	}
-	res := (*h)[n]
-	*h = (*h)[:n]
-	return res
-}
+// func heapRemove(h *heapSlice, i int) heapElem {
+// 	n := len(*h) - 1
+// 	if n != i {
+// 		h.Swap(i, n)
+// 		if !down(*h, i, n) {
+// 			up(*h, i)
+// 		}
+// 	}
+// 	res := (*h)[n]
+// 	*h = (*h)[:n]
+// 	return res
+// }
 
+// Unused
 // Fix re-establishes the heap ordering after the element at index i has changed its value.
 // Changing the value of the element at index i and then calling Fix is equivalent to,
 // but less expensive than, calling Remove(h, i) followed by a Push of the new value.
 // The complexity is Operator(log n) where n = len(h).
-func heapFix(h heapSlice, i int) {
-	if !down(h, i, len(h)) {
-		up(h, i)
-	}
-}
+// func heapFix(h heapSlice, i int) {
+// 	if !down(h, i, len(h)) {
+// 		up(h, i)
+// 	}
+// }
 
 func up(h heapSlice, j int) {
 	for {

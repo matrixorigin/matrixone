@@ -36,7 +36,7 @@ type mockDDLOp uint8
 
 const (
 	mockCreateOp mockDDLOp = iota
-	mockDropOp
+	// mockDropOp // Unused
 )
 
 type mockDDLEntry struct {

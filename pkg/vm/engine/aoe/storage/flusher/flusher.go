@@ -124,7 +124,10 @@ func (f *driver) onMessages(items ...interface{}) {
 }
 
 func (f *driver) OnStats(stats interface{}) {
-	f.EnqueueRecevied(stats)
+	err, _ := f.EnqueueRecevied(stats)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (f *driver) ShardCnt() int {
@@ -140,7 +143,10 @@ func (f *driver) ShardCreated(id uint64) {
 
 func (f *driver) ShardDeleted(id uint64) {
 	ctx := &shardDeletedCtx{id: id}
-	f.EnqueueRecevied(ctx)
+	err, _ := f.EnqueueRecevied(ctx)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (f *driver) ShardNodeCreated(shardId, nodeId uint64) {
@@ -221,6 +227,9 @@ func (f *driver) onPengdingItems(items []*shard.ItemsToCheckpointStat) {
 		toFlush.Add(stat.ShardId)
 	}
 	if toFlush.GetCardinality() > 0 {
-		f.EnqueueCheckpoint(toFlush)
+		err, _ := f.EnqueueCheckpoint(toFlush)
+		if err != nil {
+			logutil.Warnf("%v", err)
+		}
 	}
 }

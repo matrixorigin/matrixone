@@ -177,7 +177,7 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 	case ETTransaction:
 		err = cache.onReplayTxn(entry.txnStore)
 	default:
-		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
+		panic(fmt.Sprintf("unknown entry type: %d", entry.typ))
 	}
 	return err
 }
@@ -506,7 +506,7 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case logstore.ETFlush:
 	default:
-		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))
+		panic(fmt.Sprintf("unknown entry type: %d", entry.GetMeta().GetType()))
 	}
 	return nil
 }

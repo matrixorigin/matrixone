@@ -381,7 +381,6 @@ func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 		if !e.IsSoftDeletedLocked() {
 			panic("logic error")
 		}
-		break
 	default:
 		panic("not supported")
 	}

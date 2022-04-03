@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	RangeNotContinousErr = errors.New("aoe: range not continous")
+	RangeNotContinousErr = errors.New("aoe: range not continuous")
 	RangeInvalidErr      = errors.New("aoe: invalid range")
 )
 
