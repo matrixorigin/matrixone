@@ -24,83 +24,92 @@ import (
 )
 
 func TestTpeRelation_Write(t *testing.T) {
-	convey.Convey("table write without primary key",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
-		err := tpe.Create(0, "test", 0)
-		convey.So(err,convey.ShouldBeNil)
+	convey.Convey("table write without primary key", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		err = tpe.Create(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		dbDesc, err := tpe.Database("test")
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
 		//(uint64,uint64,uint64)
-		_,attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_uint64)
-
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_uint64)
 
 		attrNames := []string{
-			"a","b","c",
+			"a", "b", "c",
 		}
 		var defs []engine.TableDef
 		var rawDefs []*engine.AttributeDef
 		for i, def := range attrDefs {
 			def.Attr.Name = attrNames[i]
-			defs = append(defs,def)
-			rawDefs = append(rawDefs,def)
+			defs = append(defs, def)
+			rawDefs = append(rawDefs, def)
 		}
 
-		err = dbDesc.Create(0,"A",defs)
-		convey.So(err,convey.ShouldBeNil)
+		err = dbDesc.Create(0, "A", defs)
+		convey.So(err, convey.ShouldBeNil)
 
 		tableDesc, err := dbDesc.Relation("A")
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//make data
-		bat := tuplecodec.MakeBatch(10,attrNames, rawDefs)
+		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
 		err = tableDesc.Write(0, bat)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 
-	convey.Convey("table write with primary key",t, func() {
-		tpe, _ := NewTpeEngine(&TpeConfig{KVLimit: 10000})
-		err := tpe.Create(0, "test", 0)
-		convey.So(err,convey.ShouldBeNil)
+	convey.Convey("table write with primary key", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		err = tpe.Create(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		dbDesc, err := tpe.Database("test")
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//(a,b,c)
 		//(uint64,uint64,uint64)
 		//primary key (a,b)
-		_,attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_uint64)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_uint64)
 
 		attrNames := []string{
-			"a","b","c",
+			"a", "b", "c",
 		}
 		var defs []engine.TableDef
 		var rawDefs []*engine.AttributeDef
 		for i, def := range attrDefs {
 			def.Attr.Name = attrNames[i]
-			defs = append(defs,def)
-			rawDefs = append(rawDefs,def)
+			defs = append(defs, def)
+			rawDefs = append(rawDefs, def)
 		}
 
-		pkDef := &engine.PrimaryIndexDef{Names: []string{"a","b"}}
+		pkDef := &engine.PrimaryIndexDef{Names: []string{"a", "b"}}
 		defs[0].(*engine.AttributeDef).Attr.Primary = true
 		defs[1].(*engine.AttributeDef).Attr.Primary = true
 
-		defs = append(defs,pkDef)
+		defs = append(defs, pkDef)
 
-		err = dbDesc.Create(0,"A",defs)
-		convey.So(err,convey.ShouldBeNil)
+		err = dbDesc.Create(0, "A", defs)
+		convey.So(err, convey.ShouldBeNil)
 
 		tableDesc, err := dbDesc.Relation("A")
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-		convey.So(tableDesc.ID(),convey.ShouldEqual,"A")
+		convey.So(tableDesc.ID(), convey.ShouldEqual, "A")
 
-		convey.So(tableDesc.Nodes()[0].Addr,convey.ShouldEqual,"localhost:20000")
-		convey.So(tableDesc.Nodes()[0].Id,convey.ShouldEqual,"0")
+		convey.So(tableDesc.Nodes()[0].Addr, convey.ShouldEqual, "localhost:20000")
+		convey.So(tableDesc.Nodes()[0].Id, convey.ShouldEqual, "0")
 
 		readers := tableDesc.NewReader(10)
 		dumpReaderCnt := 0
@@ -110,26 +119,26 @@ func TestTpeRelation_Write(t *testing.T) {
 				dumpReaderCnt++
 			}
 		}
-		convey.So(dumpReaderCnt,convey.ShouldEqual,9)
+		convey.So(dumpReaderCnt, convey.ShouldEqual, 9)
 
 		getDefs := tableDesc.TableDefs()
 		for _, get := range getDefs {
-			if x,ok := get.(*engine.AttributeDef);  ok {
+			if x, ok := get.(*engine.AttributeDef); ok {
 				found := false
 				for _, attrDef := range attrDefs {
 					if x.Attr.Name == attrDef.Attr.Name {
 						found = true
-						convey.So(reflect.DeepEqual(*x,*attrDef),convey.ShouldBeTrue)
+						convey.So(reflect.DeepEqual(*x, *attrDef), convey.ShouldBeTrue)
 					}
 				}
-				convey.So(found,convey.ShouldBeTrue)
-			}else if y,ok := get.(*engine.PrimaryIndexDef); ok {
-				convey.So(y.Names,convey.ShouldResemble,pkDef.Names)
+				convey.So(found, convey.ShouldBeTrue)
+			} else if y, ok := get.(*engine.PrimaryIndexDef); ok {
+				convey.So(y.Names, convey.ShouldResemble, pkDef.Names)
 			}
 		}
 
 		//make data
-		bat := tuplecodec.MakeBatch(10,attrNames, rawDefs)
+		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
 		vec0 := bat.Vecs[0].Col.([]uint64)
 		vec1 := bat.Vecs[1].Col.([]uint64)
@@ -139,6 +148,6 @@ func TestTpeRelation_Write(t *testing.T) {
 			vec1[i] = uint64(i)
 		}
 		err = tableDesc.Write(0, bat)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }

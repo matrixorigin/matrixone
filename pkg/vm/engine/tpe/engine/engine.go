@@ -26,6 +26,7 @@ var (
 	errorTheInternalDescriptorTableHasExisted = errors.New("the internal descriptor table has existed")
 	errorTheInternalAsyncGCTableHasExisted    = errors.New("the internal asyncgc table has existed")
 	errorInvalidSerializerType                = errors.New("invalid serializer type")
+	errorInvalidValueLayoutSerializerType     = errors.New("invalid value layout serializer type")
 )
 
 func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
@@ -50,13 +51,29 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 		serial = &tuplecodec.DefaultValueSerializer{}
 	} else if tc.SerialType == tuplecodec.ST_CONCISE {
 		serial = &tuplecodec.ConciseSerializer{}
+	} else if tc.SerialType == tuplecodec.ST_FLAT {
+		serial = &tuplecodec.FlatSerializer{}
 	} else {
 		return nil, errorInvalidSerializerType
 	}
 
+	var valueLayout tuplecodec.ValueLayoutSerializer
+
+	if tc.ValueLayoutSerializerType == "default" {
+		valueLayout = &tuplecodec.DefaultValueLayoutSerializer{
+			Serializer: serial,
+		}
+	} else if tc.ValueLayoutSerializerType == "compact" {
+		valueLayout = &tuplecodec.CompactValueLayoutSerializer{
+			Serializer: serial,
+		}
+	} else {
+		return nil, errorInvalidValueLayoutSerializerType
+	}
+
 	dh := tuplecodec.NewDescriptorHandlerImpl(tch, kv, serial, uint64(kvLimit))
 	rcc := &tuplecodec.RowColumnConverterImpl{}
-	ihi := tuplecodec.NewIndexHandlerImpl(tch, nil, kv, uint64(kvLimit), serial, rcc)
+	ihi := tuplecodec.NewIndexHandlerImpl(tch, nil, kv, uint64(kvLimit), serial, valueLayout, rcc)
 	ihi.PBKV = tc.PBKV
 	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
 	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch, tc.ParallelReader)
