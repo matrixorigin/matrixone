@@ -24,6 +24,7 @@ const (
 	ApproxCountDistinct
 	Variance
 	BitAnd
+	BitXor
 )
 
 var TransformerNames = [...]string{
@@ -37,6 +38,7 @@ var TransformerNames = [...]string{
 	Variance:            "var",
 	// Variance:			 "var", // just sample implement of aggregate function for contributor.
 	BitAnd: "bit_and",
+	BitXor: "bit_xor",
 }
 
 var TransformerNamesMap map[string]int
