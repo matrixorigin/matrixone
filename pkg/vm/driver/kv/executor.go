@@ -233,6 +233,17 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 
 	rep = protoc.MustMarshal(&tsr)
 
+	//for test
+	//print keys
+	//cnt := 0
+	//for _, key := range keys {
+	//	if bytes.Compare(key, userReq.GetEnd()) >= 0 {
+	//		cnt++
+	//	}
+	//}
+	//
+	//logutil.Infof("tpescan exceed cnt %d lastKey %v endKey %v", cnt, lastKey, userReq.GetEnd())
+
 	return rep, nil
 }
 
