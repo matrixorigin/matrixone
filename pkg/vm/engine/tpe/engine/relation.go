@@ -198,6 +198,9 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 		shardCountPerReader++
 	}
 
+	//for test
+	shardCountPerReader = shardInfosCount
+
 	startIndex := 0
 	for i := 0; i < len(tpeReaders); i++ {
 		endIndex := tuplecodec.Min(startIndex+shardCountPerReader, shardInfosCount)

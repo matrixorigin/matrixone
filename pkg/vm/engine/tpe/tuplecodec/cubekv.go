@@ -977,6 +977,8 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 	var shardInfos []ShardInfo
 	var stores = make(map[uint64]string)
 
+	logutil.Infof("origin startKey %v endKey %v", startKey, endKey)
+
 	callback := func(shard metapb.Shard, store metapb.Store) bool {
 		logutil.Infof("originshardinfo %v %v", shard.GetStart(), shard.GetEnd())
 		//the shard overlaps the [startKey,endKey)
@@ -1009,9 +1011,9 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 		return true
 	}
 
-	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, callback)
+	//ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, callback)
 	//TODO: wait cube to fix
-	//ck.Cube.RaftStore().GetRouter().AscendRange(uint64(pb.KVGroup), startKey, endKey, rpcpb.SelectLeader, callback)
+	ck.Cube.RaftStore().GetRouter().AscendRange(uint64(pb.KVGroup), startKey, endKey, rpcpb.SelectLeader, callback)
 
 	var nodes []ShardNode
 	for id, addr := range stores {

@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -77,6 +78,10 @@ type ShardNode struct {
 	IDbytes string
 }
 
+func (sn ShardNode) String() string {
+	return fmt.Sprintf("ShardNode{ Addr %v ID %v IDbytes %v}", sn.Addr, sn.IDbytes, sn.IDbytes)
+}
+
 type ShardInfo struct {
 	//the startKey and endKey of the Shard
 	startKey []byte
@@ -86,6 +91,15 @@ type ShardInfo struct {
 	//scan shard completely?
 	completeInShard bool
 	node            ShardNode
+}
+
+func (si ShardInfo) String() string {
+	return fmt.Sprintf("startKey %v endKey %v nextScanKey %v completeInShard %v node %v",
+		si.startKey,
+		si.endKey,
+		si.nextScanKey,
+		si.completeInShard,
+		si.node)
 }
 
 type TpeReader struct {

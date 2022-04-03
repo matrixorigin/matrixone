@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -73,32 +74,61 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	amForKey := &AttributeMap{}
 	amForValue := &AttributeMap{}
 	needKeyOnly := true
+	var positionsInValue map[uint32]int
+	if ihi.useLayout {
+		positionsInValue = ihi.layoutSerializer.GetPositionsOfAttributesInTheValue(indexReadCtx.TableDesc, indexReadCtx.IndexDesc)
+	}
+	var exist2 bool
 	for i, attr := range indexReadCtx.ReadAttributeDescs {
-		if _, exist := indexAttrIDs[attr.ID]; exist {
+		if positionInIndex, exist := indexAttrIDs[attr.ID]; exist {
 			//id in the key
-			amForKey.Append(int(attr.ID), i, -1)
+			amForKey.Append(int(attr.ID), positionInIndex, i)
 		} else {
 			//id is not in the index key
 			//then find it in the value
 			needKeyOnly = false
-			amForValue.Append(int(attr.ID), i, -1)
+			positionInValue := i
+			if ihi.useLayout {
+				if positionInValue, exist2 = positionsInValue[attr.ID]; !exist2 {
+					return nil, 0, errorInvalidAttributePosition
+				}
+			}
+
+			amForValue.Append(int(attr.ID), positionInValue, i)
 		}
 	}
+	amForKey.BuildPositionInDecodedItemArray()
+	amForValue.BuildPositionInDecodedItemArray()
 
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()
 	tkd := ihi.tch.GetDecoder()
 
 	//need table prefix also in parallel read
-	if indexReadCtx.PrefixForScanKey == nil {
+	if len(indexReadCtx.PrefixForScanKey) == 0 {
 		indexReadCtx.PrefixForScanKey, _ = tke.EncodeIndexPrefix(nil, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
 		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
 	}
 
-	if indexReadCtx.ShardNextScanKey == nil {
-		indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+	if len(indexReadCtx.ShardNextScanKey) == 0 {
+		if len(indexReadCtx.ShardStartKey) == 0 ||
+			TupleKey(indexReadCtx.ShardStartKey).Less(indexReadCtx.PrefixForScanKey) {
+			indexReadCtx.ShardNextScanKey = indexReadCtx.PrefixForScanKey
+		} else {
+			indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+		}
+	}
+
+	if len(indexReadCtx.ShardScanEndKey) == 0 {
+		prefix := SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+		if len(indexReadCtx.ShardEndKey) == 0 ||
+			prefix.Less(indexReadCtx.ShardScanEndKey) {
+			indexReadCtx.ShardScanEndKey = prefix
+		} else {
+			indexReadCtx.ShardScanEndKey = indexReadCtx.ShardEndKey
+		}
 	}
 
 	//nextScanKey does not have the prefix of the table
@@ -118,17 +148,29 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	//get keys with the prefix
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithPrefixLimit(indexReadCtx.ShardNextScanKey,
-			indexReadCtx.ShardEndKey, indexReadCtx.PrefixForScanKey, uint64(needRead))
+		logutil.Infof("readCtx before prefix %v %v",
+			indexReadCtx.PrefixForScanKey,
+			indexReadCtx.ParallelReaderContext)
+		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithPrefixLimit(
+			indexReadCtx.ShardNextScanKey,
+			indexReadCtx.ShardScanEndKey,
+			indexReadCtx.PrefixForScanKey,
+			uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
 
-		rowRead += len(keys)
+		//rowRead += len(keys)
+		//indexReadCtx.addReadCount(len(keys))
 
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
+			if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+				break
+			}
+			rowRead++
+			indexReadCtx.addReadCount(1)
 			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
 			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
 			if err != nil {
@@ -148,30 +190,58 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			//need to update prefix
 			//decode index value
 			for i := 0; i < len(keys); i++ {
+				if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+					break
+				}
 				//decode the name which is in the value
 				data := values[i]
-				_, dis, err := tkd.DecodePrimaryIndexValue(data,
-					indexReadCtx.IndexDesc, 0, ihi.serializer)
-				if err != nil {
-					return nil, 0, err
-				}
+				if ihi.useLayout {
+					vdis, err := ihi.decodePrimaryIndexValue(data, indexReadCtx, amForValue)
+					if err != nil {
+						return nil, 0, err
+					}
 
-				//pick wanted fields and save them in the batch
-				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
-					0, dis, amForValue, bat, i)
-				if err != nil {
-					return nil, 0, err
+					//fill the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue2(indexReadCtx.IndexDesc,
+						0, vdis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
+				} else {
+					_, dis, err := tkd.DecodePrimaryIndexValue(data,
+						indexReadCtx.IndexDesc, 0, ihi.serializer)
+					if err != nil {
+						return nil, 0, err
+					}
+
+					//pick wanted fields and save them in the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+						0, dis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
 				}
 			}
 		}
 
 		//get the next prefix
-		indexReadCtx.ShardNextScanKey = nextScanKey
+		logutil.Infof("readCtx after complete %v prefix %v %v",
+			complete,
+			indexReadCtx.PrefixForScanKey,
+			indexReadCtx.ParallelReaderContext)
+
 		if complete {
 			indexReadCtx.CompleteInShard = true
 			readFinished = true
 			break
 		}
+		//if the nextScanKey is out of the shard, stop scanning
+		if len(nextScanKey) == 0 || !nextScanKey.Less(indexReadCtx.ShardEndKey) {
+			indexReadCtx.CompleteInShard = true
+			readFinished = true
+			break
+		}
+		indexReadCtx.ShardNextScanKey = nextScanKey
 	}
 
 	TruncateBatch(bat, int(ihi.kvLimit), rowRead)
