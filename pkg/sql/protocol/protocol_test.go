@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bit_or"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -879,47 +879,7 @@ func TestRing(t *testing.T) {
 			BitAndResult: []uint64{6112323, 34542345346, 234, 23412312},
 			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
-		&bit_or.FloatRing{
-			NullCounts:  []int64{996674, 123123908950, 9089374534},
-			Values:  []uint64{123, 34534, 234123},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.Int8Ring{
-			NullCounts:  []int64{123123123, 123123908950, 9089374534},
-			Values:  []int8{6, 6, 8, 0},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.Int16Ring{
-			NullCounts:  []int64{567567, 123123908950, 9089374534},
-			Values:  []int16{62, 62, 8, 01},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.Int32Ring{
-			NullCounts:  []int64{789789, 123123908950, 9089374534},
-			Values:  []int32{612, 632, 81, 0423},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.Int64Ring{
-			NullCounts:  []int64{178923123, 123123908950, 9089374534},
-			Values:  []int64{6123, 123126, 2323328, 02342342},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.UInt8Ring{
-			NullCounts:  []int64{123123123, 123123908950, 9089374534},
-			Values:  []uint8{6, 6, 8, 0},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.UInt16Ring{
-			NullCounts:  []int64{45634564, 123123908950, 9089374534},
-			Values:  []uint16{6123, 1236, 8123, 12310},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.UInt32Ring{
-			NullCounts:  []int64{56784567, 123123908950, 9089374534},
-			Values:  []uint32{6123, 3454346, 345348, 345340},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
-		},
-		&bit_or.UInt64Ring{
+		&bitor.Uint64Ring{
 			NullCounts:  []int64{8902345, 123123908950, 9089374534},
 			Values:  []uint64{6112323, 34542345346, 234, 23412312},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
@@ -1579,176 +1539,8 @@ func TestRing(t *testing.T) {
 					return
 				}
 			}
-		case *bit_or.FloatRing:
-			oriRing := r.(*bit_or.FloatRing)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.Int8Ring:
-			oriRing := r.(*bit_or.Int8Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeInt8Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.Int16Ring:
-			oriRing := r.(*bit_or.Int16Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeInt16Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.Int32Ring:
-			oriRing := r.(*bit_or.Int32Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeInt32Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.Int64Ring:
-			oriRing := r.(*bit_or.Int64Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeInt64Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.UInt8Ring:
-			oriRing := r.(*bit_or.UInt8Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeUint8Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.UInt16Ring:
-			oriRing := r.(*bit_or.UInt16Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeUint16Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.UInt32Ring:
-			oriRing := r.(*bit_or.UInt32Ring)
-			// Data
-			if string(ExpectRing.Data) != string(encoding.EncodeUint32Slice(oriRing.Values)) {
-				t.Errorf("Decode ring Data failed.")
-				return
-			}
-			// NullCounts
-			for i, n := range oriRing.NullCounts {
-				if ExpectRing.NullCounts[i] != n {
-					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
-					return
-				}
-			}
-			// Values
-			for i, v := range oriRing.Values {
-				if ExpectRing.Values[i] != v {
-					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
-					return
-				}
-			}
-		case *bit_or.UInt64Ring:
-			oriRing := r.(*bit_or.UInt64Ring)
+		case *bitor.Uint64Ring:
+			oriRing := r.(*bitor.Uint64Ring)
 			// Data
 			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.Values)) {
 				t.Errorf("Decode ring Data failed.")
