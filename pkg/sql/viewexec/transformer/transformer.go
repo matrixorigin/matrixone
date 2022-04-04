@@ -18,17 +18,19 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
+
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/avg"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/count"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/max"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/min"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/starcount"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/sum"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -70,6 +72,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_float64
 	case BitAnd:
 		return types.T_uint64
+	case BitXor:
+		return types.T_uint64
 	case StdDevPop:
 		return types.T_float64
 	}
@@ -93,9 +97,11 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case ApproxCountDistinct:
 		return approxcd.NewApproxCountDistinct(typ), nil
 	case Variance:
-		return variance.NewVarianceRing(typ), nil
+		return variance.NewVarianceRingWithTypeCheck(typ)
 	case BitAnd:
 		return NewBitAnd(typ)
+	case BitXor:
+		return NewBitXor(typ)
 	case StdDevPop:
 		return stddevpop.NewStdDevPopRing(typ), nil
 	}
@@ -108,6 +114,14 @@ func NewBitAnd(typ types.Type) (ring.Ring, error) {
 		return bitand.NewNumeric(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support BitAnd", typ))
+}
+
+func NewBitXor(typ types.Type) (ring.Ring, error) {
+	switch typ.Oid {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
+		return bitxor.NewBitXor(typ), nil
+	}
+	return nil, errors.New(fmt.Sprintf("'%v' not support BitXor", typ))
 }
 
 func NewSum(typ types.Type) (ring.Ring, error) {

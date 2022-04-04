@@ -12,36 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package variance
+package bitxor
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// TestVariance just for verify varRing related process
-func TestVariance(t *testing.T) {
+func TestBitXor(t *testing.T) {
 	// verify that if we can calculate
 	// the variance of {1, 2, null, 0, 3, 4} and {2, 3, null, null, 4, 5} correctly
 
 	// 1. make the test case
-	v1 := NewVarianceRing(types.Type{Oid: types.T_float64})
-	v2 := v1.Dup().(*VarRing)
+	v1 := NewBitXor(types.Type{Oid: types.T_float64})
+	v2 := v1.Dup().(*BitXorRing)
 	{
 		// first 3 rows.
 		// column1: {1, 2, null}, column2: {2, 3, null}
-		v1.SumX = []float64{1 + 2, 2 + 3}
-		v1.SumX2 = []float64{1*1 + 2*2, 2*2 + 3*3}
+		v1.Values = []uint64{1 ^ 2, 2 ^ 3}
 		v1.NullCounts = []int64{1, 1}
 	}
 	{
 		// last 3 rows.
 		// column1: {0, 3, 4}, column2: {null, 4, 5}
-		v2.SumX = []float64{0 + 3 + 4, 4 + 5}
-		v2.SumX2 = []float64{3*3 + 4*4, 4*4 + 5*5}
+		v2.Values = []uint64{0 ^ 3 ^ 4, 4 ^ 5}
 		v2.NullCounts = []int64{0, 1}
 	}
 	v1.Add(v2, 0, 0)
@@ -49,26 +46,8 @@ func TestVariance(t *testing.T) {
 
 	result := v1.Eval([]int64{6, 6})
 
-	expected := []float64{2.0, 1.25}
+	expected := []uint64{4, 0}
 	if !reflect.DeepEqual(result.Col, expected) {
 		t.Errorf(fmt.Sprintf("TestVariance wrong, expected %v, but got %v", expected, result.Col))
-	}
-
-	// check type support
-	typSupport := []types.Type{
-		{Oid: types.T_uint8},
-		{Oid: types.T_uint16},
-		{Oid: types.T_uint32},
-		{Oid: types.T_uint64},
-		{Oid: types.T_int8},
-		{Oid: types.T_int16},
-		{Oid: types.T_int32},
-		{Oid: types.T_int64},
-		{Oid: types.T_float32},
-		{Oid: types.T_float64},
-	}
-	for _, typ := range typSupport {
-		_, err := NewVarianceRingWithTypeCheck(typ)
-		require.NoError(t, err)
 	}
 }

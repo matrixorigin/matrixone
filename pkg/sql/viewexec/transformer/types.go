@@ -24,6 +24,7 @@ const (
 	ApproxCountDistinct
 	Variance
 	BitAnd
+	BitXor
 	StdDevPop
 )
 
@@ -38,6 +39,7 @@ var TransformerNames = [...]string{
 	Variance:            "var",
 	// Variance:			 "var", // just sample implement of aggregate function for contributor.
 	BitAnd:    "bit_and",
+	BitXor:    "bit_xor",
 	StdDevPop: "stddev_pop",
 }
 

@@ -71,6 +71,8 @@ const (
 	VarianceRing
 	// BitAnd
 	BitAndNumericRing
+	// BitXor
+	BitXorRing
 	// StdDevPop
 	StdDevPopRing
 )
