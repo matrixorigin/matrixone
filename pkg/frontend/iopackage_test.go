@@ -363,7 +363,7 @@ func Test_AppendUint(t *testing.T) {
 
 		io.endian = true
 		pos = 0
-		u, i, b = io.ReadUint64(data, pos)
+		_, i, b = io.ReadUint64(data, pos)
 		convey.So(i, convey.ShouldEqual, 8)
 		convey.So(b, convey.ShouldEqual, true)
 	})

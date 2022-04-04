@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -38,7 +39,13 @@ import (
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
 // A scope is an execution unit.
-func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+		}
+	}()
+
 	// do semantic analysis and build plan for sql
 	// do ast rewrite
 	e.stmt = rewrite.AstRewrite(e.stmt)
@@ -72,7 +79,13 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (e *Exec) Run(ts uint64) error {
+func (e *Exec) Run(ts uint64) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+		}
+	}()
+
 	if e.scope == nil {
 		return nil
 	}
@@ -234,9 +247,11 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
+/*
 func (e *Exec) increaseAffectedRows(n uint64) {
 	e.affectRows += n
 }
+*/
 
 func (e *Exec) setAffectedRows(n uint64) {
 	e.affectRows = n
@@ -272,11 +287,11 @@ func (e *Exec) compileQuery(qry *plan.Query) (*Scope, error) {
 
 func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table delete is supported"))
+		return nil, errors.New(errno.FeatureNotSupported, "Only single table delete is supported")
 	}
 	rel := e.getRelationFromPlanScope(qry.Scope)
 	if rel == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for delete"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for delete")
 	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
@@ -302,11 +317,11 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 
 func (e *Exec) compileUpdate(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table update is supported"))
+		return nil, errors.New(errno.FeatureNotSupported, "Only single table update is supported")
 	}
 	rel := e.getRelationFromPlanScope(qry.Scope)
 	if rel == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for update"))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for update")
 	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
