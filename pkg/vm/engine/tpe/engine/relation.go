@@ -31,11 +31,21 @@ var (
 )
 
 func (trel *TpeRelation) Rows() int64 {
-	return 1
+	rows := int64(0)
+	for _, info := range trel.shards.ShardInfos() {
+		stats := info.GetStatistics()
+		rows += int64(stats.GetApproximateKeys())
+	}
+	return rows
 }
 
 func (trel *TpeRelation) Size(s string) int64 {
-	return 1
+	size := int64(0)
+	for _, info := range trel.shards.ShardInfos() {
+		stats := info.GetStatistics()
+		size += int64(stats.GetApproximateSize())
+	}
+	return size
 }
 
 func (trel *TpeRelation) Close() {
@@ -199,7 +209,8 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 	}
 
 	//for test
-	shardCountPerReader = shardInfosCount
+	//one reader for all shards
+	//shardCountPerReader = shardInfosCount
 
 	startIndex := 0
 	for i := 0; i < len(tpeReaders); i++ {
@@ -212,10 +223,12 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 				endKey:          info.GetEndKey(),
 				nextScanKey:     nil,
 				completeInShard: false,
+				shardID:         info.GetShardID(),
 				node: ShardNode{
-					Addr:    info.GetShardNode().Addr,
-					ID:      info.GetShardNode().ID,
-					IDbytes: info.GetShardNode().IDbytes,
+					Addr:         info.GetShardNode().Addr,
+					StoreID:      info.GetShardNode().StoreID,
+					StoreIDbytes: info.GetShardNode().StoreIDbytes,
+					Statistics:   info.GetStatistics(),
 				},
 			}
 			infos = append(infos, newInfo)
@@ -273,9 +286,9 @@ func (trel *TpeRelation) NewReader(cnt int) []engine.Reader {
 			nextScanKey:     nil,
 			completeInShard: false,
 			node: ShardNode{
-				Addr:    info.GetShardNode().Addr,
-				ID:      info.GetShardNode().ID,
-				IDbytes: info.GetShardNode().IDbytes,
+				Addr:         info.GetShardNode().Addr,
+				StoreID:      info.GetShardNode().StoreID,
+				StoreIDbytes: info.GetShardNode().StoreIDbytes,
 			},
 		}
 		tr.shardInfos = append(tr.shardInfos, newInfo)
