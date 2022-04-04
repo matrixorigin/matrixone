@@ -431,7 +431,7 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	var nodes engine.Nodes
 	for _, node := range shards.nodes {
 		nodes = append(nodes, engine.Node{
-			Id:   node.IDbytes,
+			Id:   node.StoreIDbytes,
 			Addr: node.Addr,
 		})
 	}

@@ -215,6 +215,7 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		case executor.GenWithResultLastKey:
 			nextKey = kv.NextKey(lastKey, nil)
 		case executor.UseShardEnd:
+			//the ShardEndKey may be nil too.
 			nextKey = ce.clone(shard.GetEnd())
 		}
 	}
@@ -224,9 +225,19 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		return rep, nil
 	}
 
+	//TODO: to remove the check after the adjust function been fixed
+	//the check ensure the endKey is not nil.
+	r := 0
+	for _, key := range keys {
+		if bytes.Compare(key, userReq.GetEnd()) >= 0 {
+			break
+		}
+		r++
+	}
+
 	tsr := pb.TpeScanResponse{
-		Keys:                keys,
-		Values:              values,
+		Keys:                keys[:r],
+		Values:              values[:r],
 		CompleteInAllShards: completed,
 		NextScanKey:         nextKey,
 	}
@@ -236,7 +247,10 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 	//for test
 	//print keys
 	//cnt := 0
-	//for _, key := range keys {
+	//for i, key := range keys {
+	//	if i >= r {
+	//		break
+	//	}
 	//	if bytes.Compare(key, userReq.GetEnd()) >= 0 {
 	//		cnt++
 	//	}
