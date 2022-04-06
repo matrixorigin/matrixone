@@ -94,7 +94,7 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case ApproxCountDistinct:
 		return approxcd.NewApproxCountDistinct(typ), nil
 	case Variance:
-		return variance.NewVarianceRing(typ), nil
+		return variance.NewVarianceRingWithTypeCheck(typ)
 	case BitAnd:
 		return NewBitAnd(typ)
 	case BitXor:
