@@ -53,7 +53,7 @@ jobs:
         run: |
           mkdir log
           touch log/console.log
-          nohup docker-compose -f ./optools/test/docker-compose.yaml up --no-build > ./log/console.log 2>&1 &
+          docker-compose -f ./optools/test/docker-compose.yaml up --no-build > ./log/console.log &
 
       - name: Check running containers
         run: docker ps -a
