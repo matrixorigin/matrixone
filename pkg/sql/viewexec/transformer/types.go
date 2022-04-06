@@ -25,6 +25,7 @@ const (
 	Variance
 	BitAnd
 	BitXor
+	BitOr
 	StdDevPop
 )
 
@@ -37,9 +38,10 @@ var TransformerNames = [...]string{
 	StarCount:           "starcount",
 	ApproxCountDistinct: "approx_count_distinct",
 	Variance:            "var",
-	// Variance:			 "var", // just sample implement of aggregate function for contributor.
+	// Variance:			 "var", // just sample implement of aggregate function for contributor.,
 	BitAnd:    "bit_and",
 	BitXor:    "bit_xor",
+	BitOr:     "bit_or",
 	StdDevPop: "stddev_pop",
 }
 
