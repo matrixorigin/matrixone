@@ -17,6 +17,7 @@ package variance
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
 )
@@ -51,5 +52,23 @@ func TestVariance(t *testing.T) {
 	expected := []float64{2.0, 1.25}
 	if !reflect.DeepEqual(result.Col, expected) {
 		t.Errorf(fmt.Sprintf("TestVariance wrong, expected %v, but got %v", expected, result.Col))
+	}
+
+	// check type support
+	typSupport := []types.Type{
+		{Oid: types.T_uint8},
+		{Oid: types.T_uint16},
+		{Oid: types.T_uint32},
+		{Oid: types.T_uint64},
+		{Oid: types.T_int8},
+		{Oid: types.T_int16},
+		{Oid: types.T_int32},
+		{Oid: types.T_int64},
+		{Oid: types.T_float32},
+		{Oid: types.T_float64},
+	}
+	for _, typ := range typSupport {
+		_, err := NewVarianceRingWithTypeCheck(typ)
+		require.NoError(t, err)
 	}
 }
