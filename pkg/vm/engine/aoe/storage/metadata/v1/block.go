@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	UpgradeInfullBlockErr = errors.New("aoe: upgrade infull block")
+	ErrUpgradeInfullBlock = errors.New("aoe: upgrade infull block")
 )
 
 type blockLogEntry struct {
@@ -295,14 +295,14 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	e.Lock()
 	defer e.Unlock()
 	if e.GetCountLocked() != e.Segment.Table.Schema.BlockMaxRows {
-		return nil, UpgradeInfullBlockErr
+		return nil, ErrUpgradeInfullBlock
 	}
 	var newOp OpT
 	switch e.CommitInfo.Op {
 	case OpCreate:
 		newOp = OpUpgradeFull
 	default:
-		return nil, UpgradeNotNeededErr
+		return nil, ErrUpgradeNotNeeded
 	}
 	cInfo := &CommitInfo{
 		TranId:   ctx.tranId,

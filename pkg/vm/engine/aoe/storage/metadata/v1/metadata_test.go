@@ -872,7 +872,7 @@ func TestAppliedIndex(t *testing.T) {
 	}
 	indexWal.SyncLog(index)
 	tbl.SimpleSoftDelete(index)
-	snip = blk.ConsumeSnippet(false)
+	blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(index)
 
 	testutils.WaitExpect(50, func() bool {

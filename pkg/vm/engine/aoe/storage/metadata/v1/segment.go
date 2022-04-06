@@ -24,8 +24,8 @@ import (
 )
 
 var (
-	UpgradeInfullSegmentErr = errors.New("aoe: upgrade infull segment")
-	UpgradeNotNeededErr     = errors.New("aoe: already upgraded")
+	ErrUpgradeInfullSegment = errors.New("aoe: upgrade infull segment")
+	ErrUpgradeNotNeeded     = errors.New("aoe: already upgraded")
 )
 
 type segmentLogEntry struct {
@@ -376,14 +376,14 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	e.RLock()
 	if !e.HasMaxBlocks() {
 		e.RUnlock()
-		return nil, UpgradeInfullSegmentErr
+		return nil, ErrUpgradeInfullSegment
 	}
 	if e.IsSortedLocked() {
-		return nil, UpgradeNotNeededErr
+		return nil, ErrUpgradeNotNeeded
 	}
 	for _, blk := range e.BlockSet {
 		if !blk.IsFullLocked() {
-			return nil, UpgradeInfullSegmentErr
+			return nil, ErrUpgradeInfullSegment
 		}
 	}
 	e.RUnlock()
@@ -394,7 +394,7 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	case OpCreate:
 		newOp = OpUpgradeSorted
 	default:
-		return nil, UpgradeNotNeededErr
+		return nil, ErrUpgradeNotNeeded
 	}
 	cInfo := &CommitInfo{
 		TranId:   ctx.tranId,

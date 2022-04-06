@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	FileNotExistErr = errors.New("file not exist")
+	ErrFileNotExist = errors.New("file not exist")
 )
 
 type versionBlockFile struct {
@@ -373,7 +373,7 @@ func (f *TransientBlockFile) refLatestFile() *versionBlockFile {
 func (f *TransientBlockFile) CopyTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
-		err = FileNotExistErr
+		err = ErrFileNotExist
 		return
 	}
 	defer file.Unref()
@@ -384,7 +384,7 @@ func (f *TransientBlockFile) CopyTo(path string) (err error) {
 func (f *TransientBlockFile) LinkTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
-		err = FileNotExistErr
+		err = ErrFileNotExist
 		return
 	}
 	defer file.Unref()

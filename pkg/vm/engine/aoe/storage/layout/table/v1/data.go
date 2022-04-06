@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	NotExistErr = errors.New("not exist error")
+	ErrNotExist = errors.New("not exist error")
 )
 
 func newTableData(host *Tables, meta *metadata.Table) *tableData {
@@ -288,7 +288,7 @@ func (td *tableData) LinkTo(dir string) error {
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
 		if err = file.LinkTo(dir); err != nil {
-			if err == dataio.FileNotExistErr {
+			if err == dataio.ErrFileNotExist {
 				err = nil
 			}
 		}
@@ -315,7 +315,7 @@ func (td *tableData) CopyTo(dir string) error {
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
 		if err = file.CopyTo(dir); err != nil {
-			if err == dataio.FileNotExistErr {
+			if err == dataio.ErrFileNotExist {
 				err = nil
 			}
 		}
@@ -478,7 +478,7 @@ func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) 
 	tbl, ok := ts.Data[tid]
 	if !ok {
 		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
-		return tbl, NotExistErr
+		return tbl, ErrNotExist
 	}
 	delete(ts.ids, tid)
 	delete(ts.Data, tid)

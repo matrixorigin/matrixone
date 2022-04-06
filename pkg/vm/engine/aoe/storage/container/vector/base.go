@@ -56,7 +56,7 @@ func (v *BaseVector) Length() int {
 
 func (v *BaseVector) IsNull(idx int) (bool, error) {
 	if idx >= v.Length() {
-		return false, VecInvalidOffsetErr
+		return false, ErrVecInvalidOffset
 	}
 	if !v.IsReadonly() {
 		v.RLock()

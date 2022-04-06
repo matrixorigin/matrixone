@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -40,9 +39,10 @@ var (
 	moduleName = "mutation"
 )
 
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
+// Unused
+// func getTestPath(t *testing.T) string {
+// 	return testutils.GetDefaultTestPath(moduleName, t)
+// }
 
 func initTestEnv(t *testing.T) string {
 	testutils.RemoveDefaultTestPath(moduleName, t)
@@ -73,7 +73,7 @@ func TestMutableBlockNode(t *testing.T) {
 	tblkfile := dataio.NewTBlockFile(segfile, *meta1.AsCommonID())
 	assert.NotNil(t, tblkfile)
 	capacity := uint64(4096)
-	fsMgr := ldio.NewManager(dir, false)
+	fsMgr := dataio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
@@ -151,7 +151,7 @@ func TestMutableBlockNode(t *testing.T) {
 	t.Log(mgr.String())
 
 	h2.Close()
-	h1 = mgr.Pin(node1)
+	mgr.Pin(node1)
 
 	t.Log(mgr.String())
 	t.Log(common.GPool.String())

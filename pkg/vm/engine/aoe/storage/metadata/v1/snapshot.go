@@ -26,7 +26,7 @@ import (
 )
 
 var (
-	AddressNotFoundErr = errors.New("address not found")
+	ErrAddressNotFound = errors.New("address not found")
 )
 
 type SSWriter interface {
@@ -81,15 +81,15 @@ func (m *Addresses) GetBlkAddr(addr *common.ID) (*common.ID, error) {
 	naddr := new(common.ID)
 	naddr.TableID, ok = m.Table[addr.TableID]
 	if !ok {
-		return nil, AddressNotFoundErr
+		return nil, ErrAddressNotFound
 	}
 	naddr.SegmentID, ok = m.Segment[addr.SegmentID]
 	if !ok {
-		return nil, AddressNotFoundErr
+		return nil, ErrAddressNotFound
 	}
 	naddr.BlockID, ok = m.Block[addr.BlockID]
 	if !ok {
-		return nil, AddressNotFoundErr
+		return nil, ErrAddressNotFound
 	}
 	return naddr, nil
 }
@@ -99,11 +99,11 @@ func (m *Addresses) GetSegAddr(addr *common.ID) (*common.ID, error) {
 	naddr := new(common.ID)
 	naddr.TableID, ok = m.Table[addr.TableID]
 	if !ok {
-		return nil, AddressNotFoundErr
+		return nil, ErrAddressNotFound
 	}
 	naddr.SegmentID, ok = m.Segment[addr.SegmentID]
 	if !ok {
-		return nil, AddressNotFoundErr
+		return nil, ErrAddressNotFound
 	}
 	return naddr, nil
 }
@@ -111,7 +111,7 @@ func (m *Addresses) GetSegAddr(addr *common.ID) (*common.ID, error) {
 func (m *Addresses) GetTableAddr(addr uint64) (uint64, error) {
 	tid, ok := m.Table[addr]
 	if !ok {
-		return 0, AddressNotFoundErr
+		return 0, ErrAddressNotFound
 	}
 	return tid, nil
 }
@@ -119,7 +119,7 @@ func (m *Addresses) GetTableAddr(addr uint64) (uint64, error) {
 func (m *Addresses) GetDBAddr(addr uint64) (uint64, error) {
 	id, ok := m.Table[addr]
 	if !ok {
-		return 0, AddressNotFoundErr
+		return 0, ErrAddressNotFound
 	}
 	return id, nil
 }
@@ -194,7 +194,7 @@ func (ss *dbSnapshoter) ReAllocId(allocator *Sequence, view *Database) error {
 }
 
 func (ss *dbSnapshoter) PrepareLoad() error {
-	f, err := os.OpenFile(ss.name, os.O_RDONLY, 666)
+	f, err := os.OpenFile(ss.name, os.O_RDONLY, 0666)
 	if err != nil {
 		return err
 	}

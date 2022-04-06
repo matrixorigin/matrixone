@@ -44,7 +44,7 @@ func (sw *NodeWriter) Flush() (err error) {
 	filename := string(sw.Filename)
 	dir := filepath.Dir(filename)
 	logutil.Infof(" %s | SpillNode | Flushing", sw.Filename)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
+	if _, err = os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}
 	if err != nil {

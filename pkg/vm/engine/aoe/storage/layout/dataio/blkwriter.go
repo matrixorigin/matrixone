@@ -179,8 +179,8 @@ func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *me
 
 func (bw *BlockWriter) GetFileName() string {
 	fname := bw.fileHandle.Name()
-	s, _ := filepath.Abs(bw.fileHandle.Name())
-	s, _ = common.FilenameFromTmpfile(fname)
+	filepath.Abs(bw.fileHandle.Name())
+	s, _ := common.FilenameFromTmpfile(fname)
 	return s
 }
 
@@ -348,7 +348,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		}
 	}
 	// flush indices
-	indices:=make([]index.Index,len(meta.Segment.Table.Schema.ColDefs))
+	indices := make([]index.Index, len(meta.Segment.Table.Schema.ColDefs))
 	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
 		typ := colDef.Type
 		isPrimary := idx == meta.Segment.Table.Schema.PrimaryKey

@@ -62,22 +62,23 @@ const (
 var (
 	dbName    = "test_db1"
 	tableName = "test_tb"
-	cols      = []vengine.TableDef{
-		&vengine.AttributeDef{
-			Attr: vengine.Attribute{
-				Name: "col1",
-				Type: types.Type{},
-				Alg:  0,
-			},
-		},
-		&vengine.AttributeDef{
-			Attr: vengine.Attribute{
-				Name: "col2",
-				Type: types.Type{},
-				Alg:  0,
-			},
-		},
-	}
+	// Unused
+	// cols      = []vengine.TableDef{
+	// 	&vengine.AttributeDef{
+	// 		Attr: vengine.Attribute{
+	// 			Name: "col1",
+	// 			Type: types.Type{},
+	// 			Alg:  0,
+	// 		},
+	// 	},
+	// 	&vengine.AttributeDef{
+	// 		Attr: vengine.Attribute{
+	// 			Name: "col2",
+	// 			Type: types.Type{},
+	// 			Alg:  0,
+	// 		},
+	// 	},
+	// }
 )
 
 func TestAOEEngine(t *testing.T) {

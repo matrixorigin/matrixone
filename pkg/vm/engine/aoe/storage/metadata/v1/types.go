@@ -130,10 +130,10 @@ type CommitInfo struct {
 func (info *CommitInfo) Clone() *CommitInfo {
 	cloned := *info
 	if cloned.LogIndex != nil {
-		cloned.LogIndex = &(*info.LogIndex)
+		cloned.LogIndex = info.LogIndex
 	}
 	if cloned.LogRange != nil {
-		cloned.LogRange = &(*info.LogRange)
+		cloned.LogRange = info.LogRange
 	}
 	return &cloned
 }
