@@ -103,7 +103,7 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 	case BitXor:
 		return NewBitXor(typ)
 	case StdDevPop:
-		return stddevpop.NewStdDevPopRing(typ), nil
+		return stddevpop.NewStdDevPopRingWithTypeCheck(typ)
 	}
 	return nil, nil
 }

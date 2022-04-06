@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -50,4 +51,21 @@ func TestStdDevPopRing(t *testing.T) {
 		t.Errorf(fmt.Sprintf("TestStdDevPop wrong, expected %v, but got %v", expected, result.Col))
 	}
 
+	// check type support
+	typSupport := []types.Type{
+		{Oid: types.T_uint8},
+		{Oid: types.T_uint16},
+		{Oid: types.T_uint32},
+		{Oid: types.T_uint64},
+		{Oid: types.T_int8},
+		{Oid: types.T_int16},
+		{Oid: types.T_int32},
+		{Oid: types.T_int64},
+		{Oid: types.T_float32},
+		{Oid: types.T_float64},
+	}
+	for _, typ := range typSupport {
+		_, err := NewStdDevPopRingWithTypeCheck(typ)
+		require.NoError(t, err)
+	}
 }

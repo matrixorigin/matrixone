@@ -15,6 +15,7 @@
 package stddevpop
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -22,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -34,6 +37,18 @@ type StdDevPopRing struct {
 	SumX2 []float64 // sum of x^2
 
 	NullCounts []int64 // group to record number of the null value
+}
+
+func NewStdDevPopRingWithTypeCheck(typ types.Type) (*StdDevPopRing, error) {
+	switch typ.Oid {
+	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+		return NewStdDevPopRing(typ), nil
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+		return NewStdDevPopRing(typ), nil
+	case types.T_float32, types.T_float64:
+		return NewStdDevPopRing(typ), nil
+	}
+	return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("'%v' not support Var", typ))
 }
 
 func NewStdDevPopRing(typ types.Type) *StdDevPopRing {
