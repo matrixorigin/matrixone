@@ -52,6 +52,7 @@ jobs:
           COMPOSE_DOCKER_CLI_BUILD: 1
         run: |
           mkdir log
+          touch log/console.log
           nohup docker-compose -f ./optools/test/docker-compose.yaml up --no-build > ./log/console.log 2>&1 &
 
       - name: Check running containers
