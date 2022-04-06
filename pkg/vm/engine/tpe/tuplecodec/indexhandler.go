@@ -34,6 +34,8 @@ var (
 	errorWriteContextIsInvalid           = errors.New("the write context is invalid")
 	errorReadContextIsInvalid            = errors.New("the read context is invalid")
 	errorAttributeDoesNotHaveThePosition = errors.New("the attribute does not have the position")
+	errorShardNextScanKeyIsNil           = errors.New("ShardNextScanKey is nil")
+	errorShardScanEndKeyIsNil            = errors.New("ShardScanEndKey is nil")
 )
 
 var _ index.IndexHandler = &IndexHandlerImpl{}
@@ -54,23 +56,16 @@ type IndexHandlerImpl struct {
 	layoutSerializer ValueLayoutSerializer
 }
 
-func NewIndexHandlerImpl(tch *TupleCodecHandler,
-	db *descriptor.DatabaseDesc,
-	kv KVHandler,
-	kvLimit uint64,
-	serial ValueSerializer,
-	rcc RowColumnConverter) *IndexHandlerImpl {
+func NewIndexHandlerImpl(tch *TupleCodecHandler, db *descriptor.DatabaseDesc, kv KVHandler, kvLimit uint64, serial ValueSerializer, vls ValueLayoutSerializer, rcc RowColumnConverter) *IndexHandlerImpl {
 	return &IndexHandlerImpl{
-		tch:        tch,
-		dbDesc:     db,
-		kv:         kv,
-		kvLimit:    kvLimit,
-		serializer: serial,
-		rcc:        rcc,
-		useLayout:  true,
-		layoutSerializer: &DefaultValueLayoutSerializer{
-			serializer: serial,
-		},
+		tch:              tch,
+		dbDesc:           db,
+		kv:               kv,
+		kvLimit:          kvLimit,
+		serializer:       serial,
+		rcc:              rcc,
+		useLayout:        true,
+		layoutSerializer: vls,
 	}
 }
 
@@ -85,32 +80,69 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	amForKey := &AttributeMap{}
 	amForValue := &AttributeMap{}
 	needKeyOnly := true
+	var positionsInValue map[uint32]int
+	if ihi.useLayout {
+		positionsInValue = ihi.layoutSerializer.GetPositionsOfAttributesInTheValue(indexReadCtx.TableDesc, indexReadCtx.IndexDesc)
+	}
+	var exist2 bool
 	for i, attr := range indexReadCtx.ReadAttributeDescs {
-		if _, exist := indexAttrIDs[attr.ID]; exist {
+		if positionInIndex, exist := indexAttrIDs[attr.ID]; exist {
 			//id in the key
-			amForKey.Append(int(attr.ID), i, -1)
+			amForKey.Append(int(attr.ID), positionInIndex, i)
 		} else {
 			//id is not in the index key
 			//then find it in the value
 			needKeyOnly = false
-			amForValue.Append(int(attr.ID), i, -1)
+			positionInValue := i
+			if ihi.useLayout {
+				if positionInValue, exist2 = positionsInValue[attr.ID]; !exist2 {
+					return nil, 0, errorInvalidAttributePosition
+				}
+			}
+
+			amForValue.Append(int(attr.ID), positionInValue, i)
 		}
 	}
+	amForKey.BuildPositionInDecodedItemArray()
+	amForValue.BuildPositionInDecodedItemArray()
 
 	//1.encode prefix (tenantID,dbID,tableID,indexID)
 	tke := ihi.tch.GetEncoder()
 	tkd := ihi.tch.GetDecoder()
 
 	//need table prefix also in parallel read
-	if indexReadCtx.PrefixForScanKey == nil {
+	if len(indexReadCtx.PrefixForScanKey) == 0 {
 		indexReadCtx.PrefixForScanKey, _ = tke.EncodeIndexPrefix(nil, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
 		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
 	}
 
-	if indexReadCtx.ShardNextScanKey == nil {
-		indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+	if len(indexReadCtx.ShardNextScanKey) == 0 {
+		if len(indexReadCtx.ShardStartKey) == 0 ||
+			TupleKey(indexReadCtx.ShardStartKey).Less(indexReadCtx.PrefixForScanKey) {
+			indexReadCtx.ShardNextScanKey = indexReadCtx.PrefixForScanKey
+		} else {
+			indexReadCtx.ShardNextScanKey = indexReadCtx.ShardStartKey
+		}
+	}
+
+	if len(indexReadCtx.ShardNextScanKey) == 0 {
+		return nil, 0, errorShardNextScanKeyIsNil
+	}
+
+	if len(indexReadCtx.ShardScanEndKey) == 0 {
+		prefixEnd := SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+		if len(indexReadCtx.ShardEndKey) == 0 ||
+			prefixEnd.Less(indexReadCtx.ShardScanEndKey) {
+			indexReadCtx.ShardScanEndKey = prefixEnd
+		} else {
+			indexReadCtx.ShardScanEndKey = indexReadCtx.ShardEndKey
+		}
+	}
+
+	if len(indexReadCtx.ShardScanEndKey) == 0 {
+		return nil, 0, errorShardScanEndKeyIsNil
 	}
 
 	//nextScanKey does not have the prefix of the table
@@ -130,17 +162,29 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 	//get keys with the prefix
 	for rowRead < int(ihi.kvLimit) {
 		needRead := int(ihi.kvLimit) - rowRead
-		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithPrefixLimit(indexReadCtx.ShardNextScanKey,
-			indexReadCtx.ShardEndKey, indexReadCtx.PrefixForScanKey, uint64(needRead))
+		//logutil.Infof("readCtx before prefix %v %v",
+		//	indexReadCtx.PrefixForScanKey,
+		//	indexReadCtx.ParallelReaderContext)
+		keys, values, complete, nextScanKey, err := ihi.kv.GetRangeWithPrefixLimit(
+			indexReadCtx.ShardNextScanKey,
+			indexReadCtx.ShardScanEndKey,
+			indexReadCtx.PrefixForScanKey,
+			uint64(needRead))
 		if err != nil {
 			return nil, 0, err
 		}
 
 		rowRead += len(keys)
+		indexReadCtx.addReadCount(len(keys))
 
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
+			//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+			//	break
+			//}
+			//rowRead++
+			//indexReadCtx.addReadCount(1)
 			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
 			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
 			if err != nil {
@@ -160,29 +204,88 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			//need to update prefix
 			//decode index value
 			for i := 0; i < len(keys); i++ {
+				//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+				//	break
+				//}
 				//decode the name which is in the value
 				data := values[i]
-				_, dis, err := tkd.DecodePrimaryIndexValue(data,
-					indexReadCtx.IndexDesc, 0, ihi.serializer)
-				if err != nil {
-					return nil, 0, err
-				}
+				if ihi.useLayout {
+					vdis, err := ihi.decodePrimaryIndexValue(data, indexReadCtx, amForValue)
+					if err != nil {
+						return nil, 0, err
+					}
 
-				//pick wanted fields and save them in the batch
-				err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
-					0, dis, amForValue, bat, i)
-				if err != nil {
-					return nil, 0, err
+					//fill the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue2(indexReadCtx.IndexDesc,
+						0, vdis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
+				} else {
+					_, dis, err := tkd.DecodePrimaryIndexValue(data,
+						indexReadCtx.IndexDesc, 0, ihi.serializer)
+					if err != nil {
+						return nil, 0, err
+					}
+
+					//pick wanted fields and save them in the batch
+					err = ihi.rcc.FillBatchFromDecodedIndexValue(indexReadCtx.IndexDesc,
+						0, dis, amForValue, bat, i)
+					if err != nil {
+						return nil, 0, err
+					}
 				}
 			}
 		}
 
 		//get the next prefix
-		indexReadCtx.ShardNextScanKey = nextScanKey
+		//logutil.Infof("readCtx after complete %v prefix %v nextScanKey %v ParallelReaderContext %v",
+		//	complete,
+		//	indexReadCtx.PrefixForScanKey,
+		//	nextScanKey,
+		//	indexReadCtx.ParallelReaderContext)
+
 		if complete {
+			logutil.Infof("parallel reader complete 1 in shard startKey %v endKey %v",
+				indexReadCtx.ShardStartKey,
+				indexReadCtx.ShardEndKey,
+			)
 			indexReadCtx.CompleteInShard = true
 			readFinished = true
 			break
+		}
+		//the shardEnd is nil. it means +infinity
+		if len(indexReadCtx.ShardEndKey) == 0 {
+			//change it to the successor of the lastKey
+			if len(nextScanKey) == 0 {
+				if len(keys) != 0 {
+					indexReadCtx.ShardNextScanKey = SuccessorOfKey(keys[len(keys)-1])
+				} else {
+					logutil.Infof("parallel reader complete 2 in shard startKey %v endKey %v",
+						indexReadCtx.ShardStartKey,
+						indexReadCtx.ShardEndKey,
+					)
+					//the needRead can not be the zero.
+					//so, there is no data anymore.
+					indexReadCtx.CompleteInShard = true
+					readFinished = true
+					break
+				}
+			} else {
+				indexReadCtx.ShardNextScanKey = nextScanKey
+			}
+		} else {
+			//if the nextScanKey is out of the shard, stop scanning
+			if len(nextScanKey) == 0 || !nextScanKey.Less(indexReadCtx.ShardEndKey) {
+				logutil.Infof("parallel reader complete 3 in shard startKey %v endKey %v nextScanKey %v",
+					indexReadCtx.ShardStartKey,
+					indexReadCtx.ShardEndKey,
+					nextScanKey)
+				indexReadCtx.CompleteInShard = true
+				readFinished = true
+				break
+			}
+			indexReadCtx.ShardNextScanKey = nextScanKey
 		}
 	}
 

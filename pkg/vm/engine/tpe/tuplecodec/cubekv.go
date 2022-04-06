@@ -977,6 +977,8 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 	var shardInfos []ShardInfo
 	var stores = make(map[uint64]string)
 
+	logutil.Infof("origin startKey %v endKey %v", startKey, endKey)
+
 	callback := func(shard metapb.Shard, store metapb.Store) bool {
 		logutil.Infof("originshardinfo %v %v", shard.GetStart(), shard.GetEnd())
 		//the shard overlaps the [startKey,endKey)
@@ -994,10 +996,11 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 			shardInfos = append(shardInfos, ShardInfo{
 				startKey: shard.GetStart(),
 				endKey:   shard.GetEnd(),
+				shardID:  shard.GetID(),
 				node: ShardNode{
-					Addr:    store.ClientAddress,
-					IDbytes: string(codec.Uint642Bytes(store.ID)),
-					ID:      store.ID,
+					Addr:         store.ClientAddress,
+					StoreIDbytes: string(codec.Uint642Bytes(store.ID)),
+					StoreID:      store.ID,
 				},
 			})
 
@@ -1009,16 +1012,23 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 		return true
 	}
 
-	ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, callback)
+	//ck.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, callback)
 	//TODO: wait cube to fix
-	//ck.Cube.RaftStore().GetRouter().AscendRange(uint64(pb.KVGroup), startKey, endKey, rpcpb.SelectLeader, callback)
+	ck.Cube.RaftStore().GetRouter().AscendRange(uint64(pb.KVGroup), startKey, endKey, rpcpb.SelectLeader, callback)
+
+	//get statistics for every shard
+	for i := 0; i < len(shardInfos); i++ {
+		info := shardInfos[i]
+		stats := ck.Cube.RaftStore().GetRouter().GetShardStats(info.GetShardID())
+		shardInfos[i].statistics = stats
+	}
 
 	var nodes []ShardNode
 	for id, addr := range stores {
 		nodes = append(nodes, ShardNode{
-			Addr:    addr,
-			IDbytes: string(codec.Uint642Bytes(id)),
-			ID:      id,
+			Addr:         addr,
+			StoreIDbytes: string(codec.Uint642Bytes(id)),
+			StoreID:      id,
 		})
 	}
 

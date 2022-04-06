@@ -452,7 +452,9 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 		}
 
-		_, values1, _, _, err := kv.GetRangeWithLimit(TupleKey(prefix), nil, uint64(cnt))
+		endKey := SuccessorOfPrefix(TupleKey(prefix))
+
+		_, values1, _, _, err := kv.GetRangeWithLimit(TupleKey(prefix), endKey, uint64(cnt))
 		convey.So(err, convey.ShouldBeNil)
 
 		//for i, key := range keys1 {
@@ -467,7 +469,7 @@ func TestCubeKV_GetRangeWithLimit(t *testing.T) {
 		last := TupleKey(prefix)
 		readCnt := 0
 		for i := 0; i < cnt; i += step {
-			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, nil, uint64(step))
+			_, values, complete, nextScanKey, err := kv.GetRangeWithLimit(last, endKey, uint64(step))
 			convey.So(err, convey.ShouldBeNil)
 
 			for j := i; j < i+step; j++ {
@@ -567,15 +569,15 @@ func TestCubeKV_GetShardsWithRange(t *testing.T) {
 
 		for _, node := range shards.nodes {
 			fmt.Printf("%d %v | %s\n",
-				node.ID,
-				node.IDbytes, node.Addr)
+				node.StoreID,
+				node.StoreIDbytes, node.Addr)
 		}
 
 		for _, info := range shards.shardInfos {
 			fmt.Printf("%v %v %d %v | %s \n",
 				info.startKey, info.endKey,
-				info.node.ID,
-				info.node.IDbytes, info.node.Addr)
+				info.node.StoreID,
+				info.node.StoreIDbytes, info.node.Addr)
 		}
 	})
 }
@@ -604,15 +606,15 @@ func TestCubeKV_GetShardsWithPrefix(t *testing.T) {
 
 		for _, node := range shards.nodes {
 			fmt.Printf("%d %v | %s\n",
-				node.ID,
-				node.IDbytes, node.Addr)
+				node.StoreID,
+				node.StoreIDbytes, node.Addr)
 		}
 
 		for _, info := range shards.shardInfos {
 			fmt.Printf("%v %v %d %v | %s \n",
 				info.startKey, info.endKey,
-				info.node.ID,
-				info.node.IDbytes, info.node.Addr)
+				info.node.StoreID,
+				info.node.StoreIDbytes, info.node.Addr)
 		}
 	})
 }

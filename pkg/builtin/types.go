@@ -30,17 +30,19 @@ const (
 	Exp
 	Power
 	Pi
+	Space
 	Reverse
 	UTCTimestamp
 	Ltrim
 	Rtrim
+	Lpad
 	Sin
 	Cos
 	Tan
+	Acos
 	Atan
 	Cot
 	DayOfYear
 	Month
 	Weekday
-	Lpad
 )

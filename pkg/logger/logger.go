@@ -59,114 +59,150 @@ func (l *logger) SetDepth(depth int) {
 
 func (l *logger) Debug(v ...interface{}) {
 	if l.level <= DEBUG {
-		l.dlog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.dlog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Debugn(v ...interface{}) {
 	if l.level <= DEBUG {
-		l.dlog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.dlog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Debugf(format string, v ...interface{}) {
 	if l.level <= DEBUG {
-		l.dlog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.dlog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Info(v ...interface{}) {
 	if l.level <= INFO {
-		l.ilog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.ilog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Infon(v ...interface{}) {
 	if l.level <= INFO {
-		l.ilog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.ilog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Infof(format string, v ...interface{}) {
 	if l.level <= INFO {
-		l.ilog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.ilog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Warn(v ...interface{}) {
 	if l.level <= WARN {
-		l.wlog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.wlog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Warnn(v ...interface{}) {
 	if l.level <= WARN {
-		l.wlog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.wlog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Warnf(format string, v ...interface{}) {
 	if l.level <= WARN {
-		l.wlog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.wlog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Error(v ...interface{}) {
 	if l.level <= ERROR {
-		l.elog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.elog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Errorn(v ...interface{}) {
 	if l.level <= ERROR {
-		l.elog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.elog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Errorf(format string, v ...interface{}) {
 	if l.level <= ERROR {
-		l.elog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.elog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 	}
 }
 
 func (l *logger) Fatal(v ...interface{}) {
 	if l.level <= FATAL {
-		l.flog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.flog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Fataln(v ...interface{}) {
 	if l.level <= FATAL {
-		l.flog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.flog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Fatalf(format string, v ...interface{}) {
 	if l.level <= FATAL {
-		l.flog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.flog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Panic(v ...interface{}) {
 	if l.level <= PANIC {
-		l.plog.Output(l.depth, fmt.Sprint(v...))
+		if err := l.plog.Output(l.depth, fmt.Sprint(v...)); err != nil {
+			panic(err)
+		}
 		panic(v)
 	}
 }
 
 func (l *logger) Panicn(v ...interface{}) {
 	if l.level <= PANIC {
-		l.plog.Output(l.depth, fmt.Sprintln(v...))
+		if err := l.plog.Output(l.depth, fmt.Sprintln(v...)); err != nil {
+			panic(err)
+		}
 		panic(v)
 	}
 }
 
 func (l *logger) Panicf(format string, v ...interface{}) {
 	if l.level <= PANIC {
-		l.plog.Output(l.depth, fmt.Sprintf(format, v...))
+		if err := l.plog.Output(l.depth, fmt.Sprintf(format, v...)); err != nil {
+			panic(err)
+		}
 		panic(v)
 	}
 }

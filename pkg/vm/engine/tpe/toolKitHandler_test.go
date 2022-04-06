@@ -15,6 +15,9 @@ import (
 func Test_getParamFromCommand(t *testing.T) {
 	convey.Convey("getParamFromCommand function",t, func() {
 		tpeMock, _ := engine.NewTpeEngine(&engine.TpeConfig{KVLimit: 10000})
+		if tpeMock == nil {
+			return
+		}
 		err := tpeMock.Create(0, "ssb", 0)
 		convey.So(err, convey.ShouldBeNil)
 

@@ -23,7 +23,7 @@ func (a *KV) Set(k string, v []byte) error {
 func (a *KV) Get(k string, buf *bytes.Buffer) ([]byte, error) {
 	v, ok := a.mp[k]
 	if !ok {
-		return nil, NotExist
+		return nil, ErrNotExist
 	}
 	buf.Reset()
 	if len(v) > buf.Cap() {

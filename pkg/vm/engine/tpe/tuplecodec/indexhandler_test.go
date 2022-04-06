@@ -23,29 +23,30 @@ import (
 )
 
 func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
-	convey.Convey("write into index",t, func() {
+	convey.Convey("write into index", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 
 		ihi := &IndexHandlerImpl{
-			tch:        tch,
-			dbDesc:     InternalDatabaseDesc,
-			kv:         kv,
-			serializer: serial,
+			tch:              tch,
+			dbDesc:           InternalDatabaseDesc,
+			kv:               kv,
+			serializer:       serial,
+			layoutSerializer: &DefaultValueLayoutSerializer{Serializer: serial},
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
+		names, attrs := MakeAttributes(types.T_uint64, types.T_uint64, types.T_varchar, types.T_varchar)
 
 		cnt := 10
 
-		bat := MakeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt, names, attrs)
 
-		lines := randomLines(cnt,names,attrs)
+		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
 
-		writeStates := make([]AttributeStateForWrite,4)
+		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
 			writeStates[i].AttrDesc = attrDesc
 			writeStates[i].NeedGenerated = false
@@ -62,40 +63,41 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 			NodeID:          0,
 		}
 		err := ihi.WriteIntoIndex(writeCtx, bat)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		err = ihi.WriteIntoTable(InternalDescriptorTableDesc, writeCtx, bat)
-		convey.So(err,convey.ShouldBeError)
+		convey.So(err, convey.ShouldBeError)
 	})
 }
 
 func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
-	convey.Convey("read from index",t, func() {
+	convey.Convey("read from index", t, func() {
 		//make table
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 
 		ihi := &IndexHandlerImpl{
-			tch:        tch,
-			dbDesc:     InternalDatabaseDesc,
-			kv:         kv,
-			kvLimit:    uint64(10),
-			serializer: serial,
-			rcc:        &RowColumnConverterImpl{},
+			tch:              tch,
+			dbDesc:           InternalDatabaseDesc,
+			kv:               kv,
+			kvLimit:          uint64(10),
+			serializer:       serial,
+			rcc:              &RowColumnConverterImpl{},
+			layoutSerializer: &DefaultValueLayoutSerializer{Serializer: serial},
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
+		names, attrs := MakeAttributes(types.T_uint64, types.T_uint64, types.T_varchar, types.T_varchar)
 
 		cnt := 10
 
-		bat := MakeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt, names, attrs)
 
-		lines := randomLines(cnt,names,attrs)
+		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
 
-		writeStates := make([]AttributeStateForWrite,4)
+		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
 			writeStates[i].AttrDesc = attrDesc
 			writeStates[i].NeedGenerated = false
@@ -113,7 +115,7 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		}
 
 		err := ihi.WriteIntoIndex(writeCtx, bat)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		wantAttr := []*descriptor.AttributeDesc{
 			&InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_parentID_ID],
@@ -122,11 +124,11 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		}
 
 		readCtx := &ReadContext{
-			DbDesc:                   InternalDatabaseDesc,
-			TableDesc:                InternalDescriptorTableDesc,
-			IndexDesc:                &InternalDescriptorTableDesc.Primary_index,
-			ReadAttributeDescs:       wantAttr,
-			SingleReaderContext:SingleReaderContext{
+			DbDesc:             InternalDatabaseDesc,
+			TableDesc:          InternalDescriptorTableDesc,
+			IndexDesc:          &InternalDescriptorTableDesc.Primary_index,
+			ReadAttributeDescs: wantAttr,
+			SingleReaderContext: SingleReaderContext{
 				CompleteInAllShards:      false,
 				PrefixForScanKey:         nil,
 				LengthOfPrefixForScanKey: 0,
@@ -135,11 +137,11 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		//var bat2 *batch.Batch
 		var readcnt int
 
-		for  {
+		for {
 			//read table
 			_, readcnt, err = ihi.ReadFromIndex(readCtx)
-			convey.So(err,convey.ShouldBeNil)
-			if readcnt == 0 {//done
+			convey.So(err, convey.ShouldBeNil)
+			if readcnt == 0 { //done
 				break
 			}
 		}
@@ -147,31 +149,32 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 }
 
 func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
-	convey.Convey("read from index",t, func() {
+	convey.Convey("read from index", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 
 		ihi := &IndexHandlerImpl{
-			tch:        tch,
-			dbDesc:     InternalDatabaseDesc,
-			kv:         kv,
-			kvLimit:    uint64(10),
-			serializer: serial,
-			rcc:        &RowColumnConverterImpl{},
+			tch:              tch,
+			dbDesc:           InternalDatabaseDesc,
+			kv:               kv,
+			kvLimit:          uint64(10),
+			serializer:       serial,
+			rcc:              &RowColumnConverterImpl{},
+			layoutSerializer: &DefaultValueLayoutSerializer{Serializer: serial},
 		}
 
-		names,attrs := MakeAttributes(types.T_uint64,types.T_uint64,types.T_varchar,types.T_varchar)
+		names, attrs := MakeAttributes(types.T_uint64, types.T_uint64, types.T_varchar, types.T_varchar)
 
 		cnt := 10
 
-		bat := MakeBatch(cnt,names,attrs)
+		bat := MakeBatch(cnt, names, attrs)
 
-		lines := randomLines(cnt,names,attrs)
+		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
 
-		writeStates := make([]AttributeStateForWrite,4)
+		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
 			writeStates[i].AttrDesc = attrDesc
 			writeStates[i].NeedGenerated = false
@@ -189,7 +192,7 @@ func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
 		}
 
 		err := ihi.WriteIntoIndex(writeCtx, bat)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		//wantAttr := []*descriptor.AttributeDesc{
 		//	&InternalDescriptorTableDesc.Attributes[InternalDescriptorTable_parentID_ID],
@@ -215,4 +218,4 @@ func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
 		//convey.So(readcnt, convey.ShouldBeZeroValue)
 
 	})
-} 
+}

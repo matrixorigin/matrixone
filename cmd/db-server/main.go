@@ -136,7 +136,7 @@ func removeEpoch(epoch uint64) {
 	if tpe, ok := config.StorageEngine.(*tpeEngine.TpeEngine); ok {
 		err = tpe.RemoveDeletedTable(epoch)
 		if err != nil {
-			// fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
+			fmt.Printf("tpeEngine remove ddl failed. error :%v \n", err)
 		}
 	}
 
@@ -255,6 +255,7 @@ func main() {
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
 		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
 			tpeConf.KvType = tuplecodec.KV_MEMORY
@@ -270,6 +271,8 @@ func main() {
 			tpeConf.SerialType = tuplecodec.ST_CONCISE
 		} else if configSerializeTyp == "json" {
 			tpeConf.SerialType = tuplecodec.ST_JSON
+		} else if configSerializeTyp == "flat" {
+			tpeConf.SerialType = tuplecodec.ST_FLAT
 		} else {
 			logutil.Infof("there is no such serializerType %s \n", configSerializeTyp)
 			os.Exit(CreateTpeExit)

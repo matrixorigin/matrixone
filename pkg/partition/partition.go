@@ -325,7 +325,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 				if n != isNull {
 					diffs[i] = true
 				} else {
-					diffs[i] = diffs[i] || (bytes.Compare(v, w) != 0)
+					diffs[i] = diffs[i] || !bytes.Equal(v, w)
 				}
 				n = isNull
 				v = w
@@ -334,7 +334,7 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		}
 		for i, sel := range sels {
 			w := vs.Get(sel)
-			diffs[i] = diffs[i] || (bytes.Compare(v, w) != 0)
+			diffs[i] = diffs[i] || !bytes.Equal(v, w)
 			v = w
 		}
 	}

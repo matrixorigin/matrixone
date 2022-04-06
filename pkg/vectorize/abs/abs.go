@@ -14,6 +14,12 @@
 
 package abs
 
+import (
+	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
 var (
 	absUint8   func([]uint8, []uint8) []uint8
 	absUint16  func([]uint16, []uint16) []uint16
@@ -82,6 +88,9 @@ func AbsInt8(xs, rs []int8) []int8 {
 
 func absInt8Pure(xs, rs []int8) []int8 {
 	for i := range xs {
+		if xs[i] == int8(math.MinInt8) {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int8 value out of range"))
+		}
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
 		} else {
@@ -97,6 +106,10 @@ func AbsInt16(xs, rs []int16) []int16 {
 
 func absInt16Pure(xs, rs []int16) []int16 {
 	for i := range xs {
+		if xs[i] == int16(math.MinInt16) {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int16 value out of range"))
+		}
+
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
 		} else {
@@ -112,6 +125,10 @@ func AbsInt32(xs, rs []int32) []int32 {
 
 func absInt32Pure(xs, rs []int32) []int32 {
 	for i := range xs {
+		if xs[i] == int32(math.MinInt32) {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int32 value out of range"))
+		}
+
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
 		} else {
@@ -127,6 +144,9 @@ func AbsInt64(xs, rs []int64) []int64 {
 
 func absInt64Pure(xs, rs []int64) []int64 {
 	for i := range xs {
+		if xs[i] == int64(math.MinInt64) {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int64 value out of range"))
+		}
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
 		} else {

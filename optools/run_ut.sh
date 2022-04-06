@@ -101,7 +101,7 @@ function run_tests(){
         cp -f $CODE_COVERAGE $html_coverage
     else
         logger "INF" "Run UT with race check"
-        go test -v -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
