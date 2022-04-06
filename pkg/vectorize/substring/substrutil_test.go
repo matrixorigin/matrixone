@@ -203,23 +203,22 @@ func TestSliceFromZeroConstantOffsetUnbounded(t *testing.T) {
 }
 
 func TestSliceDynamicOffsetUnbounded(t *testing.T) {
-	// SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, start_column interface{}, start_column_type types.T) *types.Bytes
 	cases := []struct {
-		name       string
-		src_args   *types.Bytes
-		start_args interface{}
-		start_type types.T
-		want       *types.Bytes
+		name      string
+		srcArgs   *types.Bytes
+		startArgs interface{}
+		startType types.T
+		want      *types.Bytes
 	}{
 		{
 			name: "Test01",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []uint8{5},
-			start_type: types.T_uint8,
+			startArgs: []uint8{5},
+			startType: types.T_uint8,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -228,13 +227,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test02",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []uint16{5},
-			start_type: types.T_uint16,
+			startArgs: []uint16{5},
+			startType: types.T_uint16,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -243,13 +242,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test03",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []uint32{5},
-			start_type: types.T_uint32,
+			startArgs: []uint32{5},
+			startType: types.T_uint32,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -258,13 +257,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test04",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []uint64{5},
-			start_type: types.T_uint64,
+			startArgs: []uint64{5},
+			startType: types.T_uint64,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -273,13 +272,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test05",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []int8{-10},
-			start_type: types.T_int8,
+			startArgs: []int8{-10},
+			startType: types.T_int8,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -288,13 +287,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test06",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []int16{-10},
-			start_type: types.T_int16,
+			startArgs: []int16{-10},
+			startType: types.T_int16,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -303,13 +302,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test07",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []int32{-10},
-			start_type: types.T_int32,
+			startArgs: []int32{-10},
+			startType: types.T_int32,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -318,13 +317,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test08",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []int64{-10},
-			start_type: types.T_int64,
+			startArgs: []int64{-10},
+			startType: types.T_int64,
 			want: &types.Bytes{
 				Data:    []byte("efghijklmn"),
 				Lengths: []uint32{uint32(len("efghijklmn"))},
@@ -333,13 +332,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test09",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []uint64{0},
-			start_type: types.T_uint64,
+			startArgs: []uint64{0},
+			startType: types.T_uint64,
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -348,13 +347,13 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 		},
 		{
 			name: "Test10",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args: []int32{0},
-			start_type: types.T_int32,
+			startArgs: []int32{0},
+			startType: types.T_int32,
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -366,12 +365,12 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.src_args.Data)),
-				Lengths: make([]uint32, len(c.src_args.Lengths)),
-				Offsets: make([]uint32, len(c.src_args.Offsets)),
+				Data:    make([]byte, len(c.srcArgs.Data)),
+				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
+				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
 
-			got := SliceDynamicOffsetUnbounded(c.src_args, out, c.start_args, c.start_type)
+			got := SliceDynamicOffsetUnbounded(c.srcArgs, out, c.startArgs, c.startType)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
@@ -737,27 +736,27 @@ func TestSliceFromZeroConstantOffsetBounded(t *testing.T) {
 
 func TestSliceDynamicOffsetBounded(t *testing.T) {
 	cases := []struct {
-		name        string
-		src_args    *types.Bytes
-		start_args  interface{}
-		start_type  types.T
-		lenght_args interface{}
-		length_type types.T
-		cs          []bool
-		want        *types.Bytes
+		name       string
+		srcArgs    *types.Bytes
+		startArgs  interface{}
+		startType  types.T
+		lengthArgs interface{}
+		lengthType types.T
+		cs         []bool
+		want       *types.Bytes
 	}{
 		{
 			name: "Test01",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint8{5},
-			start_type:  types.T_uint8,
-			lenght_args: []uint8{6},
-			length_type: types.T_uint8,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint8{5},
+			startType:  types.T_uint8,
+			lengthArgs: []uint8{6},
+			lengthType: types.T_uint8,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghij"),
 				Lengths: []uint32{uint32(len("efghij"))},
@@ -766,16 +765,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test02",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint16{5},
-			start_type:  types.T_uint16,
-			lenght_args: []uint16{6},
-			length_type: types.T_uint16,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint16{5},
+			startType:  types.T_uint16,
+			lengthArgs: []uint16{6},
+			lengthType: types.T_uint16,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghij"),
 				Lengths: []uint32{uint32(len("efghij"))},
@@ -784,16 +783,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test03",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []uint32{6},
-			length_type: types.T_uint32,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []uint32{6},
+			lengthType: types.T_uint32,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghij"),
 				Lengths: []uint32{uint32(len("efghij"))},
@@ -802,16 +801,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test04",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint64{5},
-			start_type:  types.T_uint64,
-			lenght_args: []uint64{6},
-			length_type: types.T_uint64,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint64{5},
+			startType:  types.T_uint64,
+			lengthArgs: []uint64{6},
+			lengthType: types.T_uint64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghij"),
 				Lengths: []uint32{uint32(len("efghij"))},
@@ -820,16 +819,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test05",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []int64{6},
-			length_type: types.T_int64,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []int64{6},
+			lengthType: types.T_int64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghij"),
 				Lengths: []uint32{uint32(len("efghij"))},
@@ -838,16 +837,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test06",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []int64{-6},
-			length_type: types.T_int64,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []int64{-6},
+			lengthType: types.T_int64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efgh"),
 				Lengths: []uint32{uint32(len("efgh"))},
@@ -856,16 +855,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test07",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []int8{-6},
-			length_type: types.T_int8,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []int8{-6},
+			lengthType: types.T_int8,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efgh"),
 				Lengths: []uint32{uint32(len("efgh"))},
@@ -874,16 +873,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test08",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []int8{0},
-			length_type: types.T_int8,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []int8{0},
+			lengthType: types.T_int8,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -892,16 +891,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test09",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []uint32{5},
-			start_type:  types.T_uint32,
-			lenght_args: []int16{-10},
-			length_type: types.T_int16,
-			cs:          []bool{false, false, false},
+			startArgs:  []uint32{5},
+			startType:  types.T_uint32,
+			lengthArgs: []int16{-10},
+			lengthType: types.T_int16,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -910,16 +909,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test10",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int32{0},
-			start_type:  types.T_int32,
-			lenght_args: []int16{-10},
-			length_type: types.T_int16,
-			cs:          []bool{false, false, false},
+			startArgs:  []int32{0},
+			startType:  types.T_int32,
+			lengthArgs: []int16{-10},
+			lengthType: types.T_int16,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -929,16 +928,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		//----------------------------------------
 		{
 			name: "Test11",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int16{-10},
-			start_type:  types.T_int16,
-			lenght_args: []int16{-2},
-			length_type: types.T_int16,
-			cs:          []bool{false, false, false},
+			startArgs:  []int16{-10},
+			startType:  types.T_int16,
+			lengthArgs: []int16{-2},
+			lengthType: types.T_int16,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efghijkl"),
 				Lengths: []uint32{uint32(len("efghijkl"))},
@@ -947,16 +946,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test12",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int32{-10},
-			start_type:  types.T_int32,
-			lenght_args: []int64{-6},
-			length_type: types.T_int64,
-			cs:          []bool{false, false, false},
+			startArgs:  []int32{-10},
+			startType:  types.T_int32,
+			lengthArgs: []int64{-6},
+			lengthType: types.T_int64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("efgh"),
 				Lengths: []uint32{uint32(len("efgh"))},
@@ -965,16 +964,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test13",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int8{-10},
-			start_type:  types.T_int8,
-			lenght_args: []int32{-12},
-			length_type: types.T_int32,
-			cs:          []bool{false, false, false},
+			startArgs:  []int8{-10},
+			startType:  types.T_int8,
+			lengthArgs: []int32{-12},
+			lengthType: types.T_int32,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -983,16 +982,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test14",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int16{-10},
-			start_type:  types.T_int16,
-			lenght_args: []int32{0},
-			length_type: types.T_int32,
-			cs:          []bool{false, false, false},
+			startArgs:  []int16{-10},
+			startType:  types.T_int16,
+			lengthArgs: []int32{0},
+			lengthType: types.T_int32,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -1001,16 +1000,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test15",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int32{-10},
-			start_type:  types.T_int32,
-			lenght_args: []int64{-9},
-			length_type: types.T_int64,
-			cs:          []bool{false, false, false},
+			startArgs:  []int32{-10},
+			startType:  types.T_int32,
+			lengthArgs: []int64{-9},
+			lengthType: types.T_int64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte("e"),
 				Lengths: []uint32{uint32(len("e"))},
@@ -1019,16 +1018,16 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 		},
 		{
 			name: "Test16",
-			src_args: &types.Bytes{
+			srcArgs: &types.Bytes{
 				Data:    []byte("abcdefghijklmn"),
 				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
 				Offsets: []uint32{0},
 			},
-			start_args:  []int32{-10},
-			start_type:  types.T_int32,
-			lenght_args: []int64{-10},
-			length_type: types.T_int64,
-			cs:          []bool{false, false, false},
+			startArgs:  []int32{-10},
+			startType:  types.T_int32,
+			lengthArgs: []int64{-10},
+			lengthType: types.T_int64,
+			cs:         []bool{false, false, false},
 			want: &types.Bytes{
 				Data:    []byte(""),
 				Lengths: []uint32{uint32(len(""))},
@@ -1040,15 +1039,12 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.src_args.Data)),
-				Lengths: make([]uint32, len(c.src_args.Lengths)),
-				Offsets: make([]uint32, len(c.src_args.Offsets)),
+				Data:    make([]byte, len(c.srcArgs.Data)),
+				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
+				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
-			// func SliceDynamicOffsetBounded(src *types.Bytes, res *types.Bytes,
-			// 	start_column interface{}, start_column_type types.T,
-			// 	length_column interface{}, length_column_type types.T) *types.Bytes
 
-			got := SliceDynamicOffsetBounded(c.src_args, out, c.start_args, c.start_type, c.lenght_args, c.length_type, c.cs)
+			got := SliceDynamicOffsetBounded(c.srcArgs, out, c.startArgs, c.startType, c.lengthArgs, c.lengthType, c.cs)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}

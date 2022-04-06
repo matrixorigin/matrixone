@@ -170,7 +170,7 @@ func SliceFromZeroConstantOffsetBounded(src *types.Bytes, res *types.Bytes) *typ
 }
 
 //Without binding the length parameter, dynamically cut the string
-func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, start_column interface{}, start_column_type types.T) *types.Bytes {
+func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -178,31 +178,31 @@ func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, start_colum
 		//get substring str parameter value of bytes
 		bytes := src.Data[cursor : cursor+curLen]
 		//get substring pos parameter value
-		var start_value int64
+		var startValue int64
 
-		switch start_column_type {
+		switch startColumnType {
 		case types.T_uint8:
-			start_value = int64(start_column.([]uint8)[idx])
+			startValue = int64(startColumn.([]uint8)[idx])
 		case types.T_uint16:
-			start_value = int64(start_column.([]uint16)[idx])
+			startValue = int64(startColumn.([]uint16)[idx])
 		case types.T_uint32:
-			start_value = int64(start_column.([]uint32)[idx])
+			startValue = int64(startColumn.([]uint32)[idx])
 		case types.T_uint64:
-			start_value = int64(start_column.([]uint64)[idx])
+			startValue = int64(startColumn.([]uint64)[idx])
 		case types.T_int8:
-			start_value = int64(start_column.([]int8)[idx])
+			startValue = int64(startColumn.([]int8)[idx])
 		case types.T_int16:
-			start_value = int64(start_column.([]int16)[idx])
+			startValue = int64(startColumn.([]int16)[idx])
 		case types.T_int32:
-			start_value = int64(start_column.([]int32)[idx])
+			startValue = int64(startColumn.([]int32)[idx])
 		case types.T_int64:
-			start_value = start_column.([]int64)[idx]
+			startValue = startColumn.([]int64)[idx]
 		default:
-			start_value = int64(1)
+			startValue = int64(1)
 		}
 
-		if start_value > 0 {
-			slice, size := getSliceFromLeft(bytes, start_value-1)
+		if startValue > 0 {
+			slice, size := getSliceFromLeft(bytes, startValue-1)
 			for _, b := range slice {
 				res.Data[retCursor] = b
 				retCursor++
@@ -213,8 +213,8 @@ func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, start_colum
 				res.Offsets[idx] = uint32(0)
 			}
 			res.Lengths[idx] = uint32(size)
-		} else if start_value < 0 {
-			slice, size := getSliceFromRight(bytes, -start_value)
+		} else if startValue < 0 {
+			slice, size := getSliceFromRight(bytes, -startValue)
 			for _, b := range slice {
 				res.Data[retCursor] = b
 				retCursor++
@@ -244,7 +244,6 @@ func SliceFromLeftConstantOffsetBounded(src *types.Bytes, res *types.Bytes, star
 		cursor := offset
 		curLen := src.Lengths[idx]
 
-		//获取当前行源字符串对应的byte切片
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromLeftWithLength(bytes, start, length)
 		for _, b := range slice {
@@ -285,8 +284,8 @@ func SliceFromRightConstantOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 }
 
 // bound the length parameter, dynamically cut the string
-func SliceDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, start_column interface{}, start_column_type types.T,
-	length_column interface{}, length_column_type types.T, cs []bool) *types.Bytes {
+func SliceDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
+	lengthColumn interface{}, lengthColumnType types.T, cs []bool) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -295,25 +294,25 @@ func SliceDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, start_column 
 		bytes := src.Data[cursor : cursor+curLen]
 
 		//get substring pos parameter value
-		start_value := getColumnValue(start_column, start_column_type, idx, cs[1])
+		startValue := getColumnValue(startColumn, startColumnType, idx, cs[1])
 		//get substring len parameter value
-		length_value := getColumnValue(length_column, length_column_type, idx, cs[2])
+		lengthValue := getColumnValue(lengthColumn, lengthColumnType, idx, cs[2])
 
-		if length_value < 0 {
-			if start_value > 0 {
-				length_value += int64(curLen) - (start_value - 1)
+		if lengthValue < 0 {
+			if startValue > 0 {
+				lengthValue += int64(curLen) - (startValue - 1)
 			} else {
-				length_value += -start_value
+				lengthValue += -startValue
 			}
 		}
 
-		if start_value != 0 && length_value > 0 {
+		if startValue != 0 && lengthValue > 0 {
 			var slice []byte
 			var size int64
-			if start_value > 0 {
-				slice, size = getSliceFromLeftWithLength(bytes, start_value-1, length_value)
+			if startValue > 0 {
+				slice, size = getSliceFromLeftWithLength(bytes, startValue-1, lengthValue)
 			} else {
-				slice, size = getSliceFromRightWithLength(bytes, -start_value, length_value)
+				slice, size = getSliceFromRightWithLength(bytes, -startValue, lengthValue)
 			}
 			for _, b := range slice {
 				res.Data[retCursor] = b
@@ -346,28 +345,28 @@ func min(x, y int64) int64 {
 }
 
 // get value of column by index
-func getColumnValue(src_column interface{}, column_type types.T, idx int, isConsttant bool) int64 {
+func getColumnValue(srcColumn interface{}, columnType types.T, idx int, isConsttant bool) int64 {
 	var dstValue int64
 	if isConsttant {
 		idx = 0
 	}
-	switch column_type {
+	switch columnType {
 	case types.T_uint8:
-		dstValue = int64(src_column.([]uint8)[idx])
+		dstValue = int64(srcColumn.([]uint8)[idx])
 	case types.T_uint16:
-		dstValue = int64(src_column.([]uint16)[idx])
+		dstValue = int64(srcColumn.([]uint16)[idx])
 	case types.T_uint32:
-		dstValue = int64(src_column.([]uint32)[idx])
+		dstValue = int64(srcColumn.([]uint32)[idx])
 	case types.T_uint64:
-		dstValue = int64(src_column.([]uint64)[idx])
+		dstValue = int64(srcColumn.([]uint64)[idx])
 	case types.T_int8:
-		dstValue = int64(src_column.([]int8)[idx])
+		dstValue = int64(srcColumn.([]int8)[idx])
 	case types.T_int16:
-		dstValue = int64(src_column.([]int16)[idx])
+		dstValue = int64(srcColumn.([]int16)[idx])
 	case types.T_int32:
-		dstValue = int64(src_column.([]int32)[idx])
+		dstValue = int64(srcColumn.([]int32)[idx])
 	case types.T_int64:
-		dstValue = src_column.([]int64)[idx]
+		dstValue = srcColumn.([]int64)[idx]
 	default:
 		dstValue = int64(1)
 	}

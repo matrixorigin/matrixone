@@ -231,201 +231,201 @@ func init() {
 			Fn: func(inputVecs []*vector.Vector, proc *process.Process, cs []bool) (*vector.Vector, error) {
 				// get the number of substr function parameters
 				var paramNum int = len(inputVecs)
-				column_src_col := inputVecs[0].Col.(*types.Bytes)
-				var column_start_const bool = cs[1]
+				columnSrcCol := inputVecs[0].Col.(*types.Bytes)
+				var columnStartConst bool = cs[1]
 
 				// Substr function has no length parameter
 				if paramNum == 2 {
-					if column_start_const {
+					if columnStartConst {
 						// get start constant value
-						start_value := inputVecs[1].Col.([]int64)[0]
-						if start_value > 0 {
+						startValue := inputVecs[1].Col.([]int64)[0]
+						if startValue > 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetUnbounded(column_src_col, column_src_col, start_value-1)
+								substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							// set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(column_src_col, results, start_value-1))
+							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, results, startValue-1))
 							return resultVec, nil
-						} else if start_value < 0 {
+						} else if startValue < 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetUnbounded(column_src_col, column_src_col, -start_value)
+								substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(column_src_col, results, -start_value))
+							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, results, -startValue))
 							return resultVec, nil
 						} else {
-							//start_value == 0
+							//startValue == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetUnbounded(column_src_col, column_src_col)
+								substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(column_src_col, results))
+							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
 						//The pos column is a variable or an expression
-						column_start_col := inputVecs[1].Col
-						column_start_type := inputVecs[1].Typ.Oid
+						columnStartCol := inputVecs[1].Col
+						columnStartType := inputVecs[1].Typ.Oid
 
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetUnbounded(column_src_col, column_src_col, column_start_col, column_start_type)
+							substring.SliceDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
-						resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+						resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 						if err != nil {
 							return nil, err
 						}
 						results := &types.Bytes{
 							Data:    resultVec.Data,
-							Offsets: make([]uint32, len(column_src_col.Offsets)),
-							Lengths: make([]uint32, len(column_src_col.Lengths)),
+							Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+							Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(column_src_col, results, column_start_col, column_start_type))
+						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 						return resultVec, nil
 					}
 				} else {
 					//Substring column with length parameter
-					var column_length_const bool = cs[2]
-					if column_start_const && column_length_const {
+					var columnLengthConst bool = cs[2]
+					if columnStartConst && columnLengthConst {
 						// get start constant value
-						start_value := inputVecs[1].Col.([]int64)[0]
+						startValue := inputVecs[1].Col.([]int64)[0]
 						// get length constant value
-						length_value := inputVecs[2].Col.([]int64)[0]
-						if start_value > 0 {
+						lengthValue := inputVecs[2].Col.([]int64)[0]
+						if startValue > 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetBounded(column_src_col, column_src_col, start_value-1, length_value)
+								substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
-								resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+								resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 								if err != nil {
 									return nil, err
 								}
 								results := &types.Bytes{
 									Data:    resultVec.Data,
-									Offsets: make([]uint32, len(column_src_col.Offsets)),
-									Lengths: make([]uint32, len(column_src_col.Lengths)),
+									Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+									Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(column_src_col, results, start_value-1, length_value))
+								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 								return resultVec, nil
 							}
-						} else if start_value < 0 {
+						} else if startValue < 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetBounded(column_src_col, column_src_col, -start_value, length_value)
+								substring.SliceFromRightConstantOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
-								resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+								resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 								if err != nil {
 									return nil, err
 								}
 								results := &types.Bytes{
 									Data:    resultVec.Data,
-									Offsets: make([]uint32, len(column_src_col.Offsets)),
-									Lengths: make([]uint32, len(column_src_col.Lengths)),
+									Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+									Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(column_src_col, results, -start_value, length_value))
+								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 								return resultVec, nil
 							}
 						} else {
-							//start_value == 0
+							//startValue == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetBounded(column_src_col, column_src_col)
+								substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(column_src_col, results))
+							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
-						column_start_col := inputVecs[1].Col
-						column_start_type := inputVecs[1].Typ.Oid
-						column_length_col := inputVecs[2].Col
-						column_length_type := inputVecs[2].Typ.Oid
+						columnStartCol := inputVecs[1].Col
+						columnStartType := inputVecs[1].Typ.Oid
+						columnLengthCol := inputVecs[2].Col
+						columnLengthType := inputVecs[2].Typ.Oid
 
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetBounded(column_src_col, column_src_col, column_start_col, column_start_type, column_length_col, column_length_type, cs)
+							substring.SliceDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
-						resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_char, Size: 24})
+						resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_char, Size: 24})
 						if err != nil {
 							return nil, err
 						}
 						results := &types.Bytes{
 							Data:    resultVec.Data,
-							Offsets: make([]uint32, len(column_src_col.Offsets)),
-							Lengths: make([]uint32, len(column_src_col.Lengths)),
+							Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+							Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(column_src_col, results, column_start_col, column_start_type, column_length_col, column_length_type, cs))
+						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 						return resultVec, nil
 					}
 				}
@@ -440,201 +440,201 @@ func init() {
 			Fn: func(inputVecs []*vector.Vector, proc *process.Process, cs []bool) (*vector.Vector, error) {
 				// get the number of substr function parameters
 				var paramNum int = len(inputVecs)
-				column_src_col := inputVecs[0].Col.(*types.Bytes)
-				var column_start_const bool = cs[1]
+				columnSrcCol := inputVecs[0].Col.(*types.Bytes)
+				var columnStartConst bool = cs[1]
 
 				// Substr function has no length parameter
 				if paramNum == 2 {
-					if column_start_const {
+					if columnStartConst {
 						// get start constant value
-						start_value := inputVecs[1].Col.([]int64)[0]
-						if start_value > 0 {
+						startValue := inputVecs[1].Col.([]int64)[0]
+						if startValue > 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetUnbounded(column_src_col, column_src_col, start_value-1)
+								substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(column_src_col, results, start_value-1))
+							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, results, startValue-1))
 							return resultVec, nil
-						} else if start_value < 0 {
+						} else if startValue < 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetUnbounded(column_src_col, column_src_col, -start_value)
+								substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(column_src_col, results, -start_value))
+							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, results, -startValue))
 							return resultVec, nil
 						} else {
 							//start_value == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetUnbounded(column_src_col, column_src_col)
+								substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(column_src_col, results))
+							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
 						//The start column is a variable or an expression
-						column_start_col := inputVecs[1].Col
-						column_start_type := inputVecs[1].Typ.Oid
+						columnStartCol := inputVecs[1].Col
+						columnStartType := inputVecs[1].Typ.Oid
 
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetUnbounded(column_src_col, column_src_col, column_start_col, column_start_type)
+							substring.SliceDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
-						resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+						resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 						if err != nil {
 							return nil, err
 						}
 						results := &types.Bytes{
 							Data:    resultVec.Data,
-							Offsets: make([]uint32, len(column_src_col.Offsets)),
-							Lengths: make([]uint32, len(column_src_col.Lengths)),
+							Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+							Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(column_src_col, results, column_start_col, column_start_type))
+						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 						return resultVec, nil
 					}
 				} else {
 					//Substring column with length parameter
-					var column_length_const bool = cs[2]
-					if column_start_const && column_length_const {
+					var columnLengthConst bool = cs[2]
+					if columnStartConst && columnLengthConst {
 						// get start constant value
-						start_value := inputVecs[1].Col.([]int64)[0]
+						startValue := inputVecs[1].Col.([]int64)[0]
 						// get length constant value
-						length_value := inputVecs[2].Col.([]int64)[0]
-						if start_value > 0 {
+						lengthValue := inputVecs[2].Col.([]int64)[0]
+						if startValue > 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetBounded(column_src_col, column_src_col, start_value-1, length_value)
+								substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
-								resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+								resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 								if err != nil {
 									return nil, err
 								}
 								results := &types.Bytes{
 									Data:    resultVec.Data,
-									Offsets: make([]uint32, len(column_src_col.Offsets)),
-									Lengths: make([]uint32, len(column_src_col.Lengths)),
+									Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+									Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(column_src_col, results, start_value-1, length_value))
+								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 								return resultVec, nil
 							}
-						} else if start_value < 0 {
+						} else if startValue < 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetBounded(column_src_col, column_src_col, -start_value, length_value)
+								substring.SliceFromRightConstantOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
-								resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+								resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 								if err != nil {
 									return nil, err
 								}
 								results := &types.Bytes{
 									Data:    resultVec.Data,
-									Offsets: make([]uint32, len(column_src_col.Offsets)),
-									Lengths: make([]uint32, len(column_src_col.Lengths)),
+									Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+									Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(column_src_col, results, -start_value, length_value))
+								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 								return resultVec, nil
 							}
 						} else {
 							//start_value == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetBounded(column_src_col, column_src_col)
+								substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
-							resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+							resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 							if err != nil {
 								return nil, err
 							}
 							results := &types.Bytes{
 								Data:    resultVec.Data,
-								Offsets: make([]uint32, len(column_src_col.Offsets)),
-								Lengths: make([]uint32, len(column_src_col.Lengths)),
+								Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+								Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(column_src_col, results))
+							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
-						column_start_col := inputVecs[1].Col
-						column_start_type := inputVecs[1].Typ.Oid
-						column_length_col := inputVecs[2].Col
-						column_length_type := inputVecs[2].Typ.Oid
+						columnStartCol := inputVecs[1].Col
+						columnStartType := inputVecs[1].Typ.Oid
+						columnLengthCol := inputVecs[2].Col
+						columnLengthType := inputVecs[2].Typ.Oid
 
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetBounded(column_src_col, column_src_col, column_start_col, column_start_type, column_length_col, column_length_type, cs)
+							substring.SliceDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
-						resultVec, err := process.Get(proc, int64(len(column_src_col.Data)), types.Type{Oid: types.T_varchar, Size: 24})
+						resultVec, err := process.Get(proc, int64(len(columnSrcCol.Data)), types.Type{Oid: types.T_varchar, Size: 24})
 						if err != nil {
 							return nil, err
 						}
 						results := &types.Bytes{
 							Data:    resultVec.Data,
-							Offsets: make([]uint32, len(column_src_col.Offsets)),
-							Lengths: make([]uint32, len(column_src_col.Lengths)),
+							Offsets: make([]uint32, len(columnSrcCol.Offsets)),
+							Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(column_src_col, results, column_start_col, column_start_type, column_length_col, column_length_type, cs))
+						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 						return resultVec, nil
 					}
 				}
