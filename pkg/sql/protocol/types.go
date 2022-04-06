@@ -71,6 +71,10 @@ const (
 	VarianceRing
 	// BitAnd
 	BitAndNumericRing
+	//Bitor
+	BitOrRing
+	// BitXor
+	BitXorRing
 )
 
 // colexec
