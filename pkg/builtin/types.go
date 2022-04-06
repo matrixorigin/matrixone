@@ -30,6 +30,7 @@ const (
 	Exp
 	Power
 	Pi
+	Space
 	Reverse
 	UTCTimestamp
 	Ltrim
