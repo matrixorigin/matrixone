@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/axiomhq/hyperloglog"
@@ -878,6 +879,11 @@ func TestRing(t *testing.T) {
 			BitAndResult: []uint64{6112323, 34542345346, 234, 23412312},
 			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&bitxor.BitXorRing{
+			Values:     []uint64{5234232, 6345123, 7345312, 878956},
+			NullCounts: []int64{56784567, 123123908950, 9089374534},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
 	}
 	for _, r := range ringArray {
 		var buf bytes.Buffer
@@ -893,6 +899,27 @@ func TestRing(t *testing.T) {
 		}
 
 		switch ExpectRing := resultRing.(type) {
+		case *bitxor.BitXorRing:
+			oriRing := r.(*bitxor.BitXorRing)
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.Values)) {
+				t.Errorf("Decode bit_xor numeric ring data failed")
+				return
+			}
+			// NullCnt
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode bit_xor int ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
+					return
+				}
+			}
+			// BitAndResult
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode bit_xor int ring BitAndResult failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
+					return
+				}
+			}
 		case *bitand.NumericRing:
 			oriRing := r.(*bitand.NumericRing)
 			// Data
