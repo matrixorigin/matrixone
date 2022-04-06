@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -354,24 +355,21 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 		}
 	}
 	prefix := " "
-	if attributeDefs != nil {
-		for _, a := range attributeDefs {
-			buf.WriteString(prefix)
-			a.Format(&buf)
-			prefix = ",\n "
-		}
+	for _, a := range attributeDefs {
+		buf.WriteString(prefix)
+		a.Format(&buf)
+		prefix = ",\n "
 	}
+
 	if len(primaryIndexDef.Names) > 0 {
 		buf.WriteString(prefix)
 		primaryIndexDef.Format(&buf)
 		prefix = ",\n "
 	}
-	if indexTableDefs != nil {
-		for _, idx := range indexTableDefs {
-			buf.WriteString(prefix)
-			idx.Format(&buf)
-			prefix = ",\n "
-		}
+	for _, idx := range indexTableDefs {
+		buf.WriteString(prefix)
+		idx.Format(&buf)
+		prefix = ",\n "
 	}
 	buf.WriteString("\n)")
 
@@ -457,7 +455,12 @@ func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
 }
 
 // Run read data from storage engine and run the instructions of scope.
-func (s *Scope) Run(e engine.Engine) error {
+func (s *Scope) Run(e engine.Engine) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+		}
+	}()
 	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
 	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
 		return err

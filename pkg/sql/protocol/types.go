@@ -72,7 +72,9 @@ const (
 	// BitAnd
 	BitAndNumericRing
 	//Bitor
-	BitOrUint64Ring
+	BitOrRing
+	// BitXor
+	BitXorRing
 )
 
 // colexec

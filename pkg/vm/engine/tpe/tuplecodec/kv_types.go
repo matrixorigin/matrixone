@@ -14,6 +14,8 @@
 
 package tuplecodec
 
+import "github.com/matrixorigin/matrixcube/pb/metapb"
+
 type KVType int
 
 const (
@@ -87,15 +89,17 @@ type ShardNode struct {
 	//the address of the store of the leader replica of the shard
 	Addr string
 	//the id of the store of the leader replica of the shard
-	ID uint64
+	StoreID uint64
 	//the bytes of the id
-	IDbytes string
+	StoreIDbytes string
 }
 
 type ShardInfo struct {
-	startKey []byte
-	endKey   []byte
-	node     ShardNode
+	startKey   []byte
+	endKey     []byte
+	shardID    uint64
+	statistics metapb.ShardStats
+	node       ShardNode
 }
 
 func (si ShardInfo) GetStartKey() []byte {
@@ -104,6 +108,13 @@ func (si ShardInfo) GetStartKey() []byte {
 
 func (si ShardInfo) GetEndKey() []byte {
 	return si.endKey
+}
+
+func (si ShardInfo) GetShardID() uint64 {
+	return si.shardID
+}
+func (si ShardInfo) GetStatistics() metapb.ShardStats {
+	return si.statistics
 }
 
 func (si ShardInfo) GetShardNode() ShardNode {
