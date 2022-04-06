@@ -190,13 +190,13 @@ func (i *BlockZoneMapIndex) Unmarshal(data []byte) error {
 		i.MinV = encoding.DecodeDate(buf[:4])
 		buf = buf[4:]
 		i.MaxV = encoding.DecodeDate(buf[:4])
-		buf = buf[4:]
+		// buf = buf[4:] // unused
 		return nil
 	case types.T_datetime:
 		i.MinV = encoding.DecodeDatetime(buf[:8])
 		buf = buf[8:]
 		i.MaxV = encoding.DecodeDatetime(buf[:8])
-		buf = buf[8:]
+		// buf = buf[8:] // unused
 		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		lenminv := encoding.DecodeInt16(buf[:2])

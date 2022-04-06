@@ -301,7 +301,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
-	logutil.Infof(" %s | SegmentFile | Destorying", name)
+	logutil.Infof(" %s | SegmentFile | Destroying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

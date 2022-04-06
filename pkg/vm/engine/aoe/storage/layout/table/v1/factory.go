@@ -15,7 +15,6 @@ package table
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
@@ -24,7 +23,7 @@ type blockFactory struct {
 	nodeFactory base.NodeFactory
 }
 
-func newBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *blockFactory {
+func newBlockFactory(mutFactory base.MutFactory, tabledata iface.ITableData) *blockFactory {
 	f := &blockFactory{}
 	if mutFactory != nil {
 		f.nodeFactory = mutFactory.GetNodeFactroy(tabledata)

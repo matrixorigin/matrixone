@@ -54,10 +54,7 @@ func (blk *baseBlock) GetMeta() *metadata.Block { return blk.meta }
 func (blk *baseBlock) GetType() base.BlockType  { return blk.typ }
 func (blk *baseBlock) GetRowCount() uint64      { return blk.meta.GetCountLocked() }
 func (blk *baseBlock) IsMutable() bool {
-	if blk.typ >= base.PERSISTENT_BLK {
-		return false
-	}
-	return true
+	return blk.typ < base.PERSISTENT_BLK 
 }
 
 func (blk *baseBlock) WeakRefSegment() iface.ISegment      { return blk.host }

@@ -62,10 +62,7 @@ func (it *SegmentLinkIt) Next() {
 }
 
 func (it *SegmentLinkIt) Valid() bool {
-	if it.Cursor != nil {
-		return true
-	}
-	return false
+	return it.Cursor != nil
 }
 
 func (it *SegmentLinkIt) GetHandle() dbi.ISegment {

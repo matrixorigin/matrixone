@@ -48,9 +48,10 @@ var (
 	moduleName = "Meta"
 )
 
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
+// Unused
+// func getTestPath(t *testing.T) string {
+// 	return testutils.GetDefaultTestPath(moduleName, t)
+// }
 
 func initTestEnv(t *testing.T) string {
 	testutils.RemoveDefaultTestPath(moduleName, t)
@@ -871,7 +872,7 @@ func TestAppliedIndex(t *testing.T) {
 	}
 	indexWal.SyncLog(index)
 	tbl.SimpleSoftDelete(index)
-	snip = blk.ConsumeSnippet(false)
+	blk.ConsumeSnippet(false)
 	indexWal.Checkpoint(index)
 
 	testutils.WaitExpect(50, func() bool {
@@ -1577,7 +1578,7 @@ func TestIndice(t *testing.T) {
 	_, err = indice.MakeIndex("idx-0", NumBsi, 0)
 	assert.Nil(t, err)
 	_, err = indice.MakeIndex("idx-0", NumBsi, 1)
-	assert.Equal(t, DupIndexErr, err)
+	assert.Equal(t, ErrDupIndex, err)
 
 	err = table.SimpleAddIndice(indice.Indice, gen.Next(database.ShardId))
 	assert.Nil(t, err)
@@ -1593,7 +1594,7 @@ func TestIndice(t *testing.T) {
 	names := []string{"idx-2"}
 	logIndex := gen.Next(database.ShardId)
 	err = table.SimpleDropIndice(names, logIndex)
-	assert.Equal(t, IndexNotFoundErr, err)
+	assert.Equal(t, ErrIndexNotFound, err)
 	assert.Equal(t, 2, table.GetIndexSchema().IndiceNum())
 
 	names = []string{"idx-0"}

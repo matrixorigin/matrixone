@@ -98,12 +98,12 @@ func (bf *BlockFile) GetDir() string {
 
 func (bf *BlockFile) close() {
 	bf.Close()
-	bf.Destory()
+	bf.Destroy()
 }
 
-func (bf *BlockFile) Destory() {
+func (bf *BlockFile) Destroy() {
 	name := bf.Name()
-	logutil.Infof(" %s | BlockFile | Destorying", name)
+	logutil.Infof(" %s | BlockFile | Destroying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

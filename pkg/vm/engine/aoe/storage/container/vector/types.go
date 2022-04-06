@@ -28,10 +28,10 @@ import (
 )
 
 var (
-	VecNotRoErr = errors.New("should only be called in read-only mode")
-	VecWriteRoErr       = errors.New("write on readonly vector")
-	VecInvalidOffsetErr = errors.New("invalid offset error")
-	VecTypeNotSupportErr = errors.New("type not supported yet")
+	ErrVecNotRo = errors.New("should only be called in read-only mode")
+	ErrVecWriteRo       = errors.New("write on readonly vector")
+	ErrVecInvalidOffset = errors.New("invalid offset error")
+	ErrVecTypeNotSupport = errors.New("type not supported yet")
 )
 
 type IVectorWriter interface {

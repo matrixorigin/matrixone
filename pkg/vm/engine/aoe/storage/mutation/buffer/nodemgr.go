@@ -80,7 +80,6 @@ func (mgr *nodeManager) RegisterNode(node base.INode) {
 		panic(fmt.Sprintf("Duplicate node: %s", id.BlockString()))
 	}
 	mgr.nodes[id] = node
-	return
 }
 
 func (mgr *nodeManager) UnregisterNode(node base.INode) {
