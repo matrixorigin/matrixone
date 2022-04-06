@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	log "github.com/sirupsen/logrus"
 
@@ -243,7 +242,11 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 	return nil
 }
 
+<<<<<<< HEAD
 func (r *relation) NewReader(num int, _ extend.Extend, _ []byte) []engine.Reader {
+=======
+func (r *relation) NewReader(num int) []engine.Reader {
+>>>>>>> e54f78b7 (modify update plan)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++

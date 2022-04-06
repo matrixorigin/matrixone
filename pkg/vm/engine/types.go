@@ -148,8 +148,12 @@ type Relation interface {
 	AddTableDef(uint64, TableDef) error
 	DelTableDef(uint64, TableDef) error
 
+<<<<<<< HEAD
 	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
 	NewReader(int, extend.Extend, []byte) []Reader
+=======
+	NewReader(int) []Reader // first argument is the number of reader
+>>>>>>> e54f78b7 (modify update plan)
 }
 
 type Reader interface {

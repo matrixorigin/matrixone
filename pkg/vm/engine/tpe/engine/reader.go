@@ -40,7 +40,6 @@ var (
 
 /*
 func (tr *  TpeReader) NewFilter() engine.Filter {
->>>>>>> 985fad5f (refactoring update/delete plan)
 	return nil
 }
 
@@ -157,6 +156,10 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 						tr.shardInfos[tr.readCtx.ShardIndex],
 						tr.readCtx.ParallelReaderContext,
 					)
+<<<<<<< HEAD
+=======
+				tr.readCtx.ShardIndex++
+>>>>>>> e54f78b7 (modify update plan)
 				} else {
 					return nil, nil
 				}

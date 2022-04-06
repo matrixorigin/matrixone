@@ -28,5 +28,4 @@ type Argument struct {
 	UpdateList      []extend.UpdateExtend
 	UpdateAttrs     []string
 	OtherAttrs		[]string
-	HasModifyPriKey bool
 }

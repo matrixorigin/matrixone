@@ -21,15 +21,10 @@ import (
 )
 
 func UpdateEval(typ, toTyp types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
-	if rule, ok := binaryOpsNeedCast(EQ, toTyp, typ); ok {
-		var err error
-		rightCast := rule.targetTypes[1]
-		if !v.Typ.Eq(rightCast) {
-			v, err = BinaryEval(Typecast, typ, rightCast.Oid, c, false, v, vector.New(rightCast), p)
-			if err != nil {
-				return nil, err
-			}
-		}
+	var err error
+	v, err = BinaryEval(Typecast, typ, toTyp, c, false, v, vector.New(types.Type{Oid: toTyp}), p)
+	if err != nil {
+		return nil, err
 	}
 	return v, nil
 }

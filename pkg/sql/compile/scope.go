@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 	"math"
 	"net"
 	"runtime"
@@ -453,7 +454,7 @@ func (s *Scope) Delete(ts uint64, e engine.Engine) (uint64, error) {
 // Update will update rows from a single of table
 func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
 	s.Magic = Merge
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deleteTag.Argument)
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*updateTag.Argument)
 	arg.Ts = ts
 	defer arg.Relation.Close()
 	if err := s.MergeRun(e); err != nil {
@@ -650,7 +651,11 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
+<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
+=======
+		rds = rel.NewReader(mcpu)
+>>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -816,7 +821,11 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
+<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
+=======
+		rds = rel.NewReader(mcpu)
+>>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
@@ -1005,7 +1014,11 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 			return err
 		}
 		defer rel.Close()
+<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
+=======
+		rds = rel.NewReader(mcpu)
+>>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
