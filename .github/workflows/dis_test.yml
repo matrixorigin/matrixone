@@ -74,4 +74,4 @@ jobs:
         with:
           name: distributed-tests-log
           path: log/
-        retention-days: 7 
+          retention-days: 7 
