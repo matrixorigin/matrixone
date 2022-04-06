@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -879,6 +880,11 @@ func TestRing(t *testing.T) {
 			BitAndResult: []uint64{6112323, 34542345346, 234, 23412312},
 			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&bitor.BitOrRing{
+			NullCounts:  []int64{8902345, 123123908950, 9089374534},
+			Values:  []uint64{6112323, 34542345346, 234, 23412312},
+			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
 		&bitxor.BitXorRing{
 			Values:     []uint64{5234232, 6345123, 7345312, 878956},
 			NullCounts: []int64{56784567, 123123908950, 9089374534},
@@ -1557,6 +1563,27 @@ func TestRing(t *testing.T) {
 			for i, v := range oriRing.SumX2 {
 				if !reflect.DeepEqual(ExpectRing.SumX2[i], v) {
 					t.Errorf("Decode varRing Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.SumX2[i])
+					return
+				}
+			}
+		case *bitor.BitOrRing:
+			oriRing := r.(*bitor.BitOrRing)
+			// Data
+			if string(ExpectRing.Data) != string(encoding.EncodeUint64Slice(oriRing.Values)) {
+				t.Errorf("Decode ring Data failed.")
+				return
+			}
+			// NullCounts
+			for i, n := range oriRing.NullCounts {
+				if ExpectRing.NullCounts[i] != n {
+					t.Errorf("Decode ring NullCounts failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.NullCounts[i])
+					return
+				}
+			}
+			// Values
+			for i, v := range oriRing.Values {
+				if ExpectRing.Values[i] != v {
+					t.Errorf("Decode ring Values failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Values[i])
 					return
 				}
 			}
