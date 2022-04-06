@@ -884,6 +884,7 @@ func TestRing(t *testing.T) {
 			NullCounts:  []int64{8902345, 123123908950, 9089374534},
 			Values:  []uint64{6112323, 34542345346, 234, 23412312},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+		},
 		&bitxor.BitXorRing{
 			Values:     []uint64{5234232, 6345123, 7345312, 878956},
 			NullCounts: []int64{56784567, 123123908950, 9089374534},

@@ -27,8 +27,8 @@ func TestBitOr(t *testing.T) {
 	// verify that if we can calculates
 
 	// 1. make the test case
-	v1 := NewUint64Ring(types.Type{Oid: types.T_int32})
-	v2 := v1.Dup().(*Uint64Ring)
+	v1 := NewBitOr(types.Type{Oid: types.T_int32})
+	v2 := v1.Dup().(*BitOrRing)
 	{ 
 		v1.Values = []uint64{1,2,8}
 		v1.NullCounts = []int64{1, 1,0}
