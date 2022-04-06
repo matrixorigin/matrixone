@@ -268,7 +268,6 @@ func SliceFromRightConstantOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 		cursor := offset
 		curLen := src.Lengths[idx]
 
-		//获取当前行源字符串对应的byte切片
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromRightWithLength(bytes, start, length)
 		for _, b := range slice {
