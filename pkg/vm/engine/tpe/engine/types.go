@@ -15,6 +15,8 @@
 package engine
 
 import (
+	"fmt"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -72,9 +74,14 @@ type ShardNode struct {
 	//the address of the store of the leader replica of the shard
 	Addr string
 	//the id of the store of the leader replica of the shard
-	ID uint64
+	StoreID uint64
 	//the bytes of the id
-	IDbytes string
+	StoreIDbytes string
+	Statistics   metapb.ShardStats
+}
+
+func (sn ShardNode) String() string {
+	return fmt.Sprintf("ShardNode{ Addr %v ID %v IDbytes %v}", sn.Addr, sn.StoreID, sn.StoreIDbytes)
 }
 
 type ShardInfo struct {
@@ -85,7 +92,17 @@ type ShardInfo struct {
 	nextScanKey []byte
 	//scan shard completely?
 	completeInShard bool
+	shardID         uint64
 	node            ShardNode
+}
+
+func (si ShardInfo) String() string {
+	return fmt.Sprintf("startKey %v endKey %v nextScanKey %v completeInShard %v node %v",
+		si.startKey,
+		si.endKey,
+		si.nextScanKey,
+		si.completeInShard,
+		si.node)
 }
 
 type TpeReader struct {

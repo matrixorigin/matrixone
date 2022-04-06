@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
 
@@ -1568,8 +1569,8 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 		// Typ
 		buf.Write(encoding.EncodeType(v.Typ))
 		return nil
-	case *bitor.Uint64Ring:
-		buf.WriteByte(BitOrUint64Ring)
+	case *bitor.BitOrRing:
+		buf.WriteByte(BitOrRing)
 		// NullCounts
 		n := len(v.NullCounts)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -1577,6 +1578,25 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
 		}
 		// Values
+		da := encoding.EncodeUint64Slice(v.Values)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
+	case *bitxor.BitXorRing:
+		buf.WriteByte(BitXorRing)
+		// NullCounts
+		n := len(v.NullCounts)
+		buf.Write((encoding.EncodeUint32(uint32(n))))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
+		}
+		// BitXor Results
+
 		da := encoding.EncodeUint64Slice(v.Values)
 		n = len(da)
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -2377,8 +2397,8 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		r.Typ = typ
 		// return
 		return r, data, nil
-	case BitOrUint64Ring:
-		r := new(bitor.Uint64Ring)
+	case BitOrRing:
+		r := new(bitor.BitOrRing)
 		data = data[1:]
 		// NullCounts
 		n := encoding.DecodeUint32(data[:4])
@@ -2401,6 +2421,29 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case BitXorRing:
+		result := new(bitxor.BitXorRing)
+		data = data[1:]
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			result.NullCounts = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		// decode bitxor results
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			result.Data = data[:n]
+			data = data[n:]
+		}
+		result.Values = encoding.DecodeUint64Slice(result.Data)
+		// decode type
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		result.Typ = typ
+		return result, data, nil
 	}
 	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])
 }
@@ -3368,8 +3411,8 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		r.Typ = typ
 		// return
 		return r, data, nil
-	case BitOrUint64Ring:
-		r := new(bitor.Uint64Ring)
+	case BitOrRing:
+		r := new(bitor.BitOrRing)
 		data = data[1:]
 		// NullCounts
 		n := encoding.DecodeUint32(data[:4])
@@ -3398,6 +3441,35 @@ func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byt
 		data = data[encoding.TypeSize:]
 		r.Typ = typ
 		return r, data, nil
+	case BitXorRing:
+		result := new(bitxor.BitXorRing)
+		data = data[1:]
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			result.NullCounts = make([]int64, n)
+			copy(result.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode bitxor result
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			var err error
+			result.Data, err = mheap.Alloc(proc.Mp, int64(n))
+			if err != nil {
+				return nil, nil, err
+			}
+			copy(result.Data, data[:n])
+			data = data[n:]
+		}
+		result.Values = encoding.DecodeUint64Slice(result.Data)
+		// Typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		result.Typ = typ
+		return result, data, nil
 	}
 	return nil, nil, fmt.Errorf("type '%v' ring not yet support", data[0])
 }

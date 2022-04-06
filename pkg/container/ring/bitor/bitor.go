@@ -24,22 +24,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-type Uint64Ring struct {
+type BitOrRing struct {
 	Typ types.Type // vec value type
 	Data         []byte
 	Values []uint64 // value
 	NullCounts []int64 // group to record number of the null value
 }
 
-func NewUint64Ring(typ types.Type) *Uint64Ring {
-	return &Uint64Ring{Typ: typ}
+func NewBitOr(typ types.Type) *BitOrRing {
+	return &BitOrRing{Typ: typ}
 }
 
-func (r *Uint64Ring) String() string {
+func (r *BitOrRing) String() string {
 	return fmt.Sprintf("%v-%v", r.Values, r.NullCounts)
 }
 
-func (r *Uint64Ring) Free(m *mheap.Mheap) {
+func (r *BitOrRing) Free(m *mheap.Mheap) {
 	if r.Data != nil {
 		mheap.Free(m, r.Data)
 		r.Data = nil
@@ -48,30 +48,30 @@ func (r *Uint64Ring) Free(m *mheap.Mheap) {
 	}
 }
 
-func (r *Uint64Ring) Count() int {
+func (r *BitOrRing) Count() int {
 	return len(r.Values)
 }
 
-func (r *Uint64Ring) Size() int {
+func (r *BitOrRing) Size() int {
 	return cap(r.Data)
 }
 
-func (r *Uint64Ring) Dup() ring.Ring {
-	return &Uint64Ring{
+func (r *BitOrRing) Dup() ring.Ring {
+	return &BitOrRing{
 		Typ: r.Typ,
 	}
 }
 
-func (r *Uint64Ring) Type() types.Type {
+func (r *BitOrRing) Type() types.Type {
 	return r.Typ
 }
 
-func (r *Uint64Ring) SetLength(n int) {
+func (r *BitOrRing) SetLength(n int) {
 	r.Values = r.Values[:n]
 	r.NullCounts = r.NullCounts[:n]
 }
 
-func (r *Uint64Ring) Shrink(selectedIndexes []int64) {
+func (r *BitOrRing) Shrink(selectedIndexes []int64) {
 	for i, idx := range selectedIndexes {
 		r.Values[i] = r.Values[idx]
 		r.NullCounts[i] = r.NullCounts[idx]
@@ -80,11 +80,11 @@ func (r *Uint64Ring) Shrink(selectedIndexes []int64) {
 	r.NullCounts = r.NullCounts[:len(selectedIndexes)]
 }
 
-func (v *Uint64Ring) Shuffle(_ []int64, _ *mheap.Mheap) error {
+func (v *BitOrRing) Shuffle(_ []int64, _ *mheap.Mheap) error {
 	return nil
 }
 
-func (r *Uint64Ring) Grow(m *mheap.Mheap) error {
+func (r *BitOrRing) Grow(m *mheap.Mheap) error {
 	n := len(r.Values)
 
 	if n == 0 {
@@ -111,7 +111,7 @@ func (r *Uint64Ring) Grow(m *mheap.Mheap) error {
 	return nil
 }
 
-func (r *Uint64Ring) Grows(size int, m *mheap.Mheap) error {
+func (r *BitOrRing) Grows(size int, m *mheap.Mheap) error {
 	n := len(r.Values)
 	if n == 0 {
 		data, err := mheap.Alloc(m, int64(size*8))
@@ -145,7 +145,7 @@ func (r *Uint64Ring) Grows(size int, m *mheap.Mheap) error {
 }
 
 // Fill update Uint64Ring by a row
-func (r *Uint64Ring) Fill(idxOfGroup, idxOfRow, cntOfRow int64, vec *vector.Vector) {
+func (r *BitOrRing) Fill(idxOfGroup, idxOfRow, cntOfRow int64, vec *vector.Vector) {
 	var rowData uint64
 	switch vec.Typ.Oid {
 	case types.T_float32:
@@ -177,7 +177,7 @@ func (r *Uint64Ring) Fill(idxOfGroup, idxOfRow, cntOfRow int64, vec *vector.Vect
 }
 
 // BulkFill update ring by a whole vector
-func (r *Uint64Ring) BulkFill(idxOfGroup int64, cntOfRows []int64, vec *vector.Vector) {
+func (r *BitOrRing) BulkFill(idxOfGroup int64, cntOfRows []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_float32:
 		vecCol := vec.Col.([]float32)
@@ -302,7 +302,7 @@ func (r *Uint64Ring) BulkFill(idxOfGroup int64, cntOfRows []int64, vec *vector.V
 	}
 }
 
-func (r *Uint64Ring) BatchFill(offset int64, os []uint8, vps []uint64, cntOfRows []int64, vec *vector.Vector) {
+func (r *BitOrRing) BatchFill(offset int64, os []uint8, vps []uint64, cntOfRows []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_float32:
 		vecCol := vec.Col.([]float32)
@@ -365,27 +365,27 @@ func (r *Uint64Ring) BatchFill(offset int64, os []uint8, vps []uint64, cntOfRows
 	}
 }
 
-func (r *Uint64Ring) Add(ring interface{}, x, y int64) {
-	ringData := ring.(*Uint64Ring)
+func (r *BitOrRing) Add(ring interface{}, x, y int64) {
+	ringData := ring.(*BitOrRing)
 	r.Values[x] |= ringData.Values[y]
 	r.NullCounts[x] += ringData.NullCounts[y]
 }
 
-func (r *Uint64Ring) BatchAdd(ring interface{}, start int64, os []uint8, vps []uint64) {
-	ringData := ring.(*Uint64Ring)
+func (r *BitOrRing) BatchAdd(ring interface{}, start int64, os []uint8, vps []uint64) {
+	ringData := ring.(*BitOrRing)
 	for i := range os {
 		r.Values[vps[i]-1] |= ringData.Values[int64(i)+start]
 		r.NullCounts[vps[i]-1] += ringData.NullCounts[int64(i)+start]
 	}
 }
 
-func (r *Uint64Ring) Mul(ring interface{}, x, y, z int64) {
-	ringData := ring.(*Uint64Ring)
+func (r *BitOrRing) Mul(ring interface{}, x, y, z int64) {
+	ringData := ring.(*BitOrRing)
 	r.Values[x] |= ringData.Values[y]
 	r.NullCounts[x] += ringData.NullCounts[y] * z
 }
 
-func (r *Uint64Ring) Eval(cntOfRows []int64) *vector.Vector {
+func (r *BitOrRing) Eval(cntOfRows []int64) *vector.Vector {
 	defer func() {
 		r.Data = nil
 		r.NullCounts = nil

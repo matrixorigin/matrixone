@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -430,7 +431,7 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	var nodes engine.Nodes
 	for _, node := range shards.nodes {
 		nodes = append(nodes, engine.Node{
-			Id:   node.IDbytes,
+			Id:   node.StoreIDbytes,
 			Addr: node.Addr,
 		})
 	}
@@ -489,6 +490,8 @@ func (wc *WriteContext) resetWriteCache() {
 
 //for parallel readers
 type ParallelReaderContext struct {
+	ID int
+
 	//index in shard info
 	ShardIndex int
 
@@ -501,8 +504,69 @@ type ParallelReaderContext struct {
 	//the next scan key of the shard
 	ShardNextScanKey []byte
 
+	//scan end key for the shard
+	ShardScanEndKey []byte
+
 	//finished ?
 	CompleteInShard bool
+
+	ReadCnt int
+
+	CountOfWithoutPrefix int
+}
+
+func (prc *ParallelReaderContext) Reset() {
+	prc.ID = -1
+	prc.ShardIndex = -1
+	prc.ShardStartKey = nil
+	prc.ShardEndKey = nil
+	prc.ShardNextScanKey = nil
+	prc.ShardScanEndKey = nil
+	prc.CompleteInShard = false
+	prc.ReadCnt = 0
+	prc.CountOfWithoutPrefix = 0
+}
+
+func (prc *ParallelReaderContext) Set(id, shardIndex int) {
+	prc.ID = id
+	prc.ShardIndex = shardIndex
+}
+
+func (prc *ParallelReaderContext) SetShardInfo(shardStartKey, shardEndKey, nextScanKeyInShard, scanEndKeyInShard []byte) {
+	prc.ShardStartKey = shardStartKey
+	prc.ShardEndKey = shardEndKey
+	prc.ShardNextScanKey = nextScanKeyInShard
+	prc.ShardScanEndKey = scanEndKeyInShard
+}
+
+func (prc *ParallelReaderContext) addReadCount(c int) {
+	prc.ReadCnt += c
+}
+
+func (prc *ParallelReaderContext) getReadCount() int {
+	return prc.ReadCnt
+}
+
+func (prc *ParallelReaderContext) addCountOfWithoutPrefix(c int) {
+	prc.CountOfWithoutPrefix += c
+}
+
+func (prc *ParallelReaderContext) getCountOfWithoutPrefix() int {
+	return prc.CountOfWithoutPrefix
+}
+
+func (prc ParallelReaderContext) String() string {
+	return fmt.Sprintf("id %d shardIndex %d readCnt %d CountOfWithoutPrefix %d shardStartKey %v shardNextScanKey %v shardScanEndKey %v shardEndKey %v  completeInShard %v",
+		prc.ID,
+		prc.ShardIndex,
+		prc.ReadCnt,
+		prc.CountOfWithoutPrefix,
+		prc.ShardStartKey,
+		prc.ShardNextScanKey,
+		prc.ShardScanEndKey,
+		prc.ShardEndKey,
+		prc.CompleteInShard,
+	)
 }
 
 type SingleReaderContext struct {

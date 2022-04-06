@@ -12,37 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package builtin
+package bitxor
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-const (
-	Length = iota + overload.NE + 1
-	Year
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Space
-	Reverse
-	UTCTimestamp
-	Ltrim
-	Rtrim
-	Lpad
-	Sin
-	Cos
-	Tan
-	Acos
-	Atan
-	Cot
-	DayOfYear
-	Month
-	Weekday
-)
+type BitXorRing struct {
+	Typ        types.Type
+	Data       []byte
+	Values     []uint64
+	NullCounts []int64
+}
