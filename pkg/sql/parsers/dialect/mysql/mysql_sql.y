@@ -4447,6 +4447,22 @@ function_call_generic:
             Exprs: $3,
         }
     }
+|   SUBSTRING '(' expression_list_opt ')'
+    {
+            name := tree.SetUnresolvedName(strings.ToLower($1))
+            $$ = &tree.FuncExpr{
+                Func: tree.FuncName2ResolvableFunctionReference(name),
+                Exprs: $3,
+            }
+    }
+|   SUBSTR '(' expression_list_opt ')'
+    {
+                name := tree.SetUnresolvedName(strings.ToLower($1))
+                $$ = &tree.FuncExpr{
+                    Func: tree.FuncName2ResolvableFunctionReference(name),
+                    Exprs: $3,
+                }
+    }
 // |   identifier '.' identifier '(' expression_list_opt ')'
 //     {
 //         name := tree.SetUnresolvedName(strings.ToLower($1), strings.ToLower($3))
