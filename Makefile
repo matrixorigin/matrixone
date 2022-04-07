@@ -133,3 +133,26 @@ static-check:
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
   
+###############################################################################
+# distributed test
+###############################################################################
+
+.PHONY: dis-mo
+dis-mo:
+	@docker-compose -f optools/test/docker-compose.yaml build --build-arg PROXY=$(PROXY)
+	@docker-compose -f optools/test/docker-compose.yaml up -d
+
+.PHONY: dis-bvt
+dis-bvt:
+	@docker build -f optools/test/Dockerfile.bvt . -t matrixorigin/mysql-tester:dt --build-arg PROXY=$(PROXY)
+	@docker run --tty --rm --name mysql-tester --network test_monet matrixorigin/mysql-tester:dt -host 172.19.0.2 -port 6001 -user dump -passwd 111
+
+.PHONY: dis-down
+dis-down:
+	@docker-compose down -f optools/test/docker-compose.yaml down --remove-orphans
+
+.PHONY:  dis-clean
+dis-clean:
+	@docker rmi matrixorigin/matrixone:dt
+	@docker rmi matrixorigin/mysql-tester:dt
+	@rm -rf log/ data/
