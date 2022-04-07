@@ -11,6 +11,7 @@ MO_Version=$(shell git describe --abbrev=0 --tags)
 TARGET_OS ?=
 TARGET_ARCH ?=
 BVT_BRANCH ?= master
+PROXY ?= https://goproxy.cn,direct
 
 # generate files generated from .template and needs to delete when clean
 GENERATE_OVERLOAD_LOGIC := ./pkg/sql/colexec/extend/overload/and.go ./pkg/sql/colexec/extend/overload/or.go
@@ -149,10 +150,8 @@ dis-bvt:
 
 .PHONY: dis-down
 dis-down:
-	@docker-compose down -f optools/test/docker-compose.yaml down --remove-orphans
+	@docker-compose -f optools/test/docker-compose.yaml down --remove-orphans
 
 .PHONY:  dis-clean
 dis-clean:
-	@docker rmi matrixorigin/matrixone:dt
-	@docker rmi matrixorigin/mysql-tester:dt
 	@rm -rf log/ data/
