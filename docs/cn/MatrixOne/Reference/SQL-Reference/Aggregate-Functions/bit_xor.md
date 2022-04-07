@@ -1,13 +1,13 @@
-# **BIT_AND**
+# **BIT_XOR**
 
 ## **函数说明**
 
-BIT_AND()是一个聚合函数，计算了列中所有位的按位与。
+BIT_XOR()是一个聚合函数，计算了列中所有位的按位异或。
 
 ## **函数语法**
 
 ```
-> BIT_AND(expr)
+> BIT_XOR(expr)
 ```
 ## **参数释义**
 |  参数   | 说明 |
@@ -24,12 +24,12 @@ BIT_AND()是一个聚合函数，计算了列中所有位的按位与。
       ('a',111),('a',110),('a',100),
       ('a',000),('b',001),('b',011);
 
-> select id, BIT_AND(number) FROM t1 GROUP BY id;
+> select id, bit_xor(number) from t1 group by id;
 +------+-----------------+
-| id   | bit_and(number) |
+| id   | bit_xor(number) |
 +------+-----------------+
-| a    |               0 |
-| b    |               1 |
+| a    |             101 |
+| b    |              10 |
 +------+-----------------+
 ```
 
