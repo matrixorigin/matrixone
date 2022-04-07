@@ -133,9 +133,8 @@ func (r *BitOrRing) Grows(size int, m *mheap.Mheap) error {
 	}
 	r.Values = r.Values[:n+size]
 
-	// set all empty to ^uint64(0)
 	for i := 0; i < size; i++ {
-		r.Values[n+i] = ^uint64(0)
+		r.Values[n+i] = 0
 	}
 
 	for i := 0; i < size; i++ {
