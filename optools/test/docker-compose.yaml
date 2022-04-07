@@ -20,7 +20,7 @@ services:
       HOST: 172.19.0.2
     volumes:
       - ../../log/node0:/log
-      # - ../../data/node0:/store
+      - ../../data/node0:/store
     restart: on-failure
     tty: true
     networks:
@@ -46,7 +46,7 @@ services:
       HOST: 172.19.0.3
     volumes:
       - ../../log/node1:/log
-      # - ../../data/node1:/store
+      - ../../data/node1:/store
     restart: on-failure
     tty: true
     networks:
@@ -72,7 +72,7 @@ services:
       HOST: 172.19.0.4
     volumes:
       - ../../log/node2:/log
-      # - ../../data/node2:/store
+      - ../../data/node2:/store
     restart: on-failure
     tty: true    
     networks:
