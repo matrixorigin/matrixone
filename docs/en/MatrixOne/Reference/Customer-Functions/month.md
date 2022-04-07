@@ -22,17 +22,17 @@ The MONTH() function returns the month part for a given date (a number from 1 to
 
 ```sql
 > drop table if exists t1;
-> create table t1(a date);
-> insert into t1 values('20211223');
-> insert into t1 values('2021-12-24');
+> create table t1(a date, b datetime);
+> insert into t1 values('20211223','2021-10-22 09:23:23');
+> insert into t1 values('2021-12-23','2021-10-22 00:23:23');
 
 > select month(a) from t1;
-+----------+
-| month(a) |
-+----------+
-|       12 |
-|       12 |
-+----------+
++----------+----------+
+| month(a) | month(b) |
++----------+----------+
+|       12 |       10 |
+|       12 |       10 |
++----------+----------+
 ```
 
 ## **Constraints**

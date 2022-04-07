@@ -16,14 +16,16 @@ package engine
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/computation"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"time"
 )
 
 var _ engine.Engine = &TpeEngine{}
@@ -115,4 +117,25 @@ type TpeReader struct {
 	//for test
 	isDumpReader bool
 	id           int
+	dumpData	 bool
+	opt 		 *batch.DumpOption
 }
+
+func GetTpeReaderInfo(r *TpeRelation, eng *TpeEngine, opt *batch.DumpOption) *TpeReader {
+	return &TpeReader{
+		dbDesc:	r.dbDesc,
+		tableDesc: r.desc,
+		computeHandler: eng.computeHandler,
+		opt: opt,
+		dumpData: true,
+	}
+}
+
+func MakeReadParam(r *TpeRelation) (refCnts []uint64, attrs []string) {
+    refCnts = make([]uint64, len(r.desc.Attributes))
+	attrs = make([]string, len(refCnts))
+	for i, attr := range r.desc.Attributes {
+		attrs[i] = attr.Name
+	}
+	return refCnts, attrs
+} 

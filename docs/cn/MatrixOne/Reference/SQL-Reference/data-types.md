@@ -40,7 +40,7 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 
 ## **示例**
 
-``` sql
+``` 
 //Create a table named "numtable" with 3 attributes of an "int", a "float" and a "double"
 > create table numtable(id int,fl float, dl double);
 
@@ -71,5 +71,11 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 //Insert a data of "varchar" and "char" into table "names" 
 > insert into names(name, age) values('Abby', '24');
 
+//Create a table named "calendar" with 2 attributes of a "date" and a "datetime"
+> create table calendar(a date, b datetime);
+
+//Insert a data of "date" and "datetime" into table "calendar" 
+> insert into calendar(a, b) values('20220202', '2022-02-02 00:10:30');
+> insert into calendar(a, b) values('2022-02-02', '2022-02-02 00:10:30');
 
 ```
