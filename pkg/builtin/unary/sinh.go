@@ -32,11 +32,8 @@ import (
 func init() {
 	extend.FunctionRegistry["sinh"] = builtin.Sinh	// register function name
 
-	for _, item := range argAndRets {
-		overload.AppendFunctionRets(builtin.Sinh, item.args, item.ret)	// append function parameter types and return types
-	}
 	extend.UnaryReturnTypes[builtin.Sinh] = func(extend extend.Extend) types.T {
-		return getUnaryReturnType(builtin.Sinh, extend)	// define a get return type function for sinh function
+		return types.T_float64
 	}
 
 	extend.UnaryStrings[builtin.Sinh] = func(e extend.Extend) string {	// define a stringify function for sinh
