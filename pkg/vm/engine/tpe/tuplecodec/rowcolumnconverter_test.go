@@ -49,7 +49,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 
 		lines := randomLines(cnt, names, attrs)
 
-		fillBatch(lines, bat)
+		FillBatch(lines, bat)
 
 		ba := NewBatchAdapter(bat)
 
