@@ -25,10 +25,10 @@ import (
 )
 
 type BitOrRing struct {
-	Typ        types.Type // vec value type
-	Data       []byte
-	Values     []uint64 // value
-	NullCounts []int64  // group to record number of the null value
+	Typ types.Type // vec value type
+	Data         []byte
+	Values []uint64 // value
+	NullCounts []int64 // group to record number of the null value
 }
 
 func NewBitOr(typ types.Type) *BitOrRing {
@@ -106,7 +106,7 @@ func (r *BitOrRing) Grow(m *mheap.Mheap) error {
 		r.Values = encoding.DecodeUint64Slice(data)
 	}
 	r.Values = r.Values[:n+1]
-	r.Values[n] = 0
+	r.Values[n] = 0 
 	r.NullCounts = append(r.NullCounts, 0)
 	return nil
 }
