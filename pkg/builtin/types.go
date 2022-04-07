@@ -36,6 +36,7 @@ const (
 	Ltrim
 	Rtrim
 	Lpad
+	StartsWith
 	Sin
 	Cos
 	Acos
