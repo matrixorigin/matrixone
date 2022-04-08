@@ -24,10 +24,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -355,21 +356,24 @@ func (s *Scope) ShowCreateTable(u interface{}, fill func(interface{}, *batch.Bat
 		}
 	}
 	prefix := " "
-	for _, a := range attributeDefs {
-		buf.WriteString(prefix)
-		a.Format(&buf)
-		prefix = ",\n "
+	if attributeDefs != nil {
+		for _, a := range attributeDefs {
+			buf.WriteString(prefix)
+			a.Format(&buf)
+			prefix = ",\n "
+		}
 	}
-
 	if len(primaryIndexDef.Names) > 0 {
 		buf.WriteString(prefix)
 		primaryIndexDef.Format(&buf)
 		prefix = ",\n "
 	}
-	for _, idx := range indexTableDefs {
-		buf.WriteString(prefix)
-		idx.Format(&buf)
-		prefix = ",\n "
+	if indexTableDefs != nil {
+		for _, idx := range indexTableDefs {
+			buf.WriteString(prefix)
+			idx.Format(&buf)
+			prefix = ",\n "
+		}
 	}
 	buf.WriteString("\n)")
 
@@ -455,12 +459,7 @@ func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
 }
 
 // Run read data from storage engine and run the instructions of scope.
-func (s *Scope) Run(e engine.Engine) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
+func (s *Scope) Run(e engine.Engine) error {
 	p := pipeline.New(s.DataSource.RefCounts, s.DataSource.Attributes, s.Instructions)
 	if _, err := p.Run(s.DataSource.R, s.Proc); err != nil {
 		return err
@@ -586,17 +585,24 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 
 // ParallelRun try to execute the scope in parallel way.
 func (s *Scope) ParallelRun(e engine.Engine) error {
-	var op *join.Argument
+	var jop *join.Argument
+	var top *times.Argument
 
 	{
 		for _, in := range s.Instructions {
 			if in.Op == vm.Join {
-				op = in.Arg.(*join.Argument)
+				jop = in.Arg.(*join.Argument)
+			}
+			if in.Op == vm.Times {
+				top = in.Arg.(*times.Argument)
 			}
 		}
 	}
-	if op != nil {
-		return s.RunCQ(e, op)
+	if jop != nil {
+		return s.RunCQ(e, jop)
+	}
+	if top != nil {
+		return s.RunCAQ(e, top)
 	}
 	switch t := s.Instructions[0].Arg.(type) {
 	case *transform.Argument:
@@ -753,7 +759,8 @@ func (s *Scope) RunQ(e engine.Engine) error {
 				ss[i].Instructions = ss[i].Instructions[:len(ss[i].Instructions)-1]
 			}
 			s.Instructions[0] = vm.Instruction{
-				Op: vm.Merge,
+				Op:  vm.Merge,
+				Arg: &merge.Argument{},
 			}
 			s.Instructions[1] = s.Instructions[len(s.Instructions)-1]
 			s.Instructions = s.Instructions[:2]
@@ -1028,8 +1035,234 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 	rs := &Scope{Magic: Merge}
 	rs.PreScopes = ss
 	rs.Instructions = append(rs.Instructions, vm.Instruction{
-		Op: vm.Merge,
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
 	})
+	rs.Instructions = append(rs.Instructions, s.Instructions...)
+	ctx, cancel := context.WithCancel(context.Background())
+	rs.Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+	rs.Proc.Cancel = cancel
+	rs.Proc.Id = s.Proc.Id
+	rs.Proc.Lim = s.Proc.Lim
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
+	{
+		for i := 0; i < len(ss); i++ {
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+				Ctx: ctx,
+				Ch:  make(chan *batch.Batch, 1),
+			}
+		}
+	}
+	for i := range ss {
+		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Mmu: rs.Proc.Mp.Gm,
+				Reg: rs.Proc.Reg.MergeReceivers[i],
+			},
+		})
+	}
+	return rs.MergeRun(e)
+}
+
+// RunCAQ run the scope which sql is a query for conjunctive aggregation query
+func (s *Scope) RunCAQ(e engine.Engine, op *times.Argument) error {
+	var err error
+	var bats []*batch.Batch
+	var rds []engine.Reader
+
+	{ // fill batchs
+		bats = make([]*batch.Batch, len(op.Vars))
+		ctx, cancel := context.WithCancel(context.Background())
+		s.Proc.Cancel = cancel
+		s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(s.PreScopes))
+		{
+			for i := 0; i < len(s.PreScopes); i++ {
+				s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
+					Ctx: ctx,
+					Ch:  make(chan *batch.Batch, 1),
+				}
+			}
+		}
+		for i := range s.PreScopes {
+			s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
+				Op: vm.Connector,
+				Arg: &connector.Argument{
+					Mmu: s.Proc.Mp.Gm,
+					Reg: s.Proc.Reg.MergeReceivers[i],
+				},
+			})
+		}
+		for i := range s.PreScopes {
+			switch s.PreScopes[i].Magic {
+			case Normal:
+				go func(s *Scope) {
+					if rerr := s.Run(e); rerr != nil {
+						err = rerr
+					}
+				}(s.PreScopes[i])
+			case Merge:
+				go func(s *Scope) {
+					if rerr := s.MergeRun(e); rerr != nil {
+						err = rerr
+					}
+				}(s.PreScopes[i])
+			case Remote:
+				go func(s *Scope) {
+					if rerr := s.RemoteRun(e); rerr != nil {
+						err = rerr
+					}
+				}(s.PreScopes[i])
+			case Parallel:
+				go func(s *Scope) {
+					if rerr := s.ParallelRun(e); rerr != nil {
+						err = rerr
+					}
+				}(s.PreScopes[i])
+			}
+		}
+		if err != nil {
+			for i, in := range s.Instructions {
+				if in.Op == vm.Connector {
+					arg := s.Instructions[i].Arg.(*connector.Argument)
+					select {
+					case <-arg.Reg.Ctx.Done():
+					case arg.Reg.Ch <- nil:
+					}
+					break
+				}
+			}
+			return err
+		}
+		flg := false // check for empty tables
+		for i := 0; i < len(s.Proc.Reg.MergeReceivers); i++ {
+			reg := s.Proc.Reg.MergeReceivers[i]
+			for {
+				bat := <-reg.Ch
+				if bat == nil {
+					break
+				}
+				if len(bat.Zs) == 0 {
+					continue
+				}
+				if bats[i] == nil {
+					bats[i] = bat
+				} else {
+					if bats[i], err = bats[i].Append(s.Proc.Mp, bat); err != nil {
+						for i := range bats {
+							if bats[i] != nil {
+								batch.Clean(bats[i], s.Proc.Mp)
+							}
+						}
+						return err
+					}
+				}
+			}
+			if bats[i] == nil {
+				flg = true
+			}
+		}
+		if flg {
+			for i, in := range s.Instructions {
+				if in.Op == vm.Connector {
+					arg := s.Instructions[i].Arg.(*connector.Argument)
+					select {
+					case <-arg.Reg.Ctx.Done():
+					case arg.Reg.Ch <- nil:
+					}
+					break
+				}
+			}
+			for i := range bats {
+				if bats[i] != nil {
+					batch.Clean(bats[i], s.Proc.Mp)
+				}
+			}
+			return nil
+		}
+		constructViews(bats, op.Vars)
+		op.Bats = bats
+		defer func() {
+			for i := range bats {
+				if bats[i] != nil {
+					batch.Clean(bats[i], s.Proc.Mp)
+				}
+			}
+		}()
+	}
+	mcpu := runtime.NumCPU()
+	{
+		db, err := e.Database(s.DataSource.SchemaName)
+		if err != nil {
+			return err
+		}
+		rel, err := db.Relation(s.DataSource.RelationName)
+		if err != nil {
+			return err
+		}
+		defer rel.Close()
+		rds = rel.NewReader(mcpu)
+	}
+	ss := make([]*Scope, mcpu)
+	for i := 0; i < mcpu; i++ {
+		ss[i] = &Scope{
+			Magic: Normal,
+			DataSource: &Source{
+				R:            rds[i],
+				IsMerge:      s.DataSource.IsMerge,
+				SchemaName:   s.DataSource.SchemaName,
+				RelationName: s.DataSource.RelationName,
+				RefCounts:    s.DataSource.RefCounts,
+				Attributes:   s.DataSource.Attributes,
+			},
+		}
+		ss[i].Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))
+		ss[i].Proc.Id = s.Proc.Id
+		ss[i].Proc.Lim = s.Proc.Lim
+		{
+			for _, in := range s.Instructions {
+				ss[i].Instructions = append(ss[i].Instructions, dupInstruction(in))
+				if in.Op == vm.Times {
+					break
+				}
+			}
+		}
+	}
+	if len(ss) > 3 {
+		if len(op.Result) == 0 {
+			ss = newMergeScope(ss, plus.BoundVars, s.Proc)
+		} else {
+			ss = newMergeScope(ss, plus.FreeVarsAndBoundVars, s.Proc)
+		}
+	}
+	{
+		j := 0
+		for k, in := range s.Instructions {
+			j = k
+			if in.Op == vm.Times {
+				break
+			}
+		}
+		s.Instructions = s.Instructions[j+1:]
+	}
+	rs := &Scope{Magic: Merge}
+	rs.PreScopes = ss
+
+	if len(op.Result) == 0 {
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: vm.Plus,
+			Arg: &plus.Argument{
+				Typ: plus.BoundVars,
+			},
+		})
+	} else {
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Op: vm.Plus,
+			Arg: &plus.Argument{
+				Typ: plus.FreeVarsAndBoundVars,
+			},
+		})
+	}
 	rs.Instructions = append(rs.Instructions, s.Instructions...)
 	ctx, cancel := context.WithCancel(context.Background())
 	rs.Proc = process.New(mheap.New(guest.New(s.Proc.Mp.Gm.Limit, s.Proc.Mp.Gm.Mmu)))

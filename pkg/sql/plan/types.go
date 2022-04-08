@@ -139,8 +139,9 @@ type Field struct {
 }
 
 type Join struct {
-	Type int // join type
-	Vars [][]int
+	Type   int // join type
+	Vars   [][]int
+	Result []string
 }
 
 type Dedup struct {

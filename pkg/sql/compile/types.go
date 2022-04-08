@@ -93,8 +93,8 @@ type Col struct {
 
 // Exec stores all information related to the execution phase of a single sql.
 type Exec struct {
-	// err stores err information if error occurred during execution.
-	// err error
+	//err stores err information if error occurred during execution.
+	err error
 	//resultCols stores the column information of result.
 	resultCols []*Col
 	scope      *Scope

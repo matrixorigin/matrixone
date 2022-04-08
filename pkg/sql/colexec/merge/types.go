@@ -14,5 +14,10 @@
 
 package merge
 
+type Container struct {
+	i int
+}
+
 type Argument struct {
+	ctr *Container
 }

@@ -39,6 +39,9 @@ func (s *Scope) Rows() int64 {
 func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 	switch op := s.Op.(type) {
 	case *Join:
+		for k, _ := range attrsMap {
+			op.Result = append(op.Result, k)
+		}
 		for name, ref := range attrsMap {
 			if attr, ok := s.Result.AttrsMap[name]; ok {
 				attr.Ref = int(ref)
@@ -507,7 +510,7 @@ func printScopes(prefix []byte, ss []*Scope, buf *bytes.Buffer) {
 }
 
 func printJoin(op *Join, s *Scope) string {
-	return fmt.Sprintf("⨝(%v[%v])", op.Type, op.Vars)
+	return fmt.Sprintf("⨝(%v[%v], [%v])", op.Type, op.Vars, op.Result)
 }
 
 func printDedup(op *Dedup) string {

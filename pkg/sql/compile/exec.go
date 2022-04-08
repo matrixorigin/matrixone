@@ -18,11 +18,11 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -39,13 +39,7 @@ import (
 
 // Compile is the entrance of the compute-layer, it compiles AST tree to scope list.
 // A scope is an execution unit.
-func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
-
+func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
 	// do semantic analysis and build plan for sql
 	// do ast rewrite
 	e.stmt = rewrite.AstRewrite(e.stmt)
@@ -79,13 +73,7 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (e *Exec) Run(ts uint64) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
-
+func (e *Exec) Run(ts uint64) error {
 	if e.scope == nil {
 		return nil
 	}
@@ -247,11 +235,9 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
-/*
 func (e *Exec) increaseAffectedRows(n uint64) {
 	e.affectRows += n
 }
-*/
 
 func (e *Exec) setAffectedRows(n uint64) {
 	e.affectRows = n
@@ -287,11 +273,11 @@ func (e *Exec) compileQuery(qry *plan.Query) (*Scope, error) {
 
 func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
-		return nil, errors.New(errno.FeatureNotSupported, "Only single table delete is supported")
+		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table delete is supported"))
 	}
 	rel := e.getRelationFromPlanScope(qry.Scope)
 	if rel == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for delete")
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for delete"))
 	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
@@ -317,11 +303,11 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 
 func (e *Exec) compileUpdate(qry *plan.Query) (*Scope, error) {
 	if e.checkPlanScope(qry.Scope) != BQ {
-		return nil, errors.New(errno.FeatureNotSupported, "Only single table update is supported")
+		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table update is supported"))
 	}
 	rel := e.getRelationFromPlanScope(qry.Scope)
 	if rel == nil {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for update")
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find table for update"))
 	}
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
@@ -361,7 +347,8 @@ func (e *Exec) compilePlanScope(s *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -802,7 +789,8 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -856,7 +844,8 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Projection,
@@ -1080,7 +1069,8 @@ func (e *Exec) compileAQ(ps *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -1170,7 +1160,8 @@ func (e *Exec) compileCQ(ps *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -1585,8 +1576,8 @@ func (e *Exec) compileJoin(ps *plan.Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].PreScopes = append(ss[i].PreScopes, children...)
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op:  vm.Join,
-			Arg: constructJoin(op),
+			Op:  vm.Times,
+			Arg: constructTimes(op),
 		})
 	}
 	return ss, nil
@@ -1641,7 +1632,8 @@ func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -1754,7 +1746,8 @@ func (e *Exec) compileCAQFact(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
