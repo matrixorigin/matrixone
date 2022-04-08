@@ -104,8 +104,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		panic("not support")
 	}
 
-	var node bmgrif.INode
-	node = bufMgr.CreateNode(vf, false, constructor)
+	node := bufMgr.CreateNode(vf, false, constructor)
 	if node == nil {
 		return nil
 	}

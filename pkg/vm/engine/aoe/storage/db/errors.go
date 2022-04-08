@@ -27,6 +27,6 @@ var (
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 	ErrTimeout           = errors.New("aoe: timeout")
 	ErrStaleErr          = errors.New("aoe: stale")
-	ErrIdempotence       = metadata.IdempotenceErr
+	ErrIdempotence       = metadata.ErrIdempotence
 	ErrResourceDeleted   = errors.New("aoe: resource is deleted")
 )

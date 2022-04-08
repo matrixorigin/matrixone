@@ -48,15 +48,15 @@ func TestFilenames(t *testing.T) {
 
 	res, ok := ParseSegmentFileName(seg1)
 	assert.True(t, ok)
-	res, ok = ParseSegmentFileName(res)
+	_, ok = ParseSegmentFileName(res)
 	assert.False(t, ok)
 	res, ok = ParseBlockfileName(blk1)
 	assert.True(t, ok)
-	res, ok = ParseBlockfileName(res)
+	_, ok = ParseBlockfileName(res)
 	assert.False(t, ok)
 	res, ok = ParseTBlockfileName(tblk1)
 	assert.True(t, ok)
-	res, ok = ParseTBlockfileName(res)
+	_, ok = ParseTBlockfileName(res)
 	assert.False(t, ok)
 
 	n := MakeFilename(workDir, FTTransientNode, "node", false)

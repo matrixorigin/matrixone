@@ -132,7 +132,7 @@ func (split *ShardSplitSpec) GetBlkAddr(blk *common.ID) (addr *common.ID, err er
 		}
 	}
 	if addr == nil {
-		err = AddressNotFoundErr
+		err = ErrAddressNotFound
 	}
 	return
 }
@@ -145,7 +145,7 @@ func (split *ShardSplitSpec) GetSegAddr(seg *common.ID) (addr *common.ID, err er
 		}
 	}
 	if addr == nil {
-		err = AddressNotFoundErr
+		err = ErrAddressNotFound
 	}
 	return
 }

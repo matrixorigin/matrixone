@@ -42,10 +42,11 @@ type addDatabaseCtx struct {
 	database *Database
 }
 
-type addTableCtx struct {
-	writeCtx
-	table *Table
-}
+// Unused
+// type addTableCtx struct {
+// 	writeCtx
+// 	table *Table
+// }
 
 type createTableCtx struct {
 	writeCtx
@@ -102,11 +103,12 @@ type upgradeBlockCtx struct {
 	exIndice []*LogIndex
 }
 
-type replaceTableCtx struct {
-	writeCtx
-	table   *Table
-	discard bool
-}
+// Unused
+// type replaceTableCtx struct {
+// 	writeCtx
+// 	table   *Table
+// 	discard bool
+// }
 
 type replaceDatabaseCtx struct {
 	writeCtx
@@ -128,7 +130,7 @@ type splitDBCtx struct {
 }
 
 type commitSplitCtx struct {
-	writeCtx
+	// writeCtx
 	replace *dbReplaceLogEntry
 }
 

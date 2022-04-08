@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	stopSign = errors.New("stop sign")
+	ErrStopSign = errors.New("stop sign")
 )
 
 type catalogCompactionRequest struct {
@@ -60,7 +60,7 @@ func (req *catalogCompactionRequest) hardDeleteDatabase(db *metadata.Database) {
 		t.RLock()
 		defer t.RUnlock()
 		if !t.IsHardDeletedLocked() || !t.HasCommittedLocked() {
-			return stopSign
+			return ErrStopSign
 		}
 		return nil
 	}

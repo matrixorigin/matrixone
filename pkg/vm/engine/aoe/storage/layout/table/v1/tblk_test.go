@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation"
@@ -38,14 +37,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type testProcessor struct {
-	t  *testing.T
-	fn func(batch.IBatch)
-}
+// Unused
+// type testProcessor struct {
+// 	// t  *testing.T // Unused
+// 	fn func(batch.IBatch)
+// }
 
-func (p *testProcessor) execute(bat batch.IBatch) {
-	p.fn(bat)
-}
+// Unused
+// func (p *testProcessor) execute(bat batch.IBatch) {
+// 	p.fn(bat)
+// }
 
 func TestTBlock(t *testing.T) {
 	dir := testutils.InitTestEnv(moduleName, t)
@@ -65,7 +66,7 @@ func TestTBlock(t *testing.T) {
 	assert.NotNil(t, meta2)
 
 	capacity := uint64(4096)
-	fsMgr := ldio.NewManager(dir, false)
+	fsMgr := dataio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)

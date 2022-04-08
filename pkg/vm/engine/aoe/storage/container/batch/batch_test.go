@@ -54,7 +54,7 @@ func TestBatch(t *testing.T) {
 	closed, err := bat1.IsVectorClosed(0)
 	assert.Nil(t, err)
 	assert.False(t, closed)
-	closed, err = bat1.IsVectorClosed(-1)
+	_, err = bat1.IsVectorClosed(-1)
 	assert.NotNil(t, err)
 	err = bat1.CloseVector(-1)
 	assert.NotNil(t, err)

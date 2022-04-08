@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	ParseReprErr = errors.New("parse repr error")
+	ErrParseRepr = errors.New("parse repr error")
 )
 
 type IndexId struct {
@@ -102,12 +102,12 @@ func (idx *Index) Repr() string {
 
 func (idx *Index) ParseRepr(repr string) (err error) {
 	if repr == "" {
-		err = ParseReprErr
+		err = ErrParseRepr
 		return
 	}
 	strs := strings.Split(repr, ":")
 	if len(strs) != 7 {
-		err = ParseReprErr
+		err = ErrParseRepr
 		return
 	}
 	if idx.ShardId, err = strconv.ParseUint(strs[0], 10, 64); err != nil {

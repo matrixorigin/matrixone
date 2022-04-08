@@ -38,12 +38,13 @@ const (
 	Lpad
 	Sin
 	Cos
-	Tan
 	Acos
+	Tan
 	Atan
 	Cot
 	DayOfYear
 	Month
 	Weekday
 	EndsWith
+	Date
 )

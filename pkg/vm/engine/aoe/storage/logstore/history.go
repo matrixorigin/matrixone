@@ -22,7 +22,7 @@ import (
 )
 
 var (
-	VersionNotFoundErr = errors.New("aoe: version not found")
+	ErrVersionNotFound = errors.New("aoe: version not found")
 )
 
 type HistoryFactory func() IHistory
@@ -94,7 +94,7 @@ func (h *baseHistory) Truncate(id uint64) error {
 	defer h.mu.Unlock()
 	pos, version := h.findVersion(id)
 	if version == nil {
-		return VersionNotFoundErr
+		return ErrVersionNotFound
 	}
 	h.versions = append(h.versions[:pos], h.versions[pos+1:]...)
 	return version.Destroy()

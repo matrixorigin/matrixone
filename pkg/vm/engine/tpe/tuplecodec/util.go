@@ -140,7 +140,7 @@ func MakeBatch(batchSize int, attrName []string, cols []*engine.AttributeDef) *b
 		}
 		batchData.Vecs[i] = vec
 	}
-
+	batchData.Attrs = attrName
 	return batchData
 }
 
@@ -191,7 +191,7 @@ func randomLines(rowCnt int, attrName []string, cols []*engine.AttributeDef) [][
 	return lines
 }
 
-func fillBatch(lines [][]string, batchData *batch.Batch) {
+func FillBatch(lines [][]string, batchData *batch.Batch) {
 	for i, line := range lines {
 		rowIdx := i
 		for j, field := range line {

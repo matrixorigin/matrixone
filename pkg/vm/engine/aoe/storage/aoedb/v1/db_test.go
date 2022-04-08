@@ -100,7 +100,7 @@ func TestCreateDuplicateTable(t *testing.T) {
 	assert.Nil(t, err)
 	createCtx.Id = gen.Alloc(database.GetShardId())
 	_, err = inst.CreateTable(createCtx)
-	assert.Equal(t, metadata.DuplicateErr, err)
+	assert.Equal(t, metadata.ErrDuplicate, err)
 }
 
 func TestDropEmptyTable(t *testing.T) {

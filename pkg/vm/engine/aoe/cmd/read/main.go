@@ -20,7 +20,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"runtime"
-	"runtime/pprof"
+	// "runtime/pprof"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,8 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	// "github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	// "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	log "github.com/sirupsen/logrus"
 
@@ -53,15 +53,15 @@ const (
 	batchInsertRows uint64 = insertRows / insertCnt
 	readPoolSize    int    = 40
 
-	cpuprofile string = "/tmp/readcpufile"
+	// cpuprofile string = "/tmp/readcpufile" // Unused
 )
 
 var (
 	opts     = &storage.Options{}
 	schema   *metadata.Schema
 	readPool *ants.Pool
-	proc     *process.Process
-	hm       *host.Mmu
+	// proc     *process.Process // Unused
+	// hm       *host.Mmu // Unused
 	gen      *shard.MockIndexAllocator
 	dbName   string
 	shardId  uint64
@@ -95,14 +95,16 @@ func getInsertBatch(meta *metadata.Table) *batch.Batch {
 	return bat
 }
 
-func startProfile() {
-	f, _ := os.Create(cpuprofile)
-	pprof.StartCPUProfile(f)
-}
+// Unused
+// func startProfile() {
+// 	f, _ := os.Create(cpuprofile)
+// 	pprof.StartCPUProfile(f)
+// }
 
-func stopProfile() {
-	pprof.StopCPUProfile()
-}
+// Unused
+// func stopProfile() {
+// 	pprof.StopCPUProfile()
+// }
 
 func makeDB() *aoedb.DB {
 	impl, _ := aoedb.Open(workDir, opts)

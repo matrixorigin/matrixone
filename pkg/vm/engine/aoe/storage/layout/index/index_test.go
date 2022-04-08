@@ -25,9 +25,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var (
-	workDir = "/tmp/index_test"
-)
+// Unused
+// var (
+// 	workDir = "/tmp/index_test"
+// )
 
 func TestSegment(t *testing.T) {
 	//segType := base.UNSORTED_SEG

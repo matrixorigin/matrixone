@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMock(t *testing.T) {
@@ -40,7 +40,8 @@ func TestMock(t *testing.T) {
 		e := NewBaseEvent(nil, MockEvent, nil, false)
 		err := scheduler.Schedule(e)
 		assert.Equal(t, ErrSchedule, err)
-		e.Cancel()
+		err = e.Cancel()
+		assert.Nil(t, err)
 	}
 }
 

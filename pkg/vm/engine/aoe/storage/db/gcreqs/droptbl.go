@@ -58,11 +58,9 @@ func (req *dropTblRequest) Execute() error {
 		return err
 	}
 	err = e.WaitDone()
-	if err != nil && err != table.NotExistErr {
+	if err != nil && err != table.ErrNotExist {
 		return err
-	} else if err != nil {
-		err = nil
-	} else {
+	} else if err == nil {
 		e.Data.Unref()
 	}
 	if err = req.Meta.Database.SimpleHardDeleteTable(req.Meta.Id); err != nil {
