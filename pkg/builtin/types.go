@@ -23,6 +23,7 @@ const (
 	Substring
 	Ltrim
 	Rtrim
+	StartsWith
 	Lpad
 	Round
 	Floor
