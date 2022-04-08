@@ -115,7 +115,7 @@ func TestEndsWithRightConst(t *testing.T) {
 			lv:   MakeBytes([]string{"H", "He", "Hello", "world"}),
 			rv:   MakeBytes([]string{"He"}),
 			rs:   make([]uint8, 4),
-			want: []uint8{0, 1, 1, 0},
+			want: []uint8{0, 1, 0, 0},
 		},
 	}
 
@@ -139,7 +139,7 @@ func TestEndsWithLeftConst(t *testing.T) {
 		{
 			name: "Left Const",
 			lv:   MakeBytes([]string{"Hello"}),
-			rv:   MakeBytes([]string{"He", "Hello", "", "Helloo"}),
+			rv:   MakeBytes([]string{"lo", "Hello", "", "HHello"}),
 			rs:   make([]uint8, 4),
 			want: []uint8{1, 1, 1, 0},
 		},
@@ -165,7 +165,7 @@ func TestEndsWithAllConst(t *testing.T) {
 		{
 			name: "All Const",
 			lv:   MakeBytes([]string{"Hello"}),
-			rv:   MakeBytes([]string{"He"}),
+			rv:   MakeBytes([]string{"llo"}),
 			rs:   make([]uint8, 1),
 			want: []uint8{1},
 		},
