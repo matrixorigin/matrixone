@@ -319,10 +319,6 @@ func TestProxy2(t *testing.T) {
 }
 
 func TestProxy3(t *testing.T) {
-	waitTime := time.Duration(200) * time.Millisecond
-	if invariants.RaceEnabled {
-		waitTime *= 5
-	}
 	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
 	var indice []*Index
@@ -353,8 +349,7 @@ func TestProxy3(t *testing.T) {
 		for i := 0; i <= len(indice)-1; i++ {
 			mgr.Checkpoint(indice[i])
 		}
-		time.Sleep(waitTime)
-		testutils.WaitExpect(200, func() bool {
+		testutils.WaitExpect(1000, func() bool {
 			s, err := mgr.GetShard(uint64(0))
 			if err != nil {
 				return false
