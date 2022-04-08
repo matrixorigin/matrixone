@@ -28,6 +28,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+func fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
+
+	var resultsLen int
+	if len(lvs.Lengths) > len(rvs.Lengths) {
+		resultsLen = len(lvs.Lengths)
+	} else {
+		resultsLen = len(rvs.Lengths)
+	}
+
+	resultVector, err := process.Get(proc, 1*int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
+	if err != nil {
+		return nil, err
+	}
+	results := encoding.DecodeUint8Slice(resultVector.Data)
+	results = results[:resultsLen]
+	resultVector.Col = results
+	nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
+
+	if lc && rc {
+		vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
+	} else if !lc && rc {
+		vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
+	} else if lc && !rc {
+		vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
+	} else {
+		vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
+	}
+
+	return resultVector, nil
+}
+
 func init() {
 	extend.FunctionRegistry["startswith"] = builtin.StartsWith
 	extend.BinaryReturnTypes[builtin.StartsWith] = func(e extend.Extend, e2 extend.Extend) types.T {
@@ -45,142 +77,25 @@ func init() {
 			LeftType:   types.T_char,
 			RightType:  types.T_char,
 			ReturnType: types.T_uint8,
-			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
-
-				var resultsLen int
-				if len(lvs.Lengths) > len(rvs.Lengths) {
-					resultsLen = len(lvs.Lengths)
-				} else {
-					resultsLen = len(rvs.Lengths)
-				}
-
-				resultVector, err := process.Get(proc, 1*int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:resultsLen]
-				resultVector.Col = results
-				nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-
-				if lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
-				} else if !lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
-				} else if lc && !rc {
-					vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
-				} else {
-					vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
-				}
-
-				return resultVector, nil
-			},
+			Fn:         fn,
 		},
 		{
 			LeftType:   types.T_char,
 			RightType:  types.T_varchar,
 			ReturnType: types.T_uint8,
-			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
-
-				var resultsLen int
-				if len(lvs.Lengths) > len(rvs.Lengths) {
-					resultsLen = len(lvs.Lengths)
-				} else {
-					resultsLen = len(rvs.Lengths)
-				}
-				resultVector, err := process.Get(proc, 1*int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:resultsLen]
-				resultVector.Col = results
-				nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-
-				if lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
-				} else if !lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
-				} else if lc && !rc {
-					vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
-				} else {
-					vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
-				}
-
-				return resultVector, nil
-			},
+			Fn:         fn,
 		},
 		{
 			LeftType:   types.T_varchar,
 			RightType:  types.T_char,
 			ReturnType: types.T_uint8,
-			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
-
-				var resultsLen int
-				if len(lvs.Lengths) > len(rvs.Lengths) {
-					resultsLen = len(lvs.Lengths)
-				} else {
-					resultsLen = len(rvs.Lengths)
-				}
-				resultVector, err := process.Get(proc, 1*int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:resultsLen]
-				resultVector.Col = results
-				nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-
-				if lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
-				} else if !lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
-				} else if lc && !rc {
-					vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
-				} else {
-					vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
-				}
-
-				return resultVector, nil
-			},
+			Fn:         fn,
 		},
 		{
 			LeftType:   types.T_varchar,
 			RightType:  types.T_varchar,
 			ReturnType: types.T_uint8,
-			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
-				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
-
-				var resultsLen int
-				if len(lvs.Lengths) > len(rvs.Lengths) {
-					resultsLen = len(lvs.Lengths)
-				} else {
-					resultsLen = len(rvs.Lengths)
-				}
-				resultVector, err := process.Get(proc, 1*int64(resultsLen), types.Type{Oid: types.T_uint8, Size: 1})
-				if err != nil {
-					return nil, err
-				}
-				results := encoding.DecodeUint8Slice(resultVector.Data)
-				results = results[:resultsLen]
-				resultVector.Col = results
-				nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
-
-				if lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
-				} else if !lc && rc {
-					vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
-				} else if lc && !rc {
-					vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
-				} else {
-					vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
-				}
-
-				return resultVector, nil
-			},
+			Fn:         fn,
 		},
 	}
 
