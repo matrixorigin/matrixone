@@ -14,15 +14,18 @@
 
 package sched
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
+// import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
-type metaHandler struct {
-	sched.EventHandler
-}
 
-func newMetaHandler() *metaHandler {
-	h := &metaHandler{
-		EventHandler: sched.NewPoolHandler(4, nil),
-	}
-	return h
-}
+// Unused
+// type metaHandler struct {
+// 	sched.EventHandler
+// }
+
+// Unused
+// func newMetaHandler() *metaHandler {
+// 	h := &metaHandler{
+// 		EventHandler: sched.NewPoolHandler(4, nil),
+// 	}
+// 	return h
+// }

@@ -103,7 +103,7 @@ func (msf *MockSegmentFile) Close() error {
 }
 
 func (msf *MockSegmentFile) Destory() {
-	logutil.Debugf("%s:%s | Destory", msf.TypeName, msf.FileName)
+	logutil.Debugf("%s:%s | Destroy", msf.TypeName, msf.FileName)
 }
 
 func (msf *MockSegmentFile) Ref() {

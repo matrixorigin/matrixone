@@ -25,7 +25,7 @@ var (
 	ErrMarshalFailed   = errors.New("request marshal has failed")
 	ErrInvalidValue    = errors.New("value is invalid")
 	ErrShardNotExisted = errors.New("shard is not existed")
-	ErrDispatchFailed  = errors.New("dispath raft query failed")
+	ErrDispatchFailed  = errors.New("dispatch raft query failed")
 	ErrKeyNotExisted   = errors.New("request key is not existed")
 	ErrStartupTimeout  = errors.New("driver startup timeout")
 	ErrStartupFailed  = errors.New("driver startup failed")

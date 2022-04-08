@@ -102,11 +102,11 @@ func (e *BaseEntry) checkStale1(info *CommitInfo) error {
 	}
 	comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
 	if comp > 0 {
-		return CommitStaleErr
+		return ErrCommitStale
 	} else if comp == 0 && !e.CommitInfo.SameTran(info) {
 		logutil.Error(e.PString(PPL1))
 		logutil.Error(info.PString(PPL1))
-		return CommitStaleErr
+		return ErrCommitStale
 	}
 	return nil
 }
@@ -145,15 +145,16 @@ func (e *BaseEntry) CanUseTxnLocked(tranId uint64) bool {
 	return e.CommitInfo.CanUseTxn(tranId)
 }
 
-func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
-	if e.CommitInfo.CommitId > id {
-		return nil
-	}
-	return &BaseEntry{
-		Id:         e.Id,
-		CommitInfo: e.CommitInfo,
-	}
-}
+// Unused
+// func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
+// 	if e.CommitInfo.CommitId > id {
+// 		return nil
+// 	}
+// 	return &BaseEntry{
+// 		Id:         e.Id,
+// 		CommitInfo: e.CommitInfo,
+// 	}
+// }
 
 func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	e.RLock()
@@ -190,7 +191,6 @@ func (e *BaseEntry) ForEachCommitLocked(fn func(*CommitInfo) bool) {
 		}
 		curr = curr.GetNext()
 	}
-	return
 }
 
 func (e *BaseEntry) FindCommitByIndexLocked(index *LogIndex) *CommitInfo {

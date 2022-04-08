@@ -130,10 +130,7 @@ func (db *Database) FindTableCommitByIndexLocked(name string, index *LogIndex) *
 	fn := func(nn *nameNode) bool {
 		table := nn.GetTable()
 		found = table.FindCommitByIndexLocked(index)
-		if found != nil {
-			return false
-		}
-		return true
+		return found == nil
 	}
 	node.ForEachNodes(fn)
 	return found
@@ -365,7 +362,7 @@ func (db *Database) SimpleHardDeleteTable(id uint64) error {
 	table := db.TableSet[id]
 	if table == nil {
 		db.Unlock()
-		return TableNotFoundErr
+		return ErrTableNotFound
 	}
 	db.Unlock()
 
@@ -391,7 +388,7 @@ func (db *Database) prepareHardDelete(ctx *deleteDatabaseCtx) (LogEntry, error) 
 	db.Lock()
 	defer db.Unlock()
 	if !db.CanHardDeleteLocked() {
-		return nil, CannotHardDeleteErr
+		return nil, ErrCannotHardDelete
 	}
 	cInfo.LogIndex = db.CommitInfo.LogIndex
 	if err := db.onCommit(cInfo); err != nil {
@@ -431,7 +428,7 @@ func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 	db.Lock()
 	if db.IsDeletedLocked() {
 		db.Unlock()
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	err := db.onCommit(cInfo)
 	db.Unlock()
@@ -449,7 +446,7 @@ func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 func (db *Database) SimpleDropTableByName(name string, exIndex *LogIndex) error {
 	table := db.SimpleGetTableByName(name)
 	if table == nil {
-		return TableNotFoundErr
+		return ErrTableNotFound
 	}
 	tranId := db.Catalog.NextUncommitId()
 	ctx := new(dropTableCtx)
@@ -462,7 +459,7 @@ func (db *Database) SimpleDropTableByName(name string, exIndex *LogIndex) error 
 func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) (*Table, error) {
 	table := db.GetTableByNameInTxn(txn, name)
 	if table == nil {
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	ctx := new(dropTableCtx)
 	ctx.tranId = txn.tranId
@@ -510,7 +507,7 @@ func (db *Database) GetTableByNameAndLogIndex(name string, index *LogIndex) (*Ta
 	defer db.RUnlock()
 	nn := db.nameNodes[name]
 	if nn == nil {
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	var err error
 	var table *Table
@@ -524,7 +521,7 @@ func (db *Database) GetTableByNameAndLogIndex(name string, index *LogIndex) (*Ta
 		return true
 	})
 	if table == nil {
-		err = TableNotFoundErr
+		err = ErrTableNotFound
 	}
 	return table, err
 }
@@ -557,11 +554,11 @@ func (db *Database) ForLoopTables(h func(*Table) error) error {
 func (db *Database) SimpleGetSegment(tableId, segmentId uint64) (*Segment, error) {
 	table := db.SimpleGetTable(tableId)
 	if table == nil {
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	segment := table.SimpleGetSegment(segmentId)
 	if segment == nil {
-		return nil, SegmentNotFoundErr
+		return nil, ErrSegmentNotFound
 	}
 	return segment, nil
 }
@@ -573,14 +570,14 @@ func (db *Database) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Block, 
 	}
 	block := segment.SimpleGetBlock(blockId)
 	if block == nil {
-		return nil, BlockNotFoundErr
+		return nil, ErrBlockNotFound
 	}
 	return block, nil
 }
 
 func (db *Database) SimpleCreateTable(schema *Schema, indice *IndexSchema, exIndex *LogIndex) (*Table, error) {
 	if !schema.Valid() {
-		return nil, InvalidSchemaErr
+		return nil, ErrInvalidSchema
 	}
 	tranId := db.Catalog.NextUncommitId()
 	ctx := new(createTableCtx)
@@ -595,7 +592,7 @@ func (db *Database) SimpleCreateTable(schema *Schema, indice *IndexSchema, exInd
 
 func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema, indice *IndexSchema) (*Table, error) {
 	if !schema.Valid() {
-		return nil, InvalidSchemaErr
+		return nil, ErrInvalidSchema
 	}
 	ctx := new(createTableCtx)
 	ctx.tranId = txn.tranId
@@ -615,7 +612,7 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	db.Lock()
 	if db.IsSoftDeletedLocked() {
 		db.Unlock()
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	// if ctx.exIndex != nil {
 	// 	if found := db.FindTableLogIndexLocked(ctx.schema.Name, ctx.exIndex); found {
@@ -638,19 +635,20 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	return logEntry, err
 }
 
-func (db *Database) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
-	var err error
-	db.Lock()
-	if err = db.onNewTable(ctx.table); err != nil {
-		db.Unlock()
-		return nil, err
-	}
-	db.Unlock()
-	if ctx.inTran {
-		return nil, nil
-	}
-	panic("todo")
-}
+// Unused
+// func (db *Database) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
+// 	var err error
+// 	db.Lock()
+// 	if err = db.onNewTable(ctx.table); err != nil {
+// 		db.Unlock()
+// 		return nil, err
+// 	}
+// 	db.Unlock()
+// 	if ctx.inTran {
+// 		return nil, nil
+// 	}
+// 	panic("todo")
+// }
 
 func (db *Database) SplitCheck(size, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
 	coarseSize, coarseCount = uint64(db.GetSize()), uint64(db.GetCount())
@@ -883,7 +881,7 @@ func (db *Database) onNewTable(entry *Table) error {
 		e := nn.GetTable()
 		// Conflict checks all committed and uncommitted entries.
 		if !e.IsDeleted() {
-			return DuplicateErr
+			return ErrDuplicate
 		}
 		db.TableSet[entry.Id] = entry
 		nn.CreateNode(entry.Id)
@@ -911,7 +909,7 @@ func (db *Database) onReplayNewTable(entry *Table) error {
 				nn.CreateNode(e.Id)
 				return nil
 			}
-			return DuplicateErr
+			return ErrDuplicate
 		}
 		db.TableSet[entry.Id] = entry
 		nn.CreateNode(entry.Id)

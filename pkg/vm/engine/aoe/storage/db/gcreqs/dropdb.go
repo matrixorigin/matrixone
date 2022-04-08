@@ -33,7 +33,7 @@ type dropDBRequest struct {
 	Opts           *storage.Options
 	Cleaner        *metadata.Cleaner
 	needReschedule bool
-	startTime      time.Time
+	// startTime      time.Time // Unused
 }
 
 func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables) *dropDBRequest {

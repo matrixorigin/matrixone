@@ -30,13 +30,13 @@ import (
 func TestWrapper(t *testing.T) {
 	schema := metadata.MockSchemaAll(14)
 	capacity := uint64(10000)
-	wrappers := make([]*VectorWrapper, 0)
+	// wrappers := make([]*VectorWrapper, 0)
 	for i, colDef := range schema.ColDefs {
 		vec := MockVector(colDef.Type, capacity)
 		rov, err := vec.CopyToVector()
 		assert.Nil(t, err)
 		wrapper := NewVectorWrapper(rov)
-		wrappers = append(wrappers, wrapper)
+		// wrappers = append(wrappers, wrapper)
 
 		// not supported ops
 		assert.Panics(t, func() {

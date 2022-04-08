@@ -56,7 +56,10 @@ func NewBaseEventHandler(name string) *BaseEventHandler {
 func (h *BaseEventHandler) Enqueue(e Event) {
 	if !h.SendOp(e) {
 		e.SetError(ErrEventHandleEnqueue)
-		e.Cancel()
+		err := e.Cancel()
+		if err != nil{
+		logutil.Warnf("%v", err)
+		}
 	}
 }
 

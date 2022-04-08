@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -34,9 +33,10 @@ var (
 	moduleName = "ShardWal"
 )
 
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
+// Unused
+// func getTestPath(t *testing.T) string {
+// 	return testutils.GetDefaultTestPath(moduleName, t)
+// }
 
 func initTestEnv(t *testing.T) string {
 	testutils.RemoveDefaultTestPath(moduleName, t)
@@ -268,10 +268,6 @@ func TestShardManager(t *testing.T) {
 }
 
 func TestProxy2(t *testing.T) {
-	waitTime := time.Duration(1) * time.Millisecond
-	if invariants.RaceEnabled {
-		waitTime *= 10
-	}
 	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
 	var indice []*Index
@@ -296,16 +292,24 @@ func TestProxy2(t *testing.T) {
 	t.Log(s0.stopmask.String())
 	mgr.Checkpoint(indice[0])
 	mgr.Checkpoint(indice[1])
-	time.Sleep(waitTime)
+	testutils.WaitExpect(1000, func() bool {
+		return uint64(5) == s0.GetSafeId()
+	})
 	assert.Equal(t, uint64(5), s0.GetSafeId())
 	mgr.Checkpoint(indice[2])
-	time.Sleep(waitTime)
+	testutils.WaitExpect(1000, func() bool {
+		return uint64(9) == s0.GetSafeId()
+	})
 	assert.Equal(t, uint64(9), s0.GetSafeId())
 	mgr.Checkpoint(indice[3])
-	time.Sleep(waitTime)
+	testutils.WaitExpect(1000, func() bool {
+		return uint64(13) == s0.GetSafeId()
+	})
 	assert.Equal(t, uint64(13), s0.GetSafeId())
 	mgr.Checkpoint(indice[4])
-	time.Sleep(waitTime)
+	testutils.WaitExpect(1000, func() bool {
+		return uint64(17) == s0.GetSafeId()
+	})
 	assert.Equal(t, uint64(17), s0.GetSafeId())
 
 	safe_ids := mgr.GetSafeIds()
@@ -318,10 +322,6 @@ func TestProxy2(t *testing.T) {
 }
 
 func TestProxy3(t *testing.T) {
-	waitTime := time.Duration(10) * time.Millisecond
-	if invariants.RaceEnabled {
-		waitTime *= 5
-	}
 	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
 	var indice []*Index
@@ -352,7 +352,13 @@ func TestProxy3(t *testing.T) {
 		for i := 0; i <= len(indice)-1; i++ {
 			mgr.Checkpoint(indice[i])
 		}
-		time.Sleep(waitTime)
+		testutils.WaitExpect(1000, func() bool {
+			s, err := mgr.GetShard(uint64(0))
+			if err != nil {
+				return false
+			}
+			return lastIndex.Id.Id == s.GetSafeId()
+		})
 		s, err := mgr.GetShard(uint64(0))
 		assert.Nil(t, err)
 		assert.Equal(t, lastIndex.Id.Id, s.GetSafeId())

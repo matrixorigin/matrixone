@@ -32,8 +32,8 @@ import (
 )
 
 var (
-	DefaultSuffix string = ".rot"
-	DefaultRotationFileMaxSize = 100 * int(common.M)
+	DefaultSuffix              string = ".rot"
+	DefaultRotationFileMaxSize        = 100 * int(common.M)
 )
 
 func MakeVersionFile(prefix, suffix string, version uint64) string {
@@ -162,7 +162,10 @@ func (r *Rotational) OnReplayCommit(id uint64) {
 }
 
 func (r *Rotational) ApplyCheckpoint(rng common.Range) {
-	r.currInfo.UnionCheckpointRange(rng)
+	err := r.currInfo.UnionCheckpointRange(rng)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (r *Rotational) ApplyCommit(id uint64) {
@@ -171,7 +174,10 @@ func (r *Rotational) ApplyCommit(id uint64) {
 
 func (r *Rotational) OnReplayCheckpoint(rng common.Range) {
 	logutil.Infof("Replay Checkpoint %s, version %d", rng.String(), r.currInfo.id)
-	r.currInfo.UnionCheckpointRange(rng)
+	err := r.currInfo.UnionCheckpointRange(rng)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (r *Rotational) OnNewVersion(id uint64) {
@@ -183,7 +189,10 @@ func (r *Rotational) OnNewVersion(id uint64) {
 }
 
 func (r *Rotational) TryCompact() {
-	r.archived.TryTruncate(nil)
+	err := r.archived.TryTruncate(nil)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (r *Rotational) ReplayVersions(handler VersionReplayHandler) error {

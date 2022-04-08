@@ -34,7 +34,7 @@ import (
 )
 
 var (
-	NotExistErr = errors.New("not exist error")
+	ErrNotExist = errors.New("not exist error")
 )
 
 func newTableData(host *Tables, meta *metadata.Table) *tableData {
@@ -288,7 +288,7 @@ func (td *tableData) LinkTo(dir string) error {
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
 		if err = file.LinkTo(dir); err != nil {
-			if err == dataio.FileNotExistErr {
+			if err == dataio.ErrFileNotExist {
 				err = nil
 			}
 		}
@@ -315,7 +315,7 @@ func (td *tableData) CopyTo(dir string) error {
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
 		if err = file.CopyTo(dir); err != nil {
-			if err == dataio.FileNotExistErr {
+			if err == dataio.ErrFileNotExist {
 				err = nil
 			}
 		}
@@ -370,7 +370,7 @@ func (td *tableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	}
 	meta := td.meta.SimpleGetSegment(id)
 	if meta == nil {
-		return nil, metadata.SegmentNotFoundErr
+		return nil, metadata.ErrSegmentNotFound
 	}
 	upgradeSeg, err := old.CloneWithUpgrade(td, meta)
 	if err != nil {
@@ -478,7 +478,7 @@ func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) 
 	tbl, ok := ts.Data[tid]
 	if !ok {
 		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
-		return tbl, NotExistErr
+		return tbl, ErrNotExist
 	}
 	delete(ts.ids, tid)
 	delete(ts.Data, tid)
@@ -520,7 +520,7 @@ func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) 
 	ts.Lock()
 	defer ts.Unlock()
 	if meta.IsCloseLocked() {
-		return nil, metadata.TableNotFoundErr
+		return nil, metadata.ErrTableNotFound
 	}
 	if err := ts.CreateTableNoLock(tbl); err != nil {
 		tbl.Unref()
@@ -563,7 +563,7 @@ func (ts *Tables) ForTablesLocked(fn func(iface.ITableData) error) error {
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
-		return metadata.DuplicateErr
+		return metadata.ErrDuplicate
 	}
 	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl

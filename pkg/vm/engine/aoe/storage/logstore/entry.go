@@ -146,7 +146,7 @@ func (meta *EntryMeta) ReadFrom(r io.Reader) (int64, error) {
 type BaseEntry struct {
 	Meta     *EntryMeta
 	Payload  []byte
-	Auxilary interface{}
+	Auxiliary interface{}
 	p        *sync.Pool
 }
 
@@ -170,13 +170,13 @@ func (e *BaseEntry) Clone(o Entry) {
 	e.Meta.SetType(o.GetMeta().GetType())
 	e.Meta.SetPayloadSize(o.GetMeta().PayloadSize())
 	e.Payload = o.GetPayload()
-	e.Auxilary = o.GetAuxilaryInfo()
+	e.Auxiliary = o.GetAuxilaryInfo()
 }
 
 func (e *BaseEntry) reset() {
 	e.Meta.reset()
 	e.Payload = e.Payload[:0]
-	e.Auxilary = nil
+	e.Auxiliary = nil
 	e.p = nil
 }
 
@@ -189,8 +189,8 @@ func (e *BaseEntry) Free() {
 }
 
 func (e *BaseEntry) IsAsync() bool                    { return false }
-func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxilary }
-func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxilary = info }
+func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxiliary }
+func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxiliary = info }
 func (e *BaseEntry) GetMeta() *EntryMeta              { return e.Meta }
 func (e *BaseEntry) SetMeta(meta *EntryMeta)          { e.Meta = meta }
 func (e *BaseEntry) GetPayload() []byte               { return e.Payload }
@@ -229,16 +229,16 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int64, error
 	if err != nil {
 		return int64(n2), err
 	}
-	auxilary := e.GetAuxilaryInfo()
-	if auxilary == nil {
+	auxiliary := e.GetAuxilaryInfo()
+	if auxiliary == nil {
 		return n1 + int64(n2), nil
 	}
 
 	if e.Meta.IsCheckpoint() {
-		r := auxilary.(*common.Range)
+		r := auxiliary.(*common.Range)
 		w.ApplyCheckpoint(*r)
 	} else {
-		id := auxilary.(uint64)
+		id := auxiliary.(uint64)
 		w.ApplyCommit(id)
 	}
 	return n1 + int64(n2), err

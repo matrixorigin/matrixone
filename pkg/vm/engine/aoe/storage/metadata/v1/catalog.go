@@ -37,20 +37,20 @@ var (
 )
 
 var (
-	ResourceStaleErr       = errors.New("aoe: resource is stale")
-	DuplicateErr           = errors.New("aoe: duplicate")
-	DatabaseNotFoundErr    = errors.New("aoe: db not found")
-	TableNotFoundErr       = errors.New("aoe: table not found")
-	SegmentNotFoundErr     = errors.New("aoe: segment not found")
-	BlockNotFoundErr       = errors.New("aoe: block not found")
-	InvalidSchemaErr       = errors.New("aoe: invalid schema")
-	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
-	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
-	CommitStaleErr         = errors.New("aoe: commit stale info")
-	IdempotenceErr         = errors.New("aoe: idempotence error")
-	DupIndexErr            = errors.New("aoe: dup index")
-	IndexNotFoundErr       = errors.New("aoe: index not found")
-	ReplayFailedErr           = errors.New("aoe: replay failed")
+	ErrResourceStale       = errors.New("aoe: resource is stale")
+	ErrDuplicate           = errors.New("aoe: duplicate")
+	ErrDatabaseNotFound    = errors.New("aoe: db not found")
+	ErrTableNotFound       = errors.New("aoe: table not found")
+	ErrSegmentNotFound     = errors.New("aoe: segment not found")
+	ErrBlockNotFound       = errors.New("aoe: block not found")
+	ErrInvalidSchema       = errors.New("aoe: invalid schema")
+	ErrInconsistentShardId = errors.New("aoe: InconsistentShardIdErr")
+	ErrCannotHardDelete    = errors.New("aoe: cannot hard delete now")
+	ErrCommitStale         = errors.New("aoe: commit stale info")
+	ErrIdempotence         = errors.New("aoe: idempotence error")
+	ErrDupIndex            = errors.New("aoe: dup index")
+	ErrIndexNotFound       = errors.New("aoe: index not found")
+	ErrReplayFailed           = errors.New("aoe: replay failed")
 )
 
 type CatalogCfg struct {
@@ -108,19 +108,21 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	return catalog
 }
 
-type catalogCheckpointer struct {
-	catalog *Catalog
-}
+// Unused
+// type catalogCheckpointer struct {
+// 	catalog *Catalog
+// }
 
-func (c *catalogCheckpointer) OnExec() {
-	previousCheckpointId := c.catalog.GetCheckpointId()
-	commitId := c.catalog.Store.GetSyncedId()
-	if commitId < previousCheckpointId+DefaultCheckpointDelta {
-		return
-	}
-	c.catalog.Checkpoint()
-}
-func (c *catalogCheckpointer) OnStopped() {}
+// Unused
+// func (c *catalogCheckpointer) OnExec() {
+// 	previousCheckpointId := c.catalog.GetCheckpointId()
+// 	commitId := c.catalog.Store.GetSyncedId()
+// 	if commitId < previousCheckpointId+DefaultCheckpointDelta {
+// 		return
+// 	}
+// 	c.catalog.Checkpoint()
+// }
+// func (c *catalogCheckpointer) OnStopped() {}
 
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
@@ -157,7 +159,7 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 func (catalog *Catalog) unregisterDatabaseLocked(db *Database) error {
 	node := catalog.nameNodes[db.Name]
 	if node == nil {
-		return DatabaseNotFoundErr
+		return ErrDatabaseNotFound
 	}
 	_, empty := node.DeleteNode(db.Id)
 	if empty {
@@ -266,7 +268,7 @@ func (catalog *Catalog) SimpleGetDatabase(id uint64) (*Database, error) {
 	defer catalog.RUnlock()
 	db := catalog.Databases[id]
 	if db == nil {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	return db, nil
 }
@@ -278,7 +280,7 @@ func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, 
 	}
 	table := database.SimpleGetTableByName(tableName)
 	if table == nil {
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	return table, nil
 }
@@ -462,13 +464,13 @@ func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
 			err := catalog.onReplaySegmentCheckpoint(
 				&segmentEntry.LogEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 		for _, blockEntry := range segmentEntry.Blocks {
 			err := catalog.onReplayBlockCheckpoint(blockEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 	}
@@ -489,7 +491,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			// db.CommitInfo.CommitId = entry.Range.Right
 			err := catalog.unregisterDatabaseLocked(db)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 			return nil
 		}
@@ -499,7 +501,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			err := catalog.onReplayDatabaseCheckpoint(
 				&databaseEntry.LogEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 
@@ -509,7 +511,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		for _, tableEntry := range databaseEntry.Tables {
 			err := catalog.onReplayTableEntry(tableEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 		delete(entry.Databases, db.Id)
@@ -525,7 +527,7 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		}
 		err := catalog.onReplayTableEntry(tableEntry)
 		if err != nil {
-			panic(ReplayFailedErr)
+			panic(ErrReplayFailed)
 		}
 		delete(currentDatabaseEntry.Tables, tb.Id)
 		return nil
@@ -537,13 +539,13 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 			err := catalog.onReplayDatabaseCheckpoint(
 				&databaseEntry.LogEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 		for _, tableEntry := range databaseEntry.Tables {
 			err := catalog.onReplayTableEntry(tableEntry)
 			if err != nil {
-				panic(ReplayFailedErr)
+				panic(ErrReplayFailed)
 			}
 		}
 	}
@@ -791,11 +793,11 @@ func (catalog *Catalog) GetDatabaseByNameInTxn(txn *TxnCtx, name string) (*Datab
 	defer catalog.RUnlock()
 	nn := catalog.nameNodes[name]
 	if nn == nil {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	db := nn.GetDatabase()
 	if db.IsDeletedInTxnLocked(txn) {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	return db, nil
 }
@@ -805,7 +807,7 @@ func (catalog *Catalog) GetDatabaseByName(name string) (*Database, error) {
 	defer catalog.RUnlock()
 	nn := catalog.nameNodes[name]
 	if nn == nil {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	db := nn.GetDatabase()
 	return db, nil
@@ -816,11 +818,11 @@ func (catalog *Catalog) SimpleGetDatabaseByName(name string) (*Database, error) 
 	defer catalog.RUnlock()
 	nn := catalog.nameNodes[name]
 	if nn == nil {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	db := nn.GetDatabase()
 	if db.IsDeletedLocked() || !db.HasCommittedLocked() {
-		return nil, DatabaseNotFoundErr
+		return nil, ErrDatabaseNotFound
 	}
 	return db, nil
 }
@@ -830,7 +832,7 @@ func (catalog *Catalog) SimpleHardDeleteDatabase(id uint64) error {
 	db := catalog.Databases[id]
 	if db == nil {
 		catalog.Unlock()
-		return DatabaseNotFoundErr
+		return ErrDatabaseNotFound
 	}
 	catalog.Unlock()
 	return db.SimpleHardDelete()
@@ -845,15 +847,16 @@ func (catalog *Catalog) SplitCheck(size, index uint64, dbName string) (coarseSiz
 	return db.SplitCheck(size, index)
 }
 
-func (catalog *Catalog) execSplit(rename RenameTableFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []*DBSpec) error {
-	ctx := new(splitDBCtx)
-	ctx.spec = spec
-	ctx.renameTable = rename
-	ctx.tranId = tranId
-	ctx.exIndex = index
-	ctx.dbSpecs = dbSpecs
-	return catalog.onCommitRequest(ctx, true)
-}
+// Unused
+// func (catalog *Catalog) execSplit(rename RenameTableFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []*DBSpec) error {
+// 	ctx := new(splitDBCtx)
+// 	ctx.spec = spec
+// 	ctx.renameTable = rename
+// 	ctx.tranId = tranId
+// 	ctx.exIndex = index
+// 	ctx.dbSpecs = dbSpecs
+// 	return catalog.onCommitRequest(ctx, true)
+// }
 
 func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {
 	entry := newDbReplaceLogEntry()
@@ -901,7 +904,7 @@ func (catalog *Catalog) onNewDatabase(db *Database) error {
 	if nn != nil {
 		e := nn.GetDatabase()
 		if !e.IsDeletedLocked() {
-			return DuplicateErr
+			return ErrDuplicate
 		}
 		catalog.Databases[db.Id] = db
 		nn.CreateNode(db.Id)
@@ -928,7 +931,7 @@ func (catalog *Catalog) onReplayNewDatabase(db *Database) error {
 				nn.CreateNode(e.Id)
 				return nil
 			}
-			return DuplicateErr
+			return ErrDuplicate
 		}
 		catalog.Databases[db.Id] = db
 		nn.CreateNode(db.Id)
@@ -1075,7 +1078,7 @@ func (catalog *Catalog) onReplayDatabaseCheckpoint(entry *databaseLogEntry) erro
 	catalog.TryUpdateDatabaseId(db.Id)
 	err := catalog.onReplayNewDatabase(db)
 	if err != nil {
-		panic(ReplayFailedErr)
+		panic(ErrReplayFailed)
 	}
 	return nil
 }

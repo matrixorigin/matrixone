@@ -32,8 +32,8 @@ var (
 )
 
 var (
-	DuplicateShardErr = errors.New("aoe: duplicate shard")
-	ShardNotFoundErr  = errors.New("aoe: shard not found")
+	ErrDuplicateShard = errors.New("aoe: duplicate shard")
+	ErrShardNotFound  = errors.New("aoe: shard not found")
 )
 
 type noopWal struct{}
@@ -185,7 +185,7 @@ func (mgr *manager) GetShard(id uint64) (*proxy, error) {
 	defer mgr.mu.RUnlock()
 	s, ok := mgr.shards[id]
 	if !ok {
-		return nil, ShardNotFoundErr
+		return nil, ErrShardNotFound
 	}
 	return s, nil
 }
@@ -193,7 +193,7 @@ func (mgr *manager) GetShard(id uint64) (*proxy, error) {
 func (mgr *manager) AddShardLocked(id uint64) (*proxy, error) {
 	_, ok := mgr.shards[id]
 	if ok {
-		return nil, DuplicateShardErr
+		return nil, ErrDuplicateShard
 	}
 	mgr.shards[id] = newProxy(id, mgr)
 	return mgr.shards[id], nil
@@ -206,7 +206,7 @@ func (mgr *manager) getOrAddShard(id uint64) (*proxy, error) {
 	}
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
-	if shard, err = mgr.AddShardLocked(id); err == DuplicateShardErr {
+	if shard, err = mgr.AddShardLocked(id); err == ErrDuplicateShard {
 		shard = mgr.shards[id]
 		err = nil
 	}
@@ -234,14 +234,14 @@ func (mgr *manager) InitShard(shardId, safeId uint64) error {
 
 func (mgr *manager) TryInitShard(shardId, safeId uint64) error {
 	s, err := mgr.GetShard(shardId)
-	if err != nil && err != ShardNotFoundErr {
+	if err != nil && err != ErrShardNotFound {
 		return err
 	}
-	if err == ShardNotFoundErr {
+	if err == ErrShardNotFound {
 		mgr.mu.Lock()
 		s, err = mgr.AddShardLocked(shardId)
 		mgr.mu.Unlock()
-		if err != nil && err != DuplicateShardErr {
+		if err != nil && err != ErrDuplicateShard {
 			return err
 		}
 	}

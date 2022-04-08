@@ -24,8 +24,8 @@ import (
 )
 
 var (
-	UpgradeInfullSegmentErr = errors.New("aoe: upgrade infull segment")
-	UpgradeNotNeededErr     = errors.New("aoe: already upgraded")
+	ErrUpgradeInfullSegment = errors.New("aoe: upgrade infull segment")
+	ErrUpgradeNotNeeded     = errors.New("aoe: already upgraded")
 )
 
 type segmentLogEntry struct {
@@ -136,9 +136,7 @@ func (e *Segment) fillView(filter *Filter) *Segment {
 	}
 	e.RLock()
 	blks := make([]*Block, 0, len(e.BlockSet))
-	for _, blk := range e.BlockSet {
-		blks = append(blks, blk)
-	}
+	blks = append(blks, e.BlockSet...)
 	e.RUnlock()
 	for _, blk := range blks {
 		blkView := blk.fillView(filter)
@@ -163,7 +161,7 @@ func (e *Segment) toLogEntry(info *CommitInfo) *segmentLogEntry {
 	}
 	return &segmentLogEntry{
 		BaseEntry: &BaseEntry{
-			Id: e.Id,
+			Id:         e.Id,
 			CommitInfo: info.Clone()},
 		TableId:    e.Table.Id,
 		DatabaseId: e.Table.Database.Id,
@@ -216,7 +214,6 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 		if !e.IsSoftDeletedLocked() {
 			panic("logic error")
 		}
-		break
 	default:
 		panic("not supported")
 	}
@@ -379,14 +376,14 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	e.RLock()
 	if !e.HasMaxBlocks() {
 		e.RUnlock()
-		return nil, UpgradeInfullSegmentErr
+		return nil, ErrUpgradeInfullSegment
 	}
 	if e.IsSortedLocked() {
-		return nil, UpgradeNotNeededErr
+		return nil, ErrUpgradeNotNeeded
 	}
 	for _, blk := range e.BlockSet {
 		if !blk.IsFullLocked() {
-			return nil, UpgradeInfullSegmentErr
+			return nil, ErrUpgradeInfullSegment
 		}
 	}
 	e.RUnlock()
@@ -397,7 +394,7 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	case OpCreate:
 		newOp = OpUpgradeSorted
 	default:
-		return nil, UpgradeNotNeededErr
+		return nil, ErrUpgradeNotNeeded
 	}
 	cInfo := &CommitInfo{
 		TranId:   ctx.tranId,
