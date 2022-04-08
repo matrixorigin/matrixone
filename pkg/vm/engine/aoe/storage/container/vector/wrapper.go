@@ -112,7 +112,7 @@ func (v *VectorWrapper) FreeMemory() {
 }
 
 func (v *VectorWrapper) Append(n int, vals interface{}) error {
-	return VecWriteRoErr
+	return ErrVecWriteRo
 }
 
 func (v *VectorWrapper) GetMemorySize() uint64 {
@@ -128,12 +128,12 @@ func (v *VectorWrapper) GetMemoryCapacity() uint64 {
 }
 
 func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
-	return VecWriteRoErr
+	return ErrVecWriteRo
 }
 
 func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 	if idx >= v.Length() || idx < 0 {
-		return nil, VecInvalidOffsetErr
+		return nil, ErrVecInvalidOffset
 	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
@@ -170,7 +170,7 @@ func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 	case types.T_tuple:
 		return v.Col.([][]interface{})[idx], nil
 	default:
-		return nil, VecTypeNotSupportErr
+		return nil, ErrVecTypeNotSupport
 	}
 }
 

@@ -25,8 +25,8 @@ import (
 )
 
 var (
-	DupBlkError = errors.New("duplicate blk")
-	DupSegError = errors.New("duplicate seg")
+	ErrDupBlk = errors.New("duplicate blk")
+	ErrDupSeg = errors.New("duplicate seg")
 )
 
 type FileType uint8
@@ -77,7 +77,7 @@ func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (base.ISegmentFile, erro
 	_, ok := mgr.UnsortedFiles[id]
 	if ok {
 		usf.Close()
-		return nil, DupSegError
+		return nil, ErrDupSeg
 	}
 	mgr.UnsortedFiles[id] = usf
 	return usf, nil
@@ -95,12 +95,12 @@ func (mgr *Manager) RegisterSortedFiles(id common.ID) (base.ISegmentFile, error)
 	_, ok := mgr.UnsortedFiles[id]
 	if ok {
 		sf.Close()
-		return nil, DupSegError
+		return nil, ErrDupSeg
 	}
 	_, ok = mgr.SortedFiles[id]
 	if ok {
 		sf.Close()
-		return nil, DupSegError
+		return nil, ErrDupSeg
 	}
 	mgr.SortedFiles[id] = sf
 	return sf, nil

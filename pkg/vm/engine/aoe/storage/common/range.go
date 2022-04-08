@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	RangeNotContinousErr = errors.New("aoe: range not continous")
-	RangeInvalidErr      = errors.New("aoe: invalid range")
+	ErrRangeNotContinous = errors.New("aoe: range not continuous")
+	ErrRangeInvalid      = errors.New("aoe: invalid range")
 )
 
 type Range struct {
@@ -74,7 +74,7 @@ func (r *Range) CommitLeft(left uint64) bool {
 
 func (r *Range) Union(o *Range) error {
 	if o.Left > r.Right+1 || r.Left > o.Right+1 {
-		return RangeNotContinousErr
+		return ErrRangeNotContinous
 	}
 	if r.Left > o.Left {
 		r.Left = o.Left
@@ -93,7 +93,7 @@ func (r *Range) Append(right uint64) error {
 	}
 	// if right < r.Left || right > r.Right+1 {
 	if right <= r.Right {
-		return RangeInvalidErr
+		return ErrRangeInvalid
 	}
 	r.Right = right
 	return nil

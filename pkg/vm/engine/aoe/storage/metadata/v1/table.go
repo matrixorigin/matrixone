@@ -220,9 +220,7 @@ func (e *Table) fillView(filter *Filter) *Table {
 	}
 	e.RLock()
 	segs := make([]*Segment, 0, len(e.SegmentSet))
-	for _, seg := range e.SegmentSet {
-		segs = append(segs, seg)
-	}
+		segs = append(segs, e.SegmentSet...)
 	e.RUnlock()
 	for _, seg := range segs {
 		segView := seg.fillView(filter)
@@ -274,7 +272,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 	defer e.Unlock()
 	if e.IsHardDeletedLocked() {
 		logutil.Warnf("HardDelete %d but already hard deleted", e.Id)
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	if !e.IsSoftDeletedLocked() && !e.IsReplacedLocked() && !e.Database.IsDeleted() {
 		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
@@ -293,7 +291,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // related resources.
 func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
 	if exIndex != nil && exIndex.ShardId != e.Database.GetShardId() {
-		return InconsistentShardIdErr
+		return ErrInconsistentShardId
 	}
 	tranId := e.Database.Catalog.NextUncommitId()
 	ctx := new(dropTableCtx)
@@ -317,7 +315,7 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	if e.IsDeletedLocked() {
 		// if e.IsDeletedInTxnLocked(ctx.txn) {
 		e.Unlock()
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	cInfo.Indice = e.CommitInfo.Indice
 	err := e.onCommit(cInfo)
@@ -355,7 +353,7 @@ func (e *Table) prepareAddIndice(ctx *addIndiceCtx) (LogEntry, error) {
 	e.Lock()
 	if e.IsDeletedInTxnLocked(ctx.txn) {
 		e.Unlock()
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	lastIndice := e.CommitInfo.Indice
 	indice := NewIndexSchema()
@@ -407,7 +405,7 @@ func (e *Table) prepareDropIndice(ctx *dropIndiceCtx) (LogEntry, error) {
 	e.Lock()
 	if e.IsDeletedInTxnLocked(ctx.txn) {
 		e.Unlock()
-		return nil, TableNotFoundErr
+		return nil, ErrTableNotFound
 	}
 	lastIndice := e.CommitInfo.Indice
 	indice := NewIndexSchema()
@@ -638,11 +636,11 @@ func (e *Table) onNewSegment(entry *Segment) {
 func (e *Table) SimpleGetBlock(segId, blkId uint64) (*Block, error) {
 	seg := e.SimpleGetSegment(segId)
 	if seg == nil {
-		return nil, SegmentNotFoundErr
+		return nil, ErrSegmentNotFound
 	}
 	blk := seg.SimpleGetBlock(blkId)
 	if blk == nil {
-		return nil, BlockNotFoundErr
+		return nil, ErrBlockNotFound
 	}
 	return blk, nil
 }

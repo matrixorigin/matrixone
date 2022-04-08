@@ -34,6 +34,14 @@ var (
 	errorUnmatchedValueType        = errors.New("unmatched value type 2")
 )
 
+func getInt64Value(value interface{}) int64 {
+	if v, ok := value.(int64); ok {
+		return v
+	} else {
+		return int64(value.(uint64))
+	}
+}
+
 //DecodeKey decodes
 func (od *OrderedDecoder) DecodeKey(data []byte, valueType ValueType) ([]byte, *DecodedItem, error) {
 	if data == nil || len(data) < 1 {
@@ -69,13 +77,13 @@ func (od *OrderedDecoder) DecodeKey(data []byte, valueType ValueType) ([]byte, *
 	case VALUE_TYPE_UINT64:
 		d.Value = uint64(d.Value.(uint64))
 	case VALUE_TYPE_INT8:
-		d.Value = int8(d.Value.(uint64))
+		d.Value = int8(getInt64Value(d.Value))
 	case VALUE_TYPE_INT16:
-		d.Value = int16(d.Value.(uint64))
+		d.Value = int16(getInt64Value(d.Value))
 	case VALUE_TYPE_INT32:
-		d.Value = int32(d.Value.(uint64))
+		d.Value = int32(getInt64Value(d.Value))
 	case VALUE_TYPE_INT64:
-		d.Value = int64(d.Value.(uint64))
+		d.Value = int64(getInt64Value(d.Value))
 	case VALUE_TYPE_UINT8:
 		d.Value = uint8(d.Value.(uint64))
 	case VALUE_TYPE_UINT16:
@@ -129,7 +137,7 @@ func (od *OrderedDecoder) DecodeInt64(data []byte) ([]byte, *DecodedItem, error)
 		value = (value << 8)
 		value |= int64(^t)
 	}
-	return data[l:], NewDecodeItem(^value, VALUE_TYPE_UINT64, 0, 0, l+1), nil
+	return data[l:], NewDecodeItem(^value, VALUE_TYPE_INT64, 0, 0, l+1), nil
 }
 
 // DecodeUint64  decodes the uint64 with the variable length encoding

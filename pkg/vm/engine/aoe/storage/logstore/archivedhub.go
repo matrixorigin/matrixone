@@ -60,7 +60,7 @@ type archivedHub struct {
 	sync.RWMutex
 	versions []*versionInfo
 	remote   IHistory
-	store    AwareStore
+	// store    AwareStore // Unused
 }
 
 func newArchivedHub(remote IHistory) *archivedHub {

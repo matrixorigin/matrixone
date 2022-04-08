@@ -23,9 +23,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func doAlloc(size uint64) []byte {
-	return make([]byte, size)
-}
+// Unused
+// func doAlloc(size uint64) []byte {
+// 	return make([]byte, size)
+// }
 
 func TestPool(t *testing.T) {
 	mp := NewMempool(M * K * 8)
@@ -83,7 +84,8 @@ func TestPool(t *testing.T) {
 				mp.Free(n)
 			}
 		}
-		p.Submit(f)
+		err := p.Submit(f)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Logf("Takes %s", time.Since(now))
@@ -103,7 +105,8 @@ func TestPool(t *testing.T) {
 			quota := mp.ApplyQuota(size)
 			mp.Free(quota)
 		}
-		p.Submit(f)
+		err := p.Submit(f)
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	t.Log(mp.String())

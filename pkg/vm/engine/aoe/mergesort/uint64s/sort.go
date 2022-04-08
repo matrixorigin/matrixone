@@ -73,11 +73,12 @@ func medianOfThree(data sortSlice, m1, m0, m2 int) {
 	// now data[m0] <= data[m1] <= data[m2]
 }
 
-func swapRange(data sortSlice, a, b, n int) {
-	for i := 0; i < n; i++ {
-		data.Swap(a+i, b+i)
-	}
-}
+// Unused
+// func swapRange(data sortSlice, a, b, n int) {
+// 	for i := 0; i < n; i++ {
+// 		data.Swap(a+i, b+i)
+// 	}
+// }
 
 func doPivot(data sortSlice, lo, hi int) (midlo, midhi int) {
 	m := int(uint(lo+hi) >> 1) // Written like this to avoid integer overflow.
@@ -231,31 +232,32 @@ func maxDepth(n int) int {
 //    January 2004 and the references in there.
 //  - Often "optimal" algorithms are optimal in the number of assignments
 //    but Interface has only Swap as operation.
+// Unused
+// func stable(data sortSlice, n int) {
+// 	blockSize := 20 // must be > 0
+// 	a, b := 0, blockSize
+// 	for b <= n {
+// 		insertionSort(data, a, b)
+// 		a = b
+// 		b += blockSize
+// 	}
+// 	insertionSort(data, a, n)
 
-func stable(data sortSlice, n int) {
-	blockSize := 20 // must be > 0
-	a, b := 0, blockSize
-	for b <= n {
-		insertionSort(data, a, b)
-		a = b
-		b += blockSize
-	}
-	insertionSort(data, a, n)
+// 	for blockSize < n {
+// 		a, b = 0, 2*blockSize
+// 		for b <= n {
+// 			symMerge(data, a, a+blockSize, b)
+// 			a = b
+// 			b += 2 * blockSize
+// 		}
+// 		if m := a + blockSize; m < n {
+// 			symMerge(data, a, m, n)
+// 		}
+// 		blockSize *= 2
+// 	}
+// }
 
-	for blockSize < n {
-		a, b = 0, 2*blockSize
-		for b <= n {
-			symMerge(data, a, a+blockSize, b)
-			a = b
-			b += 2 * blockSize
-		}
-		if m := a + blockSize; m < n {
-			symMerge(data, a, m, n)
-		}
-		blockSize *= 2
-	}
-}
-
+// Unused
 // symMerge merges the two sorted subsequences data[a:m] and data[m:b] using
 // the SymMerge algorithm from Pok-Son Kim and Arne Kutzner, "Stable Minimum
 // Storage Merging by Symmetric Comparisons", in Susanne Albers and Tomasz
@@ -275,108 +277,109 @@ func stable(data sortSlice, n int) {
 // symMerge assumes non-degenerate arguments: a < m && m < b.
 // Having the caller check this condition eliminates many leaf recursion calls,
 // which improves performance.
-func symMerge(data sortSlice, a, m, b int) {
-	// Avoid unnecessary recursions of symMerge
-	// by direct insertion of data[a] into data[m:b]
-	// if data[a:m] only contains one element.
-	if m-a == 1 {
-		// Use binary search to find the lowest index i
-		// such that data[i] >= data[a] for m <= i < b.
-		// Exit the search loop with i == b in case no such index exists.
-		i := m
-		j := b
-		for i < j {
-			h := int(uint(i+j) >> 1)
-			if data.Less(h, a) {
-				i = h + 1
-			} else {
-				j = h
-			}
-		}
-		// Swap values until data[a] reaches the position before i.
-		for k := a; k < i-1; k++ {
-			data.Swap(k, k+1)
-		}
-		return
-	}
+// func symMerge(data sortSlice, a, m, b int) {
+// 	// Avoid unnecessary recursions of symMerge
+// 	// by direct insertion of data[a] into data[m:b]
+// 	// if data[a:m] only contains one element.
+// 	if m-a == 1 {
+// 		// Use binary search to find the lowest index i
+// 		// such that data[i] >= data[a] for m <= i < b.
+// 		// Exit the search loop with i == b in case no such index exists.
+// 		i := m
+// 		j := b
+// 		for i < j {
+// 			h := int(uint(i+j) >> 1)
+// 			if data.Less(h, a) {
+// 				i = h + 1
+// 			} else {
+// 				j = h
+// 			}
+// 		}
+// 		// Swap values until data[a] reaches the position before i.
+// 		for k := a; k < i-1; k++ {
+// 			data.Swap(k, k+1)
+// 		}
+// 		return
+// 	}
 
-	// Avoid unnecessary recursions of symMerge
-	// by direct insertion of data[m] into data[a:m]
-	// if data[m:b] only contains one element.
-	if b-m == 1 {
-		// Use binary search to find the lowest index i
-		// such that data[i] > data[m] for a <= i < m.
-		// Exit the search loop with i == m in case no such index exists.
-		i := a
-		j := m
-		for i < j {
-			h := int(uint(i+j) >> 1)
-			if !data.Less(m, h) {
-				i = h + 1
-			} else {
-				j = h
-			}
-		}
-		// Swap values until data[m] reaches the position i.
-		for k := m; k > i; k-- {
-			data.Swap(k, k-1)
-		}
-		return
-	}
+// 	// Avoid unnecessary recursions of symMerge
+// 	// by direct insertion of data[m] into data[a:m]
+// 	// if data[m:b] only contains one element.
+// 	if b-m == 1 {
+// 		// Use binary search to find the lowest index i
+// 		// such that data[i] > data[m] for a <= i < m.
+// 		// Exit the search loop with i == m in case no such index exists.
+// 		i := a
+// 		j := m
+// 		for i < j {
+// 			h := int(uint(i+j) >> 1)
+// 			if !data.Less(m, h) {
+// 				i = h + 1
+// 			} else {
+// 				j = h
+// 			}
+// 		}
+// 		// Swap values until data[m] reaches the position i.
+// 		for k := m; k > i; k-- {
+// 			data.Swap(k, k-1)
+// 		}
+// 		return
+// 	}
 
-	mid := int(uint(a+b) >> 1)
-	n := mid + m
-	var start, r int
-	if m > mid {
-		start = n - b
-		r = mid
-	} else {
-		start = a
-		r = m
-	}
-	p := n - 1
+// 	mid := int(uint(a+b) >> 1)
+// 	n := mid + m
+// 	var start, r int
+// 	if m > mid {
+// 		start = n - b
+// 		r = mid
+// 	} else {
+// 		start = a
+// 		r = m
+// 	}
+// 	p := n - 1
 
-	for start < r {
-		c := int(uint(start+r) >> 1)
-		if !data.Less(p-c, c) {
-			start = c + 1
-		} else {
-			r = c
-		}
-	}
+// 	for start < r {
+// 		c := int(uint(start+r) >> 1)
+// 		if !data.Less(p-c, c) {
+// 			start = c + 1
+// 		} else {
+// 			r = c
+// 		}
+// 	}
 
-	end := n - start
-	if start < m && m < end {
-		rotate(data, start, m, end)
-	}
-	if a < start && start < mid {
-		symMerge(data, a, start, mid)
-	}
-	if mid < end && end < b {
-		symMerge(data, mid, end, b)
-	}
-}
+// 	end := n - start
+// 	if start < m && m < end {
+// 		rotate(data, start, m, end)
+// 	}
+// 	if a < start && start < mid {
+// 		symMerge(data, a, start, mid)
+// 	}
+// 	if mid < end && end < b {
+// 		symMerge(data, mid, end, b)
+// 	}
+// }
 
+// Unused
 // rotate rotates two consecutive blocks u = data[a:m] and v = data[m:b] in data:
 // DataSource of the form 'x u v y' is changed to 'x v u y'.
 // rotate performs at most b-a many calls to data.Swap,
 // and it assumes non-degenerate arguments: a < m && m < b.
-func rotate(data sortSlice, a, m, b int) {
-	i := m - a
-	j := b - m
+// func rotate(data sortSlice, a, m, b int) {
+// 	i := m - a
+// 	j := b - m
 
-	for i != j {
-		if i > j {
-			swapRange(data, m-i, m, j)
-			i -= j
-		} else {
-			swapRange(data, m-i, m+j-i, i)
-			j -= i
-		}
-	}
-	// i == j
-	swapRange(data, m-i, m, i)
-}
+// 	for i != j {
+// 		if i > j {
+// 			swapRange(data, m-i, m, j)
+// 			i -= j
+// 		} else {
+// 			swapRange(data, m-i, m+j-i, i)
+// 			j -= i
+// 		}
+// 	}
+// 	// i == j
+// 	swapRange(data, m-i, m, i)
+// }
 
 /*
 Complexity of Stable Sorting
@@ -439,10 +442,11 @@ func sortUnstable(data sortSlice) {
 	quickSort(data, 0, n, maxDepth(n))
 }
 
+// Unused
 // Stable sorts data while keeping the original order of equal elements.
 //
 // It makes one call to data.Len to determine n, Operator(n*log(n)) calls to
 // data.Less and Operator(n*log(n)*log(n)) calls to data.Swap.
-func sortStable(data sortSlice) {
-	stable(data, len(data))
-}
+// func sortStable(data sortSlice) {
+// 	stable(data, len(data))
+// }

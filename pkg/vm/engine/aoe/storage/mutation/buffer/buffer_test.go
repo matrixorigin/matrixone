@@ -32,7 +32,7 @@ func (h *testNodeHandle) load() {
 func (h *testNodeHandle) unload() {
 	h.t.Logf("Unload %s", h.id.BlockString())
 }
-func (h *testNodeHandle) destory() {
+func (h *testNodeHandle) destroy() {
 	h.t.Logf("Destroy %s", h.id.BlockString())
 }
 
@@ -43,7 +43,7 @@ func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T
 	n.Node = *NewNode(n, mgr, id, size)
 	n.LoadFunc = n.load
 	n.UnloadFunc = n.unload
-	n.DestroyFunc = n.destory
+	n.DestroyFunc = n.destroy
 	return n
 }
 

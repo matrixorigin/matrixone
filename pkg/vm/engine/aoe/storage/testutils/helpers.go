@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func WaitExpect(timeout int, expect func() bool) {
@@ -36,7 +38,8 @@ func GetDefaultTestPath(module string, t *testing.T) string {
 
 func MakeDefaultTestPath(module string, t *testing.T) string {
 	path := GetDefaultTestPath(module, t)
-	os.MkdirAll(path, os.FileMode(0755))
+	err := os.MkdirAll(path, os.FileMode(0755))
+	assert.Nil(t, err)
 	return path
 }
 

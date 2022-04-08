@@ -259,7 +259,7 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 	for id, _ := range usf.files {
 		meta := usf.meta.SimpleGetBlock(id.BlockID)
 		if meta == nil {
-			panic(metadata.BlockNotFoundErr)
+			panic(metadata.ErrBlockNotFound)
 		}
 		if !meta.IsFullLocked() {
 			return false

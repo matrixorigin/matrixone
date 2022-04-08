@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	tif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -419,7 +418,7 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 	panic("not supported")
 }
 
-func (s *scheduler) InstallBlock(meta *metadata.Block, tableData tif.ITableData) (block tif.IBlock, err error) {
+func (s *scheduler) InstallBlock(meta *metadata.Block, tableData iface.ITableData) (block iface.IBlock, err error) {
 	ctx := &Context{Opts: s.opts, Waitable: true}
 	e := NewInstallBlockEvent(ctx, meta, tableData)
 	s.Schedule(e)

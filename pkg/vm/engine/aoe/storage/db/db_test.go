@@ -21,17 +21,18 @@ import (
 )
 
 var (
-	defaultDBPath            = "aoedb"
-	moduleName               = "DB"
-	defaultDBName            = "default"
-	emptyDBName              = ""
-	defaultTestBlockRows     = uint64(2000)
-	defaultTestSegmentBlocks = uint64(2)
+	// defaultDBPath            = "aoedb" // Unused
+	moduleName = "DB"
+	// defaultDBName            = "default" // Unused
+	// emptyDBName              = "" // Unused
+	// defaultTestBlockRows     = uint64(2000) // Unused
+	// defaultTestSegmentBlocks = uint64(2) // Unused
 )
 
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
+// Unused
+// func getTestPath(t *testing.T) string {
+// 	return testutils.GetDefaultTestPath(moduleName, t)
+// }
 
 func initTestEnv(t *testing.T) string {
 	testutils.RemoveDefaultTestPath(moduleName, t)

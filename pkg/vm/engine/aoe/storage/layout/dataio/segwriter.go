@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/iterator/iface"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	// "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -151,34 +151,35 @@ func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.Fil
 	return w, err
 }
 
+// Unused
 // flushIndices flush embedded index of segment.
-func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
-	var indices []index.Index
+// func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
+// 	indices := make([]index.Index, len(meta.Table.Schema.ColDefs))
 
-	// ZoneMapIndex
-	for idx, colDef := range meta.Table.Schema.ColDefs {
-		columns := make([]*vector.Vector, 0)
-		typ := colDef.Type
-		isPrimary := idx == meta.Table.Schema.PrimaryKey
-		for i := 0; i < len(data); i++ {
-			columns = append(columns, data[i].Vecs[idx])
-		}
-		zmi, err := index.BuildSegmentZoneMapIndex(columns, typ, int16(idx), isPrimary)
-		if err != nil {
-			return err
-		}
-		indices = append(indices, zmi)
-	}
+// 	// ZoneMapIndex
+// 	for idx, colDef := range meta.Table.Schema.ColDefs {
+// 		columns := make([]*vector.Vector, 0)
+// 		typ := colDef.Type
+// 		isPrimary := idx == meta.Table.Schema.PrimaryKey
+// 		for i := 0; i < len(data); i++ {
+// 			columns = append(columns, data[i].Vecs[idx])
+// 		}
+// 		zmi, err := index.BuildSegmentZoneMapIndex(columns, typ, int16(idx), isPrimary)
+// 		if err != nil {
+// 			return err
+// 		}
+// 		indices[idx] = zmi
+// 	}
 
-	// other embedded indices if needed
+// 	// other embedded indices if needed
 
-	buf, err := index.DefaultRWHelper.WriteIndices(indices)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(buf)
-	return err
-}
+// 	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	_, err = w.Write(buf)
+// 	return err
+// }
 
 // Execute steps as follows:
 // 1. Create a temp segment file.

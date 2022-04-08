@@ -30,15 +30,15 @@ import (
 
 type BlockIndexHolder struct {
 	common.RefHelper
-	ID common.ID
+	ID               common.ID
 	versionAllocator ColumnsAllocator
-	self struct {
+	self             struct {
 		sync.RWMutex
-		colIndices    map[int][]*Node
-		loadedVersion map[int]uint64
+		colIndices     map[int][]*Node
+		loadedVersion  map[int]uint64
 		droppedVersion map[int]uint64
 		fileHelper     map[string]*Node
-    }
+	}
 	BufMgr      mgrif.IBufferManager
 	Inited      bool
 	PostCloseCB PostCloseCB
@@ -84,9 +84,9 @@ func (holder *BlockIndexHolder) Init(segFile base.ISegmentFile) {
 		default:
 			panic("unsupported embedded index type")
 		}
-		idxes, ok := holder.self.colIndices[col]
+		_, ok := holder.self.colIndices[col]
 		if !ok {
-			idxes = make([]*Node, 0)
+			idxes := make([]*Node, 0)
 			holder.self.colIndices[col] = idxes
 		}
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
@@ -206,7 +206,7 @@ func (holder *BlockIndexHolder) DropIndex(filename string) {
 			idxes := holder.self.colIndices[int(col)]
 			for i, idx := range idxes {
 				if idx == node {
-					if i == len(idxes) - 1 {
+					if i == len(idxes)-1 {
 						idxes = idxes[:len(idxes)-1]
 					} else {
 						idxes = append(idxes[:i], idxes[i+1:]...)
@@ -214,6 +214,7 @@ func (holder *BlockIndexHolder) DropIndex(filename string) {
 					break
 				}
 			}
+			holder.self.colIndices[int(col)] = idxes
 			node.VFile.Unref()
 			delete(holder.self.fileHelper, staleName)
 			delete(holder.self.loadedVersion, int(col))
@@ -246,7 +247,7 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 		if dropped >= version {
 			// newer version used to be loaded, but dropped explicitly
 			// or dropped speculatively in the past.
-			isLatest = false
+			// isLatest = false
 			if err := os.Remove(filename); err != nil {
 				panic(err)
 			}
@@ -266,14 +267,15 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 			idxes := holder.self.colIndices[int(col)]
 			for i, idx := range idxes {
 				if idx == node {
-					if i == len(idxes) - 1 {
-						idxes = idxes[:len(idxes) - 1]
+					if i == len(idxes)-1 {
+						idxes = idxes[:len(idxes)-1]
 					} else {
 						idxes = append(idxes[:i], idxes[i+1:]...)
 					}
 					break
 				}
 			}
+			holder.self.colIndices[int(col)] = idxes
 			node.VFile.Unref()
 			delete(holder.self.fileHelper, staleName)
 			logutil.Infof("[BLK] dropping stale index implicitly | version-%d", v)
@@ -314,9 +316,9 @@ func (holder *BlockIndexHolder) LoadIndex(segFile base.ISegmentFile, filename st
 		default:
 			panic("unsupported index type")
 		}
-		idxes, ok := holder.self.colIndices[col]
+		_, ok := holder.self.colIndices[col]
 		if !ok {
-			idxes = make([]*Node, 0)
+			idxes := make([]*Node, 0)
 			holder.self.colIndices[col] = idxes
 		}
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
@@ -572,4 +574,3 @@ func (holder *BlockIndexHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, 
 	}
 	return 0, 0, errors.New("bsi not found")
 }
-
