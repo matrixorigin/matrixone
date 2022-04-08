@@ -20,13 +20,15 @@ import (
 
 type commitChecker func(info *CommitInfo) bool
 
-var replacedStopper = func(info *CommitInfo) bool {
-	return info.Op == OpReplaced
-}
+// Unused
+// var replacedStopper = func(info *CommitInfo) bool {
+// 	return info.Op == OpReplaced
+// }
 
-var deleteStopper = func(info *CommitInfo) bool {
-	return info.Op >= OpSoftDelete
-}
+// Unused
+// var deleteStopper = func(info *CommitInfo) bool {
+// 	return info.Op >= OpSoftDelete
+// }
 
 func createDeleteAndIndexStopper(index uint64) commitChecker {
 	return func(info *CommitInfo) bool {
@@ -40,14 +42,15 @@ func createDeleteAndIndexStopper(index uint64) commitChecker {
 	}
 }
 
-func createShardChecker(shardId uint64) commitChecker {
-	return func(info *CommitInfo) bool {
-		if info.LogIndex == nil {
-			return true
-		}
-		return info.LogIndex.ShardId == shardId
-	}
-}
+// Unused
+// func createShardChecker(shardId uint64) commitChecker {
+// 	return func(info *CommitInfo) bool {
+// 		if info.LogIndex == nil {
+// 			return true
+// 		}
+// 		return info.LogIndex.ShardId == shardId
+// 	}
+// }
 
 func createCommitIdChecker(id uint64) commitChecker {
 	interval := &common.Range{

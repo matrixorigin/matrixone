@@ -48,6 +48,12 @@ func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, 
 		if n.Op == overload.UnaryMinus {
 			return b.pruneUnaryMinus(n)
 		}
+	case *extend.MultiExtend:
+		for i, ext := range n.Args {
+			if n.Args[i], err = b.pruneExtend(ext, false); err != nil {
+				return nil, err
+			}
+		}
 	case *extend.ParenExtend:
 		if n.E, err = b.pruneExtend(n.E, false); err != nil {
 			return nil, err

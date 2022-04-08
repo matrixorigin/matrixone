@@ -797,7 +797,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 		success := true
 		for _, sid := range shardIds {
 			_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
-			if err != nil && err != metadata.TableNotFoundErr {
+			if err != nil && err != metadata.ErrTableNotFound {
 				logutil.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
 				success = false
 				break

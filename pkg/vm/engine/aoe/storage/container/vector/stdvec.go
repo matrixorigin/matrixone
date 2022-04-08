@@ -131,7 +131,7 @@ func (v *StdVector) SetValue(idx int, val interface{}) error {
 
 func (v *StdVector) GetValue(idx int) (interface{}, error) {
 	if idx >= v.Length() || idx < 0 {
-		return nil, VecInvalidOffsetErr
+		return nil, ErrVecInvalidOffset
 	}
 	if !v.IsReadonly() {
 		v.RLock()
@@ -168,13 +168,13 @@ func (v *StdVector) GetValue(idx int) (interface{}, error) {
 	case types.T_datetime:
 		return encoding.DecodeDatetime(data), nil
 	default:
-		return nil, VecTypeNotSupportErr
+		return nil, ErrVecTypeNotSupport
 	}
 }
 
 func (v *StdVector) Append(n int, vals interface{}) error {
 	if v.IsReadonly() {
-		return VecWriteRoErr
+		return ErrVecWriteRo
 	}
 	v.Lock()
 	defer v.Unlock()
@@ -224,10 +224,10 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	case types.T_datetime:
 		data = encoding.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
 	default:
-		return VecTypeNotSupportErr
+		return ErrVecTypeNotSupport
 	}
 	if len(v.Data)+len(data) > cap(v.Data) {
-		return VecInvalidOffsetErr
+		return ErrVecInvalidOffset
 	}
 	v.Data = append(v.Data, data...)
 	return nil
@@ -235,10 +235,10 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 
 func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
 	if offset < 0 || offset >= ro.Length(vec) {
-		return n, VecInvalidOffsetErr
+		return n, ErrVecInvalidOffset
 	}
 	if v.IsReadonly() {
-		return 0, VecWriteRoErr
+		return 0, ErrVecWriteRo
 	}
 	v.Lock()
 	defer v.Unlock()
@@ -275,7 +275,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 
 func (v *StdVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	if !v.IsReadonly() {
-		return nil, VecNotRoErr
+		return nil, ErrVecNotRo
 	}
 	startIdx := start * int(v.Type.Size)
 	endIdx := end * int(v.Type.Size)
@@ -348,7 +348,7 @@ func (v *StdVector) GetLatestView() IVector {
 
 func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		return nil, VecNotRoErr
+		return nil, ErrVecNotRo
 	}
 	nullSize := 0
 	var nullbuf []byte
@@ -388,7 +388,7 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 
 func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		return nil, VecNotRoErr
+		return nil, ErrVecNotRo
 	}
 	length := v.Length()
 	vec := ro.New(v.Type)
@@ -474,7 +474,7 @@ func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 	default:
-		return nil, VecTypeNotSupportErr
+		return nil, ErrVecTypeNotSupport
 	}
 	return vec, nil
 }

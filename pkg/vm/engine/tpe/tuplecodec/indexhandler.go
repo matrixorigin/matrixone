@@ -16,8 +16,12 @@ package tuplecodec
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
+
 	"github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
@@ -309,12 +313,211 @@ func (ihi *IndexHandlerImpl) decodePrimaryIndexValue(data []byte, ctx *ReadConte
 	return vdis, nil
 }
 
+func (ihi * IndexHandlerImpl) getPrimaryIndexKeyOfValue(readCtx interface{}, opt *batch.DumpOption) ([]byte, error) {
+	indexReadCtx,ok := readCtx.(*ReadContext)
+	if !ok {
+		return nil, nil
+	}
+	if len(opt.PrimaryValue) != len(indexReadCtx.IndexDesc.Attributes) {
+		return nil, errors.New("the input value cnt is not right")
+	}
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	var prefix TupleKey
+	prefix, _ = tke.EncodeIndexPrefix(prefix, uint64(indexReadCtx.DbDesc.ID), uint64(indexReadCtx.TableDesc.ID), uint64(indexReadCtx.IndexDesc.ID))
+
+	key := make(TupleKey, len(prefix))
+	copy(key, prefix)
+	var value interface{}
+
+	for i, attr := range opt.PrimaryValue {
+		//check if has the null
+		v, err := strconv.ParseInt(attr, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		switch indexReadCtx.IndexDesc.Attributes[i].TypesType.Oid { //get col
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			value = int64(v)
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			value = uint64(v)
+		case types.T_float32, types.T_float64:
+			v, err := strconv.ParseFloat(attr, 32)
+			if err != nil {
+				return nil ,err
+			}
+			value = v
+		case types.T_char, types.T_varchar:
+			value = attr
+		case types.T_date:
+			value = types.Date(v)
+		case types.T_datetime:
+			value = types.Datetime(v)
+		default:
+			logutil.Errorf("getPrimaryIndexKeyOfValue : unsupported type %d \n", indexReadCtx.IndexDesc.Attributes[i].Type)
+			return nil, fmt.Errorf("getPrimaryIndexKeyOfValue : unsupported type %d \n", indexReadCtx.IndexDesc.Attributes[i].Type)
+		}
+
+		if value == nil {
+			return nil, nil
+		}
+
+		key, _ = tke.oe.EncodeKey(key, value)
+	}
+	return key, nil
+}
+
+func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
+	indexReadCtx,ok := readCtx.(*ReadContext)
+	if !ok {
+		return nil, 0, errorReadContextIsInvalid
+	}
+
+	result := &batch.DumpResult{}
+	//check if we need the index key only.
+	//Attributes we want are in the index key only.
+	indexAttrIDs := descriptor.ExtractIndexAttributeIDs(indexReadCtx.IndexDesc.Attributes)
+	amForKey := &AttributeMap{}
+	amForValue := &AttributeMap{}
+	needKeyOnly := true
+	var positionsInValue map[uint32]int
+	if ihi.useLayout {
+		positionsInValue = ihi.layoutSerializer.GetPositionsOfAttributesInTheValue(indexReadCtx.TableDesc, indexReadCtx.IndexDesc)
+	}
+	var exist2 bool
+	for i, attr := range indexReadCtx.ReadAttributeDescs {
+		if positionInIndex, exist := indexAttrIDs[attr.ID]; exist {
+			//id in the key
+			amForKey.Append(int(attr.ID), positionInIndex, i)
+			result.Decode_keys.Attrs = append(result.Decode_keys.Attrs, attr.Name)
+		} else {
+			//id is not in the index key
+			//then find it in the value
+			needKeyOnly = false
+			positionInValue := i
+			if ihi.useLayout {
+				if positionInValue, exist2 = positionsInValue[attr.ID]; !exist2 {
+					return nil, 0, errorInvalidAttributePosition
+				}
+			}
+
+			amForValue.Append(int(attr.ID), positionInValue, i)
+		}
+		result.Decode_values.Attrs = append(result.Decode_values.Attrs, attr.Name)
+	}
+	amForKey.BuildPositionInDecodedItemArray()
+	amForValue.BuildPositionInDecodedItemArray()
+
+	//1.encode prefix (tenantID,dbID,tableID,indexID)
+	tke := ihi.tch.GetEncoder()
+	tkd := ihi.tch.GetDecoder()
+	if indexReadCtx.CompleteInAllShards {
+		return nil, 0, nil
+	} else if !indexReadCtx.CompleteInAllShards && indexReadCtx.PrefixForScanKey == nil {
+		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+			uint64(indexReadCtx.TableDesc.ID),
+			uint64(indexReadCtx.IndexDesc.ID))
+			indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
+			indexReadCtx.PrefixEnd = SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+	}
+	
+	//prepare the batch
+	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
+	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
+	result.Decode_keys.Vecs = make([]batch.DumpDecodeItem, len(result.Decode_keys.Attrs))
+	result.Decode_values.Vecs = make([]batch.DumpDecodeItem, len(result.Decode_values.Attrs))
+	
+	rowRead := 0
+	var keys []TupleKey
+	var values []TupleValue
+	var complete bool
+	var nextScanKey TupleKey
+	var err error
+	//2.prefix read data from kv
+	//get keys with the prefix
+	for rowRead < int(ihi.kvLimit) {
+		needRead := int(ihi.kvLimit) - rowRead
+		if indexReadCtx.Opt.UseValue {
+			var err error
+			indexReadCtx.Opt.PrimaryKey, err = ihi.getPrimaryIndexKeyOfValue(readCtx, indexReadCtx.Opt)
+			if err != nil {
+				return nil, 0, err
+			}
+		}
+		if indexReadCtx.Opt.UseValue || indexReadCtx.Opt.UseKey {
+			keys, values, complete, nextScanKey, err = ihi.kv.GetWithPrefix(TupleKey(indexReadCtx.Opt.PrimaryKey), len(indexReadCtx.Opt.PrimaryKey), nil, false, indexReadCtx.Opt.ReadCnt)
+		} else {
+			keys, values, complete, nextScanKey, err = ihi.kv.GetWithPrefix(indexReadCtx.PrefixForScanKey,
+				indexReadCtx.LengthOfPrefixForScanKey,
+				indexReadCtx.PrefixEnd,
+				needKeyOnly,
+				uint64(needRead))
+		}
+
+		if err != nil {
+			return nil, 0, err
+		}
+	
+		rowRead += len(keys)
+		for _, key := range keys {
+			result.Keys = append(result.Keys, []byte(key))
+		}
+		for _, value := range values {
+			result.Values = append(result.Values, []byte(value))
+		}
+	
+		//1.decode index key
+		//2.get fields wanted
+		for i := 0; i < len(keys); i++ {
+			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
+			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
+			if err != nil {
+				return nil, 0, err
+			}
+	
+			for j, key := range dis {
+				result.Decode_keys.Vecs[j] = append(result.Decode_keys.Vecs[j], key.Value)
+			}
+		}
+	
+		//skip decoding the value
+		if !needKeyOnly {
+			//need to update prefix
+			//decode index value
+			for i := 0; i < len(keys); i++ {
+				//decode the name which is in the value
+				data := values[i]
+				_,dis,err := tkd.DecodePrimaryIndexValue(data, indexReadCtx.IndexDesc,0,ihi.serializer)
+				if err != nil {
+					return nil, 0, err
+				}
+				for j, value := range dis {
+					result.Decode_values.Vecs[j] = append(result.Decode_values.Vecs[j], value.Value)
+				}
+			}
+		}
+	
+		//get the next prefix
+		indexReadCtx.PrefixForScanKey = nextScanKey
+		if complete {
+			indexReadCtx.CompleteInAllShards = true
+			break
+		}
+	}
+	bat.Result = result
+	return bat, rowRead, nil
+}
+
 func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
 	indexReadCtx, ok := readCtx.(*ReadContext)
 	if !ok {
 		return nil, 0, errorReadContextIsInvalid
 	}
 
+	if indexReadCtx.DumpData {
+		return ihi.DumpReadFromIndex(readCtx)
+	}
+	
 	if indexReadCtx.ParallelReader {
 		return ihi.parallelReader(indexReadCtx)
 	}

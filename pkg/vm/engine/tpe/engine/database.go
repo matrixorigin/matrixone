@@ -118,7 +118,7 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 			ID: uint32(columnIdx),
 			Name:              pkFieldName,
 			Ttype:             orderedcodec.VALUE_TYPE_UINT64,
-			TypesType:                 tuplecodec.TpeTypeToEngineType(orderedcodec.VALUE_TYPE_UINT64),
+			TypesType:  	   tuplecodec.TpeTypeToEngineType(orderedcodec.VALUE_TYPE_UINT64),
 			Is_null:           false,
 			Default_value:     "",
 			Is_hidden:         true,
@@ -137,6 +137,7 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 			Direction: 0,
 			ID: pkAttrDesc.ID,
 			Type:      orderedcodec.VALUE_TYPE_UINT64,
+			TypesType:  	   tuplecodec.TpeTypeToEngineType(orderedcodec.VALUE_TYPE_UINT64),
 		}
 
 		pkDesc.Attributes = append(pkDesc.Attributes,indexDesc)
@@ -185,6 +186,7 @@ func (td * TpeDatabase) Create(epoch uint64,name string, defs []engine.TableDef)
 					Direction: 0,
 					ID:        uint32(columnIdx),
 					Type:      tuplecodec.EngineTypeToTpeType(&attr.Attr.Type),
+					TypesType: attr.Attr.Type,
 				}
 				pkDesc.Attributes = append(pkDesc.Attributes,indexDesc)
 			}

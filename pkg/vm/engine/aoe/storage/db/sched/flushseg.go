@@ -24,7 +24,7 @@ type flushSegEvent struct {
 	BaseEvent
 	// Segment to be flushed
 	Segment   iface.ISegment
-	Destoryer dataio.FileDestoryer
+	Destroyer dataio.FileDestoryer
 }
 
 func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
@@ -34,8 +34,8 @@ func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 }
 
 func (e *flushSegEvent) Rollback(reason string) error {
-	if e.Destoryer != nil {
-		return e.Destoryer(reason)
+	if e.Destroyer != nil {
+		return e.Destroyer(reason)
 	}
 	return nil
 }
@@ -58,6 +58,6 @@ func (e *flushSegEvent) Execute() error {
 	if err := w.Execute(); err != nil {
 		return err
 	}
-	e.Destoryer = w.GetDestoryer()
+	e.Destroyer = w.GetDestoryer()
 	return nil
 }

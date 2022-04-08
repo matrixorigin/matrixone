@@ -56,9 +56,18 @@ type syncHandler struct {
 	store *syncAwareStore
 }
 
-func (h *syncHandler) OnExec() { h.store.Sync() }
+func (h *syncHandler) OnExec() {
+	err := h.store.Sync()
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
+}
+
 func (h *syncHandler) OnStopped() {
-	h.store.Sync()
+	err := h.store.Sync()
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 	logutil.Infof("syncHandler Stoped at: %d", h.store.GetSyncedId())
 }
 

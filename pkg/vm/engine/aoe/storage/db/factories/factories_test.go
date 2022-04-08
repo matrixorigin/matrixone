@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -67,7 +66,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
 
 	capacity := uint64(4096)
-	fsMgr := ldio.NewManager(dir, false)
+	fsMgr := dataio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
@@ -147,7 +146,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	t.Log(mgr.String())
 
 	h2.Close()
-	h1 = mgr.Pin(node1)
+	mgr.Pin(node1)
 
 	t.Log(mgr.String())
 	t.Log(common.GPool.String())

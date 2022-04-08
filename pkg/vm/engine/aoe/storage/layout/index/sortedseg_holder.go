@@ -94,9 +94,9 @@ func (holder *sortedSegmentHolder) Init(segFile base.ISegmentFile) {
 		default:
 			panic("unsupported embedded index type")
 		}
-		idxes, ok := holder.self.colIndices[col]
+		_, ok := holder.self.colIndices[col]
 		if !ok {
-			idxes = make([]*Node, 0)
+			idxes := make([]*Node, 0)
 			holder.self.colIndices[col] = idxes
 		}
 		holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
@@ -583,7 +583,7 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 			if dropped >= version {
 				// newer version used to be loaded, but dropped explicitly
 				// or dropped speculatively in the past.
-				isLatest = false
+				// isLatest = false
 				if err := os.Remove(filename); err != nil {
 					panic(err)
 				}

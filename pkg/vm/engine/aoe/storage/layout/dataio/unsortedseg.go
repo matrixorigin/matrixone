@@ -67,7 +67,7 @@ func (sf *UnsortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, er
 	defer sf.Unlock()
 	_, ok := sf.TBlocks[id]
 	if ok {
-		return nil, DupBlkError
+		return nil, ErrDupBlk
 	}
 	bf := NewTBlockFile(sf, id)
 	sf.TBlocks[id] = bf
@@ -259,12 +259,12 @@ func (sf *UnsortedSegmentFile) CopyTo(dir string) error {
 		}
 	}()
 	if len(blks)+len(tblks) == 0 {
-		return FileNotExistErr
+		return ErrFileNotExist
 	}
 	var err error
 	for _, blk := range blks {
 		if err = blk.CopyTo(dir); err != nil {
-			if err == FileNotExistErr {
+			if err == ErrFileNotExist {
 				err = nil
 			} else {
 				return err
@@ -273,7 +273,7 @@ func (sf *UnsortedSegmentFile) CopyTo(dir string) error {
 	}
 	for _, tblk := range tblks {
 		if err = tblk.CopyTo(dir); err != nil {
-			if err == FileNotExistErr {
+			if err == ErrFileNotExist {
 				err = nil
 			} else {
 				return err
@@ -291,12 +291,12 @@ func (sf *UnsortedSegmentFile) LinkTo(dir string) error {
 		}
 	}()
 	if len(blks)+len(tblks) == 0 {
-		return FileNotExistErr
+		return ErrFileNotExist
 	}
 	var err error
 	for _, blk := range blks {
 		if err = blk.LinkTo(dir); err != nil {
-			if err == FileNotExistErr {
+			if err == ErrFileNotExist {
 				err = nil
 			} else {
 				return err
@@ -305,7 +305,7 @@ func (sf *UnsortedSegmentFile) LinkTo(dir string) error {
 	}
 	for _, tblk := range tblks {
 		if err = tblk.LinkTo(dir); err != nil {
-			if err == FileNotExistErr {
+			if err == ErrFileNotExist {
 				err = nil
 			} else {
 				return err

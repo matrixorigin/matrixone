@@ -336,7 +336,7 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment
 	for _, blk := range seg.tree.blocks {
 		newBlkMeta := cloned.meta.SimpleGetBlock(blk.GetMeta().Id)
 		if newBlkMeta == nil {
-			panic(metadata.BlockNotFoundErr)
+			panic(metadata.ErrBlockNotFound)
 		}
 		cloned.Ref()
 		cur, err := blk.CloneWithUpgrade(cloned, newBlkMeta)

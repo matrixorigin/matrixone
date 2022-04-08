@@ -95,12 +95,15 @@ func TestShardFlusher(t *testing.T) {
 	assert.Equal(t, ErrDuplicateNodeFlusher, flusher.addNode(uint64(11)))
 	_, err := flusher.deleteNode(uint64(13))
 	assert.Equal(t, ErrNotFoundNodeFlusher, err)
-	flusher.addNode(uint64(3))
+	err = flusher.addNode(uint64(3))
+	assert.Nil(t, err)
 	left, _ := flusher.deleteNode(uint64(11))
 	assert.Equal(t, uint64(1), left)
 
-	flusher.addNode(uint64(12))
-	flusher.addNode(uint64(7))
+	err = flusher.addNode(uint64(12))
+	assert.Nil(t, err)
+	err = flusher.addNode(uint64(7))
+	assert.Nil(t, err)
 
 	t.Logf("%s", flusher)
 

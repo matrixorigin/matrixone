@@ -2390,7 +2390,7 @@ func (v *Vector) String() string {
 			if nulls.Contains(v.Nsp, 0) {
 				return "null"
 			} else {
-				return fmt.Sprintf("%s\n", col.Get(0))
+				return fmt.Sprintf("'%s'", col.Get(0))
 			}
 		}
 	}

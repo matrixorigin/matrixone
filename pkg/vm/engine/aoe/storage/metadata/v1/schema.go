@@ -69,7 +69,7 @@ func (is *IndexSchema) Append(index *IndexInfo) error {
 	// TODO: validation
 	for _, idx := range is.Indice {
 		if idx.Name == index.Name {
-			return DupIndexErr
+			return ErrDupIndex
 		}
 	}
 	is.Indice = append(is.Indice, index)
@@ -85,7 +85,7 @@ func (is *IndexSchema) Extend(indice []*IndexInfo) error {
 	for _, index := range indice {
 		_, ok := names[index.Name]
 		if ok {
-			return DupIndexErr
+			return ErrDupIndex
 		}
 	}
 	is.Indice = append(is.Indice, indice...)
@@ -103,7 +103,7 @@ func (is *IndexSchema) DropByName(name string) error {
 		}
 	}
 	if !found {
-		return IndexNotFoundErr
+		return ErrIndexNotFound
 	}
 	is.Indice = append(is.Indice[:dropIdx], is.Indice[dropIdx+1:]...)
 	return nil
@@ -118,7 +118,7 @@ func (is *IndexSchema) DropByNames(names []string) error {
 	for _, name := range names {
 		pos, ok := nameMap[name]
 		if !ok {
-			return IndexNotFoundErr
+			return ErrIndexNotFound
 		}
 		idx = append(idx, pos)
 	}

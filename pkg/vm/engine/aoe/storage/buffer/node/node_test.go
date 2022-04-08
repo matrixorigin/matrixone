@@ -49,7 +49,6 @@ func TestNode(t *testing.T) {
 	node2 := pool.Alloc(common.NewMemFile(int64(node_capacity)), false, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, node2)
 	id2 := id
-	id++
 	node_buff2 := NewNodeBuffer(id2, node2)
 	assert.Equal(t, node_buff2.GetCapacity(), node_capacity)
 	assert.Equal(t, id2, node_buff2.GetID())

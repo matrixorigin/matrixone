@@ -15,10 +15,10 @@
 package dataio
 
 import (
-	"encoding/binary"
-	"fmt"
-	"os"
-	"path/filepath"
+	// "encoding/binary"
+	// "fmt"
+	// "os"
+	// "path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -30,8 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -43,87 +43,89 @@ var (
 	moduleName = "Meta"
 )
 
-func getTestPath(t *testing.T) string {
-	return testutils.GetDefaultTestPath(moduleName, t)
-}
+// Unused
+// func getTestPath(t *testing.T) string {
+// 	return testutils.GetDefaultTestPath(moduleName, t)
+// }
 
 func initTestEnv(t *testing.T) string {
 	testutils.RemoveDefaultTestPath(moduleName, t)
 	return testutils.MakeDefaultTestPath(moduleName, t)
 }
 
-func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices []index.Index, blkCnt int) base.ISegmentFile {
-	baseid := id
-	var dir string
-	for i := 0; i < blkCnt; i++ {
-		id.BlockID = uint64(i)
-		name := common.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
-		dir = filepath.Dir(name)
-		if _, err := os.Stat(dir); os.IsNotExist(err) {
-			err = os.MkdirAll(dir, 0755)
-			if err != nil {
-				panic(fmt.Sprintf("err: %s", err))
-			}
-		}
-		t.Log(name)
-		w, err := os.Create(name)
-		if err != nil {
-			panic(err)
-		}
-		//buf, err := index.DefaultRWHelper.WriteIndices(indices)
-		//if err != nil {
-		//	panic(err)
-		//}
-		//_, err = w.Write(buf)
-		//if err != nil {
-		//	panic(err)
-		//}
-		algo := uint8(0)
-		cols := uint16(0)
-		count := uint64(0)
-		logRange := new(metadata.LogRange)
-		err = binary.Write(w, binary.BigEndian, &algo)
-		assert.Nil(t, err)
-		err = binary.Write(w, binary.BigEndian, &cols)
-		assert.Nil(t, err)
-		err = binary.Write(w, binary.BigEndian, &count)
-		assert.Nil(t, err)
-		rangeBuf, err := logRange.Marshal()
-		assert.Nil(t, err)
-		err = binary.Write(w, binary.BigEndian, &rangeBuf)
-		prevIdx := shard.Index{
-			Id: shard.SimpleIndexId(uint64(0)),
-		}
-		buf, err := prevIdx.Marshal()
-		assert.Nil(t, err)
-		var sz int32
-		sz = int32(len(buf))
-		err = binary.Write(w, binary.BigEndian, &sz)
-		assert.Nil(t, err)
-		err = binary.Write(w, binary.BigEndian, &buf)
-		assert.Nil(t, err)
-		idx := shard.Index{
-			Id: shard.SimpleIndexId(uint64(0)),
-		}
-		buf, err = idx.Marshal()
-		assert.Nil(t, err)
-		var sz_ int32
-		sz_ = int32(len(buf))
-		err = binary.Write(w, binary.BigEndian, &sz_)
-		assert.Nil(t, err)
-		err = binary.Write(w, binary.BigEndian, &buf)
-		assert.Nil(t, err)
-		w.Close()
-	}
-	segFile := NewUnsortedSegmentFile(dirname, baseid)
-	id = baseid
-	for i := 0; i < blkCnt; i++ {
-		id.BlockID = uint64(i)
-		segFile.RefBlock(id)
-	}
+// Unused
+// func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices []index.Index, blkCnt int) base.ISegmentFile {
+// 	baseid := id
+// 	var dir string
+// 	for i := 0; i < blkCnt; i++ {
+// 		id.BlockID = uint64(i)
+// 		name := common.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
+// 		dir = filepath.Dir(name)
+// 		if _, err := os.Stat(dir); os.IsNotExist(err) {
+// 			err = os.MkdirAll(dir, 0755)
+// 			if err != nil {
+// 				panic(fmt.Sprintf("err: %s", err))
+// 			}
+// 		}
+// 		t.Log(name)
+// 		w, err := os.Create(name)
+// 		if err != nil {
+// 			panic(err)
+// 		}
+// 		//buf, err := index.DefaultRWHelper.WriteIndices(indices)
+// 		//if err != nil {
+// 		//	panic(err)
+// 		//}
+// 		//_, err = w.Write(buf)
+// 		//if err != nil {
+// 		//	panic(err)
+// 		//}
+// 		algo := uint8(0)
+// 		cols := uint16(0)
+// 		count := uint64(0)
+// 		logRange := new(metadata.LogRange)
+// 		err = binary.Write(w, binary.BigEndian, &algo)
+// 		assert.Nil(t, err)
+// 		err = binary.Write(w, binary.BigEndian, &cols)
+// 		assert.Nil(t, err)
+// 		err = binary.Write(w, binary.BigEndian, &count)
+// 		assert.Nil(t, err)
+// 		rangeBuf, err := logRange.Marshal()
+// 		assert.Nil(t, err)
+// 		err = binary.Write(w, binary.BigEndian, &rangeBuf)
+// 		prevIdx := shard.Index{
+// 			Id: shard.SimpleIndexId(uint64(0)),
+// 		}
+// 		buf, err := prevIdx.Marshal()
+// 		assert.Nil(t, err)
+// 		var sz int32
+// 		sz = int32(len(buf))
+// 		err = binary.Write(w, binary.BigEndian, &sz)
+// 		assert.Nil(t, err)
+// 		err = binary.Write(w, binary.BigEndian, &buf)
+// 		assert.Nil(t, err)
+// 		idx := shard.Index{
+// 			Id: shard.SimpleIndexId(uint64(0)),
+// 		}
+// 		buf, err = idx.Marshal()
+// 		assert.Nil(t, err)
+// 		var sz_ int32
+// 		sz_ = int32(len(buf))
+// 		err = binary.Write(w, binary.BigEndian, &sz_)
+// 		assert.Nil(t, err)
+// 		err = binary.Write(w, binary.BigEndian, &buf)
+// 		assert.Nil(t, err)
+// 		w.Close()
+// 	}
+// 	segFile := NewUnsortedSegmentFile(dirname, baseid)
+// 	id = baseid
+// 	for i := 0; i < blkCnt; i++ {
+// 		id.BlockID = uint64(i)
+// 		segFile.RefBlock(id)
+// 	}
 
-	return segFile
-}
+// 	return segFile
+// }
 
 // TODO(zzl)
 //func TestAll(t *testing.T) {
@@ -304,7 +306,6 @@ func TestIVectorNodeWriter(t *testing.T) {
 			assert.Equal(t, int32(3), v.Col.([]int32)[1])
 			assert.Equal(t, int32(2), v.Col.([]int32)[2])
 			assert.Equal(t, int32(0), v.Col.([]int32)[3])
-			break
 		case 1:
 			assert.Equal(t, []byte("str0"), v.Col.(*types.Bytes).Data[0:4])
 			assert.Equal(t, []byte("str1"), v.Col.(*types.Bytes).Data[4:8])

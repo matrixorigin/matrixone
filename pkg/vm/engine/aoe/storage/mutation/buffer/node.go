@@ -89,7 +89,7 @@ func (n *Node) MakeHandle() base.INodeHandle {
 
 func (n *Node) Close() error {
 	n.Lock()
-	if n.closed == true {
+	if n.closed {
 		n.Unlock()
 		return nil
 	}

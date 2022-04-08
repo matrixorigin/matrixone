@@ -34,7 +34,7 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 
 |  Data Type   | Size  | Resolution |  Min Value   | Max Value  | Precision |
 |  ----  | ----  |   ----  |  ----  | ----  |   ----  |
-| Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD |
+| Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD/YYYYMMDD |
 | DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
 
 ## **Examples**
@@ -70,5 +70,10 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 //Insert a data of "varchar" and "char" into table "names" 
 > insert into names(name, age) values('Abby', '24');
 
+//Create a table named "calendar" with 2 attributes of a "date" and a "datetime"
+> create table calendar(a date, b datetime);
 
+//Insert a data of "date" and "datetime" into table "calendar" 
+> insert into calendar(a, b) values('20220202, '2022-02-02 00:10:30');
+> insert into calendar(a, b) values('2022-02-02, '2022-02-02 00:10:30');
 ```

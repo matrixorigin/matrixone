@@ -47,7 +47,7 @@ func (e *installBlockEvent) Execute() error {
 	if seg == nil {
 		seg, err = e.TableData.RegisterSegment(e.BlkMeta.Segment)
 		if err != nil {
-			panic("should not happend")
+			panic("should not happen")
 		}
 	}
 	defer seg.Unref()

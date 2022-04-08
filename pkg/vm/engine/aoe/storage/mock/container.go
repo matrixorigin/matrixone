@@ -22,9 +22,9 @@ import (
 )
 
 func MockBatch(types []types.Type, rows uint64) *batch.Batch {
-	var attrs []string
+	attrs := make([]string, len(types))
 	for idx := range types {
-		attrs = append(attrs, "mock_"+strconv.Itoa(idx))
+		attrs[idx] = "mock_" + strconv.Itoa(idx)
 	}
 
 	bat := batch.New(true, attrs)

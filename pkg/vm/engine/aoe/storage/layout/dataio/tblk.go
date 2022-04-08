@@ -33,7 +33,7 @@ import (
 )
 
 var (
-	FileNotExistErr = errors.New("file not exist")
+	ErrFileNotExist = errors.New("file not exist")
 )
 
 type versionBlockFile struct {
@@ -57,7 +57,7 @@ func newVersionBlockFile(count uint64, tag string, host base.ISegmentFile, id co
 
 func (f *versionBlockFile) close() {
 	f.Close()
-	f.Destory()
+	f.Destroy()
 }
 
 func MakeTblockFileName(dir, tag string, count uint64, id common.ID, tmp bool) string {
@@ -129,7 +129,7 @@ type TransientBlockFile struct {
 	common.RefHelper
 	host    base.ISegmentFile
 	id      common.ID
-	maxver  uint32
+	// maxver  uint32 // Unused
 	files   []*versionBlockFile
 	currpos uint32
 	mu      sync.RWMutex
@@ -373,7 +373,7 @@ func (f *TransientBlockFile) refLatestFile() *versionBlockFile {
 func (f *TransientBlockFile) CopyTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
-		err = FileNotExistErr
+		err = ErrFileNotExist
 		return
 	}
 	defer file.Unref()
@@ -384,7 +384,7 @@ func (f *TransientBlockFile) CopyTo(path string) (err error) {
 func (f *TransientBlockFile) LinkTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
-		err = FileNotExistErr
+		err = ErrFileNotExist
 		return
 	}
 	defer file.Unref()

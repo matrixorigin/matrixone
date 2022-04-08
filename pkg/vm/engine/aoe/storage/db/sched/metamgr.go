@@ -171,7 +171,7 @@ func (mgr *metaResourceMgr) String() string {
 }
 
 func (mgr *metaResourceMgr) stringLocked() string {
-	s := fmt.Sprintf("<MetaResourceMgr>")
+	s := "<MetaResourceMgr>"
 	s = fmt.Sprintf("%s\nRunning: (ScopeAll=%v)(Events=[", s, mgr.runnings.scopeall)
 	for eid, e := range mgr.runnings.events {
 		scope, _ := e.GetScope()

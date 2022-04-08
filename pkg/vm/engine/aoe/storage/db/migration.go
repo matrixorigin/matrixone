@@ -107,7 +107,7 @@ func CopyDataFiles(tblks, blks, segs []string, srcDir, destDir string, blkMapFn,
 	var err error
 	for _, tblk := range tblks {
 		if err = CopyTBlockFileToDestDir(tblk, srcDir, destDir, blkMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
+			if err == metadata.ErrAddressNotFound {
 				logutil.Warnf("%s cannot be used", tblk)
 				err = nil
 				continue
@@ -117,7 +117,7 @@ func CopyDataFiles(tblks, blks, segs []string, srcDir, destDir string, blkMapFn,
 	}
 	for _, blk := range blks {
 		if err = CopyBlockFileToDestDir(blk, srcDir, destDir, blkMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
+			if err == metadata.ErrAddressNotFound {
 				logutil.Warnf("%s cannot be used", blk)
 				err = nil
 				continue
@@ -127,7 +127,7 @@ func CopyDataFiles(tblks, blks, segs []string, srcDir, destDir string, blkMapFn,
 	}
 	for _, seg := range segs {
 		if err = CopySegmentFileToDestDir(seg, srcDir, destDir, segMapFn); err != nil {
-			if err == metadata.AddressNotFoundErr {
+			if err == metadata.ErrAddressNotFound {
 				logutil.Warnf("%s cannot be used", seg)
 				err = nil
 				continue

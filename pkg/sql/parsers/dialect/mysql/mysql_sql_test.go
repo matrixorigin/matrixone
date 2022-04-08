@@ -56,6 +56,14 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select substr(name, 5) from t1",
+	}, {
+		input: "select substring(name, 5) from t1",
+	}, {
+		input: "select substr(name, 5, 3) from t1",
+	}, {
+		input: "select substring(name, 5, 3) from t1",
+	}, {
 		input:  "select * from R join S on R.uid = S.uid",
 		output: "select * from R inner join S on R.uid = S.uid",
 	}, {
@@ -203,13 +211,13 @@ var (
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from u",
 	}, {
-		input: "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
+		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
 		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000 order by t.a desc, u.a asc, v.d asc, tubb limit 200 offset 100",
 	}, {
-		input: "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
+		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
 		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b) having t.a = 11 and v.c > 1000",
 	}, {
-		input: "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
+		input:  "select t.a, u.a, t.b * u.b from sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
 		output: "select t.a, u.a, t.b * u.b from sa.t inner join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b group by t.a, u.a, (t.a + u.b + v.b)",
 	}, {
 		input:  "SELECT t.a,u.a,t.b * u.b FROM sa.t join u on t.c = u.c or t.d != u.d where t.a = u.a and t.b > u.b",
@@ -626,14 +634,14 @@ var (
 	}, {
 		input: "select * from (select a from t) as t1",
 	}, {
-		input: "select * from (select a from t) as t1 join t2 on 1",
+		input:  "select * from (select a from t) as t1 join t2 on 1",
 		output: "select * from (select a from t) as t1 inner join t2 on 1",
 	}, {
 		input: "select * from (select a from t) as t1 inner join t2 using (a)",
 	}, {
 		input: "select * from (select a from t) as t1 cross join t2",
 	}, {
-		input: "select * from t1 join t2 using (a, b, c)",
+		input:  "select * from t1 join t2 using (a, b, c)",
 		output: "select * from t1 inner join t2 using (a, b, c)",
 	}, {
 		input: "select * from t1 straight_join t2 on 1 + 213",
@@ -653,25 +661,25 @@ var (
 		input:  "analyze table part (a,b )",
 		output: "analyze table part(a, b)",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test'",
+		input:  "select $ from t into outfile '/Users/tmp/test'",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ','",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ','",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n'",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'TRUE'",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header true",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE'",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400",
 	}, {
-		input: "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
+		input:  "select $ from t into outfile '/Users/tmp/test' FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' header 'FALSE' MAX_FILE_SIZE 100 FORCE_QUOTE (a, b)",
 		output: "select $ from t into outfile /Users/tmp/test fields terminated by , enclosed by \" lines terminated by \n header false max_file_size 102400 force_quote a, b",
 	}}
 )
