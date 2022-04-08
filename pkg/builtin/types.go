@@ -14,13 +14,16 @@
 
 package builtin
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-)
+import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 
 const (
 	Length = iota + overload.NE + 1
-	Year
+	Space
+	Reverse
+	Substring
+	Ltrim
+	Rtrim
+	Lpad
 	Round
 	Floor
 	Abs
@@ -30,12 +33,6 @@ const (
 	Exp
 	Power
 	Pi
-	Space
-	Reverse
-	UTCTimestamp
-	Ltrim
-	Rtrim
-	Lpad
 	Sin
 	Sinh
 	Cos
@@ -43,8 +40,10 @@ const (
 	Tan
 	Atan
 	Cot
+	UTCTimestamp
 	DayOfYear
 	Month
+	Year
 	Weekday
 	Date
 )
