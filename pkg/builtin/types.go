@@ -37,6 +37,7 @@ const (
 	Rtrim
 	Lpad
 	Sin
+	Sinh
 	Cos
 	Acos
 	Tan
