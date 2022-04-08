@@ -141,7 +141,7 @@ static-check:
 .PHONY: dis-mo
 dis-mo:
 	@COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f optools/test/docker-compose.yaml build --build-arg PROXY=$(PROXY)
-	@docker-compose -f optools/test/docker-compose.yaml up -d
+	@COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f optools/test/docker-compose.yaml up -d
 
 .PHONY: dis-bvt
 dis-bvt:
