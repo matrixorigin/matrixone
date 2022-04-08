@@ -15,56 +15,66 @@
 package endswith
 
 import (
-	"fmt"
+	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
-	endsWithChar    func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	endsWithVarChar func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	endsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	endsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	endsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	endsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
 )
 
 func init() {
-	endsWithChar = EndsWith
-	endsWithVarChar = EndsWith
+	endsWith = EndsWith
+	endsWithRightConst = EndsWithRightConst
+	endsWithLeftConst = EndsWithLeftConst
+	endsWithAllConst = EndsWithAllConst
 }
 
-func EndsWith(lvs *types.Bytes, rvs *types.Bytes, rs []uint8) []uint8 {
-	fmt.Println("here")
-	fmt.Println("len(lvs.Offsets)=", len(lvs.Offsets))
-	fmt.Println("len(rvs.Offsets)=", len(rvs.Offsets))
-	fmt.Println("len(rs)=", len(rs))
-	for idx := range lvs.Offsets {
-		lv_offset, rv_offset := lvs.Offsets[idx], rvs.Offsets[idx]
-		lv_length, rv_length := lvs.Lengths[idx], rvs.Lengths[idx]
-		fmt.Println("lv_offset=", lv_offset)
-		fmt.Println("rv_offset=", rv_offset)
-		fmt.Println("lv_length=", lv_length)
-		fmt.Println("rv_length=", rv_length)
-		if lv_length < rv_length { // lv is shorter than rv
-			rs[idx] = 0
-			continue
-		}
-
-		i, j := lv_offset+lv_length-1, rv_offset+rv_length-1
-		for ; i >= lv_offset && j >= rv_offset; i, j = i-1, j-1 {
-			fmt.Println("i=", i)
-			fmt.Println("j=", j)
-			fmt.Println("lvs.Data[i]=", lvs.Data[i])
-			fmt.Println("rvs.Data[j]=", rvs.Data[j])
-			if lvs.Data[i] != rvs.Data[j] {
-				fmt.Println("before =0")
-				rs[idx] = 0
-				break
-			}
-			if j == rv_offset { // two strings are exactly equal
-				fmt.Println("before =1")
-				rs[idx] = 1
-				break
-			}
-		}
+func isEqualSuffix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) uint8 {
+	if len1 >= len2 && bytes.Equal(b1[offset1+len1-len2:offset1+len1], b2[offset2:offset2+len2]) {
+		return 1
 	}
-	fmt.Println("finish")
+	return 0
+}
+
+func EndsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
+	for i := range lv.Offsets {
+		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
+		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
+		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
+	}
+
+	return rs
+}
+
+func EndsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
+	for i := range lv.Offsets {
+		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
+		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
+	}
+
+	return rs
+}
+
+func EndsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
+	for i := range rv.Offsets {
+		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
+		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
+	}
+
+	return rs
+}
+
+func EndsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
+	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
+	rs[0] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
+
 	return rs
 }
