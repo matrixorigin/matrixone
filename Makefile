@@ -138,7 +138,7 @@ static-check:
 # distributed test
 ###############################################################################
 
-.PHONY: dis-mo
+.PHONY: dis-up
 dis-mo:
 	@COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f optools/test/docker-compose.yaml build --build-arg PROXY=$(PROXY)
 	@COMPOSE_DOCKER_CLI_BUILD=1 DOCKER_BUILDKIT=1 docker-compose -f optools/test/docker-compose.yaml up -d
