@@ -319,7 +319,7 @@ func TestProxy2(t *testing.T) {
 }
 
 func TestProxy3(t *testing.T) {
-	waitTime := time.Duration(10) * time.Millisecond
+	waitTime := time.Duration(200) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime *= 5
 	}
@@ -354,6 +354,13 @@ func TestProxy3(t *testing.T) {
 			mgr.Checkpoint(indice[i])
 		}
 		time.Sleep(waitTime)
+		testutils.WaitExpect(200, func() bool {
+			s, err := mgr.GetShard(uint64(0))
+			if err != nil {
+				return false
+			}
+			return lastIndex.Id.Id == s.GetSafeId()
+		})
 		s, err := mgr.GetShard(uint64(0))
 		assert.Nil(t, err)
 		assert.Equal(t, lastIndex.Id.Id, s.GetSafeId())

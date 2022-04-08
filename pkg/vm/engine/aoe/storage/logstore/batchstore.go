@@ -65,7 +65,10 @@ func (s *batchStore) onEntries(items ...interface{}) {
 		if err = s.store.AppendEntry(entry); err != nil {
 			panic(err)
 		}
-		s.OnEntryReceived(entry)
+		err := s.OnEntryReceived(entry)
+		if err != nil {
+			panic(err)
+		}
 	}
 	if err = s.store.Sync(); err != nil {
 		panic(err)

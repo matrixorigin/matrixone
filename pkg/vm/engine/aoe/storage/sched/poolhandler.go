@@ -15,10 +15,12 @@
 package sched
 
 import (
-	"github.com/panjf2000/ants/v2"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
-	"sync"
+	"github.com/panjf2000/ants/v2"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -70,7 +72,10 @@ func (h *poolHandler) doHandle(op iops.IOp) {
 		}
 	}
 	h.wg.Add(1)
-	h.pool.Submit(closure(op, h.wg))
+	err := h.pool.Submit(closure(op, h.wg))
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (h *poolHandler) Close() error {

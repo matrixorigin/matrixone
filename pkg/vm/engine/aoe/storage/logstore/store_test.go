@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 
@@ -48,7 +49,10 @@ func newMockDDLEntry(op mockDDLOp, data []byte) *mockDDLEntry {
 	payload[0] = byte(op)
 	copy(payload[1:], data)
 	entry := newEmptyDDLEntry(nil)
-	entry.Unmarshal(payload)
+	err := entry.Unmarshal(payload)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 	entry.Meta.SetType(mockETDDL)
 	entry.Meta.SetPayloadSize(uint32(len(payload)))
 	return entry
@@ -201,7 +205,8 @@ func TestBatchStore(t *testing.T) {
 
 	for i := 0; i < 200; i++ {
 		wg.Add(1)
-		pool.Submit(f(i))
+		err := pool.Submit(f(i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 }

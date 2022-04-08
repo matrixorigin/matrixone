@@ -139,7 +139,9 @@ func (f *driver) ShardCnt() int {
 func (f *driver) ShardCreated(id uint64) {
 	ctx := &shardCreatedCtx{id: id}
 	_, err := f.EnqueueRecevied(ctx)
-	logutil.Warnf("%v", err)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (f *driver) ShardDeleted(id uint64) {
@@ -156,7 +158,9 @@ func (f *driver) ShardNodeCreated(shardId, nodeId uint64) {
 		nodeId:  nodeId,
 	}
 	_, err := f.EnqueueRecevied(ctx)
-	logutil.Warnf("%v", err)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (f *driver) ShardNodeDeleted(shardId, nodeId uint64) {
@@ -165,7 +169,9 @@ func (f *driver) ShardNodeDeleted(shardId, nodeId uint64) {
 		nodeId:  nodeId,
 	}
 	_, err := f.EnqueueRecevied(ctx)
-	logutil.Warnf("%v", err)
+	if err != nil {
+		logutil.Warnf("%v", err)
+	}
 }
 
 func (f *driver) getShard(id uint64) *shardFlusher {

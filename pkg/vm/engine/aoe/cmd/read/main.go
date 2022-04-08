@@ -53,7 +53,7 @@ const (
 	batchInsertRows uint64 = insertRows / insertCnt
 	readPoolSize    int    = 40
 
-	cpuprofile string = "/tmp/readcpufile"
+	// cpuprofile string = "/tmp/readcpufile" // Unused
 )
 
 var (
