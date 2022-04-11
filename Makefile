@@ -130,6 +130,6 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconv
 .PHONY: static-check
 static-check:
 	@for p in $(DIRS); do \
-    /home/jiangxinmeng/go/pkg/mod/github.com/golangci/golangci-lint@v1.45.2/golangci-lint run $(EXTRA_LINTERS) $$p; \
+    golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
   
