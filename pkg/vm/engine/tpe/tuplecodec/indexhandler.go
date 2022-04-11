@@ -183,7 +183,8 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
 				break
 			}
-			logutil.Infof("keyvalue %v %v", keys[i], values[i])
+			//for test
+			//logutil.Infof("keyvalue %v %v", keys[i], values[i])
 			rowRead++
 			indexReadCtx.addReadCount(1)
 			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
