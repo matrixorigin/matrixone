@@ -12,19 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD:pkg/vm/driver/aoe/helper.go
-package aoe
-
-import "strconv"
-
-func encodeMetatableName(sid uint64) string{
-	tableName := sPrefix + strconv.Itoa(int(sid))
-	return tableName
-}
-=======
->>>>>>> upstream/main
 package fz
 
 type FilterPacket func(packet []byte) []byte
@@ -34,7 +21,3 @@ func (_ Def) FilterPacket() FilterPacket {
 		return packet
 	}
 }
-<<<<<<< HEAD
-=======
->>>>>>> upstream/main:pkg/chaostesting/net_filter.go
->>>>>>> upstream/main

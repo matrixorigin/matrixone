@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 // Copyright 2021 Matrix Origin
-=======
-// Copyright 2022 Matrix Origin
->>>>>>> upstream/main
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,36 +11,11 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-<<<<<<< HEAD
 
-=======
-package pi
-
-<<<<<<< HEAD:pkg/vectorize/pi/pi.go
-import (
-	"math"
-)
-
-var (
-	GetPi func() float64
-)
-
-func init() {
-	GetPi = getPiImpl
-}
-
-func getPiImpl() float64 {
-	return math.Pi
-=======
->>>>>>> upstream/main
 package fz
 
 type IsTesting bool
 
 func (_ Def) IsTesting() IsTesting {
 	return false
-<<<<<<< HEAD
-=======
->>>>>>> upstream/main:pkg/chaostesting/debug.go
->>>>>>> upstream/main
 }

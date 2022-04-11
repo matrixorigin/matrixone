@@ -12,32 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD:pkg/chaostesting/fuse_test.go
-package fz
-
-import (
-	"testing"
-)
-
-func TestFuse(t *testing.T) {
-	NewScope().Fork(func() TempDirModel {
-		return "fuse"
-	}, func() IsTesting {
-		return true
-	}).Call(func(
-		getTempDir GetTempDir,
-		cleanup Cleanup,
-	) {
-		defer cleanup()
-
-		testFS(t, string(getTempDir()))
-
-	})
-}
-=======
->>>>>>> upstream/main
 package main
 
 import (
@@ -57,7 +31,3 @@ var (
 type (
 	Scope = dscope.Scope
 )
-<<<<<<< HEAD
-=======
->>>>>>> upstream/main:pkg/chaostesting/testcube/alias.go
->>>>>>> upstream/main

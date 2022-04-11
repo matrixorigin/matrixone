@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-<<<<<<< HEAD
-<<<<<<< HEAD:pkg/chaostesting/fuse_test.go
-=======
->>>>>>> upstream/main
 package fz
 
 import (
@@ -37,27 +33,3 @@ func TestFuse(t *testing.T) {
 
 	})
 }
-<<<<<<< HEAD
-=======
-package main
-
-import (
-	"fmt"
-
-	"github.com/reusee/dscope"
-	"github.com/reusee/e4"
-)
-
-var (
-	ce = e4.Check.With(e4.WrapStacktrace)
-	we = e4.Wrap.With(e4.WrapStacktrace)
-	he = e4.Handle
-	pt = fmt.Printf
-)
-
-type (
-	Scope = dscope.Scope
-)
->>>>>>> upstream/main:pkg/chaostesting/testcube/alias.go
-=======
->>>>>>> upstream/main
