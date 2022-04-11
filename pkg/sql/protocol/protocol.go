@@ -20,9 +20,10 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
@@ -970,6 +971,29 @@ func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, [
 
 func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 	switch v := r.(type) {
+	case *stddevpop.StdDevPopRing:
+		buf.WriteByte(StdDevPopRing)
+		n := len(v.NullCounts)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeInt64Slice(v.NullCounts))
+		}
+		// Sumx2
+		n = len(v.SumX2)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(encoding.EncodeFloat64Slice(v.SumX2))
+		}
+		// Sumx
+		da := encoding.EncodeFloat64Slice(v.SumX)
+		n = len(da)
+		buf.Write(encoding.EncodeUint32(uint32(n)))
+		if n > 0 {
+			buf.Write(da)
+		}
+		// Typ
+		buf.Write(encoding.EncodeType(v.Typ))
+		return nil
 	case *bitand.NumericRing:
 		buf.WriteByte(BitAndNumericRing)
 		// nsp
@@ -1612,6 +1636,40 @@ func EncodeRing(r ring.Ring, buf *bytes.Buffer) error {
 
 func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 	switch data[0] {
+	case StdDevPopRing:
+		r := new(stddevpop.StdDevPopRing)
+		data = data[1:]
+
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCounts = make([]int64, n)
+			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx2
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
+			data = data[n:]
+		}
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		// return
+		return r, data, nil
 	case BitAndNumericRing:
 		r := new(bitand.NumericRing)
 		data = data[1:]
@@ -2450,6 +2508,40 @@ func DecodeRing(data []byte) (ring.Ring, []byte, error) {
 
 func DecodeRingWithProcess(data []byte, proc *process.Process) (ring.Ring, []byte, error) {
 	switch data[0] {
+	case StdDevPopRing:
+		r := new(stddevpop.StdDevPopRing)
+		data = data[1:]
+
+		// decode NullCounts
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.NullCounts = make([]int64, n)
+			copy(r.NullCounts, encoding.DecodeInt64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx2
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.SumX2 = make([]float64, n)
+			copy(r.SumX2, encoding.DecodeFloat64Slice(data[:n*8]))
+			data = data[n*8:]
+		}
+		// decode Sumx
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if n > 0 {
+			r.Data = data[:n]
+			data = data[n:]
+		}
+		r.SumX = encoding.DecodeFloat64Slice(r.Data)
+		// decode typ
+		typ := encoding.DecodeType(data[:encoding.TypeSize])
+		data = data[encoding.TypeSize:]
+		r.Typ = typ
+		// return
+		return r, data, nil
 	case BitAndNumericRing:
 		r := new(bitand.NumericRing)
 		data = data[1:]

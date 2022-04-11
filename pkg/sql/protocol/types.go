@@ -75,6 +75,8 @@ const (
 	BitOrRing
 	// BitXor
 	BitXorRing
+	// StdDevPop
+	StdDevPopRing
 )
 
 // colexec
