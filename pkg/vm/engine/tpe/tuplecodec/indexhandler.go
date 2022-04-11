@@ -174,17 +174,18 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			return nil, 0, err
 		}
 
-		rowRead += len(keys)
-		indexReadCtx.addReadCount(len(keys))
+		//rowRead += len(keys)
+		//indexReadCtx.addReadCount(len(keys))
 
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
-			//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
-			//	break
-			//}
-			//rowRead++
-			//indexReadCtx.addReadCount(1)
+			if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+				break
+			}
+			logutil.Infof("keyvalue %v %v", keys[i], values[i])
+			rowRead++
+			indexReadCtx.addReadCount(1)
 			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
 			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
 			if err != nil {
@@ -204,9 +205,9 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			//need to update prefix
 			//decode index value
 			for i := 0; i < len(keys); i++ {
-				//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
-				//	break
-				//}
+				if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+					break
+				}
 				//decode the name which is in the value
 				data := values[i]
 				if ihi.useLayout {
@@ -291,6 +292,11 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 
 	TruncateBatch(bat, int(ihi.kvLimit), rowRead)
 
+	err := SerializeVectorForBatch(bat)
+	if err != nil {
+		return nil, 0, err
+	}
+
 	if readFinished {
 		if rowRead == 0 {
 			//there are no data read in this call.
@@ -313,8 +319,8 @@ func (ihi *IndexHandlerImpl) decodePrimaryIndexValue(data []byte, ctx *ReadConte
 	return vdis, nil
 }
 
-func (ihi * IndexHandlerImpl) getPrimaryIndexKeyOfValue(readCtx interface{}, opt *batch.DumpOption) ([]byte, error) {
-	indexReadCtx,ok := readCtx.(*ReadContext)
+func (ihi *IndexHandlerImpl) getPrimaryIndexKeyOfValue(readCtx interface{}, opt *batch.DumpOption) ([]byte, error) {
+	indexReadCtx, ok := readCtx.(*ReadContext)
 	if !ok {
 		return nil, nil
 	}
@@ -344,7 +350,7 @@ func (ihi * IndexHandlerImpl) getPrimaryIndexKeyOfValue(readCtx interface{}, opt
 		case types.T_float32, types.T_float64:
 			v, err := strconv.ParseFloat(attr, 32)
 			if err != nil {
-				return nil ,err
+				return nil, err
 			}
 			value = v
 		case types.T_char, types.T_varchar:
@@ -368,7 +374,7 @@ func (ihi * IndexHandlerImpl) getPrimaryIndexKeyOfValue(readCtx interface{}, opt
 }
 
 func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batch, int, error) {
-	indexReadCtx,ok := readCtx.(*ReadContext)
+	indexReadCtx, ok := readCtx.(*ReadContext)
 	if !ok {
 		return nil, 0, errorReadContextIsInvalid
 	}
@@ -414,19 +420,19 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 	if indexReadCtx.CompleteInAllShards {
 		return nil, 0, nil
 	} else if !indexReadCtx.CompleteInAllShards && indexReadCtx.PrefixForScanKey == nil {
-		indexReadCtx.PrefixForScanKey,_ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
+		indexReadCtx.PrefixForScanKey, _ = tke.EncodeIndexPrefix(indexReadCtx.PrefixForScanKey, uint64(indexReadCtx.DbDesc.ID),
 			uint64(indexReadCtx.TableDesc.ID),
 			uint64(indexReadCtx.IndexDesc.ID))
-			indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
-			indexReadCtx.PrefixEnd = SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
+		indexReadCtx.LengthOfPrefixForScanKey = len(indexReadCtx.PrefixForScanKey)
+		indexReadCtx.PrefixEnd = SuccessorOfPrefix(indexReadCtx.PrefixForScanKey)
 	}
-	
+
 	//prepare the batch
-	names,attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
-	bat := MakeBatch(int(ihi.kvLimit),names,attrdefs)
+	names, attrdefs := ConvertAttributeDescIntoTypesType(indexReadCtx.ReadAttributeDescs)
+	bat := MakeBatch(int(ihi.kvLimit), names, attrdefs)
 	result.Decode_keys.Vecs = make([]batch.DumpDecodeItem, len(result.Decode_keys.Attrs))
 	result.Decode_values.Vecs = make([]batch.DumpDecodeItem, len(result.Decode_values.Attrs))
-	
+
 	rowRead := 0
 	var keys []TupleKey
 	var values []TupleValue
@@ -457,7 +463,7 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 		if err != nil {
 			return nil, 0, err
 		}
-	
+
 		rowRead += len(keys)
 		for _, key := range keys {
 			result.Keys = append(result.Keys, []byte(key))
@@ -465,7 +471,7 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 		for _, value := range values {
 			result.Values = append(result.Values, []byte(value))
 		}
-	
+
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
@@ -474,12 +480,12 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 			if err != nil {
 				return nil, 0, err
 			}
-	
+
 			for j, key := range dis {
 				result.Decode_keys.Vecs[j] = append(result.Decode_keys.Vecs[j], key.Value)
 			}
 		}
-	
+
 		//skip decoding the value
 		if !needKeyOnly {
 			//need to update prefix
@@ -487,7 +493,7 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 			for i := 0; i < len(keys); i++ {
 				//decode the name which is in the value
 				data := values[i]
-				_,dis,err := tkd.DecodePrimaryIndexValue(data, indexReadCtx.IndexDesc,0,ihi.serializer)
+				_, dis, err := tkd.DecodePrimaryIndexValue(data, indexReadCtx.IndexDesc, 0, ihi.serializer)
 				if err != nil {
 					return nil, 0, err
 				}
@@ -496,7 +502,7 @@ func (ihi *IndexHandlerImpl) DumpReadFromIndex(readCtx interface{}) (*batch.Batc
 				}
 			}
 		}
-	
+
 		//get the next prefix
 		indexReadCtx.PrefixForScanKey = nextScanKey
 		if complete {
@@ -517,8 +523,8 @@ func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, i
 	if indexReadCtx.DumpData {
 		return ihi.DumpReadFromIndex(readCtx)
 	}
-	
-	if indexReadCtx.ParallelReader {
+
+	if indexReadCtx.ParallelReader || indexReadCtx.MultiNode {
 		return ihi.parallelReader(indexReadCtx)
 	}
 
@@ -651,6 +657,11 @@ func (ihi *IndexHandlerImpl) ReadFromIndex(readCtx interface{}) (*batch.Batch, i
 	}
 
 	TruncateBatch(bat, int(ihi.kvLimit), rowRead)
+
+	err := SerializeVectorForBatch(bat)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	if readFinished {
 		if rowRead == 0 {
