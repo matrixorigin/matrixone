@@ -6059,7 +6059,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 	}
 	ctr.hashes[0] = 0
 	vecs := bat.Ht.([]*vector.Vector)
-	ctr.pctr.strHashMap.InsertStringBatchWithRing(ctr.zs, ctr.strHashStates, ctr.hstr.keys[:n], ctr.values)
+	ctr.pctr.strHashMap.InsertString40BatchWithRing(ctr.zs, ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
 	{ // batch
 		for k, v := range ctr.values[:n] {
 			if ctr.zs[k] == 0 {
