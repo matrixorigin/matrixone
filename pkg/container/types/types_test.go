@@ -15,8 +15,9 @@
 package types
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestType_String(t *testing.T) {
@@ -31,26 +32,23 @@ func TestType_Eq(t *testing.T) {
 }
 
 func TestT_ToType(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, int32(1), myT.ToType().Size)
-	myT = T(2)
-	require.Equal(t, int32(2), myT.ToType().Size)
-	myT = T(3)
-	require.Equal(t, int32(4), myT.ToType().Size)
+	require.Equal(t, int32(1), T_int8.ToType().Size)
+	require.Equal(t, int32(1), T_uint8.ToType().Size)
+	require.Equal(t, int32(2), T_int16.ToType().Size)
+	require.Equal(t, int32(2), T_uint16.ToType().Size)
+	require.Equal(t, int32(4), T_int32.ToType().Size)
+	require.Equal(t, int32(4), T_uint32.ToType().Size)
 }
 
 func TestT_String(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, "TINYINT", myT.String())
-	myT = T(2)
-	require.Equal(t, "SMALLINT", myT.String())
-	myT = T(3)
-	require.Equal(t, "INT", myT.String())
+	require.Equal(t, "TINYINT", T_int8.String())
+	require.Equal(t, "SMALLINT", T_int16.String())
+	require.Equal(t, "INT", T_int32.String())
 }
 
 func TestT_OidString(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, "T_int8", myT.OidString())
-	myT = T(2)
-	require.Equal(t, "T_int16", myT.OidString())
+	require.Equal(t, "T_int8", T_int8.OidString())
+	require.Equal(t, "T_uint8", T_uint8.OidString())
+	require.Equal(t, "T_int16", T_int16.OidString())
+	require.Equal(t, "T_uint16", T_uint16.OidString())
 }

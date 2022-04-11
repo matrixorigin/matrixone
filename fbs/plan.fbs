@@ -1,0 +1,371 @@
+namespace fbs;
+
+// Data types.  Slightly different from container.types
+enum TypeId : uint16 {
+	ANY = 0,
+	STAR = 1,
+
+	BOOL    = 10,
+
+	// INTs
+	INT8    = 20, 
+	INT16   = 21, 
+	INT32   = 22,
+	INT64   = 23,
+	INT128  = 24,
+	// UINT are mysql quirks.
+	UINT8   = 25,
+	UINT16  = 26,
+	UINT32  = 27,
+	UINT64  = 28,
+	UINT128 = 29,
+	FLOAT32 = 30,
+	FLOAT64 = 31,
+	DECIMAL64	= 32,
+	DECIMAL128	= 33,
+	DECIMAL     = 34,
+	ANYINT    = 37,
+	ANYFLOAT  = 38,
+	ANYNUMBER = 39,
+
+	// Some special small (<= 32 bytes) fixed len types that worth optimize
+	UUID      = 40,		// 16 bytes,
+	UB160     = 41,     // 20 bytes, SHA-1
+	UB184     = 42,     // 23 bytes,  
+	UB192     = 43,		// 24 bytes, for example, BLAKE3 output of 24 bytes. 
+	UB224	  = 44,		// 28 bytes, for example, SHA-224, BLAKE3-224
+	UB256	  = 45,		// 32 bytes, for example, SHA-256, BLAKE3-256
+
+	// Time 
+	DATE		= 50,
+	TIME        = 51,
+	DATETIME	= 52,
+	TIMESTAMP	= 53,
+	INTERVAL    = 54,
+	ANYTIME     = 59,
+
+	// Strings and binaries
+	CHAR		= 60,
+	VARCHAR		= 61,
+	JSON		= 62,
+	BINARY      = 70,
+	VARBINARY   = 71,
+
+	// Special 
+	ARRAY       = 90,
+	FLEXBUFFER  = 91,
+
+	// Physical for varlen
+	BYTEA8      = 100,
+	BYTEA16     = 101,
+	BYTEA       = 102,
+
+	// MO Special, not sure if we really need these. 
+	SEL         = 200,
+	TUPLE       = 201,
+}
+
+// Data flags, for now just null bit.
+enum DataFlag : uint8 (bit_flags) {
+	IS_NULL,
+}
+
+// DatumAttr: implementation details
+enum DatumAttr : uint8 {
+	// 0 - 31 are reserved
+	NULL	= 32,
+
+	B1		= 40,
+	B2		= 41,
+	B4		= 42,
+	B8		= 43,
+	B16		= 44,
+	UB1		= 45,
+	UB2		= 46,
+	UB4		= 47,
+	UB8		= 48,
+	UB16	= 49,
+
+	MEMAREA = 64,
+	MEMAREA_ROWSTE = 65,
+	MEMAREA_PLAN   = 66,
+	MEMAREA_NODE   = 67,
+	MEMAREA_QUERY  = 69,
+
+	FP			= 128,
+	FP_REMOTE	= 129,
+	FP_LOCAL	= 130,
+	FP_QUERY	= 131,
+}
+
+// Datum: we give it 32 bytes
+struct Datum {
+a:uint64;
+b:uint64;
+c:uint64;
+d:uint64;
+}
+
+// Function flag
+enum FuncFlag : uint32 (bit_flags) {
+	// Function call by system, user cannot invoke directly.
+	INTERNAL,              
+
+	// Immutable: result computed from value only.  This is defautl.
+	// Therefore no flags
+
+	// Stable: result depends on session or database, but result 
+	// is the same within the this query if arg are the same. 
+	STABLE,                 
+
+	// Volatile: no promise
+	VOLATILE,
+
+	// Strict: result is null iff some arg is null.
+	// Produce null: result maybe null (even if all args are not null).
+	// Produce no null: result cannot be null
+	STRICT,
+	PRODUCE_NULL,
+	PRODUCE_NO_NULL,
+
+	// variable args, all trailing varargs must be of the same type. 
+	VARARG,
+	
+	// Aggregate function and window function.  All Agg functions 
+	// are window functions.
+	AGG,
+	WIN,
+}
+
+enum OrderByFlag : uint16 (bit_flags) {
+	ASC,
+	DESC,
+	NULLS_FIRST,
+	NULLS_LAST,
+	UNIQUE, 
+	INTERNAL,
+}
+
+enum JoinFlag : uint16 (bit_flags) {
+	APPLY, 
+	OUTER, 
+	SEMI,
+	ANTI,
+	SINGLE,
+	MARK,
+	// MORE?
+}
+
+// TODO: Agg may be broken into multi levels. 
+enum AggType: uint16 {
+	FULL,
+	BOTTOM,
+	TOP,
+}
+
+// Nodes: Could be more, but this should be enough for a simple 
+// plan tree
+enum NodeType : uint32 {
+	UNKNOWN = 0,		
+
+	// Statement type
+	SELECT,
+	INSERT,
+	DELETE,
+	UPDATE,
+
+	// Node Types
+
+	// Scans
+	ValueScan,
+	TableScan,
+	FunctionScan,
+	ExternalScan,
+
+	// Proj, for convinience
+	Project,
+
+	// External function call (UDF)
+	ExternalFunction,
+
+	// Matrial, CTE, etc.
+	Material,
+	RecursiveCTE,
+	Sink,
+	SinkScan,
+
+	// Proper Relational Operators
+	Agg,
+	Join,
+	LimitOffset,
+	Sample,
+	Sort,
+	Union,
+	UnionAll,
+	Unique,
+	Window,
+
+	// Physical tuple mover
+	Broadcast,
+	Split,
+	Gather,
+
+	// Misc
+	Assert,        // Check a condition is met, or throw/abort.
+}
+
+// SQL Type
+table Type {
+id:TypeId;
+nullable:bool;
+width:int32;
+precision:int32;
+}
+
+// Constants
+table Const {
+typ:Type;
+name:string;
+isnull:bool;
+// Const values: bool, i8 to i64 are stored in ival
+ival:int64;
+// Const values: f32 and f64
+fval:double;
+// Const values: the rest are in sval
+sval:string;
+}
+
+// Param ref, of prepared statement.  User to fill on exec.
+table ParamRef {
+typ:Type;
+pos:int32;
+}
+
+// (Session) Variable ref, compliler/optimizer should fold.
+table VarRef {
+typ:Type;
+name:string;
+}
+
+// Object ref, that is, table or view, or input node (relation)
+table ObjectRef {
+server:string;
+database:string;
+schema:string;
+object:string;
+}
+
+// Column is identified by relationsPos (the index of input relations)
+// and columnPos.   relationPos = -1 means it references columns in 
+// the same projection list (must appear before).
+table ColumnRef {
+typ:Type;
+name:string;
+relationPos:int32;
+columnPos:int32;
+}
+
+// Expressions 
+table Expr {
+typ:Type;
+value:Const;
+param:ParamRef;
+colref:ColumnRef;
+func:ObjectRef;
+args: [Expr];
+options:string;
+}
+
+// Schema
+table Column {
+typ:Type;
+name:string;
+// Position in primary key column list, -1 if it is not a col in primary key
+pkidx:int16;  
+}
+
+table Schema {
+columns:[Column];
+}
+
+struct Cost {
+start:double;
+total:double;
+cardinality:double;
+rowsize:double;
+ndv:double;
+}
+
+table ColData {
+row_count:int32;
+null_count:int32;
+flags:[DataFlag];
+i8:[int8];
+i16:[int16];
+i32:[int32];
+i64:[int64];
+f32:[float];
+f64:[double];
+s:[string];
+}
+
+table RowsetData {
+schema:Schema;
+cols:[ColData];
+}
+
+table WindowSpec {
+partition_by:[Expr];
+order_by:[Expr];
+order_by_collations:[int32];
+order_by_flags:[OrderByFlag];
+lead:int32;
+lag:int32;
+}
+
+table Node {
+// Common part of every node.
+id:int32;
+node_type:NodeType;
+cost:Cost;
+
+//  
+filter:[Expr];
+project:[Expr];
+children:[int32];
+join_type:JoinFlag; 
+on:[Expr]; 
+where:[Expr];
+group_by:[Expr];
+grouping_sets:[Expr];
+order_by:[Expr];
+order_by_collations:[int32];
+order_by_flags:[OrderByFlag]; 
+window:WindowSpec;
+limit:[Expr];
+offset:[Expr];
+table_ref:[ObjectRef];
+rowset_data:[RowsetData];
+options:string;
+}
+
+table Query {
+// A query may need to run in steps.   This in theory is not
+// necessary but often convinient and/or can be better optimized.
+// For example, executing non correctlated scalar subquery first
+// we can plug the value in the optmizer and the newly available
+// value may generate better plan.
+
+// Each step is simply a root node.  Root node refers to other 
+// node as children and the whole step is a DAG.
+
+steps:[int32];
+
+// All the nodes.  It is OK to have dangle nodes, we only excute nodes 
+// reachable from step roots.
+nodes:[Node];
+
+// Bound Parameter for the query.
+params:[Const];
+}
+

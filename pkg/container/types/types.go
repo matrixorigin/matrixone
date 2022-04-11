@@ -17,56 +17,58 @@ package types
 import (
 	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/fbs"
 )
+
+type T fbs.TypeId
 
 const (
 	// any family
-	T_any = 0
+	T_any T = T(fbs.TypeIdANY)
 
 	// numeric/integer family
-	T_int8   = 1
-	T_int16  = 2
-	T_int32  = 3
-	T_int64  = 5
-	T_uint8  = 6
-	T_uint16 = 7
-	T_uint32 = 9
-	T_uint64 = 10
+	T_int8   T = T(fbs.TypeIdINT8)
+	T_int16  T = T(fbs.TypeIdINT16)
+	T_int32  T = T(fbs.TypeIdINT32)
+	T_int64  T = T(fbs.TypeIdINT64)
+	T_uint8  T = T(fbs.TypeIdUINT8)
+	T_uint16 T = T(fbs.TypeIdUINT16)
+	T_uint32 T = T(fbs.TypeIdUINT32)
+	T_uint64 T = T(fbs.TypeIdUINT64)
 
 	// numeric/decimal family - unsigned attribute is deprecated
-	T_decimal = 11
+	T_decimal T = T(fbs.TypeIdDECIMAL)
 
 	// numeric/float family - unsigned attribute is deprecated
-	T_float32 = 12
-	T_float64 = 13
+	T_float32 T = T(fbs.TypeIdFLOAT32)
+	T_float64 T = T(fbs.TypeIdFLOAT64)
 
 	// date family
-	T_date     = 15 // 3 byte
-	T_datetime = 18 // 8 byte
+	T_date     T = T(fbs.TypeIdDATE)
+	T_datetime T = T(fbs.TypeIdDATETIME)
 
 	// string family
-	T_char    = 20
-	T_varchar = 21
+	T_char    T = T(fbs.TypeIdCHAR)
+	T_varchar T = T(fbs.TypeIdVARCHAR)
 
 	// json family
-	T_json = 32
+	T_json T = T(fbs.TypeIdJSON)
 
 	// system family
-	T_sel   = 200 //selection
-	T_tuple = 201 // immutable, size = 24
+	T_sel   T = T(fbs.TypeIdSEL)
+	T_tuple T = T(fbs.TypeIdTUPLE)
 )
 
-type T uint8
-
 type Type struct {
-	Oid       T		`json:"oid,string"`
-	Size      int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+	Oid  T     `json:"oid,string"`
+	Size int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
 
 	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
-	Width     int32	`json:"width,string"`
+	Width int32 `json:"width,string"`
 
 	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
-	Precision int32	`json:"precision,string"`
+	Precision int32 `json:"precision,string"`
 }
 
 type Bytes struct {
@@ -89,11 +91,11 @@ var Types map[string]T = map[string]T{
 	"integer":  T_int32,
 	"bigint":   T_int64,
 
-	"tinyint unsigned":  T_int8,
-	"smallint unsigned": T_int16,
-	"int unsigned":      T_int32,
-	"integer unsigned":  T_int32,
-	"bigint unsigned":   T_int64,
+	"tinyint unsigned":  T_uint8,
+	"smallint unsigned": T_uint16,
+	"int unsigned":      T_uint32,
+	"integer unsigned":  T_uint32,
+	"bigint unsigned":   T_uint64,
 
 	"decimal": T_decimal,
 
