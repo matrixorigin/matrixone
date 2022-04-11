@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+func endswith_fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
 	lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
 	var resultsLen int
 	if len(lvs.Lengths) > len(rvs.Lengths) {
@@ -72,25 +72,25 @@ func init() {
 			LeftType:   types.T_varchar,
 			RightType:  types.T_varchar,
 			ReturnType: types.T_uint8,
-			Fn:         fn,
+			Fn:         endswith_fn,
 		},
 		{
 			LeftType:   types.T_char,
 			RightType:  types.T_char,
 			ReturnType: types.T_uint8,
-			Fn:         fn,
+			Fn:         endswith_fn,
 		},
 		{
 			LeftType:   types.T_varchar,
 			RightType:  types.T_char,
 			ReturnType: types.T_uint8,
-			Fn:         fn,
+			Fn:         endswith_fn,
 		},
 		{
 			LeftType:   types.T_char,
 			RightType:  types.T_varchar,
 			ReturnType: types.T_uint8,
-			Fn:         fn,
+			Fn:         endswith_fn,
 		},
 	}
 }
