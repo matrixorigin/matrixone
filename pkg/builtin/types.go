@@ -25,6 +25,7 @@ const (
 	Rtrim
 	StartsWith
 	Lpad
+	Rpad
 	Round
 	Floor
 	Abs
