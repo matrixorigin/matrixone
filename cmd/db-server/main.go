@@ -253,6 +253,7 @@ func main() {
 		tpeConf.PBKV = kvs
 		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+		tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
 		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
 		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()

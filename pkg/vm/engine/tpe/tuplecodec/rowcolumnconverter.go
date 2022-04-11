@@ -546,6 +546,7 @@ func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKey(
 				vBytes.Data = append(vBytes.Data, d...)
 				vBytes.Lengths[rowIdx] = uint32(len(d))
 			}
+			vec.Data = vBytes.Data
 		case types.T_date:
 			cols := vec.Col.([]types.Date)
 			if isNullOrEmpty {

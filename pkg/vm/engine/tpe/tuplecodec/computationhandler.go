@@ -17,6 +17,7 @@ package tuplecodec
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"time"
 
@@ -56,6 +57,7 @@ type ComputationHandlerImpl struct {
 	indexHandler   index.IndexHandler
 	epochHandler   *EpochHandler
 	parallelReader bool
+	multiNode      bool
 }
 
 func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
@@ -86,7 +88,7 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool, multiNode bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh:             dh,
 		kv:             kv,
@@ -95,6 +97,7 @@ func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tc
 		indexHandler:   ih,
 		epochHandler:   epoch,
 		parallelReader: parallelReader,
+		multiNode:      multiNode,
 	}
 }
 
@@ -429,7 +432,8 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	}
 
 	var nodes engine.Nodes
-	for _, node := range shards.nodes {
+	for i, node := range shards.nodes {
+		logutil.Infof("xindex %d all_nodes %v", i, node)
 		nodes = append(nodes, engine.Node{
 			Id:   node.StoreIDbytes,
 			Addr: node.Addr,
@@ -445,6 +449,10 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 
 func (chi *ComputationHandlerImpl) ParallelReader() bool {
 	return chi.parallelReader
+}
+
+func (chi *ComputationHandlerImpl) MultiNode() bool {
+	return chi.multiNode
 }
 
 type AttributeStateForWrite struct {
@@ -595,6 +603,8 @@ type ReadContext struct {
 	ReadAttributeDescs []*descriptor.AttributeDesc
 
 	ParallelReader bool
+
+	MultiNode bool
 
 	//for test
 	ReadCount int

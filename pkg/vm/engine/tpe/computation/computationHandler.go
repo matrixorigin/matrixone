@@ -48,4 +48,6 @@ type ComputationHandler interface {
 	GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error)
 
 	ParallelReader() bool
+
+	MultiNode() bool
 }
