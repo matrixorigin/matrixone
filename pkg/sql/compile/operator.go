@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transformer"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
@@ -75,8 +76,15 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *join.Argument:
 		rin.Arg = &join.Argument{
-			Vars: arg.Vars,
-			Bats: arg.Bats,
+			Vars:   arg.Vars,
+			Bats:   arg.Bats,
+			Result: arg.Result,
+		}
+	case *times.Argument:
+		rin.Arg = &times.Argument{
+			Vars:   arg.Vars,
+			Bats:   arg.Bats,
+			Result: arg.Result,
 		}
 	case *restrict.Argument:
 		rin.Arg = &restrict.Argument{
@@ -425,5 +433,19 @@ func constructJoin(op *plan.Join) *join.Argument {
 			arg.Vars[i-1][j] = strconv.Itoa(op.Vars[i][j])
 		}
 	}
+	arg.Result = append(arg.Result, op.Result...)
+	return arg
+}
+
+func constructTimes(op *plan.Join) *times.Argument {
+	arg := new(times.Argument)
+	arg.Vars = make([][]string, len(op.Vars)-1)
+	for i := 1; i < len(op.Vars); i++ {
+		arg.Vars[i-1] = make([]string, len(op.Vars[i]))
+		for j := range op.Vars[i] {
+			arg.Vars[i-1][j] = strconv.Itoa(op.Vars[i][j])
+		}
+	}
+	arg.Result = append(arg.Result, op.Result...)
 	return arg
 }

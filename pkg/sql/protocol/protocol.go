@@ -51,6 +51,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -75,6 +76,7 @@ func init() {
 	gob.Register(TransformArgument{})
 	gob.Register(Transformer{})
 	gob.Register(JoinArgument{})
+	gob.Register(TimesArgument{})
 	gob.Register(UntransformArgument{})
 
 	gob.Register(Source{})
@@ -219,7 +221,20 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 	case vm.Join:
 		arg := in.Arg.(*join.Argument)
 		data, err := encoding.Encode(JoinArgument{
-			Vars: arg.Vars,
+			Vars:   arg.Vars,
+			Result: arg.Result,
+		})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Times:
+		arg := in.Arg.(*times.Argument)
+		data, err := encoding.Encode(TimesArgument{
+			Vars:   arg.Vars,
+			Result: arg.Result,
 		})
 		if err != nil {
 			return err
@@ -409,10 +424,26 @@ func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 			return in, nil, err
 		}
 		joinArg := &join.Argument{
-			Vars: arg.Vars,
+			Vars:   arg.Vars,
+			Result: arg.Result,
 		}
 		data = data[n:]
 		in.Arg = joinArg
+	case vm.Times:
+		var arg TimesArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		timesArg := &times.Argument{
+			Vars:   arg.Vars,
+			Result: arg.Result,
+		}
+		data = data[n:]
+		in.Arg = timesArg
 	case vm.Merge:
 		var arg MergeArgument
 		data = data[4:]

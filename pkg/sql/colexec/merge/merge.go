@@ -24,28 +24,34 @@ func String(_ interface{}, buf *bytes.Buffer) {
 	buf.WriteString(" + ")
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, arg interface{}) error {
+	n := arg.(*Argument)
+	n.ctr = new(Container)
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	if len(proc.Reg.MergeReceivers) == 0 {
-		return true, nil
-	}
-	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
-		reg := proc.Reg.MergeReceivers[i]
+	n := arg.(*Argument)
+	for {
+		if len(proc.Reg.MergeReceivers) == 0 {
+			return true, nil
+		}
+		reg := proc.Reg.MergeReceivers[n.ctr.i]
 		bat := <-reg.Ch
 		if bat == nil {
-			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
-			i--
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:n.ctr.i], proc.Reg.MergeReceivers[n.ctr.i+1:]...)
+			if n.ctr.i >= len(proc.Reg.MergeReceivers) {
+				n.ctr.i = 0
+			}
 			continue
 		}
 		if len(bat.Zs) == 0 {
-			i--
 			continue
 		}
 		proc.Reg.InputBatch = bat
+		if n.ctr.i = n.ctr.i + 1; n.ctr.i >= len(proc.Reg.MergeReceivers) {
+			n.ctr.i = 0
+		}
 		return false, nil
 	}
-	return true, nil
 }

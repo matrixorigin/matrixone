@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package join
+package times
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -24,12 +24,22 @@ const (
 	UnitLimit = 256
 )
 
+const (
+	H0 = iota
+	H8
+	H24
+	H32
+	H40
+	HStr
+)
+
 var OneInt64s []int64
 
 type view struct {
 	isPure bool // true: primary key join
 
 	is  []int // subscript in the result attribute
+	ris []int // subscript in the result ring
 	ois []int // subscript in the origin batch
 
 	attrs      []string
@@ -41,10 +51,14 @@ type view struct {
 	strHashMap *hashtable.StringHashMap
 }
 
-type HashTable struct {
-	Sels       [][]int64
-	IntHashMap *hashtable.Int64HashMap
-	StrHashMap *hashtable.StringHashMap
+type probeContainer struct {
+	typ  int
+	rows uint64
+
+	bat *batch.Batch
+
+	intHashMap *hashtable.Int64HashMap
+	strHashMap *hashtable.StringHashMap
 }
 
 type Container struct {
@@ -65,7 +79,12 @@ type Container struct {
 
 	mx, mx0, mx1 [][]int64 // matrix buffer
 
+	values []uint64
+
 	zValues []int64
+
+	keyOffs  []uint32
+	zKeyOffs []uint32
 
 	hashes        []uint64
 	strHashStates [][3]uint64
@@ -77,8 +96,22 @@ type Container struct {
 	}
 
 	h8 struct {
-		keys []uint64
+		keys  []uint64
+		zKeys []uint64
 	}
+	h24 struct {
+		keys  [][3]uint64
+		zKeys [][3]uint64
+	}
+	h32 struct {
+		keys  [][4]uint64
+		zKeys [][4]uint64
+	}
+	h40 struct {
+		keys  [][5]uint64
+		zKeys [][5]uint64
+	}
+	pctr *probeContainer
 }
 
 type Argument struct {

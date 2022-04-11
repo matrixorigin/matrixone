@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/oplus"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -45,6 +46,7 @@ var stringFunc = [...]func(interface{}, *bytes.Buffer){
 	Top:         top.String,
 	Join:        join.String,
 	Plus:        plus.String,
+	Times:       times.String,
 	Limit:       limit.String,
 	Dedup:       dedup.String,
 	Order:       order.String,
@@ -71,6 +73,7 @@ var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Top:         top.Prepare,
 	Join:        join.Prepare,
 	Plus:        plus.Prepare,
+	Times:       times.Prepare,
 	Limit:       limit.Prepare,
 	Dedup:       dedup.Prepare,
 	Order:       order.Prepare,
@@ -97,6 +100,7 @@ var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Top:         top.Call,
 	Join:        join.Call,
 	Plus:        plus.Call,
+	Times:       times.Call,
 	Limit:       limit.Call,
 	Dedup:       dedup.Call,
 	Order:       order.Call,

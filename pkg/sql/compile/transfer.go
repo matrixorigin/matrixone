@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/plus"
+	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/times"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/transform"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/untransform"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -89,6 +90,10 @@ func UntransferIns(ins, pins vm.Instructions) {
 		case vm.Join:
 			a := ins[i].Arg.(*join.Argument)
 			pa := in.Arg.(*join.Argument)
+			a.Vars = pa.Vars
+		case vm.Times:
+			a := ins[i].Arg.(*times.Argument)
+			pa := in.Arg.(*times.Argument)
 			a.Vars = pa.Vars
 		case vm.Merge:
 		case vm.Dedup:
