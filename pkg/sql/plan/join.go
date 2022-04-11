@@ -75,14 +75,6 @@ func (b *build) buildQualifiedJoin(joinType int, ss *ScopeSet) (*Scope, error) {
 	var ts []types.Type
 	var attrs, as []string
 
-	/*
-		{
-			fmt.Printf("******ss.Scopes: %v\n", len(ss.Scopes))
-			for i, cond := range ss.Conds {
-				fmt.Printf("\t[%v]: %v.%v = %v.%v\n", i, cond.R, cond.Rattr, cond.S, cond.Sattr)
-			}
-		}
-	*/
 	nss := make([]*Scope, len(ss.Scopes))
 	{
 		ap := new(int) // alias generator
@@ -103,11 +95,6 @@ func (b *build) buildQualifiedJoin(joinType int, ss *ScopeSet) (*Scope, error) {
 				as0 = append(as0, alias)
 				ts0 = append(ts0, s.Result.AttrsMap[s.Result.Attrs[j]].Type)
 			}
-			/*
-				{
-					fmt.Printf("rename %v -> %v\n", s.Result.Attrs, as0)
-				}
-			*/
 			nss[i] = b.buildRename(s, s.Result.Attrs, as0, ts0)
 		}
 	}
@@ -167,38 +154,14 @@ func (b *build) buildHyperGraph(joinType int, ss *ScopeSet) (*Scope, error) {
 			gp.Es = append(gp.Es, ep)
 		}
 	}
-	/*
-		{
-			fmt.Printf("graph:\n")
-			for i, e := range gp.Es {
-				fmt.Printf("\t[%v] = %v\n", i, e.Vs)
-			}
-		}
-	*/
 	if err := b.checkHyperGraph(gp, ss); err != nil {
 		return nil, err
 	}
 	ness := []*EdgeSet{}
 	{
 		ess := buildEdgeSet(gp.Es)
-		/*
-			{
-				fmt.Printf("ess:\n")
-				for i := range ess {
-					fmt.Printf("\t[%v] = (%v, %v): %v\n", i, ess[i].I1, ess[i].I2, connectedVertexs(ess[i].E1.Vs, ess[i].E2.Vs))
-				}
-			}
-		*/
 		ness = b.decomposition(buildVertexSet(gp.Es), b.initVertexSet(gp.Es, ss.Scopes, ess), ess, ness, ss.Scopes)
 	}
-	/*
-		{
-			fmt.Printf("decomposition:\n")
-			for i, ess := range ness {
-				fmt.Printf("\t[%v]: (%v, %v)\n", i, ess.E1.Vs, ess.E2.Vs)
-			}
-		}
-	*/
 	return b.buildJoinTree(joinType, new(Scope), ness[0].I1, ness, ss.Scopes), nil
 }
 
@@ -215,11 +178,6 @@ func (b *build) decomposition(vp, nvp *VertexSet, ess, ness []*EdgeSet, ss []*Sc
 			}
 		}
 	}
-	/*
-		{
-			fmt.Printf("\tdecompostion (%v): %v\n", nvp.Is, j)
-		}
-	*/
 	if j >= 0 {
 		ness = append(ness, ess[j])
 		nvp.Is = append(nvp.Is, ess[j].I2)
@@ -233,22 +191,12 @@ func (b *build) decomposition(vp, nvp *VertexSet, ess, ness []*EdgeSet, ss []*Sc
 
 func (b *build) buildJoinTree(joinType int, root *Scope, i int, ess []*EdgeSet, ss []*Scope) *Scope {
 	op := &Join{Type: joinType}
-	root.Children = append(root.Children, ss[i]) // 初始边
+	root.Children = append(root.Children, ss[i])
 	for j := 0; j < len(ess); j++ {
-		/*
-			{
-				fmt.Printf("\tess[%v] = %v -> (%v, %v)\n", j, i, ess[j].I1, ess[j].I2)
-			}
-		*/
 		if ess[j].I1 != i {
 			continue
 		}
 		es := ess[j]
-		/*
-			{
-				fmt.Printf("\t\tconnect (%v:%v, %v:%v) %v\n", es.I1, es.E1.Vs, es.I2, es.E2.Vs, connectedVertexs(es.E1.Vs, es.E2.Vs))
-			}
-		*/
 		op.Vars = append(op.Vars, connectedVertexs(es.E1.Vs, es.E2.Vs))
 		ess = append(ess[:j], ess[j+1:]...)
 		b.buildPath(joinType, root, es, ess, ss)
@@ -295,7 +243,7 @@ func (b *build) buildJoinTree(joinType int, root *Scope, i int, ess []*EdgeSet, 
 }
 
 func (b *build) buildPath(joinType int, root *Scope, es *EdgeSet, ess []*EdgeSet, ss []*Scope) {
-	if isEndEdgeSet(es, ess) { // 没有儿子的即为end
+	if isEndEdgeSet(es, ess) {
 		root.Children = append(root.Children, ss[es.I2])
 	} else {
 		tm := make([]*EdgeSet, 0, len(ess))
@@ -447,7 +395,6 @@ func (b *build) findAttributeWithSchema(schema, name string, ss *ScopeSet) (int,
 	}
 }
 
-// 找出所有想等的键值
 func (b *build) initAliasGenerator(ap *int, conds []*JoinCondition) {
 	var alias int
 

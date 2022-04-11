@@ -193,7 +193,6 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy,
 		qry.Scope = s
 	}
 	if len(fvars) > 0 || len(qry.Aggs) > 0 {
-		//	if !pushDownUntransform(false, qry.Scope, fvars) {
 		s := &Scope{
 			Name:     qry.Scope.Name,
 			Children: []*Scope{qry.Scope},
@@ -210,7 +209,6 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy,
 		}
 		s.Op = &Untransform{fvars}
 		qry.Scope = s
-		//	}
 	}
 	{
 		proj.As = append(proj.As, groupProj.As...)
