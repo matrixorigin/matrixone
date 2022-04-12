@@ -471,6 +471,9 @@ func (b *build) buildAggregation(op int, name string, n tree.Expr, qry *Query, f
 	if err != nil {
 		return nil, err
 	}
+	if e.IsLogical() {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support in aggregation function", e))
+	}
 	alias := fmt.Sprintf("%s(%s)", name, e)
 	qry.Aggs = append(qry.Aggs, &Aggregation{
 		E:     e,

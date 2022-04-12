@@ -1638,7 +1638,13 @@ func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs := &Scope{Magic: Merge}
+		rs := &Scope{
+			Magic: Remote,
+			NodeInfo: engine.Node{
+				Id:   Address,
+				Addr: Address,
+			},
+		}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Merge,
@@ -1752,7 +1758,13 @@ func (e *Exec) compileCAQFact(ps *plan.Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs := &Scope{Magic: Merge}
+		rs := &Scope{
+			Magic: Remote,
+			NodeInfo: engine.Node{
+				Id:   Address,
+				Addr: Address,
+			},
+		}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Merge,
