@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
@@ -67,7 +68,6 @@ func (seg *Segment) Block(id string) aoe.Block {
 	return blk
 }
 
-/*
 // NewFilter generates a Filter for segment.
 func (seg *Segment) NewFilter() engine.Filter {
 	return NewSegmentFilter(seg)
@@ -82,7 +82,6 @@ func (seg *Segment) NewSummarizer() engine.Summarizer {
 func (seg *Segment) NewSparseFilter() aoe.SparseFilter {
 	return NewSegmentSparseFilter(seg)
 }
-*/
 
 // Rows returns how many rows this segment contains currently.
 func (seg *Segment) Rows() int64 {

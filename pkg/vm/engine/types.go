@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 type Nodes []Node
@@ -65,7 +67,6 @@ type NodeInfo struct {
 type Statistics interface {
 	Rows() int64
 	Size(string) int64
-	Cardinality(string) int64
 }
 
 type ListPartition struct {
@@ -148,16 +149,40 @@ type Relation interface {
 	AddTableDef(uint64, TableDef) error
 	DelTableDef(uint64, TableDef) error
 
-<<<<<<< HEAD
 	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
 	NewReader(int, extend.Extend, []byte) []Reader
-=======
-	NewReader(int) []Reader // first argument is the number of reader
->>>>>>> e54f78b7 (modify update plan)
 }
 
 type Reader interface {
 	Read([]uint64, []string) (*batch.Batch, error)
+}
+
+type Filter interface {
+	Eq(string, interface{}) (*roaring.Bitmap, error)
+	Ne(string, interface{}) (*roaring.Bitmap, error)
+	Lt(string, interface{}) (*roaring.Bitmap, error)
+	Le(string, interface{}) (*roaring.Bitmap, error)
+	Gt(string, interface{}) (*roaring.Bitmap, error)
+	Ge(string, interface{}) (*roaring.Bitmap, error)
+	Btw(string, interface{}, interface{}) (*roaring.Bitmap, error)
+}
+
+type Summarizer interface {
+	Count(string, *roaring.Bitmap) (uint64, error)
+	NullCount(string, *roaring.Bitmap) (uint64, error)
+	Max(string, *roaring.Bitmap) (interface{}, error)
+	Min(string, *roaring.Bitmap) (interface{}, error)
+	Sum(string, *roaring.Bitmap) (int64, uint64, error)
+}
+
+type SparseFilter interface {
+	Eq(string, interface{}) (Reader, error)
+	Ne(string, interface{}) (Reader, error)
+	Lt(string, interface{}) (Reader, error)
+	Le(string, interface{}) (Reader, error)
+	Gt(string, interface{}) (Reader, error)
+	Ge(string, interface{}) (Reader, error)
+	Btw(string, interface{}, interface{}) (Reader, error)
 }
 
 type Database interface {

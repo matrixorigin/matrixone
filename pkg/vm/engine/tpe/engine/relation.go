@@ -16,6 +16,7 @@ package engine
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,19 +70,6 @@ func (trel *TpeRelation) Nodes() engine.Nodes {
 	return trel.nodes
 }
 
-<<<<<<< HEAD
-=======
-/*
-func (trel *TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
-	panic("implement me")
-}
-
-func (trel *TpeRelation) DropIndex(epoch uint64, name string) error {
-	panic("implement me")
-}
-*/
-
->>>>>>> e54f78b7 (modify update plan)
 func (trel *TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
 	var attrs []engine.Attribute
 	hasPriKey := false
@@ -285,12 +273,6 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 
 		logutil.Infof("store id %d reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
 			trel.storeID, i, startIndex, shardCountPerReader, shardInfosCount, endIndex, tpeReaders[i].isDumpReader)
-<<<<<<< HEAD
-=======
-		logutil.Infof("reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
-			i, startIndex, shardCountPerReader, shardInfosCount, endIndex, tpeReaders[i].isDumpReader)
-
->>>>>>> e54f78b7 (modify update plan)
 		startIndex += shardCountPerReader
 	}
 
@@ -305,11 +287,7 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 	return retReaders
 }
 
-<<<<<<< HEAD
 func (trel *TpeRelation) NewReader(cnt int, _ extend.Extend, _ []byte) []engine.Reader {
-=======
-func (trel *TpeRelation) NewReader(cnt int) []engine.Reader {
->>>>>>> e54f78b7 (modify update plan)
 	logutil.Infof("newreader cnt %d", cnt)
 	if trel.computeHandler.ParallelReader() || trel.computeHandler.MultiNode() {
 		return trel.parallelReader(cnt)
@@ -339,10 +317,6 @@ func (trel *TpeRelation) NewReader(cnt int) []engine.Reader {
 		}
 		tr.shardInfos = append(tr.shardInfos, newInfo)
 		logutil.Infof("single reader %v", newInfo)
-<<<<<<< HEAD
-=======
-		tr.shardInfos = append(tr.shardInfos, newInfo)
->>>>>>> e54f78b7 (modify update plan)
 	}
 	readers[0] = tr
 	for i := 1; i < cnt; i++ {

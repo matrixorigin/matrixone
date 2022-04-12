@@ -114,8 +114,7 @@ func (s *Scope) DropDatabase(ts uint64) error {
 		}
 		return err
 	}
-	return nil
-	//	return p.E.Delete(ts, p.Id)
+	return p.E.Delete(ts, p.Id)
 }
 
 // DropTable do drop table work according to drop table plan
@@ -651,11 +650,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
-=======
-		rds = rel.NewReader(mcpu)
->>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -821,11 +816,7 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
-=======
-		rds = rel.NewReader(mcpu)
->>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
@@ -1014,11 +1005,7 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 			return err
 		}
 		defer rel.Close()
-<<<<<<< HEAD
 		rds = rel.NewReader(mcpu, nil, nil)
-=======
-		rds = rel.NewReader(mcpu)
->>>>>>> e54f78b7 (modify update plan)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {

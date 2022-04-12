@@ -645,7 +645,6 @@ func GetRow(writeCtx interface{}, bat *batch.Batch, row []interface{}, j int) er
 	if len(bat.Sels) != 0 {
 		rowIndex = bat.Sels[j]
 	}
-
 	if indexWriteCtx.colIndex == nil {
 		InitColIndex(indexWriteCtx, bat)
 	}

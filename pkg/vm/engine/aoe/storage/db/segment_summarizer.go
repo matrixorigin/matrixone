@@ -14,6 +14,15 @@
 
 package db
 
+import (
+	"errors"
+	"fmt"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+)
+
 // SegmentSummarizer provides segment-level aggregations with bitmap
 // support. (e.g. Count(string, *roaring.Bitmap) (uint64, error)
 // where inputs are column name and row filter, returns a count
@@ -25,7 +34,7 @@ type SegmentSummarizer struct {
 	segment *Segment
 }
 
-/*
+
 func NewSegmentSummarizer(s *Segment) engine.Summarizer {
 	return &SegmentSummarizer{segment: s}
 }
@@ -221,8 +230,3 @@ func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uin
 		return sum, cnt, nil
 	}
 }
-
-
-
-
-*/

@@ -783,6 +783,94 @@ func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(columnGroupID uint64, write
 	return out, nil, nil
 }
 
+// judge whether the primary key is modified, true for modified, false for not modified
+func judgePrimatyKeyModified(writeCtx interface{}, bat *batch.Batch, row1, row2 []interface{}) (bool, error) {
+	indexWriteCtx, ok := writeCtx.(*WriteContext)
+    if !ok {
+        return false, errorWriteContextIsInvalid
+	}
+
+	for _, attr := range indexWriteCtx.IndexDesc.Attributes {
+		for i := 0; i < len(bat.Attrs); i++ {
+			if attr.Name == bat.Attrs[i] {
+				if row1[i] != row2[i] {
+					return true, nil
+				}
+			}
+		}
+	}
+	return true, nil
+}
+
+func (ihi *IndexHandlerImpl) UpdateIntoIndex(writeCtx interface{}, bat *batch.Batch) error {
+	indexWriteCtx, ok := writeCtx.(*WriteContext)
+	if !ok {
+		return errorWriteContextIsInvalid
+	}
+	oldBatchData, newBatchData := &batch.Batch{}, &batch.Batch{}
+	oldBatchData.Vecs = make([]*vector.Vector, len(bat.Vecs))
+	newBatchData.Vecs = make([]*vector.Vector, len(bat.Vecs))
+
+	row1, row2 := make([]interface{}, len(bat.Vecs)), make([]interface{}, len(bat.Vecs))
+	n := vector.Length(bat.Vecs[0])
+	var deleteKey, insertKeys []TupleKey
+	var insertValues []TupleValue
+	for j := 0; j < n/2; j++ { //row index
+		err := GetRow(indexWriteCtx, bat, row1, j)
+		if err != nil {
+			return err
+		}
+
+		err = GetRow(writeCtx, bat, row2, j + n/2)
+		if err != nil {
+			return err
+		}
+		flag, err := judgePrimatyKeyModified(writeCtx, bat, row1, row2)
+		if err != nil {
+			return err
+		}
+		//1.encode prefix (tenantID,dbID,tableID,indexID)
+		tke := ihi.tch.GetEncoder()
+		var prefix TupleKey
+		prefix, _ = tke.EncodeIndexPrefix(prefix,
+			uint64(indexWriteCtx.DbDesc.ID),
+			uint64(indexWriteCtx.TableDesc.ID),
+			uint64(indexWriteCtx.IndexDesc.ID))
+
+		indexWriteCtx.callback = callbackPackage{
+			prefix: prefix,
+		}
+
+		if flag {
+			tuple := NewTupleBatchImpl(bat, row1)
+			if err = ihi.callbackForEncodeTupleInBatch(indexWriteCtx, tuple); err != nil {
+				return err
+			}
+			deleteKey = append(deleteKey, indexWriteCtx.keys[len(indexWriteCtx.keys)-1])
+		}
+		tuple := NewTupleBatchImpl(bat, row2)
+		err = ihi.callbackForEncodeTupleInBatch(indexWriteCtx, tuple)
+		if err != nil {
+			return err
+		}
+		insertKeys = append(insertKeys, indexWriteCtx.keys[len(indexWriteCtx.keys)-1])
+		insertValues = append(insertValues, indexWriteCtx.values[len(indexWriteCtx.values)-1])
+	}
+	for _, key := range deleteKey {
+		err := ihi.kv.Delete(key)
+		if err != nil {
+			return err
+		}
+	}
+	for i, key := range insertKeys {
+		err := ihi.kv.DedupSet(key, insertValues[i])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (ihi *IndexHandlerImpl) callbackForEncodeTupleInBatch(callbackCtx interface{}, tuple Tuple) error {
 	writeCtx := callbackCtx.(*WriteContext)
 

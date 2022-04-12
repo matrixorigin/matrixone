@@ -31,11 +31,9 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		}
 		s.start = true
 		s.mutex.Unlock()
-		/*
-			for _, filter := range reader.filter {
-				s.sparseFilter(&filter)
-			}
-		*/
+		for _, filter := range reader.filter {
+			s.sparseFilter(&filter)
+		}
 		s.ReadStart(refCount, attrs)
 	}
 GET:
@@ -117,7 +115,6 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	}
 }
 
-/*
 func (s *store) sparseFilter(filter *filterContext)  {
 	switch filter.filterType {
 	case FileterEq:
@@ -215,7 +212,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 		panic("No Support")
 	}
 }
-*/
 
 func blockExist(blocks []aoe.Block, iter string) bool {
 	exist := false

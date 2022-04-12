@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"math/rand"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -193,6 +194,16 @@ func (r *relation) update() error {
 	return nil
 }
 
+func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
+	idxInfo := helper.IndexDefs(r.pid, r.tbl.Id, nil, defs)
+	//TODO
+	return r.catalog.CreateIndex(epoch, idxInfo[0])
+}
+
+func (r *relation) DropIndex(epoch uint64, name string) error {
+	return r.catalog.DropIndex(epoch, r.tbl.Id, r.tbl.SchemaId, name)
+}
+
 func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
@@ -242,11 +253,7 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 	return nil
 }
 
-<<<<<<< HEAD
 func (r *relation) NewReader(num int, _ extend.Extend, _ []byte) []engine.Reader {
-=======
-func (r *relation) NewReader(num int) []engine.Reader {
->>>>>>> e54f78b7 (modify update plan)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++

@@ -363,6 +363,9 @@ func (b *build) getSchemaInfo(schema string, name string) ([]string, map[string]
 	}
 	if b.isModify {
 		priKeys, _ := r.GetPriKeyOrHideKey()
+		if priKeys == nil {
+			return nil, nil, -1, errors.New(errno.CaseNotFound, " can not find the primary or hide key of table")
+		}
 		for _, key := range priKeys {
 			if _, ok := attrsMap[key.Name]; !ok {
 				attrsMap[key.Name] = &Attribute{

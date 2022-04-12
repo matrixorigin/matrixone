@@ -117,78 +117,19 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return false, nil
 }
 
-//func mergeBatches(toBat *batch.Batch, bat *batch.Batch) (*batch.Batch, error) {
-//	if toBat == nil {
-//		return toBat, nil
-//	}
-//	if len(bat.Vecs) != len(toBat.Vecs) {
-//		return nil, errors.New(errno.InternalError, "unexpected error happens in batch merge")
-//	}
-//	if len(toBat.Vecs) == 0 {
-//		return toBat, nil
-//	}
-//	for i, attr := range bat.Attrs {
-//		toVec := batch.GetVector(toBat, attr)
-//		vec := bat.Vecs[i]
-//		if toVec.Typ.Oid != vec.Typ.Oid {
-//			panic("old batch type is not equal to update batch type")
-//		}
-//		switch toVec.Typ.Oid {
-//		case types.T_int8:
-//			toCol := toVec.Col.([]int8)
-//			col := vec.Col.([]int8)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_int16:
-//			toCol := toVec.Col.([]int16)
-//			col := vec.Col.([]int16)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_int32:
-//			toCol := toVec.Col.([]int32)
-//			col := vec.Col.([]int32)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_int64:
-//			toCol := toVec.Col.([]int64)
-//			col := vec.Col.([]int64)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_uint8:
-//			toCol := toVec.Col.([]uint8)
-//			col := vec.Col.([]uint8)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_uint16:
-//			toCol := toVec.Col.([]uint16)
-//			col := vec.Col.([]uint16)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_uint32:
-//			toCol := toVec.Col.([]uint32)
-//			col := vec.Col.([]uint32)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		case types.T_uint64:
-//			toCol := toVec.Col.([]uint64)
-//			col := vec.Col.([]uint64)
-//			toCol = append(toCol, col...)
-//			vector.SetCol(toVec, toCol)
-//		default:
-//			panic(fmt.Sprintf("unexpect type %s for function mergeBatches", vec.Typ))
-//		}
-//	}
-//	toBat.Zs = append(toBat.Zs, bat.Zs...)
-//	return toBat, nil
-//}
-
 func constantPadding(vec *vector.Vector, count uint64) error {
 	length := uint64(vector.Length(vec))
 	if length == count {
 		return nil
 	}
-	if length != 1{
+	if length != 1 && !nulls.Contains(vec.Nsp, 0){
 		panic("constant result rows are not one")
+	}
+	if nulls.Contains(vec.Nsp, 0) {
+		for i := uint64(0); i < count - 1; i++ {
+			nulls.Add(vec.Nsp, i+1)
+		}
+		return nil
 	}
 	switch vec.Typ.Oid {
 	case types.T_int8:
@@ -196,7 +137,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]int8)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_int16:
@@ -204,7 +144,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]int16)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_int32:
@@ -212,7 +151,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]int32)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_int64:
@@ -220,7 +158,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]int64)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_uint8:
@@ -228,7 +165,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]uint8)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_uint16:
@@ -236,7 +172,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]uint16)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_uint32:
@@ -244,7 +179,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]uint32)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_uint64:
@@ -252,7 +186,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]uint64)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_float32:
@@ -260,7 +193,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]float32)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_float64:
@@ -268,7 +200,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]float64)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_sel:
@@ -276,7 +207,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]int64)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_tuple:
@@ -284,7 +214,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([][]interface{})
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_char, types.T_varchar, types.T_json:
@@ -297,7 +226,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 			values.Lengths = append(values.Lengths, cnt)
 			offset += cnt
 			values.Offsets = append(values.Offsets, offset)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_date:
@@ -305,7 +233,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]types.Date)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	case types.T_datetime:
@@ -313,7 +240,6 @@ func constantPadding(vec *vector.Vector, count uint64) error {
 		values := vec.Col.([]types.Datetime)
 		for i := uint64(0); i < count - 1; i++ {
 			values = append(values, value)
-			nulls.Add(vec.Nsp, i+1)
 		}
 		vector.SetCol(vec, values)
 	default:

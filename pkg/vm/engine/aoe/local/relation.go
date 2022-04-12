@@ -77,6 +77,10 @@ func (r *localRoRelation) Close() {
 	r.impl.Close()
 }
 
+func (r *localRoRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }

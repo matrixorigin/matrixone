@@ -16,6 +16,7 @@ package deleteTag
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -44,10 +45,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 
+	affectedRows := uint64(vector.Length(bat.Vecs[0]))
 	batch.Clean(bat, proc.Mp)
 	proc.Reg.InputBatch = &batch.Batch{}
 
-	affectedRows := uint64(vector.Length(bat.Vecs[0]))
 	p.M.Lock()
 	p.AffectedRows += affectedRows
 	p.M.Unlock()

@@ -14,6 +14,17 @@
 
 package db
 
+import (
+	"errors"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
+
+	"github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring/roaring64"
+)
+
 // SegmentFilter provides segment-level & dense interfaces with bitmap
 // support. (e.g. Eq(string, interface{}) (*roaring.Bitmap, error)
 // where inputs are column name and value, returns a bitmap telling
@@ -22,7 +33,6 @@ type SegmentFilter struct {
 	segment *Segment
 }
 
-/*
 func NewSegmentFilter(s *Segment) engine.Filter {
 	return &SegmentFilter{segment: s}
 }
@@ -290,4 +300,3 @@ func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*r
 	_, err = ret.FromBase64(buf)
 	return ret, err
 }
-*/

@@ -288,16 +288,6 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 	if rel == nil {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "cannot find table for delete")
 	}
-<<<<<<< HEAD
-
-=======
-	// TODO: projection can be prune
-	//attrsMap := make(map[string]uint64)
-	//for _, key := range colKeys {
-	//	attrsMap[key] = 1
-	//}
-	//qry.Scope.Prune(attrsMap, nil)
->>>>>>> e54f78b7 (modify update plan)
 	s, err := e.compilePlanScope(qry.Scope)
 	if err != nil {
 		return nil, err
