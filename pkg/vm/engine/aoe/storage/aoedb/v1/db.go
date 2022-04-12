@@ -337,7 +337,7 @@ func (d *DB) Append(ctx *AppendCtx) (err error) {
 		return
 	}
 	defer func() {
-		if err != nil {
+		if err == nil {
 			index.Count = index.Capacity - index.Start
 			d.Wal.Checkpoint(index)
 		}
