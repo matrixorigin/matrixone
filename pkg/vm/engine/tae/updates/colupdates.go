@@ -38,6 +38,10 @@ func NewColumnUpdates(target *common.ID, colDef *catalog.ColDef, rwlock *sync.RW
 	}
 }
 
+func (n *ColumnUpdates) HasUpdateLocked(row uint32) bool {
+	return n.txnVals[row] != nil
+}
+
 func (n *ColumnUpdates) EqualLocked(o *ColumnUpdates) bool {
 	if o == nil {
 		return n == nil

@@ -78,6 +78,49 @@ func NewMergeBlockUpdates(commitTs uint64, meta *catalog.BlockEntry, rwlocker *s
 	return updates
 }
 
+func (n *BlockUpdates) ApplyDeleteRowsLocked(start, end uint32) {
+	if n.localDeletes == nil {
+		n.localDeletes = roaring.New()
+	}
+	n.localDeletes.AddRange(uint64(start), uint64(end+1))
+}
+
+func (n *BlockUpdates) ApplyUpdateColLocked(row uint32, colIdx uint16, v interface{}) {
+	if err := n.UpdateLocked(row, colIdx, v); err != nil {
+		panic(err)
+	}
+}
+
+func (n *BlockUpdates) HasDeleteOverlapLocked(start, end uint32) bool {
+	if n.localDeletes == nil && n.baseDeletes == nil {
+		return false
+	}
+	var overlap bool
+	if n.localDeletes != nil {
+		if start == end {
+			overlap = n.localDeletes.Contains(start)
+		} else {
+			x2 := roaring.New()
+			x2.AddRange(uint64(start), uint64(end+1))
+			overlap = n.localDeletes.Intersects(x2)
+		}
+	}
+	if overlap {
+		return overlap
+	}
+	if n.baseDeletes == nil {
+		return overlap
+	}
+	if start == end {
+		overlap = n.baseDeletes.Contains(start)
+	} else {
+		x2 := roaring.New()
+		x2.AddRange(uint64(start), uint64(end+1))
+		overlap = n.baseDeletes.Intersects(x2)
+	}
+	return overlap
+}
+
 func (n *BlockUpdates) String() string {
 	n.RLock()
 	defer n.RUnlock()
@@ -266,6 +309,18 @@ func (n *BlockUpdates) Compare(o common.NodePayload) int {
 	}
 
 	return 1
+}
+
+func (n *BlockUpdates) HasActiveTxnLocked() bool {
+	return n.txn != nil
+}
+
+func (n *BlockUpdates) HasColUpdateLocked(row uint32, colIdx uint16) bool {
+	colUpdates := n.cols[colIdx]
+	if colUpdates == nil {
+		return false
+	}
+	return colUpdates.HasUpdateLocked(row)
 }
 
 func (n *BlockUpdates) PrepareCommit() error {

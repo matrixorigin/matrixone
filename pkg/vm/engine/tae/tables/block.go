@@ -19,7 +19,7 @@ type dataBlock struct {
 	node   *appendableNode
 	file   dataio.BlockFile
 	bufMgr base.INodeManager
-	chain  updates.BlockUpdateChain
+	chain  *updates.BlockUpdateChain
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile dataio.SegmentFile, bufMgr base.INodeManager) *dataBlock {
@@ -72,4 +72,22 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	blk.RLock()
 	defer blk.RUnlock()
 	return blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
+}
+
+func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node data.UpdateNode, err error) {
+	blk.Lock()
+	defer blk.Unlock()
+	// First update
+	if blk.chain == nil {
+		blk.chain = updates.NewUpdateChain(blk.RWMutex, blk.meta)
+		node = blk.chain.AddNodeLocked(txn)
+		return
+	}
+	err = blk.chain.TryDeleteRowsLocked(start, end, txn)
+	if err != nil {
+		return
+	}
+	node = blk.chain.AddNodeLocked(txn)
+	node.ApplyDeleteRowsLocked(start, end)
+	return
 }

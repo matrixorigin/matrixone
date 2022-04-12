@@ -11,7 +11,6 @@ import (
 type BlockUpdateChain struct {
 	*common.Link
 	*sync.RWMutex
-	rwlocker     *sync.RWMutex
 	meta         *catalog.BlockEntry
 	latestMerge  *BlockUpdateNode
 	latestCommit *BlockUpdateNode
@@ -35,6 +34,7 @@ func (chain *BlockUpdateChain) UpdateLocked(node *BlockUpdateNode) {
 	}
 }
 
+func (chain *BlockUpdateChain) GetID() *common.ID            { return chain.meta.AsCommonID() }
 func (chain *BlockUpdateChain) GetMeta() *catalog.BlockEntry { return chain.meta }
 
 func (chain *BlockUpdateChain) AddNode(txn txnif.AsyncTxn) *BlockUpdateNode {
@@ -42,6 +42,12 @@ func (chain *BlockUpdateChain) AddNode(txn txnif.AsyncTxn) *BlockUpdateNode {
 	updates := NewBlockUpdates(txn, chain.meta, nil, nil)
 	chain.Lock()
 	defer chain.Unlock()
+	node := NewBlockUpdateNode(chain, updates)
+	return node
+}
+
+func (chain *BlockUpdateChain) AddNodeLocked(txn txnif.AsyncTxn) *BlockUpdateNode {
+	updates := NewBlockUpdates(txn, chain.meta, nil, nil)
 	node := NewBlockUpdateNode(chain, updates)
 	return node
 }
@@ -115,11 +121,35 @@ func (chain *BlockUpdateChain) FirstNode() (node *BlockUpdateNode) {
 
 // Read Related
 
-// func (chain *BlockUpdateChain) CollectUpdates(txn txnif.AsyncTxn) *BlockUpdates {
-// 	if chain == nil {
-// 		return nil
-// 	}
-// 	if txn == nil {
-// 		return nil
-// 	}
-// }
+// Locked
+func (chain *BlockUpdateChain) TryDeleteRowsLocked(start, end uint32, txn txnif.AsyncTxn) (err error) {
+	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
+		n.RLock()
+		defer n.RUnlock()
+		overlap := n.HasDeleteOverlapLocked(start, end)
+		if overlap {
+			err = txnif.TxnWWConflictErr
+		}
+		if n.IsMerge() || err != nil {
+			return false
+		}
+		return true
+	}, false)
+	return
+}
+
+func (chain *BlockUpdateChain) TryUpdateColLocked(row uint32, colIdx uint16, txn txnif.AsyncTxn) (err error) {
+	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
+		n.RLock()
+		defer n.RUnlock()
+		if !n.HasActiveTxnLocked() {
+			return false
+		}
+		if n.HasColUpdateLocked(row, colIdx) {
+			err = txnif.TxnWWConflictErr
+			return false
+		}
+		return true
+	}, false)
+	return
+}
