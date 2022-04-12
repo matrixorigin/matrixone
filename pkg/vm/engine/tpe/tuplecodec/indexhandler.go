@@ -174,19 +174,20 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			return nil, 0, err
 		}
 
-		//rowRead += len(keys)
-		//indexReadCtx.addReadCount(len(keys))
+		rowRead += len(keys)
+		indexReadCtx.addReadCount(len(keys))
 
 		//1.decode index key
 		//2.get fields wanted
 		for i := 0; i < len(keys); i++ {
-			if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
-				break
-			}
+			//!!!Note: Reserve the logic for the regression test
+			//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+			//	break
+			//}
 			//for test
 			//logutil.Infof("keyvalue %v %v", keys[i], values[i])
-			rowRead++
-			indexReadCtx.addReadCount(1)
+			//rowRead++
+			//indexReadCtx.addReadCount(1)
 			indexKey := keys[i][indexReadCtx.LengthOfPrefixForScanKey:]
 			_, dis, err := tkd.DecodePrimaryIndexKey(indexKey, indexReadCtx.IndexDesc)
 			if err != nil {
@@ -206,9 +207,10 @@ func (ihi *IndexHandlerImpl) parallelReader(indexReadCtx *ReadContext) (*batch.B
 			//need to update prefix
 			//decode index value
 			for i := 0; i < len(keys); i++ {
-				if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
-					break
-				}
+				//!!!Note: Reserve the logic for the regression test
+				//if !keys[i].Less(indexReadCtx.ShardScanEndKey) {
+				//	break
+				//}
 				//decode the name which is in the value
 				data := values[i]
 				if ihi.useLayout {

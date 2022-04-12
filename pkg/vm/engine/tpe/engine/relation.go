@@ -215,7 +215,9 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 
 	//for test
 	//one reader for all shards
-	//shardCountPerReader = shardInfosCount
+	if trel.useOneThread {
+		shardCountPerReader = shardInfosCount
+	}
 
 	startIndex := 0
 	for i := 0; i < len(tpeReaders); i++ {

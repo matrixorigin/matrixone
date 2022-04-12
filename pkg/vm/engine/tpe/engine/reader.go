@@ -166,7 +166,7 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 	}
 
 	//for test
-	if tr.readCtx.ParallelReader && tr.multiNode {
+	if tr.readCtx.ParallelReader && tr.multiNode && tr.printBatch {
 		cnt := 0
 		if bat != nil {
 			cnt = vector.Length(bat.Vecs[0])
@@ -386,8 +386,17 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 			bat.Vecs[i].Ref = ref
 		}
 		for _, vec := range bat.Vecs {
-			if !vec.Or || vec.Data == nil {
+			if !vec.Or {
 				return nil, errorVectorIsInvalid
+			}
+			if vec.Typ.Oid == types.T_varchar || vec.Typ.Oid == types.T_char {
+				if vec.Col == nil {
+					return nil, errorVectorIsInvalid
+				}
+			} else {
+				if vec.Data == nil {
+					return nil, errorVectorIsInvalid
+				}
 			}
 		}
 	}
