@@ -41,20 +41,21 @@ func (db *TxnDatabase) Relations() (rels []handle.Relation)                     
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
 func (db *TxnDatabase) GetMeta() interface{}                                            { return nil }
 
-func (rel *TxnRelation) String() string                                 { return "" }
-func (rel *TxnRelation) Close() error                                   { return nil }
-func (rel *TxnRelation) ID() uint64                                     { return 0 }
-func (rel *TxnRelation) Rows() int64                                    { return 0 }
-func (rel *TxnRelation) Size(attr string) int64                         { return 0 }
-func (rel *TxnRelation) GetCardinality(attr string) int64               { return 0 }
-func (rel *TxnRelation) Schema() interface{}                            { return nil }
-func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                { return nil }
-func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                    { return nil }
-func (rel *TxnRelation) MakeReader() handle.Reader                      { return nil }
-func (rel *TxnRelation) BatchDedup(col *vector.Vector) error            { return nil }
-func (rel *TxnRelation) Append(data *batch.Batch) error                 { return nil }
-func (rel *TxnRelation) GetMeta() interface{}                           { return nil }
-func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error) { return }
+func (rel *TxnRelation) String() string                                             { return "" }
+func (rel *TxnRelation) Close() error                                               { return nil }
+func (rel *TxnRelation) ID() uint64                                                 { return 0 }
+func (rel *TxnRelation) Rows() int64                                                { return 0 }
+func (rel *TxnRelation) Size(attr string) int64                                     { return 0 }
+func (rel *TxnRelation) GetCardinality(attr string) int64                           { return 0 }
+func (rel *TxnRelation) Schema() interface{}                                        { return nil }
+func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                            { return nil }
+func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                { return nil }
+func (rel *TxnRelation) MakeReader() handle.Reader                                  { return nil }
+func (rel *TxnRelation) BatchDedup(col *vector.Vector) error                        { return nil }
+func (rel *TxnRelation) Append(data *batch.Batch) error                             { return nil }
+func (rel *TxnRelation) GetMeta() interface{}                                       { return nil }
+func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)             { return }
+func (rel *TxnRelation) Update(*common.ID, uint32, uint16, interface{}) (err error) { return }
 
 func (seg *TxnSegment) GetMeta() interface{}               { return nil }
 func (seg *TxnSegment) String() string                     { return "" }

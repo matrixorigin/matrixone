@@ -3,7 +3,7 @@ package updates
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type BlockUpdateNode struct {
@@ -23,7 +23,7 @@ func NewBlockUpdateNode(chain *BlockUpdateChain, blkupdates *BlockUpdates) *Bloc
 }
 
 func (node *BlockUpdateNode) GetMeta() *catalog.BlockEntry { return node.chain.GetMeta() }
-func (node *BlockUpdateNode) GetChain() data.UpdateChain   { return node.chain }
+func (node *BlockUpdateNode) GetChain() txnif.UpdateChain  { return node.chain }
 
 func (n *BlockUpdateNode) Compare(o common.NodePayload) int {
 	return n.BlockUpdates.Compare(o.(*BlockUpdateNode).BlockUpdates)

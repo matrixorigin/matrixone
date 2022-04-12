@@ -150,8 +150,8 @@ func (n *ColumnUpdates) UpdateLocked(row uint32, v interface{}) error {
 	return nil
 }
 
-func (n *ColumnUpdates) MergeLocked(o txnif.ColumnUpdates) error {
-	for k, v := range o.(*ColumnUpdates).txnVals {
+func (n *ColumnUpdates) MergeLocked(o *ColumnUpdates) error {
+	for k, v := range o.txnVals {
 		n.txnMask.Add(k)
 		n.txnVals[k] = v
 	}

@@ -4,7 +4,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -88,22 +87,26 @@ type SyncTxn interface {
 	TxnChanger
 }
 
-type BlockUpdates interface {
+type UpdateChain interface {
+	sync.Locker
+	RLock()
+	RUnlock()
 	GetID() *common.ID
-	DeleteLocked(start, end uint32) error
-	UpdateLocked(row uint32, colIdx uint16, v interface{}) error
-	GetColumnUpdatesLocked(colIdx uint16) ColumnUpdates
-	MergeColumnLocked(o BlockUpdates, colIdx uint16) error
-	ReadFrom(r io.Reader) error
-	WriteTo(w io.Writer) error
+	TryDeleteRowsLocked(start, end uint32, txn AsyncTxn) error
+	TryUpdateColLocked(row uint32, colIdx uint16, txn AsyncTxn) error
 }
-type ColumnUpdates interface {
-	ReadFrom(r io.Reader) error
-	WriteTo(w io.Writer) error
-	Update(row uint32, v interface{}) error
-	UpdateLocked(row uint32, v interface{}) error
-	MergeLocked(o ColumnUpdates) error
-	ApplyToColumn(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Vector
+
+type UpdateNode interface {
+	sync.Locker
+	RLock()
+	RUnlock()
+	GetID() *common.ID
+	String() string
+	GetChain() UpdateChain
+	PrepareCommit() error
+	ApplyDeleteRowsLocked(start, end uint32)
+	ApplyUpdateColLocked(row uint32, colIdx uint16, v interface{})
+	// MakeCommand(id uint32, forceFlush bool) (txnif.TxnCmd, txnbase.NodeEntry, error)
 }
 
 type TxnStore interface {
@@ -116,7 +119,9 @@ type TxnStore interface {
 	Append(id uint64, data *batch.Batch) error
 	RangeDeleteLocalRows(id uint64, start, end uint32) error
 	UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
-	AddUpdateNode(id uint64, node BlockUpdates) error
+	AddUpdateNode(id uint64, node UpdateNode) error
+
+	Update(id *common.ID, row uint32, col uint16, v interface{}) error
 
 	CreateRelation(def interface{}) (handle.Relation, error)
 	DropRelationByName(name string) (handle.Relation, error)

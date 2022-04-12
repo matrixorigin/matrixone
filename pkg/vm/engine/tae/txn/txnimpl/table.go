@@ -39,7 +39,7 @@ type Table interface {
 	BatchDedupLocal(data *gbat.Batch) error
 	BatchDedupLocalByCol(col *gvec.Vector) error
 	BatchDedup(col *gvec.Vector) error
-	AddUpdateNode(txnif.BlockUpdates) error
+	AddUpdateNode(txnif.UpdateNode) error
 	IsDeleted() bool
 	PreCommit() error
 	PrepareCommit() error
@@ -64,7 +64,7 @@ type txnTable struct {
 	dropEntry   txnif.TxnEntry
 	inodes      []InsertNode
 	appendable  base.INodeHandle
-	updateNodes map[common.ID]*updates.BlockUpdates
+	updateNodes map[common.ID]*updates.BlockUpdateNode
 	driver      txnbase.NodeDriver
 	entry       *catalog.TableEntry
 	handle      handle.Relation
@@ -90,7 +90,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		entry:       handle.GetMeta().(*catalog.TableEntry),
 		driver:      driver,
 		index:       NewSimpleTableIndex(),
-		updateNodes: make(map[common.ID]*updates.BlockUpdates),
+		updateNodes: make(map[common.ID]*updates.BlockUpdateNode),
 		csegs:       make([]*catalog.SegmentEntry, 0),
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
@@ -253,13 +253,13 @@ func (tbl *txnTable) registerInsertNode() error {
 	return nil
 }
 
-func (tbl *txnTable) AddUpdateNode(node txnif.BlockUpdates) error {
+func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	id := *node.GetID()
 	u := tbl.updateNodes[id]
 	if u != nil {
 		return ErrDuplicateNode
 	}
-	tbl.updateNodes[id] = node.(*updates.BlockUpdates)
+	tbl.updateNodes[id] = node.(*updates.BlockUpdateNode)
 	return nil
 }
 

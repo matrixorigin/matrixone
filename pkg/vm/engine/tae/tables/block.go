@@ -74,7 +74,7 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	return blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
 }
 
-func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node data.UpdateNode, err error) {
+func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node txnif.UpdateNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
 	// First update

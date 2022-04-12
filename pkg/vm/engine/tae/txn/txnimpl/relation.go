@@ -105,3 +105,7 @@ func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
 func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 	return newRelationBlockIt(h)
 }
+
+func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
+	return h.Txn.GetStore().Update(id, row, col, v)
+}

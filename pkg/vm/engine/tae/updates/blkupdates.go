@@ -164,33 +164,29 @@ func (n *BlockUpdates) UpdateLocked(row uint32, colIdx uint16, v interface{}) er
 	return col.UpdateLocked(row, v)
 }
 
-func (n *BlockUpdates) GetColumnUpdatesLocked(colIdx uint16) txnif.ColumnUpdates {
-	return n.cols[colIdx]
-}
-
 func (n *BlockUpdates) GetCommitTSLocked() uint64 { return n.commitTs }
 func (n *BlockUpdates) GetStartTS() uint64        { return n.startTs }
 
-func (n *BlockUpdates) MergeColumnLocked(ob txnif.BlockUpdates, colIdx uint16) error {
-	o := ob.(*BlockUpdates)
-	if o.localDeletes != nil {
-		if n.localDeletes == nil {
-			n.localDeletes = roaring.NewBitmap()
-		}
-		n.localDeletes.Or(o.localDeletes)
-	}
-	col := o.cols[colIdx]
-	if col == nil {
-		return nil
-	}
-	currCol := n.cols[colIdx]
-	if currCol == nil {
-		currCol = NewColumnUpdates(n.id, n.meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx], n.RWMutex)
-		n.cols[colIdx] = currCol
-	}
-	currCol.MergeLocked(col)
-	return nil
-}
+// func (n *BlockUpdates) MergeColumnLocked(ob txnif.BlockUpdates, colIdx uint16) error {
+// 	o := ob.(*BlockUpdates)
+// 	if o.localDeletes != nil {
+// 		if n.localDeletes == nil {
+// 			n.localDeletes = roaring.NewBitmap()
+// 		}
+// 		n.localDeletes.Or(o.localDeletes)
+// 	}
+// 	col := o.cols[colIdx]
+// 	if col == nil {
+// 		return nil
+// 	}
+// 	currCol := n.cols[colIdx]
+// 	if currCol == nil {
+// 		currCol = NewColumnUpdates(n.id, n.meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx], n.RWMutex)
+// 		n.cols[colIdx] = currCol
+// 	}
+// 	currCol.MergeLocked(col)
+// 	return nil
+// }
 
 func (n *BlockUpdates) MergeLocked(o *BlockUpdates) error {
 	if o.localDeletes != nil {

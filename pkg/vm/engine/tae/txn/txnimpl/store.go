@@ -107,7 +107,7 @@ func (store *txnStore) UpdateLocalValue(id uint64, row uint32, col uint16, value
 	return table.UpdateLocalValue(row, col, value)
 }
 
-func (store *txnStore) AddUpdateNode(id uint64, node txnif.BlockUpdates) error {
+func (store *txnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error {
 	table := store.tables[id]
 	return table.AddUpdateNode(node)
 }
