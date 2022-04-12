@@ -13,4 +13,4 @@ jobs:
               with:
                   image_size: 30
               env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
