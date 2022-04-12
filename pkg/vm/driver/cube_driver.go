@@ -575,12 +575,12 @@ func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey 
 	var keys [][]byte = nil
 
 	data, err = h.ExecWithGroup(req, pb.KVGroup)
-	if data == nil {
-		return nil, nil, false, nil, errorCubeReturnIsNull
-	}
-
 	if err != nil {
 		return nil, nil, false, nil, err
+	}
+
+	if data == nil {
+		return nil, nil, false, nil, errorCubeReturnIsNull
 	}
 
 	var tsr pb.TpeScanResponse
@@ -670,11 +670,12 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 	var data []byte
 
 	data, err = h.ExecWithGroup(req, pb.KVGroup)
-	if data == nil {
-		return nil, nil, false, nil, errorCubeReturnIsNull
-	}
 	if err != nil {
 		return nil, nil, false, nil, err
+	}
+
+	if data == nil {
+		return nil, nil, false, nil, errorCubeReturnIsNull
 	}
 
 	var tsr pb.TpeScanResponse

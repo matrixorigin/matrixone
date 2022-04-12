@@ -79,7 +79,8 @@ type TpeRelation struct {
 	//shards in this node
 	shardsInThisNode *tuplecodec.Shards
 	//storeid or nodeid ?
-	storeID uint64
+	storeID      uint64
+	useOneThread bool
 }
 
 type ShardNode struct {
@@ -125,6 +126,7 @@ type TpeReader struct {
 	shardInfos     []ShardInfo
 	parallelReader bool
 	multiNode      bool
+	printBatch     bool
 	//for test
 	isDumpReader bool
 	id           int
