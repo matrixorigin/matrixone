@@ -37,8 +37,10 @@ func newReader(rel handle.Relation, it *txnReaderIt) *txnReader {
 		dds[i] = bytes.NewBuffer(make([]byte, 1<<20))
 	}
 	return &txnReader{
-		handle: rel,
-		it:     it,
+		compressed:   cds,
+		decompressed: dds,
+		handle:       rel,
+		it:           it,
 	}
 }
 
@@ -76,13 +78,14 @@ func (it *txnReaderIt) Get() handle.Block {
 }
 
 func (r *txnReader) Read(refCount []uint64, attrs []string) (*batch.Batch, error) {
-	r.it.RLock()
+	r.it.Lock()
 	if !r.it.Valid() {
-		r.it.RUnlock()
+		r.it.Unlock()
 		return nil, nil
 	}
 	h := r.it.Get()
-	r.it.RUnlock()
+	r.it.Next()
+	r.it.Unlock()
 	block := newBlock(h)
 	return block.Read(refCount, attrs, r.compressed, r.decompressed)
 }

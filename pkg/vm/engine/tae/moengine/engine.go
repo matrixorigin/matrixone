@@ -4,11 +4,18 @@ import (
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 var (
 	_ engine.Engine = (*txnEngine)(nil)
 )
+
+func NewEngine(txn txnif.AsyncTxn) *txnEngine {
+	return &txnEngine{
+		txn: txn,
+	}
+}
 
 func (e *txnEngine) Delete(_ uint64, name string) (err error) {
 	_, err = e.txn.DropDatabase(name)

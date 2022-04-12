@@ -41,6 +41,8 @@ func (db *txnDatabase) Create(_ uint64, name string, defs []engine.TableDef) err
 		return err
 	}
 	schema := TableInfoToSchema(&info)
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 20
 	_, err = db.handle.CreateRelation(schema)
 	return err
 }
