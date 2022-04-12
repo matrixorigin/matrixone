@@ -17,56 +17,58 @@ package types
 import (
 	"fmt"
 	"strings"
-)
 
-const (
-	// any family
-	T_any = 0
-
-	// numeric/integer family
-	T_int8   = 1
-	T_int16  = 2
-	T_int32  = 3
-	T_int64  = 5
-	T_uint8  = 6
-	T_uint16 = 7
-	T_uint32 = 9
-	T_uint64 = 10
-
-	// numeric/decimal family - unsigned attribute is deprecated
-	T_decimal = 11
-
-	// numeric/float family - unsigned attribute is deprecated
-	T_float32 = 12
-	T_float64 = 13
-
-	// date family
-	T_date     = 15 // 3 byte
-	T_datetime = 18 // 8 byte
-
-	// string family
-	T_char    = 20
-	T_varchar = 21
-
-	// json family
-	T_json = 32
-
-	// system family
-	T_sel   = 200 //selection
-	T_tuple = 201 // immutable, size = 24
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type T uint8
 
+const (
+	// any family
+	T_any T = T(plan.Type_ANY)
+
+	// numeric/integer family
+	T_int8   T = T(plan.Type_INT8)
+	T_int16  T = T(plan.Type_INT16)
+	T_int32  T = T(plan.Type_INT32)
+	T_int64  T = T(plan.Type_INT64)
+	T_uint8  T = T(plan.Type_UINT8)
+	T_uint16 T = T(plan.Type_UINT16)
+	T_uint32 T = T(plan.Type_UINT32)
+	T_uint64 T = T(plan.Type_UINT64)
+
+	// numeric/decimal family - unsigned attribute is deprecated
+	T_decimal T = T(plan.Type_DECIMAL)
+
+	// numeric/float family - unsigned attribute is deprecated
+	T_float32 T = T(plan.Type_FLOAT32)
+	T_float64 T = T(plan.Type_FLOAT64)
+
+	// date family
+	T_date     T = T(plan.Type_DATE)
+	T_datetime T = T(plan.Type_DATETIME)
+
+	// string family
+	T_char    T = T(plan.Type_CHAR)
+	T_varchar T = T(plan.Type_VARCHAR)
+
+	// json family
+	T_json T = T(plan.Type_JSON)
+
+	// system family
+	T_sel   T = T(plan.Type_SEL)   //selection
+	T_tuple T = T(plan.Type_TUPLE) // immutable, size = 24
+)
+
 type Type struct {
-	Oid       T		`json:"oid,string"`
-	Size      int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+	Oid  T     `json:"oid,string"`
+	Size int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
 
 	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
-	Width     int32	`json:"width,string"`
+	Width int32 `json:"width,string"`
 
 	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
-	Precision int32	`json:"precision,string"`
+	Precision int32 `json:"precision,string"`
 }
 
 type Bytes struct {
@@ -89,11 +91,11 @@ var Types map[string]T = map[string]T{
 	"integer":  T_int32,
 	"bigint":   T_int64,
 
-	"tinyint unsigned":  T_int8,
-	"smallint unsigned": T_int16,
-	"int unsigned":      T_int32,
-	"integer unsigned":  T_int32,
-	"bigint unsigned":   T_int64,
+	"tinyint unsigned":  T_uint8,
+	"smallint unsigned": T_uint16,
+	"int unsigned":      T_uint32,
+	"integer unsigned":  T_uint32,
+	"bigint unsigned":   T_uint64,
 
 	"decimal": T_decimal,
 

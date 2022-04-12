@@ -794,7 +794,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 func Test_typeconvert(t *testing.T) {
 	convey.Convey("convertEngineTypeToMysqlType", t, func() {
-		input := []uint8{
+		input := []types.T{
 			types.T_int8,
 			types.T_uint8,
 			types.T_int16,
