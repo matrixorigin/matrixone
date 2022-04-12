@@ -45,8 +45,11 @@ func (db *txnDatabase) GetRelationByName(name string) (rel handle.Relation, err 
 	return db.Txn.GetStore().GetRelationByName(name)
 }
 
-func (db *txnDatabase) RelationCnt() int64                     { return 0 }
-func (db *txnDatabase) Relations() (rels []handle.Relation)    { return }
-func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) { return }
-func (db *txnDatabase) Close() error                           { return nil }
-func (db *txnDatabase) GetMeta() interface{}                   { return db.entry }
+func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) {
+	return newRelationIt(db.Txn, db.entry)
+}
+
+func (db *txnDatabase) RelationCnt() int64                  { return 0 }
+func (db *txnDatabase) Relations() (rels []handle.Relation) { return }
+func (db *txnDatabase) Close() error                        { return nil }
+func (db *txnDatabase) GetMeta() interface{}                { return db.entry }
