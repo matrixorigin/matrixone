@@ -35,6 +35,7 @@ type BlockReader interface {
 	GetMeta() interface{}
 	Fingerprint() *common.ID
 	Rows() int
+	BatchDedup(col *vector.Vector) error
 }
 
 type BlockWriter interface {

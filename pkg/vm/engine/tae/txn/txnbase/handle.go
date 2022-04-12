@@ -74,6 +74,7 @@ func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error)         {
 func (seg *TxnSegment) PushDeleteOp(handle.Filter) (err error)                      { return }
 func (seg *TxnSegment) PushUpdateOp(handle.Filter, string, interface{}) (err error) { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)                  { return }
+func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }
 
 func (blk *TxnBlock) Fingerprint() *common.ID                                       { return &common.ID{} }
 func (blk *TxnBlock) Rows() int                                                     { return 0 }
@@ -88,6 +89,7 @@ func (blk *TxnBlock) GetVectorCopy(compressed, decompressed *bytes.Buffer) (vec 
 	return
 }
 
+func (blk *TxnBlock) BatchDedup(*vector.Vector) (err error)                       { return }
 func (blk *TxnBlock) Append(*batch.Batch, uint32) (n uint32, err error)           { return }
 func (blk *TxnBlock) Update(uint32, uint16, interface{}) (err error)              { return }
 func (blk *TxnBlock) RangeDelete(uint32, uint32) (err error)                      { return }

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -71,6 +72,18 @@ func (store *txnStore) Close() error {
 
 func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
 	store.txn = txn
+}
+
+func (store *txnStore) BatchDedup(id uint64, pks *vector.Vector) (err error) {
+	table, err := store.getOrSetTable(id)
+	if err != nil {
+		return err
+	}
+	if table.IsDeleted() {
+		return txnbase.ErrNotFound
+	}
+
+	return table.BatchDedup(pks)
 }
 
 func (store *txnStore) Append(id uint64, data *batch.Batch) error {

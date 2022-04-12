@@ -2,6 +2,7 @@ package txnbase
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -35,6 +36,7 @@ func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err err
 func (store *NoopTxnStore) UseDatabase(name string) (err error)                             { return }
 func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)            { return }
 func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error)        { return }
+func (store *NoopTxnStore) BatchDedup(uint64, *vector.Vector) (err error)                   { return }
 
 // func (store *NoopTxnStore) DropDBEntry(name string) error                           { return nil }
 // func (store *NoopTxnStore) CreateTableEntry(database string, def interface{}) error { return nil }

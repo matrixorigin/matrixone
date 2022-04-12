@@ -4,6 +4,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 type SegmentIt interface {
@@ -19,6 +20,8 @@ type SegmentReader interface {
 	GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
 	GetMeta() interface{}
+
+	BatchDedup(col *vector.Vector) error
 }
 
 type SegmentWriter interface {

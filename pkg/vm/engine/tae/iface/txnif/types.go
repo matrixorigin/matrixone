@@ -111,6 +111,8 @@ type TxnStore interface {
 	io.Closer
 	BindTxn(AsyncTxn)
 
+	BatchDedup(id uint64, pks *vector.Vector) error
+
 	Append(id uint64, data *batch.Batch) error
 	RangeDeleteLocalRows(id uint64, start, end uint32) error
 	UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error

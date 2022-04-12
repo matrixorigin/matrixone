@@ -38,6 +38,7 @@ type Table interface {
 	Rows() uint32
 	BatchDedupLocal(data *gbat.Batch) error
 	BatchDedupLocalByCol(col *gvec.Vector) error
+	BatchDedup(col *gvec.Vector) error
 	AddUpdateNode(txnif.BlockUpdates) error
 	IsDeleted() bool
 	PreCommit() error
@@ -379,6 +380,22 @@ func (tbl *txnTable) Rows() uint32 {
 		return 0
 	}
 	return (uint32(cnt)-1)*txnbase.MaxNodeRows + tbl.inodes[cnt-1].Rows()
+}
+
+func (tbl *txnTable) BatchDedup(pks *gvec.Vector) (err error) {
+	if err = tbl.BatchDedupLocalByCol(pks); err != nil {
+		return err
+	}
+	segIt := tbl.handle.MakeSegmentIt()
+	for segIt.Valid() {
+		seg := segIt.GetSegment()
+		if err = seg.BatchDedup(pks); err != nil {
+			break
+		}
+		segIt.Next()
+	}
+	segIt.Close()
+	return
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *gbat.Batch) error {

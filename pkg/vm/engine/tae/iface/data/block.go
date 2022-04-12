@@ -22,5 +22,4 @@ type Block interface {
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*vector.Vector, error)
-	// CopyBatch(cs []uint64, attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error)
 }

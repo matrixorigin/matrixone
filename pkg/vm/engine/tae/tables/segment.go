@@ -1,11 +1,13 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type dataSegment struct {
@@ -84,5 +86,9 @@ func (segment *dataSegment) SetAppender(blkId uint64) (appender data.BlockAppend
 	}
 	segment.aBlk = blk.GetBlockData()
 	appender, err = segment.aBlk.MakeAppender()
+	return
+}
+
+func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) (err error) {
 	return
 }
