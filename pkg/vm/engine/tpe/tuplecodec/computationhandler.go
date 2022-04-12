@@ -17,9 +17,10 @@ package tuplecodec
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -489,6 +490,7 @@ type WriteContext struct {
 	keys   []TupleKey
 	values []TupleValue
 	t0     time.Duration
+	colIndex	map[string]int
 }
 
 func (wc *WriteContext) resetWriteCache() {

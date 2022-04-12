@@ -1,4 +1,4 @@
-package tpe
+package engine
 
 import (
 	"bufio"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	vm_engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 )
 
 func DumpDatabaseInfo(eng vm_engine.Engine, args []string) error {
@@ -117,9 +116,9 @@ func getParamFromCommand(opt *batch.DumpOption, args []string) error {
     return nil
 }
 
-func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.DumpResult, error) {
+var DumpTableInfo = func(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.DumpResult, error) {
     var result *batch.DumpResult
-    tpe_eng, ok := eng.(*engine.TpeEngine)
+    tpe_eng, ok := eng.(*TpeEngine)
     if !ok {
         return nil, errors.New("TpeEngine convert failed")
     }
@@ -143,13 +142,13 @@ func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.DumpResu
             if err != nil {
                 return nil, err
             }
-            tpe_relation, ok := table.(*engine.TpeRelation)
+            tpe_relation, ok := table.(*TpeRelation)
             if !ok {
                 return nil, errors.New("TpeRelation convert failed")
             }
-            var reader *engine.TpeReader = engine.GetTpeReaderInfo(tpe_relation, tpe_eng, opt)
+            var reader *TpeReader = GetTpeReaderInfo(tpe_relation, tpe_eng, opt)
 
-            refCnts, attrs := engine.MakeReadParam(tpe_relation)
+            refCnts, attrs := MakeReadParam(tpe_relation)
 
             result, err = getTableData(reader, refCnts, attrs, opt)
             if err != nil {
@@ -160,7 +159,7 @@ func DumpTableInfo(eng vm_engine.Engine, opt *batch.DumpOption) (*batch.DumpResu
     return result, nil
 }
 
-func getTableData(tr *engine.TpeReader, refCnts []uint64, attrs []string, opt* batch.DumpOption) (*batch.DumpResult, error) {
+func getTableData(tr *TpeReader, refCnts []uint64, attrs []string, opt* batch.DumpOption) (*batch.DumpResult, error) {
     bat, err := tr.Read(refCnts, attrs)
     if err != nil {
         return nil, err
@@ -217,30 +216,6 @@ func getDumpDataHeader(opt* batch.DumpOption, result *batch.DumpResult) string {
         header += fmt.Sprintf("%v", result.Decode_values.Attrs)
     }
     return header
-}
-
-func outputOneLine(opt* batch.DumpOption, str interface{}) error {
-    switch str.(type) {
-    case []byte, batch.DumpKey, batch.DumpValue:
-        if opt.Filename == "" {
-            fmt.Print(str)
-        } else {
-            _, err := opt.Writer.Write([]byte(fmt.Sprintf("%v", str)))
-            if err != nil {
-                return err
-            }
-        }
-    case string:
-        if opt.Filename == "" {
-            fmt.Print(str)
-        } else {
-            _, err := opt.Writer.WriteString(str.(string))
-            if err != nil {
-                return err
-            }
-        }
-    }
-    return nil
 }
 
 func getDumpDataBody(opt* batch.DumpOption, result *batch.DumpResult, i int) string {
