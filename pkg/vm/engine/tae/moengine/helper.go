@@ -23,6 +23,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
+func SchemaToTableInfo(schema *catalog.Schema) aoe.TableInfo {
+	tblInfo := aoe.TableInfo{
+		Name:    schema.Name,
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	for idx, colDef := range schema.ColDefs {
+		col := aoe.ColumnInfo{
+			Name: colDef.Name,
+			Type: colDef.Type,
+		}
+		if idx == int(schema.PrimaryKey) {
+			col.PrimaryKey = true
+		}
+		tblInfo.Columns = append(tblInfo.Columns, col)
+	}
+	return tblInfo
+}
+
 func MockTableInfo(colCnt int) *aoe.TableInfo {
 	tblInfo := &aoe.TableInfo{
 		Name:    "mocktbl",
@@ -52,6 +71,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 	}
 	return tblInfo
 }
+
 func MockIndexInfo() *aoe.IndexInfo {
 	idxInfo := aoe.IndexInfo{
 		Type:    aoe.IndexT(catalog.ZoneMap),

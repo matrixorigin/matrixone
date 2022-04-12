@@ -3,6 +3,7 @@ package moengine
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
@@ -51,8 +52,11 @@ func (_ *txnRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
-func (_ *txnRelation) TableDefs() []engine.TableDef {
-	panic("implement me")
+func (rel *txnRelation) TableDefs() []engine.TableDef {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	info := SchemaToTableInfo(schema)
+	_, _, _, _, defs, _ := helper.UnTransfer(info)
+	return defs
 }
 
 func (rel *txnRelation) Rows() int64 {
@@ -79,7 +83,6 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch) error {
 }
 
 func (rel *txnRelation) NewReader(num int) (rds []engine.Reader) {
-	// it := newReaderIt(rel.handle)
 	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)
