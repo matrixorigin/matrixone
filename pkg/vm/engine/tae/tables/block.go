@@ -74,6 +74,24 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	return blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
 }
 
+func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (node txnif.UpdateNode, err error) {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.chain == nil {
+		blk.chain = updates.NewUpdateChain(blk.RWMutex, blk.meta)
+		node = blk.chain.AddNodeLocked(txn)
+		node.ApplyUpdateColLocked(row, colIdx, v)
+		return
+	}
+	err = blk.chain.TryUpdateColLocked(row, colIdx, txn)
+	if err != nil {
+		return
+	}
+	node = blk.chain.AddNodeLocked(txn)
+	node.ApplyUpdateColLocked(row, colIdx, v)
+	return
+}
+
 func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node txnif.UpdateNode, err error) {
 	blk.Lock()
 	defer blk.Unlock()
@@ -81,6 +99,7 @@ func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node t
 	if blk.chain == nil {
 		blk.chain = updates.NewUpdateChain(blk.RWMutex, blk.meta)
 		node = blk.chain.AddNodeLocked(txn)
+		node.ApplyDeleteRowsLocked(start, end)
 		return
 	}
 	err = blk.chain.TryDeleteRowsLocked(start, end, txn)

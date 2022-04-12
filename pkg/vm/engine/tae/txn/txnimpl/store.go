@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -95,6 +96,17 @@ func (store *txnStore) Append(id uint64, data *batch.Batch) error {
 		return txnbase.ErrNotFound
 	}
 	return table.Append(data)
+}
+
+func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+	table, err := store.getOrSetTable(id.TableID)
+	if err != nil {
+		return err
+	}
+	if table.IsDeleted() {
+		return txnbase.ErrNotFound
+	}
+	return table.Update(id.PartID, id.SegmentID, id.BlockID, row, colIdx, v)
 }
 
 func (store *txnStore) RangeDeleteLocalRows(id uint64, start, end uint32) error {

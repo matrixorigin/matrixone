@@ -35,6 +35,7 @@ type Table interface {
 	IsLocalDeleted(row uint32) bool
 	GetLocalPhysicalAxis(row uint32) (int, uint32)
 	UpdateLocalValue(row uint32, col uint16, value interface{}) error
+	Update(inodePos uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
 	Rows() uint32
 	BatchDedupLocal(data *gbat.Batch) error
 	BatchDedupLocalByCol(col *gvec.Vector) error
@@ -64,7 +65,7 @@ type txnTable struct {
 	dropEntry   txnif.TxnEntry
 	inodes      []InsertNode
 	appendable  base.INodeHandle
-	updateNodes map[common.ID]*updates.BlockUpdateNode
+	updateNodes map[uint64]*updates.BlockUpdateNode
 	driver      txnbase.NodeDriver
 	entry       *catalog.TableEntry
 	handle      handle.Relation
@@ -90,7 +91,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		entry:       handle.GetMeta().(*catalog.TableEntry),
 		driver:      driver,
 		index:       NewSimpleTableIndex(),
-		updateNodes: make(map[common.ID]*updates.BlockUpdateNode),
+		updateNodes: make(map[uint64]*updates.BlockUpdateNode),
 		csegs:       make([]*catalog.SegmentEntry, 0),
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
@@ -255,11 +256,11 @@ func (tbl *txnTable) registerInsertNode() error {
 
 func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	id := *node.GetID()
-	u := tbl.updateNodes[id]
+	u := tbl.updateNodes[id.BlockID]
 	if u != nil {
 		return ErrDuplicateNode
 	}
-	tbl.updateNodes[id] = node.(*updates.BlockUpdateNode)
+	tbl.updateNodes[id.BlockID] = node.(*updates.BlockUpdateNode)
 	return nil
 }
 
@@ -353,6 +354,40 @@ func (tbl *txnTable) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	npos := int(row) / int(txnbase.MaxNodeRows)
 	noffset := row % uint32(txnbase.MaxNodeRows)
 	return npos, noffset
+}
+
+func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) (err error) {
+	if inode != 0 {
+		return tbl.UpdateLocalValue(row, col, v)
+	}
+	node := tbl.updateNodes[blockId]
+	if node != nil {
+		chain := node.GetChain()
+		chain.RLock()
+		if err = chain.TryUpdateColLocked(row, col, tbl.txn); err != nil {
+			chain.RUnlock()
+			return
+		}
+		node.Lock()
+		chain.RUnlock()
+		node.ApplyUpdateColLocked(row, col, v)
+		node.Unlock()
+		return
+	}
+	seg, err := tbl.entry.GetSegmentByID(segmentId)
+	if err != nil {
+		return
+	}
+	blk, err := seg.GetBlockEntryByID(blockId)
+	if err != nil {
+		return
+	}
+	blkData := blk.GetBlockData()
+	node2, err := blkData.Update(tbl.txn, row, col, v)
+	if err == nil {
+		tbl.AddUpdateNode(node2)
+	}
+	return
 }
 
 // 1. Get insert node and offset in node
