@@ -47,3 +47,7 @@ func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
 func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
 	return newSegmentIt(h.Txn, h.entry)
 }
+
+func (h *txnRelation) MakeBlockIt() handle.BlockIt {
+	return newRelationBlockIt(h)
+}

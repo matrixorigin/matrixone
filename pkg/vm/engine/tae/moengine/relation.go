@@ -79,7 +79,8 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch) error {
 }
 
 func (rel *txnRelation) NewReader(num int) (rds []engine.Reader) {
-	it := newReaderIt(rel.handle)
+	// it := newReaderIt(rel.handle)
+	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)
 		rds = append(rds, reader)

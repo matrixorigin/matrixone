@@ -25,6 +25,13 @@ type blockIt struct {
 	curr   *catalog.BlockEntry
 }
 
+type relBlockIt struct {
+	sync.RWMutex
+	rel       handle.Relation
+	segmentIt handle.SegmentIt
+	blockIt   handle.BlockIt
+}
+
 func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
 	it := &blockIt{
 		txn:    txn,
@@ -84,4 +91,52 @@ func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, 
 
 func (blk *txnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, err error) {
 	return blk.entry.GetBlockData().GetVectorCopy(blk.Txn, attr, compressed, decompressed)
+}
+
+func newRelationBlockIt(rel handle.Relation) *relBlockIt {
+	segmentIt := rel.MakeSegmentIt()
+	if !segmentIt.Valid() {
+		return new(relBlockIt)
+	}
+	seg := segmentIt.GetSegment()
+	blockIt := seg.MakeBlockIt()
+	return &relBlockIt{
+		blockIt:   blockIt,
+		segmentIt: segmentIt,
+		rel:       rel,
+	}
+}
+
+func (it *relBlockIt) Close() error { return nil }
+func (it *relBlockIt) Valid() bool {
+	if it.segmentIt == nil || !it.segmentIt.Valid() {
+		return false
+	}
+	if !it.blockIt.Valid() {
+		it.segmentIt.Next()
+		if !it.segmentIt.Valid() {
+			return false
+		}
+		seg := it.segmentIt.GetSegment()
+		it.blockIt = seg.MakeBlockIt()
+		return it.blockIt.Valid()
+	}
+	return true
+}
+
+func (it *relBlockIt) GetBlock() handle.Block {
+	return it.blockIt.GetBlock()
+}
+
+func (it *relBlockIt) Next() {
+	it.blockIt.Next()
+	if it.blockIt.Valid() {
+		return
+	}
+	it.segmentIt.Next()
+	if !it.segmentIt.Valid() {
+		return
+	}
+	seg := it.segmentIt.GetSegment()
+	it.blockIt = seg.MakeBlockIt()
 }

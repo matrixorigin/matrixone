@@ -49,6 +49,7 @@ func (rel *TxnRelation) Size(attr string) int64                         { return
 func (rel *TxnRelation) GetCardinality(attr string) int64               { return 0 }
 func (rel *TxnRelation) Schema() interface{}                            { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                { return nil }
+func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                    { return nil }
 func (rel *TxnRelation) MakeReader() handle.Reader                      { return nil }
 func (rel *TxnRelation) BatchDedup(col *vector.Vector) error            { return nil }
 func (rel *TxnRelation) Append(data *batch.Batch) error                 { return nil }

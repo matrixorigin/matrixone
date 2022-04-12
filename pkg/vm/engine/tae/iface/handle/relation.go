@@ -20,6 +20,7 @@ type Relation interface {
 	Schema() interface{}
 	MakeSegmentIt() SegmentIt
 	MakeReader() Reader
+	MakeBlockIt() BlockIt
 
 	BatchDedup(col *vector.Vector) error
 	Append(data *batch.Batch) error
