@@ -19,7 +19,7 @@ type txnBlock struct {
 }
 
 type blockIt struct {
-	rwlock sync.RWMutex
+	sync.RWMutex
 	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
 	curr   *catalog.BlockEntry

@@ -17,7 +17,7 @@ type txnSegment struct {
 }
 
 type segmentIt struct {
-	rwlock sync.RWMutex
+	sync.RWMutex
 	txn    txnif.AsyncTxn
 	linkIt *common.LinkIt
 	curr   *catalog.SegmentEntry
