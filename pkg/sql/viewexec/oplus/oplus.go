@@ -495,7 +495,7 @@ func (ctr *Container) fillH8(bat *batch.Batch, proc *process.Process) error {
 					if !nulls.Any(vecs[j].Nsp) {
 						for k := int64(0); k < n; k++ {
 							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h8.keys[k])), 8)[ctr.keyOffs[k]:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
+							copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h8.keys[k])), 8)[ctr.keyOffs[k]+1:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
 							ctr.keyOffs[k] += vLen[i+k] + 1
 						}
 					} else {
@@ -776,7 +776,7 @@ func (ctr *Container) fillH8(bat *batch.Batch, proc *process.Process) error {
 				if !nulls.Any(vecs[j].Nsp) {
 					for k := int64(0); k < n; k++ {
 						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h8.keys[k])), 8)[ctr.keyOffs[k]:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
+						copy(unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h8.keys[k])), 8)[ctr.keyOffs[k]+1:], vData[vOff[i+k]:vOff[i+k]+vLen[i+k]])
 						ctr.keyOffs[k] += vLen[i+k] + 1
 					}
 				} else {
