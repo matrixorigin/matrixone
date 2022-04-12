@@ -15,10 +15,11 @@
 package logstore
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"io"
 	"os"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 const (

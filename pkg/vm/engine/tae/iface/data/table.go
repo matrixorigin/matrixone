@@ -1,6 +1,6 @@
 package data
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 func IsSegmentID(id *common.ID) bool {
 	return id.SegmentID != 0 && id.BlockID == 0

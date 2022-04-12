@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 )
 
 var SegmentFileMockFactory = func(dir string, id uint64) SegmentFile {

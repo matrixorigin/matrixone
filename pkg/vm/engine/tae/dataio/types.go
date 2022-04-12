@@ -4,10 +4,9 @@ import (
 	"io"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 )
 
 type SegmentFileFactory = func(dir string, id uint64) SegmentFile

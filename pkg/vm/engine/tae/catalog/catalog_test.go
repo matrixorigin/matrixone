@@ -1,0 +1,454 @@
+package catalog
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/stretchr/testify/assert"
+)
+
+func initTestPath(t *testing.T) string {
+	dir := filepath.Join("/tmp", t.Name())
+	os.RemoveAll(dir)
+	return dir
+}
+
+func TestCreateDB1(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+
+	txn1 := txnMgr.StartTxn(nil)
+
+	name := fmt.Sprintf("%s-%d", t.Name(), 1)
+	db1, err := txn1.CreateDatabase(name)
+	assert.Nil(t, err)
+	t.Log(db1.String())
+
+	assert.Equal(t, 1, len(catalog.entries))
+	cnt := 0
+	catalog.link.Loop(func(n *common.DLNode) bool {
+		t.Log(n.GetPayload().(*DBEntry).GetID())
+		cnt++
+		return true
+	}, true)
+	assert.Equal(t, 1, cnt)
+
+	_, err = txn1.CreateDatabase(name)
+	assert.Equal(t, ErrDuplicate, err)
+
+	txn2 := txnMgr.StartTxn(nil)
+
+	_, err = txn2.CreateDatabase(name)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
+
+	_, err = txn1.GetDatabase(name)
+	assert.Nil(t, err)
+
+	txn1.Commit()
+
+	assert.Nil(t, err)
+	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())
+
+	_, err = txn2.CreateDatabase(name)
+	assert.Equal(t, ErrDuplicate, err)
+
+	_, err = txn2.DropDatabase(name)
+	assert.Equal(t, ErrNotFound, err)
+
+	txn3 := txnMgr.StartTxn(nil)
+	_, err = txn3.DropDatabase(name)
+	assert.Nil(t, err)
+	// assert.True(t, db1.(*mcokDBHandle).entry.IsDroppedUncommitted())
+
+	_, err = txn3.CreateDatabase(name)
+	assert.Nil(t, err)
+
+	cnt = 0
+	catalog.link.Loop(func(n *common.DLNode) bool {
+		// t.Log(n.payload.(*DBEntry).String())
+		cnt++
+		return true
+	}, true)
+	assert.Equal(t, 2, cnt)
+
+	txn4 := txnMgr.StartTxn(nil)
+
+	h, err := txn4.GetDatabase(name)
+	assert.NotNil(t, h)
+	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
+}
+
+//
+// TXN1-S     TXN2-S      TXN1-C  TXN3-S TXN4-S  TXN3-C TXN5-S
+//  |            |           |      |      |       |      |                                Time
+// -+-+---+---+--+--+----+---+--+---+-+----+-+-----+------+-+------------------------------------>
+//    |   |   |     |    |      |     |      |              |
+//    |   |   |     |    |      |     |      |            [TXN5]: GET TBL [NOTFOUND]
+//    |   |   |     |    |      |     |    [TXN4]: GET TBL [OK] | DROP DB1-TB1 [W-W]
+//    |   |   |     |    |      |   [TXN3]: GET TBL [OK] | DROP DB1-TB1 [OK] | GET TBL [NOT FOUND]
+//    |   |   |     |    |    [TXN2]: DROP DB [NOTFOUND]
+//    |   |   |     |  [TXN2]: DROP DB [NOTFOUND]
+//    |   |   |   [TXN2]:  GET DB [NOTFOUND] | CREATE DB [W-W]
+//    |   | [TXN1]: CREATE DB1-TB1 [DUP]
+//    | [TXN1]: CREATE DB1-TB1 [OK] | GET TBL [OK]
+//  [TXN1]: CREATE DB1 [OK] | GET DB [OK]
+func TestTableEntry1(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+
+	txn1 := txnMgr.StartTxn(nil)
+	name := "db1"
+	db1, err := txn1.CreateDatabase(name)
+	assert.Nil(t, err)
+	t.Log(db1.String())
+
+	schema := MockSchema(2)
+	schema.Name = "tb1"
+	tb1, err := db1.CreateRelation(schema)
+	assert.Nil(t, err)
+	t.Log(tb1.String())
+
+	_, err = db1.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+
+	_, err = db1.CreateRelation(schema)
+	assert.Equal(t, ErrDuplicate, err)
+
+	txn2 := txnMgr.StartTxn(nil)
+	_, err = txn2.GetDatabase(schema.Name)
+	assert.Equal(t, err, ErrNotFound)
+
+	_, err = txn2.CreateDatabase(name)
+	assert.Equal(t, err, txnif.TxnWWConflictErr)
+
+	_, err = txn2.DropDatabase(name)
+	assert.Equal(t, err, ErrNotFound)
+
+	err = txn1.Commit()
+	assert.Nil(t, err)
+
+	_, err = txn2.DropDatabase(name)
+	assert.Equal(t, err, ErrNotFound)
+
+	txn3 := txnMgr.StartTxn(nil)
+	db, err := txn3.GetDatabase(name)
+	assert.Nil(t, err)
+
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	t.Log(tb1.String())
+
+	_, err = db.GetRelationByName(schema.Name)
+	assert.Equal(t, ErrNotFound, err)
+
+	txn4 := txnMgr.StartTxn(nil)
+	db, err = txn4.GetDatabase(name)
+	assert.Nil(t, err)
+	_, err = db.GetRelationByName(schema.Name)
+	assert.Nil(t, err)
+
+	_, err = db.DropRelationByName(schema.Name)
+	assert.Equal(t, txnif.TxnWWConflictErr, err)
+
+	err = txn3.Commit()
+	assert.Nil(t, err)
+
+	t.Log(tb1.String())
+
+	txn5 := txnMgr.StartTxn(nil)
+	db, err = txn5.GetDatabase(name)
+	assert.Nil(t, err)
+	_, err = db.GetRelationByName(schema.Name)
+	assert.Equal(t, ErrNotFound, err)
+}
+
+func TestTableEntry2(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+
+	txn1 := txnMgr.StartTxn(nil)
+	name := "db1"
+	db, err := txn1.CreateDatabase(name)
+	assert.Nil(t, err)
+	schema := MockSchema(2)
+	schema.Name = "tb1"
+	_, err = db.CreateRelation(schema)
+	assert.Nil(t, err)
+
+	for i := 0; i < 1000; i++ {
+		s := MockSchema(1)
+		s.Name = fmt.Sprintf("xx%d", i)
+		_, err = db.CreateRelation(s)
+		assert.Nil(t, err)
+	}
+	err = txn1.Commit()
+	assert.Nil(t, err)
+
+	txn2 := txnMgr.StartTxn(nil)
+	db, err = txn2.GetDatabase(name)
+	assert.Nil(t, err)
+	rel, err := db.DropRelationByName(schema.Name)
+	assert.Nil(t, err)
+	t.Log(rel.String())
+	db, err = txn2.DropDatabase(name)
+	assert.Nil(t, err)
+	t.Log(db.String())
+
+	var wg sync.WaitGroup
+	txns := []txnif.AsyncTxn{txn2}
+	for i := 0; i < 10; i++ {
+		txn := txnMgr.StartTxn(nil)
+		txns = append(txns, txn)
+	}
+	now := time.Now()
+	for _, txn := range txns {
+		wg.Add(1)
+		go func(ttxn txnif.AsyncTxn) {
+			defer wg.Done()
+			for i := 0; i < 1000; i++ {
+				database, err := ttxn.GetDatabase(name)
+				if err != nil {
+					// t.Logf("db-ttxn=%d, %s", ttxn.GetID(), err)
+				} else {
+					// t.Logf("db-ttxn=%d, %v", ttxn.GetID(), err)
+					_, err := database.GetRelationByName(schema.Name)
+					if err != nil {
+						// t.Logf("rel-ttxn=%d, %s", ttxn.GetID(), err)
+					}
+				}
+			}
+		}(txn)
+	}
+	wg.Wait()
+	t.Log(time.Since(now))
+}
+
+func TestDB1(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+	name := "db1"
+	var wg sync.WaitGroup
+	flow := func() {
+		defer wg.Done()
+		txn := txnMgr.StartTxn(nil)
+		_, err := txn.GetDatabase(name)
+		if err == ErrNotFound {
+			_, err = txn.CreateDatabase(name)
+			if err != nil {
+				return
+			}
+		} else {
+			_, err = txn.DropDatabase(name)
+			if err != nil {
+				return
+			}
+		}
+		err = txn.Commit()
+		assert.Nil(t, err)
+	}
+
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go flow()
+	}
+	wg.Wait()
+}
+
+func TestTable1(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+	name := "db1"
+	tbName := "tb1"
+	var wg sync.WaitGroup
+	flow := func() {
+		defer wg.Done()
+		txn := txnMgr.StartTxn(nil)
+		db, err := txn.GetDatabase(name)
+		assert.Nil(t, err)
+		rel, err := db.GetRelationByName(tbName)
+		if err == ErrNotFound {
+			schema := MockSchema(1)
+			schema.Name = tbName
+			if rel, err = db.CreateRelation(schema); err != nil {
+				return
+			}
+		} else {
+			if rel, err = db.DropRelationByName(tbName); err != nil {
+				return
+			}
+		}
+		err = txn.Commit()
+		assert.Nil(t, err)
+		assert.NotNil(t, rel)
+		// t.Log(rel.String())
+	}
+	{
+		txn := txnMgr.StartTxn(nil)
+		_, err := txn.CreateDatabase(name)
+		assert.Nil(t, err)
+		err = txn.Commit()
+		assert.Nil(t, err)
+	}
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		go flow()
+	}
+	wg.Wait()
+}
+
+func TestCommand(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+	name := "db"
+
+	db := NewDBEntry(catalog, name, nil)
+	db.CreateAt = common.NextGlobalSeqNum()
+	db.CurrOp = OpCreate
+	db.ID = uint64(99)
+
+	cdb, err := db.MakeCommand(0)
+	assert.Nil(t, err)
+
+	var w bytes.Buffer
+	err = cdb.WriteTo(&w)
+	assert.Nil(t, err)
+
+	buf := w.Bytes()
+	r := bytes.NewBuffer(buf)
+
+	cmd, err := txnbase.BuildCommandFrom(r)
+	assert.Nil(t, err)
+	t.Log(cmd.GetType())
+	eCmd := cmd.(*entryCmd)
+	assert.Equal(t, db.CreateAt, eCmd.db.CreateAt)
+	assert.Equal(t, db.name, eCmd.db.name)
+	assert.Equal(t, db.ID, eCmd.entry.ID)
+
+	db.CurrOp = OpSoftDelete
+	db.DeleteAt = common.NextGlobalSeqNum()
+
+	cdb, err = db.MakeCommand(1)
+	assert.Nil(t, err)
+
+	w.Reset()
+	err = cdb.WriteTo(&w)
+	assert.Nil(t, err)
+
+	buf = w.Bytes()
+	r = bytes.NewBuffer(buf)
+
+	cmd, err = txnbase.BuildCommandFrom(r)
+	assert.Nil(t, err)
+
+	eCmd = cmd.(*entryCmd)
+	assert.Equal(t, db.DeleteAt, eCmd.entry.DeleteAt)
+	assert.Equal(t, db.ID, eCmd.entry.ID)
+
+	schema := MockSchemaAll(13)
+	tb := NewTableEntry(db, schema, nil, nil)
+	tb.CreateAt = common.NextGlobalSeqNum()
+	tb.ID = common.NextGlobalSeqNum()
+
+	w.Reset()
+	cmd, err = tb.MakeCommand(2)
+	assert.Nil(t, err)
+
+	err = cmd.WriteTo(&w)
+	assert.Nil(t, err)
+
+	buf = w.Bytes()
+	r = bytes.NewBuffer(buf)
+
+	cmd, err = txnbase.BuildCommandFrom(r)
+	assert.Nil(t, err)
+	eCmd = cmd.(*entryCmd)
+	assert.Equal(t, tb.ID, eCmd.table.ID)
+	assert.Equal(t, tb.CreateAt, eCmd.table.CreateAt)
+	assert.Equal(t, tb.GetSchema().Name, eCmd.table.GetSchema().Name)
+	assert.Equal(t, tb.db.ID, eCmd.db.ID)
+
+	tb.DeleteAt = common.NextGlobalSeqNum()
+	tb.CurrOp = OpSoftDelete
+
+	cmd, err = tb.MakeCommand(3)
+	assert.Nil(t, err)
+
+	w.Reset()
+	err = cmd.WriteTo(&w)
+	assert.Nil(t, err)
+
+	buf = w.Bytes()
+	r = bytes.NewBuffer(buf)
+
+	cmd, err = txnbase.BuildCommandFrom(r)
+	assert.Nil(t, err)
+	eCmd = cmd.(*entryCmd)
+	assert.Equal(t, tb.ID, eCmd.entry.ID)
+	assert.Equal(t, tb.DeleteAt, eCmd.entry.DeleteAt)
+	assert.Equal(t, tb.db.ID, eCmd.db.ID)
+}
+
+// UT Steps
+// 1. Start Txn1, create a database "db", table "tb" and segment "seg1", then commit Txn1
+// 1. Start Txn2, create a segment "seg2". Txn2 scan "tb" and "seg1, seg2" found
+// 2. Start Txn3, scan "tb" and only "seg1" found
+// 3. Commit Txn2
+// 4. Txn3 scan "tb" and also only "seg1" found
+// 5. Start Txn4, scan "tb" and both "seg1" and "seg2" found
+func TestSegment1(t *testing.T) {
+	dir := initTestPath(t)
+	catalog := MockCatalog(dir, "mock", nil)
+	defer catalog.Close()
+	txnMgr := txnbase.NewTxnManager(MockTxnStoreFactory(catalog), MockTxnFactory(catalog))
+	txnMgr.Start()
+	defer txnMgr.Stop()
+	name := "db"
+	tbName := "tb"
+	txn1 := txnMgr.StartTxn(nil)
+	db, err := catalog.CreateDBEntry(name, txn1)
+	assert.Nil(t, err)
+	schema := MockSchema(1)
+	schema.Name = tbName
+	tb, err := db.CreateTableEntry(schema, txn1, nil)
+	assert.Nil(t, err)
+	seg1, err := tb.CreateSegment(txn1, ES_Appendable, nil)
+	assert.Nil(t, err)
+	err = txn1.Commit()
+	assert.Nil(t, err)
+	t.Log(seg1.String())
+	t.Log(tb.String())
+}
