@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -289,7 +290,7 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		h := tbl.appendable
 		n := h.GetNode().(*insertNode)
 		toAppend := n.PrepareAppend(data, offset)
-		size := txnbase.EstimateSize(data, offset, toAppend)
+		size := compute.EstimateSize(data, offset, toAppend)
 		logrus.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
 		err := n.Expand(size, func() error {
 			appended, err = n.Append(data, offset)

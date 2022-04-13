@@ -8,6 +8,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
@@ -385,6 +386,10 @@ func (n *BlockUpdates) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bo
 		rwlocker.RLock()
 	}
 	return state != txnif.TxnStateRollbacked
+}
+
+func (n *BlockUpdates) ApplyChangesToColumn(colIdx uint16, vec *gvec.Vector) *gvec.Vector {
+	return vec
 }
 
 func (n *BlockUpdates) ApplyChanges(bat *gbat.Batch, deletes *roaring.Bitmap) *batch.Batch {

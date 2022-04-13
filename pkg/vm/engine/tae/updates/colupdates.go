@@ -14,6 +14,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -101,7 +102,7 @@ func (n *ColumnUpdates) ReadFrom(r io.Reader) error {
 	it := n.txnMask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		v := txnbase.GetValue(&vals, row)
+		v := compute.GetValue(&vals, row)
 		n.txnVals[row] = v
 	}
 	return nil
@@ -130,7 +131,7 @@ func (n *ColumnUpdates) WriteTo(w io.Writer) error {
 	it := n.txnMask.Iterator()
 	for it.HasNext() {
 		row := it.Next()
-		txnbase.AppendValue(col, n.txnVals[row])
+		compute.AppendValue(col, n.txnVals[row])
 	}
 	buf, err = col.Show()
 	if err != nil {
@@ -173,7 +174,7 @@ func (n *ColumnUpdates) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 			types.T_decimal, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
 			for txnMaskIterator.HasNext() {
 				row := txnMaskIterator.Next()
-				txnbase.SetFixSizeTypeValue(vec, row, n.txnVals[row])
+				compute.SetFixSizeTypeValue(vec, row, n.txnVals[row])
 				if vec.Nsp != nil && vec.Nsp.Np != nil {
 					if vec.Nsp.Np.Contains(uint64(row)) {
 						vec.Nsp.Np.Flip(uint64(row), uint64(row+1))
@@ -186,7 +187,7 @@ func (n *ColumnUpdates) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 			for txnMaskIterator.HasNext() {
 				row := txnMaskIterator.Next()
 				if pre != -1 {
-					txnbase.UpdateOffsets(data, pre, int(row))
+					compute.UpdateOffsets(data, pre, int(row))
 				}
 				val := n.txnVals[row].([]byte)
 				suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
@@ -201,7 +202,7 @@ func (n *ColumnUpdates) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 				}
 			}
 			if pre != -1 {
-				txnbase.UpdateOffsets(data, pre, len(data.Lengths)-1)
+				compute.UpdateOffsets(data, pre, len(data.Lengths)-1)
 			}
 		}
 	}
@@ -257,9 +258,9 @@ func (n *ColumnUpdates) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 				currRow := row - uint32(deleted)
 				if pre != -1 {
 					if int(currRow) == len(data.Lengths)-1 {
-						txnbase.UpdateOffsets(data, pre-1, int(currRow))
+						compute.UpdateOffsets(data, pre-1, int(currRow))
 					} else {
-						txnbase.UpdateOffsets(data, pre-1, int(currRow)+1)
+						compute.UpdateOffsets(data, pre-1, int(currRow)+1)
 					}
 				}
 				if int(currRow) == len(data.Lengths)-1 {
@@ -298,7 +299,7 @@ func (n *ColumnUpdates) ApplyToColumn(vec *gvec.Vector, deletes *roaring.Bitmap)
 				}
 			}
 			if pre != -1 {
-				txnbase.UpdateOffsets(data, pre-1, len(data.Lengths)-1)
+				compute.UpdateOffsets(data, pre-1, len(data.Lengths)-1)
 			}
 		}
 		vec.Nsp = nsp

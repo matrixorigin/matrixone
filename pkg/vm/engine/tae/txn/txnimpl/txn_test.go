@@ -15,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
@@ -154,7 +155,7 @@ func TestUpdate(t *testing.T) {
 	tbl.GetSchema().PrimaryKey = 1
 	bat := mock.MockBatch(tbl.GetSchema().Types(), 1024)
 
-	bats := txnbase.SplitBatch(bat, 2)
+	bats := compute.SplitBatch(bat, 2)
 
 	for _, b := range bats {
 		err := tbl.BatchDedupLocal(b)
@@ -183,7 +184,7 @@ func TestAppend(t *testing.T) {
 	brows := rows / 3
 	bat := mock.MockBatch(tbl.GetSchema().Types(), rows)
 
-	bats := txnbase.SplitBatch(bat, 3)
+	bats := compute.SplitBatch(bat, 3)
 
 	err := tbl.BatchDedupLocal(bats[0])
 	assert.Nil(t, err)
@@ -264,7 +265,7 @@ func TestLoad(t *testing.T) {
 	tbl.GetSchema().PrimaryKey = 13
 
 	bat := mock.MockBatch(tbl.GetSchema().Types(), 60000)
-	bats := txnbase.SplitBatch(bat, 5)
+	bats := compute.SplitBatch(bat, 5)
 	// for _, b := range bats {
 	// 	tbl.Append(b)
 	// }
