@@ -31,7 +31,21 @@ func (_ *FuncExtend) IsConstant() bool {
 }
 
 func (a *FuncExtend) Attributes() []string {
-	return []string{a.Name}
+	var attrs []string
+
+	for _, arg := range a.Args {
+		attrs = append(attrs, arg.Attributes()...)
+	}
+	return attrs
+}
+
+func (a *FuncExtend) ExtendAttributes() []*Attribute {
+	var attrs []*Attribute
+
+	for _, arg := range a.Args {
+		attrs = append(attrs, arg.ExtendAttributes()...)
+	}
+	return attrs
 }
 
 func (a *FuncExtend) ReturnType() types.T {

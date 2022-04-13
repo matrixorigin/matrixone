@@ -33,6 +33,10 @@ func (a *StarExtend) Attributes() []string {
 	return []string{}
 }
 
+func (a *StarExtend) ExtendAttributes() []*Attribute {
+	return nil
+}
+
 func (a *StarExtend) ReturnType() types.T {
 	return 0
 }

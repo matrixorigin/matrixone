@@ -2,24 +2,12 @@ package memEngine
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
-
-func (r *reader) NewFilter() engine.Filter {
-	return nil
-}
-
-func (r *reader) NewSummarizer() engine.Summarizer {
-	return nil
-}
-
-func (r *reader) NewSparseFilter() engine.SparseFilter {
-	return nil
-}
 
 func (r *reader) Read(cs []uint64, attrs []string) (*batch.Batch, error) {
 	if len(r.segs) == 0 {

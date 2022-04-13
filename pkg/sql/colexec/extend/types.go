@@ -28,6 +28,7 @@ type Extend interface {
 	IsConstant() bool
 	ReturnType() types.T
 	Attributes() []string
+	ExtendAttributes() []*Attribute
 	Eval(*batch.Batch, *process.Process) (*vector.Vector, types.T, error)
 }
 
