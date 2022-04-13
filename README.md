@@ -521,13 +521,20 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/chaixuqing">
+            <img src="https://avatars.githubusercontent.com/u/41991639?v=4" width="30;" alt="chaixuqing"/>
+            <br />
+            <sub><b>XuQing Chai</b></sub>
+        </a>
+    </td></tr>
+<tr>
+    <td align="center">
         <a href="https://github.com/Y7n05h">
             <img src="https://avatars.githubusercontent.com/u/69407218?v=4" width="30;" alt="Y7n05h"/>
             <br />
             <sub><b>Y7n05h</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/yuxubinchen">
             <img src="https://avatars.githubusercontent.com/u/74901886?v=4" width="30;" alt="yuxubinchen"/>
@@ -562,15 +569,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Hiyoyolumi</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/jinfuchiang">
             <img src="https://avatars.githubusercontent.com/u/92502624?v=4" width="30;" alt="jinfuchiang"/>
             <br />
             <sub><b>Jinfu</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/sundy-li">
             <img src="https://avatars.githubusercontent.com/u/3325189?v=4" width="30;" alt="sundy-li"/>
