@@ -230,10 +230,11 @@ func TestTxn3(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchemaAll(4)
 	schema.BlockMaxRows = 40000
 	schema.SegmentMaxBlocks = 8
 	rows := uint64(30)
+	colIdx := uint16(0)
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
@@ -246,7 +247,7 @@ func TestTxn3(t *testing.T) {
 		}
 		err := txn.Commit()
 		assert.Nil(t, err)
-		t.Log(bat.Vecs[0].String())
+		t.Log(bat.Vecs[colIdx].String())
 	}
 	{
 		txn := mgr.StartTxn(nil)
@@ -255,17 +256,20 @@ func TestTxn3(t *testing.T) {
 		it := rel.MakeBlockIt()
 		assert.True(t, it.Valid())
 		blk := it.GetBlock()
-		err := blk.Update(5, 0, uint32(99))
+		err := blk.Update(5, colIdx, int8(99))
+		// err := blk.Update(5, colIdx, uint32(99))
 		assert.Nil(t, err)
 
 		// Txn can update a resource many times in a txn
-		err = blk.Update(5, 0, int32(100))
+		err = blk.Update(5, colIdx, int8(100))
+		// err = blk.Update(5, colIdx, int32(100))
 		assert.Nil(t, err)
 
 		err = blk.RangeDelete(0, 2)
 		assert.Nil(t, err)
 
-		err = blk.Update(1, 0, int32(11))
+		// err = blk.Update(1, 0, int32(11))
+		err = blk.Update(1, colIdx, int8(11))
 		assert.NotNil(t, err)
 
 		var comp bytes.Buffer
@@ -273,7 +277,8 @@ func TestTxn3(t *testing.T) {
 		vec, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		assert.Equal(t, int(rows)-3, vector.Length(vec))
-		assert.Equal(t, int32(100), compute.GetValue(vec, 2))
+		assert.Equal(t, int8(100), compute.GetValue(vec, 2))
+		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
 		// Check w-w with uncommitted col update
 		{
 			txn := mgr.StartTxn(nil)
@@ -282,14 +287,17 @@ func TestTxn3(t *testing.T) {
 			it := rel.MakeBlockIt()
 			assert.True(t, it.Valid())
 			blk := it.GetBlock()
-			err := blk.Update(5, 0, int32(99))
+			err := blk.Update(5, colIdx, int8(99))
+			// err := blk.Update(5, colIdx, int32(99))
 			assert.NotNil(t, err)
-			err = blk.Update(8, 0, int32(88))
+			err = blk.Update(8, colIdx, int8(88))
+			// err = blk.Update(8, colIdx, int32(88))
 			assert.Nil(t, err)
 
 			err = blk.RangeDelete(2, 2)
 			assert.NotNil(t, err)
-			err = blk.Update(0, 0, int32(200))
+			err = blk.Update(0, colIdx, int8(50))
+			// err = blk.Update(0, colIdx, int32(200))
 			assert.NotNil(t, err)
 
 			txn.Rollback()
@@ -304,9 +312,11 @@ func TestTxn3(t *testing.T) {
 		it := rel.MakeBlockIt()
 		assert.True(t, it.Valid())
 		blk := it.GetBlock()
-		err := blk.Update(5, 0, int32(99))
+		err := blk.Update(5, colIdx, int8(99))
+		// err := blk.Update(5, colIdx, int32(99))
 		assert.Nil(t, err)
-		err = blk.Update(8, 0, int32(88))
+		err = blk.Update(8, colIdx, int8(88))
+		// err = blk.Update(8, colIdx, int32(88))
 		assert.Nil(t, err)
 
 		txn2 := mgr.StartTxn(nil)
@@ -315,7 +325,8 @@ func TestTxn3(t *testing.T) {
 		it2 := rel2.MakeBlockIt()
 		assert.True(t, it.Valid())
 		blk2 := it2.GetBlock()
-		err = blk2.Update(20, 0, int32(2000))
+		err = blk2.Update(20, colIdx, int8(40))
+		// err = blk2.Update(20, colIdx, int32(2000))
 		assert.Nil(t, err)
 		chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
 		t.Log(chain.StringLocked())
@@ -325,13 +336,15 @@ func TestTxn3(t *testing.T) {
 		assert.Nil(t, err)
 		t.Log(vec.String())
 		assert.Equal(t, int(rows)-3, vector.Length(vec))
-		assert.Equal(t, int32(100), compute.GetValue(vec, 2))
-		assert.Equal(t, int32(2000), compute.GetValue(vec, 17))
+		assert.Equal(t, int8(100), compute.GetValue(vec, 2))
+		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
+		assert.Equal(t, int8(40), compute.GetValue(vec, 17))
+		// assert.Equal(t, int32(50), compute.GetValue(vec, 17))
 
 		assert.Nil(t, txn.Commit())
-		vec, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		vec, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
-		t.Log(vec.String())
+		t.Log(vec.Typ.String())
 		chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
 		t.Log(chain.StringLocked())
 	}
