@@ -151,9 +151,6 @@ func (n *ColumnUpdates) Update(row uint32, v interface{}) error {
 }
 
 func (n *ColumnUpdates) UpdateLocked(row uint32, v interface{}) error {
-	// if _, ok := n.txnVals[row]; ok {
-	// 	return txnif.TxnWWConflictErr
-	// }
 	n.txnMask.Add(row)
 	n.txnVals[row] = v
 	return nil

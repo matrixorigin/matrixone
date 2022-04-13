@@ -254,13 +254,13 @@ func TestTxn3(t *testing.T) {
 		assert.Nil(t, err)
 
 		// Txn can update a resource many times in a txn
-		err = blk.Update(5, 0, uint32(100))
+		err = blk.Update(5, 0, int32(100))
 		assert.Nil(t, err)
 
 		err = blk.RangeDelete(0, 2)
 		assert.Nil(t, err)
 
-		err = blk.Update(1, 0, uint32(11))
+		err = blk.Update(1, 0, int32(11))
 		assert.NotNil(t, err)
 
 		var comp bytes.Buffer
@@ -276,14 +276,14 @@ func TestTxn3(t *testing.T) {
 			it := rel.MakeBlockIt()
 			assert.True(t, it.Valid())
 			blk := it.GetBlock()
-			err := blk.Update(5, 0, uint32(99))
+			err := blk.Update(5, 0, int32(99))
 			assert.NotNil(t, err)
-			err = blk.Update(8, 0, uint32(88))
+			err = blk.Update(8, 0, int32(88))
 			assert.Nil(t, err)
 
 			err = blk.RangeDelete(2, 2)
 			assert.NotNil(t, err)
-			err = blk.Update(0, 0, uint32(200))
+			err = blk.Update(0, 0, int32(200))
 			assert.NotNil(t, err)
 
 			txn.Rollback()
@@ -298,9 +298,9 @@ func TestTxn3(t *testing.T) {
 		it := rel.MakeBlockIt()
 		assert.True(t, it.Valid())
 		blk := it.GetBlock()
-		err := blk.Update(5, 0, uint32(99))
-		assert.NotNil(t, err)
-		err = blk.Update(8, 0, uint32(88))
+		err := blk.Update(5, 0, int32(99))
+		assert.Nil(t, err)
+		err = blk.Update(8, 0, int32(88))
 		assert.Nil(t, err)
 	}
 }

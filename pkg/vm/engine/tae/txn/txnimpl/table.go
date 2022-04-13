@@ -145,6 +145,16 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 			cmdMgr.AddCmd(cmd)
 		}
 	}
+	for _, node := range tbl.updateNodes {
+		csn := cmdMgr.GetCSN()
+		updateCmd, _, err := node.MakeCommand(uint32(csn), false)
+		if err != nil {
+			panic(err)
+		}
+		if updateCmd != nil {
+			cmdMgr.AddCmd(updateCmd)
+		}
+	}
 	return nil
 }
 
@@ -601,7 +611,11 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 			return
 		}
 	}
-	// TODO
+	for _, update := range tbl.updateNodes {
+		if err = update.PrepareCommit(); err != nil {
+			return
+		}
+	}
 	return
 }
 
@@ -630,6 +644,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	for _, blk := range tbl.cblks {
 		if err = blk.ApplyCommit(); err != nil {
 			break
+		}
+	}
+	for _, update := range tbl.updateNodes {
+		if err = update.ApplyCommit(); err != nil {
+			return
 		}
 	}
 	// TODO
