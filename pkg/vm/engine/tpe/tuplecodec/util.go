@@ -442,7 +442,9 @@ func TruncateBatch(bat *batch.Batch, batchSize, needLen int) {
 		case types.T_char, types.T_varchar: //bytes is different
 			vBytes := vec.Col.(*types.Bytes)
 			if len(vBytes.Offsets) > needLen {
+				nextStart := vBytes.Offsets[needLen]
 				vec.Col = vBytes.Window(0, needLen)
+				vBytes.Data = vBytes.Data[:nextStart]
 			}
 			vec.Data = vBytes.Data
 		case types.T_date:
@@ -480,7 +482,7 @@ func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc) ([]str
 		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
 			Name:    attr.Name,
 			Alg:     0,
-			Type:    TpeTypeToEngineType(attr.Ttype),
+			Type:    attr.TypesType,
 			Default: engine.DefaultExpr{},
 		}})
 	}
