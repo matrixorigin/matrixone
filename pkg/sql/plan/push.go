@@ -374,6 +374,9 @@ func pushDownRestrictExtend(e extend.Extend, qry *Query) bool {
 	var s *Scope
 
 	attrs := e.ExtendAttributes()
+	if len(attrs) == 0 {
+		return false
+	}
 	aliases := make([]string, len(attrs))
 	if s = findScopeWithAttribute(attrs[0].Name, &aliases[0], qry.Scope); s == nil {
 		return false
