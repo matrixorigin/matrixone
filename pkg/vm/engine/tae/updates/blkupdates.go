@@ -132,8 +132,16 @@ func (n *BlockUpdates) String() string {
 	if n.nodeType == NT_Merge {
 		ntype = "MERGE"
 	}
-	s := fmt.Sprintf("[%s:%s:%s](%d-%d)", ntype, commitState, n.id.BlockString(), n.startTs, n.commitTs)
-	return s
+	s := fmt.Sprintf("[%s:%s:%s](%d-%d)", ntype, commitState, n.id.ToBlockFileName(), n.startTs, n.commitTs)
+	if n.localDeletes != nil {
+		s = fmt.Sprintf("%s(DEL:%s)", s, n.localDeletes.String())
+	}
+	cols := "{"
+	for colIdx, colUpdates := range n.cols {
+		cols = fmt.Sprintf("%s%d:%s,", cols, colIdx, colUpdates.StringLocked())
+	}
+
+	return fmt.Sprintf("%s%s}", s, cols)
 }
 
 func (n *BlockUpdates) IsMerge() bool     { return n.nodeType == NT_Merge }
@@ -153,7 +161,7 @@ func (n *BlockUpdates) DeleteLocked(start, end uint32) error {
 }
 
 func (n *BlockUpdates) UpdateLocked(row uint32, colIdx uint16, v interface{}) error {
-	if (n.baseDeletes != nil && n.baseDeletes.Contains(row)) || n.localDeletes.Contains(row) {
+	if (n.baseDeletes != nil && n.baseDeletes.Contains(row)) || (n.localDeletes != nil && n.localDeletes.Contains(row)) {
 		return txnif.TxnWWConflictErr
 	}
 	col, ok := n.cols[colIdx]
@@ -309,6 +317,10 @@ func (n *BlockUpdates) Compare(o common.NodePayload) int {
 
 func (n *BlockUpdates) HasActiveTxnLocked() bool {
 	return n.txn != nil
+}
+
+func (n *BlockUpdates) IsSameTxnLocked(txn txnif.AsyncTxn) bool {
+	return n.txn != nil && n.txn.GetID() == txn.GetID()
 }
 
 func (n *BlockUpdates) HasColUpdateLocked(row uint32, colIdx uint16) bool {

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sync"
@@ -217,4 +218,71 @@ func TestTxn2(t *testing.T) {
 	go run()
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))
+}
+
+func TestTxn3(t *testing.T) {
+	dir := initTestPath(t)
+	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchema(1)
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 8
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		rel, _ := db.CreateRelation(schema)
+		bat := mock.MockBatch(schema.Types(), uint64(10))
+		// bat := mock.MockBatch(schema.Types(), uint64(schema.BlockMaxRows/4))
+		for i := 0; i < 1; i++ {
+			err := rel.Append(bat)
+			assert.Nil(t, err)
+		}
+		err := txn.Commit()
+		assert.Nil(t, err)
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		assert.True(t, it.Valid())
+		blk := it.GetBlock()
+		err := blk.Update(5, 0, uint32(99))
+		assert.Nil(t, err)
+
+		// Txn can update a resource many times in a txn
+		err = blk.Update(5, 0, uint32(100))
+		assert.Nil(t, err)
+
+		err = blk.RangeDelete(0, 2)
+		assert.Nil(t, err)
+
+		err = blk.Update(1, 0, uint32(11))
+		assert.NotNil(t, err)
+
+		var comp bytes.Buffer
+		var decomp bytes.Buffer
+		vec, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		assert.Nil(t, err)
+		t.Log(vec.String())
+		// Check w-w with uncommitted col update
+		{
+			txn := mgr.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, _ := db.GetRelationByName(schema.Name)
+			it := rel.MakeBlockIt()
+			assert.True(t, it.Valid())
+			blk := it.GetBlock()
+			err := blk.Update(5, 0, uint32(99))
+			assert.NotNil(t, err)
+			err = blk.Update(8, 0, uint32(88))
+			assert.Nil(t, err)
+			txn.Rollback()
+		}
+		err = txn.Commit()
+		assert.Nil(t, err)
+	}
 }

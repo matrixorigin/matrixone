@@ -2,6 +2,7 @@ package updates
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"sync"
 
@@ -13,7 +14,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -36,6 +36,15 @@ func NewColumnUpdates(target *common.ID, colDef *catalog.ColDef, rwlock *sync.RW
 		txnMask: roaring.NewBitmap(),
 		txnVals: make(map[uint32]interface{}),
 	}
+}
+
+func (n *ColumnUpdates) StringLocked() string {
+	s := "["
+	for k, v := range n.txnVals {
+		s = fmt.Sprintf("%s%d:%v,", s, k, v)
+	}
+	s = fmt.Sprintf("%s]", s)
+	return s
 }
 
 func (n *ColumnUpdates) HasUpdateLocked(row uint32) bool {
@@ -142,9 +151,9 @@ func (n *ColumnUpdates) Update(row uint32, v interface{}) error {
 }
 
 func (n *ColumnUpdates) UpdateLocked(row uint32, v interface{}) error {
-	if _, ok := n.txnVals[row]; ok {
-		return txnif.TxnWWConflictErr
-	}
+	// if _, ok := n.txnVals[row]; ok {
+	// 	return txnif.TxnWWConflictErr
+	// }
 	n.txnMask.Add(row)
 	n.txnVals[row] = v
 	return nil

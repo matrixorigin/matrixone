@@ -92,8 +92,8 @@ type UpdateChain interface {
 	RLock()
 	RUnlock()
 	GetID() *common.ID
-	TryDeleteRowsLocked(start, end uint32, txn AsyncTxn) error
-	TryUpdateColLocked(row uint32, colIdx uint16, txn AsyncTxn) error
+	CheckDeletedLocked(start, end uint32, txn AsyncTxn) error
+	CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn AsyncTxn) error
 }
 
 type UpdateNode interface {
@@ -121,6 +121,7 @@ type TxnStore interface {
 	UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
 	AddUpdateNode(id uint64, node UpdateNode) error
 
+	RangeDelete(id *common.ID, start, end uint32) error
 	Update(id *common.ID, row uint32, col uint16, v interface{}) error
 
 	CreateRelation(def interface{}) (handle.Relation, error)

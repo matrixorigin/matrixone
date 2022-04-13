@@ -98,6 +98,17 @@ func (store *txnStore) Append(id uint64, data *batch.Batch) error {
 	return table.Append(data)
 }
 
+func (store *txnStore) RangeDelete(id *common.ID, start, end uint32) (err error) {
+	table, err := store.getOrSetTable(id.TableID)
+	if err != nil {
+		return err
+	}
+	if table.IsDeleted() {
+		return txnbase.ErrNotFound
+	}
+	return table.RangeDelete(id.PartID, id.SegmentID, id.BlockID, start, end)
+}
+
 func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
 	table, err := store.getOrSetTable(id.TableID)
 	if err != nil {

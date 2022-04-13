@@ -83,7 +83,13 @@ func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v in
 		node.ApplyUpdateColLocked(row, colIdx, v)
 		return
 	}
-	err = blk.chain.TryUpdateColLocked(row, colIdx, txn)
+	// logutil.Info(blk.chain.StringLocked())
+	// If the specified row was deleted. w-w
+	if err = blk.chain.CheckDeletedLocked(row, row, txn); err != nil {
+		return
+	}
+	// If the specified row was updated by another active txn. w-w
+	err = blk.chain.CheckColumnUpdatedLocked(row, colIdx, txn)
 	if err != nil {
 		return
 	}
@@ -102,9 +108,17 @@ func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node t
 		node.ApplyDeleteRowsLocked(start, end)
 		return
 	}
-	err = blk.chain.TryDeleteRowsLocked(start, end, txn)
+	err = blk.chain.CheckDeletedLocked(start, end, txn)
 	if err != nil {
 		return
+	}
+
+	for col := range blk.meta.GetSegment().GetTable().GetSchema().ColDefs {
+		for row := start; row <= end; row++ {
+			if err = blk.chain.CheckColumnUpdatedLocked(row, uint16(col), txn); err != nil {
+				return
+			}
+		}
 	}
 	node = blk.chain.AddNodeLocked(txn)
 	node.ApplyDeleteRowsLocked(start, end)

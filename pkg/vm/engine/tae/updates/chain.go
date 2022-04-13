@@ -1,6 +1,7 @@
 package updates
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -50,6 +51,21 @@ func (chain *BlockUpdateChain) AddNodeLocked(txn txnif.AsyncTxn) *BlockUpdateNod
 	updates := NewBlockUpdates(txn, chain.meta, nil, nil)
 	node := NewBlockUpdateNode(chain, updates)
 	return node
+}
+
+func (chain *BlockUpdateChain) String() string {
+	chain.RLock()
+	defer chain.RUnlock()
+	return chain.StringLocked()
+}
+
+func (chain *BlockUpdateChain) StringLocked() string {
+	var msg string
+	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
+		msg = fmt.Sprintf("%s\n%s", msg, n.String())
+		return true
+	}, false)
+	return msg
 }
 
 func (chain *BlockUpdateChain) AddMergeNode() *BlockUpdateNode {
@@ -122,7 +138,7 @@ func (chain *BlockUpdateChain) FirstNode() (node *BlockUpdateNode) {
 // Read Related
 
 // Locked
-func (chain *BlockUpdateChain) TryDeleteRowsLocked(start, end uint32, txn txnif.AsyncTxn) (err error) {
+func (chain *BlockUpdateChain) CheckDeletedLocked(start, end uint32, txn txnif.AsyncTxn) (err error) {
 	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
 		n.RLock()
 		defer n.RUnlock()
@@ -138,14 +154,14 @@ func (chain *BlockUpdateChain) TryDeleteRowsLocked(start, end uint32, txn txnif.
 	return
 }
 
-func (chain *BlockUpdateChain) TryUpdateColLocked(row uint32, colIdx uint16, txn txnif.AsyncTxn) (err error) {
+func (chain *BlockUpdateChain) CheckColumnUpdatedLocked(row uint32, colIdx uint16, txn txnif.AsyncTxn) (err error) {
 	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
 		n.RLock()
 		defer n.RUnlock()
 		if !n.HasActiveTxnLocked() {
 			return false
 		}
-		if n.HasColUpdateLocked(row, colIdx) {
+		if n.HasColUpdateLocked(row, colIdx) && !n.IsSameTxnLocked(txn) {
 			err = txnif.TxnWWConflictErr
 			return false
 		}

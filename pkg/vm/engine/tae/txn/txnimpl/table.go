@@ -35,7 +35,8 @@ type Table interface {
 	IsLocalDeleted(row uint32) bool
 	GetLocalPhysicalAxis(row uint32) (int, uint32)
 	UpdateLocalValue(row uint32, col uint16, value interface{}) error
-	Update(inodePos uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
+	Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) error
+	RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) error
 	Rows() uint32
 	BatchDedupLocal(data *gbat.Batch) error
 	BatchDedupLocalByCol(col *gvec.Vector) error
@@ -356,6 +357,48 @@ func (tbl *txnTable) GetLocalPhysicalAxis(row uint32) (int, uint32) {
 	return npos, noffset
 }
 
+func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start, end uint32) (err error) {
+	if inode != 0 {
+		return tbl.RangeDeleteLocalRows(start, end)
+	}
+	node := tbl.updateNodes[blockId]
+	if node != nil {
+		chain := node.GetChain()
+		chain.RLock()
+		if err = chain.CheckDeletedLocked(start, end, tbl.txn); err != nil {
+			chain.RUnlock()
+			return
+		}
+		for col := range tbl.entry.GetSchema().ColDefs {
+			for row := start; row <= end; row++ {
+				if err = chain.CheckColumnUpdatedLocked(row, uint16(col), tbl.txn); err != nil {
+					chain.RUnlock()
+					return
+				}
+			}
+		}
+		node.Lock()
+		chain.RUnlock()
+		node.ApplyDeleteRowsLocked(start, end)
+		node.Unlock()
+		return
+	}
+	seg, err := tbl.entry.GetSegmentByID(segmentId)
+	if err != nil {
+		return
+	}
+	blk, err := seg.GetBlockEntryByID(blockId)
+	if err != nil {
+		return
+	}
+	blkData := blk.GetBlockData()
+	node2, err := blkData.RangeDelete(tbl.txn, start, end)
+	if err == nil {
+		tbl.AddUpdateNode(node2)
+	}
+	return
+}
+
 func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) (err error) {
 	if inode != 0 {
 		return tbl.UpdateLocalValue(row, col, v)
@@ -364,7 +407,11 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 	if node != nil {
 		chain := node.GetChain()
 		chain.RLock()
-		if err = chain.TryUpdateColLocked(row, col, tbl.txn); err != nil {
+		if err = chain.CheckDeletedLocked(row, row, tbl.txn); err != nil {
+			chain.RUnlock()
+			return
+		}
+		if err = chain.CheckColumnUpdatedLocked(row, col, tbl.txn); err != nil {
 			chain.RUnlock()
 			return
 		}

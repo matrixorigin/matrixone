@@ -86,6 +86,14 @@ func (blk *txnBlock) String() string          { return blk.entry.String() }
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 
+func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
+	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end)
+}
+
+func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
+	return blk.Txn.GetStore().Update(blk.entry.AsCommonID(), row, col, v)
+}
+
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, true) }
 
