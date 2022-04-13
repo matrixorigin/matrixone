@@ -77,6 +77,8 @@ func (l *DLNode) Compare(o *DLNode) int {
 }
 
 func (l *DLNode) GetPayload() NodePayload { return l.payload }
+func (l *DLNode) GetPrev() *DLNode        { return l.prev }
+func (l *DLNode) GetNext() *DLNode        { return l.next }
 
 func (l *DLNode) Sort() (*DLNode, *DLNode) {
 	curr := l

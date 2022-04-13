@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -302,5 +303,22 @@ func TestTxn3(t *testing.T) {
 		assert.Nil(t, err)
 		err = blk.Update(8, 0, int32(88))
 		assert.Nil(t, err)
+
+		txn2 := mgr.StartTxn(nil)
+		db2, _ := txn2.GetDatabase("db")
+		rel2, _ := db2.GetRelationByName(schema.Name)
+		it2 := rel2.MakeBlockIt()
+		assert.True(t, it.Valid())
+		blk2 := it2.GetBlock()
+		err = blk2.Update(20, 0, int32(2000))
+		assert.Nil(t, err)
+		chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
+		t.Log(chain.StringLocked())
+		var comp bytes.Buffer
+		var decomp bytes.Buffer
+		vec, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		assert.Nil(t, err)
+		t.Log(vec.String())
 	}
+
 }

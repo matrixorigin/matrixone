@@ -68,6 +68,42 @@ func (chain *BlockUpdateChain) StringLocked() string {
 	return msg
 }
 
+func (chain *BlockUpdateChain) CollectCommittedUpdatesLocked(txn txnif.AsyncTxn) *BlockUpdates {
+	var merged *BlockUpdates
+	chain.LoopChainLocked(func(curr *BlockUpdateNode) bool {
+		curr.RLock()
+		if merged == nil {
+			merged = NewMergeBlockUpdates(txn.GetStartTS(), chain.meta, nil, nil)
+		}
+		// If this node is uncommitted, skip it
+		if curr.HasActiveTxnLocked() && curr.GetCommitTSLocked() == txnif.UncommitTS && (curr.txn.GetID() != txn.GetID()) {
+			// if curr.HasActiveTxnLocked() && curr.GetCommitTSLocked() == txnif.UncommitTS && (curr.txn.GetID() != txn.GetID()) {
+			curr.RUnlock()
+			return true
+		}
+		if curr.GetCommitTSLocked() > curr.GetCommitTSLocked() {
+			curr.RUnlock()
+			return false
+		}
+		if curr.GetCommitTSLocked() < txn.GetStartTS() && curr.HasActiveTxnLocked() {
+			curr.RUnlock()
+			state := curr.txn.GetTxnState(true)
+			if state == txnif.TxnStateRollbacked {
+				return true
+			}
+			curr.RLock()
+		}
+		merged.MergeLocked(curr.BlockUpdates)
+		if curr.IsMerge() {
+			curr.RUnlock()
+			return false
+		}
+		curr.RUnlock()
+		return true
+	}, false)
+	return merged
+}
+
 func (chain *BlockUpdateChain) AddMergeNode() *BlockUpdateNode {
 	chain.Lock()
 	defer chain.Unlock()

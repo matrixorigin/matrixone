@@ -24,4 +24,6 @@ type Block interface {
 	GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*vector.Vector, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.UpdateNode, error)
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
+
+	GetUpdateChain() txnif.UpdateChain
 }

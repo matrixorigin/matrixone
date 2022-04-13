@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
@@ -71,6 +72,8 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	defer h.Close()
 	blk.RLock()
 	defer blk.RUnlock()
+	merged := blk.chain.CollectCommittedUpdatesLocked(txn)
+	logutil.Info(merged.String())
 	return blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
 }
 
@@ -123,4 +126,10 @@ func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node t
 	node = blk.chain.AddNodeLocked(txn)
 	node.ApplyDeleteRowsLocked(start, end)
 	return
+}
+
+func (blk *dataBlock) GetUpdateChain() txnif.UpdateChain {
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.chain
 }
