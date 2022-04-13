@@ -428,20 +428,27 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/fengttt">
+            <img src="https://avatars.githubusercontent.com/u/169294?v=4" width="30;" alt="fengttt"/>
+            <br />
+            <sub><b>Fengttt</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/whileskies">
             <img src="https://avatars.githubusercontent.com/u/20637002?v=4" width="30;" alt="whileskies"/>
             <br />
             <sub><b>Whileskies</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/BePPPower">
             <img src="https://avatars.githubusercontent.com/u/43782773?v=4" width="30;" alt="BePPPower"/>
             <br />
             <sub><b>BePPPower</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/jiajunhuang">
             <img src="https://avatars.githubusercontent.com/u/5924269?v=4" width="30;" alt="jiajunhuang"/>
@@ -454,13 +461,6 @@ Contributions to MatrixOne are welcome from everyone.
             <img src="https://avatars.githubusercontent.com/u/74389817?v=4" width="30;" alt="NTH19"/>
             <br />
             <sub><b>NTH19</b></sub>
-        </a>
-    </td>
-    <td align="center">
-        <a href="https://github.com/fengttt">
-            <img src="https://avatars.githubusercontent.com/u/169294?v=4" width="30;" alt="fengttt"/>
-            <br />
-            <sub><b>Fengttt</b></sub>
         </a>
     </td>
     <td align="center">
