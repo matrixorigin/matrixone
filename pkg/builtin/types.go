@@ -47,5 +47,6 @@ const (
 	Month
 	Year
 	Weekday
+	EndsWith
 	Date
 )
