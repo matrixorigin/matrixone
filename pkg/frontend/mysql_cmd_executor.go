@@ -99,7 +99,7 @@ type outputQueue struct {
 	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
-	ep *tree.ExportParam
+	ep     *tree.ExportParam
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -111,7 +111,7 @@ func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *
 		mrs:    mrs,
 		rowIdx: 0,
 		length: length,
-		ep: ep,
+		ep:     ep,
 	}
 }
 
@@ -236,10 +236,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-				case <- ses.closeRef.stopExportData: {
+			case <-ses.closeRef.stopExportData:
+				{
 					return nil
 				}
-				default:{}
+			default:
+				{
+				}
 			}
 		}
 
@@ -765,7 +768,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid), col)
+		err = convertEngineTypeToMysqlType(c.Type.Oid, col)
 		if err != nil {
 			return err
 		}
@@ -879,7 +882,7 @@ func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
 	for _, c := range columns {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		err = convertEngineTypeToMysqlType(c.Typ, col)
 		if err != nil {
 			return nil, err
 		}
@@ -1160,7 +1163,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 			}
-			
+
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
@@ -1341,7 +1344,7 @@ func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 /*
 convert the type in computation engine to the type in mysql.
 */
-func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
+func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)
