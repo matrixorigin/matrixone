@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -389,6 +390,13 @@ func (n *BlockUpdates) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bo
 }
 
 func (n *BlockUpdates) ApplyChangesToColumn(colIdx uint16, vec *gvec.Vector) *gvec.Vector {
+	colUpdates := n.cols[colIdx]
+	if colUpdates != nil {
+		vec = compute.ApplyUpdateToVector(vec, colUpdates.txnMask, colUpdates.txnVals)
+	}
+	if n.localDeletes != nil {
+		vec = compute.ApplyDeleteToVector(vec, n.localDeletes)
+	}
 	return vec
 }
 

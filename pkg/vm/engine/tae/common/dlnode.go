@@ -1,6 +1,8 @@
 package common
 
-import "sync"
+import (
+	"sync"
+)
 
 type Link struct {
 	head *DLNode
@@ -108,6 +110,9 @@ func (l *DLNode) Sort() (*DLNode, *DLNode) {
 	}
 	if next == nil {
 		tail = curr
+	}
+	if head.prev != nil {
+		head = nil
 	}
 	return head, tail
 }

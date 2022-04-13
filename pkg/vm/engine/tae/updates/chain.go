@@ -62,7 +62,11 @@ func (chain *BlockUpdateChain) String() string {
 func (chain *BlockUpdateChain) StringLocked() string {
 	var msg string
 	chain.LoopChainLocked(func(n *BlockUpdateNode) bool {
-		msg = fmt.Sprintf("%s\n%s", msg, n.String())
+		if msg == "" {
+			msg = fmt.Sprintf("%s%s", msg, n.String())
+		} else {
+			msg = fmt.Sprintf("%s\n%s", msg, n.String())
+		}
 		return true
 	}, false)
 	return msg
@@ -81,9 +85,9 @@ func (chain *BlockUpdateChain) CollectCommittedUpdatesLocked(txn txnif.AsyncTxn)
 			curr.RUnlock()
 			return true
 		}
-		if curr.GetCommitTSLocked() > curr.GetCommitTSLocked() {
+		if curr.GetCommitTSLocked() != txnif.UncommitTS && curr.GetCommitTSLocked() > txn.GetStartTS() {
 			curr.RUnlock()
-			return false
+			return true
 		}
 		if curr.GetCommitTSLocked() < txn.GetStartTS() && curr.HasActiveTxnLocked() {
 			curr.RUnlock()

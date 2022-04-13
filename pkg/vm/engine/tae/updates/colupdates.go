@@ -156,8 +156,10 @@ func (n *ColumnUpdates) UpdateLocked(row uint32, v interface{}) error {
 
 func (n *ColumnUpdates) MergeLocked(o *ColumnUpdates) error {
 	for k, v := range o.txnVals {
-		n.txnMask.Add(k)
-		n.txnVals[k] = v
+		if vv := n.txnVals[k]; vv == nil {
+			n.txnMask.Add(k)
+			n.txnVals[k] = v
+		}
 	}
 	return nil
 }

@@ -72,9 +72,20 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	defer h.Close()
 	blk.RLock()
 	defer blk.RUnlock()
-	merged := blk.chain.CollectCommittedUpdatesLocked(txn)
-	logutil.Info(merged.String())
-	return blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
+	vec, err = blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
+	if err != nil {
+		return
+	}
+	if blk.chain != nil {
+		// TODO: Collect by column
+		blkUpdates := blk.chain.CollectCommittedUpdatesLocked(txn)
+		logutil.Info(blkUpdates.String())
+		if blkUpdates != nil {
+			colIdx := blk.meta.GetSegment().GetTable().GetSchema().GetColIdx(attr)
+			vec = blkUpdates.ApplyChangesToColumn(uint16(colIdx), vec)
+		}
+	}
+	return
 }
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (node txnif.UpdateNode, err error) {

@@ -8,11 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -231,11 +233,12 @@ func TestTxn3(t *testing.T) {
 	schema := catalog.MockSchema(1)
 	schema.BlockMaxRows = 40000
 	schema.SegmentMaxBlocks = 8
+	rows := uint64(30)
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
 		rel, _ := db.CreateRelation(schema)
-		bat := mock.MockBatch(schema.Types(), uint64(10))
+		bat := mock.MockBatch(schema.Types(), rows)
 		// bat := mock.MockBatch(schema.Types(), uint64(schema.BlockMaxRows/4))
 		for i := 0; i < 1; i++ {
 			err := rel.Append(bat)
@@ -243,6 +246,7 @@ func TestTxn3(t *testing.T) {
 		}
 		err := txn.Commit()
 		assert.Nil(t, err)
+		t.Log(bat.Vecs[0].String())
 	}
 	{
 		txn := mgr.StartTxn(nil)
@@ -268,7 +272,8 @@ func TestTxn3(t *testing.T) {
 		var decomp bytes.Buffer
 		vec, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
-		t.Log(vec.String())
+		assert.Equal(t, int(rows)-3, vector.Length(vec))
+		assert.Equal(t, int32(100), compute.GetValue(vec, 2))
 		// Check w-w with uncommitted col update
 		{
 			txn := mgr.StartTxn(nil)
@@ -319,6 +324,16 @@ func TestTxn3(t *testing.T) {
 		vec, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.String())
+		assert.Equal(t, int(rows)-3, vector.Length(vec))
+		assert.Equal(t, int32(100), compute.GetValue(vec, 2))
+		assert.Equal(t, int32(2000), compute.GetValue(vec, 17))
+
+		assert.Nil(t, txn.Commit())
+		vec, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		assert.Nil(t, err)
+		t.Log(vec.String())
+		chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
+		t.Log(chain.StringLocked())
 	}
 
 }
