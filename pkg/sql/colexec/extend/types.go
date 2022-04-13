@@ -59,7 +59,8 @@ type StarExtend struct {
 }
 
 type ValueExtend struct {
-	V *vector.Vector
+	V       *vector.Vector
+	OrigStr string
 }
 
 type Attribute struct {

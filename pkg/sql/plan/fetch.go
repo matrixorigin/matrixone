@@ -96,7 +96,7 @@ func (b *build) buildFetch(fetch *tree.Limit, qry *Query) error {
 func (b *build) buildFetchExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, n.String())
 	case *tree.ParenExpr:
 		return b.buildFetchExpr(e.Expr, qry)
 	case *tree.OrExpr:

@@ -163,8 +163,8 @@ func newBytesIterSolo(vec *vector.Vector) bytesIter {
 		data, stride = encoding.EncodeDateSlice(vec.Col.([]types.Date)), encoding.DateSize
 	case types.T_datetime:
 		data, stride = encoding.EncodeDatetimeSlice(vec.Col.([]types.Datetime)), encoding.DatetimeSize
-	case types.T_decimal:
-		data, stride = encoding.EncodeDecimalSlice(vec.Col.([]types.Decimal)), encoding.DecimalSize
+	case types.T_decimal128:
+		data, stride = encoding.EncodeDecimal128Slice(vec.Col.([]types.Decimal128)), encoding.Decimal128Size
 	}
 	if data == nil {
 		panic(fmt.Sprintf("not support for type %s", vec.Typ.Oid))

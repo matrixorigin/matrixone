@@ -20,6 +20,7 @@ package encoding
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,12 +30,16 @@ var TypeSize int
 var DateSize int
 var DatetimeSize int
 var DecimalSize int
+var Decimal128Size int
 
 func init() {
 	TypeSize = int(unsafe.Sizeof(types.Type{}))
 	DateSize = int(unsafe.Sizeof(types.Date(0)))
 	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
-	DecimalSize = int(unsafe.Sizeof(types.Decimal{}))
+	Decimal128Size = 16
+	fmt.Println("datetimeSize is", DatetimeSize)
+	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
+	fmt.Println("decimal128Size is", Decimal128Size)
 }
 
 func Encode(v interface{}) ([]byte, error) {
@@ -152,6 +157,14 @@ func EncodeDatetime(v types.Datetime) []byte {
 
 func DecodeDatetime(v []byte) types.Datetime {
 	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeDecimal128(v types.Decimal128) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 16)
+}
+
+func DecodeDecimal128(v []byte) types.Decimal128 {
+	return *(*types.Decimal128)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt8Slice(v []int8) []byte {
@@ -310,16 +323,16 @@ func DecodeDatetimeSlice(v []byte) (ret []types.Datetime) {
 	return
 }
 
-func EncodeDecimalSlice(v []types.Decimal) (ret []byte) {
+func EncodeDecimal128Slice(v []types.Decimal128) (ret []byte) {
 	if len(v) > 0 {
-		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*DecimalSize)[:len(v)*DecimalSize]
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*16)[:len(v)*16]
 	}
 	return
 }
 
-func DecodeDecimalSlice(v []byte) (ret []types.Decimal) {
+func DecodeDecimal128Slice(v []byte) (ret []types.Decimal128) {
 	if len(v) > 0 {
-		ret = unsafe.Slice((*types.Decimal)(unsafe.Pointer(&v[0])), cap(v)/DecimalSize)[:len(v)/DecimalSize]
+		ret = unsafe.Slice((*types.Decimal128)(unsafe.Pointer(&v[0])), cap(v)/Decimal128Size)[:len(v)/Decimal128Size]
 	}
 	return
 }

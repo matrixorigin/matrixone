@@ -198,6 +198,12 @@ func (i *BlockZoneMapIndex) Unmarshal(data []byte) error {
 		i.MaxV = encoding.DecodeDatetime(buf[:8])
 		// buf = buf[8:] // unused
 		return nil
+	case types.T_decimal128:
+		i.MinV = encoding.DecodeDecimal128(buf[:16])
+		buf = buf[16:]
+		i.MaxV = encoding.DecodeDecimal128(buf[:16])
+		// buf = buf[8:] // unused
+		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		lenminv := encoding.DecodeInt16(buf[:2])
 		buf = buf[2:]
@@ -315,8 +321,6 @@ func (i *BlockZoneMapIndex) Eq(v interface{}) bool {
 		return v.(uint32) >= i.MinV.(uint32) && v.(uint32) <= i.MaxV.(uint32)
 	case types.T_uint64:
 		return v.(uint64) >= i.MinV.(uint64) && v.(uint64) <= i.MaxV.(uint64)
-	case types.T_decimal:
-		panic("not supported")
 	case types.T_float32:
 		return v.(float32) >= i.MinV.(float32) && v.(float32) <= i.MaxV.(float32)
 	case types.T_float64:
@@ -363,8 +367,6 @@ func (i *BlockZoneMapIndex) Lt(v interface{}) bool {
 		return v.(uint32) > i.MinV.(uint32)
 	case types.T_uint64:
 		return v.(uint64) > i.MinV.(uint64)
-	case types.T_decimal:
-		panic("not supported")
 	case types.T_float32:
 		return v.(float32) > i.MinV.(float32)
 	case types.T_float64:
@@ -401,8 +403,6 @@ func (i *BlockZoneMapIndex) Le(v interface{}) bool {
 		return v.(uint32) >= i.MinV.(uint32)
 	case types.T_uint64:
 		return v.(uint64) >= i.MinV.(uint64)
-	case types.T_decimal:
-		panic("not supported")
 	case types.T_float32:
 		return v.(float32) >= i.MinV.(float32)
 	case types.T_float64:
@@ -439,8 +439,6 @@ func (i *BlockZoneMapIndex) Gt(v interface{}) bool {
 		return v.(uint32) < i.MaxV.(uint32)
 	case types.T_uint64:
 		return v.(uint64) < i.MaxV.(uint64)
-	case types.T_decimal:
-		panic("not supported")
 	case types.T_float32:
 		return v.(float32) < i.MaxV.(float32)
 	case types.T_float64:
@@ -477,8 +475,6 @@ func (i *BlockZoneMapIndex) Ge(v interface{}) bool {
 		return v.(uint32) <= i.MaxV.(uint32)
 	case types.T_uint64:
 		return v.(uint64) <= i.MaxV.(uint64)
-	case types.T_decimal:
-		panic("not supported")
 	case types.T_float32:
 		return v.(float32) <= i.MaxV.(float32)
 	case types.T_float64:

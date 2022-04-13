@@ -99,7 +99,7 @@ type outputQueue struct {
 	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
-	ep *tree.ExportParam
+	ep     *tree.ExportParam
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -111,7 +111,7 @@ func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *
 		mrs:    mrs,
 		rowIdx: 0,
 		length: length,
-		ep: ep,
+		ep:     ep,
 	}
 }
 
@@ -236,10 +236,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-				case <- ses.closeRef.stopExportData: {
+			case <-ses.closeRef.stopExportData:
+				{
 					return nil
 				}
-				default:{}
+			default:
+				{
+				}
 			}
 		}
 
@@ -424,6 +427,20 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					} else {
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_decimal128:
+				fmt.Println("the scale for this decimal is", vec.Typ.Scale)
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal128)
+					row[i] = vs[rowIndex].Decimal128ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal128)
+						row[i] = vs[rowIndex].Decimal128ToString(scale)
 					}
 				}
 			default:
@@ -1160,7 +1177,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 			}
-			
+
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
@@ -1375,6 +1392,8 @@ func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

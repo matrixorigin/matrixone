@@ -14,95 +14,108 @@
 
 package sub
 
-var (
-	Int8Sub                func([]int8, []int8, []int8) []int8
-	Int8SubSels            func([]int8, []int8, []int8, []int64) []int8
-	Int8SubScalar          func(int8, []int8, []int8) []int8
-	Int8SubScalarSels      func(int8, []int8, []int8, []int64) []int8
-	Int8SubByScalar        func(int8, []int8, []int8) []int8
-	Int8SubByScalarSels    func(int8, []int8, []int8, []int64) []int8
-	Int16Sub               func([]int16, []int16, []int16) []int16
-	Int16SubSels           func([]int16, []int16, []int16, []int64) []int16
-	Int16SubScalar         func(int16, []int16, []int16) []int16
-	Int16SubScalarSels     func(int16, []int16, []int16, []int64) []int16
-	Int16SubByScalar       func(int16, []int16, []int16) []int16
-	Int16SubByScalarSels   func(int16, []int16, []int16, []int64) []int16
-	Int32Sub               func([]int32, []int32, []int32) []int32
-	Int32SubSels           func([]int32, []int32, []int32, []int64) []int32
-	Int32SubScalar         func(int32, []int32, []int32) []int32
-	Int32SubScalarSels     func(int32, []int32, []int32, []int64) []int32
-	Int32SubByScalar       func(int32, []int32, []int32) []int32
-	Int32SubByScalarSels   func(int32, []int32, []int32, []int64) []int32
-	Int64Sub               func([]int64, []int64, []int64) []int64
-	Int64SubSels           func([]int64, []int64, []int64, []int64) []int64
-	Int64SubScalar         func(int64, []int64, []int64) []int64
-	Int64SubScalarSels     func(int64, []int64, []int64, []int64) []int64
-	Int64SubByScalar       func(int64, []int64, []int64) []int64
-	Int64SubByScalarSels   func(int64, []int64, []int64, []int64) []int64
-	Uint8Sub               func([]uint8, []uint8, []uint8) []uint8
-	Uint8SubSels           func([]uint8, []uint8, []uint8, []int64) []uint8
-	Uint8SubScalar         func(uint8, []uint8, []uint8) []uint8
-	Uint8SubScalarSels     func(uint8, []uint8, []uint8, []int64) []uint8
-	Uint8SubByScalar       func(uint8, []uint8, []uint8) []uint8
-	Uint8SubByScalarSels   func(uint8, []uint8, []uint8, []int64) []uint8
-	Uint16Sub              func([]uint16, []uint16, []uint16) []uint16
-	Uint16SubSels          func([]uint16, []uint16, []uint16, []int64) []uint16
-	Uint16SubScalar        func(uint16, []uint16, []uint16) []uint16
-	Uint16SubScalarSels    func(uint16, []uint16, []uint16, []int64) []uint16
-	Uint16SubByScalar      func(uint16, []uint16, []uint16) []uint16
-	Uint16SubByScalarSels  func(uint16, []uint16, []uint16, []int64) []uint16
-	Uint32Sub              func([]uint32, []uint32, []uint32) []uint32
-	Uint32SubSels          func([]uint32, []uint32, []uint32, []int64) []uint32
-	Uint32SubScalar        func(uint32, []uint32, []uint32) []uint32
-	Uint32SubScalarSels    func(uint32, []uint32, []uint32, []int64) []uint32
-	Uint32SubByScalar      func(uint32, []uint32, []uint32) []uint32
-	Uint32SubByScalarSels  func(uint32, []uint32, []uint32, []int64) []uint32
-	Uint64Sub              func([]uint64, []uint64, []uint64) []uint64
-	Uint64SubSels          func([]uint64, []uint64, []uint64, []int64) []uint64
-	Uint64SubScalar        func(uint64, []uint64, []uint64) []uint64
-	Uint64SubScalarSels    func(uint64, []uint64, []uint64, []int64) []uint64
-	Uint64SubByScalar      func(uint64, []uint64, []uint64) []uint64
-	Uint64SubByScalarSels  func(uint64, []uint64, []uint64, []int64) []uint64
-	Float32Sub             func([]float32, []float32, []float32) []float32
-	Float32SubSels         func([]float32, []float32, []float32, []int64) []float32
-	Float32SubScalar       func(float32, []float32, []float32) []float32
-	Float32SubScalarSels   func(float32, []float32, []float32, []int64) []float32
-	Float32SubByScalar     func(float32, []float32, []float32) []float32
-	Float32SubByScalarSels func(float32, []float32, []float32, []int64) []float32
-	Float64Sub             func([]float64, []float64, []float64) []float64
-	Float64SubSels         func([]float64, []float64, []float64, []int64) []float64
-	Float64SubScalar       func(float64, []float64, []float64) []float64
-	Float64SubScalarSels   func(float64, []float64, []float64, []int64) []float64
-	Float64SubByScalar     func(float64, []float64, []float64) []float64
-	Float64SubByScalarSels func(float64, []float64, []float64, []int64) []float64
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-	Int32Int64Sub func([]int64, []int32, []int64) []int64
-	Int32Int64SubSels func([]int64, []int32, []int64, []int64) []int64
-	Int16Int64Sub func([]int64, []int16, []int64) []int64
-	Int16Int64SubSels func([]int64, []int16, []int64, []int64) []int64
-	Int8Int64Sub func([]int64, []int8, []int64) []int64
-	Int8Int64SubSels func([]int64, []int8, []int64, []int64) []int64
-	Int16Int32Sub func([]int32, []int16, []int32) []int32
-	Int16Int32SubSels func([]int32, []int16, []int32, []int64) []int32
-	Int8Int32Sub func([]int32, []int8, []int32) []int32
-	Int8Int32SubSels func([]int32, []int8, []int32, []int64) []int32
-	Int8Int16Sub func([]int16, []int8, []int16) []int16
-	Int8Int16SubSels func([]int16, []int8, []int16, []int64) []int16
-	Float32Float64Sub func([]float64, []float32, []float64) []float64
+var (
+	Int8Sub                 func([]int8, []int8, []int8) []int8
+	Int8SubSels             func([]int8, []int8, []int8, []int64) []int8
+	Int8SubScalar           func(int8, []int8, []int8) []int8
+	Int8SubScalarSels       func(int8, []int8, []int8, []int64) []int8
+	Int8SubByScalar         func(int8, []int8, []int8) []int8
+	Int8SubByScalarSels     func(int8, []int8, []int8, []int64) []int8
+	Int16Sub                func([]int16, []int16, []int16) []int16
+	Int16SubSels            func([]int16, []int16, []int16, []int64) []int16
+	Int16SubScalar          func(int16, []int16, []int16) []int16
+	Int16SubScalarSels      func(int16, []int16, []int16, []int64) []int16
+	Int16SubByScalar        func(int16, []int16, []int16) []int16
+	Int16SubByScalarSels    func(int16, []int16, []int16, []int64) []int16
+	Int32Sub                func([]int32, []int32, []int32) []int32
+	Int32SubSels            func([]int32, []int32, []int32, []int64) []int32
+	Int32SubScalar          func(int32, []int32, []int32) []int32
+	Int32SubScalarSels      func(int32, []int32, []int32, []int64) []int32
+	Int32SubByScalar        func(int32, []int32, []int32) []int32
+	Int32SubByScalarSels    func(int32, []int32, []int32, []int64) []int32
+	Int64Sub                func([]int64, []int64, []int64) []int64
+	Int64SubSels            func([]int64, []int64, []int64, []int64) []int64
+	Int64SubScalar          func(int64, []int64, []int64) []int64
+	Int64SubScalarSels      func(int64, []int64, []int64, []int64) []int64
+	Int64SubByScalar        func(int64, []int64, []int64) []int64
+	Int64SubByScalarSels    func(int64, []int64, []int64, []int64) []int64
+	Uint8Sub                func([]uint8, []uint8, []uint8) []uint8
+	Uint8SubSels            func([]uint8, []uint8, []uint8, []int64) []uint8
+	Uint8SubScalar          func(uint8, []uint8, []uint8) []uint8
+	Uint8SubScalarSels      func(uint8, []uint8, []uint8, []int64) []uint8
+	Uint8SubByScalar        func(uint8, []uint8, []uint8) []uint8
+	Uint8SubByScalarSels    func(uint8, []uint8, []uint8, []int64) []uint8
+	Uint16Sub               func([]uint16, []uint16, []uint16) []uint16
+	Uint16SubSels           func([]uint16, []uint16, []uint16, []int64) []uint16
+	Uint16SubScalar         func(uint16, []uint16, []uint16) []uint16
+	Uint16SubScalarSels     func(uint16, []uint16, []uint16, []int64) []uint16
+	Uint16SubByScalar       func(uint16, []uint16, []uint16) []uint16
+	Uint16SubByScalarSels   func(uint16, []uint16, []uint16, []int64) []uint16
+	Uint32Sub               func([]uint32, []uint32, []uint32) []uint32
+	Uint32SubSels           func([]uint32, []uint32, []uint32, []int64) []uint32
+	Uint32SubScalar         func(uint32, []uint32, []uint32) []uint32
+	Uint32SubScalarSels     func(uint32, []uint32, []uint32, []int64) []uint32
+	Uint32SubByScalar       func(uint32, []uint32, []uint32) []uint32
+	Uint32SubByScalarSels   func(uint32, []uint32, []uint32, []int64) []uint32
+	Uint64Sub               func([]uint64, []uint64, []uint64) []uint64
+	Uint64SubSels           func([]uint64, []uint64, []uint64, []int64) []uint64
+	Uint64SubScalar         func(uint64, []uint64, []uint64) []uint64
+	Uint64SubScalarSels     func(uint64, []uint64, []uint64, []int64) []uint64
+	Uint64SubByScalar       func(uint64, []uint64, []uint64) []uint64
+	Uint64SubByScalarSels   func(uint64, []uint64, []uint64, []int64) []uint64
+	Float32Sub              func([]float32, []float32, []float32) []float32
+	Float32SubSels          func([]float32, []float32, []float32, []int64) []float32
+	Float32SubScalar        func(float32, []float32, []float32) []float32
+	Float32SubScalarSels    func(float32, []float32, []float32, []int64) []float32
+	Float32SubByScalar      func(float32, []float32, []float32) []float32
+	Float32SubByScalarSels  func(float32, []float32, []float32, []int64) []float32
+	Float64Sub              func([]float64, []float64, []float64) []float64
+	Float64SubSels          func([]float64, []float64, []float64, []int64) []float64
+	Float64SubScalar        func(float64, []float64, []float64) []float64
+	Float64SubScalarSels    func(float64, []float64, []float64, []int64) []float64
+	Float64SubByScalar      func(float64, []float64, []float64) []float64
+	Float64SubByScalarSels  func(float64, []float64, []float64, []int64) []float64
+	Decimal128Sub           func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128SubSels       func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128SubScalar     func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128SubScalarSels func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+
+	Int32Int64Sub         func([]int64, []int32, []int64) []int64
+	Int32Int64SubSels     func([]int64, []int32, []int64, []int64) []int64
+	Int16Int64Sub         func([]int64, []int16, []int64) []int64
+	Int16Int64SubSels     func([]int64, []int16, []int64, []int64) []int64
+	Int8Int64Sub          func([]int64, []int8, []int64) []int64
+	Int8Int64SubSels      func([]int64, []int8, []int64, []int64) []int64
+	Int16Int32Sub         func([]int32, []int16, []int32) []int32
+	Int16Int32SubSels     func([]int32, []int16, []int32, []int64) []int32
+	Int8Int32Sub          func([]int32, []int8, []int32) []int32
+	Int8Int32SubSels      func([]int32, []int8, []int32, []int64) []int32
+	Int8Int16Sub          func([]int16, []int8, []int16) []int16
+	Int8Int16SubSels      func([]int16, []int8, []int16, []int64) []int16
+	Float32Float64Sub     func([]float64, []float32, []float64) []float64
 	Float32Float64SubSels func([]float64, []float32, []float64, []int64) []float64
-	Uint32Uint64Sub func([]uint64, []uint32, []uint64) []uint64
-	Uint32Uint64SubSels func([]uint64, []uint32, []uint64, []int64) []uint64
-	Uint16Uint64Sub func([]uint64, []uint16, []uint64) []uint64
-	Uint16Uint64SubSels func([]uint64, []uint16, []uint64, []int64) []uint64
-	Uint8Uint64Sub func([]uint64, []uint8, []uint64) []uint64
-	Uint8Uint64SubSels func([]uint64, []uint8, []uint64, []int64) []uint64
-	Uint16Uint32Sub func([]uint32, []uint16, []uint32) []uint32
-	Uint16Uint32SubSels func([]uint32, []uint16, []uint32, []int64) []uint32
-	Uint8Uint32Sub func([]uint32, []uint8, []uint32) []uint32
-	Uint8Uint32SubSels func([]uint32, []uint8, []uint32, []int64) []uint32
-	Uint8Uint16Sub func([]uint16, []uint8, []uint16) []uint16
-	Uint8Uint16SubSels func([]uint16, []uint8, []uint16, []int64) []uint16
+	Uint32Uint64Sub       func([]uint64, []uint32, []uint64) []uint64
+	Uint32Uint64SubSels   func([]uint64, []uint32, []uint64, []int64) []uint64
+	Uint16Uint64Sub       func([]uint64, []uint16, []uint64) []uint64
+	Uint16Uint64SubSels   func([]uint64, []uint16, []uint64, []int64) []uint64
+	Uint8Uint64Sub        func([]uint64, []uint8, []uint64) []uint64
+	Uint8Uint64SubSels    func([]uint64, []uint8, []uint64, []int64) []uint64
+	Uint16Uint32Sub       func([]uint32, []uint16, []uint32) []uint32
+	Uint16Uint32SubSels   func([]uint32, []uint16, []uint32, []int64) []uint32
+	Uint8Uint32Sub        func([]uint32, []uint8, []uint32) []uint32
+	Uint8Uint32SubSels    func([]uint32, []uint8, []uint32, []int64) []uint32
+	Uint8Uint16Sub        func([]uint16, []uint8, []uint16) []uint16
+	Uint8Uint16SubSels    func([]uint16, []uint8, []uint16, []int64) []uint16
 )
+
+func init() {
+	Decimal128Sub = decimal128Sub
+	Decimal128SubSels = decimal128SubSels
+	Decimal128SubScalar = decimal128SubScalar
+	Decimal128SubScalarSels = decimal128SubScalarSels
+}
 
 func int8Sub(xs, ys, rs []int8) []int8 {
 	for i, x := range xs {
@@ -705,3 +718,102 @@ func uint8Uint16SubSels(xs []uint16, ys []uint8, rs []uint16, sels []int64) []ui
 	}
 	return rs
 }
+
+func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	/* to add two decimal128 value, first we need to align them to the same scale(the maximum of the two)
+																	Decimal(20, 5), Decimal(20, 6)
+	value																321.4			123.5
+	representation														32,140,000		123,500,000
+	align to the same scale	by scale 12340000 by 10 321400000			321,400,000		123,500,000
+	add
+
+	*/
+	if xsScale > ysScale {
+		ysScaled := make([]types.Decimal128, len(ys))
+		scaleDiff := xsScale - ysScale
+		for i, y := range ys {
+			ysScaled[i] = y
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for i := 0; i < int(scaleDiff); i++ {
+				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
+			}
+		}
+		for i, x := range xs {
+			rs[i] = types.Decimal128SubAligned(x, ysScaled[i])
+		}
+		return rs
+	} else if xsScale < ysScale {
+		xsScaled := make([]types.Decimal128, len(xs))
+		scaleDiff := ysScale - xsScale
+		for i, x := range xs {
+			xsScaled[i] = x
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for i := 0; i < int(scaleDiff); i++ {
+				xsScaled[i] = types.ScaleDecimal128By10(xsScaled[i])
+			}
+		}
+		for i, y := range ys {
+			rs[i] = types.Decimal128SubAligned(xsScaled[i], y)
+		}
+		return rs
+	} else {
+		for i, x := range xs {
+			rs[i] = types.Decimal128SubAligned(x, ys[i])
+		}
+		return rs
+	}
+}
+
+func decimal128SubSels(xs, ys []types.Decimal128, xsScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal128Sub(xs[sel], ys[sel], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128SubScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	if xScale > ysScale {
+		ysScaled := make([]types.Decimal128, len(ys))
+		scaleDiff := xScale - ysScale
+		for i, y := range ys {
+			ysScaled[i] = y
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for i := 0; i < int(scaleDiff); i++ {
+				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
+			}
+		}
+		for i, yScaled := range ysScaled {
+			rs[i] = types.Decimal128SubAligned(x, yScaled)
+		}
+		return rs
+	} else if xScale < ysScale {
+		xScaled := x
+		scaleDiff := ysScale - xScale
+		// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+		for i := 0; i < int(scaleDiff); i++ {
+			xScaled = types.ScaleDecimal128By10(xScaled)
+		}
+		for i, y := range ys {
+			rs[i] = types.Decimal128SubAligned(xScaled, y)
+		}
+		return rs
+	} else {
+		for i, y := range ys {
+			rs[i] = types.Decimal128SubAligned(x, y)
+		}
+		return rs
+	}
+	return rs
+}
+
+func decimal128SubScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal128Sub(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
+/*
+
+
+ */

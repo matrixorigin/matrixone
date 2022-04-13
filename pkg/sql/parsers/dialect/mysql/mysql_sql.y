@@ -5164,6 +5164,43 @@ decimal_type:
                 }
         }
     }
+
+|   DECIMAL decimal_length_opt
+    {
+        locale := ""
+        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+		return 1
+        }
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
+        	yylex.Error("For decimal(M), M must between 0 and 38.")
+                return 1
+        } else if $2.DisplayWith <= 18 {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  64,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+		}
+        } else {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  128,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+                }
+        }
+    }
 // |   DECIMAL decimal_length_opt
 //     {
 //         $$ = tree.TYPE_DOUBLE
