@@ -135,6 +135,10 @@ func (chain *BlockUpdateChain) FirstNode() (node *BlockUpdateNode) {
 	return chain.GetHead().GetPayload().(*BlockUpdateNode)
 }
 
+func (chain *BlockUpdateChain) DeleteUncommittedNodeLocked(n *BlockUpdateNode) {
+	chain.Delete(n.DLNode)
+}
+
 // Read Related
 
 // Locked

@@ -508,6 +508,12 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 			return
 		}
 	}
+	for _, node := range tbl.updateNodes {
+		chain := node.GetChain().(*updates.BlockUpdateChain)
+		chain.Lock()
+		chain.DeleteUncommittedNodeLocked(node)
+		chain.Unlock()
+	}
 	// TODO: remove all inserts and updates
 	return
 }

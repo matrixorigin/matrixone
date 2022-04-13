@@ -280,9 +280,27 @@ func TestTxn3(t *testing.T) {
 			assert.NotNil(t, err)
 			err = blk.Update(8, 0, uint32(88))
 			assert.Nil(t, err)
+
+			err = blk.RangeDelete(2, 2)
+			assert.NotNil(t, err)
+			err = blk.Update(0, 0, uint32(200))
+			assert.NotNil(t, err)
+
 			txn.Rollback()
 		}
 		err = txn.Commit()
+		assert.Nil(t, err)
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		assert.True(t, it.Valid())
+		blk := it.GetBlock()
+		err := blk.Update(5, 0, uint32(99))
+		assert.NotNil(t, err)
+		err = blk.Update(8, 0, uint32(88))
 		assert.Nil(t, err)
 	}
 }
