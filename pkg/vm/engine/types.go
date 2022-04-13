@@ -28,6 +28,7 @@ type Nodes []Node
 type Node struct {
 	Id   string `json:"id"`
 	Addr string `json:"address"`
+	Data []byte `json:"payload"`
 }
 
 type Attribute struct {
@@ -35,7 +36,7 @@ type Attribute struct {
 	Alg     compress.T  // compression algorithm
 	Type    types.Type  // type of attribute
 	Default DefaultExpr // default value of this attribute.
-	Primary bool		// if true, it is primary key
+	Primary bool        // if true, it is primary key
 }
 
 type DefaultExpr struct {
@@ -147,14 +148,11 @@ type Relation interface {
 	AddTableDef(uint64, TableDef) error
 	DelTableDef(uint64, TableDef) error
 
-	NewReader(int) []Reader // first argument is the number of reader
+	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
+	NewReader(int, extend.Extend, []byte) []Reader
 }
 
 type Reader interface {
-	NewFilter() Filter
-	NewSummarizer() Summarizer
-	NewSparseFilter() SparseFilter
-
 	Read([]uint64, []string) (*batch.Batch, error)
 }
 

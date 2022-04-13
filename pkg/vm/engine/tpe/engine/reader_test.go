@@ -69,7 +69,7 @@ func TestTpeReader_Read(t *testing.T) {
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10)
+		readers := tableDesc.NewReader(10, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {
@@ -145,7 +145,7 @@ func TestTpeReader_Read(t *testing.T) {
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10)
+		readers := tableDesc.NewReader(10, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {

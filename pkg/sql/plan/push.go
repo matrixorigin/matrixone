@@ -24,36 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
-func isSingle(s *Scope) interface{} {
-	switch op := s.Op.(type) {
-	case *Order:
-		return isSingle(s.Children[0])
-	case *Dedup:
-		return isSingle(s.Children[0])
-	case *Limit:
-		return isSingle(s.Children[0])
-	case *Offset:
-		return isSingle(s.Children[0])
-	case *Restrict:
-		return isSingle(s.Children[0])
-	case *Projection:
-		return isSingle(s.Children[0])
-	case *ResultProjection:
-		return isSingle(s.Children[0])
-	case *Rename:
-		return isSingle(s.Children[0])
-	case *Untransform:
-		return isSingle(s.Children[0])
-	case *Relation:
-		return op
-	case *DerivedRelation:
-		return op
-	case *Join:
-		return nil
-	}
-	return nil
-}
-
 // check if it is conjunctive aggregation query.
 func isCAQ(flg bool, s *Scope) bool {
 	switch s.Op.(type) {
@@ -168,29 +138,7 @@ func pushDownUntransform(s *Scope, fvars []string) {
 }
 
 func pushDownRestrict(flg bool, e extend.Extend, qry *Query) extend.Extend {
-	if op := isSingle(qry.Scope); flg && op != nil {
-		switch rel := op.(type) {
-		case *Relation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: e,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = e
-			}
-		case *DerivedRelation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: e,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = e
-			}
-		}
+	if pushDownRestrictExtend(e, qry) {
 		return nil
 	}
 	if es := extend.AndExtends(e, nil); len(es) > 0 {
@@ -425,122 +373,43 @@ func pushDownProjectionExtend(e extend.Extend, qry *Query) extend.Extend {
 func pushDownRestrictExtend(e extend.Extend, qry *Query) bool {
 	var s *Scope
 
-	v, ok := e.(*extend.BinaryExtend)
-	if !ok {
+	attrs := e.ExtendAttributes()
+	aliases := make([]string, len(attrs))
+	if s = findScopeWithAttribute(attrs[0].Name, &aliases[0], qry.Scope); s == nil {
 		return false
 	}
-	left, lok := v.Left.(*extend.Attribute)
-	right, rok := v.Right.(*extend.Attribute)
-	switch {
-	case lok && rok:
-		var lname, rname string
-
-		if s = findScopeWithAttribute(left.Name, &lname, qry.Scope); s == nil {
-			return false
-		}
-		t := findScopeWithAttribute(right.Name, &rname, qry.Scope)
+	for i := 1; i < len(attrs); i++ {
+		t := findScopeWithAttribute(attrs[i].Name, &aliases[i], qry.Scope)
 		if t != s {
 			return false
 		}
-		v.Left = &extend.Attribute{
-			Name: lname,
-			Type: left.Type,
-		}
-		v.Right = &extend.Attribute{
-			Name: rname,
-			Type: right.Type,
-		}
-		switch rel := s.Op.(type) {
-		case *Relation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		case *DerivedRelation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		}
-		return true
-	case !lok && rok:
-		var rname string
-
-		if s = findScopeWithAttribute(right.Name, &rname, qry.Scope); s == nil {
-			return false
-		}
-		v.Right = &extend.Attribute{
-			Name: rname,
-			Type: right.Type,
-		}
-		switch rel := s.Op.(type) {
-		case *Relation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		case *DerivedRelation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		}
-		return true
-	case lok && !rok:
-		var lname string
-
-		if s = findScopeWithAttribute(left.Name, &lname, qry.Scope); s == nil {
-			return false
-		}
-		v.Left = &extend.Attribute{
-			Name: lname,
-			Type: left.Type,
-		}
-		switch rel := s.Op.(type) {
-		case *Relation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		case *DerivedRelation:
-			if rel.Cond != nil {
-				rel.Cond = &extend.BinaryExtend{
-					Op:    overload.And,
-					Right: v,
-					Left:  rel.Cond,
-				}
-			} else {
-				rel.Cond = v
-			}
-		}
-		return true
 	}
-	return false
+	for i, attr := range attrs {
+		attr.Name = aliases[i]
+	}
+	switch rel := s.Op.(type) {
+	case *Relation:
+		if rel.Cond != nil {
+			rel.Cond = &extend.BinaryExtend{
+				Op:    overload.And,
+				Right: e,
+				Left:  rel.Cond,
+			}
+		} else {
+			rel.Cond = e
+		}
+	case *DerivedRelation:
+		if rel.Cond != nil {
+			rel.Cond = &extend.BinaryExtend{
+				Op:    overload.And,
+				Right: e,
+				Left:  rel.Cond,
+			}
+		} else {
+			rel.Cond = e
+		}
+	}
+	return true
 }
 
 func findScopeWithAttribute(name string, alias *string, s *Scope) *Scope {

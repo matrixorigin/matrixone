@@ -111,7 +111,7 @@ func TestTpeRelation_Write(t *testing.T) {
 		convey.So(tableDesc.Nodes()[0].Addr, convey.ShouldEqual, "localhost:20000")
 		convey.So(tableDesc.Nodes()[0].Id, convey.ShouldEqual, "0")
 
-		readers := tableDesc.NewReader(10)
+		readers := tableDesc.NewReader(10, nil, nil)
 		dumpReaderCnt := 0
 		for i := 0; i < 10; i++ {
 			rd := readers[i].(*TpeReader)

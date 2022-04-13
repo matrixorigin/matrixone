@@ -41,6 +41,10 @@ func (e *BinaryExtend) Attributes() []string {
 	return append(e.Left.Attributes(), e.Right.Attributes()...)
 }
 
+func (e *BinaryExtend) ExtendAttributes() []*Attribute {
+	return append(e.Left.ExtendAttributes(), e.Right.ExtendAttributes()...)
+}
+
 func (e *BinaryExtend) ReturnType() types.T {
 	if fn, ok := BinaryReturnTypes[e.Op]; ok {
 		return fn(e.Left, e.Right)
