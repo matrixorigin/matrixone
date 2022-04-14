@@ -232,6 +232,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 		}
+		blockIt.Next()
 	}
 	err = catalog.ErrNotFound
 	return
@@ -266,6 +267,7 @@ func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, 
 				return id, offset, entry, err
 			}
 		}
+		blockIt.Next()
 	}
 	err = catalog.ErrNotFound
 	return
