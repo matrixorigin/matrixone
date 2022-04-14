@@ -26,4 +26,5 @@ type Block interface {
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
 
 	GetUpdateChain() txnif.UpdateChain
+	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
 }

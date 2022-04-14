@@ -17,50 +17,118 @@ package common
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
-func CompareInterface(a, b interface{}) int64 {
-	if av, ok := a.(int8); ok {
-		return int64(av - b.(int8))
+func CompareGeneric(a, b interface{}, t types.Type) int {
+	switch t.Oid {
+	case types.T_int8:
+		if a.(int8) > b.(int8) {
+			return 1
+		} else if a.(int8) < b.(int8) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_int16:
+		if a.(int16) > b.(int16) {
+			return 1
+		} else if a.(int16) < b.(int16) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_int32:
+		if a.(int32) > b.(int32) {
+			return 1
+		} else if a.(int32) < b.(int32) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_int64:
+		if a.(int64) > b.(int64) {
+			return 1
+		} else if a.(int64) < b.(int64) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_uint8:
+		if a.(uint8) > b.(uint8) {
+			return 1
+		} else if a.(uint8) < b.(uint8) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_uint16:
+		if a.(uint16) > b.(uint16) {
+			return 1
+		} else if a.(uint16) < b.(uint16) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_uint32:
+		if a.(uint32) > b.(uint32) {
+			return 1
+		} else if a.(uint32) < b.(uint32) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_uint64:
+		if a.(uint64) > b.(uint64) {
+			return 1
+		} else if a.(uint64) < b.(uint64) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_float32:
+		if a.(float32) > b.(float32) {
+			return 1
+		} else if a.(float32) < b.(float32) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_float64:
+		if a.(float64) > b.(float64) {
+			return 1
+		} else if a.(float64) < b.(float64) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_date:
+		if a.(types.Date) > b.(types.Date) {
+			return 1
+		} else if a.(types.Date) < b.(types.Date) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_datetime:
+		if a.(types.Datetime) > b.(types.Datetime) {
+			return 1
+		} else if a.(types.Datetime) < b.(types.Datetime) {
+			return -1
+		} else {
+			return 0
+		}
+	case types.T_char, types.T_varchar:
+		res := bytes.Compare(a.([]byte), b.([]byte))
+		if res > 0 {
+			return 1
+		} else if res < 0 {
+			return -1
+		} else {
+			return 0
+		}
+	default:
+		panic(errors.ErrTypeNotSupported)
 	}
-	if av, ok := a.(int16); ok {
-		return int64(av - b.(int16))
-	}
-	if av, ok := a.(int32); ok {
-		return int64(av - b.(int32))
-	}
-	if av, ok := a.(int64); ok {
-		return av - b.(int64)
-	}
-	if av, ok := a.(uint8); ok {
-		return int64(av - b.(uint8))
-	}
-	if av, ok := a.(uint16); ok {
-		return int64(av - b.(uint16))
-	}
-	if av, ok := a.(uint32); ok {
-		return int64(av - b.(uint32))
-	}
-	if av, ok := a.(uint64); ok {
-		return int64(av - b.(uint64))
-	}
-	if av, ok := a.(float32); ok {
-		return int64(av - b.(float32))
-	}
-	if av, ok := a.(float64); ok {
-		return int64(av - b.(float64))
-	}
-	if av, ok := a.(types.Date); ok {
-		return int64(av - b.(types.Date))
-	}
-	if av, ok := a.(types.Datetime); ok {
-		return int64(av - b.(types.Datetime))
-	}
-	if av, ok := a.([]byte); ok {
-		return int64(bytes.Compare(av, b.([]byte)))
-	}
-	logutil.Infof("%+v\n%+v\n", a, b)
-	panic("invalid type")
 }
 

@@ -4,17 +4,20 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
 )
 
 type blockAppender struct {
 	node   *appendableNode
 	handle base.INodeHandle
+	indexAppender accessif.IAppendableBlockIndexHolder
 }
 
-func newAppender(node *appendableNode) *blockAppender {
+func newAppender(node *appendableNode, idxApd accessif.IAppendableBlockIndexHolder) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
 	appender.handle = node.mgr.Pin(node)
+	appender.indexAppender = idxApd
 	return appender
 }
 
@@ -41,5 +44,11 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		from, err = appender.node.ApplyAppend(bat, offset, length, ctx)
 		return err
 	})
+
+	schema := appender.node.meta.GetSegment().GetTable().GetSchema()
+	pkIdx := schema.PrimaryKey
+	pks := bat.Vecs[pkIdx]
+	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
+
 	return
 }

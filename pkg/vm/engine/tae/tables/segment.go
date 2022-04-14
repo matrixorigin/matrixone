@@ -90,5 +90,13 @@ func (segment *dataSegment) SetAppender(blkId uint64) (appender data.BlockAppend
 }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) (err error) {
-	return
+	blkIt := segment.meta.MakeBlockIt(false)
+	for blkIt.Valid() {
+		block := blkIt.Get().GetPayload().(*catalog.BlockEntry)
+		if err = block.GetBlockData().BatchDedup(txn, pks); err != nil {
+			return
+		}
+		blkIt.Next()
+	}
+	return nil
 }

@@ -2,6 +2,8 @@ package tables
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/impl"
 	"sync"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -21,19 +23,26 @@ type dataBlock struct {
 	file   dataio.BlockFile
 	bufMgr base.INodeManager
 	chain  *updates.BlockUpdateChain
+	updatableIndexHolder accessif.IAppendableBlockIndexHolder
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile dataio.SegmentFile, bufMgr base.INodeManager) *dataBlock {
 	file := segFile.GetBlockFile(meta.GetID())
 	var node *appendableNode
+	var holder accessif.IAppendableBlockIndexHolder
 	if meta.IsAppendable() {
 		node = newNode(bufMgr, meta, file)
+		schema := meta.GetSegment().GetTable().GetSchema()
+		pkIdx := schema.PrimaryKey
+		pkType := schema.Types()[pkIdx]
+		holder = impl.NewAppendableBlockIndexHolder(pkType)
 	}
 	return &dataBlock{
 		RWMutex: new(sync.RWMutex),
 		meta:    meta,
 		file:    file,
 		node:    node,
+		updatableIndexHolder: holder,
 	}
 }
 
@@ -60,7 +69,7 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 		err = data.ErrNotAppendable
 		return
 	}
-	appender = newAppender(blk.node)
+	appender = newAppender(blk.node, blk.updatableIndexHolder)
 	return
 }
 
@@ -143,4 +152,11 @@ func (blk *dataBlock) GetUpdateChain() txnif.UpdateChain {
 	blk.RLock()
 	defer blk.RUnlock()
 	return blk.chain
+}
+
+func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
+	if blk.updatableIndexHolder == nil {
+		panic("unexpected error")
+	}
+	return blk.updatableIndexHolder.BatchDedup(pks)
 }
