@@ -57,6 +57,10 @@ var (
 	Float64MulSels          func([]float64, []float64, []float64, []int64) []float64
 	Float64MulScalar        func(float64, []float64, []float64) []float64
 	Float64MulScalarSels    func(float64, []float64, []float64, []int64) []float64
+	Decimal64Mul            func([]types.Decimal64, []types.Decimal64, []types.Decimal128) []types.Decimal128
+	Decimal64MulSels        func([]types.Decimal64, []types.Decimal64, []types.Decimal128, []int64) []types.Decimal128
+	Decimal64MulScalar      func(types.Decimal64, []types.Decimal64, []types.Decimal128) []types.Decimal128
+	Decimal64MulScalarSels  func(types.Decimal64, []types.Decimal64, []types.Decimal128, []int64) []types.Decimal128
 	Decimal128Mul           func([]types.Decimal128, []types.Decimal128, []types.Decimal128) []types.Decimal128
 	Decimal128MulSels       func([]types.Decimal128, []types.Decimal128, []types.Decimal128, []int64) []types.Decimal128
 	Decimal128MulScalar     func(types.Decimal128, []types.Decimal128, []types.Decimal128) []types.Decimal128
@@ -131,6 +135,10 @@ func init() {
 	Float64MulSels = float64MulSels
 	Float64MulScalar = float64MulScalar
 	Float64MulScalarSels = float64MulScalarSels
+	Decimal64Mul = decimal64Mul
+	Decimal64MulSels = decimal64MulSels
+	Decimal64MulScalar = decimal64MulScalar
+	Decimal64MulScalarSels = decimal64MulScalarSels
 	Decimal128Mul = decimal128Mul
 	Decimal128MulSels = decimal128MulSels
 	Decimal128MulScalar = decimal128MulScalar
@@ -626,36 +634,34 @@ func uint8Uint16MulSels(xs []uint8, ys, rs []uint16, sels []int64) []uint16 {
 	return rs
 }
 
-/*
-func float32Mul(xs, ys, rs []float32) []float32 {
+func decimal64Mul(xs []types.Decimal64, ys []types.Decimal64, rs []types.Decimal128) []types.Decimal128 {
 	for i, x := range xs {
-		rs[i] = x * ys[i]
+		rs[i] = types.Decimal64Decimal64Mul(x, ys[i])
 	}
 	return rs
 }
 
-func float32MulSels(xs, ys, rs []float32, sels []int64) []float32 {
+func decimal64MulSels(xs, ys []types.Decimal64, rs []types.Decimal128, sels []int64) []types.Decimal128 {
 	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
+		rs[i] = types.Decimal64Decimal64Mul(xs[sel], ys[sel])
 	}
 	return rs
 }
 
-func float32MulScalar(x float32, ys, rs []float32) []float32 {
+func decimal64MulScalar(x types.Decimal64, ys []types.Decimal64, rs []types.Decimal128) []types.Decimal128 {
 	for i, y := range ys {
-		rs[i] = x * y
+		rs[i] = types.Decimal64Decimal64Mul(x, y)
 	}
 	return rs
 }
 
-func float32MulScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
+func decimal64MulScalarSels(x types.Decimal64, ys []types.Decimal64, rs []types.Decimal128, sels []int64) []types.Decimal128 {
 	for i, sel := range sels {
-		rs[i] = x * ys[sel]
+		rs[i] = types.Decimal64Decimal64Mul(x, ys[sel])
 	}
 	return rs
 }
 
-*/
 func decimal128Mul(xs []types.Decimal128, ys []types.Decimal128, rs []types.Decimal128) []types.Decimal128 {
 	for i, x := range xs {
 		rs[i] = types.Decimal128Decimal128Mul(x, ys[i])

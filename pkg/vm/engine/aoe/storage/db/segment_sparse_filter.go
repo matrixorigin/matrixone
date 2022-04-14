@@ -445,8 +445,10 @@ func compare(val1, val2 interface{}, typ types.Type) int {
 		return int(val1.(types.Datetime) - val2.(types.Datetime))
 	case types.T_date:
 		return int(val1.(types.Date) - val2.(types.Date))
+	case types.T_decimal64:
+		return 1 // todo: add a types.CompareDecimal64Decimal64 function
 	case types.T_decimal128:
-		return 1
+		return int(types.CompareDecimal128Decimal128Aligned(val1.(types.Decimal128), val2.(types.Decimal128)))
 	}
 	panic("unsupported")
 }

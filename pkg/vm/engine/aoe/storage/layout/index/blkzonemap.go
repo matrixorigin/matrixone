@@ -198,6 +198,12 @@ func (i *BlockZoneMapIndex) Unmarshal(data []byte) error {
 		i.MaxV = encoding.DecodeDatetime(buf[:8])
 		// buf = buf[8:] // unused
 		return nil
+	case types.T_decimal64:
+		i.MinV = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		i.MaxV = encoding.DecodeDecimal64(buf[:8])
+		// buf = buf[8:] // unused
+		return nil
 	case types.T_decimal128:
 		i.MinV = encoding.DecodeDecimal128(buf[:16])
 		buf = buf[16:]

@@ -121,6 +121,12 @@ func New(typ types.Type) *Vector {
 			Col: &types.Bytes{},
 			Nsp: &nulls.Nulls{},
 		}
+	case types.T_decimal64:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Decimal64{},
+			Nsp: &nulls.Nulls{},
+		}
 	case types.T_decimal128:
 		return &Vector{
 			Typ: typ,
@@ -247,6 +253,11 @@ func SetLength(v *Vector, n int) {
 		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
 	case types.T_datetime:
 		vs := v.Col.([]types.Datetime)
+		m := len(vs)
+		v.Col = vs[:n]
+		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+	case types.T_decimal64:
+		vs := v.Col.([]types.Decimal64)
 		m := len(vs)
 		v.Col = vs[:n]
 		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
@@ -482,6 +493,22 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Ref:  v.Ref,
 			Link: v.Link,
 		}, nil
+	case types.T_decimal64:
+		vs := v.Col.([]types.Decimal64)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeDecimal64Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	case types.T_decimal128:
 		vs := v.Col.([]types.Decimal128)
 		data, err := mheap.Alloc(m, int64(len(vs)*16))
@@ -550,6 +577,9 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	case types.T_datetime:
 		w.Col = v.Col.([]types.Datetime)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	case types.T_decimal64:
+		w.Col = v.Col.([]types.Decimal64)[start:end]
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	case types.T_decimal128:
 		w.Col = v.Col.([]types.Decimal128)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
@@ -591,6 +621,8 @@ func Append(v *Vector, arg interface{}) error {
 		v.Col = append(v.Col.([][]interface{}), arg.([][]interface{})...)
 	case types.T_char, types.T_varchar, types.T_json:
 		return v.Col.(*types.Bytes).Append(arg.([][]byte))
+	case types.T_decimal64:
+		v.Col = append(v.Col.([]types.Decimal64), arg.([]types.Decimal64)...)
 	case types.T_decimal128:
 		v.Col = append(v.Col.([]types.Decimal128), arg.([]types.Decimal128)...)
 	default:
@@ -703,6 +735,13 @@ func Shrink(v *Vector, sels []int64) {
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	case types.T_datetime:
 		vs := v.Col.([]types.Datetime)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_decimal64:
+		vs := v.Col.([]types.Decimal64)
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
@@ -870,6 +909,16 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		}
 		ws := encoding.DecodeDatetimeSlice(data)
 		v.Col = shuffle.DatetimeShuffle(vs, ws, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		mheap.Free(m, data)
+	case types.T_decimal64:
+		vs := v.Col.([]types.Decimal64)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return err
+		}
+		ws := encoding.DecodeDecimal64Slice(data)
+		v.Col = shuffle.Decimal64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_decimal128:
@@ -1280,6 +1329,33 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]types.Datetime)[sel])
+			v.Col = vs
+		}
+	case types.T_decimal64:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 8*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDecimal64Slice(data)
+			vs[0] = w.Col.([]types.Decimal64)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Decimal64)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDecimal64Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]types.Decimal64)[sel])
 			v.Col = vs
 		}
 	case types.T_decimal128:
@@ -1892,6 +1968,48 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 			v.Col = vs
 		}
 
+	case types.T_decimal64:
+		col := w.Col.([]types.Decimal64)
+		if len(v.Data) == 0 {
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeDecimal64Slice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Decimal64)
+			n := len(vs)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeDecimal64Slice(data)
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
 	case types.T_decimal128:
 		col := w.Col.([]types.Decimal128)
 		if len(v.Data) == 0 {
@@ -2143,6 +2261,18 @@ func (v *Vector) Show() ([]byte, error) {
 		}
 		buf.Write(data)
 		return buf.Bytes(), nil
+	case types.T_decimal64:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeDecimal64Slice(v.Col.([]types.Decimal64)))
+		return buf.Bytes(), nil
 	case types.T_decimal128:
 		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
@@ -2343,6 +2473,17 @@ func (v *Vector) Read(data []byte) error {
 			return err
 		}
 		v.Col = col
+	case types.T_decimal64:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeDecimal64Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeDecimal64Slice(data[size:])
+		}
 	case types.T_decimal128:
 		size := encoding.DecodeUint32(data)
 		if size == 0 {
@@ -2493,6 +2634,15 @@ func (v *Vector) String() string {
 				return "null"
 			} else {
 				return fmt.Sprintf("%s\n", col.Get(0))
+			}
+		}
+	case types.T_decimal64:
+		col := v.Col.([]types.Decimal64)
+		if len(col) == 1 {
+			if nulls.Contains(v.Nsp, 0) {
+				return "null"
+			} else {
+				return fmt.Sprintf("%v", col[0])
 			}
 		}
 	case types.T_decimal128:
@@ -2861,6 +3011,33 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 					rs[i] = nullStr
 				} else {
 					rs[i] = fmt.Sprintf("%s", vs[index].String())
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_decimal64:
+		vs := v.Col.([]types.Decimal64)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%d", vs[index])
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%d", vs[index])
 				}
 			}
 			for count > 1 {

@@ -366,6 +366,22 @@ func (i *SegmentZoneMapIndex) Unmarshal(data []byte) error {
 			buf = buf[4:]
 		}
 		return nil
+	case types.T_decimal64:
+		i.MinV = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		i.MaxV = encoding.DecodeDecimal64(buf[:8])
+		buf = buf[8:]
+		len := encoding.DecodeInt32(buf[:4])
+		buf = buf[4:]
+		i.BlkMax = make([]interface{}, len)
+		i.BlkMin = make([]interface{}, len)
+		for j := 0; j < int(len); j++ {
+			i.BlkMin[j] = encoding.DecodeDecimal64(buf[:8])
+			buf = buf[8:]
+			i.BlkMax[j] = encoding.DecodeDecimal64(buf[:8])
+			buf = buf[8:]
+		}
+		return nil
 	case types.T_decimal128:
 		i.MinV = encoding.DecodeDecimal128(buf[:16])
 		buf = buf[16:]
@@ -526,6 +542,16 @@ func (i *SegmentZoneMapIndex) Marshal() ([]byte, error) {
 			buf.Write(encoding.EncodeDate(i.BlkMax[j].(types.Date)))
 		}
 		return buf.Bytes(), nil
+	case types.T_decimal64:
+		buf.Write(encoding.EncodeType(i.T))
+		buf.Write(encoding.EncodeDecimal64(i.MinV.(types.Decimal64)))
+		buf.Write(encoding.EncodeDecimal64(i.MaxV.(types.Decimal64)))
+		buf.Write(encoding.EncodeInt32(int32(len(i.BlkMin))))
+		for j := 0; j < len(i.BlkMin); j++ {
+			buf.Write(encoding.EncodeDecimal64(i.BlkMin[j].(types.Decimal64)))
+			buf.Write(encoding.EncodeDecimal64(i.BlkMax[j].(types.Decimal64)))
+		}
+		return buf.Bytes(), nil
 	case types.T_decimal128:
 		buf.Write(encoding.EncodeType(i.T))
 		buf.Write(encoding.EncodeDecimal128(i.MinV.(types.Decimal128)))
@@ -579,6 +605,14 @@ func (i *SegmentZoneMapIndex) Eq(v interface{}) bool {
 			return false
 		}
 		if bytes.Compare(v.([]byte), i.MaxV.([]byte)) > 0 {
+			return false
+		}
+		return true
+	case types.T_decimal64:
+		if types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MinV.(types.Decimal64)) < 0 { // is these two decimal128 the same column, I am not sure...
+			return false
+		}
+		if types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MaxV.(types.Decimal64)) > 0 {
 			return false
 		}
 		return true

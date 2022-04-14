@@ -14,73 +14,86 @@
 
 package sub
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
+)
 
 var (
-	Int8Sub                 func([]int8, []int8, []int8) []int8
-	Int8SubSels             func([]int8, []int8, []int8, []int64) []int8
-	Int8SubScalar           func(int8, []int8, []int8) []int8
-	Int8SubScalarSels       func(int8, []int8, []int8, []int64) []int8
-	Int8SubByScalar         func(int8, []int8, []int8) []int8
-	Int8SubByScalarSels     func(int8, []int8, []int8, []int64) []int8
-	Int16Sub                func([]int16, []int16, []int16) []int16
-	Int16SubSels            func([]int16, []int16, []int16, []int64) []int16
-	Int16SubScalar          func(int16, []int16, []int16) []int16
-	Int16SubScalarSels      func(int16, []int16, []int16, []int64) []int16
-	Int16SubByScalar        func(int16, []int16, []int16) []int16
-	Int16SubByScalarSels    func(int16, []int16, []int16, []int64) []int16
-	Int32Sub                func([]int32, []int32, []int32) []int32
-	Int32SubSels            func([]int32, []int32, []int32, []int64) []int32
-	Int32SubScalar          func(int32, []int32, []int32) []int32
-	Int32SubScalarSels      func(int32, []int32, []int32, []int64) []int32
-	Int32SubByScalar        func(int32, []int32, []int32) []int32
-	Int32SubByScalarSels    func(int32, []int32, []int32, []int64) []int32
-	Int64Sub                func([]int64, []int64, []int64) []int64
-	Int64SubSels            func([]int64, []int64, []int64, []int64) []int64
-	Int64SubScalar          func(int64, []int64, []int64) []int64
-	Int64SubScalarSels      func(int64, []int64, []int64, []int64) []int64
-	Int64SubByScalar        func(int64, []int64, []int64) []int64
-	Int64SubByScalarSels    func(int64, []int64, []int64, []int64) []int64
-	Uint8Sub                func([]uint8, []uint8, []uint8) []uint8
-	Uint8SubSels            func([]uint8, []uint8, []uint8, []int64) []uint8
-	Uint8SubScalar          func(uint8, []uint8, []uint8) []uint8
-	Uint8SubScalarSels      func(uint8, []uint8, []uint8, []int64) []uint8
-	Uint8SubByScalar        func(uint8, []uint8, []uint8) []uint8
-	Uint8SubByScalarSels    func(uint8, []uint8, []uint8, []int64) []uint8
-	Uint16Sub               func([]uint16, []uint16, []uint16) []uint16
-	Uint16SubSels           func([]uint16, []uint16, []uint16, []int64) []uint16
-	Uint16SubScalar         func(uint16, []uint16, []uint16) []uint16
-	Uint16SubScalarSels     func(uint16, []uint16, []uint16, []int64) []uint16
-	Uint16SubByScalar       func(uint16, []uint16, []uint16) []uint16
-	Uint16SubByScalarSels   func(uint16, []uint16, []uint16, []int64) []uint16
-	Uint32Sub               func([]uint32, []uint32, []uint32) []uint32
-	Uint32SubSels           func([]uint32, []uint32, []uint32, []int64) []uint32
-	Uint32SubScalar         func(uint32, []uint32, []uint32) []uint32
-	Uint32SubScalarSels     func(uint32, []uint32, []uint32, []int64) []uint32
-	Uint32SubByScalar       func(uint32, []uint32, []uint32) []uint32
-	Uint32SubByScalarSels   func(uint32, []uint32, []uint32, []int64) []uint32
-	Uint64Sub               func([]uint64, []uint64, []uint64) []uint64
-	Uint64SubSels           func([]uint64, []uint64, []uint64, []int64) []uint64
-	Uint64SubScalar         func(uint64, []uint64, []uint64) []uint64
-	Uint64SubScalarSels     func(uint64, []uint64, []uint64, []int64) []uint64
-	Uint64SubByScalar       func(uint64, []uint64, []uint64) []uint64
-	Uint64SubByScalarSels   func(uint64, []uint64, []uint64, []int64) []uint64
-	Float32Sub              func([]float32, []float32, []float32) []float32
-	Float32SubSels          func([]float32, []float32, []float32, []int64) []float32
-	Float32SubScalar        func(float32, []float32, []float32) []float32
-	Float32SubScalarSels    func(float32, []float32, []float32, []int64) []float32
-	Float32SubByScalar      func(float32, []float32, []float32) []float32
-	Float32SubByScalarSels  func(float32, []float32, []float32, []int64) []float32
-	Float64Sub              func([]float64, []float64, []float64) []float64
-	Float64SubSels          func([]float64, []float64, []float64, []int64) []float64
-	Float64SubScalar        func(float64, []float64, []float64) []float64
-	Float64SubScalarSels    func(float64, []float64, []float64, []int64) []float64
-	Float64SubByScalar      func(float64, []float64, []float64) []float64
-	Float64SubByScalarSels  func(float64, []float64, []float64, []int64) []float64
-	Decimal128Sub           func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
-	Decimal128SubSels       func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
-	Decimal128SubScalar     func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
-	Decimal128SubScalarSels func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Int8Sub                func([]int8, []int8, []int8) []int8
+	Int8SubSels            func([]int8, []int8, []int8, []int64) []int8
+	Int8SubScalar          func(int8, []int8, []int8) []int8
+	Int8SubScalarSels      func(int8, []int8, []int8, []int64) []int8
+	Int8SubByScalar        func(int8, []int8, []int8) []int8
+	Int8SubByScalarSels    func(int8, []int8, []int8, []int64) []int8
+	Int16Sub               func([]int16, []int16, []int16) []int16
+	Int16SubSels           func([]int16, []int16, []int16, []int64) []int16
+	Int16SubScalar         func(int16, []int16, []int16) []int16
+	Int16SubScalarSels     func(int16, []int16, []int16, []int64) []int16
+	Int16SubByScalar       func(int16, []int16, []int16) []int16
+	Int16SubByScalarSels   func(int16, []int16, []int16, []int64) []int16
+	Int32Sub               func([]int32, []int32, []int32) []int32
+	Int32SubSels           func([]int32, []int32, []int32, []int64) []int32
+	Int32SubScalar         func(int32, []int32, []int32) []int32
+	Int32SubScalarSels     func(int32, []int32, []int32, []int64) []int32
+	Int32SubByScalar       func(int32, []int32, []int32) []int32
+	Int32SubByScalarSels   func(int32, []int32, []int32, []int64) []int32
+	Int64Sub               func([]int64, []int64, []int64) []int64
+	Int64SubSels           func([]int64, []int64, []int64, []int64) []int64
+	Int64SubScalar         func(int64, []int64, []int64) []int64
+	Int64SubScalarSels     func(int64, []int64, []int64, []int64) []int64
+	Int64SubByScalar       func(int64, []int64, []int64) []int64
+	Int64SubByScalarSels   func(int64, []int64, []int64, []int64) []int64
+	Uint8Sub               func([]uint8, []uint8, []uint8) []uint8
+	Uint8SubSels           func([]uint8, []uint8, []uint8, []int64) []uint8
+	Uint8SubScalar         func(uint8, []uint8, []uint8) []uint8
+	Uint8SubScalarSels     func(uint8, []uint8, []uint8, []int64) []uint8
+	Uint8SubByScalar       func(uint8, []uint8, []uint8) []uint8
+	Uint8SubByScalarSels   func(uint8, []uint8, []uint8, []int64) []uint8
+	Uint16Sub              func([]uint16, []uint16, []uint16) []uint16
+	Uint16SubSels          func([]uint16, []uint16, []uint16, []int64) []uint16
+	Uint16SubScalar        func(uint16, []uint16, []uint16) []uint16
+	Uint16SubScalarSels    func(uint16, []uint16, []uint16, []int64) []uint16
+	Uint16SubByScalar      func(uint16, []uint16, []uint16) []uint16
+	Uint16SubByScalarSels  func(uint16, []uint16, []uint16, []int64) []uint16
+	Uint32Sub              func([]uint32, []uint32, []uint32) []uint32
+	Uint32SubSels          func([]uint32, []uint32, []uint32, []int64) []uint32
+	Uint32SubScalar        func(uint32, []uint32, []uint32) []uint32
+	Uint32SubScalarSels    func(uint32, []uint32, []uint32, []int64) []uint32
+	Uint32SubByScalar      func(uint32, []uint32, []uint32) []uint32
+	Uint32SubByScalarSels  func(uint32, []uint32, []uint32, []int64) []uint32
+	Uint64Sub              func([]uint64, []uint64, []uint64) []uint64
+	Uint64SubSels          func([]uint64, []uint64, []uint64, []int64) []uint64
+	Uint64SubScalar        func(uint64, []uint64, []uint64) []uint64
+	Uint64SubScalarSels    func(uint64, []uint64, []uint64, []int64) []uint64
+	Uint64SubByScalar      func(uint64, []uint64, []uint64) []uint64
+	Uint64SubByScalarSels  func(uint64, []uint64, []uint64, []int64) []uint64
+	Float32Sub             func([]float32, []float32, []float32) []float32
+	Float32SubSels         func([]float32, []float32, []float32, []int64) []float32
+	Float32SubScalar       func(float32, []float32, []float32) []float32
+	Float32SubScalarSels   func(float32, []float32, []float32, []int64) []float32
+	Float32SubByScalar     func(float32, []float32, []float32) []float32
+	Float32SubByScalarSels func(float32, []float32, []float32, []int64) []float32
+
+	Float64Sub             func([]float64, []float64, []float64) []float64
+	Float64SubSels         func([]float64, []float64, []float64, []int64) []float64
+	Float64SubScalar       func(float64, []float64, []float64) []float64
+	Float64SubScalarSels   func(float64, []float64, []float64, []int64) []float64
+	Float64SubByScalar     func(float64, []float64, []float64) []float64
+	Float64SubByScalarSels func(float64, []float64, []float64, []int64) []float64
+
+	Decimal64Sub              func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64) []types.Decimal64
+	Decimal64SubSels          func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64, []int64) []types.Decimal64
+	Decimal64SubScalar        func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64) []types.Decimal64
+	Decimal64SubScalarSels    func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64, []int64) []types.Decimal64
+	Decimal64SubByScalar      func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64) []types.Decimal64
+	Decimal64SubByScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64, []int64) []types.Decimal64
+	Decimal128Sub             func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128SubSels         func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128SubScalar       func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128SubScalarSels   func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128SubByScalar     func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128SubByScalarSels func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
 
 	Int32Int64Sub         func([]int64, []int32, []int64) []int64
 	Int32Int64SubSels     func([]int64, []int32, []int64, []int64) []int64
@@ -111,10 +124,18 @@ var (
 )
 
 func init() {
+	Decimal64Sub = decimal64Sub
+	Decimal64SubSels = decimal64SubSels
+	Decimal64SubScalar = decimal64SubScalar
+	Decimal64SubScalarSels = decimal64SubScalarSels
+	Decimal64SubByScalar = decimal64SubByScalar
+	Decimal64SubByScalarSels = decimal64SubByScalarSels
 	Decimal128Sub = decimal128Sub
 	Decimal128SubSels = decimal128SubSels
 	Decimal128SubScalar = decimal128SubScalar
 	Decimal128SubScalarSels = decimal128SubScalarSels
+	Decimal128SubByScalar = decimal128SubByScalar
+	Decimal128SubByScalarSels = decimal128SubByScalarSels
 }
 
 func int8Sub(xs, ys, rs []int8) []int8 {
@@ -719,6 +740,118 @@ func uint8Uint16SubSels(xs []uint16, ys []uint8, rs []uint16, sels []int64) []ui
 	return rs
 }
 
+func decimal64Sub(xs []types.Decimal64, ys []types.Decimal64, xsScale int32, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+	if xsScale > ysScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xsScale - ysScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, x := range xs {
+			rs[i] = types.Decimal64SubAligned(x, ysScaled[i])
+		}
+		return rs
+	} else if xsScale < ysScale {
+		xsScaled := make([]types.Decimal64, len(xs))
+		scaleDiff := ysScale - xsScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, x := range xs {
+			xsScaled[i] = types.ScaleDecimal64(x, scale)
+		}
+		for i, y := range ys {
+			rs[i] = types.Decimal64SubAligned(xsScaled[i], y)
+		}
+		return rs
+	} else {
+		for i, x := range xs {
+			rs[i] = types.Decimal64SubAligned(x, ys[i])
+		}
+		return rs
+	}
+}
+
+func decimal64SubSels(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal64Sub(xs[sel], ys[sel], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64SubScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+	if xScale > ysScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - ysScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, yScaled := range ysScaled {
+			rs[i] = types.Decimal64SubAligned(x, yScaled)
+		}
+		return rs
+	} else if xScale < ysScale {
+		xScaled := x
+		scaleDiff := ysScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled = types.ScaleDecimal64(x, scale)
+		for i, y := range ys {
+			rs[i] = types.Decimal64SubAligned(xScaled, y)
+		}
+		return rs
+	} else {
+		for i, y := range ys {
+			rs[i] = types.Decimal64SubAligned(x, y)
+		}
+		return rs
+	}
+	return rs
+}
+
+func decimal64SubScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal64Sub(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64SubByScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+	if xScale > ysScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - ysScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, yScaled := range ysScaled {
+			rs[i] = types.Decimal64SubAligned(yScaled, x)
+		}
+		return rs
+	} else if xScale < ysScale {
+		xScaled := x
+		scaleDiff := ysScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled = types.ScaleDecimal64(x, scale)
+		for i, y := range ys {
+			rs[i] = types.Decimal64SubAligned(y, xScaled)
+		}
+		return rs
+	} else {
+		for i, y := range ys {
+			rs[i] = types.Decimal64SubAligned(y, x)
+		}
+		return rs
+	}
+	return rs
+}
+
+func decimal64SubByScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal64Sub(ys[sel], x, ysScale, xScale)
+	}
+	return rs
+}
+
 func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
 	/* to add two decimal128 value, first we need to align them to the same scale(the maximum of the two)
 																	Decimal(20, 5), Decimal(20, 6)
@@ -734,7 +867,7 @@ func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, 
 		for i, y := range ys {
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 		}
@@ -748,7 +881,7 @@ func decimal128Sub(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, 
 		for i, x := range xs {
 			xsScaled[i] = x
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				xsScaled[i] = types.ScaleDecimal128By10(xsScaled[i])
 			}
 		}
@@ -778,7 +911,7 @@ func decimal128SubScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysSc
 		for i, y := range ys {
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 		}
@@ -813,7 +946,44 @@ func decimal128SubScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, 
 	return rs
 }
 
-/*
+func decimal128SubByScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	if xScale > ysScale {
+		ysScaled := make([]types.Decimal128, len(ys))
+		scaleDiff := xScale - ysScale
+		for i, y := range ys {
+			ysScaled[i] = y
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for j := 0; j < int(scaleDiff); j++ {
+				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
+			}
+		}
+		for i, yScaled := range ysScaled {
+			rs[i] = types.Decimal128SubAligned(yScaled, x)
+		}
+		return rs
+	} else if xScale < ysScale {
+		xScaled := x
+		scaleDiff := ysScale - xScale
+		// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+		for i := 0; i < int(scaleDiff); i++ {
+			xScaled = types.ScaleDecimal128By10(xScaled)
+		}
+		for i, y := range ys {
+			rs[i] = types.Decimal128SubAligned(y, xScaled)
+		}
+		return rs
+	} else {
+		for i, y := range ys {
+			rs[i] = types.Decimal128SubAligned(y, x)
+		}
+		return rs
+	}
+	return rs
+}
 
-
- */
+func decimal128SubByScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal128Sub(ys[sel], x, ysScale, xScale)
+	}
+	return rs
+}

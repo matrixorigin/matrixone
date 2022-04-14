@@ -398,6 +398,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			if err := vector.Append(vec, vs); err != nil {
 				return err
 			}
+		case types.T_decimal64:
+			vs := make([]types.Decimal64, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(types.Decimal64), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(types.Decimal64)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_decimal128:
 			vs := make([]types.Decimal128, len(rows.Rows))
 			{
@@ -462,6 +484,8 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			vec.Col = make([]types.Date, len(rows.Rows))
 		case types.T_datetime:
 			vec.Col = make([]types.Datetime, len(rows.Rows))
+		case types.T_decimal64:
+			vec.Col = make([]types.Decimal64, len(rows.Rows))
 		case types.T_decimal128:
 			vec.Col = make([]types.Decimal128, len(rows.Rows))
 		default:

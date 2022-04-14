@@ -14,7 +14,10 @@
 
 package add
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
+)
 
 var (
 	Int8Add                 func([]int8, []int8, []int8) []int8
@@ -57,6 +60,10 @@ var (
 	Float64AddSels          func([]float64, []float64, []float64, []int64) []float64
 	Float64AddScalar        func(float64, []float64, []float64) []float64
 	Float64AddScalarSels    func(float64, []float64, []float64, []int64) []float64
+	Decimal64Add            func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64) []types.Decimal64
+	Decimal64AddSels        func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64, []int64) []types.Decimal64
+	Decimal64AddScalar      func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64) []types.Decimal64
+	Decimal64AddScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal64, []int64) []types.Decimal64
 	Decimal128Add           func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
 	Decimal128AddSels       func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
 	Decimal128AddScalar     func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
@@ -118,6 +125,10 @@ var (
 
 func init() {
 
+	Decimal64Add = decimal64Add
+	Decimal64AddSels = decimal64AddSels
+	Decimal64AddScalar = decimal64AddScalar
+	Decimal64AddScalarSels = decimal64AddScalarSels
 	Decimal128Add = decimal128Add
 	Decimal128AddSels = decimal128AddSels
 	Decimal128AddScalar = decimal128AddScalar
@@ -768,6 +779,88 @@ func uint8Uint16AddScalarSels(x uint8, ys, rs []uint16, sels []int64) []uint16 {
 	return rs
 }
 
+func decimal64Add(xs []types.Decimal64, ys []types.Decimal64, xsScale int32, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+	/* to add two decimal64 value, first we need to align them to the same scale(the maximum of the two)
+																	Decimal(10, 5), Decimal(10, 6)
+	value																321.4			123.5
+	representation														32,140,000		123,500,000
+	align to the same scale	by scale 32,140,000 by 10 					321,400,000		123,500,000
+	add
+	*/
+	if xsScale > ysScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xsScale - ysScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, x := range xs {
+			rs[i] = types.Decimal64AddAligned(x, ysScaled[i])
+		}
+		return rs
+	} else if xsScale < ysScale {
+		xsScaled := make([]types.Decimal64, len(xs))
+		scaleDiff := ysScale - xsScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, x := range xs {
+			xsScaled[i] = types.ScaleDecimal64(x, scale)
+		}
+		for i, y := range ys {
+			rs[i] = types.Decimal64AddAligned(xsScaled[i], y)
+		}
+		return rs
+	} else {
+		for i, x := range xs {
+			rs[i] = types.Decimal64AddAligned(x, ys[i])
+		}
+		return rs
+	}
+}
+
+func decimal64AddSels(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal64Add(xs[sel], ys[sel], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64AddScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64) []types.Decimal64 {
+	if xScale > ysScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - ysScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, yScaled := range ysScaled {
+			rs[i] = types.Decimal64AddAligned(x, yScaled)
+		}
+		return rs
+	} else if xScale < ysScale {
+		xScaled := x
+		scaleDiff := ysScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled = types.ScaleDecimal64(x, scale)
+		for i, y := range ys {
+			rs[i] = types.Decimal64AddAligned(xScaled, y)
+		}
+		return rs
+	} else {
+		for i, y := range ys {
+			rs[i] = types.Decimal64AddAligned(x, y)
+		}
+		return rs
+	}
+	return rs
+}
+
+func decimal64AddScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
+	for i, sel := range sels {
+		rs[i] = types.Decimal64Add(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
 func decimal128Add(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
 	/* to add two decimal128 value, first we need to align them to the same scale(the maximum of the two)
 																	Decimal(20, 5), Decimal(20, 6)
@@ -783,7 +876,7 @@ func decimal128Add(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, 
 		for i, y := range ys {
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 		}
@@ -797,7 +890,7 @@ func decimal128Add(xs []types.Decimal128, ys []types.Decimal128, xsScale int32, 
 		for i, x := range xs {
 			xsScaled[i] = x
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				xsScaled[i] = types.ScaleDecimal128By10(xsScaled[i])
 			}
 		}
@@ -827,7 +920,7 @@ func decimal128AddScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysSc
 		for i, y := range ys {
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 		}
@@ -861,8 +954,3 @@ func decimal128AddScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, 
 	}
 	return rs
 }
-
-/*
-
-
- */

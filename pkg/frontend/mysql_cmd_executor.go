@@ -429,6 +429,20 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = vs[rowIndex]
 					}
 				}
+			case types.T_decimal64:
+				fmt.Println("the scale for this decimal is", vec.Typ.Scale)
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal64)
+					row[i] = vs[rowIndex].Decimal64ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal64)
+						row[i] = vs[rowIndex].Decimal64ToString(scale)
+					}
+				}
 			case types.T_decimal128:
 				fmt.Println("the scale for this decimal is", vec.Typ.Scale)
 				scale := vec.Typ.Scale
@@ -1392,6 +1406,8 @@ func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_decimal64:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:

@@ -5128,7 +5128,7 @@ decimal_type:
 	    },
         }
     }
-|   FLOAT_TYPE decimal_length_opt
+|   FLOAT_TYPE float_length_opt
     {
         locale := ""
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
@@ -5566,15 +5566,15 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.NotDefineDisplayWidth,
-            Precision: tree.NotDefineDec,
+            DisplayWith: 10,           // this is the default precision for decimal
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: tree.NotDefineDec,
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'

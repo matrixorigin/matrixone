@@ -657,6 +657,10 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				}
 				return int64(v), nil
 			}
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			v, _ := constant.Uint64Val(val)
 			if num.Negative() {
@@ -741,18 +745,9 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return float64(v), nil
 		case types.T_datetime:
 			return types.ParseDatetime(str)
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
 		case types.T_decimal128:
-			/*
-				scaleDiff := 0
-				parts := strings.Split(str, ".")
-				if len(parts) == 1 {
-					// todo
-				} else if len(parts) == 2 {
-					return types.ParseStringToDecimal128(parts[0]+parts[1], scaleDiff)
-				} else {
-					return nil, errors.New(errno.InvalidName, "invalid Decimal string") // todo: perhaps add a new errno
-				}
-			*/
 			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		}
 	case constant.String:

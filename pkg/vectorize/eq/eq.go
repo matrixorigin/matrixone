@@ -111,6 +111,14 @@ var (
 	StrEqNullableScalar            func([]byte, *types.Bytes, *roaring.Bitmap, []int64) []int64
 	StrEqScalarSels                func([]byte, *types.Bytes, []int64, []int64) []int64
 	StrEqNullableScalarSels        func([]byte, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal64Eq                    func([]types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64EqNullable            func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64EqSels                func([]types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64EqNullableSels        func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal64EqScalar              func(types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64EqNullableScalar      func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64EqScalarSels          func(types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64EqNullableScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
 	Decimal128Eq                   func([]types.Decimal128, []types.Decimal128, int32, int32, []int64) []int64
 	Decimal128EqNullable           func([]types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64) []int64
 	Decimal128EqSels               func([]types.Decimal128, []types.Decimal128, int32, int32, []int64, []int64) []int64
@@ -210,6 +218,14 @@ func init() {
 	StrEqNullableScalar = strEqNullableScalar
 	StrEqScalarSels = strEqScalarSels
 	StrEqNullableScalarSels = strEqNullableScalarSels
+	Decimal64Eq = decimal64Eq
+	Decimal64EqNullable = decimal64EqNullable
+	Decimal64EqSels = decimal64EqSels
+	Decimal64EqNullableSels = decimal64EqNullableSels
+	Decimal64EqScalar = decimal64EqScalar
+	Decimal64EqNullableScalar = decimal64EqNullableScalar
+	Decimal64EqScalarSels = decimal64EqScalarSels
+	Decimal64EqNullableScalarSels = decimal64EqNullableScalarSels
 	Decimal128Eq = decimal128Eq
 	Decimal128EqNullable = decimal128EqNullable
 	Decimal128EqSels = decimal128EqSels
@@ -1522,6 +1538,187 @@ func strEqNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, r
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && bytes.Equal(x, ys.Get(sel)) {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64Eq(xs, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	// to compare two decimal values, first we need to align them to the same scale
+	// for example,    							Decimal(20, 3)  Decimal(20, 5)
+	// 				value: 						12.3 			123.45
+	// 				internal representation: 	12300  			12345000
+	// align to the same scale by scale the smaller scale decimal to the same scale as the bigger one:
+	// 											1230000         12345000
+	// 				then do integer comparison
+
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - yScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ysScaled[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xsScaled := make([]types.Decimal64, len(xs))
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, x := range xs {
+			xsScaled[i] = types.ScaleDecimal64(x, scale)
+		}
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xsScaled[i], y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ys[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64EqNullable(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, ys[i], xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqSels(xs, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqNullableSels(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		for i, y := range ys {
+			scaleDiff := xScale - yScale
+			scale := int64(math.Pow10(int(scaleDiff)))
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, yScaled := range ysScaled {
+			if types.CompareDecimal64Decimal64Aligned(x, yScaled) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled := types.ScaleDecimal64(x, scale)
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xScaled, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(x, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64EqNullableScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, y, xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqNullableScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) == 0 {
 			rs[rsi] = sel
 			rsi++
 		}

@@ -49,6 +49,7 @@ const (
 	T_json = 32
 
 	// numeric/decimal family - unsigned attribute is deprecated
+	T_decimal64  = 40
 	T_decimal128 = 41
 
 	// system family
@@ -78,6 +79,7 @@ type Date int32
 
 type Datetime int64
 
+type Decimal64 int64
 type Decimal128 struct {
 	lo int64
 	hi int64
@@ -96,6 +98,7 @@ var Types map[string]T = map[string]T{
 	"integer unsigned":  T_int32,
 	"bigint unsigned":   T_int64,
 
+	"decimal64":  T_decimal64,
 	"decimal128": T_decimal128,
 
 	"float":  T_float32,
@@ -149,6 +152,8 @@ func (t T) ToType() Type {
 		typ.Size = 24
 	case T_sel:
 		typ.Size = 8
+	case T_decimal64:
+		typ.Size = 8
 	case T_decimal128:
 		typ.Size = 16
 	}
@@ -191,6 +196,8 @@ func (t T) String() string {
 		return "SEL"
 	case T_tuple:
 		return "TUPLE"
+	case T_decimal64:
+		return "DECIMAL64"
 	case T_decimal128:
 		return "DECIMAL128"
 	}
@@ -232,6 +239,8 @@ func (t T) OidString() string {
 		return "T_date"
 	case T_datetime:
 		return "T_datetime"
+	case T_decimal64:
+		return "T_decimal64"
 	case T_decimal128:
 		return "T_decimal128"
 	}
@@ -271,6 +280,8 @@ func (t T) GoType() string {
 		return "date"
 	case T_datetime:
 		return "datetime"
+	case T_decimal64:
+		return "decimal64"
 	case T_decimal128:
 		return "decimal128"
 	}
@@ -314,6 +325,8 @@ func (t T) TypeLen() int {
 	case T_varchar:
 		return 24
 	case T_sel:
+		return 8
+	case T_decimal64:
 		return 8
 	case T_decimal128:
 		return 16

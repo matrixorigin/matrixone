@@ -167,6 +167,8 @@ func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 		return v.Col.([]int64)[idx], nil
 	case types.T_tuple:
 		return v.Col.([][]interface{})[idx], nil
+	case types.T_decimal64:
+		return v.Col.([]types.Decimal64)[idx], nil
 	case types.T_decimal128:
 		return v.Col.([]types.Decimal128)[idx], nil
 	default:

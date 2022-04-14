@@ -239,5 +239,138 @@ func initMult() {
             },
         },
         {{end}}
+
+
+		{
+			LeftType:   types.T_decimal64,
+			RightType:  types.T_decimal64,
+			ReturnType: types.T_decimal64,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+				resultScale := lv.Typ.Scale + rv.Typ.Scale
+				resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, mul.Decimal64MulScalar(lvs[0], rvs, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				case !lc && rc:
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, mul.Decimal64MulScalar(rvs[0], lvs, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal128Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				vector.SetCol(vec, mul.Decimal64Mul(lvs, rvs, rs))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				vec.Typ = resultTyp
+				return vec, nil
+			},
+		},
+
+		{
+			LeftType:   types.T_decimal128,
+			RightType:  types.T_decimal128,
+			ReturnType: types.T_decimal128,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+				resultScale := lv.Typ.Scale + rv.Typ.Scale
+				resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					if rv.Ref == 1 || rv.Ref == 0 {
+						rv.Ref = 0
+						mul.Decimal128MulScalar(lvs[0], rvs, rvs)
+						rv.Typ = resultTyp
+						return rv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, mul.Decimal128MulScalar(lvs[0], rvs, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				case !lc && rc:
+					if lv.Ref == 1 || lv.Ref == 0 {
+						lv.Ref = 0
+						mul.Decimal128MulScalar(rvs[0], lvs, lvs)
+						lv.Typ = resultTyp
+						return lv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, mul.Decimal128MulScalar(rvs[0], lvs, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				case lv.Ref == 1 || lv.Ref == 0:
+					lv.Ref = 0
+					mul.Decimal128Mul(lvs, rvs, lvs)
+					lv.Nsp = lv.Nsp.Or(rv.Nsp)
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					lv.Typ = resultTyp
+					return lv, nil
+				case rv.Ref == 1 || rv.Ref == 0:
+					rv.Ref = 0
+					mul.Decimal128Mul(lvs, rvs, rvs)
+					rv.Nsp = rv.Nsp.Or(lv.Nsp)
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					rv.Typ = resultTyp
+					return rv, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal128Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				vector.SetCol(vec, mul.Decimal128Mul(lvs, rvs, rs))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				vec.Typ = resultTyp
+				return vec, nil
+			},
+		},
     }
 }

@@ -35,6 +35,7 @@ var (
 	dateShuffle     func([]types.Date, []types.Date, []int64) []types.Date
 	datetimeShuffle func([]types.Datetime, []types.Datetime, []int64) []types.Datetime
 
+	decimal64Shuffle  func([]types.Decimal64, []types.Decimal64, []int64) []types.Decimal64
 	decimal128Shuffle func([]types.Decimal128, []types.Decimal128, []int64) []types.Decimal128
 
 	tupleShuffle func([][]interface{}, [][]interface{}, []int64) [][]interface{}
@@ -56,6 +57,7 @@ func init() {
 	float32Shuffle = float32ShufflePure
 	float64Shuffle = float64ShufflePure
 
+	decimal64Shuffle = decimal64ShufflePure
 	decimal128Shuffle = decimal128ShufflePure
 
 	dateShuffle = dateShufflePure
@@ -104,6 +106,10 @@ func Float32Shuffle(vs, ws []float32, sels []int64) []float32 {
 
 func Float64Shuffle(vs, ws []float64, sels []int64) []float64 {
 	return float64Shuffle(vs, ws, sels)
+}
+
+func Decimal64Shuffle(vs, ws []types.Decimal64, sels []int64) []types.Decimal64 {
+	return decimal64Shuffle(vs, ws, sels)
 }
 
 func Decimal128Shuffle(vs, ws []types.Decimal128, sels []int64) []types.Decimal128 {
@@ -199,6 +205,14 @@ func float32ShufflePure(vs, ws []float32, sels []int64) []float32 {
 }
 
 func float64ShufflePure(vs, ws []float64, sels []int64) []float64 {
+	for i, sel := range sels {
+		ws[i] = vs[sel]
+	}
+	copy(vs, ws)
+	return vs[:len(sels)]
+}
+
+func decimal64ShufflePure(vs []types.Decimal64, ws []types.Decimal64, sels []int64) []types.Decimal64 {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}

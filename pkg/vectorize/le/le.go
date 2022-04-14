@@ -17,6 +17,7 @@ package le
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"math"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -111,6 +112,14 @@ var (
 	StrLeScalarSels             func([]byte, *types.Bytes, []int64, []int64) []int64
 	StrLeNullableScalarSels     func([]byte, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
 
+	Decimal64Le                    func([]types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64LeNullable            func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64LeSels                func([]types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64LeNullableSels        func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal64LeScalar              func(types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64LeNullableScalar      func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64LeScalarSels          func(types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64LeNullableScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
 	Decimal128Le                   func([]types.Decimal128, []types.Decimal128, int32, int32, []int64) []int64
 	Decimal128LeNullable           func([]types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64) []int64
 	Decimal128LeSels               func([]types.Decimal128, []types.Decimal128, int32, int32, []int64, []int64) []int64
@@ -210,6 +219,14 @@ func init() {
 	StrLeNullableScalar = strLeNullableScalar
 	StrLeScalarSels = strLeScalarSels
 	StrLeNullableScalarSels = strLeNullableScalarSels
+	Decimal64Le = decimal64Le
+	Decimal64LeNullable = decimal64LeNullable
+	Decimal64LeSels = decimal64LeSels
+	Decimal64LeNullableSels = decimal64LeNullableSels
+	Decimal64LeScalar = decimal64LeScalar
+	Decimal64LeNullableScalar = decimal64LeNullableScalar
+	Decimal64LeScalarSels = decimal64LeScalarSels
+	Decimal64LeNullableScalarSels = decimal64LeNullableScalarSels
 	Decimal128Le = decimal128Le
 	Decimal128LeNullable = decimal128LeNullable
 	Decimal128LeSels = decimal128LeSels
@@ -1511,6 +1528,191 @@ func strLeNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, r
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && bytes.Compare(x, ys.Get(sel)) <= 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64Le(xs, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	// to compare two decimal values, first we need to align them to the same scale
+	// for example,    							Decimal(20, 3)  Decimal(20, 5)
+	// 				value: 						12.3 			123.45
+	// 				internal representation: 	12300  			12345000
+	// align to the same scale by scale the smaller scale decimal to the same scale as the bigger one:
+	// 											1230000         12345000
+	// 				then do integer comparison
+
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - yScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ysScaled[i]) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xsScaled := make([]types.Decimal64, len(xs))
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, x := range xs {
+			xsScaled[i] = types.ScaleDecimal64(x, scale)
+		}
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xsScaled[i], y) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ys[i]) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64LeNullable(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, ys[i], xScale, yScale) <= 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64LeSels(xs, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) <= 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64LeNullableSels(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) <= 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64LeScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		for i, y := range ys {
+			scaleDiff := xScale - yScale
+			ysScaled[i] = y
+			scale := int64(math.Pow10(int(scaleDiff)))
+			for i, y := range ys {
+				ysScaled[i] = types.ScaleDecimal64(y, scale)
+			}
+		}
+		for i, yScaled := range ysScaled {
+			if types.CompareDecimal64Decimal64Aligned(x, yScaled) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xScaled := x
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled = types.ScaleDecimal64(xScaled, scale)
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xScaled, y) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(x, y) <= 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64LeNullableScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, y, xScale, yScale) <= 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64LeScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) <= 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64LeNullableScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) <= 0 {
 			rs[rsi] = sel
 			rsi++
 		}

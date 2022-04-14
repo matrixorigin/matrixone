@@ -261,5 +261,86 @@ func initCast() {
                 return vec, nil
             },
         },
+
+        {
+             LeftType:   types.T_decimal64,
+             RightType:  types.T_decimal128,
+             ReturnType: types.T_decimal128,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 defer func() {
+                      if lv.Ref == 0 {
+                          process.Put(proc, lv)
+                      }
+                 }()
+                 lvScale := lv.Typ.Scale
+                 resultScale := lvScale
+                 resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+                 lvs := lv.Col.([]types.Decimal64)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal128Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 if _, err := typecast.Decimal64ToDecimal128(lvs, rs); err != nil {
+                      process.Put(proc, vec)
+                      return nil, err
+                 }
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 return vec, nil
+             },
+        },
+
+         {
+             LeftType:   types.T_decimal64,
+             RightType:  types.T_decimal64,
+             ReturnType: types.T_decimal64,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 if lv.Ref == 0 {
+                      return lv, nil
+                 }
+                 resultTyp := lv.Typ
+                 lvs := lv.Col.([]types.Decimal64)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal64Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 copy(rs, lvs)
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 vec.Typ = resultTyp
+                 return vec, nil
+             },
+         },
+
+         {
+             LeftType:   types.T_decimal128,
+             RightType:  types.T_decimal128,
+             ReturnType: types.T_decimal128,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 if lv.Ref == 0 {
+                      return lv, nil
+                 }
+                 resultTyp := lv.Typ
+                 lvs := lv.Col.([]types.Decimal128)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal128Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 copy(rs, lvs)
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 vec.Typ = resultTyp
+                 return vec, nil
+             },
+         },
+
+
     }
+
 }

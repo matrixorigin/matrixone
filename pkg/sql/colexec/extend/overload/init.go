@@ -239,6 +239,8 @@ func initCastRulesForBinaryOps() {
 	// dates := []types.T{types.T_date, types.T_datetime}
 
 	// PLUS cast rule / Minus cast rule / Multiplication cast rule
+	// the cast rule for operation between different numeric types
+	// https://github.com/matrixorigin/matrixone/issues/1721
 	{
 		ops := []int{Plus, Minus, Mult}
 		for _, op := range ops {
@@ -478,6 +480,13 @@ func initCastRulesForBinaryOps() {
 					{NumArgs: 2, sourceTypes: []types.T{types.T_float64, types.T_uint64}, targetTypes: []types.Type{
 						{Oid: types.T_float64, Size: 8}, {Oid: types.T_float64, Size: 8}}},
 				}...)
+				// decimal data type
+				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+					{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: []types.Type{
+						{Oid: types.T_decimal128, Size: 16}, {Oid: types.T_decimal128, Size: 16}}},
+					{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: []types.Type{
+						{Oid: types.T_decimal128, Size: 16}, {Oid: types.T_decimal128, Size: 16}}},
+				}...)
 			}
 		}
 	}
@@ -549,6 +558,17 @@ func initCastRulesForBinaryOps() {
 				}...)
 			}
 		}
+		// div cast rule for operation between decimal64 and decimal128
+		OperatorCastRules[Div] = append(OperatorCastRules[Div], []castRule{
+			{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: []types.Type{
+				{Oid: types.T_decimal128, Size: 16},
+				{Oid: types.T_decimal128, Size: 16},
+			}},
+			{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: []types.Type{
+				{Oid: types.T_decimal128, Size: 16},
+				{Oid: types.T_decimal128, Size: 16},
+			}},
+		}...)
 	}
 	// Mod cast rule
 	{
@@ -636,6 +656,16 @@ func initCastRulesForBinaryOps() {
 	{
 		ops := []int{EQ, NE, GT, GE, LT, LE}
 		for _, op := range ops {
+			{
+				targetType := []types.Type{
+					{Oid: types.T_decimal128, Size: 16},
+					{Oid: types.T_decimal128, Size: 16},
+				}
+				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+					//		{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: targetType},
+					{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: targetType},
+				}...)
+			}
 			{
 				/*
 					cast to int64 op int64 :
@@ -760,6 +790,18 @@ func initCastRulesForBinaryOps() {
 					}...)
 				}
 			}
+			/*
+				{
+					targetType := []types.Type{
+						{Oid: types.T_decimal128, Size: 16},
+						{Oid: types.T_decimal128, Size: 16},
+					}
+					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+						//		{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: targetType},
+					}...)
+				}
+			*/
 		}
 	}
 }
