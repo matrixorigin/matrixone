@@ -14,13 +14,11 @@
 
 // MatrixOne's decimal(fixed point numeric) data type
 // https://github.com/matrixorigin/matrixone/issues/1867
-// in many database management systems, the DECIMAL type may also refered to as NUMERIC.
+// in many database management systems, the DECIMAL type may also referred as NUMERIC.
 //
-// Usage: Decimal(precision, scale)
-// Decimal(precision, scale)
-// creat table t1 (a decimal);       the default precion 10, default scale 0 is applyed, that means,
-// this is the same as "create table t1 (a decimal(10, 0));
-// create table t1(a decimal(20);	the default scale 0 is applyed, that means, this is the same as create table t1(a decimal(20, 0);
+// Usage: Decimal(precision, scale), Decimal(precision), Decimal
+// creat table t1 (a decimal);       the default precision 10, default scale 0 is applied, this is the same as "create table t1 (a decimal(10, 0));
+// create table t1(a decimal(20);	 the default scale 0 is applied, that means, this is the same as create table t1(a decimal(20, 0);
 // create table t1(a decimal(20, 5);
 //
 // MatrixOne supports decimal data type with precision range (0, 38], scale range (0, 38], and scale <= precision.
@@ -29,13 +27,15 @@
 // we support addition, subtraction, multiplication, division for decimal data type
 
 // for decimal64, addition and subtraction operation
-// have result return type decimal64, the result's scale is the maximum of its two operands, overflow may happen in these two operations and no precaution is implemented,
-// nor does any indication. for multiplication and division on decimal64, the result is of type Decimal128 and therefore these two operations are safe in Decimal64, that is,
+// have result of type decimal64, the result's scale is the maximum of its two operands, overflow may happen in these two operations and no precaution is implemented,
+// nor does any indication. for multiplication and division on decimal64, the result is of type Decimal128 and therefore these two operations are safe on Decimal64, that is,
 // overflow is guaranteed IMPOSSIBLE.
 //
-// For Decimal128, operations on this data type may overflow and no precautions nor indications are implementated, but these will only happen in extreme use cases, that is, when the result can not fit into a 128 bit representation
+// For Decimal128, operations on this data type may overflow and no precautions nor indications are implemented, but these will only happen in extreme use cases, that is, when the result can not fit into a 128 bit representation
+//
 // Comparison operations <, >, =, !=, <=, >= is also supported in decimal type
-// in the case where a literal string need to be interpreted as decimal, for example, "select * from decimal_table where a = 1.23",
+//
+// in the case where a literal string needs to be interpreted as decimal, for example, "select * from decimal_table where a = 1.23",
 // it will be interpreted as decimal128
 // for operations between decimals and integers, the result is of type decimal128
 // operations between decimals and floats are not defined.
