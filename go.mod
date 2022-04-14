@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.0.0
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
+	github.com/bxcodec/faker/v3 v3.8.0
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d

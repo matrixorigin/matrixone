@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -75,7 +74,7 @@ func TestTables1(t *testing.T) {
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
 	t.Log(toAppend)
-	bat := mock.MockBatch(schema.Types(), uint64(rows))
+	bat := compute.MockBatch(schema.Types(), uint64(rows), int(schema.PrimaryKey), nil)
 	_, err = appender.ApplyAppend(bat, 0, toAppend, nil)
 	assert.Nil(t, err)
 	assert.True(t, table.HasAppendableSegment())
@@ -128,7 +127,7 @@ func TestTxn1(t *testing.T) {
 	schema.SegmentMaxBlocks = 4
 	batchRows := uint64(schema.BlockMaxRows) * 2 / 5
 	batchCnt := 2
-	bat := mock.MockBatch(schema.Types(), batchRows)
+	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
@@ -239,7 +238,7 @@ func TestTxn3(t *testing.T) {
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
 		rel, _ := db.CreateRelation(schema)
-		bat := mock.MockBatch(schema.Types(), rows)
+		bat := compute.MockBatch(schema.Types(), rows, int(schema.PrimaryKey), nil)
 		// bat := mock.MockBatch(schema.Types(), uint64(schema.BlockMaxRows/4))
 		for i := 0; i < 1; i++ {
 			err := rel.Append(bat)

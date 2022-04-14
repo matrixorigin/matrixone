@@ -10,7 +10,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -102,7 +101,6 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, e
 		return
 	}
 	pos += 2 + 4
-	logrus.Info(pos)
 	lens := make([]uint32, vecs)
 	vecTypes = make([]types.Type, vecs)
 	for i := uint16(0); i < vecs; i++ {

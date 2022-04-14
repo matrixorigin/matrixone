@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -73,7 +73,7 @@ func main() {
 			panic(err)
 		}
 	}
-	bat := mock.MockBatch(schema.Types(), batchRows)
+	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
 	var wg sync.WaitGroup
 	doAppend := func() {
 		defer wg.Done()

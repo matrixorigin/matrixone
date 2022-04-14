@@ -79,7 +79,7 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	if blk.chain != nil {
 		// TODO: Collect by column
 		blkUpdates := blk.chain.CollectCommittedUpdatesLocked(txn)
-		logutil.Info(blkUpdates.String())
+		logutil.Debug(blkUpdates.String())
 		if blkUpdates != nil {
 			colIdx := blk.meta.GetSegment().GetTable().GetSchema().GetColIdx(attr)
 			vec = blkUpdates.ApplyChangesToColumn(uint16(colIdx), vec)

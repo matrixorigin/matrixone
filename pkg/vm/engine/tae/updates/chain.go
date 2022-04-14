@@ -90,8 +90,9 @@ func (chain *BlockUpdateChain) CollectCommittedUpdatesLocked(txn txnif.AsyncTxn)
 			return true
 		}
 		if curr.GetCommitTSLocked() < txn.GetStartTS() && curr.HasActiveTxnLocked() {
+			currTxn := curr.txn
 			curr.RUnlock()
-			state := curr.txn.GetTxnState(true)
+			state := currTxn.GetTxnState(true)
 			if state == txnif.TxnStateRollbacked {
 				return true
 			}
