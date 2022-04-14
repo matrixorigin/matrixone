@@ -2,6 +2,7 @@ package moengine
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -82,7 +83,7 @@ func (rel *txnRelation) Write(_ uint64, bat *batch.Batch) error {
 	return rel.handle.Append(bat)
 }
 
-func (rel *txnRelation) NewReader(num int) (rds []engine.Reader) {
+func (rel *txnRelation) NewReader(num int, _ extend.Extend, _ []byte) (rds []engine.Reader) {
 	it := rel.handle.MakeBlockIt()
 	for i := 0; i < num; i++ {
 		reader := newReader(rel.handle, it)

@@ -149,7 +149,7 @@ func main() {
 		}
 
 		parallel := 10
-		readers := rel.NewReader(parallel)
+		readers := rel.NewReader(parallel, nil, nil)
 		for _, reader := range readers {
 			wg.Add(1)
 			go readProc(reader)
