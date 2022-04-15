@@ -19,6 +19,7 @@ const (
 	Join
 	Plus
 	Limit
+	Times
 	Merge
 	Dedup
 	Order

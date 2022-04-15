@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -79,13 +80,7 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (e *Exec) Run(ts uint64) (err error) {
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-		}
-	}()
-
+func (e *Exec) Run(ts uint64) error {
 	if e.scope == nil {
 		return nil
 	}
@@ -361,7 +356,8 @@ func (e *Exec) compilePlanScope(s *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -802,7 +798,8 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -856,7 +853,8 @@ func (e *Exec) compileQ(ps *plan.Scope) ([]*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Projection,
@@ -1080,7 +1078,8 @@ func (e *Exec) compileAQ(ps *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -1170,7 +1169,8 @@ func (e *Exec) compileCQ(ps *plan.Scope) (*Scope, error) {
 		rs := &Scope{Magic: Merge}
 		rs.PreScopes = ss
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		ctx, cancel := context.WithCancel(context.Background())
 		rs.Proc = process.New(mheap.New(guest.New(e.c.proc.Mp.Gm.Limit, e.c.proc.Mp.Gm.Mmu)))
@@ -1585,8 +1585,8 @@ func (e *Exec) compileJoin(ps *plan.Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].PreScopes = append(ss[i].PreScopes, children...)
 		ss[i].Instructions = append(ss[i].Instructions, vm.Instruction{
-			Op:  vm.Join,
-			Arg: constructJoin(op),
+			Op:  vm.Times,
+			Arg: constructTimes(op),
 		})
 	}
 	return ss, nil
@@ -1638,10 +1638,17 @@ func (e *Exec) compileFact(ps *plan.Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs := &Scope{Magic: Merge}
+		rs := &Scope{
+			Magic: Remote,
+			NodeInfo: engine.Node{
+				Id:   Address,
+				Addr: Address,
+			},
+		}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,
@@ -1751,10 +1758,17 @@ func (e *Exec) compileCAQFact(ps *plan.Scope) ([]*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs := &Scope{Magic: Merge}
+		rs := &Scope{
+			Magic: Remote,
+			NodeInfo: engine.Node{
+				Id:   Address,
+				Addr: Address,
+			},
+		}
 		rs.PreScopes = []*Scope{child}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op: vm.Merge,
+			Op:  vm.Merge,
+			Arg: &merge.Argument{},
 		})
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
 			Op:  vm.Transform,

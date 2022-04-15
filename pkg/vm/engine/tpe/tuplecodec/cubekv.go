@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 )
 
 const (
@@ -980,7 +979,11 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 	logutil.Infof("origin startKey %v endKey %v", startKey, endKey)
 
 	callback := func(shard metapb.Shard, store metapb.Store) bool {
-		logutil.Infof("originshardinfo %v %v", shard.GetStart(), shard.GetEnd())
+		logutil.Infof("originshardinfo store_id %v store_addr %v startKey %v endKey %v",
+			store.GetID(),
+			store.GetClientAddress(),
+			shard.GetStart(),
+			shard.GetEnd())
 		//the shard overlaps the [startKey,endKey)
 		checkRange := Range{startKey: shard.GetStart(), endKey: shard.GetEnd()}
 
@@ -999,14 +1002,16 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 				shardID:  shard.GetID(),
 				node: ShardNode{
 					Addr:         store.ClientAddress,
-					StoreIDbytes: string(codec.Uint642Bytes(store.ID)),
+					StoreIDbytes: Uint64ToString(store.ID),
 					StoreID:      store.ID,
 				},
 			})
 
 			info := shardInfos[len(shardInfos)-1]
 
-			logutil.Infof("shardinfo startKey %v endKey %v", info.GetStartKey(), info.GetEndKey())
+			logutil.Infof("shardinfo store_id %v store_addr %v startKey %v endKey %v",
+				store.GetID(), store.GetClientAddress(),
+				info.GetStartKey(), info.GetEndKey())
 		}
 
 		return true
@@ -1023,17 +1028,32 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 		shardInfos[i].statistics = stats
 	}
 
+	duplicateFunc := func(nodes []ShardNode, addr string) bool {
+		for _, node := range nodes {
+			if node.Addr == addr {
+				return true
+			}
+		}
+		return false
+	}
+
+	//all nodes that hold the table
 	var nodes []ShardNode
 	for id, addr := range stores {
-		nodes = append(nodes, ShardNode{
-			Addr:         addr,
-			StoreIDbytes: string(codec.Uint642Bytes(id)),
-			StoreID:      id,
-		})
+		if !duplicateFunc(nodes, addr) {
+			nodes = append(nodes, ShardNode{
+				Addr:         addr,
+				StoreIDbytes: Uint64ToString(id),
+				StoreID:      id,
+			})
+		}
 	}
 
 	if len(nodes) == 0 {
 		logutil.Warnf("there are no nodes hold the range [%v %v)", startKey, endKey)
+	}
+	for i, node := range nodes {
+		logutil.Infof("yindex %d all_nodes %v", i, node)
 	}
 
 	logutil.Infof("shardinfo count %d ", len(shardInfos))

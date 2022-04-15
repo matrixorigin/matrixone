@@ -122,10 +122,25 @@ func (si ShardInfo) GetShardNode() ShardNode {
 }
 
 type Shards struct {
-	nodes      []ShardNode
+	//all nodes that hold the table
+	nodes []ShardNode
+
+	//all shards that hold the table
 	shardInfos []ShardInfo
 }
 
-func (s Shards) ShardInfos() []ShardInfo {
+func (s Shards) GetShardInfos() []ShardInfo {
 	return s.shardInfos
+}
+
+func (s Shards) GetShardNodes() []ShardNode {
+	return s.nodes
+}
+
+func (s *Shards) SetShardInfos(infos []ShardInfo) {
+	s.shardInfos = infos
+}
+
+func (s *Shards) SetShardNodes(nodes []ShardNode) {
+	s.nodes = nodes
 }

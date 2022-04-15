@@ -37,6 +37,10 @@ func (e *UnaryExtend) Attributes() []string {
 	return e.E.Attributes()
 }
 
+func (e *UnaryExtend) ExtendAttributes() []*Attribute {
+	return e.E.ExtendAttributes()
+}
+
 func (e *UnaryExtend) ReturnType() types.T {
 	if fn, ok := UnaryReturnTypes[e.Op]; ok {
 		return fn(e.E)

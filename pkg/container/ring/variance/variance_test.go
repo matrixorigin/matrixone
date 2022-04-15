@@ -33,15 +33,15 @@ func TestVariance(t *testing.T) {
 	{
 		// first 3 rows.
 		// column1: {1, 2, null}, column2: {2, 3, null}
-		v1.SumX = []float64{1+2, 2+3}
-		v1.SumX2 = []float64{1*1+2*2, 2*2+3*3}
+		v1.SumX = []float64{1 + 2, 2 + 3}
+		v1.SumX2 = []float64{1*1 + 2*2, 2*2 + 3*3}
 		v1.NullCounts = []int64{1, 1}
 	}
 	{
 		// last 3 rows.
 		// column1: {0, 3, 4}, column2: {null, 4, 5}
-		v2.SumX = []float64{0+3+4, 4+5}
-		v2.SumX2 = []float64{3*3+4*4, 4*4+5*5}
+		v2.SumX = []float64{0 + 3 + 4, 4 + 5}
+		v2.SumX2 = []float64{3*3 + 4*4, 4*4 + 5*5}
 		v2.NullCounts = []int64{0, 1}
 	}
 	v1.Add(v2, 0, 0)

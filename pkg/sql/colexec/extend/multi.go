@@ -44,8 +44,18 @@ func (_ *MultiExtend) IsConstant() bool {
 
 func (e *MultiExtend) Attributes() []string {
 	var attrs []string
+
 	for _, arg := range e.Args {
 		attrs = append(attrs, arg.Attributes()...)
+	}
+	return attrs
+}
+
+func (e *MultiExtend) ExtendAttributes() []*Attribute {
+	var attrs []*Attribute
+
+	for _, arg := range e.Args {
+		attrs = append(attrs, arg.ExtendAttributes()...)
 	}
 	return attrs
 }

@@ -37,7 +37,7 @@ go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
-UT_TIMEOUT=5
+UT_TIMEOUT=30
 LOG="$G_TS-$TEST_TYPE.log"
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"

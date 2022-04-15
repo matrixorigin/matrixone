@@ -16,11 +16,12 @@ package db
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"io/ioutil"
 	"os"
 	"path"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -794,6 +795,12 @@ func (h *replayHandle) Replay() error {
 			if err := h.rebuildTable(tbl); err != nil {
 				return err
 			}
+			// In the Replay process, IdempotentIndex needs to
+			// be corrected after rebuilding Table, because
+			// InitIdempotentIndex is called before rebuilding tblk,
+			// IdempotentIndex does not update the logindex of tblk,
+			// and the same data may be repeatedly appended.
+			tbl.InitIdempotentIndex(tbl.MaxLogIndex())
 		}
 		if database.IsDeleted() && !database.IsHardDeleted() {
 			h.compactdbs = append(h.compactdbs, database)

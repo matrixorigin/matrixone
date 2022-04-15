@@ -19,9 +19,10 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/stddevpop"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/approxcd"
@@ -76,6 +77,8 @@ func ReturnType(op int, typ types.T) types.T {
 		return types.T_uint64
 	case BitOr:
 		return types.T_uint64
+	case StdDevPop:
+		return types.T_float64
 	}
 	return 0
 }
@@ -104,6 +107,8 @@ func New(op int, typ types.Type) (ring.Ring, error) {
 		return NewBitXor(typ)
 	case BitOr:
 		return NewBitOr(typ)
+	case StdDevPop:
+		return stddevpop.NewStdDevPopRingWithTypeCheck(typ)
 	}
 	return nil, nil
 }
@@ -124,7 +129,6 @@ func NewBitOr(typ types.Type) (ring.Ring, error) {
 	return nil, errors.New(fmt.Sprintf("'%v' not support BitOr", typ))
 }
 
-
 func NewBitXor(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64, types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_float32, types.T_float64:
@@ -143,16 +147,6 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 		return sum.NewUint(typ), nil
 	}
 	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
-}
-
-func NewAvg(typ types.Type) (ring.Ring, error) {
-	switch typ.Oid {
-	case types.T_float32, types.T_float64:
-		return avg.NewAvg(typ), nil
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return avg.NewAvg(typ), nil
-	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Avg", typ))
 }
 
 func NewMax(typ types.Type) (ring.Ring, error) {

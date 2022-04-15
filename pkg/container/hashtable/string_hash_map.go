@@ -144,6 +144,7 @@ func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]
 		values[i] = cell.Mapped
 	}
 }
+
 func (ht *StringHashMap) InsertString24BatchWithRing(zValues []int64, states [][3]uint64, keys [][3]uint64, values []uint64) {
 	ht.resizeOnDemand(uint64(len(keys)))
 
@@ -226,6 +227,19 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
+		cell := ht.findCell(&states[i])
+		values[i] = cell.Mapped
+	}
+}
+
+func (ht *StringHashMap) FindStringBatchWithRing(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64) {
+	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+
+	for i := range keys {
+		if zValues[i] == 0 {
+			values[i] = 0
+			continue
+		}
 		cell := ht.findCell(&states[i])
 		values[i] = cell.Mapped
 	}

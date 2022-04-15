@@ -21,9 +21,9 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitand"
+	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/bitxor"
 	"github.com/matrixorigin/matrixone/pkg/container/ring/variance"
-	"github.com/matrixorigin/matrixone/pkg/container/ring/bitor"
 
 	"github.com/axiomhq/hyperloglog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -355,41 +355,6 @@ func TestInstruction(t *testing.T) {
 			}
 		}
 	}
-}
-
-func IsEqualBatch(expect *batch.Batch, actual *batch.Batch) bool {
-	if expect.Ro != actual.Ro {
-		return false
-	}
-	if string(expect.SelsData) != string(actual.SelsData) {
-		return false
-	}
-	for i, v := range actual.Sels {
-		if expect.Sels[i] != v {
-			return false
-		}
-	}
-	for i, v := range actual.Attrs {
-		if expect.Attrs[i] != v {
-			return false
-		}
-	}
-	for i, v := range actual.Zs {
-		if expect.Zs[i] != v {
-			return false
-		}
-	}
-	for i, v := range actual.As {
-		if expect.As[i] != v {
-			return false
-		}
-	}
-	for i, v := range actual.Refs {
-		if expect.Refs[i] != v {
-			return false
-		}
-	}
-	return true
 }
 
 func TestExtend(t *testing.T) {
@@ -784,6 +749,16 @@ func TestRing(t *testing.T) {
 			Vs:  [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&max.DateRing{
+			Ns:  []int64{789789, 123123908950, 9089374534},
+			Vs:  []types.Date{612, 632, 81, 0423},
+			Typ: types.Type{Oid: types.T(types.T_date), Size: 4},
+		},
+		&max.DatetimeRing{
+			Ns:  []int64{178923123, 123123908950, 9089374534},
+			Vs:  []types.Datetime{6123, 123126, 2323328, 02342342},
+			Typ: types.Type{Oid: types.T(types.T_datetime), Size: 8},
+		},
 		&min.Int8Ring{
 			Ns:  []int64{123123123, 123123908950, 9089374534},
 			Vs:  []int8{6, 6, 8, 0},
@@ -839,6 +814,16 @@ func TestRing(t *testing.T) {
 			Vs:  [][]byte{[]byte("test1"), []byte("mysql1"), []byte("postgresql1")},
 			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
+		&min.DateRing{
+			Ns:  []int64{789789, 123123908950, 9089374534},
+			Vs:  []types.Date{612, 632, 81, 0423},
+			Typ: types.Type{Oid: types.T(types.T_date), Size: 4},
+		},
+		&min.DatetimeRing{
+			Ns:  []int64{178923123, 123123908950, 9089374534},
+			Vs:  []types.Datetime{6123, 123126, 2323328, 02342342},
+			Typ: types.Type{Oid: types.T(types.T_datetime), Size: 8},
+		},
 		&sum.IntRing{
 			Ns:  []int64{178923123, 123123908950, 9089374534},
 			Vs:  []int64{6123, 123126, 2323328, 02342342},
@@ -881,9 +866,9 @@ func TestRing(t *testing.T) {
 			Typ:          types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&bitor.BitOrRing{
-			NullCounts:  []int64{8902345, 123123908950, 9089374534},
-			Values:  []uint64{6112323, 34542345346, 234, 23412312},
-			Typ: types.Type{Oid: types.T(types.T_varchar), Size: 24},
+			NullCounts: []int64{8902345, 123123908950, 9089374534},
+			Values:     []uint64{6112323, 34542345346, 234, 23412312},
+			Typ:        types.Type{Oid: types.T(types.T_varchar), Size: 24},
 		},
 		&bitxor.BitXorRing{
 			Values:     []uint64{5234232, 6345123, 7345312, 878956},
@@ -1029,7 +1014,6 @@ func TestRing(t *testing.T) {
 					t.Errorf("Decode ring failed. \nExpected/Got:\n%v\n%v", expect, got)
 				}
 			}
-
 		case *max.Int8Ring:
 			oriRing := r.(*max.Int8Ring)
 			// Da
@@ -1256,6 +1240,48 @@ func TestRing(t *testing.T) {
 					return
 				}
 			}
+		case *max.DateRing:
+			oriRing := r.(*max.DateRing)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeDateSlice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
+			}
+			// Ns
+			for i, n := range oriRing.Ns {
+				if ExpectRing.Ns[i] != n {
+					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					return
+				}
+			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
+		case *max.DatetimeRing:
+			oriRing := r.(*max.DatetimeRing)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeDatetimeSlice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
+			}
+			// Ns
+			for i, n := range oriRing.Ns {
+				if ExpectRing.Ns[i] != n {
+					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					return
+				}
+			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
 		case *min.Int8Ring:
 			oriRing := r.(*min.Int8Ring)
 			// Da
@@ -1479,6 +1505,48 @@ func TestRing(t *testing.T) {
 			for i, v := range oriRing.Vs {
 				if string(ExpectRing.Vs[i]) != string(v) {
 					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", string(v), string(ExpectRing.Vs[i]))
+					return
+				}
+			}
+		case *min.DateRing:
+			oriRing := r.(*min.DateRing)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeDateSlice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
+			}
+			// Ns
+			for i, n := range oriRing.Ns {
+				if ExpectRing.Ns[i] != n {
+					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					return
+				}
+			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
+					return
+				}
+			}
+		case *min.DatetimeRing:
+			oriRing := r.(*min.DatetimeRing)
+			// Da
+			if string(ExpectRing.Da) != string(encoding.EncodeDatetimeSlice(oriRing.Vs)) {
+				t.Errorf("Decode ring Da failed.")
+				return
+			}
+			// Ns
+			for i, n := range oriRing.Ns {
+				if ExpectRing.Ns[i] != n {
+					t.Errorf("Decode ring Ns failed. \nExpected/Got:\n%v\n%v", n, ExpectRing.Ns[i])
+					return
+				}
+			}
+			// Vs
+			for i, v := range oriRing.Vs {
+				if ExpectRing.Vs[i] != v {
+					t.Errorf("Decode ring Vs failed. \nExpected/Got:\n%v\n%v", v, ExpectRing.Vs[i])
 					return
 				}
 			}

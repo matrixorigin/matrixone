@@ -796,7 +796,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid), col)
+		err = convertEngineTypeToMysqlType(c.Type.Oid, col)
 		if err != nil {
 			return err
 		}
@@ -910,7 +910,7 @@ func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
 	for _, c := range columns {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		err = convertEngineTypeToMysqlType(c.Typ, col)
 		if err != nil {
 			return nil, err
 		}
@@ -1372,7 +1372,7 @@ func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 /*
 convert the type in computation engine to the type in mysql.
 */
-func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
+func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)

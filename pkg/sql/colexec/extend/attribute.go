@@ -33,6 +33,10 @@ func (a *Attribute) Attributes() []string {
 	return []string{a.Name}
 }
 
+func (a *Attribute) ExtendAttributes() []*Attribute {
+	return []*Attribute{a}
+}
+
 func (a *Attribute) ReturnType() types.T {
 	return a.Type
 }

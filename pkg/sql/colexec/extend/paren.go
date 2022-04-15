@@ -37,6 +37,10 @@ func (e *ParenExtend) Attributes() []string {
 	return e.E.Attributes()
 }
 
+func (e *ParenExtend) ExtendAttributes() []*Attribute {
+	return e.E.ExtendAttributes()
+}
+
 func (e *ParenExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vector, types.T, error) {
 	return e.E.Eval(bat, proc)
 }

@@ -243,17 +243,19 @@ func TestAOEEngine(t *testing.T) {
 	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
-	readers := tb.NewReader(6)
+	readers := tb.NewReader(6, nil, nil)
 	for _, reader := range readers {
-		fileter := reader.NewSparseFilter()
-		reader, _ = fileter.Eq("mock_0", int32(0))
+		/*
+			fileter := reader.NewSparseFilter()
+			reader, _ = fileter.Eq("mock_0", int32(0))
+		*/
 		bat, err := reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
 		if bat != nil {
 			fmt.Printf("bat is %v", bat.Vecs[0].Col.([]int32)[0])
 		}
 		require.NoError(t, err)
 	}
-	num := tb.NewReader(15)
+	num := tb.NewReader(15, nil, nil)
 	require.Equal(t, 15, len(num))
 	tb.Close()
 

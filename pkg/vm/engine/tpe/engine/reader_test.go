@@ -15,11 +15,14 @@
 package engine
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -66,7 +69,7 @@ func TestTpeReader_Read(t *testing.T) {
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10)
+		readers := tableDesc.NewReader(10, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {
@@ -142,7 +145,7 @@ func TestTpeReader_Read(t *testing.T) {
 
 		var get *batch.Batch
 
-		readers := tableDesc.NewReader(10)
+		readers := tableDesc.NewReader(10, nil, nil)
 		for i, reader := range readers {
 			if i == 0 {
 				for {
@@ -169,4 +172,31 @@ func TestTpeReader_Read(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSort(t *testing.T) {
+	attrs := []string{
+		"P_CATEGORY", "P_BRAND", "LO_ORDERKEY", "LO_REVENUE", "S_REGION", "LO_ORDERDATE", "LO_LINENUMBER",
+	}
+
+	var indexes []int = make([]int, len(attrs))
+	for i := 0; i < len(attrs); i++ {
+		indexes[i] = i
+	}
+
+	sort.Slice(indexes, func(i, j int) bool {
+		ai := indexes[i]
+		bi := indexes[j]
+		a := attrs[ai]
+		b := attrs[bi]
+		return strings.Compare(a, b) < 0
+	})
+
+	for _, index := range indexes {
+		s := attrs[index]
+		fmt.Printf("%s ", s)
+	}
+	fmt.Println()
+	sort.Strings(attrs)
+	fmt.Printf("%v\n", attrs)
 }

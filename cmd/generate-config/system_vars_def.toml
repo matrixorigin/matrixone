@@ -399,6 +399,16 @@ comment = "default is false. Enable transactional processing engine."
 update-mode = "dynamic"
 
 [[parameter]]
+name = "tpeMultiNode"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "default is false. true : tpe works well in multi node environment."
+update-mode = "dynamic"
+
+[[parameter]]
 name = "tpeKVType"
 scope = ["global"]
 access = ["file"]

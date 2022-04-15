@@ -24,29 +24,50 @@ const (
 	UnitLimit = 256
 )
 
+var OneInt64s []int64
+
 type view struct {
-	is         []int // subscript in the result attribute
-	ris        []int // subscript in the result ring
+	isPure bool // true: primary key join
+
+	is  []int // subscript in the result attribute
+	ois []int // subscript in the origin batch
+
 	attrs      []string
 	values     []uint64
 	sels       [][]int64
 	bat        *batch.Batch
 	vecs       []*vector.Vector
+	intHashMap *hashtable.Int64HashMap
 	strHashMap *hashtable.StringHashMap
 }
 
 type HashTable struct {
 	Sels       [][]int64
+	IntHashMap *hashtable.Int64HashMap
 	StrHashMap *hashtable.StringHashMap
 }
 
 type Container struct {
+	isPure bool // true: primary key join
+
+	is  []int // subscript in the result attribute
+	ois []int // subscript in the origin batch
+
 	zs []int64
+
+	sels []int64
 
 	attrs []string
 
-	mx0, mx1 [][]int64 // matrix buffer
+	oattrs []string // order of attributes of input batch
 
+	result map[string]uint8 // result attributes of join
+
+	mx, mx0, mx1 [][]int64 // matrix buffer
+
+	zValues []int64
+
+	hashes        []uint64
 	strHashStates [][3]uint64
 
 	views []*view
@@ -54,10 +75,15 @@ type Container struct {
 	hstr struct {
 		keys [][]byte
 	}
+
+	h8 struct {
+		keys []uint64
+	}
 }
 
 type Argument struct {
-	Vars [][]string
-	ctr  *Container
-	Bats []*batch.Batch
+	Result []string
+	Vars   [][]string
+	ctr    *Container
+	Bats   []*batch.Batch
 }
