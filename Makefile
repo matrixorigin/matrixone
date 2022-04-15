@@ -147,20 +147,24 @@ molint:
 # distributed mo with docker-compose
 ###############################################################################
 
+# Bootstrap mo
 .PHONY: dis-up
 dis-up:
 	@docker-compose -f optools/test/docker-compose.yaml build --build-arg PROXY=$(PROXY)
 	@docker-compose -f optools/test/docker-compose.yaml up -d
 
+# Make bvt test
 .PHONY: dis-bvt
 dis-bvt:
 	@docker build -f optools/test/Dockerfile.bvt . -t matrixorigin/mysql-tester:dt --build-arg PROXY=$(PROXY)
 	@docker run --tty --rm --name mysql-tester --network test_monet matrixorigin/mysql-tester:dt -host 172.19.0.2 -port 6001 -user dump -passwd 111
 
+# Stop mo
 .PHONY: dis-down
 dis-down:
 	@docker-compose -f optools/test/docker-compose.yaml down --remove-orphans
 
+# Clean files
 .PHONY:  dis-clean
 dis-clean:
 	@rm -rf log/ data/
