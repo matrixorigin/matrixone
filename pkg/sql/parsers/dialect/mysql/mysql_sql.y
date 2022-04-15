@@ -5567,7 +5567,14 @@ float_length_opt:
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.NotDefineDisplayWidth,
-            Precision:  tree.NotDefineDec,
+            Precision: tree.NotDefineDec,
+        }
+    }
+|   '(' INTEGRAL ')'
+    {
+        $$ = tree.LengthScaleOpt{
+            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            Precision: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
