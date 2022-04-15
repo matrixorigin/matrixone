@@ -68,12 +68,7 @@ type Type struct {
 	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
 	Width int32 `json:"width,string"`
 
-	<<<<<<< HEAD
 	Scale int32 `json:"Scale,string"`
-	====== =
-	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
-	Precision int32 `json:"precision,string"`
-	>>>>>>> refs/remotes/origin/main
 }
 
 type Bytes struct {
