@@ -40,7 +40,9 @@ func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err er
 func (store *NoopTxnStore) BatchDedup(uint64, *vector.Vector) (err error)                   { return }
 func (store *NoopTxnStore) Update(*common.ID, uint32, uint16, interface{}) (err error)      { return }
 func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32) (err error)              { return }
-
-// func (store *NoopTxnStore) DropDBEntry(name string) error                           { return nil }
-// func (store *NoopTxnStore) CreateTableEntry(database string, def interface{}) error { return nil }
-// func (store *NoopTxnStore) DropTableEntry(dbName, name string) error                { return nil }
+func (store *NoopTxnStore) GetByFilter(uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
+	return
+}
+func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v interface{}, err error) {
+	return
+}

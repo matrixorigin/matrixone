@@ -106,6 +106,14 @@ func (h *txnRelation) MakeBlockIt() handle.BlockIt {
 	return newRelationBlockIt(h)
 }
 
+func (h *txnRelation) GetByFilter(filter *handle.Filter) (*common.ID, uint32, error) {
+	return h.Txn.GetStore().GetByFilter(h.entry.GetID(), filter)
+}
+
 func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{}) error {
 	return h.Txn.GetStore().Update(id, row, col, v)
+}
+
+func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
+	return h.Txn.GetStore().GetValue(id, row, col)
 }

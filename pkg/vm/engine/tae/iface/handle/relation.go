@@ -25,6 +25,8 @@ type Relation interface {
 	MakeBlockIt() BlockIt
 
 	Update(id *common.ID, row uint32, col uint16, v interface{}) error
+	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
+	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
 
 	BatchDedup(col *vector.Vector) error
 	Append(data *batch.Batch) error

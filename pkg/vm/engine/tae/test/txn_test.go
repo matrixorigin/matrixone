@@ -240,36 +240,48 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 
 // TODO: rewrite
 func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, entry *APP1Goods, err error) {
+	filter := new(handle.Filter)
+	filter.Op = handle.FilterEq
+	filter.Val = goodId
 	goodRel, _ := c.DB.GetRelationByName(goods.Name)
-	blockIt := goodRel.MakeBlockIt()
-	var comp bytes.Buffer
-	var decomp bytes.Buffer
-	for blockIt.Valid() {
-		comp.Reset()
-		decomp.Reset()
-		blk := blockIt.GetBlock()
-		vec, err := blk.GetVectorCopy(goods.ColDefs[0].Name, &comp, &decomp)
-		if err != nil {
-			return id, offset, entry, err
-		}
-		rows := gvec.Length(vec)
-		for i := 0; i < rows; i++ {
-			v := compute.GetValue(vec, uint32(i))
-			if v == goodId {
-				entry = new(APP1Goods)
-				entry.ID = goodId
-				id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-				offset = uint32(i)
-				comp.Reset()
-				decomp.Reset()
-				vec, _ := blk.GetVectorCopy(goods.ColDefs[2].Name, &comp, &decomp)
-				entry.Price = compute.GetValue(vec, offset).(float64)
-				return id, offset, entry, err
-			}
-		}
-		blockIt.Next()
+	id, offset, err = goodRel.GetByFilter(filter)
+	if err != nil {
+		return
 	}
-	err = catalog.ErrNotFound
+
+	entry = new(APP1Goods)
+	entry.ID = goodId
+	price, _ := goodRel.GetValue(id, offset, 2)
+	entry.Price = price.(float64)
+
+	// var comp bytes.Buffer
+	// var decomp bytes.Buffer
+	// for blockIt.Valid() {
+	// 	comp.Reset()
+	// 	decomp.Reset()
+	// 	blk := blockIt.GetBlock()
+	// 	vec, err := blk.GetVectorCopy(goods.ColDefs[0].Name, &comp, &decomp)
+	// 	if err != nil {
+	// 		return id, offset, entry, err
+	// 	}
+	// 	rows := gvec.Length(vec)
+	// 	for i := 0; i < rows; i++ {
+	// 		v := compute.GetValue(vec, uint32(i))
+	// 		if v == goodId {
+	// 			entry = new(APP1Goods)
+	// 			entry.ID = goodId
+	// 			id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
+	// 			offset = uint32(i)
+	// 			comp.Reset()
+	// 			decomp.Reset()
+	// 			vec, _ := blk.GetVectorCopy(goods.ColDefs[2].Name, &comp, &decomp)
+	// 			entry.Price = compute.GetValue(vec, offset).(float64)
+	// 			return id, offset, entry, err
+	// 		}
+	// 	}
+	// 	blockIt.Next()
+	// }
+	// err = catalog.ErrNotFound
 	return
 }
 
@@ -474,7 +486,7 @@ func TestApp1(t *testing.T) {
 			t.Log(txn.String())
 		}
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 1; i++ {
 		wg.Add(1)
 		p.Submit(buyTxn)
 	}

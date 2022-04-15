@@ -18,19 +18,21 @@ type FilterOp int16
 
 const (
 	FilterEq FilterOp = iota
+	FilterBatchEq
 	FilterBtw
 )
 
 type Filter struct {
 	Op  FilterOp
 	Col *vector.Vector
+	Val interface{}
 }
 
 type BlockReader interface {
 	io.Closer
 	ID() uint64
 	String() string
-	GetByFilter(filter Filter, offsetOnly bool) (*batch.Batch, error)
+	GetByFilter(filter Filter) (uint32, error)
 	GetVectorCopy(string, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, error)
 	GetMeta() interface{}
 	Fingerprint() *common.ID

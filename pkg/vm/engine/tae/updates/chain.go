@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type BlockUpdateChain struct {
@@ -107,6 +108,57 @@ func (chain *BlockUpdateChain) CollectCommittedUpdatesLocked(txn txnif.AsyncTxn)
 		return true
 	}, false)
 	return merged
+}
+
+func (chain *BlockUpdateChain) GetValueLocked(row uint32, col uint16, txn txnif.AsyncTxn) (v interface{}, err error) {
+	var found bool
+	chain.LoopChainLocked(func(updates *BlockUpdateNode) bool {
+		updates.RLock()
+		if updates.HasActiveTxnLocked() && !updates.IsSameTxnLocked(txn) {
+			committed := updates.GetCommitTSLocked()
+			// Skip other uncommitted txn or committed that after txn started
+			if committed == txnif.UncommitTS || committed > txn.GetStartTS() {
+				updates.RUnlock()
+				return true
+			}
+			// Processing committing txn that before txn started
+			nTxn := updates.txn
+			updates.RUnlock()
+			state := nTxn.GetTxnState(true)
+			if state == txnif.TxnStateRollbacked {
+				return true
+			}
+			updates.RLock()
+		}
+		if updates.IsSameTxnLocked(txn) {
+			v, err = updates.GetValueLocked(row, col)
+			updates.RUnlock()
+			// value found in the same txn should be used
+			if err == nil {
+				found = true
+				return false
+			}
+			// value not found in the same txn. go to next node
+			return true
+		}
+		if updates.GetCommitTSLocked() > txn.GetStartTS() {
+			updates.RUnlock()
+			return true
+		}
+		v, err = updates.GetValueLocked(row, col)
+		updates.RUnlock()
+		if err == nil {
+			found = true
+			return false
+		}
+		return true
+	}, false)
+	if found {
+		err = nil
+	} else {
+		err = txnbase.ErrNotFound
+	}
+	return
 }
 
 func (chain *BlockUpdateChain) AddMergeNode() *BlockUpdateNode {

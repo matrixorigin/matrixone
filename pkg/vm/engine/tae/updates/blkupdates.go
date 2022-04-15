@@ -80,6 +80,14 @@ func NewMergeBlockUpdates(commitTs uint64, meta *catalog.BlockEntry, rwlocker *s
 	return updates
 }
 
+func (n *BlockUpdates) GetValueLocked(row uint32, colIdx uint16) (v interface{}, err error) {
+	col := n.cols[colIdx]
+	if col == nil {
+		err = txnbase.ErrNotFound
+	}
+	return col.GetValueLocked(row)
+}
+
 func (n *BlockUpdates) ApplyDeleteRowsLocked(start, end uint32) {
 	if n.localDeletes == nil {
 		n.localDeletes = roaring.New()

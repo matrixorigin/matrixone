@@ -109,6 +109,30 @@ func (store *txnStore) RangeDelete(id *common.ID, start, end uint32) (err error)
 	return table.RangeDelete(id.PartID, id.SegmentID, id.BlockID, start, end)
 }
 
+func (store *txnStore) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+	table, err := store.getOrSetTable(tid)
+	if err != nil {
+		return
+	}
+	if table.IsDeleted() {
+		err = txnbase.ErrNotFound
+		return
+	}
+	return table.GetByFilter(filter)
+}
+
+func (store *txnStore) GetValue(id *common.ID, row uint32, colIdx uint16) (v interface{}, err error) {
+	table, err := store.getOrSetTable(id.TableID)
+	if err != nil {
+		return
+	}
+	if table.IsDeleted() {
+		err = txnbase.ErrNotFound
+		return
+	}
+	return table.GetValue(id, row, colIdx)
+}
+
 func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
 	table, err := store.getOrSetTable(id.TableID)
 	if err != nil {
@@ -405,18 +429,3 @@ func (store *txnStore) PrepareRollback() error {
 	}
 	return err
 }
-
-// func (store *txnStore) FindKeys(db, table uint64, keys [][]byte) []uint32 {
-// 	// TODO
-// 	return nil
-// }
-
-// func (store *txnStore) FindKey(db, table uint64, key []byte) uint32 {
-// 	// TODO
-// 	return 0
-// }
-
-// func (store *txnStore) HasKey(db, table uint64, key []byte) bool {
-// 	// TODO
-// 	return false
-// }

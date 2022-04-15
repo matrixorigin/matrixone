@@ -90,6 +90,10 @@ func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end)
 }
 
+// func (blk *txnBlock) GetByFilter(filter handle.Filter) (uint32, error) {
+// 	return blk.Txn.GetStore().GetByFilter(blk.entry.AsCommonID(), filter)
+// }
+
 func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 	return blk.Txn.GetStore().Update(blk.entry.AsCommonID(), row, col, v)
 }

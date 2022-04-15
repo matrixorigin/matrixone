@@ -36,6 +36,14 @@ func NewColumnUpdates(target *common.ID, colDef *catalog.ColDef, rwlock *sync.RW
 	}
 }
 
+func (n *ColumnUpdates) GetValueLocked(row uint32) (v interface{}, err error) {
+	v = n.txnVals[row]
+	if v == nil {
+		err = txnbase.ErrNotFound
+	}
+	return
+}
+
 func (n *ColumnUpdates) StringLocked() string {
 	s := "["
 	for k, v := range n.txnVals {

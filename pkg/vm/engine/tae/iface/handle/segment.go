@@ -17,7 +17,7 @@ type SegmentReader interface {
 	GetID() uint64
 	MakeBlockIt() BlockIt
 	MakeReader() Reader
-	GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
+	// GetByFilter(filter Filter, offsetOnly bool) (map[uint64]*batch.Batch, error)
 	String() string
 	GetMeta() interface{}
 

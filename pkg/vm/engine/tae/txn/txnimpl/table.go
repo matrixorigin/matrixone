@@ -56,6 +56,8 @@ type Table interface {
 	SetDropEntry(txnif.TxnEntry)
 	GetMeta() *catalog.TableEntry
 
+	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
+	GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error)
 	CreateSegment() (handle.Segment, error)
 	CreateBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
@@ -409,6 +411,44 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 		tbl.AddUpdateNode(node2)
 	}
 	return
+}
+
+func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
+	offset, err = tbl.index.Find(filter.Val)
+	if err == nil {
+		id = &common.ID{}
+		id.PartID = 1
+		err = nil
+		return
+	}
+	blockIt := tbl.handle.MakeBlockIt()
+	for blockIt.Valid() {
+		h := blockIt.GetBlock()
+		block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		offset, err = block.GetByFilter(tbl.txn, filter)
+		if err == nil {
+			id = h.Fingerprint()
+			break
+		}
+		blockIt.Next()
+	}
+	return
+}
+
+func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interface{}, err error) {
+	if id.PartID != 0 {
+		return tbl.GetLocalValue(row, col)
+	}
+	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		panic(err)
+	}
+	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		panic(err)
+	}
+	block := meta.GetBlockData()
+	return block.GetValue(tbl.txn, row, col)
 }
 
 func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) (err error) {

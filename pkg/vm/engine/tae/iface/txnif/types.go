@@ -27,7 +27,6 @@ type TxnReader interface {
 	GetInfo() []byte
 	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
-	// Compare(o TxnReader) int
 	GetTxnState(waitIfcommitting bool) int32
 	GetError() error
 	GetStore() TxnStore
@@ -36,10 +35,6 @@ type TxnReader interface {
 }
 
 type TxnHandle interface {
-	// BatchDedup(uint64, *vector.Vector) error
-	// RegisterTable(interface{}) error
-	// GetTableByName(db, table string) (interface{}, error)
-	// Append(uint64, *batch.Batch)
 	CreateDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
@@ -123,6 +118,8 @@ type TxnStore interface {
 
 	RangeDelete(id *common.ID, start, end uint32) error
 	Update(id *common.ID, row uint32, col uint16, v interface{}) error
+	GetByFilter(id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
 
 	CreateRelation(def interface{}) (handle.Relation, error)
 	DropRelationByName(name string) (handle.Relation, error)
