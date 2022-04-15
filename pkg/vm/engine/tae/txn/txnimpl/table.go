@@ -292,7 +292,7 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		toAppend := n.PrepareAppend(data, offset)
 		size := compute.EstimateSize(data, offset, toAppend)
 		logrus.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
-		err := n.Expand(size, func() error {
+		err = n.Expand(size, func() error {
 			appended, err = n.Append(data, offset)
 			return err
 		})
@@ -304,7 +304,8 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		space := n.GetSpace()
 		logrus.Debugf("Appended: %d, Space:%d", appended, space)
 		start := tbl.rows
-		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
+		// logrus.Infof("s,offset=%d,appended=%d,start=%d", data.Vecs[tbl.GetSchema().PrimaryKey], offset, appended, start)
+		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, true); err != nil {
 			break
 		}
 		offset += appended
@@ -462,6 +463,10 @@ func (tbl *txnTable) UpdateLocalValue(row uint32, col uint16, value interface{})
 	}
 	if err = n.RangeDelete(uint32(noffset), uint32(noffset)); err != nil {
 		return err
+	}
+	v, _ := n.GetValue(int(tbl.entry.GetSchema().PrimaryKey), row)
+	if err = tbl.index.Delete(v); err != nil {
+		panic(err)
 	}
 	err = tbl.Append(window)
 	return err

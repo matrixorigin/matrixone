@@ -130,30 +130,33 @@ func TestInsertNode(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 1, common.K*20)
+	tbl := makeTable(t, dir, 3, common.M*20)
 	defer tbl.driver.Close()
 
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 1024)
-	for i := 0; i < 100; i++ {
-		err := tbl.Append(bat)
+	schema := tbl.GetSchema()
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(tbl.GetSchema().Types(), common.K*100, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 100)
+	for _, data := range bats {
+		err := tbl.Append(data)
 		assert.Nil(t, err)
 	}
 	t.Log(tbl.nodesMgr.String())
 	tbl.RangeDeleteLocalRows(1024+20, 1024+30)
 	tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
-	t.Log(t, tbl.LocalDeletesToString())
+	// t.Log(t, tbl.LocalDeletesToString())
 	assert.True(t, tbl.IsLocalDeleted(1024+20))
 	assert.True(t, tbl.IsLocalDeleted(1024+30))
 	assert.False(t, tbl.IsLocalDeleted(1024+19))
 	assert.False(t, tbl.IsLocalDeleted(1024+31))
 }
 
-func TestUpdate(t *testing.T) {
+func TestUpdateUncommitted(t *testing.T) {
 	dir := initTestPath(t)
 	tbl := makeTable(t, dir, 2, common.K*10)
 	defer tbl.driver.Close()
 	tbl.GetSchema().PrimaryKey = 1
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 1024)
+	bat := mock.MockBatch(tbl.GetSchema().Types(), 1000)
 
 	bats := compute.SplitBatch(bat, 2)
 
@@ -164,7 +167,7 @@ func TestUpdate(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	row := uint32(999)
+	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.Rows()
 	err := tbl.UpdateLocalValue(row, 0, 999)

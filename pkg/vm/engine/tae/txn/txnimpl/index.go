@@ -96,6 +96,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -111,6 +114,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -126,6 +132,12 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -141,6 +153,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -156,6 +171,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -171,6 +189,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -186,6 +207,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -201,6 +225,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -216,6 +243,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -231,6 +261,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -246,6 +279,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -261,6 +297,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -276,6 +315,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			}
 		}
 		for _, v := range data[start : start+count] {
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}
@@ -295,6 +337,9 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 		for i, s := range data.Offsets[start : start+count] {
 			e := s + data.Lengths[i+start]
 			v := string(data.Data[s:e])
+			if _, ok := idx.tree[v]; ok {
+				return txnbase.ErrDuplicated
+			}
 			idx.tree[v] = row
 			row++
 		}

@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -122,12 +124,14 @@ func TestTxn1(t *testing.T) {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchema(3)
 	schema.BlockMaxRows = 10000
 	schema.SegmentMaxBlocks = 4
+	schema.PrimaryKey = 2
 	batchRows := uint64(schema.BlockMaxRows) * 2 / 5
-	batchCnt := 2
-	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	cnt := uint64(20)
+	bat := compute.MockBatch(schema.Types(), batchRows*cnt, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 20)
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase("db")
@@ -137,33 +141,33 @@ func TestTxn1(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	now := time.Now()
-	doAppend := func() {
-		defer wg.Done()
-		txn := mgr.StartTxn(nil)
-		db, _ := txn.GetDatabase("db")
-		rel, err := db.GetRelationByName(schema.Name)
-		assert.Nil(t, err)
-		for i := 0; i < batchCnt; i++ {
-			err := rel.Append(bat)
+	doAppend := func(b *gbat.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := mgr.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, err := db.GetRelationByName(schema.Name)
+			assert.Nil(t, err)
+			err = rel.Append(b)
+			assert.Nil(t, err)
+			err = txn.Commit()
 			assert.Nil(t, err)
 		}
-		err = txn.Commit()
-		assert.Nil(t, err)
 	}
 	p, _ := ants.NewPool(4)
-	loopCnt := 20
-	for i := 0; i < loopCnt; i++ {
+	for _, toAppend := range bats {
 		wg.Add(1)
-		p.Submit(doAppend)
+		p.Submit(doAppend(toAppend))
 	}
 
 	wg.Wait()
 
 	t.Logf("Append takes: %s", time.Since(now))
-	expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
+	// expectBlkCnt := (uint32(batchRows)*uint32(batchCnt)*uint32(loopCnt)-1)/schema.BlockMaxRows + 1
+	expectBlkCnt := (uint32(batchRows)*uint32(cnt)-1)/schema.BlockMaxRows + 1
 	expectSegCnt := (expectBlkCnt-1)/uint32(schema.SegmentMaxBlocks) + 1
-	t.Log(expectBlkCnt)
-	t.Log(expectSegCnt)
+	// t.Log(expectBlkCnt)
+	// t.Log(expectSegCnt)
 	t.Log(txnBufMgr.String())
 	t.Log(mutBufMgr.String())
 	{
@@ -347,5 +351,32 @@ func TestTxn3(t *testing.T) {
 		chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
 		t.Log(chain.StringLocked())
 	}
+}
 
+func TestTxn4(t *testing.T) {
+	dir := initTestPath(t)
+	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(4)
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 8
+	schema.PrimaryKey = 2
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		rel, _ := db.CreateRelation(schema)
+		pk := gvec.New(schema.ColDefs[schema.PrimaryKey].Type)
+		compute.AppendValue(pk, int32(1))
+		compute.AppendValue(pk, int32(2))
+		compute.AppendValue(pk, int32(1))
+		provider := compute.NewMockDataProvider()
+		provider.AddColumnProvider(int(schema.PrimaryKey), pk)
+		bat := compute.MockBatch(schema.Types(), 3, int(schema.PrimaryKey), provider)
+		err := rel.Append(bat)
+		t.Log(err)
+		assert.NotNil(t, err)
+	}
 }
