@@ -1,20 +1,26 @@
-package tpe
+package engine
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	vm_engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 )
 
 func Test_getParamFromCommand(t *testing.T) {
 	convey.Convey("getParamFromCommand function",t, func() {
-		tpeMock, _ := engine.NewTpeEngine(&engine.TpeConfig{KVLimit: 10000})
+		tpeMock, _ := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000,
+		})
 		if tpeMock == nil {
 			return
 		}
@@ -44,13 +50,69 @@ func Test_getParamFromCommand(t *testing.T) {
 		table, err := dbDesc.Relation("t1")
         convey.So(err, convey.ShouldBeNil)
 
-        tpe_relation, ok := table.(*engine.TpeRelation)
+        tpe_relation, ok := table.(*TpeRelation)
 		convey.So(ok, convey.ShouldBeTrue)
 
 		cnt := 2
 		bat := tuplecodec.MakeBatch(cnt, attrNames, attrDefs)
 		lines := [][]string{{"1", "2", "-1"}, {"100", "200", "-1000"}}
 		tuplecodec.FillBatch(lines, bat)
+
+		convey.Convey("Test DumpDatabaseInfo", func() {
+			args := []string{"system_vars_config.toml"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldBeNil)
+
+			args = []string{"system_vars_config.toml", "-db"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the dbname do not input"))
+
+			args = []string{"system_vars_config.toml", "-table"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the table do not input"))
+
+			args = []string{"system_vars_config.toml", "-limit"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the limit param do not input"))
+
+			args = []string{"system_vars_config.toml", "-limit", "1"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the input limit param format is not correcr"))
+
+			args = []string{"system_vars_config.toml", "-export"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the export filename do not input"))
+
+			args = []string{"system_vars_config.toml", "-getvalueofkey"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the getValueofKey param do not input"))
+
+			args = []string{"system_vars_config.toml", "-getvalueoforiginkey"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("the getValueofOriginKey param do not input"))
+
+			args = []string{"system_vars_config.toml", "-abc"}
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("Unmatch keyword, please check the input"))
+
+			args = []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-limit", "0,2"}
+			err = DumpDatabaseInfo(nil, args)
+			convey.So(err, convey.ShouldResemble, errors.New("TpeEngine convert failed"))
+
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldResemble, errors.New("The limit range is out of the result"))
+
+			args = []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1", "-export", "a.txt"}
+			stubs := gostub.StubFunc(&DumpTableInfo, nil, errors.New("can not open file"))
+			defer stubs.Reset()
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldNotBeNil)
+
+			stubs = gostub.StubFunc(&DumpTableInfo, nil, nil)
+			err = DumpDatabaseInfo(tpeMock, args)
+			convey.So(err, convey.ShouldBeNil)
+
+		})
 
 		convey.Convey("GetAllvalues of table", func() {
 			args := []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1"}
@@ -70,6 +132,7 @@ func Test_getParamFromCommand(t *testing.T) {
 
 			result, err := DumpTableInfo(tpeMock, opt)
 			convey.So(err, convey.ShouldBeNil)
+			convey.So(result, convey.ShouldNotBeNil)
 			convey.So(result.Keys, convey.ShouldBeNil)
 			convey.So(result.Values, convey.ShouldBeNil)
 			convey.So(result.Decode_keys.Attrs, convey.ShouldNotBeNil)
@@ -88,6 +151,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			result, err = DumpTableInfo(tpeMock, opt)
+			convey.So(result, convey.ShouldNotBeNil)
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < cnt; i++ {
 				for j := 0; j < len(attrNames); j++ {
@@ -113,6 +177,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			result, err := DumpTableInfo(tpeMock, opt)
+			convey.So(result, convey.ShouldNotBeNil)
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < 1; i++ {
 				for j := 0; j < len(attrNames); j++ {
@@ -133,6 +198,7 @@ func Test_getParamFromCommand(t *testing.T) {
 
 			opt.PrimaryValue[0] = fmt.Sprintf("%v", result.Decode_values.Vecs[0][0])
 			result, err = DumpTableInfo(tpeMock, opt)
+			convey.So(result, convey.ShouldNotBeNil)
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < 1; i++ {
 				for j := 0; j < len(attrNames); j++ {
@@ -142,5 +208,8 @@ func Test_getParamFromCommand(t *testing.T) {
 			}
 
 		})
+	
+		err = dbDesc.Delete(0, "t1")
+		convey.So(err, convey.ShouldBeNil)
 	})
 }

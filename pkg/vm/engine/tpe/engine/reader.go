@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"sort"
-	"strings"
 )
 
 var (
@@ -90,6 +91,8 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 			ParallelReader:      tr.parallelReader,
 			MultiNode:           tr.multiNode,
 			ReadCount:           0,
+			DumpData:			 tr.dumpData,
+			Opt: 				 tr.opt,
 		}
 
 		if tr.readCtx.ParallelReader || tr.readCtx.MultiNode {
