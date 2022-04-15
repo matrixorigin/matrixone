@@ -144,11 +144,11 @@ molint:
 
 
 ###############################################################################
-# distributed test
+# distributed mo with docker-compose
 ###############################################################################
 
-.PHONY: dis-mo
-dis-mo:
+.PHONY: dis-up
+dis-up:
 	@docker-compose -f optools/test/docker-compose.yaml build --build-arg PROXY=$(PROXY)
 	@docker-compose -f optools/test/docker-compose.yaml up -d
 
@@ -159,7 +159,7 @@ dis-bvt:
 
 .PHONY: dis-down
 dis-down:
-	@docker-compose down -f optools/test/docker-compose.yaml down --remove-orphans
+	@docker-compose -f optools/test/docker-compose.yaml down --remove-orphans
 
 .PHONY:  dis-clean
 dis-clean:
