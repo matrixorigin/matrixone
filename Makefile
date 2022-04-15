@@ -132,4 +132,11 @@ static-check:
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
-  
+
+.PHONY: install-molint
+install-molint:
+	@go install github.com/matrixorigin/linter/cmd/molint@latest
+
+.PHONY: molint
+molint:
+	@go vet -vettool=$(shell which molint) ./...
