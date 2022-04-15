@@ -378,5 +378,6 @@ func TestTxn4(t *testing.T) {
 		err := rel.Append(bat)
 		t.Log(err)
 		assert.NotNil(t, err)
+		assert.Nil(t, txn.Commit())
 	}
 }

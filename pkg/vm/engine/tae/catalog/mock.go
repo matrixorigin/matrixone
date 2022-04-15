@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -66,6 +68,10 @@ type mockDBHandle struct {
 	entry   *DBEntry
 }
 
+type mockSegIt struct {
+	sync.RWMutex
+}
+
 type mockTableHandle struct {
 	*txnbase.TxnRelation
 	catalog *Catalog
@@ -91,6 +97,11 @@ func newMockTableHandle(catalog *Catalog, txn txnif.AsyncTxn, entry *TableEntry)
 		entry:   entry,
 	}
 }
+
+func (it *mockSegIt) Valid() bool                { return false }
+func (it *mockSegIt) Next()                      {}
+func (it *mockSegIt) Close() error               { return nil }
+func (it *mockSegIt) GetSegment() handle.Segment { return nil }
 
 func (h *mockDBHandle) CreateRelation(def interface{}) (rel handle.Relation, err error) {
 	schema := def.(*Schema)
@@ -123,6 +134,10 @@ func (h *mockDBHandle) GetRelationByName(name string) (rel handle.Relation, err 
 		return nil, err
 	}
 	return newMockTableHandle(h.catalog, h.Txn, entry), nil
+}
+
+func (h *mockTableHandle) MakeSegmentIt() (it handle.SegmentIt) {
+	return new(mockSegIt)
 }
 
 func (h *mockTableHandle) String() string {

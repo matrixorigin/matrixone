@@ -48,7 +48,9 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 			RWMutex: new(sync.RWMutex),
 			ID:      id,
 		},
-		schema: schema,
+		schema:  schema,
+		link:    new(common.Link),
+		entries: make(map[uint64]*common.DLNode),
 	}
 }
 
@@ -63,6 +65,8 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 }
 
 func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.LinkIt {
+	entry.RLock()
+	defer entry.RUnlock()
 	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
 }
 

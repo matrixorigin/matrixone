@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -61,10 +62,12 @@ func main() {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchema(1)
+	schema := catalog.MockSchemaAll(10)
 	schema.BlockMaxRows = 1000
 	schema.SegmentMaxBlocks = 10
-	batchRows := uint64(schema.BlockMaxRows) * 1 / 2
+	schema.PrimaryKey = 3
+	batchCnt := uint64(10)
+	batchRows := uint64(schema.BlockMaxRows) * 1 / 2 * batchCnt
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
@@ -74,32 +77,34 @@ func main() {
 		}
 	}
 	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
-	doAppend := func() {
-		defer wg.Done()
-		txn := mgr.StartTxn(nil)
-		db, err := txn.GetDatabase(dbName)
-		if err != nil {
-			panic(err)
-		}
-		rel, err := db.GetRelationByName(schema.Name)
-		if err != nil {
-			panic(err)
-		}
-		if err := rel.Append(bat); err != nil {
-			panic(err)
-		}
-		if err := txn.Commit(); err != nil {
-			panic(err)
+	doAppend := func(b *batch.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := mgr.StartTxn(nil)
+			db, err := txn.GetDatabase(dbName)
+			if err != nil {
+				panic(err)
+			}
+			rel, err := db.GetRelationByName(schema.Name)
+			if err != nil {
+				panic(err)
+			}
+			if err := rel.Append(b); err != nil {
+				panic(err)
+			}
+			if err := txn.Commit(); err != nil {
+				panic(err)
+			}
 		}
 	}
 	p, _ := ants.NewPool(4)
-	batchCnt := 10
 	now := time.Now()
 	startProfile()
-	for i := 0; i < batchCnt; i++ {
+	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend)
+		p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()

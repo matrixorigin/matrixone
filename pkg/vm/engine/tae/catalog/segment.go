@@ -142,6 +142,8 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 }
 
 func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.LinkIt {
+	entry.RLock()
+	defer entry.RUnlock()
 	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
 }
 

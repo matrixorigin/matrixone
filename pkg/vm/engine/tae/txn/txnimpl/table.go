@@ -279,7 +279,10 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 }
 
 func (tbl *txnTable) Append(data *batch.Batch) error {
-	var err error
+	err := tbl.BatchDedup(data.Vecs[tbl.entry.GetSchema().PrimaryKey])
+	if err != nil {
+		return err
+	}
 	if tbl.appendable == nil {
 		if err = tbl.registerInsertNode(); err != nil {
 			return err
@@ -300,14 +303,13 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		})
 		if err != nil {
 			logrus.Info(tbl.nodesMgr.String())
-			logrus.Error(err)
-			break
+			panic(err)
 		}
 		space := n.GetSpace()
 		logrus.Debugf("Appended: %d, Space:%d", appended, space)
 		start := tbl.rows
 		// logrus.Infof("s,offset=%d,appended=%d,start=%d", data.Vecs[tbl.GetSchema().PrimaryKey], offset, appended, start)
-		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, true); err != nil {
+		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
 			break
 		}
 		offset += appended
@@ -541,6 +543,11 @@ func (tbl *txnTable) BatchDedupLocal(bat *gbat.Batch) error {
 }
 
 func (tbl *txnTable) BatchDedupLocalByCol(col *gvec.Vector) error {
+	index := NewSimpleTableIndex()
+	err := index.BatchInsert(col, 0, gvec.Length(col), 0, true)
+	if err != nil {
+		return err
+	}
 	return tbl.index.BatchDedup(col)
 }
 

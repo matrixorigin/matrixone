@@ -16,7 +16,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 
@@ -130,43 +132,61 @@ func TestInsertNode(t *testing.T) {
 
 func TestTable(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 3, common.M*20)
-	defer tbl.driver.Close()
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
-	schema := tbl.GetSchema()
+	schema := catalog.MockSchemaAll(3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
 	schema.PrimaryKey = 2
-	bat := compute.MockBatch(tbl.GetSchema().Types(), common.K*100, int(schema.PrimaryKey), nil)
-	bats := compute.SplitBatch(bat, 100)
-	for _, data := range bats {
-		err := tbl.Append(data)
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		rel, _ := db.CreateRelation(schema)
+		bat := compute.MockBatch(schema.Types(), common.K*100, int(schema.PrimaryKey), nil)
+		bats := compute.SplitBatch(bat, 100)
+		for _, data := range bats {
+			err := rel.Append(data)
+			assert.Nil(t, err)
+		}
+		tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+		tbl.RangeDeleteLocalRows(1024+20, 1024+30)
+		tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
+		assert.True(t, tbl.IsLocalDeleted(1024+20))
+		assert.True(t, tbl.IsLocalDeleted(1024+30))
+		assert.False(t, tbl.IsLocalDeleted(1024+19))
+		assert.False(t, tbl.IsLocalDeleted(1024+31))
+		err := txn.Commit()
 		assert.Nil(t, err)
 	}
-	t.Log(tbl.nodesMgr.String())
-	tbl.RangeDeleteLocalRows(1024+20, 1024+30)
-	tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
-	// t.Log(t, tbl.LocalDeletesToString())
-	assert.True(t, tbl.IsLocalDeleted(1024+20))
-	assert.True(t, tbl.IsLocalDeleted(1024+30))
-	assert.False(t, tbl.IsLocalDeleted(1024+19))
-	assert.False(t, tbl.IsLocalDeleted(1024+31))
 }
 
 func TestUpdateUncommitted(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 2, common.K*10)
-	defer tbl.driver.Close()
-	tbl.GetSchema().PrimaryKey = 1
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 1000)
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
+	schema := catalog.MockSchemaAll(3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 1
+
+	bat := compute.MockBatch(schema.Types(), 1000, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, 2)
 
+	txn := mgr.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
 	for _, b := range bats {
-		err := tbl.BatchDedupLocal(b)
-		assert.Nil(t, err)
-		err = tbl.Append(b)
+		err := rel.Append(b)
 		assert.Nil(t, err)
 	}
 
+	tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.Rows()
@@ -178,11 +198,21 @@ func TestUpdateUncommitted(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 2, common.K*20)
-	defer tbl.driver.Close()
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
-	tbl.GetSchema().PrimaryKey = 1
+	schema := catalog.MockSchemaAll(3)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 1
 
+	txn := mgr.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tbl := table.(*txnTable)
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
 	bat := mock.MockBatch(tbl.GetSchema().Types(), rows)
@@ -234,12 +264,12 @@ func TestIndex(t *testing.T) {
 	idx := NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[0])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[0], 0, gvec.Length(bat.Vecs[0]), 0, true)
+	err = idx.BatchInsert(bat.Vecs[0], 0, gvec.Length(bat.Vecs[0]), 0, false)
 	assert.NotNil(t, err)
 
 	err = idx.BatchDedup(bat.Vecs[1])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[1], 0, gvec.Length(bat.Vecs[1]), 0, true)
+	err = idx.BatchInsert(bat.Vecs[1], 0, gvec.Length(bat.Vecs[1]), 0, false)
 	assert.Nil(t, err)
 
 	window := gvec.New(bat.Vecs[1].Typ)
@@ -251,7 +281,7 @@ func TestIndex(t *testing.T) {
 	idx = NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[12])
 	assert.Nil(t, err)
-	err = idx.BatchInsert(bat.Vecs[12], 0, gvec.Length(bat.Vecs[12]), 0, true)
+	err = idx.BatchInsert(bat.Vecs[12], 0, gvec.Length(bat.Vecs[12]), 0, false)
 	assert.Nil(t, err)
 
 	window = gvec.New(bat.Vecs[12].Typ)
@@ -263,17 +293,24 @@ func TestIndex(t *testing.T) {
 
 func TestLoad(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 14, common.K*2000)
-	defer tbl.driver.Close()
-	tbl.GetSchema().PrimaryKey = 13
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 60000)
+	schema := catalog.MockSchemaAll(14)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 13
+
+	bat := compute.MockBatch(schema.Types(), 60000, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, 5)
-	// for _, b := range bats {
-	// 	tbl.Append(b)
-	// }
-	// t.Log(tbl.Rows())
-	// t.Log(len(tbl.inodes))
+
+	txn := mgr.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tbl := table.(*txnTable)
 
 	err := tbl.Append(bats[0])
 	assert.Nil(t, err)
@@ -287,11 +324,24 @@ func TestLoad(t *testing.T) {
 
 func TestNodeCommand(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 14, common.K*1000)
-	defer tbl.driver.Close()
-	tbl.GetSchema().PrimaryKey = 13
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 15000)
+	schema := catalog.MockSchemaAll(14)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 13
+
+	bat := compute.MockBatch(schema.Types(), 15000, int(schema.PrimaryKey), nil)
+
+	txn := mgr.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+
+	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
 
@@ -316,11 +366,23 @@ func TestNodeCommand(t *testing.T) {
 
 func TestBuildCommand(t *testing.T) {
 	dir := initTestPath(t)
-	tbl := makeTable(t, dir, 14, common.K*2000)
-	defer tbl.driver.Close()
-	tbl.GetSchema().PrimaryKey = 13
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
 
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 55000)
+	schema := catalog.MockSchemaAll(14)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 13
+
+	bat := compute.MockBatch(schema.Types(), 55000, int(schema.PrimaryKey), nil)
+	txn := mgr.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+
+	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
 
@@ -534,7 +596,10 @@ func TestTxnManager1(t *testing.T) {
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, txnbase.NodeDriver) {
 	c := catalog.MockCatalog(dir, "mock", nil)
 	driver := txnbase.NewNodeDriver(dir, "store", nil)
-	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, nil, nil), TxnFactory(c))
+	txnBufMgr := buffer.NewNodeManager(common.G, nil)
+	mutBufMgr := buffer.NewNodeManager(common.G, nil)
+	factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
+	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
 	mgr.Start()
 	return c, mgr, driver
 }

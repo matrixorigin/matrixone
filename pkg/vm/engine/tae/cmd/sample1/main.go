@@ -6,11 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -59,10 +60,12 @@ func main() {
 	defer c.Close()
 	defer mgr.Stop()
 
-	schema := catalog.MockSchema(1)
-	schema.BlockMaxRows = 10000
-	schema.SegmentMaxBlocks = 10
-	batchRows := uint64(schema.BlockMaxRows) * 1 / 2
+	schema := catalog.MockSchemaAll(10)
+	schema.BlockMaxRows = 80000
+	schema.SegmentMaxBlocks = 5
+	schema.PrimaryKey = 3
+	batchCnt := uint64(200)
+	batchRows := uint64(schema.BlockMaxRows) * 1 / 20 * batchCnt
 	{
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
@@ -71,35 +74,52 @@ func main() {
 			panic(err)
 		}
 	}
-	bat := mock.MockBatch(schema.Types(), batchRows)
+	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
-	doAppend := func() {
-		defer wg.Done()
-		txn := mgr.StartTxn(nil)
-		db, err := txn.GetDatabase(dbName)
-		if err != nil {
-			panic(err)
-		}
-		rel, err := db.GetRelationByName(schema.Name)
-		if err != nil {
-			panic(err)
-		}
-		if err := rel.Append(bat); err != nil {
-			panic(err)
-		}
-		if err := txn.Commit(); err != nil {
-			panic(err)
+	doAppend := func(b *batch.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := mgr.StartTxn(nil)
+			db, err := txn.GetDatabase(dbName)
+			if err != nil {
+				panic(err)
+			}
+			rel, err := db.GetRelationByName(schema.Name)
+			if err != nil {
+				panic(err)
+			}
+			if err := rel.Append(b); err != nil {
+				panic(err)
+			}
+			if err := txn.Commit(); err != nil {
+				panic(err)
+			}
 		}
 	}
-	p, _ := ants.NewPool(12)
-	batchCnt := 1000
+	p, _ := ants.NewPool(200)
 	now := time.Now()
 	startProfile()
-	for i := 0; i < batchCnt; i++ {
+	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend)
+		p.Submit(doAppend(b))
 	}
 	wg.Wait()
+	// {
+	// 	txn := mgr.StartTxn(nil)
+	// 	db, _ := txn.GetDatabase(dbName)
+	// 	rel, _ := db.GetRelationByName(schema.Name)
+	// 	var compressed bytes.Buffer
+	// 	var decompressed bytes.Buffer
+	// 	it := rel.MakeBlockIt()
+	// 	for it.Valid() {
+	// 		blk := it.GetBlock()
+	// 		vec, _ := blk.GetVectorCopy(schema.ColDefs[schema.PrimaryKey].Name, &compressed, &decompressed)
+	// 		logutil.Info(vec.String())
+	// 		it.Next()
+	// 	}
+	// }
+
 	stopProfile()
 	logrus.Infof("Append takes: %s", time.Since(now))
 	// time.Sleep(time.Second * 100)

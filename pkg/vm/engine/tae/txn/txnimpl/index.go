@@ -94,6 +94,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -112,6 +113,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -130,6 +132,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -151,6 +154,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -169,6 +173,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -187,6 +192,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -205,6 +211,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -223,6 +230,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -241,6 +249,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -259,6 +268,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -277,6 +287,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -295,6 +306,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -313,6 +325,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for _, v := range data[start : start+count] {
 			if _, ok := idx.tree[v]; ok {
@@ -333,6 +346,7 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 				}
 				set[v] = true
 			}
+			break
 		}
 		for i, s := range data.Offsets[start : start+count] {
 			e := s + data.Lengths[i+start]

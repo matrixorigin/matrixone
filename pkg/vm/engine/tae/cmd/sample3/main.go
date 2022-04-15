@@ -6,14 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -64,9 +65,6 @@ func main() {
 	defer mgr.Stop()
 
 	var schema *catalog.Schema
-	// schema := catalog.MockSchema(1)
-	// schema.BlockMaxRows = 1000
-	// schema.SegmentMaxBlocks = 10
 	{
 		txn := mgr.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
@@ -78,45 +76,56 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		tblInfo := moengine.MockTableInfo(1)
+		tblInfo := moengine.MockTableInfo(4)
+		tblInfo.Columns[0].PrimaryKey = true
 		_, _, _, _, defs, _ := helper.UnTransfer(*tblInfo)
-		schema = moengine.TableInfoToSchema(tblInfo)
 		err = db.Create(0, tblInfo.Name, defs)
+		{
+			db, _ := txn.GetDatabase(dbName)
+			rel, _ := db.GetRelationByName(tblInfo.Name)
+			schema = rel.GetMeta().(*catalog.TableEntry).GetSchema()
+		}
 		if err := txn.Commit(); err != nil {
 			panic(err)
 		}
 	}
-	// batchRows := uint64(schema.BlockMaxRows) * 1 / 2
-	batchRows := uint64(40000) * 1 / 2
+	batchCnt := uint64(100)
+	batchRows := uint64(10000) * 1 / 2 * batchCnt
 	logrus.Info(c.SimplePPString(common.PPL1))
-	bat := mock.MockBatch(schema.Types(), batchRows)
+	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
-	doAppend := func() {
-		defer wg.Done()
-		txn := mgr.StartTxn(nil)
-		eng := moengine.NewEngine(txn)
-		db, err := eng.Database(dbName)
-		if err != nil {
-			panic(err)
-		}
-		rel, err := db.Relation(schema.Name)
-		if err != nil {
-			panic(err)
-		}
-		if err := rel.Write(0, bat); err != nil {
-			panic(err)
-		}
-		if err := txn.Commit(); err != nil {
-			panic(err)
+	doAppend := func(b *batch.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := mgr.StartTxn(nil)
+			// {
+			// 	db, _ := txn.GetDatabase(dbName)
+			// 	rel, _ := db.GetRelationByName(schema.Name)
+			// }
+			eng := moengine.NewEngine(txn)
+			db, err := eng.Database(dbName)
+			if err != nil {
+				panic(err)
+			}
+			rel, err := db.Relation(schema.Name)
+			if err != nil {
+				panic(err)
+			}
+			if err := rel.Write(0, b); err != nil {
+				panic(err)
+			}
+			if err := txn.Commit(); err != nil {
+				panic(err)
+			}
 		}
 	}
 	p, _ := ants.NewPool(10)
-	batchCnt := 100
 	now := time.Now()
 	startProfile()
-	for i := 0; i < batchCnt; i++ {
+	for _, b := range bats {
 		wg.Add(1)
-		p.Submit(doAppend)
+		p.Submit(doAppend(b))
 	}
 	wg.Wait()
 	stopProfile()
