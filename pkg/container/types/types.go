@@ -69,6 +69,8 @@ type Type struct {
 	Width int32 `json:"width,string"`
 
 	Scale int32 `json:"Scale,string"`
+
+	Precision int32 `json:"Precision,string"`
 }
 
 type Bytes struct {
