@@ -52,6 +52,16 @@ func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr bas
 	}
 }
 
+func (store *txnStore) LogSegmentID(tid, sid uint64) {
+	table, _ := store.getOrSetTable(tid)
+	table.LogSegmentID(sid)
+}
+
+func (store *txnStore) LogBlockID(tid, bid uint64) {
+	table, _ := store.getOrSetTable(tid)
+	table.LogBlockID(bid)
+}
+
 func (store *txnStore) Close() error {
 	var err error
 	for _, table := range store.tables {
@@ -335,6 +345,11 @@ func (store *txnStore) ApplyCommit() (err error) {
 }
 
 func (store *txnStore) PreCommit() (err error) {
+	for _, table := range store.tables {
+		if err = table.PreCommitDededup(); err != nil {
+			return
+		}
+	}
 	for _, table := range store.tables {
 		if err = table.PreCommit(); err != nil {
 			panic(err)

@@ -67,7 +67,7 @@ func (txn *Txn) Commit() error {
 	})
 	txn.Wait()
 	txn.Mgr.DeleteTxn(txn.GetID())
-	return txn.Err
+	return txn.GetError()
 }
 
 func (txn *Txn) GetStore() txnif.TxnStore {

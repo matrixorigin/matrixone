@@ -41,6 +41,7 @@ func (db *TxnDatabase) Relations() (rels []handle.Relation)                     
 func (db *TxnDatabase) MakeRelationIt() (it handle.RelationIt)                          { return }
 func (db *TxnDatabase) GetMeta() interface{}                                            { return nil }
 
+func (rel *TxnRelation) SimplePPString(_ common.PPLevel) string                               { return "" }
 func (rel *TxnRelation) String() string                                                       { return "" }
 func (rel *TxnRelation) Close() error                                                         { return nil }
 func (rel *TxnRelation) ID() uint64                                                           { return 0 }

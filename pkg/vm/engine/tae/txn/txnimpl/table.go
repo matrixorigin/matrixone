@@ -9,6 +9,7 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -19,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
-	"github.com/sirupsen/logrus"
 )
 
 var (
@@ -45,10 +45,14 @@ type Table interface {
 	AddUpdateNode(txnif.UpdateNode) error
 	IsDeleted() bool
 	PreCommit() error
+	PreCommitDededup() error
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit() error
 	ApplyRollback() error
+
+	LogSegmentID(sid uint64)
+	LogBlockID(bid uint64)
 
 	WaitSynced()
 
@@ -83,6 +87,8 @@ type txnTable struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	logs        []txnbase.NodeEntry
+	maxSegId    uint64
+	maxBlkId    uint64
 }
 
 func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.NodeDriver, mgr base.INodeManager, checker *warChecker, dataFactory *tables.DataFactory) *txnTable {
@@ -102,6 +108,18 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		logs:        make([]txnbase.NodeEntry, 0),
 	}
 	return tbl
+}
+
+func (tbl *txnTable) LogSegmentID(sid uint64) {
+	if tbl.maxSegId < sid {
+		tbl.maxSegId = sid
+	}
+}
+
+func (tbl *txnTable) LogBlockID(bid uint64) {
+	if tbl.maxBlkId < bid {
+		tbl.maxBlkId = bid
+	}
 }
 
 func (tbl *txnTable) WaitSynced() {
@@ -296,17 +314,17 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		n := h.GetNode().(*insertNode)
 		toAppend := n.PrepareAppend(data, offset)
 		size := compute.EstimateSize(data, offset, toAppend)
-		logrus.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
+		logutil.Debugf("Offset=%d, ToAppend=%d, EstimateSize=%d", offset, toAppend, size)
 		err = n.Expand(size, func() error {
 			appended, err = n.Append(data, offset)
 			return err
 		})
 		if err != nil {
-			logrus.Info(tbl.nodesMgr.String())
+			logutil.Info(tbl.nodesMgr.String())
 			panic(err)
 		}
 		space := n.GetSpace()
-		logrus.Debugf("Appended: %d, Space:%d", appended, space)
+		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		start := tbl.rows
 		// logrus.Infof("s,offset=%d,appended=%d,start=%d", data.Vecs[tbl.GetSchema().PrimaryKey], offset, appended, start)
 		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
@@ -522,6 +540,47 @@ func (tbl *txnTable) Rows() uint32 {
 	return (uint32(cnt)-1)*txnbase.MaxNodeRows + tbl.inodes[cnt-1].Rows()
 }
 
+func (tbl *txnTable) PreCommitDededup() (err error) {
+	if tbl.index == nil {
+		return
+	}
+	schema := tbl.entry.GetSchema()
+	pks := tbl.index.KeyToVector(schema.ColDefs[schema.PrimaryKey].Type)
+	segIt := tbl.entry.MakeSegmentIt(false)
+	for segIt.Valid() {
+		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
+		if seg.GetID() < tbl.maxSegId {
+			return
+		}
+		segData := seg.GetSegmentData()
+		// TODO: Add a new batch dedup method later
+		if err = segData.BatchDedup(tbl.txn, pks); err == data.ErrDuplicate {
+			return
+		}
+		if err == nil {
+			segIt.Next()
+			continue
+		}
+		err = nil
+		blkIt := seg.MakeBlockIt(false)
+		for blkIt.Valid() {
+			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
+			if blk.GetID() < tbl.maxBlkId {
+				return
+			}
+			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
+			blkData := blk.GetBlockData()
+			// TODO: Add a new batch dedup method later
+			if err = blkData.BatchDedup(tbl.txn, pks); err != nil {
+				return
+			}
+			blkIt.Next()
+		}
+		segIt.Next()
+	}
+	return
+}
+
 func (tbl *txnTable) BatchDedup(pks *gvec.Vector) (err error) {
 	if err = tbl.BatchDedupLocalByCol(pks); err != nil {
 		return err
@@ -529,7 +588,21 @@ func (tbl *txnTable) BatchDedup(pks *gvec.Vector) (err error) {
 	segIt := tbl.handle.MakeSegmentIt()
 	for segIt.Valid() {
 		seg := segIt.GetSegment()
-		if err = seg.BatchDedup(pks); err != nil {
+		if err = seg.BatchDedup(pks); err == data.ErrDuplicate {
+			break
+		}
+		if err == data.ErrPossibleDuplicate {
+			err = nil
+			blkIt := seg.MakeBlockIt()
+			for blkIt.Valid() {
+				block := blkIt.GetBlock()
+				if err = block.BatchDedup(pks); err != nil {
+					break
+				}
+				blkIt.Next()
+			}
+		}
+		if err != nil {
 			break
 		}
 		segIt.Next()
@@ -608,14 +681,14 @@ func (tbl *txnTable) applyAppendInode(node InsertNode) (err error) {
 			}
 		}
 		toAppend, err := appender.PrepareAppend(node.Rows() - appended)
-		bat, err := node.Window(0, toAppend-1)
+		bat, err := node.Window(appended, appended+toAppend-1)
 		var destOff uint32
 		if destOff, err = appender.ApplyAppend(bat, 0, toAppend, nil); err != nil {
 			panic(err)
 		}
 		appender.Close()
 		info := node.AddApplyInfo(appended, toAppend, destOff, toAppend, appender.GetID())
-		logrus.Debug(info.String())
+		logutil.Debug(info.String())
 		appended += toAppend
 		if appended == node.Rows() {
 			break
@@ -653,13 +726,13 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	}
 
 	for _, seg := range tbl.csegs {
-		logrus.Debugf("PrepareCommit: %s", seg.String())
+		logutil.Debugf("PrepareCommit: %s", seg.String())
 		if err = seg.PrepareCommit(); err != nil {
 			return
 		}
 	}
 	for _, blk := range tbl.cblks {
-		logrus.Debugf("PrepareCommit: %s", blk.String())
+		logutil.Debugf("PrepareCommit: %s", blk.String())
 		if err = blk.PrepareCommit(); err != nil {
 			return
 		}

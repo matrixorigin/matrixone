@@ -18,6 +18,7 @@ type Relation interface {
 	Rows() int64
 	Size(attr string) int64
 	String() string
+	SimplePPString(common.PPLevel) string
 	GetCardinality(attr string) int64
 	Schema() interface{}
 	MakeSegmentIt() SegmentIt

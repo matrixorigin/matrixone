@@ -86,5 +86,6 @@ func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 
 func (seg *txnSegment) BatchDedup(pks *vector.Vector) (err error) {
 	segData := seg.entry.GetSegmentData()
+	seg.Txn.GetStore().LogSegmentID(seg.entry.GetTable().GetID(), seg.entry.GetID())
 	return segData.BatchDedup(seg.Txn, pks)
 }

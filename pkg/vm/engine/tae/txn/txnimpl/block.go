@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -81,10 +82,19 @@ func newBlock(txn txnif.AsyncTxn, meta *catalog.BlockEntry) *txnBlock {
 	return blk
 }
 
-func (blk *txnBlock) GetMeta() interface{}    { return blk.entry }
-func (blk *txnBlock) String() string          { return blk.entry.String() }
+func (blk *txnBlock) GetMeta() interface{} { return blk.entry }
+func (blk *txnBlock) String() string {
+	blkData := blk.entry.GetBlockData()
+	return blkData.PPString(common.PPL1, 0, "")
+	// return blk.entry.String()
+}
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
+func (blk *txnBlock) BatchDedup(pks *gvec.Vector) (err error) {
+	blkData := blk.entry.GetBlockData()
+	blk.Txn.GetStore().LogBlockID(blk.entry.GetSegment().GetTable().GetID(), blk.entry.GetID())
+	return blkData.BatchDedup(blk.Txn, pks)
+}
 
 func (blk *txnBlock) RangeDelete(start, end uint32) (err error) {
 	return blk.Txn.GetStore().RangeDelete(blk.entry.AsCommonID(), start, end)

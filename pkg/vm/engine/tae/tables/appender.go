@@ -8,8 +8,8 @@ import (
 )
 
 type blockAppender struct {
-	node   *appendableNode
-	handle base.INodeHandle
+	node          *appendableNode
+	handle        base.INodeHandle
 	indexAppender accessif.IAppendableBlockIndexHolder
 }
 
@@ -48,6 +48,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 	schema := appender.node.meta.GetSegment().GetTable().GetSchema()
 	pkIdx := schema.PrimaryKey
 	pks := bat.Vecs[pkIdx]
+	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
 
 	return

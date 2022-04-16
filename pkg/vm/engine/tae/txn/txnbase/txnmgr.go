@@ -86,7 +86,7 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
-	txn.SetError(txn.PrepareRollback())
+	txn.PrepareRollback()
 }
 
 // TODO
@@ -100,6 +100,9 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 		mgr.Lock()
 		ts := mgr.TsAlloc.Alloc()
 		op.Txn.Lock()
+		if op.Txn.GetError() != nil {
+			op.Op = OpRollback
+		}
 		if op.Op == OpCommit {
 			op.Txn.ToCommittingLocked(ts)
 		} else if op.Op == OpRollback {

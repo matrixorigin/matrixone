@@ -46,3 +46,6 @@ func (store *NoopTxnStore) GetByFilter(uint64, *handle.Filter) (id *common.ID, o
 func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v interface{}, err error) {
 	return
 }
+
+func (store *NoopTxnStore) LogSegmentID(tid, sid uint64) {}
+func (store *NoopTxnStore) LogBlockID(tid, bid uint64)   {}

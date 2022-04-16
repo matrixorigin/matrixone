@@ -6,6 +6,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
@@ -19,6 +20,7 @@ type TableIndex interface {
 	Find(interface{}) (uint32, error)
 	Name() string
 	Count() int
+	KeyToVector(types.Type) *gvec.Vector
 }
 
 // TODO
@@ -33,6 +35,14 @@ func NewSimpleTableIndex() *simpleTableIndex {
 	return &simpleTableIndex{
 		tree: make(map[interface{}]uint32),
 	}
+}
+
+func (idx *simpleTableIndex) KeyToVector(kType types.Type) *gvec.Vector {
+	vec := gvec.New(kType)
+	for k, _ := range idx.tree {
+		compute.AppendValue(vec, k)
+	}
+	return vec
 }
 
 func (idx *simpleTableIndex) Close() error {

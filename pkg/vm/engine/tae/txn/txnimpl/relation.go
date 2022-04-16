@@ -1,6 +1,7 @@
 package txnimpl
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -76,6 +77,19 @@ func newRelation(txn txnif.AsyncTxn, meta *catalog.TableEntry) *txnRelation {
 
 func (h *txnRelation) ID() uint64     { return h.entry.GetID() }
 func (h *txnRelation) String() string { return h.entry.String() }
+func (h *txnRelation) SimplePPString(level common.PPLevel) string {
+	s := h.entry.String()
+	if level < common.PPL1 {
+		return s
+	}
+	it := h.MakeBlockIt()
+	for it.Valid() {
+		block := it.GetBlock()
+		s = fmt.Sprintf("%s\n%s", s, block.String())
+		it.Next()
+	}
+	return s
+}
 
 func (h *txnRelation) GetMeta() interface{}   { return h.entry }
 func (h *txnRelation) GetSchema() interface{} { return h.entry.GetSchema() }

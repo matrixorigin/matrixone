@@ -887,3 +887,85 @@ func TestBlock1(t *testing.T) {
 	}
 	assert.Equal(t, blkCnt, cnt)
 }
+
+func TestDedup1(t *testing.T) {
+	dir := initTestPath(t)
+	c, mgr, driver := initTestContext(t, dir)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(4)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	schema.PrimaryKey = 2
+	cnt := uint64(10)
+	rows := uint64(schema.BlockMaxRows) / 2 * cnt
+	bat := compute.MockBatch(schema.Types(), rows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(cnt))
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		db.CreateRelation(schema)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Rollback())
+	}
+
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Rollback())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[1])
+		assert.Nil(t, err)
+
+		txn2 := mgr.StartTxn(nil)
+		db2, _ := txn2.GetDatabase("db")
+		rel2, _ := db2.GetRelationByName(schema.Name)
+		err = rel2.Append(bats[2])
+		assert.Nil(t, err)
+		err = rel2.Append(bats[3])
+		assert.Nil(t, err)
+		assert.Nil(t, txn2.Commit())
+
+		txn3 := mgr.StartTxn(nil)
+		db3, _ := txn3.GetDatabase("db")
+		rel3, _ := db3.GetRelationByName(schema.Name)
+		err = rel3.Append(bats[4])
+		assert.Nil(t, err)
+		err = rel3.Append(bats[5])
+		assert.Nil(t, err)
+		assert.Nil(t, txn3.Commit())
+
+		err = rel.Append(bats[3])
+		assert.Nil(t, err)
+		err = txn.Commit()
+		t.Log(txn.String())
+		assert.NotNil(t, err)
+	}
+	t.Log(c.SimplePPString(common.PPL1))
+}

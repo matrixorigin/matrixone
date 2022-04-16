@@ -30,4 +30,5 @@ type Block interface {
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (interface{}, error)
+	PPString(level common.PPLevel, depth int, prefix string) string
 }

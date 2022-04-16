@@ -381,3 +381,75 @@ func TestTxn4(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 }
+
+func TestTxn5(t *testing.T) {
+	dir := initTestPath(t)
+	c, mgr, driver, _, mutBufMgr := initTestContext(t, dir, common.M*1, common.G)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(4)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	schema.PrimaryKey = 2
+	cnt := uint64(10)
+	rows := uint64(schema.BlockMaxRows) / 2 * cnt
+	bat := compute.MockBatch(schema.Types(), rows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(cnt))
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		db.CreateRelation(schema)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		err = rel.Append(bats[0])
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Rollback())
+	}
+
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[0])
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Rollback())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		err := rel.Append(bats[1])
+		assert.Nil(t, err)
+
+		txn2 := mgr.StartTxn(nil)
+		db2, _ := txn2.GetDatabase("db")
+		rel2, _ := db2.GetRelationByName(schema.Name)
+		err = rel2.Append(bats[1])
+		assert.Nil(t, err)
+		err = rel2.Append(bats[2])
+		assert.Nil(t, err)
+
+		assert.Nil(t, txn2.Commit())
+		assert.NotNil(t, txn.Commit())
+		t.Log(txn2.String())
+		t.Log(txn.String())
+	}
+	t.Log(mutBufMgr.String())
+	t.Log(c.SimplePPString(common.PPL1))
+}

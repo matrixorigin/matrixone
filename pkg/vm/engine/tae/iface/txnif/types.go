@@ -110,6 +110,8 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 
 	BatchDedup(id uint64, pks *vector.Vector) error
+	LogSegmentID(tid, sid uint64)
+	LogBlockID(tid, bid uint64)
 
 	Append(id uint64, data *batch.Batch) error
 	RangeDeleteLocalRows(id uint64, start, end uint32) error
