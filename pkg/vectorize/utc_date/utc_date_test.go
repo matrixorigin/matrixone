@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,43 +11,17 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+package utc_date
 
-package builtin
+import (
+	"testing"
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-
-const (
-	Length = iota + overload.NE + 1
-	Space
-	Reverse
-	Substring
-	Ltrim
-	Rtrim
-	StartsWith
-	Lpad
-	Rpad
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Sin
-	Sinh
-	Cos
-	Acos
-	Tan
-	Atan
-	Cot
-	UTCTimestamp
-	DayOfYear
-	Month
-	Year
-	Weekday
-	EndsWith
-	Date
-	UTCDate
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
+
+func TestUTCDate(t *testing.T) {
+	timestampStr := GetUTCDate().String()
+	if _, err := types.ParseDate(timestampStr); err != nil {
+		t.Errorf("GetUTCDate() error = %v\n", err)
+	}
+}
