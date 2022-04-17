@@ -16,14 +16,15 @@ package engine
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
-	"sort"
-	"strings"
-	"testing"
 )
 
 func TestTpeReader_Read(t *testing.T) {
@@ -73,11 +74,10 @@ func TestTpeReader_Read(t *testing.T) {
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
+					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
 					if get == nil {
 						break
 					}
-
 					for j := 0; j < 2; j++ {
 						a := bat.Vecs[j].Col.([]uint64)
 						b := get.Vecs[j].Col.([]uint64)
@@ -85,7 +85,7 @@ func TestTpeReader_Read(t *testing.T) {
 					}
 				}
 			} else {
-				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
+				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
 				convey.So(get, convey.ShouldBeNil)
 				convey.So(err, convey.ShouldBeNil)
 			}
@@ -120,7 +120,7 @@ func TestTpeReader_Read(t *testing.T) {
 			defs = append(defs, def)
 			rawDefs = append(rawDefs, def)
 		}
-		pkDef := &engine.PrimaryIndexDef{Names: []string{"a", "b"}}
+		pkDef := &engine.PrimaryIndexDef{Names: []string{"a", "b", "c"}}
 
 		defs = append(defs, pkDef)
 
@@ -149,8 +149,7 @@ func TestTpeReader_Read(t *testing.T) {
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1},
-						[]string{"a", "c"})
+					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
 					if get == nil {
 						break
 					}
@@ -166,7 +165,7 @@ func TestTpeReader_Read(t *testing.T) {
 					}
 				}
 			} else {
-				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
+				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
 				convey.So(get, convey.ShouldBeNil)
 				convey.So(err, convey.ShouldBeNil)
 			}
