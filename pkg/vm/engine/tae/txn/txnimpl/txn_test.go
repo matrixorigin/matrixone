@@ -1,7 +1,6 @@
 package txnimpl
 
 import (
-	"bytes"
 	"fmt"
 	"math/rand"
 	"os"
@@ -403,49 +402,14 @@ func TestBuildCommand(t *testing.T) {
 	t.Log(tbl.nodesMgr.String())
 }
 
-func TestColumnNode(t *testing.T) {
-	ncnt := 1000
-	nodes := make([]*updates.ColumnUpdates, ncnt)
-
-	target := common.ID{}
-	start := time.Now()
-	ecnt := 100
-	schema := catalog.MockSchema(2)
-	for i, _ := range nodes {
-		node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-		nodes[i] = node
-		for j := i * ecnt; j < i*ecnt+ecnt; j++ {
-			node.Update(uint32(j), int32(j))
-		}
-	}
-	t.Log(time.Since(start))
-	start = time.Now()
-	node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-	for _, n := range nodes {
-		node.MergeLocked(n)
-	}
-	t.Log(time.Since(start))
-	assert.Equal(t, ncnt*ecnt, node.GetUpdateCntLocked())
-
-	var w bytes.Buffer
-	err := node.WriteTo(&w)
-	assert.Nil(t, err)
-
-	buf := w.Bytes()
-	r := bytes.NewBuffer(buf)
-	n2 := updates.NewColumnUpdates(nil, nil, nil)
-	err = n2.ReadFrom(r)
-	assert.Nil(t, err)
-	assert.True(t, node.EqualLocked(n2))
-}
-
 func TestApplyToColumn1(t *testing.T) {
-	target := common.ID{}
 	deletes := &roaring.Bitmap{}
 	deletes.Add(1)
-	schema := catalog.MockSchema(2)
-	node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-	node.Update(3, []byte("update"))
+	ts := common.NextGlobalSeqNum()
+	chain := updates.MockColumnUpdateChain()
+	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node.AttachTo(chain)
+	node.UpdateLocked(3, []byte("update"))
 	deletes.AddRange(3, 4)
 
 	vec := &gvec.Vector{}
@@ -477,12 +441,13 @@ func TestApplyToColumn1(t *testing.T) {
 }
 
 func TestApplyToColumn2(t *testing.T) {
-	target := common.ID{}
 	deletes := &roaring.Bitmap{}
 	deletes.Add(1)
-	schema := catalog.MockSchema(2)
-	node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-	node.Update(0, int32(8))
+	ts := common.NextGlobalSeqNum()
+	chain := updates.MockColumnUpdateChain()
+	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node.AttachTo(chain)
+	node.UpdateLocked(0, int32(8))
 	deletes.AddRange(2, 4)
 
 	vec := &gvec.Vector{}
@@ -502,10 +467,11 @@ func TestApplyToColumn2(t *testing.T) {
 }
 
 func TestApplyToColumn3(t *testing.T) {
-	target := common.ID{}
-	schema := catalog.MockSchema(2)
-	node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-	node.Update(3, []byte("update"))
+	ts := common.NextGlobalSeqNum()
+	chain := updates.MockColumnUpdateChain()
+	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node.AttachTo(chain)
+	node.UpdateLocked(3, []byte("update"))
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_varchar
@@ -530,10 +496,11 @@ func TestApplyToColumn3(t *testing.T) {
 }
 
 func TestApplyToColumn4(t *testing.T) {
-	target := common.ID{}
-	schema := catalog.MockSchema(2)
-	node := updates.NewColumnUpdates(&target, schema.ColDefs[0], nil)
-	node.Update(3, int32(8))
+	ts := common.NextGlobalSeqNum()
+	chain := updates.MockColumnUpdateChain()
+	node := updates.NewCommittedColumnNode(ts, ts, nil, nil)
+	node.AttachTo(chain)
+	node.UpdateLocked(3, int32(8))
 
 	vec := &gvec.Vector{}
 	vec.Typ.Oid = types.T_int32

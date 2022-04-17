@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -253,6 +252,10 @@ func TestTxn3(t *testing.T) {
 		t.Log(bat.Vecs[colIdx].String())
 	}
 	{
+		// 1. Update ROW=5, VAL=99 -- PASS
+		// 2. Update ROW=5, VAL=100 -- PASS
+		// 3. Delete ROWS=[0,2] -- PASS
+		// 4. Update ROW=1 -- FAIL
 		txn := mgr.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
@@ -331,8 +334,8 @@ func TestTxn3(t *testing.T) {
 		err = blk2.Update(20, colIdx, int8(40))
 		// err = blk2.Update(20, colIdx, int32(2000))
 		assert.Nil(t, err)
-		chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
-		t.Log(chain.StringLocked())
+		// chain := it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
+		// t.Log(chain.StringLocked())
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
 		vec, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
@@ -348,8 +351,8 @@ func TestTxn3(t *testing.T) {
 		vec, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.Typ.String())
-		chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
-		t.Log(chain.StringLocked())
+		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
+		// t.Log(chain.StringLocked())
 	}
 }
 

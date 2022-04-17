@@ -27,6 +27,15 @@ func (l *Link) Update(n *DLNode) {
 	}
 }
 
+func (l *Link) Depth() int {
+	depth := 0
+	l.Loop(func(_ *DLNode) bool {
+		depth++
+		return true
+	}, false)
+	return depth
+}
+
 func (l *Link) Insert(payload NodePayload) *DLNode {
 	var (
 		n    *DLNode

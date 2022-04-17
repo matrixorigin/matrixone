@@ -71,9 +71,9 @@ type APP1 struct {
 
 func init() {
 	app1Conf = &APP1Conf{
-		Users:         10,
+		Users:         100,
 		InitBalance:   1000000,
-		GoodKinds:     10,
+		GoodKinds:     2000,
 		GoodRepertory: 100,
 	}
 
@@ -465,7 +465,7 @@ func TestApp1(t *testing.T) {
 	app1 := NewApp1(mgr, "app1")
 	app1.Init(1)
 
-	p, _ := ants.NewPool(10)
+	p, _ := ants.NewPool(100)
 
 	var wg sync.WaitGroup
 	buyTxn := func() {
@@ -486,12 +486,18 @@ func TestApp1(t *testing.T) {
 			t.Log(txn.String())
 		}
 	}
-	for i := 0; i < 1; i++ {
+	for i := 0; i < 10000; i++ {
 		wg.Add(1)
 		p.Submit(buyTxn)
 	}
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase(app1.DBName)
+		rel, _ := db.GetRelationByName(repertory.Name)
+		t.Log(rel.SimplePPString(common.PPL1))
+	}
 }
 
 func TestWarehouse(t *testing.T) {

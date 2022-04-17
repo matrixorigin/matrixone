@@ -23,10 +23,10 @@ type Block interface {
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*vector.Vector, error)
-	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.UpdateNode, error)
+	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.DeleteNode, error)
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
 
-	GetUpdateChain() txnif.UpdateChain
+	// GetUpdateChain() txnif.UpdateChain
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
 	GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (uint32, error)
 	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (interface{}, error)
