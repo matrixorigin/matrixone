@@ -38,6 +38,7 @@ const (
 	Sin
 	Sinh
 	Cos
+	Cosh
 	Acos
 	Tan
 	Atan
