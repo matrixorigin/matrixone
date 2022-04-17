@@ -25,6 +25,7 @@ type Relation interface {
 	MakeReader() Reader
 	MakeBlockIt() BlockIt
 
+	RangeDelete(id *common.ID, start, end uint32) error
 	Update(id *common.ID, row uint32, col uint16, v interface{}) error
 	GetByFilter(filter *Filter) (id *common.ID, offset uint32, err error)
 	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)

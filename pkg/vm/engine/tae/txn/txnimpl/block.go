@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -111,7 +112,7 @@ func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, true) }
 
-func (blk *txnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, err error) {
+func (blk *txnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return blk.entry.GetBlockData().GetVectorCopy(blk.Txn, attr, compressed, decompressed)
 }
 

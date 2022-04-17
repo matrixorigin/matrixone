@@ -85,7 +85,8 @@ func (node *DeleteNode) Compare(o common.NodePayload) int {
 	return 0
 }
 
-func (node *DeleteNode) GetChain() txnif.DeleteChain { return node.chain }
+func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chain }
+func (node *DeleteNode) GetDeleteMaskLocked() *roaring.Bitmap { return node.mask }
 
 func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
 	if node.mask == nil || node.mask.GetCardinality() == 0 {

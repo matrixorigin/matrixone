@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/impl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -93,11 +95,11 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	return
 }
 
-func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
 	return blk.getVectorCopy(txn, attr, compressed, decompressed, false)
 }
 
-func (blk *dataBlock) getVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, err error) {
+func (blk *dataBlock) getVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
 	h := blk.node.mgr.Pin(blk.node)
 	if h == nil {
 		panic("not expected")
@@ -122,8 +124,11 @@ func (blk *dataBlock) getVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	}
 	vec = compute.ApplyUpdateToVector(vec, updateMask, updateVals)
 	if dnode != nil {
-		vec = dnode.ApplyDeletes(vec)
+		deletes = dnode.GetDeleteMaskLocked()
 	}
+	// if dnode != nil {
+	// 	vec = dnode.ApplyDeletes(vec)
+	// }
 	return
 }
 
@@ -174,15 +179,21 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 		chain.RLock()
 		v, err = chain.GetValueLocked(row, txn.GetStartTS())
 		chain.RUnlock()
-	}
-	if v != nil && err == nil {
-		return
+		if err != nil {
+			v = nil
+			err = nil
+		}
+	} else {
+		err = txnbase.ErrNotFound
 	}
 	sharedLock.Unlock()
+	if v != nil || err != nil {
+		return
+	}
 	var comp bytes.Buffer
 	var decomp bytes.Buffer
 	attr := blk.meta.GetSegment().GetTable().GetSchema().ColDefs[col].Name
-	raw, _ := blk.getVectorCopy(txn, attr, &comp, &decomp, true)
+	raw, _, _ := blk.getVectorCopy(txn, attr, &comp, &decomp, true)
 	v = compute.GetValue(raw, row)
 	return
 }

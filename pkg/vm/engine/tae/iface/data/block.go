@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -22,7 +23,7 @@ type Block interface {
 	MakeAppender() (BlockAppender, error)
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
-	GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*vector.Vector, error)
+	GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
 	RangeDelete(txn txnif.AsyncTxn, start, end uint32) (txnif.DeleteNode, error)
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
 

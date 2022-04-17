@@ -128,6 +128,10 @@ func (h *txnRelation) Update(id *common.ID, row uint32, col uint16, v interface{
 	return h.Txn.GetStore().Update(id, row, col, v)
 }
 
+func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
+	return h.Txn.GetStore().RangeDelete(id, start, end)
+}
+
 func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
 	return h.Txn.GetStore().GetValue(id, row, col)
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -280,10 +281,11 @@ func TestTxn3(t *testing.T) {
 
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		vec, dels, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
-		assert.Equal(t, int(rows)-3, vector.Length(vec))
-		assert.Equal(t, int8(100), compute.GetValue(vec, 2))
+		assert.Equal(t, int(rows), vector.Length(vec))
+		assert.Equal(t, 3, int(dels.GetCardinality()))
+		assert.Equal(t, int8(100), compute.GetValue(vec, 5))
 		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
 		// Check w-w with uncommitted col update
 		{
@@ -338,17 +340,18 @@ func TestTxn3(t *testing.T) {
 		// t.Log(chain.StringLocked())
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		vec, dels, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.String())
-		assert.Equal(t, int(rows)-3, vector.Length(vec))
-		assert.Equal(t, int8(100), compute.GetValue(vec, 2))
+		assert.Equal(t, int(rows), vector.Length(vec))
+		assert.Equal(t, 3, int(dels.GetCardinality()))
+		assert.Equal(t, int8(100), compute.GetValue(vec, 5))
 		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
-		assert.Equal(t, int8(40), compute.GetValue(vec, 17))
+		assert.Equal(t, int8(40), compute.GetValue(vec, 20))
 		// assert.Equal(t, int32(50), compute.GetValue(vec, 17))
 
 		assert.Nil(t, txn.Commit())
-		vec, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[colIdx].Name, &comp, &decomp)
+		vec, _, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.Typ.String())
 		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
@@ -455,4 +458,119 @@ func TestTxn5(t *testing.T) {
 	}
 	t.Log(mutBufMgr.String())
 	t.Log(c.SimplePPString(common.PPL1))
+}
+
+func TestTxn6(t *testing.T) {
+	dir := initTestPath(t)
+	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
+	defer driver.Close()
+	defer c.Close()
+	defer mgr.Stop()
+
+	schema := catalog.MockSchemaAll(4)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	schema.PrimaryKey = 2
+	cnt := uint64(10)
+	rows := uint64(schema.BlockMaxRows) / 2 * cnt
+	bat := compute.MockBatch(schema.Types(), rows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, int(cnt))
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		rel, _ := db.CreateRelation(schema)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := mgr.StartTxn(nil)
+		db, _ := txn.GetDatabase("db")
+		rel, _ := db.GetRelationByName(schema.Name)
+		filter := new(handle.Filter)
+		filter.Op = handle.FilterEq
+		filter.Val = int32(5)
+		id, row, err := rel.GetByFilter(filter)
+		assert.Nil(t, err)
+
+		err = rel.Update(id, row, uint16(3), int64(33))
+		assert.Nil(t, err)
+
+		err = rel.Update(id, row, uint16(3), int64(44))
+		assert.Nil(t, err)
+		v, err := rel.GetValue(id, row, uint16(3))
+		assert.Nil(t, err)
+		assert.Equal(t, int64(44), v)
+
+		err = rel.Update(id, row+1, uint16(3), int64(77))
+		assert.Nil(t, err)
+
+		err = rel.RangeDelete(id, row+1, row+1)
+		assert.Nil(t, err)
+
+		// Double delete in a same txn -- FAIL
+		err = rel.RangeDelete(id, row+1, row+1)
+		assert.NotNil(t, err)
+
+		{
+			txn := mgr.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, _ := db.GetRelationByName(schema.Name)
+
+			v, err := rel.GetValue(id, row, uint16(3))
+			assert.Nil(t, err)
+			assert.NotEqual(t, int64(44), v)
+
+			err = rel.Update(id, row, uint16(3), int64(55))
+			assert.NotNil(t, err)
+
+			err = rel.Update(id, row+2, uint16(3), int64(88))
+			assert.Nil(t, err)
+
+			// Update row that has uncommitted delete -- FAIL
+			err = rel.Update(id, row+1, uint16(3), int64(55))
+			assert.NotNil(t, err)
+			v, err = rel.GetValue(id, row+1, uint16(3))
+			assert.Nil(t, err)
+			txn.Rollback()
+		}
+		err = rel.Update(id, row+2, uint16(3), int64(99))
+		assert.Nil(t, err)
+
+		assert.Nil(t, txn.Commit())
+
+		{
+			txn := mgr.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			rel, _ := db.GetRelationByName(schema.Name)
+
+			v, err := rel.GetValue(id, row, uint16(3))
+			assert.Nil(t, err)
+			assert.Equal(t, int64(44), v)
+
+			v, err = rel.GetValue(id, row+2, uint16(3))
+			assert.Nil(t, err)
+			assert.Equal(t, int64(99), v)
+
+			_, err = rel.GetValue(id, row+1, uint16(3))
+			assert.NotNil(t, err)
+
+			var comp bytes.Buffer
+			var decomp bytes.Buffer
+			it := rel.MakeBlockIt()
+			for it.Valid() {
+				comp.Reset()
+				decomp.Reset()
+				blk := it.GetBlock()
+				vec, dels, err := blk.GetVectorCopy(schema.ColDefs[3].Name, &comp, &decomp)
+				assert.Nil(t, err)
+				assert.Equal(t, gvec.Length(bats[0].Vecs[0]), gvec.Length(vec))
+				assert.True(t, dels.Contains(row+1))
+				t.Log(dels.String())
+				it.Next()
+			}
+
+			t.Log(rel.SimplePPString(common.PPL1))
+		}
+	}
 }

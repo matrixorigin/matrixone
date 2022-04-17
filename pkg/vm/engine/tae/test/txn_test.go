@@ -215,7 +215,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 		comp.Reset()
 		decomp.Reset()
 		blk := blockIt.GetBlock()
-		vec, err = blk.GetVectorCopy(repertory.ColDefs[1].Name, &comp, &decomp)
+		vec, _, err = blk.GetVectorCopy(repertory.ColDefs[1].Name, &comp, &decomp)
 		if err != nil {
 			return
 		}
@@ -227,7 +227,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				offset = uint32(i)
 				comp.Reset()
 				decomp.Reset()
-				vec, _ := blk.GetVectorCopy(repertory.ColDefs[2].Name, &comp, &decomp)
+				vec, _, _ := blk.GetVectorCopy(repertory.ColDefs[2].Name, &comp, &decomp)
 				count = compute.GetValue(vec, offset).(uint64)
 				return
 			}
@@ -521,7 +521,7 @@ func TestWarehouse(t *testing.T) {
 		blk := it.GetBlock()
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, _ := blk.GetVectorCopy(wareHouse.ColDefs[1].Name, &comp, &decomp)
+		vec, _, _ := blk.GetVectorCopy(wareHouse.ColDefs[1].Name, &comp, &decomp)
 		t.Log(vec.String())
 	}
 

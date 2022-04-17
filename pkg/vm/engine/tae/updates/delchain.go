@@ -59,6 +59,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts uint64) (deleted bool) {
 		n.RLock()
 		// Skip txn that committed|committing after ts
 		if n.GetCommitTSLocked() > ts && n.GetStartTS() != ts {
+			n.RUnlock()
 			return true
 		}
 		overlap := n.HasOverlapLocked(row, row)

@@ -3,6 +3,7 @@ package txnbase
 import (
 	"bytes"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -58,6 +59,7 @@ func (rel *TxnRelation) GetMeta() interface{}                                   
 func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)                       { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v interface{}, err error)       { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, interface{}) (err error)           { return }
+func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32) (err error)                   { return }
 func (rel *TxnRelation) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) { return }
 
 func (seg *TxnSegment) GetMeta() interface{}               { return nil }
@@ -89,7 +91,7 @@ func (blk *TxnBlock) GetMeta() interface{}                                 { ret
 func (blk *TxnBlock) GetByFilter(handle.Filter) (offset uint32, err error) { return }
 
 // func (blk *TxnBlock) GetBatch(ctx interface{}) (bat *batch.Batch, err error)        { return }
-func (blk *TxnBlock) GetVectorCopy(compressed, decompressed *bytes.Buffer) (vec *vector.Vector, err error) {
+func (blk *TxnBlock) GetVectorCopy(compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return
 }
 

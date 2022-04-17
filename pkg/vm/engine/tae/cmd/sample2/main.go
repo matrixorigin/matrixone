@@ -134,7 +134,7 @@ func main() {
 				logrus.Info(blk.String())
 				compressed.Reset()
 				decompressed.Reset()
-				vec, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &compressed, &decompressed)
+				vec, _, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &compressed, &decompressed)
 				logrus.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(vec))
 				if err != nil {
 					panic(err)
