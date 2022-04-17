@@ -65,7 +65,9 @@ func TestTpeReader_Read(t *testing.T) {
 		//make data
 		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
+		bat.Zs = nil
 		err = tableDesc.Write(0, bat)
+
 		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
@@ -74,7 +76,7 @@ func TestTpeReader_Read(t *testing.T) {
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
+					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
 					if get == nil {
 						break
 					}
@@ -85,7 +87,7 @@ func TestTpeReader_Read(t *testing.T) {
 					}
 				}
 			} else {
-				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
+				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
 				convey.So(get, convey.ShouldBeNil)
 				convey.So(err, convey.ShouldBeNil)
 			}
@@ -120,7 +122,7 @@ func TestTpeReader_Read(t *testing.T) {
 			defs = append(defs, def)
 			rawDefs = append(rawDefs, def)
 		}
-		pkDef := &engine.PrimaryIndexDef{Names: []string{"a", "b", "c"}}
+		pkDef := &engine.PrimaryIndexDef{Names: []string{"a", "b"}}
 
 		defs = append(defs, pkDef)
 
@@ -140,6 +142,7 @@ func TestTpeReader_Read(t *testing.T) {
 			vec0[i] = uint64(i)
 			vec1[i] = uint64(i)
 		}
+		bat.Zs = nil
 		err = tableDesc.Write(0, bat)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -149,7 +152,8 @@ func TestTpeReader_Read(t *testing.T) {
 		for i, reader := range readers {
 			if i == 0 {
 				for {
-					get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
+					get, err = reader.Read([]uint64{1, 1},
+						[]string{"a", "c"})
 					if get == nil {
 						break
 					}
@@ -165,7 +169,7 @@ func TestTpeReader_Read(t *testing.T) {
 					}
 				}
 			} else {
-				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b", "c"})
+				get, err = reader.Read([]uint64{1, 1}, []string{"a", "b"})
 				convey.So(get, convey.ShouldBeNil)
 				convey.So(err, convey.ShouldBeNil)
 			}
