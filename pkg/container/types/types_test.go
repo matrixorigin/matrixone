@@ -15,7 +15,10 @@
 package types
 
 import (
+	"math"
 	"testing"
+
+	"golang.org/x/exp/constraints"
 
 	"github.com/stretchr/testify/require"
 )
@@ -53,4 +56,70 @@ func TestT_OidString(t *testing.T) {
 	require.Equal(t, "T_int16", T_int16.OidString())
 	require.Equal(t, "T_int32", T_int32.OidString())
 	require.Equal(t, "T_int64", T_int64.OidString())
+}
+
+func sliceCopy(a, b []float64) {
+	for i := range a {
+		b[i] = a[i] + a[i]
+	}
+}
+
+func BenchmarkCopy(b *testing.B) {
+	x := make([]float64, 512)
+	y := make([]float64, 512)
+	for i := 0; i < 512; i++ {
+		x[i] = float64(i)
+	}
+
+	for n := 0; n < b.N; n++ {
+		sliceCopy(x, y)
+	}
+}
+
+func sliceCopyG[T constraints.Ordered](a, b []T) {
+	for i := range a {
+		b[i] = a[i] + a[i]
+	}
+}
+
+func BenchmarkCopyG(b *testing.B) {
+	x := make([]float64, 512)
+	y := make([]float64, 512)
+	for i := 0; i < 512; i++ {
+		x[i] = float64(i)
+	}
+
+	for n := 0; n < b.N; n++ {
+		sliceCopyG(x, y)
+	}
+}
+
+func BenchmarkCastA(b *testing.B) {
+	x := make([]int16, 8192)
+	y := make([]float64, 8192)
+	for i := 0; i < 8192; i++ {
+		x[i] = int16(i)
+	}
+	for n := 0; n < b.N; n++ {
+		for i := 0; i < 8192; i++ {
+			y[i] = math.Log(float64(x[i]))
+		}
+	}
+}
+
+func BenchmarkCastB(b *testing.B) {
+	x := make([]int16, 8192)
+	y := make([]float64, 8192)
+	z := make([]float64, 8192)
+	for i := 0; i < 8192; i++ {
+		x[i] = int16(i)
+	}
+	for n := 0; n < b.N; n++ {
+		for i := 0; i < 8192; i++ {
+			y[i] = float64(x[i])
+		}
+		for i := 0; i < 8192; i++ {
+			z[i] = math.Log(y[i])
+		}
+	}
 }
