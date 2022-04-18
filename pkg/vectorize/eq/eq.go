@@ -1742,7 +1742,7 @@ func decimal128Eq(xs, ys []types.Decimal128, xScale, yScale int32, rs []int64) [
 		for i, y := range ys {
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 		}
@@ -1835,7 +1835,7 @@ func decimal128EqScalar(x types.Decimal128, ys []types.Decimal128, xScale, yScal
 			scaleDiff := xScale - yScale
 			ysScaled[i] = y
 			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
-			for i := 0; i < int(scaleDiff); i++ {
+			for j := 0; j < int(scaleDiff); j++ {
 				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
 			}
 

@@ -570,6 +570,30 @@ func initCastRulesForBinaryOps() {
 			}},
 		}...)
 	}
+
+	// plus, minus, multiplication, division between ints and decimal
+	{
+		ops := []int{Plus, Minus, Mult, Div}
+		for _, op := range ops {
+			{
+				targetType := []types.Type{
+					{Oid: types.T_decimal128, Size: 16},
+					{Oid: types.T_decimal128, Size: 16},
+				}
+				for _, intType := range ints {
+					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{intType, types.T_decimal128}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, intType}, targetTypes: targetType},
+					}...)
+					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{intType, types.T_decimal64}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, intType}, targetTypes: targetType},
+					}...)
+				}
+			}
+		}
+	}
+
 	// Mod cast rule
 	{
 		{
@@ -665,6 +689,16 @@ func initCastRulesForBinaryOps() {
 					//		{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: targetType},
 					{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: targetType},
 				}...)
+				for _, intType := range ints {
+					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{intType, types.T_decimal128}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, intType}, targetTypes: targetType},
+					}...)
+					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+						{NumArgs: 2, sourceTypes: []types.T{intType, types.T_decimal64}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, intType}, targetTypes: targetType},
+					}...)
+				}
 			}
 			{
 				/*
