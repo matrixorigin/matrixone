@@ -25,7 +25,7 @@ import (
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
-	var mock MockOptimizer
+	mock := newMockOptimizer()
 	_, fn, _, _ := runtime.Caller(0)
 	dir := filepath.Dir(fn)
 
@@ -40,8 +40,8 @@ func Test_TPCH_Plan2(t *testing.T) {
 	}
 
 	for _, ast := range ddls {
-		q := mock.Optimize(ast)
-		if q == nil {
+		_, err := mock.Optimize(ast)
+		if err == nil {
 			t.Logf("Optimizer failed, NYI")
 		}
 	}
@@ -57,8 +57,8 @@ func Test_TPCH_Plan2(t *testing.T) {
 	}
 
 	for _, ast := range qs {
-		q := mock.Optimize(ast)
-		if q == nil {
+		_, err := mock.Optimize(ast)
+		if err == nil {
 			t.Logf("Optimizer failed, NYI")
 		}
 	}
@@ -80,8 +80,8 @@ func Test_TPCH_Plan2(t *testing.T) {
 				}
 			}
 			for _, ast := range qns {
-				q := mock.Optimize(ast)
-				if q == nil {
+				_, err := mock.Optimize(ast)
+				if err == nil {
 					t.Logf("Optimizer failed, NYI")
 				}
 			}

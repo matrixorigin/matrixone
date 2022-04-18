@@ -14,12 +14,12 @@
 
 package plan2
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+// type code move to types.go
 
-type ObjectRef plan.ObjectRef
-type Cost plan.Cost
-type Const plan.Const
-type Expr plan.Expr
-type Node plan.Node
-type RowsetData plan.RowsetData
-type Query plan.Query
+// type ObjectRef plan.ObjectRef
+// type Cost plan.Cost
+// type Const plan.Const
+// type Expr plan.Expr
+// type Node plan.Node
+// type RowsetData plan.RowsetData
+// type Query plan.Query

@@ -14,16 +14,12 @@
 
 package plan2
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-)
-
-type CompilerContext interface {
-	Resolve(name string) *ObjectRef
-	Cost(obj *ObjectRef, e *Expr) Cost
-}
-
-type Optimizer interface {
-	Optimize(stmt tree.Statement) *Query
-	CurrentContext() CompilerContext
-}
+// interface code move to types.go
+// type CompilerContext interface {
+// 	Resolve(name string) *ObjectRef
+// 	Cost(obj *ObjectRef, e *Expr) Cost
+// }
+// type Optimizer interface {
+// 	Optimize(stmt tree.Statement) *Query
+// 	CurrentContext() CompilerContext
+// }
