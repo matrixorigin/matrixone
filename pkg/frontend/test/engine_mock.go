@@ -118,6 +118,10 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
+func (m *MockRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRelation) EXPECT() *MockRelationMockRecorder {
 	return m.recorder

@@ -389,3 +389,84 @@ func TestAQ(t *testing.T) {
 	}
 	test(t, testCases)
 }
+
+
+//Do not support this unit test now, because it tests for tpe engine which has supported deletion and other engine do not support.
+//TestDeleteFunction is only used to check if the whole process about deletion can be run through
+//func TestDeleteFunction(t *testing.T) {
+//	testCases := []testCase{
+//		// order, limit, where
+//		{sql: "create table t1 (a int, b int);"},
+//		{sql: "insert into t1 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "delete from t1 where a > 1;"},
+//		{sql: "delete from t1 where a > 1 order by b;"},
+//		{sql: "delete from t1 where a > 1 limit 1;"},
+//		{sql: "delete from t1 where a > 1 order by a limit 1;"},
+//		{sql: "delete from t1 order by a;"},
+//		{sql: "delete from t1 order by a limit 1;"},
+//		{sql: "delete from t1 limit 1;"},
+//		// primary key
+//		{sql: "create table t2 (a int primary key, b int);"},
+//		{sql: "insert into t2 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "delete from t2 where a > 1;"},
+//		{sql: "delete from t2 where a > 1 order by b;"},
+//		{sql: "delete from t2 where a > 1 limit 1;"},
+//		{sql: "delete from t2 where a > 1 order by a limit 1;"},
+//		{sql: "delete from t2 order by a;"},
+//		{sql: "delete from t2 order by a limit 1;"},
+//		{sql: "delete from t2 limit 1;"},
+//		// char
+//		{sql: "create table t3(a char(20));"},
+//		{sql: "insert into t3 values(\"hello\"), (\"world\");"},
+//		{sql: "delete from t3 where a = \"hello\";"},
+//		// date
+//		{sql: "create table t4(a date);"},
+//		{sql: "insert into t4 values ('20070210'), ('1997-02-10'), ('0001-04-28'), (20041112), ('0123-04-03');"},
+//		{sql: "delete from t4 where a = '20070210';"},
+//	}
+//	test(t, testCases)
+//}
+
+//Do not support this unit test now, because it tests for tpe engine which has supported deletion and other engine do not support.
+//TestUpdateFunction is only used to check if the whole process about deletion can be run through
+//func TestUpdateFunction(t *testing.T) {
+//	testCases := []testCase{
+//		// order, limit, where
+//		{sql: "create table t1 (a int, b int);"},
+//		{sql: "insert into t1 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "update t1 set a = 1 where a > 1;"},
+//		{sql: "update t1 set a = 1 where a > 1 order by b;"},
+//		{sql: "update t1 set a = 1 where a > 1 limit 1;"},
+//		{sql: "update t1 set a = 1 where a > 1 order by a limit 1;"},
+//		{sql: "update t1 set a = 1 order by a;"},
+//		{sql: "update t1 set a = 1 order by a limit 1;"},
+//		{sql: "update t1 set a = 1 limit 1;"},
+//		// primary key
+//		{sql: "create table t2 (a int primary key, b int);"},
+//		{sql: "insert into t2 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "update t2 set a = 1 where a > 1;"},
+//		{sql: "update t2 set a = 1 where a > 1 order by b;"},
+//		{sql: "update t2 set a = 1 where a > 1 limit 1;"},
+//		{sql: "update t2 set a = 1 where a > 1 order by a limit 1;"},
+//		{sql: "update t2 set a = 1 order by a;"},
+//		{sql: "update t2 set a = 1 order by a limit 1;"},
+//		{sql: "update t2 set a = 1 limit 1;"},
+//		// char
+//		{sql: "create table t3(a char(20));"},
+//		{sql: "insert into t3 values(\"hello\"), (\"world\");"},
+//		{sql: "update t3 set a = \"nihao\" where a = \"hello\";"},
+//		// date
+//		{sql: "create table t4(a date);"},
+//		{sql: "insert into t4 values ('20070210'), ('1997-02-10'), ('0001-04-28'), (20041112), ('0123-04-03');"},
+//		{sql: "update t4 set a = '20070212' where a = '20070210';"},
+//		// cast type
+//		{sql: "create table t6 (a int);"},
+//		{sql: "insert into t6 values(1), (2), (3), (4), (5);"},
+//		{sql: "update t6 set a = 1.9 where a = 2;"},
+//		// parallel
+//		{sql: "create table t7 (a int, b int);"},
+//		{sql: "insert into t7 values (1, 2), (3, 4), (5, 6);"},
+//		{sql: "update t7 set a = b,  b = a + 1 where a > 1;"},
+//	}
+//	test(t, testCases)
+//}

@@ -12,20 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package updateTag
+package overload
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Argument struct {
-	Ts 		        uint64
-	Relation        engine.Relation
-	M	  	 	    sync.Mutex
-	AffectedRows    uint64
-	UpdateList      []extend.UpdateExtend
-	UpdateAttrs     []string
-	OtherAttrs		[]string
+func UpdateEval(typ, toTyp types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
+	var err error
+	v, err = BinaryEval(Typecast, typ, toTyp, c, false, v, vector.New(types.Type{Oid: toTyp}), p)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }

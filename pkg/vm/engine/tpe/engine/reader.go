@@ -39,7 +39,8 @@ var (
 	errorVectorIsInvalid                         = errors.New("vector is invalid")
 )
 
-func (tr *TpeReader) NewFilter() engine.Filter {
+
+func (tr *  TpeReader) NewFilter() engine.Filter {
 	return nil
 }
 
@@ -50,6 +51,7 @@ func (tr *TpeReader) NewSummarizer() engine.Summarizer {
 func (tr *TpeReader) NewSparseFilter() engine.SparseFilter {
 	return nil
 }
+
 
 func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error) {
 	if tr.isDumpReader {
@@ -107,7 +109,6 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 				ReadCnt:              0,
 				CountOfWithoutPrefix: 0,
 			}
-
 			logutil.Infof("reader %d info --> shard %v readCtx %v",
 				tr.id,
 				tr.shardInfos,
@@ -156,6 +157,7 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 						tr.shardInfos[tr.readCtx.ShardIndex],
 						tr.readCtx.ParallelReaderContext,
 					)
+				tr.readCtx.ShardIndex++
 				} else {
 					return nil, nil
 				}
@@ -381,6 +383,17 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 			}
 		}
 	}
+	/*
+		//for test
+		if tr.readCtx.ParallelReader {
+			cnt := 0
+			if bat != nil {
+				cnt = vector.Length(bat.Vecs[0])
+			}
+
+			logutil.Infof("reader %d readCount %d parallelContext %v ", tr.id, cnt, tr.readCtx.ParallelReaderContext)
+		}
+	*/
 
 	//when bat is null,it means no data anymore.
 	if bat != nil {

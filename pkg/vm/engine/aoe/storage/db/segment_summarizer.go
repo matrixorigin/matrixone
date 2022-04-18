@@ -34,6 +34,7 @@ type SegmentSummarizer struct {
 	segment *Segment
 }
 
+
 func NewSegmentSummarizer(s *Segment) engine.Summarizer {
 	return &SegmentSummarizer{segment: s}
 }
@@ -229,7 +230,3 @@ func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uin
 		return sum, cnt, nil
 	}
 }
-
-
-
-
