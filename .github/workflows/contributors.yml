@@ -1,3 +1,5 @@
+name: Update Contribute List
+
 on:
   push:
     branches:
