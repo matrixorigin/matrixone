@@ -144,6 +144,7 @@ var (
 	float64ToBytes func([]float64, *types.Bytes) (*types.Bytes, error)
 
 	decimal64ToDecimal128 func([]types.Decimal64, []types.Decimal128) ([]types.Decimal128, error)
+	int64ToDecimal128     func([]int64, []types.Decimal128) ([]types.Decimal128, error)
 )
 
 func init() {
