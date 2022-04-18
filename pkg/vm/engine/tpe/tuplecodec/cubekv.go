@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/matrixorigin/matrixcube/pb/rpcpb"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/pb/rpcpb"
+	"github.com/matrixorigin/matrixcube/raftstore"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/metapb"
@@ -958,7 +959,9 @@ func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefix
 
 		for i := 0; i < len(scanKeys); i++ {
 			keys = append(keys, scanKeys[i])
-			values = append(values, scanValues[i])
+			if (!needKeyOnly) {
+				values = append(values, scanValues[i])
+			}
 		}
 
 		lastKey = nextScanKey

@@ -1,11 +1,11 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (a *aoeReader) NewFilter() engine.Filter {

@@ -27,9 +27,9 @@ import (
 // only provides some essential interfaces used by computation layer.
 type Block struct {
 	// Segment this block belongs to
-	Host  *Segment
+	Host *Segment
 	// uint64 representation of block id
-	Id    uint64
+	Id uint64
 	// string representation of block id
 	StrId string
 }
@@ -56,6 +56,10 @@ func (blk *Block) Size(attr string) int64 {
 	}
 	defer data.Unref()
 	return int64(data.Size(attr))
+}
+
+func (blk *Block) Cardinality(_ string) int64 {
+	return 0
 }
 
 // ID returns the string representation of this block's id.
@@ -104,4 +108,3 @@ func (blk *Block) Read(cs []uint64, attrs []string, compressed []*bytes.Buffer, 
 	}
 	return bat, nil
 }
-

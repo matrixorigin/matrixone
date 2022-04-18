@@ -18,58 +18,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type Extend interface {
-	Eq(Extend) bool
-	String() string
-	IsLogical() bool
-	IsConstant() bool
-	ReturnType() types.T
-	Attributes() []string
-	ExtendAttributes() []*Attribute
-	Eval(*batch.Batch, *process.Process) (*vector.Vector, types.T, error)
+func (p *UpdateExtend) IsLogical() bool {
+	return false
 }
 
-type UnaryExtend struct {
-	Op int
-	E  Extend
+func (_ *UpdateExtend) IsConstant() bool {
+	return false
 }
 
-type BinaryExtend struct {
-	Op          int
-	Left, Right Extend
+func (p *UpdateExtend) ReturnType() types.T {
+	return types.T_any
 }
 
-type UpdateExtend struct {
-	// CanNull	   bool
-	Attr  	     Attribute
-	UpdateExtend Extend
+func (_ *UpdateExtend) Attributes() []string {
+	return nil
 }
 
-type MultiExtend struct {
-	Op   int
-	Args []Extend
+func (p *UpdateExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vector, types.T, error) {
+	vs, typ, err := p.UpdateExtend.Eval(bat, proc)
+	if err != nil {
+		return nil, 0, err
+	}
+	vec, err := overload.UpdateEval(typ, p.Attr.Type, p.UpdateExtend.IsConstant(), vs, proc)
+	if err != nil {
+		return nil, 0, err
+	}
+	return vec, p.Attr.Type, nil
 }
 
-type ParenExtend struct {
-	E Extend
+func (p *UpdateExtend) Eq(e Extend) bool {
+	return false
 }
 
-type FuncExtend struct {
-	Name string
-	Args []Extend
-}
-
-type StarExtend struct {
-}
-
-type ValueExtend struct {
-	V *vector.Vector
-}
-
-type Attribute struct {
-	Name string  `json:"name"`
-	Type types.T `json:"type"`
+func (p *UpdateExtend) String() string {
+	return "update extend"
 }
