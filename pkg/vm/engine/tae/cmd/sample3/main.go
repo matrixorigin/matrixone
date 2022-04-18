@@ -10,16 +10,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/panjf2000/ants/v2"
 	"github.com/sirupsen/logrus"
 )
@@ -47,26 +42,13 @@ func stopProfile() {
 	pprof.Lookup("heap").WriteTo(memf, 0)
 }
 
-func initContext() (*catalog.Catalog, *txnbase.TxnManager, txnbase.NodeDriver, base.INodeManager, base.INodeManager) {
-	c := catalog.MockCatalog(sampleDir, "sample", nil)
-	driver := txnbase.NewNodeDriver(sampleDir, "store", nil)
-	txnBufMgr := buffer.NewNodeManager(txnBufSize, nil)
-	mutBufMgr := buffer.NewNodeManager(mutBufSize, nil)
-	factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
-	mgr := txnbase.NewTxnManager(txnimpl.TxnStoreFactory(c, driver, txnBufMgr, factory), txnimpl.TxnFactory(c))
-	mgr.Start()
-	return c, mgr, driver, txnBufMgr, mutBufMgr
-}
-
 func main() {
-	c, mgr, driver, txnBufMgr, mutBufMgr := initContext()
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
+	tae, _ := db.Open(sampleDir, nil)
+	defer tae.Close()
 
 	var schema *catalog.Schema
 	{
-		txn := mgr.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
 		err := eng.Create(0, dbName, 0)
 		if err != nil {
@@ -91,14 +73,14 @@ func main() {
 	}
 	batchCnt := uint64(100)
 	batchRows := uint64(10000) * 1 / 2 * batchCnt
-	logrus.Info(c.SimplePPString(common.PPL1))
+	logrus.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {
 		return func() {
 			defer wg.Done()
-			txn := mgr.StartTxn(nil)
+			txn, err := tae.StartTxn(nil)
 			// {
 			// 	db, _ := txn.GetDatabase(dbName)
 			// 	rel, _ := db.GetRelationByName(schema.Name)
@@ -130,10 +112,8 @@ func main() {
 	wg.Wait()
 	stopProfile()
 	logrus.Infof("Append takes: %s", time.Since(now))
-	logrus.Info(txnBufMgr.Count())
-	logrus.Info(mutBufMgr.Count())
 	{
-		txn := mgr.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
 		db, err := eng.Database(dbName)
 		if err != nil {
@@ -168,5 +148,5 @@ func main() {
 			panic(err)
 		}
 	}
-	logrus.Info(c.SimplePPString(common.PPL1))
+	logrus.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }

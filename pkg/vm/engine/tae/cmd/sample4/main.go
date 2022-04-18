@@ -19,15 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -60,29 +54,16 @@ var querys = []string{
 	"DROP DATABASE IF EXISTS db;",
 }
 
-func initContext() (*catalog.Catalog, *txnbase.TxnManager, txnbase.NodeDriver, base.INodeManager, base.INodeManager) {
-	c := catalog.MockCatalog(sampleDir, "sample", nil)
-	driver := txnbase.NewNodeDriver(sampleDir, "store", nil)
-	txnBufMgr := buffer.NewNodeManager(txnBufSize, nil)
-	mutBufMgr := buffer.NewNodeManager(mutBufSize, nil)
-	factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
-	mgr := txnbase.NewTxnManager(txnimpl.TxnStoreFactory(c, driver, txnBufMgr, factory), txnimpl.TxnFactory(c))
-	mgr.Start()
-	return c, mgr, driver, txnBufMgr, mutBufMgr
-}
-
 func main() {
-	c, mgr, driver, txnBufMgr, mutBufMgr := initContext()
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
+	tae, _ := db.Open(sampleDir, nil)
+	defer tae.Close()
 
 	compile.InitAddress("127.0.0.1")
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
 	for _, query := range querys {
-		txn := mgr.StartTxn(nil)
+		txn, _ := tae.StartTxn(nil)
 		e := moengine.NewEngine(txn)
 		processQuery(query, e, proc)
 		if err := txn.Commit(); err != nil {
@@ -90,9 +71,9 @@ func main() {
 		}
 		logutil.Info(txn.String())
 	}
-	logutil.Infof("%d", txnBufMgr.Count())
-	logutil.Infof("%d", mutBufMgr.Count())
-	logutil.Info(c.SimplePPString(common.PPL1))
+	logutil.Infof("%d", tae.TxnBufMgr.Count())
+	logutil.Infof("%d", tae.MTBufMgr.Count())
+	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
 
 func sqlOutput(_ interface{}, bat *batch.Batch) error {
