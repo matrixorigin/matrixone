@@ -664,6 +664,8 @@ func (i *SegmentZoneMapIndex) Lt(v interface{}) bool {
 		panic("not supported")
 	case types.T_char, types.T_varchar, types.T_json:
 		return bytes.Compare(v.([]byte), i.MinV.([]byte)) > 0
+	case types.T_decimal64:
+		return types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MinV.(types.Decimal64)) > 0
 	case types.T_decimal128:
 		return types.CompareDecimal128Decimal128Aligned(v.(types.Decimal128), i.MinV.(types.Decimal128)) > 0
 	}
@@ -702,6 +704,8 @@ func (i *SegmentZoneMapIndex) Le(v interface{}) bool {
 		panic("not supported")
 	case types.T_char, types.T_varchar, types.T_json:
 		return bytes.Compare(v.([]byte), i.MinV.([]byte)) >= 0
+	case types.T_decimal64:
+		return types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MinV.(types.Decimal64)) >= 0
 	case types.T_decimal128:
 		return types.CompareDecimal128Decimal128Aligned(v.(types.Decimal128), i.MinV.(types.Decimal128)) >= 0
 	}
@@ -740,6 +744,8 @@ func (i *SegmentZoneMapIndex) Gt(v interface{}) bool {
 		panic("not supported")
 	case types.T_char, types.T_varchar, types.T_json:
 		return bytes.Compare(v.([]byte), i.MaxV.([]byte)) < 0
+	case types.T_decimal64:
+		return types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MaxV.(types.Decimal64)) < 0
 	case types.T_decimal128:
 		return types.CompareDecimal128Decimal128Aligned(v.(types.Decimal128), i.MaxV.(types.Decimal128)) < 0
 	}
@@ -778,6 +784,8 @@ func (i *SegmentZoneMapIndex) Ge(v interface{}) bool {
 		panic("not supported")
 	case types.T_char, types.T_varchar, types.T_json:
 		return bytes.Compare(v.([]byte), i.MaxV.([]byte)) <= 0
+	case types.T_decimal64:
+		return types.CompareDecimal64Decimal64Aligned(v.(types.Decimal64), i.MaxV.(types.Decimal64)) <= 0
 	case types.T_decimal128:
 		return types.CompareDecimal128Decimal128Aligned(v.(types.Decimal128), i.MaxV.(types.Decimal128)) <= 0
 	}
