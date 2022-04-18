@@ -59,7 +59,6 @@ jobs:
           p12-password: ${{ secrets.APPLE_DEVELOPER_CERTIFICATE_PASSWORD }}
       - name: Install gon via HomeBrew for code signing and app notarization
         env:
-          AC_USERNAME: ${{ secrets.AC_USERNAME }}
           AC_PASSWORD: ${{ secrets.AC_PASSWORD }}
         run: |
           brew tap mitchellh/gon
