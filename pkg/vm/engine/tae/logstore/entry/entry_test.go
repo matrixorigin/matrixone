@@ -41,7 +41,13 @@ func TestInfoMarshal1(t *testing.T) {
 			{
 				Group: GTUncommit,
 				Ranges: &common.ClosedIntervals{
-					Intervals: []*common.ClosedInterval{{Start: 3, End: 5}, {Start: 6, End: 7}}}}},
+					Intervals: []*common.ClosedInterval{{Start: 3, End: 5}, {Start: 6, End: 7}}},
+				Command: []CommandInfo{{
+					Tid:        3,
+					CommandIds: []uint32{2, 4, 1},
+					Size:       5,
+				}},
+			}},
 		Uncommits: []Tid{{
 			Group: GTCKp,
 			Tid:   12,
@@ -93,9 +99,7 @@ func checkInfoEqual(t *testing.T, info, info2 *Info) {
 	assert.Equal(t, info.Group, info2.Group)
 	assert.Equal(t, info.CommitId, info2.CommitId)
 	assert.Equal(t, info.TxnId, info2.TxnId)
-	assert.Equal(t, info.GroupLSN, info2.GroupLSN)
 	assert.Equal(t, len(info.Checkpoints), len(info2.Checkpoints))
-	assert.Equal(t, len(info.Uncommits), len(info2.Uncommits))
 	for i, ckps1 := range info.Checkpoints {
 		ckps2 := info2.Checkpoints[i]
 		assert.Equal(t, ckps1.Group, ckps2.Group)
@@ -109,10 +113,22 @@ func checkInfoEqual(t *testing.T, info, info2 *Info) {
 				assert.Equal(t, interval1.End, interval2.End)
 			}
 		}
+		assert.Equal(t, len(ckps1.Command), len(ckps2.Command))
+		for j, cmdInfo := range ckps1.Command {
+			cmdInfo2 := ckps2.Command[j]
+			assert.Equal(t, cmdInfo.Tid, cmdInfo2.Tid)
+			assert.Equal(t, len(cmdInfo.CommandIds), len(cmdInfo2.CommandIds))
+			for k, cmdid := range cmdInfo.CommandIds {
+				assert.Equal(t, cmdid, cmdInfo2.CommandIds[k])
+			}
+			assert.Equal(t, cmdInfo.Size, cmdInfo2.Size)
+		}
 	}
+	assert.Equal(t, len(info.Uncommits), len(info2.Uncommits))
 	for i, tid1 := range info.Uncommits {
 		tid2 := info2.Uncommits[i]
 		assert.Equal(t, tid1.Group, tid2.Group)
 		assert.Equal(t, tid1.Tid, tid2.Tid)
 	}
+	assert.Equal(t, info.GroupLSN, info2.GroupLSN)
 }

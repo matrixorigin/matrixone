@@ -14,6 +14,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+
 	log "github.com/sirupsen/logrus"
 )
 
@@ -66,58 +67,18 @@ func newVFile(mu *sync.RWMutex, name string, version int, history History, bsInf
 	return vf, nil
 }
 
-func (vf *vFile) InCommits(intervals map[uint32]*common.ClosedIntervals) bool {
-	for group, commits := range vf.Commits {
-		interval, ok := intervals[group]
-		if !ok {
-			return false
-		}
-		if !interval.ContainsInterval(*commits) {
-			return false
-		}
-	}
-	return true
-}
-
-func (vf *vFile) InCheckpoint(intervals map[uint32]*common.ClosedIntervals) bool {
-	for group, ckps := range vf.Checkpoints {
-		interval, ok := intervals[group]
-		if !ok {
-			return false
-		}
-		for _, ckp := range ckps.Intervals {
-			if !interval.ContainsInterval(*ckp) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// TODO: process multi checkpoints.
-func (vf *vFile) MergeCheckpoint(interval map[uint32]*common.ClosedIntervals) {
-	if len(vf.Checkpoints) == 0 {
-		return
-	}
-	if interval == nil {
-		ret := make(map[uint32]*common.ClosedIntervals)
-		for group, ckps := range vf.Checkpoints {
-			ret[group] = common.NewClosedIntervalsByIntervals(ckps)
-		}
-		interval = ret
-		return
-	}
-	for group, ckps := range vf.Checkpoints {
-		if len(ckps.Intervals) == 0 {
-			continue
-		}
-		_, ok := interval[group]
-		if !ok {
-			interval[group] = &common.ClosedIntervals{}
-		}
-		interval[group].TryMerge(*ckps)
-	}
-}
+// func (vf *vFile) InCommits(intervals map[uint32]*common.ClosedIntervals) bool {
+// 	for group, commits := range vf.Commits {
+// 		interval, ok := intervals[group]
+// 		if !ok {
+// 			return false
+// 		}
+// 		if !interval.ContainsInterval(*commits) {
+// 			return false
+// 		}
+// 	}
+// 	return true
+// }
 
 func (vf *vFile) String() string {
 	var w bytes.Buffer
@@ -177,7 +138,7 @@ func (vf *vFile) Commit() {
 	atomic.StoreInt32(&vf.committed, int32(1))
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
-	vf.FreeMeta()
+	// vf.FreeMeta()
 }
 
 //TODO reuse wait sync
@@ -336,32 +297,32 @@ func (vf *vFile) OnNewTxn(info *entry.Info) {
 	vf.Log(info)
 }
 func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {
-	for _, addr := range addrs {
-		exist := false
-		tids, ok := vf.UncommitTxn[addr.Group]
-		if !ok {
-			tids = make([]uint64, 0)
-		}
-		for _, tid := range tids {
-			if tid == addr.LSN {
-				exist = true
-			}
-		}
-		if !exist {
-			tids = append(tids, addr.LSN)
-			vf.UncommitTxn[addr.Group] = tids
-		}
-	}
+// 	for _, addr := range addrs {
+// 		exist := false
+// 		tids, ok := vf.UncommitTxn[addr.Group]
+// 		if !ok {
+// 			tids = make([]uint64, 0)
+// 		}
+// 		for _, tid := range tids {
+// 			if tid == addr.LSN {
+// 				exist = true
+// 			}
+// 		}
+// 		if !exist {
+// 			tids = append(tids, addr.LSN)
+// 			vf.UncommitTxn[addr.Group] = tids
+// 		}
+// 	}
 }
 
 func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
-	if vf.HasCommitted() {
-		err := vf.LoadMeta()
-		defer vf.FreeMeta()
-		if err != nil {
-			return nil, err
-		}
-	}
+	// if vf.HasCommitted() {
+		// err := vf.LoadMeta()
+		// defer vf.FreeMeta()
+		// if err != nil {
+		// 	return nil, err
+		// }
+	// }
 	offset, err := vf.GetOffsetByLSN(groupId, lsn)
 	if err != nil {
 		return nil, err

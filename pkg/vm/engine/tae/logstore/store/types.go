@@ -1,11 +1,9 @@
 package store
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"io"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type StoreCfg struct {
@@ -26,14 +24,19 @@ type VFile interface {
 	Id() int
 	Name() string
 	String() string
-	InCheckpoint(map[uint32]*common.ClosedIntervals) bool
-	InCommits(map[uint32]*common.ClosedIntervals) bool
-	InTxnCommits(map[uint32]map[uint64]uint64, map[uint32]*common.ClosedIntervals) bool
-	MergeCheckpoint(map[uint32]*common.ClosedIntervals)
-	MergeTidCidMap(map[uint32]map[uint64]uint64)
+
+	IsToDelete(c *compactor) (toDelete bool)
+	PrepareCompactor(c *compactor)
+	// InCheckpoint(map[uint32]*common.ClosedIntervals) bool
+	// InCommits(map[uint32]*common.ClosedIntervals) bool
+	// InTxnCommits(map[uint32]map[uint64]uint64, map[uint32]*common.ClosedIntervals) bool
+	// MergeCheckpoint(map[uint32]*common.ClosedIntervals)
+	// MergeTidCidMap(map[uint32]map[uint64]uint64)
 	Replay(*replayer, ReplayObserver) error
+
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)
 	LoadMeta() error
+	
 	FreeMeta()
 	OnReplay(r *replayer)
 }
@@ -99,7 +102,7 @@ type Store interface {
 	Replay(ApplyHandle) error
 	GetCheckpointed(uint32) uint64
 	GetSynced(uint32) uint64
-	AppendEntry(groupId uint32, e entry.Entry) (uint64, error)
+	AppendEntry(groupId uint32,e entry.Entry) (uint64, error)
 	TryCompact() error
 	TryTruncate(int64) error
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)

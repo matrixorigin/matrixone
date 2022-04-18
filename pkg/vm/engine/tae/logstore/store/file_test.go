@@ -2,15 +2,16 @@ package store
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/panjf2000/ants/v2"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -97,7 +98,7 @@ func TestAppender(t *testing.T) {
 			checkpointInfo := &entry.Info{
 				Group: entry.GTCKp,
 				Checkpoints: []entry.CkpRanges{{
-					Group: 1,
+					Group: entry.GTCustomizedStart,
 					Ranges: common.NewClosedIntervalsByInterval(
 						&common.ClosedInterval{
 							Start: 0,
@@ -153,7 +154,7 @@ func TestVInfo(t *testing.T) {
 		err := vinfo.LogCommit(commitInfo)
 		assert.Nil(t, err)
 	}
-	assert.Equal(t, uint64(end), vinfo.Commits[entry.GTCustomizedStart].End)
+	assert.Equal(t, uint64(end), vinfo.groups[entry.GTCustomizedStart].(*commitGroup).Commits.End)
 	commitInfo := &entry.Info{Group: entry.GTCustomizedStart, CommitId: uint64(end + 2)}
 	err := vinfo.LogCommit(commitInfo)
 	assert.NotNil(t, err)

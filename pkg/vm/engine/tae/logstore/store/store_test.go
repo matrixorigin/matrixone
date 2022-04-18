@@ -10,204 +10,16 @@ import (
 	"testing"
 	"time"
 
+	// "time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestStore(t *testing.T) {
-	dir := "/tmp/logstore/teststore"
-	name := "mock"
-	os.RemoveAll(dir)
-	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 20),
-	}
-	s, err := NewBaseStore(dir, name, cfg)
-	assert.Nil(t, err)
-	defer s.Close()
-
-	var wg sync.WaitGroup
-	var fwg sync.WaitGroup
-	ch := make(chan entry.Entry, 1000)
-	ctx, cancel := context.WithCancel(context.Background())
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e := <-ch:
-				err := e.WaitDone()
-				assert.Nil(t, err)
-				t.Logf("synced %d", s.GetSynced(1))
-				// t.Logf("checkpointed %d", s.GetCheckpointed())
-				fwg.Done()
-			}
-		}
-	}()
-
-	var bs bytes.Buffer
-	for i := 0; i < 1000; i++ {
-		bs.WriteString("helloyou")
-	}
-	buf := bs.Bytes()
-	cnt := 5
-	for i := 0; i < cnt; i++ {
-		e := entry.GetBase()
-		if i%2 == 0 && i > 0 {
-			checkpointInfo := &entry.Info{
-				Group: entry.GTCKp,
-				Checkpoints: []entry.CkpRanges{{
-					Group: 1,
-					Ranges: common.NewClosedIntervalsByInterval(
-						&common.ClosedInterval{
-							Start: 0,
-							End:   common.GetGlobalSeqNum(),
-						}),
-				}},
-			}
-			e.SetInfo(checkpointInfo)
-			e.SetType(entry.ETCheckpoint)
-			n := common.GPool.Alloc(uint64(len(buf)))
-			n.Buf = n.Buf[:len(buf)]
-			copy(n.GetBuf(), buf)
-			e.UnmarshalFromNode(n, true)
-			s.AppendEntry(entry.GTCKp, e)
-		} else {
-			commitInterval := &entry.Info{
-				Group:    entry.GTCustomizedStart,
-				CommitId: common.NextGlobalSeqNum(),
-			}
-			e.SetInfo(commitInterval)
-			e.SetType(entry.ETCustomizedStart)
-			n := common.GPool.Alloc(uint64(len(buf)))
-			n.Buf = n.Buf[:len(buf)]
-			copy(n.GetBuf(), buf)
-			e.UnmarshalFromNode(n, true)
-			s.AppendEntry(entry.GTCustomizedStart, e)
-		}
-		assert.Nil(t, err)
-		fwg.Add(1)
-		ch <- e
-	}
-
-	fwg.Wait()
-	cancel()
-	wg.Wait()
-
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
-	assert.Nil(t, err)
-}
-
-func TestMultiGroup(t *testing.T) {
-	dir := "/tmp/logstore/teststore"
-	name := "mock"
-	os.RemoveAll(dir)
-	cfg := &StoreCfg{
-		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 200),
-	}
-	s, err := NewBaseStore(dir, name, cfg)
-	assert.Nil(t, err)
-	defer s.Close()
-
-	var wg sync.WaitGroup
-	var fwg sync.WaitGroup
-	ch := make(chan entry.Entry, 1000)
-	ctx, cancel := context.WithCancel(context.Background())
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case e := <-ch:
-				err := e.WaitDone()
-				assert.Nil(t, err)
-				t.Logf("synced %d", s.GetSynced(1))
-				t.Logf("checkpointed %d", s.GetCheckpointed(1))
-				t.Logf("penddings %d", s.GetPenddings(1))
-				fwg.Done()
-			}
-		}
-	}()
-
-	var bs bytes.Buffer
-	for i := 0; i < 10; i++ {
-		bs.WriteString("helloyou")
-	}
-	buf := bs.Bytes()
-
-	entryPerGroup := 5000
-	groupCnt := 5
-	worker, _ := ants.NewPool(groupCnt)
-	fwg.Add(entryPerGroup * groupCnt)
-	f := func(groupNo uint32) func() {
-		return func() {
-			alloc := &common.IdAllocator{}
-			ckp := uint64(0)
-			for i := 0; i < entryPerGroup; i++ {
-				e := entry.GetBase()
-				if i%1000 == 0 && i > 0 {
-					end := alloc.Get()
-					checkpointInfo := &entry.Info{
-						Group: entry.GTCKp,
-						Checkpoints: []entry.CkpRanges{{
-							Group: 1,
-							Ranges: common.NewClosedIntervalsByInterval(
-								&common.ClosedInterval{
-									Start: ckp,
-									End:   end,
-								}),
-						}},
-					}
-					ckp = end
-					e.SetInfo(checkpointInfo)
-					e.SetType(entry.ETCheckpoint)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(entry.GTCKp, e)
-				} else {
-					commitInterval := &entry.Info{
-						Group:    groupNo,
-						CommitId: alloc.Alloc(),
-					}
-					e.SetInfo(commitInterval)
-					e.SetType(entry.ETCustomizedStart)
-					n := common.GPool.Alloc(uint64(len(buf)))
-					n.Buf = n.Buf[:len(buf)]
-					copy(n.GetBuf(), buf)
-					e.UnmarshalFromNode(n, true)
-					s.AppendEntry(groupNo, e)
-				}
-				ch <- e
-			}
-		}
-	}
-
-	for j := 0; j < groupCnt; j++ {
-		no := uint32(j) + entry.GTCustomizedStart
-		worker.Submit(f(no))
-	}
-
-	fwg.Wait()
-	cancel()
-	wg.Wait()
-	s.file.GetHistory().TryTruncate()
-
-	h := s.file.GetHistory()
-	t.Log(h.String())
-	err = h.TryTruncate()
-	assert.Nil(t, err)
-}
-
-func TestUncommitEntry(t *testing.T) {
 	dir := "/tmp/logstore/teststore"
 	name := "mock"
 	os.RemoveAll(dir)
@@ -251,7 +63,7 @@ func TestUncommitEntry(t *testing.T) {
 	}
 	buf := bs.Bytes()
 
-	entryPerGroup := 550
+	entryPerGroup := 5000
 	groupCnt := 1
 	worker, _ := ants.NewPool(groupCnt)
 	fwg.Add(entryPerGroup * groupCnt)
@@ -279,16 +91,21 @@ func TestUncommitEntry(t *testing.T) {
 					e.UnmarshalFromNode(n, true)
 					s.AppendEntry(entry.GTUncommit, e)
 				case 99:
-					end := cidAlloc.Get()
+					end := cidAlloc.Get() - 1
 					checkpointInfo := &entry.Info{
 						Group: entry.GTCKp,
 						Checkpoints: []entry.CkpRanges{{
-							Group: 1,
+							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{
 									Start: ckp,
 									End:   end,
 								}),
+							Command: []entry.CommandInfo{{
+								Tid:        end + 1,
+								CommandIds: []uint32{0},
+								Size:       1,
+							}},
 						}},
 					}
 					ckp = end
@@ -331,7 +148,7 @@ func TestUncommitEntry(t *testing.T) {
 	}
 
 	for j := 0; j < groupCnt; j++ {
-		worker.Submit(f(uint32(j)))
+		worker.Submit(f(uint32(j) + entry.GTCustomizedStart))
 	}
 
 	fwg.Wait()
@@ -342,6 +159,107 @@ func TestUncommitEntry(t *testing.T) {
 	t.Log(h.String())
 	err = h.TryTruncate()
 	assert.Nil(t, err)
+}
+
+func TestPartialCkp(t *testing.T) {
+	dir := "/tmp/logstore/teststore"
+	name := "mock"
+	os.RemoveAll(dir)
+	cfg := &StoreCfg{
+		RotateChecker: NewMaxSizeRotateChecker(int(common.K) * 2),
+	}
+	s, err := NewBaseStore(dir, name, cfg)
+	assert.Nil(t, err)
+
+	var bs bytes.Buffer
+	for i := 0; i < 300; i++ {
+		bs.WriteString("helloyou")
+	}
+	buf := bs.Bytes()
+
+	uncommit := entry.GetBase()
+	uncommitInfo := &entry.Info{
+		Group: entry.GTUncommit,
+		Uncommits: []entry.Tid{{
+			Group: entry.GTCustomizedStart,
+			Tid:   1,
+		}},
+	}
+	uncommit.SetInfo(uncommitInfo)
+	buf2 := make([]byte, common.K)
+	copy(buf2, buf)
+	uncommit.Unmarshal(buf2)
+	lsn, err := s.AppendEntry(entry.GTUncommit, uncommit)
+	assert.Nil(t, err)
+	uncommit.WaitDone()
+	_, err = s.Load(entry.GTUncommit, lsn)
+	assert.Nil(t, err)
+
+	commit := entry.GetBase()
+	commitInfo := &entry.Info{
+		Group:    entry.GTCustomizedStart,
+		CommitId: 1,
+		TxnId:    1,
+	}
+	commit.SetInfo(commitInfo)
+	buf2 = make([]byte, common.K)
+	copy(buf2, buf)
+	commit.Unmarshal(buf2)
+	s.AppendEntry(entry.GTCustomizedStart, commit)
+
+	ckp1 := entry.GetBase()
+	checkpointInfo := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group: entry.GTCustomizedStart,
+			Command: []entry.CommandInfo{{
+				Tid:        1,
+				CommandIds: []uint32{0},
+				Size:       2,
+			}},
+		}},
+	}
+	ckp1.SetInfo(checkpointInfo)
+	buf2 = make([]byte, common.K)
+	copy(buf2, buf)
+	ckp1.Unmarshal(buf2)
+	s.AppendEntry(entry.GTCKp, ckp1)
+
+	ckp2 := entry.GetBase()
+	checkpointInfo2 := &entry.Info{
+		Group: entry.GTCKp,
+		Checkpoints: []entry.CkpRanges{{
+			Group: entry.GTCustomizedStart,
+			Command: []entry.CommandInfo{{
+				Tid:        1,
+				CommandIds: []uint32{1},
+				Size:       2,
+			}},
+		}},
+	}
+	ckp2.SetInfo(checkpointInfo2)
+	buf2 = make([]byte, common.K)
+	copy(buf2, buf)
+	ckp2.Unmarshal(buf2)
+	s.AppendEntry(entry.GTCKp, ckp2)
+
+	anotherEntry := entry.GetBase()
+	commitInfo = &entry.Info{
+		Group:    entry.GTCustomizedStart + 1,
+		CommitId: 1,
+	}
+	anotherEntry.SetInfo(commitInfo)
+	buf2 = make([]byte, common.K)
+	copy(buf2, buf)
+	anotherEntry.Unmarshal(buf2)
+	s.AppendEntry(entry.GTCustomizedStart, anotherEntry)
+	anotherEntry.WaitDone()
+
+	s.TryCompact()
+	_, err = s.Load(entry.GTUncommit, lsn)
+	assert.NotNil(t, err)
+
+	s.Close()
 }
 
 func TestReplay(t *testing.T) {
@@ -366,11 +284,16 @@ func TestReplay(t *testing.T) {
 			case <-ctx.Done():
 				return
 			case e := <-ch:
+				info := e.GetInfo()
 				err := e.WaitDone()
 				assert.Nil(t, err)
-				// t.Logf("synced %d", s.GetSynced("group1"))
-				// t.Logf("checkpointed %d", s.GetCheckpointed("group1"))
-				// t.Logf("penddings %d", s.GetPenddings("group1"))
+				if info != nil {
+					groupNo := info.(*entry.Info).Group
+					t.Logf("group %d", groupNo)
+					t.Logf("synced %d", s.GetSynced(groupNo))
+					t.Logf("checkpointed %d", s.GetCheckpointed(groupNo))
+					t.Logf("penddings %d", s.GetPenddings(groupNo))
+				}
 				fwg.Done()
 			}
 		}
@@ -411,7 +334,7 @@ func TestReplay(t *testing.T) {
 					checkpointInfo := &entry.Info{
 						Group: entry.GTCKp,
 						Checkpoints: []entry.CkpRanges{{
-							Group: 1,
+							Group: groupNo,
 							Ranges: common.NewClosedIntervalsByInterval(
 								&common.ClosedInterval{
 									Start: ckp,
@@ -478,7 +401,7 @@ func TestReplay(t *testing.T) {
 	wg.Wait()
 
 	h := s.file.GetHistory()
-	// t.Log(h.String())
+	t.Log(h.String())
 	err = h.TryTruncate()
 	assert.Nil(t, err)
 
@@ -486,7 +409,7 @@ func TestReplay(t *testing.T) {
 
 	s, _ = NewBaseStore(dir, name, cfg)
 	a := func(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
-		fmt.Printf("%s", payload)
+		t.Logf("%s", payload)
 		return nil
 	}
 	r := newReplayer(a)

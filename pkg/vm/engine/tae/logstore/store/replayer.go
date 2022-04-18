@@ -3,10 +3,9 @@ package store
 import (
 	"errors"
 	"fmt"
-	"io"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"io"
 )
 
 type noopObserver struct {
@@ -50,7 +49,7 @@ func (r *replayer) updateVinfoAddrs(groupId uint32, lsn uint64, offset int) {
 	r.vinfoAddrs[groupId] = m
 }
 func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
-	if groupId == entry.GTNoop {
+	if groupId==entry.GTNoop{
 	}
 	m, ok := r.addrs[groupId]
 	if !ok {
@@ -161,14 +160,14 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 	case entry.ETFlush:
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		return nil
 	case entry.ETCheckpoint:
 		// fmt.Printf("ETCheckpoint\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		r.updatesynced(info.Group, info.CommitId)
@@ -201,7 +200,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("ETUncommitted\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		r.updatesynced(info.Group, info.CommitId)
@@ -227,7 +226,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("ETTxn\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		r.updatesynced(info.Group, info.CommitId)
@@ -251,7 +250,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("default\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
+		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		r.updatesynced(info.Group, info.CommitId)

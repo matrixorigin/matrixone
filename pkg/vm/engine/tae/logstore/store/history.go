@@ -3,9 +3,8 @@ package store
 import (
 	"errors"
 	"fmt"
+	// "github.com/jiangxinmeng1/logstore/pkg/common"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
@@ -125,10 +124,11 @@ type entryWrapper struct {
 }
 
 // One worker
+// h.mu.Rlock
+// wrapper
 func (h *history) TryTruncate() error {
-	gIntervals := make(map[uint32]*common.ClosedIntervals)
+	c := newCompactor()
 	toDelete := make([]entryWrapper, 0, 4)
-	tidCidMap := make(map[uint32]map[uint64]uint64)
 	h.mu.RLock()
 	entries := make([]VFile, len(h.entries))
 	for i, entry := range h.entries {
@@ -137,16 +137,17 @@ func (h *history) TryTruncate() error {
 	h.mu.RUnlock()
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
+		e.PrepareCompactor(c)
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
 		e.LoadMeta()
 		wrapper := entryWrapper{entry: e}
-		e.MergeTidCidMap(tidCidMap)
-		if e.InCommits(gIntervals) && e.InCheckpoint(gIntervals) && e.InTxnCommits(tidCidMap, gIntervals) {
+		if e.IsToDelete(c) {
 			wrapper.offset = i
 			toDelete = append(toDelete, wrapper)
-			continue
 		}
-		e.MergeCheckpoint(gIntervals)
-		e.FreeMeta()
+		// e.FreeMeta()
 	}
 	h.mu.Lock()
 	for _, wrapper := range toDelete {

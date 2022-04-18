@@ -95,6 +95,34 @@ func (info *Info) Marshal() []byte {
 				pos += 8
 			}
 		}
+		if len(buf) < pos+8 {
+			buf = append(buf, make([]byte, 128)...)
+		}
+		length = uint64(len(ckps.Command))
+		binary.BigEndian.PutUint64(buf[pos:pos+8], length)
+		pos += 8
+		for _, cmd := range ckps.Command {
+			if len(buf) < pos+16 {
+				buf = append(buf, make([]byte, 128)...)
+			}
+			binary.BigEndian.PutUint64(buf[pos:pos+8], cmd.Tid)
+			pos += 8
+			length = uint64(len(cmd.CommandIds))
+			binary.BigEndian.PutUint64(buf[pos:pos+8], length)
+			pos += 8
+			for _,commandId:=range cmd.CommandIds{
+				if len(buf) < pos+4 {
+					buf = append(buf, make([]byte, 128)...)
+				}
+				binary.BigEndian.PutUint32(buf[pos:pos+4], commandId)
+				pos += 4
+			}
+			if len(buf) < pos+4 {
+				buf = append(buf, make([]byte, 128)...)
+			}
+			binary.BigEndian.PutUint32(buf[pos:pos+4], cmd.Size)
+			pos += 4
+		}
 	}
 
 	length = uint64(len(info.Uncommits))
@@ -152,6 +180,24 @@ func Unmarshal(buf []byte) *Info {
 			pos += 8
 			ckps.Ranges.Intervals = append(ckps.Ranges.Intervals, interval)
 		}
+		cmdInfoLength:=binary.BigEndian.Uint64(buf[pos : pos+8])
+		pos += 8
+		ckps.Command=make([]CommandInfo, cmdInfoLength)
+		for j:=0;j<int(cmdInfoLength);j++{
+			cmd:=CommandInfo{}
+			cmd.Tid=binary.BigEndian.Uint64(buf[pos : pos+8])
+			pos += 8
+			cmdIdsLength:=binary.BigEndian.Uint64(buf[pos : pos+8])
+			pos += 8
+			cmd.CommandIds=make([]uint32, cmdIdsLength)
+			for k:=0;k<int(cmdIdsLength);k++{
+				cmd.CommandIds[k]=binary.BigEndian.Uint32(buf[pos : pos+4])
+				pos += 4
+			}
+			cmd.Size=binary.BigEndian.Uint32(buf[pos : pos+4])
+			pos += 4
+			ckps.Command[j]=cmd
+		}
 		info.Checkpoints = append(info.Checkpoints, ckps)
 	}
 
@@ -200,8 +246,15 @@ type Tid struct {
 }
 
 type CkpRanges struct {
-	Group  uint32
-	Ranges *common.ClosedIntervals
+	Group   uint32
+	Ranges  *common.ClosedIntervals
+	Command []CommandInfo //todo marshal
+}
+
+type CommandInfo struct {
+	Tid        uint64
+	CommandIds []uint32
+	Size       uint32
 }
 
 // type CommitInfo struct {
