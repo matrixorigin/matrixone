@@ -16,14 +16,15 @@ package engine
 
 import (
 	"fmt"
+	"sort"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/smartystreets/goconvey/convey"
-	"sort"
-	"strings"
-	"testing"
 )
 
 func TestTpeReader_Read(t *testing.T) {
@@ -64,7 +65,9 @@ func TestTpeReader_Read(t *testing.T) {
 		//make data
 		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
 
+		bat.Zs = nil
 		err = tableDesc.Write(0, bat)
+
 		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
@@ -77,7 +80,6 @@ func TestTpeReader_Read(t *testing.T) {
 					if get == nil {
 						break
 					}
-
 					for j := 0; j < 2; j++ {
 						a := bat.Vecs[j].Col.([]uint64)
 						b := get.Vecs[j].Col.([]uint64)
@@ -140,6 +142,7 @@ func TestTpeReader_Read(t *testing.T) {
 			vec0[i] = uint64(i)
 			vec1[i] = uint64(i)
 		}
+		bat.Zs = nil
 		err = tableDesc.Write(0, bat)
 		convey.So(err, convey.ShouldBeNil)
 

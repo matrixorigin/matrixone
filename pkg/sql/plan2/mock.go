@@ -15,15 +15,89 @@
 package plan2
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type MockCompilerContext struct {
-	objects map[string]*ObjectRef
+	objects map[string]*plan.ObjectRef
+	tables  map[string]*plan.TableDef
 }
 
-func (m *MockCompilerContext) Resolve(name string) *ObjectRef {
-	return m.objects[name]
+type col struct {
+	Name      string
+	Id        uint32
+	Nullable  bool
+	Width     int32
+	Precision int32
+}
+
+func NewMockCompilerContext() *MockCompilerContext {
+	objects := make(map[string]*plan.ObjectRef)
+	tables := make(map[string]*plan.TableDef)
+
+	tpchSchema := make(map[string][]col)
+	tpchSchema["NATION"] = []col{
+		{"N_NATIONKEY", 1, false, 0, 0},
+		{"N_NAME", 2, false, 0, 0},
+		{"N_REGIONKEY", 3, false, 0, 0},
+		{"N_COMMENT", 4, false, 0, 0},
+	}
+	tpchSchema["REGION"] = []col{
+		{"R_REGIONKEY", 1, false, 0, 0},
+		{"R_NAME", 2, false, 0, 0},
+		{"R_COMMENT", 3, false, 0, 0},
+	}
+
+	defaultDbName := "tpch"
+
+	//build tpch context data(schema)
+	for tableName, cols := range tpchSchema {
+		var colDefs []*plan.ColDef
+
+		for idx, col := range cols {
+			objName := tableName + "." + col.Name
+
+			objects[objName] = &plan.ObjectRef{
+				Server:     0,
+				Db:         0,
+				Schema:     0,
+				Obj:        int64(idx),
+				ServerName: "",
+				DbName:     defaultDbName,
+				SchemaName: "",
+				ObjName:    col.Name,
+			}
+
+			colDefs = append(colDefs, &plan.ColDef{
+				Typ: &plan.Type{
+					Id:        col.Id,
+					Nullable:  col.Nullable,
+					Width:     col.Width,
+					Precision: col.Precision,
+				},
+				Name:  col.Name,
+				Pkidx: 1,
+			})
+		}
+
+		tables[tableName] = &plan.TableDef{
+			Name: tableName,
+			Cols: colDefs,
+		}
+	}
+
+	return &MockCompilerContext{
+		objects: objects,
+		tables:  tables,
+	}
+}
+
+func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.TableDef) {
+	return m.objects[name], m.tables[name]
 }
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) Cost {
@@ -45,8 +119,20 @@ type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
 
-func (moc *MockOptimizer) Optimize(stmt tree.Statement) *Query {
-	return nil
+func newMockOptimizer() *MockOptimizer {
+	return &MockOptimizer{
+		ctxt: *NewMockCompilerContext(),
+	}
+}
+
+func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+	ctx := moc.CurrentContext()
+	query, err := buildPlan(ctx, stmt)
+	if err != nil {
+		fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+		return nil, err
+	}
+	return query, nil
 }
 
 func (moc *MockOptimizer) CurrentContext() CompilerContext {

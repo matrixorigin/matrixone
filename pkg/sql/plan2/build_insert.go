@@ -14,12 +14,8 @@
 
 package plan2
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
-type ObjectRef plan.ObjectRef
-type Cost plan.Cost
-type Const plan.Const
-type Expr plan.Expr
-type Node plan.Node
-type RowsetData plan.RowsetData
-type Query plan.Query
+func buildInsert(stmt tree.Statement, ctx CompilerContext, query *Query) error {
+	return nil
+}

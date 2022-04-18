@@ -18,13 +18,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"math/rand"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	log "github.com/sirupsen/logrus"
 
@@ -228,8 +228,16 @@ func (r *relation) Size(attr string) int64 {
 	return totalSize
 }
 
+func (r *relation) Cardinality(_ string) int64 {
+	return 0
+}
+
 func (r *relation) Nodes() engine.Nodes {
 	return r.nodes
+}
+
+func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
 }
 
 func (r *relation) TableDefs() []engine.TableDef {

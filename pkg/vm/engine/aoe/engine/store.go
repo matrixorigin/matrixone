@@ -31,7 +31,7 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		}
 		s.start = true
 		s.mutex.Unlock()
-		for _, filter := range reader.filter{
+		for _, filter := range reader.filter {
 			s.sparseFilter(&filter)
 		}
 		s.ReadStart(refCount, attrs)

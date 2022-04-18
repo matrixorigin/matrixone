@@ -17,13 +17,14 @@ package tuplecodec
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"math/rand"
 	"os"
 	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/lni/goutils/random"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -77,8 +78,10 @@ func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 			name = "T_float32"
 		case types.T_float64:
 			name = "T_float64"
-		case types.T_char, types.T_varchar:
-			name = "T_char_varchar"
+		case types.T_char:
+			name = "T_char"
+		case types.T_varchar:
+			name = "T_varchar"
 		case types.T_date:
 			name = "T_date"
 		case types.T_datetime:

@@ -124,6 +124,12 @@ func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 			return nil, err
 		}
 		return plan, nil
+	case *tree.Update:
+		plan := &Update{}
+		if err := b.buildUpdatePlan(stmt, plan); err != nil {
+			return nil, err
+		}
+		return plan, nil
 	}
 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 }
