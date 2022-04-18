@@ -293,9 +293,6 @@ func constructView(bat *batch.Batch, vars []string) {
 		{
 			for k, v := range values[:n] {
 				keys[k] = keys[k][:0]
-				if zValues[k] == 0 {
-					continue
-				}
 				if v > rows {
 					ht.Sels = append(ht.Sels, make([]int64, 0, 8))
 				}
