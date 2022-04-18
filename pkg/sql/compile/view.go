@@ -29,6 +29,7 @@ const (
 	UnitLimit = 256
 )
 
+// a slice whose size is equal to UnitLimit and whose value is all 1
 var OneInt64s []int64
 
 func init() {
@@ -44,6 +45,8 @@ func constructViews(bats []*batch.Batch, vars [][]string) {
 	}
 }
 
+// a view represent a dimension table with a hashtable
+//   constructView is used to create a hashtable for a dimension table
 func constructView(bat *batch.Batch, vars []string) {
 	var rows uint64
 
@@ -72,8 +75,9 @@ func constructView(bat *batch.Batch, vars []string) {
 		if n > UnitLimit {
 			n = UnitLimit
 		}
+		// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 		copy(zValues[:n], OneInt64s[:n])
-		for j, vec := range vecs {
+		for j, vec := range vecs { // // combine multiple attributes into a single key
 			switch vec.Typ.Oid {
 			case types.T_int8:
 				vs := vecs[j].Col.([]int8)
@@ -293,6 +297,9 @@ func constructView(bat *batch.Batch, vars []string) {
 		{
 			for k, v := range values[:n] {
 				keys[k] = keys[k][:0]
+				if zValues[k] == 0 {
+					continue
+				}
 				if v > rows {
 					ht.Sels = append(ht.Sels, make([]int64, 0, 8))
 				}
@@ -341,6 +348,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -403,6 +411,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -465,6 +474,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -527,6 +537,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -589,6 +600,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -651,6 +663,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -713,6 +726,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -775,6 +789,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -837,6 +852,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -899,6 +915,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -961,6 +978,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -1023,6 +1041,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
@@ -1090,6 +1109,7 @@ func constructViewWithOneVar(bat *batch.Batch, fvar string) {
 				}
 			}
 		} else {
+			// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 			zValues := make([]int64, UnitLimit)
 			for i := 0; i < count; i += UnitLimit {
 				n := count - i
