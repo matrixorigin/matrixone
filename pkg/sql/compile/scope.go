@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 	"math"
 	"net"
 	"runtime"
@@ -96,7 +97,12 @@ func (s *Scope) CreateIndex(ts uint64) error {
 	}
 
 	defer o.Relation.Close()
-	return o.Relation.CreateIndex(ts, o.Defs)
+	for _, def := range o.Defs {
+		if err := o.Relation.AddTableDef(ts, def); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DropDatabase do drop database work according to drop index plan
@@ -145,7 +151,8 @@ func (s *Scope) DropIndex(ts uint64) error {
 	}
 
 	defer p.Relation.Close()
-	return p.Relation.DropIndex(ts, p.Id)
+	//return p.Relation.DropIndex(ts, p.Id)
+	return nil
 }
 
 // ShowDatabases fill batch with all database names
@@ -446,7 +453,7 @@ func (s *Scope) Delete(ts uint64, e engine.Engine) (uint64, error) {
 // Update will update rows from a single of table
 func (s *Scope) Update(ts uint64, e engine.Engine) (uint64, error) {
 	s.Magic = Merge
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*deleteTag.Argument)
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*updateTag.Argument)
 	arg.Ts = ts
 	defer arg.Relation.Close()
 	if err := s.MergeRun(e); err != nil {

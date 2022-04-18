@@ -16,10 +16,10 @@ package engine
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -52,6 +52,10 @@ func (trel *TpeRelation) Size(s string) int64 {
 	return size
 }
 
+func (trel *TpeRelation) Cardinality(_ string) int64 {
+	return 1
+}
+
 func (trel *TpeRelation) Close() {
 }
 
@@ -66,26 +70,35 @@ func (trel *TpeRelation) Nodes() engine.Nodes {
 	return trel.nodes
 }
 
-func (trel *TpeRelation) CreateIndex(epoch uint64, defs []engine.TableDef) error {
-	panic("implement me")
-}
-
-func (trel *TpeRelation) DropIndex(epoch uint64, name string) error {
-	panic("implement me")
-}
-
-func (trel *TpeRelation) GetHideColDef() *engine.Attribute {
+func (trel *TpeRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	var attrs []engine.Attribute
+	hasPriKey := false
 	for _, attr := range trel.desc.Attributes {
 		if attr.Is_hidden {
-			return &engine.Attribute{
+			attrs = append(attrs, engine.Attribute{
 				Name:    attr.Name,
 				Alg:     0,
 				Type:    attr.TypesType,
 				Default: attr.Default,
-			}
+				Primary: attr.Is_primarykey,
+			})
+			return attrs, false
+		}
+		if attr.Is_primarykey {
+			attrs = append(attrs, engine.Attribute{
+				Name:    attr.Name,
+				Alg:     0,
+				Type:    attr.TypesType,
+				Default: attr.Default,
+				Primary: attr.Is_primarykey,
+			})
+			hasPriKey = true
 		}
 	}
-	return nil
+	if hasPriKey {
+		return attrs, hasPriKey
+	}
+	return nil, false
 }
 
 func (trel *TpeRelation) TableDefs() []engine.TableDef {
@@ -260,7 +273,6 @@ func (trel *TpeRelation) parallelReader(cnt int) []engine.Reader {
 
 		logutil.Infof("store id %d reader %d shard startIndex %d shardCountPerReader %d shardCount %d endIndex %d isDumpReader %v",
 			trel.storeID, i, startIndex, shardCountPerReader, shardInfosCount, endIndex, tpeReaders[i].isDumpReader)
-
 		startIndex += shardCountPerReader
 	}
 

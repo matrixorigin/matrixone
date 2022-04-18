@@ -71,16 +71,33 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 	return bat, nil
 }
 
+// judge the operation is delete or insert, true for delete, false for insert
+func GetDeleteFlag(bat *batch.Batch) bool {
+	deleteFlag := false
+	if len(bat.Zs) > 0 {
+		deleteFlag = true
+	}
+	for i := 0; i < len(bat.Zs); i++ {
+		if bat.Zs[i] != -1 {
+			deleteFlag = false
+			break
+		}
+	}
+	return deleteFlag
+}
+
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
 	if bat == nil {
 		return nil
 	}
 
 	var err error
-	if len(bat.Zs) == 2 && bat.Zs[0] == -1 && bat.Zs[1] == -1 {
+	if GetDeleteFlag(bat) {
 		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
-	} else {
+	} else if bat.Zs == nil {
 		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	} else {
+		err = chi.indexHandler.UpdateIntoIndex(writeCtx, bat)
 	}
 
 	if err != nil {

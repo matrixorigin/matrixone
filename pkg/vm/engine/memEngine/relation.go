@@ -2,11 +2,11 @@ package memEngine
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/pierrec/lz4"
@@ -26,12 +26,16 @@ func (_ *relation) Size(_ string) int64 {
 	return 0
 }
 
-func (_ *relation) CardinalNumber(_ string) int64 {
+func (_ *relation) Cardinality(_ string) int64 {
 	return 0
 }
 
 func (r *relation) Nodes() engine.Nodes {
 	return engine.Nodes{r.n}
+}
+
+func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
 }
 
 func (r *relation) TableDefs() []engine.TableDef {

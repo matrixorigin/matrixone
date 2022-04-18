@@ -147,6 +147,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			header2 := getDumpDataHeader(opt, result)
 			convey.So(header, convey.ShouldEqual, header2)
 
+			bat.Zs = nil
 			err = tpe_relation.Write(uint64(cnt), bat)
 			convey.So(err, convey.ShouldBeNil)
 
@@ -173,6 +174,7 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(opt.UseValue, convey.ShouldBeFalse)
 			convey.So(opt.PrimaryValue, convey.ShouldBeNil)
 
+			bat.Zs = nil
 			err = tpe_relation.Write(uint64(cnt), bat)
 			convey.So(err, convey.ShouldBeNil)
 
