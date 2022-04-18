@@ -17,6 +17,7 @@ package plan2
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -108,7 +109,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 	//distinct
 	if stmt.Distinct {
 		if stmt.GroupBy != nil {
-			//todo confirm: throw error in this case?
+			panic(moerr.NewError(moerr.NYI, "Distinc NYI"))
 		}
 
 		query.Nodes[len(query.Nodes)-1].GroupBy = projections

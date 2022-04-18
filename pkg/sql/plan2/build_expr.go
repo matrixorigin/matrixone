@@ -183,7 +183,7 @@ func buildRangeCond(expr *tree.RangeCond, ctx CompilerContext, query *Query) (*p
 		if err != nil {
 			return nil, err
 		}
-		funObjRef, err := getFunctionObjRef("OR")
+		funObjRef, _ := getFunctionObjRef("OR")
 		return &plan.Expr{
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -201,7 +201,7 @@ func buildRangeCond(expr *tree.RangeCond, ctx CompilerContext, query *Query) (*p
 		if err != nil {
 			return nil, err
 		}
-		funObjRef, err := getFunctionObjRef("AND")
+		funObjRef, _ := getFunctionObjRef("AND")
 		return &plan.Expr{
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
