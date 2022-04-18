@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package compile
+package times
 
 import (
+	"bytes"
+	"strconv"
+	"testing"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -22,20 +25,1052 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 const (
-	UnitLimit = 256
+	Rows = 10 // default rows
 )
 
-var OneInt64s []int64
+// add unit tests for cases
+type timesTestCase struct {
+	flg            bool // flg indicates if the data is all duplicated
+	hasNull        bool // flg indicates if the data  has null
+	arg            *Argument
+	factAttrs      []string
+	dimensionAttrs [][]string
+
+	factTypes      []types.Type
+	dimensionTypes [][]types.Type
+	proc           *process.Process
+}
+
+var (
+	tcs []timesTestCase
+)
 
 func init() {
-	OneInt64s = make([]int64, UnitLimit)
-	for i := range OneInt64s {
-		OneInt64s[i] = 1
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	tcs = []timesTestCase{
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"1"},
+			dimensionAttrs: [][]string{
+				{"1"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"1"},
+			dimensionAttrs: [][]string{
+				{"1"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"1"},
+			dimensionAttrs: [][]string{
+				{"1"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"1"},
+			dimensionAttrs: [][]string{
+				{"1"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_int8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int32},
+				types.Type{Oid: types.T_uint8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int32},
+				types.Type{Oid: types.T_uint8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int32},
+				types.Type{Oid: types.T_uint8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int32},
+				types.Type{Oid: types.T_uint8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 10},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 10},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 10},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 10},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_int8},
+				types.Type{Oid: types.T_varchar, Width: 10},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 8},
+				types.Type{Oid: types.T_varchar, Width: 8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 8},
+				types.Type{Oid: types.T_varchar, Width: 8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 8},
+				types.Type{Oid: types.T_varchar, Width: 8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 8},
+				types.Type{Oid: types.T_varchar, Width: 8},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+				types.Type{Oid: types.T_varchar, Width: 12},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       false,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   false,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
+		{
+			flg:       true,
+			hasNull:   true,
+			proc:      process.New(mheap.New(gm)),
+			factAttrs: []string{"0", "1", "2"},
+			dimensionAttrs: [][]string{
+				{"1", "2"},
+			},
+
+			factTypes: []types.Type{
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+				types.Type{Oid: types.T_varchar},
+			},
+			dimensionTypes: [][]types.Type{
+				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
+			},
+			arg: &Argument{
+				Result: []string{"0", "1", "2"},
+				Vars: [][]string{
+					{"1", "2"},
+				},
+			},
+		},
 	}
+}
+
+func TestString(t *testing.T) {
+	buf := new(bytes.Buffer)
+	for _, tc := range tcs {
+		String(tc.arg, buf)
+	}
+}
+
+func TestPrepare(t *testing.T) {
+	for _, tc := range tcs {
+		for i, dmAttrs := range tc.dimensionAttrs {
+			tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+		}
+		constructViews(tc.arg.Bats, tc.arg.Vars)
+		Prepare(tc.proc, tc.arg)
+	}
+}
+
+func TestTimes(t *testing.T) {
+	for _, tc := range tcs {
+		for i, dmAttrs := range tc.dimensionAttrs {
+			tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+		}
+		constructViews(tc.arg.Bats, tc.arg.Vars)
+		Prepare(tc.proc, tc.arg)
+		tc.proc.Reg.InputBatch = newBatch(t, tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+		Call(tc.proc, tc.arg)
+		tc.proc.Reg.InputBatch = &batch.Batch{}
+		Call(tc.proc, tc.arg)
+		tc.proc.Reg.InputBatch = nil
+		Call(tc.proc, tc.arg)
+		require.Equal(t, len(tc.proc.Reg.InputBatch.Attrs), len(tc.arg.Result))
+	}
+}
+
+// create a new block based on the attribute information, flg indicates if the data is all duplicated
+func newBatch(t *testing.T, flg, isNull bool, ts []types.Type, attrs []string, proc *process.Process) *batch.Batch {
+	bat := batch.New(true, attrs)
+	bat.Zs = make([]int64, Rows)
+	bat.Ht = []*vector.Vector{}
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
+	}
+	for i := range bat.Vecs {
+		vec := vector.New(ts[i])
+		switch vec.Typ.Oid {
+		case types.T_int8:
+			data, err := mheap.Alloc(proc.Mp, Rows*1)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeInt8Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int8(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int16:
+			data, err := mheap.Alloc(proc.Mp, Rows*2)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeInt16Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int16(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int32:
+			data, err := mheap.Alloc(proc.Mp, Rows*4)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeInt32Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int64:
+			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeInt64Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint8:
+			data, err := mheap.Alloc(proc.Mp, Rows)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeUint8Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint8(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint16:
+			data, err := mheap.Alloc(proc.Mp, Rows*2)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeUint16Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint16(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint32:
+			data, err := mheap.Alloc(proc.Mp, Rows*4)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeUint32Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint64:
+			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeUint64Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_float32:
+			data, err := mheap.Alloc(proc.Mp, Rows*4)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeFloat32Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = float32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_float64:
+			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeFloat64Slice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = float64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_date:
+			data, err := mheap.Alloc(proc.Mp, Rows*4)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeDateSlice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = types.Date(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_datetime:
+			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			require.NoError(t, err)
+			vec.Data = data
+			vs := encoding.DecodeDatetimeSlice(vec.Data)[:Rows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = types.Datetime(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_char, types.T_varchar:
+			size := 0
+			vs := make([][]byte, Rows)
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = []byte("0")
+				} else {
+					vs[i] = []byte(strconv.Itoa(i))
+				}
+				size += len(vs[i])
+			}
+			data, err := mheap.Alloc(proc.Mp, int64(size))
+			require.NoError(t, err)
+			data = data[:0]
+			col := new(types.Bytes)
+			o := uint32(0)
+			for _, v := range vs {
+				data = append(data, v...)
+				col.Offsets = append(col.Offsets, o)
+				o += uint32(len(v))
+				col.Lengths = append(col.Lengths, uint32(len(v)))
+			}
+			col.Data = data
+			vec.Col = col
+			vec.Data = data
+		}
+		bat.Vecs[i] = vec
+	}
+	return bat
 }
 
 func constructViews(bats []*batch.Batch, vars [][]string) {

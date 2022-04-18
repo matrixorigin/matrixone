@@ -20,10 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+// size limit on the number of tuples to be processed at a time
 const (
 	UnitLimit = 256
 )
 
+// attributes's size of join result: (not include aggregation)
+// 	H0:  size == 0 bytes
+//  H8:  0 < size <= 8 bytes
+//  H24: 8 < size <= 24 bytes
+//  H32: 24 < size <= 32 bytes
+//  H40: 32 < size <= 40 bytes
+//  HStr: size > 40 bytes
 const (
 	H0 = iota
 	H8
@@ -33,8 +41,10 @@ const (
 	HStr
 )
 
+// a slice whose size is equal to UnitLimit and whose value is all 1
 var OneInt64s []int64
 
+// a view represent a dimension table with a hashtable
 type view struct {
 	isPure bool // true: primary key join
 
@@ -42,21 +52,37 @@ type view struct {
 	ris []int // subscript in the result ring
 	ois []int // subscript in the origin batch
 
-	attrs      []string
-	values     []uint64
-	sels       [][]int64
-	bat        *batch.Batch
-	vecs       []*vector.Vector
+	attrs []string // attributes of dimension table
+	// each element corresponds to a specific group number.
+	//   group number is  an indication of the location of join key in the hashtable,
+	//	 and this location information is provided by the hashtable.
+	values []uint64
+	sels   [][]int64        // row list
+	bat    *batch.Batch     // tuples of dimension table
+	vecs   []*vector.Vector // vector of dimension table
+	// only one type of hashtable will exist in a view,
+	// if the join key size is zero, then hashtable does not need.
+	//  intHashMap:  0 < key size <= 8
+	//  strHashMap:  8 < key size
 	intHashMap *hashtable.Int64HashMap
 	strHashMap *hashtable.StringHashMap
 }
 
 type probeContainer struct {
-	typ  int
+	// the following values are available:
+	//   H0, H8, H24, H32, H40, HStr
+	typ int
+
+	// number of rows of result
 	rows uint64
 
+	// tuples of result batch
 	bat *batch.Batch
 
+	// only one type of hashtable will exist in a view,
+	// if the result key size is zero, then hashtable does not need.
+	//  intHashMap:  0 < key size <= 8
+	//  strHashMap:  8 < key size
 	intHashMap *hashtable.Int64HashMap
 	strHashMap *hashtable.StringHashMap
 }
@@ -67,11 +93,11 @@ type Container struct {
 	is  []int // subscript in the result attribute
 	ois []int // subscript in the origin batch
 
-	zs []int64
+	zs []int64 // each element is used to store the number of occurrences of the tuple
 
-	sels []int64
+	sels []int64 // row number list
 
-	attrs []string
+	attrs []string // attributes of result
 
 	oattrs []string // order of attributes of input batch
 
@@ -79,17 +105,27 @@ type Container struct {
 
 	mx, mx0, mx1 [][]int64 // matrix buffer
 
+	// each element corresponds to a specific group number.
+	//   group number is  an indication of the location of result key in the hashtable,
+	//	 and this location information is provided by the hashtable.
 	values []uint64
 
+	// all elements are zero, used to reset values
 	zValues []int64
 
-	keyOffs  []uint32
+	// multiple attributes are combined into a single key for hashtable,
+	// and since they are processed one by one,
+	// the length of the key needs to be recorded after processing an attribute to
+	//   facilitate the processing of the next attribute
+	keyOffs []uint32
+	// all elements are zero, used to reset keyOffs
 	zKeyOffs []uint32
 
+	views []*view
+
+	// parameters of hashtable, for the meaning of the parameters please read the information of hashtable.
 	hashes        []uint64
 	strHashStates [][3]uint64
-
-	views []*view
 
 	hstr struct {
 		keys [][]byte
@@ -111,12 +147,15 @@ type Container struct {
 		keys  [][5]uint64
 		zKeys [][5]uint64
 	}
-	pctr *probeContainer
+	pctr *probeContainer // container for probe and store result
 }
 
 type Argument struct {
+	// attributes of join result
 	Result []string
-	Vars   [][]string
-	ctr    *Container
-	Bats   []*batch.Batch
+	// join key of dimension tables
+	Vars [][]string
+	ctr  *Container
+	// tuples of dimension tables
+	Bats []*batch.Batch
 }
