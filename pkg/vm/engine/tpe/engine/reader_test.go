@@ -15,8 +15,10 @@
 package engine
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"sort"
 	"strings"
 	"testing"
@@ -250,14 +252,27 @@ func Test_ParallelReader(t *testing.T) {
 		err = tableDesc.Write(0, bat)
 		convey.So(err, convey.ShouldBeNil)
 
-		readers := tableDesc.NewReader(1, nil, nil)
+		dumpShards := &tuplecodec.CubeShards{
+			Shards: []metapb.Shard{
+				{
+					ID: 0,
+					Start: nil,
+					End: nil,
+				},
+			},
+		}
+
+		payload, err := json.Marshal(dumpShards)
+		convey.So(err,convey.ShouldBeNil)
+
+		readers := tableDesc.NewReader(1, nil, payload)
 		readers[0].(*TpeReader).parallelReader = false
 		readers[0].(*TpeReader).multiNode = false
 
 		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "b"})
 		convey.So(err, convey.ShouldBeNil)
 
-		readers = tableDesc.NewReader(1, nil, nil)
+		readers = tableDesc.NewReader(1, nil, payload)
 		readers[0].(*TpeReader).parallelReader = true
 
 		readers[0].(*TpeReader).shardInfos = make([]ShardInfo, 2)
@@ -328,9 +343,20 @@ func Test_printBatch(t *testing.T) {
 		err = tableDesc.Write(0, bat)
 
 		convey.So(err, convey.ShouldBeNil)
+		dumpShards := &tuplecodec.CubeShards{
+			Shards: []metapb.Shard{
+				{
+					ID: 0,
+					Start: nil,
+					End: nil,
+				},
+			},
+		}
+		payload, err := json.Marshal(dumpShards)
+		convey.So(err,convey.ShouldBeNil)
 
 		var get *batch.Batch
-		readers := tableDesc.NewReader(1, nil, nil)
+		readers := tableDesc.NewReader(1, nil, payload)
 		get, err = readers[0].Read(make([]uint64, 14), attrNames)
 		printBatch(readers[0].(*TpeReader), get, attrNames)
 
