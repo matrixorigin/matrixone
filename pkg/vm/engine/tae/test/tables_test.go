@@ -2,8 +2,6 @@ package test
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -11,6 +9,7 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -26,12 +25,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func initTestPath(t *testing.T) string {
-	dir := filepath.Join("/tmp", t.Name())
-	os.RemoveAll(dir)
-	return dir
-}
-
 func initTestContext(t *testing.T, dir string, txnBufSize, mutBufSize uint64) (*catalog.Catalog, *txnbase.TxnManager, txnbase.NodeDriver, base.INodeManager, base.INodeManager) {
 	c := catalog.MockCatalog(dir, "mock", nil)
 	driver := txnbase.NewNodeDriver(dir, "store", nil)
@@ -44,7 +37,7 @@ func initTestContext(t *testing.T, dir string, txnBufSize, mutBufSize uint64) (*
 }
 
 func TestTables1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, txnBufMgr, mutBufMgr := initTestContext(t, dir, 100000, 1000000)
 	defer driver.Close()
 	defer c.Close()
@@ -118,7 +111,7 @@ func TestTables1(t *testing.T) {
 }
 
 func TestTxn1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, txnBufMgr, mutBufMgr := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -202,7 +195,7 @@ func TestTxn1(t *testing.T) {
 }
 
 func TestTxn2(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.G, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -227,7 +220,7 @@ func TestTxn2(t *testing.T) {
 }
 
 func TestTxn3(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -360,7 +353,7 @@ func TestTxn3(t *testing.T) {
 }
 
 func TestTxn4(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -389,7 +382,7 @@ func TestTxn4(t *testing.T) {
 }
 
 func TestTxn5(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, mutBufMgr := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -461,7 +454,7 @@ func TestTxn5(t *testing.T) {
 }
 
 func TestTxn6(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()

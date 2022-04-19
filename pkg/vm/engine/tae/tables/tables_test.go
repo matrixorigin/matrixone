@@ -1,8 +1,6 @@
 package tables
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,11 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func initTestPath(t *testing.T) string {
-	dir := filepath.Join("/tmp", t.Name())
-	os.RemoveAll(dir)
-	return dir
-}
+const (
+	ModuleName = "TAETABLES"
+)
 
 func TestInsertInfo(t *testing.T) {
 	ts := common.NextGlobalSeqNum()

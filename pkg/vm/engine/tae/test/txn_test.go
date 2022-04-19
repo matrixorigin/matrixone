@@ -11,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -19,6 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+)
+
+const (
+	ModuleName = "TAETEST"
 )
 
 var wareHouse *catalog.Schema
@@ -456,7 +461,7 @@ func (app1 *APP1) Init(factor int) {
 }
 
 func TestApp1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.G*1, common.G)
 	defer driver.Close()
 	defer c.Close()
@@ -501,7 +506,7 @@ func TestApp1(t *testing.T) {
 }
 
 func TestWarehouse(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
 	defer driver.Close()
 	defer c.Close()

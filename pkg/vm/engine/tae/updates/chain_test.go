@@ -2,24 +2,21 @@ package updates
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
-func initTestPath(t *testing.T) string {
-	dir := filepath.Join("/tmp", t.Name())
-	os.RemoveAll(dir)
-	return dir
-}
+const (
+	ModuleName = "TAEUPDATES"
+)
 
 func mockTxn() *txnbase.Txn {
 	txn := new(txnbase.Txn)
@@ -33,7 +30,8 @@ func commitTxn(txn *txnbase.Txn) {
 
 func TestColumnChain1(t *testing.T) {
 	schema := catalog.MockSchema(1)
-	c := catalog.MockCatalog(initTestPath(t), "mock", nil)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", nil)
@@ -65,7 +63,8 @@ func TestColumnChain1(t *testing.T) {
 
 func TestColumnChain2(t *testing.T) {
 	schema := catalog.MockSchema(1)
-	c := catalog.MockCatalog(initTestPath(t), "mock", nil)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", nil)
@@ -179,7 +178,8 @@ func TestColumnChain2(t *testing.T) {
 func TestColumnChain3(t *testing.T) {
 	ncnt := 100
 	schema := catalog.MockSchema(1)
-	c := catalog.MockCatalog(initTestPath(t), "mock", nil)
+	dir := testutils.InitTestEnv(ModuleName, t)
+	c := catalog.MockCatalog(dir, "mock", nil)
 	defer c.Close()
 
 	db, _ := c.CreateDBEntry("db", nil)

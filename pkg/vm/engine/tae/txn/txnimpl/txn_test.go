@@ -3,8 +3,6 @@ package txnimpl
 import (
 	"fmt"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -18,6 +16,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 
@@ -29,6 +28,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
+)
+
+const (
+	ModuleName = "TAETXN"
 )
 
 // 1. 30 concurrency
@@ -54,12 +57,6 @@ func getNodes() int {
 	return 5 * 2
 }
 
-func initTestPath(t *testing.T) string {
-	dir := filepath.Join("/tmp", t.Name())
-	os.RemoveAll(dir)
-	return dir
-}
-
 func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 	mgr := buffer.NewNodeManager(bufSize, nil)
 	driver := txnbase.NewNodeDriver(dir, "store", nil)
@@ -71,7 +68,7 @@ func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 }
 
 func TestInsertNode(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	tbl := makeTable(t, dir, 1, common.K*6)
 	defer tbl.driver.Close()
 	bat := mock.MockBatch(tbl.GetSchema().Types(), 1024)
@@ -130,7 +127,7 @@ func TestInsertNode(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -163,7 +160,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestUpdateUncommitted(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -196,7 +193,7 @@ func TestUpdateUncommitted(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -291,7 +288,7 @@ func TestIndex(t *testing.T) {
 }
 
 func TestLoad(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -322,7 +319,7 @@ func TestLoad(t *testing.T) {
 }
 
 func TestNodeCommand(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -364,7 +361,7 @@ func TestNodeCommand(t *testing.T) {
 }
 
 func TestBuildCommand(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -577,7 +574,8 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 // 4. Txn2 commit
 // 5. Txn3 commit
 func TestTransaction1(t *testing.T) {
-	dir := initTestPath(t)
+	// dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -619,7 +617,7 @@ func TestTransaction1(t *testing.T) {
 }
 
 func TestTransaction2(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()
@@ -673,7 +671,7 @@ func TestTransaction2(t *testing.T) {
 }
 
 func TestTransaction3(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
@@ -706,7 +704,7 @@ func TestTransaction3(t *testing.T) {
 }
 
 func TestSegment1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
@@ -780,7 +778,7 @@ func TestSegment1(t *testing.T) {
 }
 
 func TestSegment2(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
@@ -810,7 +808,7 @@ func TestSegment2(t *testing.T) {
 }
 
 func TestBlock1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer mgr.Stop()
@@ -856,7 +854,7 @@ func TestBlock1(t *testing.T) {
 }
 
 func TestDedup1(t *testing.T) {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	c, mgr, driver := initTestContext(t, dir)
 	defer driver.Close()
 	defer c.Close()

@@ -56,6 +56,14 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) (err error) {
 	return
 }
 
+func (db *DB) startWorkers() (err error) {
+	return
+}
+
+func (db *DB) stopWorkers() (err error) {
+	return
+}
+
 func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)

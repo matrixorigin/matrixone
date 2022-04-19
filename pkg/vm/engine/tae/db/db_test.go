@@ -1,12 +1,11 @@
 package db
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -14,14 +13,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func initTestPath(t *testing.T) string {
-	dir := filepath.Join("/tmp", t.Name())
-	os.RemoveAll(dir)
-	return dir
-}
+const (
+	ModuleName = "TAEDB"
+)
 
 func initDB(t *testing.T, opts *options.Options) *DB {
-	dir := initTestPath(t)
+	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, nil)
 	return db
 }
