@@ -805,7 +805,6 @@ func decimal64SubScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal64SubScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
@@ -842,7 +841,6 @@ func decimal64SubByScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysSca
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal64SubByScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
@@ -936,7 +934,6 @@ func decimal128SubScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysSc
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal128SubScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
@@ -978,7 +975,6 @@ func decimal128SubByScalar(x types.Decimal128, ys []types.Decimal128, xScale, ys
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal128SubByScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {

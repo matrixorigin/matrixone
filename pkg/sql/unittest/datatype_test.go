@@ -16,6 +16,75 @@ package unittest
 
 import "testing"
 
+func TestDecimalType(t *testing.T) {
+	testCases := []testCase{
+		{sql: "create table decimal_table (d1 decimal(10, 5));"},
+		{sql: "create table decimal_table1 (d1 decimal(20, 5));"},
+		{sql: "insert into decimal_table values (333.333);"},
+		{sql: "insert into decimal_table1 values (333.333);"},
+		{sql: "select * from decimal_table;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"33333300"}},
+		}},
+		{sql: "select * from decimal_table1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{33333300 0}"}},
+		}},
+	}
+	test(t, testCases)
+}
+
+func TestDecimalComparison(t *testing.T) {
+	testCases := []testCase{
+		{sql: "create table decimal_table (d1 decimal(10, 5));"},
+		{sql: "create table decimal_table1 (d1 decimal(20, 5));"},
+		{sql: "insert into decimal_table values (333.333), (-1234.5), (5), (-5);"},
+		{sql: "insert into decimal_table1 values (333.333), (-1234.5), (5), (-5);"},
+		{sql: "select * from decimal_table where d1 > 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"33333300"}, {"500000"}},
+		}},
+		{sql: "select * from decimal_table1 where d1 > 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{33333300 0}"}, {"{500000 0}"}},
+		}},
+		{sql: "select * from decimal_table where d1 >= 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"33333300"}, {"500000"}},
+		}},
+		{sql: "select * from decimal_table1 where d1 >= 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{33333300 0}"}, {"{500000 0}"}},
+		}},
+		{sql: "select * from decimal_table where d1 < 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"-123450000"}, {"-500000"}},
+		}},
+		{sql: "select * from decimal_table1 where d1 < 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{[]string{"{-123450000 -1}"}, []string{"{-500000 -1}"}},
+		}},
+		{sql: "select * from decimal_table where d1 <= 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"-123450000"}, {"-500000"}},
+		}},
+		{sql: "select * from decimal_table1 where d1 <= 1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{-123450000 -1}"}, {"{-500000 -1}"}},
+		}},
+		{sql: "select * from decimal_table where d1 = 333.333;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"33333300"}},
+		}},
+		{sql: "select * from decimal_table1 where d1 = 333.333;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{33333300 0}"}},
+		}},
+	}
+	test(t, testCases)
+
+}
+
 // TestDateType will do test for Type date
 func TestDateType(t *testing.T) {
 	testCases := []testCase{
@@ -206,7 +275,7 @@ func TestDatetimeComparison(t *testing.T) {
 		{sql: "select * from tdatetime where a = '2020-01-01 10:21:15';", res: executeResult{
 			null: true,
 		}},
-		{sql: "select * from tdatetime where '2020-01-01 10:21:15' = a;", res:executeResult{
+		{sql: "select * from tdatetime where '2020-01-01 10:21:15' = a;", res: executeResult{
 			null: true,
 		}},
 		{sql: "select * from tdatetime where a > '2020-01-01 10:21:15'", res: executeResult{

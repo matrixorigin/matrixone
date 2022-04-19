@@ -851,7 +851,6 @@ func decimal64AddScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal64AddScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal64, sels []int64) []types.Decimal64 {
@@ -945,7 +944,6 @@ func decimal128AddScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysSc
 		}
 		return rs
 	}
-	return rs
 }
 
 func decimal128AddScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {

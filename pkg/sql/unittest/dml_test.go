@@ -48,7 +48,7 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "insert into cha2 values ('1');"},
 		{sql: "insert into cha1 values ('');"},
 		{sql: "insert into deci_table1 values (12.345);"},
-		{sql: "insert into deci_table2 values (12.345);"},
+		{sql: "insert into deci_table2 values (12.345), (-12.345);"},
 		{sql: "select * from iis;", res: executeResult{
 			attr: []string{"i1", "i2", "i3", "i4"},
 			data: [][]string{
@@ -229,7 +229,7 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "select * from deci_table2;", res: executeResult{
 			attr: []string{"d1"},
 			data: [][]string{
-				{"{12345 0}"},
+				{"{12345 0}"}, {"{-12345 -1}"},
 			},
 		}},
 		{sql: "create table issue1660 (a int, b int);"},
