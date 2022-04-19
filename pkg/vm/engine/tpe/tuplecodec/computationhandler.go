@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"math"
 	"time"
 
@@ -426,11 +427,24 @@ func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error)
 
 func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error) {
 	if chi.kv.GetKVType() == KV_MEMORY {
+		dumpShards := &CubeShards{
+			Shards: []metapb.Shard{
+				{
+					ID: 0,
+					Start: nil,
+					End: nil,
+				},
+			},
+		}
+		payload, err := json.Marshal(dumpShards)
+		if err != nil {
+			return nil, nil, err
+		}
 		var nds = []engine.Node{
 			{
 				Id:   "0",
 				Addr: "localhost:20000",
-				Data: nil,
+				Data: payload,
 			},
 		}
 		return nds, &Shards{}, nil
