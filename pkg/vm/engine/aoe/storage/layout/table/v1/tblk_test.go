@@ -200,7 +200,7 @@ func TestTBlock(t *testing.T) {
 		n := node.(*mutation.MutableBlockNode)
 		n.Meta.SimpleUpgrade(nil)
 		var vecs []*vector.Vector
-		for attri, _ := range n.Data.GetAttrs() {
+		for attri := range n.Data.GetAttrs() {
 			v, err := n.Data.GetVectorByAttr(attri)
 			if err != nil {
 				return err

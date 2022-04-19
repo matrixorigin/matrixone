@@ -25,7 +25,7 @@ func init() {
 }
 
 func lpadVarcharPure(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes {
-	var res *types.Bytes = &types.Bytes{}
+	var res = &types.Bytes{}
 	//in fact,the length of three slice is the same with each other
 	for i := 0; i < len(a.Lengths); i++ {
 		if a.Lengths[i] > uint32(b[0]) { //length less

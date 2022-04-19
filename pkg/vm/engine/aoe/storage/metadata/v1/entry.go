@@ -173,7 +173,10 @@ func (e *dbReplaceLogEntry) CommitLocked(commitId uint64) {
 	e.commitId = commitId
 	for _, db := range e.Replacer {
 		db.RLock()
-		db.RecurLoopLocked(e)
+		err := db.RecurLoopLocked(e)
+		if err != nil {
+			panic(err)
+		}
 		db.RUnlock()
 		db.Lock()
 		db.CommitLocked(commitId)

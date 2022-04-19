@@ -77,7 +77,7 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 }
 
 //The length parameter is not bound. Cut the string from the left
-func SliceFromLeftConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
+func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -101,7 +101,7 @@ func SliceFromLeftConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes, st
 }
 
 //The length parameter is not bound. Cut the string from the right
-func SliceFromRightConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
+func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -124,7 +124,7 @@ func SliceFromRightConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 }
 
 //The length parameter is not bound. Cut the string from 0
-func SliceFromZeroConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
+func substringFromZeroConstOffsetUnbounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
@@ -137,7 +137,7 @@ func SliceFromZeroConstantOffsetUnbounded(src *types.Bytes, res *types.Bytes) *t
 }
 
 //bound length parameter. Cut the string from 0
-func SliceFromZeroConstantOffsetBounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
+func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *types.Bytes {
 	for idx := range src.Offsets {
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
@@ -150,7 +150,7 @@ func SliceFromZeroConstantOffsetBounded(src *types.Bytes, res *types.Bytes) *typ
 }
 
 //Without binding the length parameter, dynamically cut the string
-func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
+func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -218,7 +218,7 @@ func SliceDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn
 }
 
 //bound length parameter. Cut the string from left
-func SliceFromLeftConstantOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
+func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -241,7 +241,7 @@ func SliceFromLeftConstantOffsetBounded(src *types.Bytes, res *types.Bytes, star
 }
 
 //bound length parameter. Cut the string from right
-func SliceFromRightConstantOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
+func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
 	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
@@ -264,7 +264,7 @@ func SliceFromRightConstantOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 }
 
 // bound the length parameter, dynamically cut the string
-func SliceDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
+func substringDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
 	lengthColumn interface{}, lengthColumnType types.T, cs []bool) *types.Bytes {
 	var retCursor uint32
 	for idx, offset := range src.Offsets {

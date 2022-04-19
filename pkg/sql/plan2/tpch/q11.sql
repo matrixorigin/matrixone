@@ -1,29 +1,28 @@
 select
-	l_shipmode,
-	sum(case
-		when o_orderpriority = '1-URGENT'
-			or o_orderpriority = '2-HIGH'
-			then 1
-		else 0
-	end) as high_line_count,
-	sum(case
-		when o_orderpriority <> '1-URGENT'
-			and o_orderpriority <> '2-HIGH'
-			then 1
-		else 0
-	end) as low_line_count
+	ps_partkey,
+	sum(ps_supplycost * ps_availqty) as value
 from
-	orders,
-	lineitem
+	partsupp,
+	supplier,
+	nation
 where
-	o_orderkey = l_orderkey
-	and l_shipmode in ('FOB', 'TRUCK')
-	and l_commitdate < l_receiptdate
-	and l_shipdate < l_commitdate
-	and l_receiptdate >= date '1996-01-01'
-	and l_receiptdate < date '1996-01-01' + interval '1 year'
+	ps_suppkey = s_suppkey
+	and s_nationkey = n_nationkey
+	and n_name = 'JAPAN'
 group by
-	l_shipmode
+	ps_partkey having
+		sum(ps_supplycost * ps_availqty) > (
+			select
+				sum(ps_supplycost * ps_availqty) * 0.0001000000
+			from
+				partsupp,
+				supplier,
+				nation
+			where
+				ps_suppkey = s_suppkey
+				and s_nationkey = n_nationkey
+				and n_name = 'JAPAN'
+		)
 order by
-	l_shipmode
+	value desc
 ;

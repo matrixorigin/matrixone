@@ -26,36 +26,32 @@ ceil(1.23, 1) -----> 1.3
 ceil(12.34, -1) ---- > 20.0*/
 
 var (
-	ceilUint8   func([]uint8, []uint8, int64) []uint8
-	ceilUint16  func([]uint16, []uint16, int64) []uint16
-	ceilUint32  func([]uint32, []uint32, int64) []uint32
-	ceilUint64  func([]uint64, []uint64, int64) []uint64
-	ceilInt8    func([]int8, []int8, int64) []int8
-	ceilInt16   func([]int16, []int16, int64) []int16
-	ceilInt32   func([]int32, []int32, int64) []int32
-	ceilInt64   func([]int64, []int64, int64) []int64
-	ceilFloat32 func([]float32, []float32, int64) []float32
-	ceilFloat64 func([]float64, []float64, int64) []float64
+	CeilUint8   func([]uint8, []uint8, int64) []uint8
+	CeilUint16  func([]uint16, []uint16, int64) []uint16
+	CeilUint32  func([]uint32, []uint32, int64) []uint32
+	CeilUint64  func([]uint64, []uint64, int64) []uint64
+	CeilInt8    func([]int8, []int8, int64) []int8
+	CeilInt16   func([]int16, []int16, int64) []int16
+	CeilInt32   func([]int32, []int32, int64) []int32
+	CeilInt64   func([]int64, []int64, int64) []int64
+	CeilFloat32 func([]float32, []float32, int64) []float32
+	CeilFloat64 func([]float64, []float64, int64) []float64
 )
 
 func init() {
-	ceilUint8 = ceilUint8Pure
-	ceilUint16 = ceilUint16Pure
-	ceilUint32 = ceilUint32Pure
-	ceilUint64 = ceilUint64Pure
-	ceilInt8 = ceilInt8Pure
-	ceilInt16 = ceilInt16Pure
-	ceilInt32 = ceilInt32Pure
-	ceilInt64 = ceilInt64Pure
-	ceilFloat32 = ceilFloat32Pure
-	ceilFloat64 = ceilFloat64Pure
+	CeilUint8 = ceilUint8
+	CeilUint16 = ceilUint16
+	CeilUint32 = ceilUint32
+	CeilUint64 = ceilUint64
+	CeilInt8 = ceilInt8
+	CeilInt16 = ceilInt16
+	CeilInt32 = ceilInt32
+	CeilInt64 = ceilInt64
+	CeilFloat32 = ceilFloat32
+	CeilFloat64 = ceilFloat64
 }
 
-func CeilUint8(xs, rs []uint8, digits int64) []uint8 {
-	return ceilUint8(xs, rs, digits)
-}
-
-func ceilUint8Pure(xs, rs []uint8, digits int64) []uint8 {
+func ceilUint8(xs, rs []uint8, digits int64) []uint8 {
 	// maximum uint8 number is 255, so we only need to worry about a few digit cases,
 	switch {
 	case digits >= 0:
@@ -80,11 +76,7 @@ func ceilUint8Pure(xs, rs []uint8, digits int64) []uint8 {
 	return rs
 }
 
-func CeilUint16(xs, rs []uint16, digits int64) []uint16 {
-	return ceilUint16(xs, rs, digits)
-}
-
-func ceilUint16Pure(xs, rs []uint16, digits int64) []uint16 {
+func ceilUint16(xs, rs []uint16, digits int64) []uint16 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -108,11 +100,7 @@ func ceilUint16Pure(xs, rs []uint16, digits int64) []uint16 {
 	return rs
 }
 
-func CeilUint32(xs, rs []uint32, digits int64) []uint32 {
-	return ceilUint32(xs, rs, digits)
-}
-
-func ceilUint32Pure(xs, rs []uint32, digits int64) []uint32 {
+func ceilUint32(xs, rs []uint32, digits int64) []uint32 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -136,16 +124,12 @@ func ceilUint32Pure(xs, rs []uint32, digits int64) []uint32 {
 	return rs
 }
 
-func CeilUint64(xs, rs []uint64, digits int64) []uint64 {
-	return ceilUint64(xs, rs, digits)
-}
-
-func ceilUint64Pure(xs, rs []uint64, digits int64) []uint64 {
+func ceilUint64(xs, rs []uint64, digits int64) []uint64 {
 	switch {
 	case digits >= 0:
 		return xs
 	case digits > -floor.MaxUint64digits:
-		scale := uint64(floor.ScaleTable[-digits])
+		scale := floor.ScaleTable[-digits]
 		for i := range xs {
 			t := xs[i] % scale
 			s := xs[i]
@@ -164,11 +148,7 @@ func ceilUint64Pure(xs, rs []uint64, digits int64) []uint64 {
 	return rs
 }
 
-func CeilInt8(xs, rs []int8, digits int64) []int8 {
-	return ceilInt8(xs, rs, digits)
-}
-
-func ceilInt8Pure(xs, rs []int8, digits int64) []int8 {
+func ceilInt8(xs, rs []int8, digits int64) []int8 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -196,11 +176,7 @@ func ceilInt8Pure(xs, rs []int8, digits int64) []int8 {
 	return rs
 }
 
-func CeilInt16(xs, rs []int16, digits int64) []int16 {
-	return ceilInt16(xs, rs, digits)
-}
-
-func ceilInt16Pure(xs, rs []int16, digits int64) []int16 {
+func ceilInt16(xs, rs []int16, digits int64) []int16 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -228,11 +204,7 @@ func ceilInt16Pure(xs, rs []int16, digits int64) []int16 {
 	return rs
 }
 
-func CeilInt32(xs, rs []int32, digits int64) []int32 {
-	return ceilInt32(xs, rs, digits)
-}
-
-func ceilInt32Pure(xs, rs []int32, digits int64) []int32 {
+func ceilInt32(xs, rs []int32, digits int64) []int32 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -260,11 +232,7 @@ func ceilInt32Pure(xs, rs []int32, digits int64) []int32 {
 	return rs
 }
 
-func CeilInt64(xs, rs []int64, digits int64) []int64 {
-	return ceilInt64(xs, rs, digits)
-}
-
-func ceilInt64Pure(xs, rs []int64, digits int64) []int64 {
+func ceilInt64(xs, rs []int64, digits int64) []int64 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -292,11 +260,7 @@ func ceilInt64Pure(xs, rs []int64, digits int64) []int64 {
 	return rs
 }
 
-func CeilFloat32(xs, rs []float32, digits int64) []float32 {
-	return ceilFloat32(xs, rs, digits)
-}
-
-func ceilFloat32Pure(xs, rs []float32, digits int64) []float32 {
+func ceilFloat32(xs, rs []float32, digits int64) []float32 {
 	if digits == 0 {
 		for i := range xs {
 			rs[i] = float32(math.Ceil(float64(xs[i])))
@@ -317,11 +281,7 @@ func ceilFloat32Pure(xs, rs []float32, digits int64) []float32 {
 	return rs
 }
 
-func CeilFloat64(xs, rs []float64, digits int64) []float64 {
-	return ceilFloat64(xs, rs, digits)
-}
-
-func ceilFloat64Pure(xs, rs []float64, digits int64) []float64 {
+func ceilFloat64(xs, rs []float64, digits int64) []float64 {
 	if digits == 0 {
 		for i := range xs {
 			rs[i] = math.Ceil(xs[i])

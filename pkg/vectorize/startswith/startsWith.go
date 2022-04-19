@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package startsWith
+package startswith
 
 import (
 	"bytes"
@@ -21,17 +21,17 @@ import (
 )
 
 var (
-	startsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	startsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	startsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	startsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	StartsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	StartsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	StartsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	StartsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
 )
 
 func init() {
-	startsWith = StartsWith
-	startsWithRightConst = StartsWithRightConst
-	startsWithLeftConst = StartsWithLeftConst
-	startsWithAllConst = StartsWithAllConst
+	StartsWith = startsWith
+	StartsWithRightConst = startsWithRightConst
+	StartsWithLeftConst = startsWithLeftConst
+	StartsWithAllConst = startsWithAllConst
 }
 
 func hasPrefix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) uint8 {
@@ -41,7 +41,7 @@ func hasPrefix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) uint8 
 	return 0
 }
 
-func StartsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func startsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	for i := range lv.Offsets {
 		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
 		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
@@ -52,7 +52,7 @@ func StartsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func StartsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func startsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
 	for i := range lv.Offsets {
 		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
@@ -63,7 +63,7 @@ func StartsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func StartsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func startsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
 	for i := range rv.Offsets {
 		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
@@ -74,7 +74,7 @@ func StartsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func StartsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func startsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
 	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
 	rs[0] = hasPrefix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)

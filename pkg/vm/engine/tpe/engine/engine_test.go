@@ -16,10 +16,11 @@ package engine
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
-	"github.com/smartystreets/goconvey/convey"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestTpeEngine_Create(t *testing.T) {
@@ -87,5 +88,80 @@ func TestTpeEngine_Create(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		ni := tpe.Node("")
 		convey.So(ni.Mcpu, convey.ShouldEqual, 1)
+	})
+}
+
+
+func TestTpeCubeKVEngine_Create(t *testing.T) {
+	convey.Convey("create series database", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_CUBE + 1,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldEqual, errorInvalidKVType)
+
+		tpe, err = NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_CUBE,
+			SerialType:                tuplecodec.ST_CONCISE,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(tpe, convey.ShouldBeNil)
+
+		tpe, err = NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_CONCISE,
+			ValueLayoutSerializerType: "compact",
+			KVLimit:                   10000})
+		convey.So(tpe, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
+
+		tpe, err = NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_FLAT + 1,
+			ValueLayoutSerializerType: "compact",
+			KVLimit:                   10000})
+		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldEqual, errorInvalidSerializerType)
+
+		tpe, err = NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_FLAT,
+			ValueLayoutSerializerType: "error",
+			KVLimit:                   10000})
+		convey.So(tpe, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldEqual, errorInvalidValueLayoutSerializerType)
+	})
+}
+
+
+func Test_TpeRemoveDeletedTable(t *testing.T) {
+	convey.Convey("Remove Deletedtable", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		
+		err = tpe.RemoveDeletedTable(0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
+
+func Test_TpeBootstrap(t *testing.T) {
+	convey.Convey("Bootstrap tpe database", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		
+		err = tpe.Bootstrap()
+		convey.So(err, convey.ShouldBeNil)
 	})
 }

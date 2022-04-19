@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 	"math"
 	"net"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
@@ -650,7 +651,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, nil)
+		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -816,7 +817,7 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, nil)
+		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
@@ -889,13 +890,25 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 			}
 		}
 		for i := range s.PreScopes {
-			s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
-				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Mmu: s.Proc.Mp.Gm,
-					Reg: s.Proc.Reg.MergeReceivers[i],
-				},
-			})
+			flg := true
+			for j, in := range s.PreScopes[i].Instructions {
+				if in.Op == vm.Connector {
+					flg = false
+					s.PreScopes[i].Instructions[j].Arg = &connector.Argument{
+						Mmu: s.Proc.Mp.Gm,
+						Reg: s.Proc.Reg.MergeReceivers[i],
+					}
+				}
+			}
+			if flg {
+				s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: s.Proc.Mp.Gm,
+						Reg: s.Proc.Reg.MergeReceivers[i],
+					},
+				})
+			}
 		}
 		for i := range s.PreScopes {
 			switch s.PreScopes[i].Magic {
@@ -1005,7 +1018,7 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, nil)
+		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -1097,13 +1110,25 @@ func (s *Scope) RunCQWithSubquery(e engine.Engine, op *join.Argument) error {
 			}
 		}
 		for i := range rs.PreScopes {
-			rs.PreScopes[i].Instructions = append(rs.PreScopes[i].Instructions, vm.Instruction{
-				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Mmu: rs.Proc.Mp.Gm,
-					Reg: rs.Proc.Reg.MergeReceivers[i],
-				},
-			})
+			flg := true
+			for j, in := range rs.PreScopes[i].Instructions {
+				if in.Op == vm.Connector {
+					flg = false
+					rs.PreScopes[i].Instructions[j].Arg = &connector.Argument{
+						Mmu: rs.Proc.Mp.Gm,
+						Reg: rs.Proc.Reg.MergeReceivers[i],
+					}
+				}
+			}
+			if flg {
+				rs.PreScopes[i].Instructions = append(rs.PreScopes[i].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs.Proc.Mp.Gm,
+						Reg: rs.Proc.Reg.MergeReceivers[i],
+					},
+				})
+			}
 		}
 		for i := range rs.PreScopes {
 			switch rs.PreScopes[i].Magic {
@@ -1227,13 +1252,26 @@ func (s *Scope) RunCAQ(e engine.Engine, op *times.Argument) error {
 			}
 		}
 		for i := range s.PreScopes {
-			s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
-				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Mmu: s.Proc.Mp.Gm,
-					Reg: s.Proc.Reg.MergeReceivers[i],
-				},
-			})
+			flg := true
+			for j, in := range s.PreScopes[i].Instructions {
+				if in.Op == vm.Connector {
+					flg = false
+					s.PreScopes[i].Instructions[j].Arg = &connector.Argument{
+						Mmu: s.Proc.Mp.Gm,
+						Reg: s.Proc.Reg.MergeReceivers[i],
+					}
+				}
+			}
+			if flg {
+				s.PreScopes[i].Instructions = append(s.PreScopes[i].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: s.Proc.Mp.Gm,
+						Reg: s.Proc.Reg.MergeReceivers[i],
+					},
+				})
+
+			}
 		}
 		for i := range s.PreScopes {
 			switch s.PreScopes[i].Magic {
@@ -1343,7 +1381,7 @@ func (s *Scope) RunCAQ(e engine.Engine, op *times.Argument) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, nil)
+		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -1454,13 +1492,25 @@ func (s *Scope) RunCAQWithSubquery(e engine.Engine, op *times.Argument) error {
 			}
 		}
 		for i := range rs.PreScopes {
-			rs.PreScopes[i].Instructions = append(rs.PreScopes[i].Instructions, vm.Instruction{
-				Op: vm.Connector,
-				Arg: &connector.Argument{
-					Mmu: rs.Proc.Mp.Gm,
-					Reg: rs.Proc.Reg.MergeReceivers[i],
-				},
-			})
+			flg := true
+			for j, in := range rs.PreScopes[i].Instructions {
+				if in.Op == vm.Connector {
+					flg = false
+					rs.PreScopes[i].Instructions[j].Arg = &connector.Argument{
+						Mmu: rs.Proc.Mp.Gm,
+						Reg: rs.Proc.Reg.MergeReceivers[i],
+					}
+				}
+			}
+			if flg {
+				rs.PreScopes[i].Instructions = append(rs.PreScopes[i].Instructions, vm.Instruction{
+					Op: vm.Connector,
+					Arg: &connector.Argument{
+						Mmu: rs.Proc.Mp.Gm,
+						Reg: rs.Proc.Reg.MergeReceivers[i],
+					},
+				})
+			}
 		}
 		for i := range rs.PreScopes {
 			switch rs.PreScopes[i].Magic {

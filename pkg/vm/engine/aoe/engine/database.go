@@ -65,7 +65,7 @@ func (db *database) Relations() []string {
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
-	var rs []string
+	rs := make([]string, 0)
 	tbs, err := db.catalog.ListTables(db.id)
 	if err != nil {
 		return rs

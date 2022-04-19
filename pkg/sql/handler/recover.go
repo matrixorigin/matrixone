@@ -33,6 +33,7 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	s.Magic = ps.Magic
 	s.NodeInfo.Id = ps.NodeInfo.Id
 	s.NodeInfo.Addr = ps.NodeInfo.Addr
+	s.NodeInfo.Data = ps.NodeInfo.Data
 	s.Proc = process.New(mheap.New(guest.New(proc.Mp.Gm.Limit, proc.Mp.Gm.Mmu)))
 	if len(ps.PreScopes) > 0 {
 		ctx, cancel := context.WithCancel(context.Background())

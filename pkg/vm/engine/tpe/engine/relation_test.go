@@ -15,6 +15,8 @@
 package engine
 
 import (
+	"encoding/json"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -111,7 +113,18 @@ func TestTpeRelation_Write(t *testing.T) {
 		convey.So(tableDesc.Nodes()[0].Addr, convey.ShouldEqual, "localhost:20000")
 		convey.So(tableDesc.Nodes()[0].Id, convey.ShouldEqual, "0")
 
-		readers := tableDesc.NewReader(10, nil, nil)
+		dumpShards := &tuplecodec.CubeShards{
+			Shards: []metapb.Shard{
+				{
+					ID: 0,
+					Start: nil,
+					End: nil,
+				},
+			},
+		}
+		payload, err := json.Marshal(dumpShards)
+
+		readers := tableDesc.NewReader(10, nil, payload)
 		dumpReaderCnt := 0
 		for i := 0; i < 10; i++ {
 			rd := readers[i].(*TpeReader)

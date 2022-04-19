@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -155,7 +156,7 @@ func initTestEnv(t *testing.T) string {
 //	//assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
 //	for bidx := 0; bidx < blkCnt; bidx++ {
 //		blk := segHolder.StrongRefBlock(uint64(bidx))
-//		for i, _ := range blk.Indices {
+//		for i := range blk.Indices {
 //			node := blk.GetIndexNode(i)
 //			mnode := node.GetManagedNode()
 //			zm := mnode.DataNode.(*index.BlockZoneMapIndex)
@@ -240,7 +241,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	segFile := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
 	f := NewBlockFile(segFile, id, nil)
 	bufs := make([][]byte, 2)
-	for i, _ := range bufs {
+	for i := range bufs {
 		sz := f.PartSize(uint64(i), id, false)
 		osz := f.PartSize(uint64(i), id, true)
 		node := common.GPool.Alloc(uint64(sz))
@@ -286,7 +287,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	segFile1 := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
 	nb := NewBlockFile(segFile1, id, nil)
 	bufs = make([][]byte, 2)
-	for i, _ := range bufs {
+	for i := range bufs {
 		sz := nb.PartSize(uint64(i), id, false)
 		osz := nb.PartSize(uint64(i), id, true)
 		buf := make([]byte, sz)

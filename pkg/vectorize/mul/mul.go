@@ -56,32 +56,32 @@ var (
 	Float64MulScalar     func(float64, []float64, []float64) []float64
 	Float64MulScalarSels func(float64, []float64, []float64, []int64) []float64
 
-	Int32Int64Mul func([]int32, []int64, []int64) []int64
-	Int32Int64MulSels func([]int32, []int64, []int64, []int64) []int64
-	Int16Int64Mul func([]int16, []int64, []int64) []int64
-	Int16Int64MulSels func([]int16, []int64, []int64, []int64) []int64
-	Int8Int64Mul func([]int8, []int64, []int64) []int64
-	Int8Int64MulSels func([]int8, []int64, []int64, []int64) []int64
-	Int16Int32Mul func([]int16, []int32, []int32) []int32
-	Int16Int32MulSels func([]int16, []int32, []int32, []int64) []int32
-	Int8Int32Mul func([]int8, []int32, []int32) []int32
-	Int8Int32MulSels func([]int8, []int32, []int32, []int64) []int32
-	Int8Int16Mul func([]int8, []int16, []int16) []int16
-	Int8Int16MulSels func([]int8, []int16, []int16, []int64) []int16
-	Float32Float64Mul func([]float32, []float64, []float64) []float64
+	Int32Int64Mul         func([]int32, []int64, []int64) []int64
+	Int32Int64MulSels     func([]int32, []int64, []int64, []int64) []int64
+	Int16Int64Mul         func([]int16, []int64, []int64) []int64
+	Int16Int64MulSels     func([]int16, []int64, []int64, []int64) []int64
+	Int8Int64Mul          func([]int8, []int64, []int64) []int64
+	Int8Int64MulSels      func([]int8, []int64, []int64, []int64) []int64
+	Int16Int32Mul         func([]int16, []int32, []int32) []int32
+	Int16Int32MulSels     func([]int16, []int32, []int32, []int64) []int32
+	Int8Int32Mul          func([]int8, []int32, []int32) []int32
+	Int8Int32MulSels      func([]int8, []int32, []int32, []int64) []int32
+	Int8Int16Mul          func([]int8, []int16, []int16) []int16
+	Int8Int16MulSels      func([]int8, []int16, []int16, []int64) []int16
+	Float32Float64Mul     func([]float32, []float64, []float64) []float64
 	Float32Float64MulSels func([]float32, []float64, []float64, []int64) []float64
-	Uint32Uint64Mul func([]uint32, []uint64, []uint64) []uint64
-	Uint32Uint64MulSels func([]uint32, []uint64, []uint64, []int64) []uint64
-	Uint16Uint64Mul func([]uint16, []uint64, []uint64) []uint64
-	Uint16Uint64MulSels func([]uint16, []uint64, []uint64, []int64) []uint64
-	Uint8Uint64Mul func([]uint8, []uint64, []uint64) []uint64
-	Uint8Uint64MulSels func([]uint8, []uint64, []uint64, []int64) []uint64
-	Uint16Uint32Mul func([]uint16, []uint32, []uint32) []uint32
-	Uint16Uint32MulSels func([]uint16, []uint32, []uint32, []int64) []uint32
-	Uint8Uint32Mul func([]uint8, []uint32, []uint32) []uint32
-	Uint8Uint32MulSels func([]uint8, []uint32, []uint32, []int64) []uint32
-	Uint8Uint16Mul func([]uint8, []uint16, []uint16) []uint16
-	Uint8Uint16MulSels func([]uint8, []uint16, []uint16, []int64) []uint16
+	Uint32Uint64Mul       func([]uint32, []uint64, []uint64) []uint64
+	Uint32Uint64MulSels   func([]uint32, []uint64, []uint64, []int64) []uint64
+	Uint16Uint64Mul       func([]uint16, []uint64, []uint64) []uint64
+	Uint16Uint64MulSels   func([]uint16, []uint64, []uint64, []int64) []uint64
+	Uint8Uint64Mul        func([]uint8, []uint64, []uint64) []uint64
+	Uint8Uint64MulSels    func([]uint8, []uint64, []uint64, []int64) []uint64
+	Uint16Uint32Mul       func([]uint16, []uint32, []uint32) []uint32
+	Uint16Uint32MulSels   func([]uint16, []uint32, []uint32, []int64) []uint32
+	Uint8Uint32Mul        func([]uint8, []uint32, []uint32) []uint32
+	Uint8Uint32MulSels    func([]uint8, []uint32, []uint32, []int64) []uint32
+	Uint8Uint16Mul        func([]uint8, []uint16, []uint16) []uint16
+	Uint8Uint16MulSels    func([]uint8, []uint16, []uint16, []int64) []uint16
 )
 
 func init() {

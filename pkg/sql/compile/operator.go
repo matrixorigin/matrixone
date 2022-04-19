@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
@@ -89,6 +90,12 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 	case *restrict.Argument:
 		rin.Arg = &restrict.Argument{
 			E: arg.E,
+		}
+	case *output.Argument:
+		rin.Arg = &output.Argument{
+			Attrs: arg.Attrs,
+			Data:  arg.Data,
+			Func:  arg.Func,
 		}
 	}
 	return rin

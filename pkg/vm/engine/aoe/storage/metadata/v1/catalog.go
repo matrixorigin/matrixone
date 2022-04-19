@@ -50,7 +50,7 @@ var (
 	ErrIdempotence         = errors.New("aoe: idempotence error")
 	ErrDupIndex            = errors.New("aoe: dup index")
 	ErrIndexNotFound       = errors.New("aoe: index not found")
-	ErrReplayFailed           = errors.New("aoe: replay failed")
+	ErrReplayFailed        = errors.New("aoe: replay failed")
 )
 
 type CatalogCfg struct {
@@ -457,7 +457,10 @@ func (catalog *Catalog) onCheckpoint(items ...interface{}) {
 
 func (catalog *Catalog) onReplayTableEntry(entry *tableCheckpoint) error {
 	if entry.NeedReplay {
-		catalog.onReplayTableCheckpoint(&entry.LogEntry)
+		err := catalog.onReplayTableCheckpoint(&entry.LogEntry)
+		if err != nil {
+			panic(ErrReplayFailed)
+		}
 	}
 	for _, segmentEntry := range entry.Segments {
 		if segmentEntry.NeedReplay {
@@ -507,7 +510,10 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 
 		//replay the tables in the database
 		currentDatabaseEntry = databaseEntry
-		db.LoopLocked(catalogProcessor)
+		err := db.LoopLocked(catalogProcessor)
+		if err != nil {
+			panic(ErrReplayFailed)
+		}
 		for _, tableEntry := range databaseEntry.Tables {
 			err := catalog.onReplayTableEntry(tableEntry)
 			if err != nil {
@@ -532,7 +538,10 @@ func (catalog *Catalog) onReplayCheckpoint(entry *catalogLogEntry) error {
 		delete(currentDatabaseEntry.Tables, tb.Id)
 		return nil
 	}
-	catalog.LoopLocked(catalogProcessor)
+	err := catalog.LoopLocked(catalogProcessor)
+	if err != nil {
+		panic(ErrReplayFailed)
+	}
 
 	for _, databaseEntry := range entry.Databases {
 		if databaseEntry.NeedReplay {
@@ -674,7 +683,10 @@ func (catalog *Catalog) ToCatalogLogEntry() *catalogLogEntry {
 		return nil
 	}
 
-	catalog.RecurLoopLocked(processor)
+	err := catalog.RecurLoopLocked(processor)
+	if err != nil {
+		panic(ErrReplayFailed)
+	}
 
 	return catalogCkp
 }
@@ -695,7 +707,10 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	}
 	entry := catalog.ToCatalogLogEntry()
 	checkpointRange := entry.Range
-	buf, _ := entry.Marshal()
+	buf, err := entry.Marshal()
+	if err != nil {
+		panic(err)
+	}
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.SetAuxilaryInfo(checkpointRange)
 	logEntry.Meta.SetType(eType)
@@ -1102,7 +1117,10 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSpli
 		if err = replacer.rebuild(false, true); err != nil {
 			break
 		}
-		replacer.InitWal(idx)
+		err := replacer.InitWal(idx)
+		if err != nil {
+			return err
+		}
 	}
 	return err
 }

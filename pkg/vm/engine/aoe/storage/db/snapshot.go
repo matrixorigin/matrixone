@@ -50,12 +50,12 @@ type ssWriter struct {
 }
 
 type ssLoader struct {
-	mloader   metadata.SSLoader
-	src       string
-	catalog   *metadata.Catalog
-	replaced  *metadata.Database
-	tables    *table.Tables
-	index     uint64
+	mloader  metadata.SSLoader
+	src      string
+	catalog  *metadata.Catalog
+	replaced *metadata.Database
+	tables   *table.Tables
+	// index     uint64 // Unused
 	flushsegs []*metadata.Segment
 }
 

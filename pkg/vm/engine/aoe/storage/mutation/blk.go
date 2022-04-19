@@ -133,7 +133,7 @@ func (n *MutableBlockNode) Flush() error {
 	attrs := make([]int, cols)
 	vecs := make([]vector.IVector, cols)
 	var err error
-	for i, _ := range n.Meta.Segment.Table.Schema.ColDefs {
+	for i := range n.Meta.Segment.Table.Schema.ColDefs {
 		attrs[i] = i
 		vec, err := n.Data.GetVectorByAttr(i)
 		if err != nil {

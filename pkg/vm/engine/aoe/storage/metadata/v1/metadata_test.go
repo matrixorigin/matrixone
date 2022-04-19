@@ -119,33 +119,37 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 			index := gen.Next(shardId)
 			name := fmt.Sprintf("t%d", index.Id.Id)
 			schema.Name = mockFactory.Encode(db.Name, name)
-			db.SyncLog(index)
+			err := db.SyncLog(index)
+			assert.Nil(t, err)
 			tbl, err := db.SimpleCreateTable(schema, nil, index)
 			assert.Nil(t, err)
 			db.Checkpoint(index)
 			var prev *Block
 			for i := 0; i < blocks; i++ {
 				blk := tbl.SimpleGetOrCreateNextBlock(prev)
-				blk.SetCount(tbl.Schema.BlockMaxRows)
+				err := blk.SetCount(tbl.Schema.BlockMaxRows)
+				assert.Nil(t, err)
 				index = &LogIndex{
 					ShardId:  shardId,
 					Id:       shard.SimpleIndexId(gen.Alloc(shardId)),
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
 				}
-				db.SyncLog(index)
+				err = db.SyncLog(index)
+				assert.Nil(t, err)
 				info := blk.GetCommit()
 				blk.Lock()
 				blk.SetIndexLocked(index.AsSlice())
 				info.SetSize(mockBlockSize)
 				blk.Unlock()
-				err := blk.SimpleUpgrade(nil)
+				err = blk.SimpleUpgrade(nil)
 				db.Checkpoint(index)
 				assert.Nil(t, err)
 				if prev != nil && blk.Segment != prev.Segment {
 					wg.Add(1)
 					if nextNode != nil {
-						nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+						err := nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+						assert.Nil(t, err)
 					} else {
 						upgradeSeg(t, prev.Segment, wg)()
 					}
@@ -238,7 +242,8 @@ func TestCreateTable(t *testing.T) {
 
 	for i := 0; i < tableCnt; i++ {
 		wg.Add(1)
-		pool.Submit(f(i))
+		err := pool.Submit(f(i))
+		assert.Nil(t, err)
 	}
 
 	wg.Wait()
@@ -332,7 +337,8 @@ func TestDropTable(t *testing.T) {
 	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.NotNil(t, err)
 
-	db.SimpleHardDeleteTable(t2.Id)
+	err = db.SimpleHardDeleteTable(t2.Id)
+	assert.Nil(t, err)
 
 	t3, err = db.SimpleCreateTable(schema3, nil, gen.Next(0))
 	assert.Nil(t, err)
@@ -458,7 +464,8 @@ func TestSegment(t *testing.T) {
 	}
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		pool.Submit(f(i))
+		err := pool.Submit(f(i))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 }
@@ -531,7 +538,10 @@ type mockGetSegmentedHB struct {
 
 func (hb *mockGetSegmentedHB) OnStopped() {}
 func (hb *mockGetSegmentedHB) OnExec() {
-	hb.db.ForLoopTables(hb.processTable)
+	err := hb.db.ForLoopTables(hb.processTable)
+	if err != nil {
+		panic(err)
+	}
 }
 func (hb *mockGetSegmentedHB) processTable(tbl *Table) error {
 	// tbl.RLock()
@@ -573,7 +583,10 @@ func TestReplay(t *testing.T) {
 
 	for i := 0; i < ws; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+		err := createBlkWorker.Submit(createBlock(t, 1, gen, db.GetShardId(), db, int(mockBlocks), &wg, upgradeSegWorker))
+		if err != nil {
+			panic(err)
+		}
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -610,8 +623,9 @@ func TestCheckpoint(t *testing.T) {
 	}
 	driver, _ := logstore.NewBatchStore(cfg.Dir, "driver", rotationCfg)
 	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
-	catalog, _ := OpenCatalogWithDriver(
+	catalog, err := OpenCatalogWithDriver(
 		new(sync.RWMutex), cfg, driver, indexWal)
+	assert.Nil(t, err)
 	catalog.Start()
 
 	//create databases
@@ -653,7 +667,8 @@ func TestCheckpoint(t *testing.T) {
 				return
 			default:
 				time.Sleep(catalogCheckpointIntervel)
-				catalog.Checkpoint()
+				_, err = catalog.Checkpoint()
+				assert.Nil(t, err)
 			}
 		}
 	}()
@@ -677,7 +692,8 @@ func TestCheckpoint(t *testing.T) {
 				// create table, segments and blocks
 				for i := 0; i < ws; i++ {
 					wg.Add(1)
-					createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+					err := createBlkWorker.Submit(createBlock(t, tableCountPerTurn, gen, dbs[i].GetShardId(), dbs[i], int(mockBlocks), &wg, upgradeSegWorker))
+					assert.Nil(t, err)
 				}
 				wg.Wait()
 				// t.Log(catalog.PString(PPL0, 0))
@@ -687,7 +703,8 @@ func TestCheckpoint(t *testing.T) {
 					db := dbs[i]
 					//drop
 					idx := gen.Next(db.GetShardId())
-					db.Wal.SyncLog(idx)
+					err := db.Wal.SyncLog(idx)
+					assert.Nil(t, err)
 					catalog.SimpleDropDatabaseByName(db.Name, idx)
 					db.Wal.Checkpoint(idx)
 					//hard delete
@@ -695,7 +712,8 @@ func TestCheckpoint(t *testing.T) {
 						testutils.WaitExpect(100, func() bool {
 							return db.UncheckpointedCnt() == 0
 						})
-						catalog.SimpleHardDeleteDatabase(db.Id)
+						err := catalog.SimpleHardDeleteDatabase(db.Id)
+						assert.Nil(t, err)
 					}
 					//create databases
 					db, _ = catalog.SimpleCreateDatabase(dbs[i].Name, nil)
@@ -1406,7 +1424,7 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, len(spec.Specs), 4)
 
 	dbSpecs := make([]*DBSpec, len(keys))
-	for i, _ := range dbSpecs {
+	for i := range dbSpecs {
 		dbSpec := new(DBSpec)
 		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
@@ -1494,7 +1512,7 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, len(spec.Specs), 4)
 
 	dbSpecs := make([]*DBSpec, len(keys))
-	for i, _ := range dbSpecs {
+	for i := range dbSpecs {
 		dbSpec := new(DBSpec)
 		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec

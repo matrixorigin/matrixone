@@ -69,7 +69,7 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -115,7 +115,7 @@ func TestSplit2(t *testing.T) {
 	// 2. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -169,7 +169,7 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -200,7 +200,7 @@ func TestSplit2(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
@@ -260,7 +260,7 @@ func TestSplit3(t *testing.T) {
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -318,7 +318,7 @@ func TestSplit3(t *testing.T) {
 
 	// 9. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -347,7 +347,7 @@ func TestSplit3(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
@@ -407,7 +407,7 @@ func TestSplit4(t *testing.T) {
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -465,7 +465,7 @@ func TestSplit4(t *testing.T) {
 
 	// 9. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -496,7 +496,7 @@ func TestSplit4(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
@@ -539,7 +539,7 @@ func TestSplit5(t *testing.T) {
 	// 2. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -599,7 +599,7 @@ func TestSplit5(t *testing.T) {
 
 	// 8. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
