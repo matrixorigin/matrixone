@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan2
+package overload
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-type CompilerContext interface {
-	Resolve(name string) *ObjectRef
-	Cost(obj *ObjectRef, e *Expr) Cost
-}
-
-type Optimizer interface {
-	Optimize(stmt tree.Statement) *Query
-	CurrentContext() CompilerContext
+func UpdateEval(typ, toTyp types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
+	var err error
+	v, err = BinaryEval(Typecast, typ, toTyp, c, false, v, vector.New(types.Type{Oid: toTyp}), p)
+	if err != nil {
+		return nil, err
+	}
+	return v, nil
 }

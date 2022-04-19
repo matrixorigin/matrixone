@@ -329,7 +329,7 @@ func (e *Block) toLogEntry(info *CommitInfo) *blockLogEntry {
 	}
 	return &blockLogEntry{
 		BaseEntry: &BaseEntry{
-			Id: e.Id,
+			Id:         e.Id,
 			CommitInfo: info.Clone()},
 		Catalog:    e.Segment.Table.Database.Catalog,
 		DatabaseId: e.Segment.Table.Database.Id,
@@ -388,6 +388,9 @@ func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 	buf, _ := entry.Marshal()
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }

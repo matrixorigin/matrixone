@@ -27,6 +27,8 @@ type IndexHandler interface {
 
 	WriteIntoIndex(writeCtx interface{}, bat *batch.Batch) error
 
+	UpdateIntoIndex(writeCtx interface{}, bat *batch.Batch) error
+
 	DeleteFromTable(writeCtx interface{}, bat *batch.Batch) error
 
 	DeleteFromIndex(writeCtx interface{}, bat *batch.Batch) error

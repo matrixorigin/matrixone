@@ -737,9 +737,9 @@ func (db *Database) String() string {
 func (db *Database) ToDatabaseLogEntry(info *CommitInfo) databaseLogEntry {
 	return databaseLogEntry{
 		BaseEntry: &BaseEntry{
-			Id: db.Id, 
+			Id:         db.Id,
 			CommitInfo: info.Clone()},
-		Database:  &Database{Name: db.Name},
+		Database: &Database{Name: db.Name},
 	}
 }
 
@@ -780,7 +780,10 @@ func (db *Database) ToLogEntry(eType LogEntryType) LogEntry {
 	}
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 
@@ -902,7 +905,7 @@ func (db *Database) onReplayNewTable(entry *Table) error {
 		e := nn.GetTable()
 		// Conflict checks all committed and uncommitted entries.
 		if !e.IsDeleted() {
-			if entry.IsDeleted(){
+			if entry.IsDeleted() {
 				db.TableSet[entry.Id] = entry
 				nn.DeleteNode(e.Id)
 				nn.CreateNode(entry.Id)

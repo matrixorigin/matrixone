@@ -67,7 +67,7 @@ type SegmentWriter struct {
 	dir        string
 	size       int64
 	fileHandle *os.File
-	destoryer  FileDestoryer
+	destroyer  FileDestoryer
 	//preprocessor func([]*batch.Batch, *metadata.Segment) error
 
 	// fileGetter is createFile()，use dir&TableID&SegmentID to
@@ -112,7 +112,7 @@ func (sw *SegmentWriter) SetFileGetter(f func(string, *metadata.Segment) (*os.Fi
 }
 
 func (sw *SegmentWriter) GetDestoryer() FileDestoryer {
-	return sw.destoryer
+	return sw.destroyer
 }
 
 //func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
@@ -212,7 +212,7 @@ func (sw *SegmentWriter) Execute() error {
 	stat, _ := os.Stat(filename)
 	sw.size = stat.Size()
 	name, err := sw.fileCommiter(filename)
-	sw.destoryer = func(reason string) error {
+	sw.destroyer = func(reason string) error {
 		logutil.Infof("SegmentFile | \"%s\" | Removed | Reason: \"%s\"", name, reason)
 		return os.Remove(name)
 	}

@@ -58,11 +58,11 @@ func TestCreateTable(t *testing.T) {
 	defer inst.Close()
 	tblCnt := rand.Intn(5) + 3
 	var wg sync.WaitGroup
-	names := make([]string, 0)
+	// names := make([]string, 0)
 
 	for i := 0; i < tblCnt; i++ {
 		schema := metadata.MockSchema(2)
-		names = append(names, schema.Name)
+		// names = append(names, schema.Name)
 		wg.Add(1)
 		go func(w *sync.WaitGroup, id uint64) {
 			ctx := &CreateDBCtx{
@@ -593,9 +593,9 @@ func TestMultiTables(t *testing.T) {
 							//	}
 							//}
 							assert.Nil(t, err)
-							for attri, attr := range attrs {
+							for _, attr := range attrs {
 								v := batch.GetVector(bat, attr)
-								if attri == 0 && vector.Length(v) > 5000 {
+								// if attri == 0 && vector.Length(v) > 5000 {
 									// edata := baseCk.Vecs[attri].Col.([]int32)
 
 									// odata := v.Col.([]int32)
@@ -608,7 +608,7 @@ func TestMultiTables(t *testing.T) {
 
 									// t.Logf("data[5000]=%d", data[5000])
 									// t.Logf("data[5001]=%d", data[5001])
-								}
+								// }
 								assert.True(t, vector.Length(v) <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
 								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, vector.Length(v))
 							}
@@ -910,7 +910,7 @@ func DisabledTestRebuildIndices(t *testing.T) {
 	os.Create(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
 
 	inst, gen, database = initTestDB3(t)
-	tblData, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	_, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 	//t.Log(tblData.String())
 	//t.Log(tblData.GetIndexHolder().String())
@@ -1250,7 +1250,7 @@ func TestLogIndex(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 2 / 5
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
-	appendCtx := new(AppendCtx)
+	var appendCtx *AppendCtx
 	for i := 0; i < 50; i++ {
 		appendCtx = CreateAppendCtx(database, gen, schema.Name, baseCk)
 		err = inst.Append(appendCtx)
@@ -1275,7 +1275,7 @@ func TestMultiInstance(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		dirs = append(dirs, path.Join(dir, fmt.Sprintf("wd%d", i)))
 	}
-	var insts []*DB
+	insts := make([]*DB, 0)
 	for _, d := range dirs {
 		opts := storage.Options{}
 		inst, _ := Open(d, &opts)
@@ -1680,9 +1680,9 @@ func TestFilter(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	inst.Store.Catalog.Cfg.BlockMaxRows = uint64(10)
 	inst.Store.Catalog.Cfg.SegmentMaxBlocks = uint64(4)
-	colIdx := make([]int, 0)
+	// colIdx := make([]int, 0)
 	for i := 0; i < 12; i++ {
-		colIdx = append(colIdx, i)
+		// colIdx = append(colIdx, i)
 	}
 
 	schema := metadata.MockSchemaAll(14)
@@ -2824,7 +2824,7 @@ func TestFilter(t *testing.T) {
 //	wg.Wait()
 //	time.Sleep(waitTime)
 //
-//	creater := func(i int) func() {
+//	creator := func(i int) func() {
 //		return func() {
 //			indice := metadata.NewIndexSchema()
 //			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
@@ -2853,7 +2853,7 @@ func TestFilter(t *testing.T) {
 //	}
 //
 //	for i := 0; i < 4; i++ {
-//		creater(i)()
+//		creator(i)()
 //		if i == 2 {
 //			dropper(0, i)()
 //		}
@@ -2861,7 +2861,7 @@ func TestFilter(t *testing.T) {
 //	time.Sleep(50 * time.Millisecond)
 //	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
 //	for i := 0; i < 2; i++ {
-//		creater(i)()
+//		creator(i)()
 //	}
 //	time.Sleep(50 * time.Millisecond)
 //	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())

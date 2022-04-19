@@ -17,6 +17,8 @@ package deleteTag
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -35,12 +37,18 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-	//Note until storage supports deletion
-	bat.Zs = []int64{-1, -1}
+
+	for i, _ := range bat.Zs {
+		bat.Zs[i] = -1
+	}
 	if err := p.Relation.Write(p.Ts, bat); err != nil {
 		return false, err
 	}
+
 	affectedRows := uint64(vector.Length(bat.Vecs[0]))
+	batch.Clean(bat, proc.Mp)
+	proc.Reg.InputBatch = &batch.Batch{}
+
 	p.M.Lock()
 	p.AffectedRows += affectedRows
 	p.M.Unlock()

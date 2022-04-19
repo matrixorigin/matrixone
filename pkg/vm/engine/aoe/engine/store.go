@@ -31,7 +31,7 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		}
 		s.start = true
 		s.mutex.Unlock()
-		for _, filter := range reader.filter{
+		for _, filter := range reader.filter {
 			s.sparseFilter(&filter)
 		}
 		s.ReadStart(refCount, attrs)
@@ -129,7 +129,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterNe:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -142,7 +141,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterLt:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -155,7 +153,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterLe:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -168,7 +165,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterGt:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -181,7 +177,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterGe:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -194,7 +189,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	case FileterBtw:
 		blocks := make([]aoe.Block, 0)
 		for _, sid := range s.rel.segments {
@@ -207,7 +201,6 @@ func (s *store) sparseFilter(filter *filterContext)  {
 			}
 		}
 		s.SetBlocks(blocks)
-		break
 	default:
 		panic("No Support")
 	}

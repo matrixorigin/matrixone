@@ -316,7 +316,10 @@ func (p *proxy) Checkpoint() {
 		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
 			panic(err)
 		}
-		logEntry.WaitDone()
+		err := logEntry.WaitDone()
+		if err != nil {
+			panic(err)
+		}
 		logEntry.Free()
 		p.lastSafeId = id
 	} else {
