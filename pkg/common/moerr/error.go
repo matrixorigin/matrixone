@@ -28,6 +28,7 @@ const (
 	// Group 1: Internal errors
 	ERROR_START = 1000 + iota
 	INTERNAL_ERROR
+	NYI
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000 + iota
