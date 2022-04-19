@@ -25,13 +25,15 @@ require (
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.1
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
-	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.19.1
 	golang.org/x/sys v0.0.0-20220128215802-99c3d69c2c27
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require github.com/coreos/etcd v3.3.13+incompatible // indirect
+require (
+	github.com/coreos/etcd v3.3.13+incompatible // indirect
+	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
+)
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
