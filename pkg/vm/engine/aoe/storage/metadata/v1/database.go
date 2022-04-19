@@ -713,7 +713,7 @@ func (db *Database) SplitCheck(size, index uint64) (coarseSize uint64, coarseCou
 	}
 
 	keys = make([][]byte, currGroup+1)
-	for i, _ := range keys {
+	for i := range keys {
 		keys[i] = []byte("1")
 	}
 	// logutil.Infof(shardSpec.String())

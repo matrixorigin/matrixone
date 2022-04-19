@@ -18,31 +18,23 @@ import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 // vectorize year and toYear function
 var (
-	dateToYear     func([]types.Date, []uint16) []uint16
-	datetimeToYear func([]types.Datetime, []uint16) []uint16
+	DateToYear     func([]types.Date, []uint16) []uint16
+	DatetimeToYear func([]types.Datetime, []uint16) []uint16
 )
 
 func init() {
-	dateToYear = dateToYearPure
-	datetimeToYear = datetimeToYearPure
+	DateToYear = dateToYear
+	DatetimeToYear = datetimeToYear
 }
 
-func DateToYear(xs []types.Date, rs []uint16) []uint16 {
-	return dateToYear(xs, rs)
-}
-
-func dateToYearPure(xs []types.Date, rs []uint16) []uint16 {
+func dateToYear(xs []types.Date, rs []uint16) []uint16 {
 	for i, x := range xs {
 		rs[i] = x.Year()
 	}
 	return rs
 }
 
-func DatetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
-	return datetimeToYear(xs, rs)
-}
-
-func datetimeToYearPure(xs []types.Datetime, rs []uint16) []uint16 {
+func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 	for i, x := range xs {
 		rs[i] = x.Year()
 	}

@@ -16,7 +16,6 @@ package types
 
 import (
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -56,7 +55,7 @@ var (
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
-	regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
+	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
 )
 
 const (
@@ -114,9 +113,9 @@ func validDate(year int32, month, day uint8) bool {
 	return false
 }
 
-func (a Date) String() string {
-	y, m, d, _ := a.Calendar(true)
-	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
+func (d Date) String() string {
+	y, m, day, _ := d.Calendar(true)
+	return fmt.Sprintf("%04d-%02d-%02d", y, m, day)
 }
 
 // Holds number of days since January 1, year 1 in Gregorian calendar
@@ -132,9 +131,9 @@ const dayInfoTableSize = dayInfoTableYears*365 + (dayInfoTableMaxYear-dayInfoTab
 const dayNumOfTableEpoch = 702360 // the day number of "1924-01-01"
 
 type dayInfo struct {
-	year  uint16
-	month uint8
-	week  uint8
+	year uint16
+	//month uint8
+	//week  uint8
 }
 
 var dayInfoTable [dayInfoTableSize]dayInfo

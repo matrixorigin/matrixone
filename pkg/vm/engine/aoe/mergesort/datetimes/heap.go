@@ -20,7 +20,7 @@ package datetimes
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // The complexity is Operator(n) where n = len(h).
-func heapInit(h heapSlice) {
+func HeapInit(h heapSlice) {
 	// heapify
 	n := len(h)
 	for i := n/2 - 1; i >= 0; i-- {
@@ -30,7 +30,7 @@ func heapInit(h heapSlice) {
 
 // Push pushes the element x onto the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapPush(h *heapSlice, x heapElem) {
+func HeapPush(h *heapSlice, x heapElem) {
 	*h = append(*h, x)
 	up(*h, len(*h)-1)
 }
@@ -38,7 +38,7 @@ func heapPush(h *heapSlice, x heapElem) {
 // Pop removes and returns the minimum element (according to Less) from the heap.
 // The complexity is Operator(log n) where n = len(h).
 // Pop is equivalent to Remove(h, 0).
-func heapPop(h *heapSlice) heapElem {
+func HeapPop(h *heapSlice) heapElem {
 	n := len(*h) - 1
 	(*h)[0], (*h)[n] = (*h)[n], (*h)[0]
 	down(*h, 0, n)
@@ -49,7 +49,7 @@ func heapPop(h *heapSlice) heapElem {
 
 // Remove removes and returns the element at index i from the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapRemove(h *heapSlice, i int) heapElem {
+func HeapRemove(h *heapSlice, i int) heapElem {
 	n := len(*h) - 1
 	if n != i {
 		h.Swap(i, n)
@@ -66,7 +66,7 @@ func heapRemove(h *heapSlice, i int) heapElem {
 // Changing the value of the element at index i and then calling Fix is equivalent to,
 // but less expensive than, calling Remove(h, i) followed by a Push of the new value.
 // The complexity is Operator(log n) where n = len(h).
-func heapFix(h heapSlice, i int) {
+func HeapFix(h heapSlice, i int) {
 	if !down(h, i, len(h)) {
 		up(h, i)
 	}

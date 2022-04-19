@@ -796,7 +796,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt8Slice(data)
-		v.Col = shuffle.I8Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int8Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_int16:
@@ -806,7 +806,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt16Slice(data)
-		v.Col = shuffle.I16Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int16Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_int32:
@@ -816,7 +816,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt32Slice(data)
-		v.Col = shuffle.I32Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int32Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_int64:
@@ -826,7 +826,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		v.Col = shuffle.I64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_uint8:
@@ -836,7 +836,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint8Slice(data)
-		v.Col = shuffle.Ui8Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint8Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_uint16:
@@ -846,7 +846,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint16Slice(data)
-		v.Col = shuffle.Ui16Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint16Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_uint32:
@@ -856,7 +856,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint32Slice(data)
-		v.Col = shuffle.Ui32Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint32Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_uint64:
@@ -866,7 +866,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeUint64Slice(data)
-		v.Col = shuffle.Ui64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Uint64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_float32:
@@ -896,7 +896,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		v.Col = shuffle.I64Shuffle(vs, ws, sels)
+		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_tuple:
@@ -917,7 +917,7 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 			return err
 		}
 		ns := encoding.DecodeUint32Slice(ndata)
-		v.Col = shuffle.SShuffle(vs, os, ns, sels)
+		v.Col = shuffle.StrShuffle(vs, os, ns, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, odata)
 		mheap.Free(m, ndata)

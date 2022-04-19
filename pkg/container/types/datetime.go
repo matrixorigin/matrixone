@@ -28,22 +28,22 @@ const (
 	secsPerMinute = 60
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
-	secsPerWeek   = 7 * secsPerDay
+	//secsPerWeek   = 7 * secsPerDay
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
 // calendar, and lower 20 bits holds number of microseconds
 
-func (a Datetime) String() string {
-	y, m, d, _ := a.ToDate().Calendar(true)
-	hour, minute, sec := a.Clock()
+func (dt Datetime) String() string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
 const (
-	tsMask         = ^uint64(0) >> 1
-	hasMonotonic   = 1 << 63
-	unixToInternal = (1969*365 + 1969/4 - 1969/100 + 1969/400) * secsPerDay
+	//tsMask         = ^uint64(0) >> 1
+	hasMonotonic = 1 << 63
+	//unixToInternal = (1969*365 + 1969/4 - 1969/100 + 1969/400) * secsPerDay
 	wallToInternal = (1884*365 + 1884/4 - 1884/100 + 1884/400) * secsPerDay
 
 	minHourInDay, maxHourInDay           = 0, 23

@@ -15,16 +15,16 @@
 package not
 
 var (
-	Int8Not func([]int8, []int8) []int8
-	Int16Not func([]int16, []int8) []int8
-	Int32Not func([]int32, []int8) []int8
-	Int64Not func([]int64, []int8) []int8
+	Int8Not    func([]int8, []int8) []int8
+	Int16Not   func([]int16, []int8) []int8
+	Int32Not   func([]int32, []int8) []int8
+	Int64Not   func([]int64, []int8) []int8
 	Float32Not func([]float32, []int8) []int8
 	Float64Not func([]float64, []int8) []int8
-	Uint8Not func([]uint8, []int8) []int8
-	Uint16Not func([]uint16, []int8) []int8
-	Uint32Not func([]uint32, []int8) []int8
-	Uint64Not func([]uint64, []int8) []int8
+	Uint8Not   func([]uint8, []int8) []int8
+	Uint16Not  func([]uint16, []int8) []int8
+	Uint32Not  func([]uint32, []int8) []int8
+	Uint64Not  func([]uint64, []int8) []int8
 )
 
 func init() {

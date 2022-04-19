@@ -1,8 +1,9 @@
 package date
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestDateToDate(t *testing.T) {
@@ -46,7 +47,7 @@ func TestDateTimeToDate(t *testing.T) {
 
 	for _, v := range testCases {
 		reply := make([]types.Date, len(v.args))
-		actual := DateTimeToDate(v.args, reply)
+		actual := datetimeToDate(v.args, reply)
 
 		if !isEqual(actual, v.want) {
 			t.Errorf("expect the %v, but got %v", v.want, actual)

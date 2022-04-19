@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/utc_timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,7 +54,7 @@ func init() {
 				}
 				nulls.Set(vec.Nsp, new(nulls.Nulls))
 				result := make([]types.Datetime, 0)
-				result = append(result, utc_timestamp.GetUTCTimestamp())
+				result = append(result, timestamp.GetUTCTimestamp())
 				vector.SetCol(vec, result)
 
 				return vec, nil

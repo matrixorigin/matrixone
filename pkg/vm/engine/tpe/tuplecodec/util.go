@@ -465,7 +465,7 @@ func TruncateBatch(bat *batch.Batch, batchSize, needLen int) {
 
 func SerializeVectorForBatch(bat *batch.Batch) error {
 	//for test
-	//for i, _ := range bat.Vecs {
+	//for i := range bat.Vecs {
 	//	bat.Vecs[i].Or = true
 	//	show, err := bat.Vecs[i].Show()
 	//	if err != nil {

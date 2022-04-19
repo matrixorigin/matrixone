@@ -461,7 +461,7 @@ func TestAbsFloat32(t *testing.T) {
     //Run abs function
     newNums = AbsFloat32(nums, newNums)
 
-    for i, _ := range newNums {
+    for i := range newNums {
         require.Equal(t, absNums[i], newNums[i])
     }
 }
@@ -477,7 +477,7 @@ func TestAbsFloat64(t *testing.T) {
     //Run abs function
     newNums = AbsFloat64(nums, newNums)
 
-    for i, _ := range newNums {
+    for i := range newNums {
         require.Equal(t, absNums[i], newNums[i])
     }
 }

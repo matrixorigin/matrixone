@@ -228,7 +228,7 @@ func TestShard1(t *testing.T) {
 
 	var wg sync.WaitGroup
 	clients := make([]*mockClient, 2)
-	for i, _ := range clients {
+	for i := range clients {
 		clients[i] = newClient(t, shards, schemas[i*tableCnt/2:(i+1)*tableCnt/2], nil)
 		wg.Add(1)
 		go func(cli *mockClient) {
@@ -276,7 +276,7 @@ func TestShard2(t *testing.T) {
 	}
 
 	batches := make([]*batch.Batch, 10)
-	for i, _ := range batches {
+	for i := range batches {
 		step := inst.Store.Catalog.Cfg.BlockMaxRows / 10
 		rows := (uint64(i) + 1) * 2 * step
 		batches[i] = mock.MockBatch(schemas[0].Types(), rows)
@@ -284,7 +284,7 @@ func TestShard2(t *testing.T) {
 
 	var wg sync.WaitGroup
 	clients := make([]*mockClient, 2)
-	for i, _ := range clients {
+	for i := range clients {
 		clients[i] = newClient(t, shards, schemas[i*tableCnt/2:(i+1)*tableCnt/2], batches)
 		wg.Add(1)
 		go func(cli *mockClient) {
@@ -384,7 +384,7 @@ func TestShard3(t *testing.T) {
 	}
 
 	batches := make([]*batch.Batch, 10)
-	for i, _ := range batches {
+	for i := range batches {
 		step := inst.Store.Catalog.Cfg.BlockMaxRows / 4
 		rows := (uint64(i) + 1) * step
 		batches[i] = mock.MockBatch(schemas[0].Types(), rows)
@@ -392,7 +392,7 @@ func TestShard3(t *testing.T) {
 
 	var wg sync.WaitGroup
 	clients := make([]*mockClient, 2)
-	for i, _ := range clients {
+	for i := range clients {
 		clients[i] = newClient(t, shards, schemas[i*tableCnt/2:(i+1)*tableCnt/2], batches)
 		wg.Add(1)
 		go func(cli *mockClient) {
