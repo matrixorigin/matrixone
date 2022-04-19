@@ -430,7 +430,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 			case types.T_decimal64:
-				fmt.Println("the scale for this decimal is", vec.Typ.Scale)
 				scale := vec.Typ.Scale
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal64)
@@ -444,7 +443,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 			case types.T_decimal128:
-				fmt.Println("the scale for this decimal is", vec.Typ.Scale)
 				scale := vec.Typ.Scale
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]types.Decimal128)
