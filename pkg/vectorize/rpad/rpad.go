@@ -71,7 +71,7 @@ func rpad(strs *types.Bytes, sizes interface{}, pads interface{}, isConst []bool
 
 	// do rpad
 	var result *types.Bytes
-	nsp := new(nulls.Nulls)
+	var nsp *nulls.Nulls
 	var err2 error
 	switch sz := sizes.(type) {
 	case []int64:
@@ -171,8 +171,6 @@ func rpadInt64(strs *types.Bytes, sizes []int64, padstrs *types.Bytes, isConst [
 				// +-----------------+
 				// |                 |
 				// +-----------------+
-				tmp = []byte("")
-
 				results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 				results.Lengths = append(results.Lengths, 0)
 			} else {
@@ -209,7 +207,7 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 			newSize = sizes[i]
 		}
 		// gets NULL if any arg is NULL or the newSize < 0
-		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) || newSize < 0 {
+		if row := uint64(i); nulls.Contains(oriNsp[0], row) || nulls.Contains(oriNsp[1], row) || nulls.Contains(oriNsp[2], row) {
 			nulls.Add(resultNsp, row)
 			results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 			results.Lengths = append(results.Lengths, 0)
@@ -241,8 +239,6 @@ func rpadUint64(strs *types.Bytes, sizes []uint64, padstrs *types.Bytes, isConst
 				// +-----------------+
 				// |                 |
 				// +-----------------+
-				tmp = []byte("")
-
 				results.Offsets = append(results.Offsets, uint32(len(results.Data)))
 				results.Lengths = append(results.Lengths, 0)
 			} else {

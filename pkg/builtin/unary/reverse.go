@@ -57,7 +57,7 @@ func init() {
 
 				if inputVec.Ref == 1 || inputVec.Ref == 0 { // reuse the original vector when we don't need the original one anymore
 					inputVec.Ref = 0
-					reverse.Reverse(inputVecCol, inputVecCol)
+					reverse.ReverseVarChar(inputVecCol, inputVecCol)
 					return inputVec, nil
 				}
 
@@ -71,7 +71,7 @@ func init() {
 					Lengths: make([]uint32, len(inputVecCol.Lengths)),
 				}
 				nulls.Set(resultVec.Nsp, inputVec.Nsp)
-				vector.SetCol(resultVec, reverse.Reverse(inputVecCol, results))
+				vector.SetCol(resultVec, reverse.ReverseVarChar(inputVecCol, results))
 				return resultVec, nil
 			},
 		},
@@ -83,7 +83,7 @@ func init() {
 
 				if inputVec.Ref == 1 || inputVec.Ref == 0 { // reuse the original vector when we don't need the original one anymore
 					inputVec.Ref = 0
-					reverse.Reverse(inputVecCol, inputVecCol)
+					reverse.ReverseChar(inputVecCol, inputVecCol)
 					return inputVec, nil
 				}
 
@@ -97,7 +97,7 @@ func init() {
 					Lengths: make([]uint32, len(inputVecCol.Lengths)),
 				}
 				nulls.Set(resultVec.Nsp, inputVec.Nsp)
-				vector.SetCol(resultVec, reverse.Reverse(inputVecCol, results))
+				vector.SetCol(resultVec, reverse.ReverseChar(inputVecCol, results))
 				return resultVec, nil
 			},
 		},

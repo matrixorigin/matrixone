@@ -66,7 +66,7 @@ func init() {
 				}
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, rtrim.Rtrim(origVecCol, results))
+				vector.SetCol(resultVector, rtrim.RtrimVarChar(origVecCol, results))
 				return resultVector, nil
 			},
 		},
@@ -91,7 +91,7 @@ func init() {
 				}
 				resultVector.Col = results
 				nulls.Set(resultVector.Nsp, origVec.Nsp)
-				vector.SetCol(resultVector, rtrim.Rtrim(origVecCol, results))
+				vector.SetCol(resultVector, rtrim.RtrimChar(origVecCol, results))
 				return resultVector, nil
 			},
 		},

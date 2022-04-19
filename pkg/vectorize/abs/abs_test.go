@@ -15,8 +15,9 @@
 package abs
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestAbsUint8(t *testing.T) {
@@ -30,7 +31,7 @@ func TestAbsUint8(t *testing.T) {
 	//Run abs function
 	newNums = absUint8(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -46,7 +47,7 @@ func TestAbsUint16(t *testing.T) {
 	//Run abs function
 	newNums = absUint16(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -62,7 +63,7 @@ func TestAbsUint32(t *testing.T) {
 	//Run abs function
 	newNums = absUint32(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -78,7 +79,7 @@ func TestAbsUint64(t *testing.T) {
 	//Run abs function
 	newNums = absUint64(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -94,7 +95,7 @@ func TestAbsInt8(t *testing.T) {
 	//Run abs function
 	newNums = absInt8(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -110,7 +111,7 @@ func TestAbsInt16(t *testing.T) {
 	//Run abs function
 	newNums = absInt16(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -126,7 +127,7 @@ func TestAbsInt32(t *testing.T) {
 	//Run abs function
 	newNums = absInt32(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -142,7 +143,7 @@ func TestAbsInt64(t *testing.T) {
 	//Run abs function
 	newNums = absInt64(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -158,7 +159,7 @@ func TestAbsFloat32(t *testing.T) {
 	//Run abs function
 	newNums = absFloat32(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -174,7 +175,7 @@ func TestAbsFloat64(t *testing.T) {
 	//Run abs function
 	newNums = absFloat64(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }

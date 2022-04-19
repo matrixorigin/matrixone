@@ -21,72 +21,52 @@ import (
 )
 
 var (
-	absUint8   func([]uint8, []uint8) []uint8
-	absUint16  func([]uint16, []uint16) []uint16
-	absUint32  func([]uint32, []uint32) []uint32
-	absUint64  func([]uint64, []uint64) []uint64
-	absInt8    func([]int8, []int8) []int8
-	absInt16   func([]int16, []int16) []int16
-	absInt32   func([]int32, []int32) []int32
-	absInt64   func([]int64, []int64) []int64
-	absFloat32 func([]float32, []float32) []float32
-	absFloat64 func([]float64, []float64) []float64
+	AbsUint8   func([]uint8, []uint8) []uint8
+	AbsUint16  func([]uint16, []uint16) []uint16
+	AbsUint32  func([]uint32, []uint32) []uint32
+	AbsUint64  func([]uint64, []uint64) []uint64
+	AbsInt8    func([]int8, []int8) []int8
+	AbsInt16   func([]int16, []int16) []int16
+	AbsInt32   func([]int32, []int32) []int32
+	AbsInt64   func([]int64, []int64) []int64
+	AbsFloat32 func([]float32, []float32) []float32
+	AbsFloat64 func([]float64, []float64) []float64
 )
 
 func init() {
-	absUint8 = absUint8Pure
-	absUint16 = absUint16Pure
-	absUint32 = absUint32Pure
-	absUint64 = absUint64Pure
-	absInt8 = absInt8Pure
-	absInt16 = absInt16Pure
-	absInt32 = absInt32Pure
-	absInt64 = absInt64Pure
-	absFloat32 = absFloat32Pure
-	absFloat64 = absFloat64Pure
-}
-
-func AbsUint8(xs, rs []uint8) []uint8 {
-	return absUint8(xs, rs)
+	AbsUint8 = absUint8
+	AbsUint16 = absUint16
+	AbsUint32 = absUint32
+	AbsUint64 = absUint64
+	AbsInt8 = absInt8
+	AbsInt16 = absInt16
+	AbsInt32 = absInt32
+	AbsInt64 = absInt64
+	AbsFloat32 = absFloat32
+	AbsFloat64 = absFloat64
 }
 
 // uint8 simply return the input values.
-func absUint8Pure(xs, rs []uint8) []uint8 {
+func absUint8(xs, rs []uint8) []uint8 {
 	return xs
-}
-
-func AbsUint16(xs, rs []uint16) []uint16 {
-	return absUint16(xs, rs)
 }
 
 // uint16 simply return the input values.
-func absUint16Pure(xs, rs []uint16) []uint16 {
+func absUint16(xs, rs []uint16) []uint16 {
 	return xs
-}
-
-func AbsUint32(xs, rs []uint32) []uint32 {
-	return absUint32(xs, rs)
 }
 
 // uint32 simply return the input values.
-func absUint32Pure(xs, rs []uint32) []uint32 {
+func absUint32(xs, rs []uint32) []uint32 {
 	return xs
-}
-
-func AbsUint64(xs, rs []uint64) []uint64 {
-	return absUint64(xs, rs)
 }
 
 // uint64 simply return the input values.
-func absUint64Pure(xs, rs []uint64) []uint64 {
+func absUint64(xs, rs []uint64) []uint64 {
 	return xs
 }
 
-func AbsInt8(xs, rs []int8) []int8 {
-	return absInt8(xs, rs)
-}
-
-func absInt8Pure(xs, rs []int8) []int8 {
+func absInt8(xs, rs []int8) []int8 {
 	for i := range xs {
 		if xs[i] == int8(math.MinInt8) {
 			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int8 value out of range"))
@@ -100,11 +80,7 @@ func absInt8Pure(xs, rs []int8) []int8 {
 	return rs
 }
 
-func AbsInt16(xs, rs []int16) []int16 {
-	return absInt16(xs, rs)
-}
-
-func absInt16Pure(xs, rs []int16) []int16 {
+func absInt16(xs, rs []int16) []int16 {
 	for i := range xs {
 		if xs[i] == int16(math.MinInt16) {
 			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int16 value out of range"))
@@ -119,11 +95,7 @@ func absInt16Pure(xs, rs []int16) []int16 {
 	return rs
 }
 
-func AbsInt32(xs, rs []int32) []int32 {
-	return absInt32(xs, rs)
-}
-
-func absInt32Pure(xs, rs []int32) []int32 {
+func absInt32(xs, rs []int32) []int32 {
 	for i := range xs {
 		if xs[i] == int32(math.MinInt32) {
 			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int32 value out of range"))
@@ -138,11 +110,7 @@ func absInt32Pure(xs, rs []int32) []int32 {
 	return rs
 }
 
-func AbsInt64(xs, rs []int64) []int64 {
-	return absInt64(xs, rs)
-}
-
-func absInt64Pure(xs, rs []int64) []int64 {
+func absInt64(xs, rs []int64) []int64 {
 	for i := range xs {
 		if xs[i] == int64(math.MinInt64) {
 			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int64 value out of range"))
@@ -156,11 +124,7 @@ func absInt64Pure(xs, rs []int64) []int64 {
 	return rs
 }
 
-func AbsFloat32(xs, rs []float32) []float32 {
-	return absFloat32(xs, rs)
-}
-
-func absFloat32Pure(xs, rs []float32) []float32 {
+func absFloat32(xs, rs []float32) []float32 {
 	for i := range xs {
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
@@ -171,11 +135,7 @@ func absFloat32Pure(xs, rs []float32) []float32 {
 	return rs
 }
 
-func AbsFloat64(xs, rs []float64) []float64 {
-	return absFloat64(xs, rs)
-}
-
-func absFloat64Pure(xs, rs []float64) []float64 {
+func absFloat64(xs, rs []float64) []float64 {
 	for i := range xs {
 		if xs[i] < 0 {
 			rs[i] = -xs[i]

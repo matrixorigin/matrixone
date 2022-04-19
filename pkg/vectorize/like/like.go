@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 	"unsafe"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
@@ -32,15 +33,15 @@ var (
 	// BtSliceAndSlice is a like function between two slices.
 	BtSliceAndSlice func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
 	// BtConstAndSlice is a like function between a const and a slice
-	BtConstAndSlice    func([]byte, *types.Bytes, []int64) ([]int64, error)
+	BtConstAndSlice func([]byte, *types.Bytes, []int64) ([]int64, error)
 	// BtConstAndConst is a like function between two const values.
-	BtConstAndConst        func([]byte, []byte, []int64) ([]int64, error)
+	BtConstAndConst func([]byte, []byte, []int64) ([]int64, error)
 	// BtSliceNullAndConst is a like function between a slice (has null value) and a const value.
-	BtSliceNullAndConst     func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
+	BtSliceNullAndConst func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
 	// BtSliceNullAndSliceNull is a like function between two slices which have null value.
 	BtSliceNullAndSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
 	// BtConstAndSliceNull is a like function between a const value and a slice (has null value).
-	BtConstAndSliceNull     func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	BtConstAndSliceNull func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
 )
 
 var _ = BtSliceAndConst
@@ -98,7 +99,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] == n && bytes.Compare(expr, s.Get(int64(i))) == 0 {
+				if s.Lengths[i] == n && bytes.Equal(expr, s.Get(int64(i))) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -112,7 +113,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 				if len(temp) > 0 {
 					temp = temp[1:]
 				}
-				if s.Lengths[i] == n && bytes.Compare(suffix, temp) == 0 {
+				if s.Lengths[i] == n && bytes.Equal(suffix, temp) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -132,7 +133,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 			prefix := expr[:n-1]
 			count := 0
 			for i := range s.Offsets {
-				if s.Lengths[i] == n && bytes.Compare(prefix, s.Get(int64(i))) == 0 {
+				if s.Lengths[i] == n && bytes.Equal(prefix, s.Get(int64(i))) {
 					rs[count] = int64(i)
 					count++
 				}
@@ -263,14 +264,14 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 		c1 := expr[n-1] // last character
 		switch {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
-			if len(p) == n && bytes.Compare(expr, p) == 0 {
+			if len(p) == n && bytes.Equal(expr, p) {
 				rs[0] = int64(0)
 				return rs[:1], nil
 			}
 			return nil, nil
 		case c0 == '_' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
+			if len(p) == n && bytes.Equal(suffix, p[1:]) {
 				rs[0] = int64(0)
 				return rs[:1], nil
 			}
@@ -284,7 +285,7 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 			return nil, nil
 		case c1 == '_' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
+			if len(p) == n && bytes.Equal(prefix, p[:n-1]) {
 				rs[0] = int64(0)
 				return rs[:1], nil
 			}
@@ -389,13 +390,13 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 				c0, c1 := expr[0], expr[n-1] // first and last
 				switch {
 				case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
-					if len(p) == n && bytes.Compare(expr, p) == 0 {
+					if len(p) == n && bytes.Equal(expr, p) {
 						rs[count] = int64(i)
 						count++
 					}
 				case c0 == '_' && !(c1 == '%' || c1 == '_'):
 					suffix := expr[1:]
-					if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
+					if len(p) == n && bytes.Equal(suffix, p[1:]) {
 						rs[count] = int64(i)
 						count++
 					}
@@ -407,7 +408,7 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 					}
 				case c1 == '_' && !(c0 == '%' || c0 == '_'):
 					prefix := expr[:n-1]
-					if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
+					if len(p) == n && bytes.Equal(prefix, p[:n-1]) {
 						rs[count] = int64(i)
 						count++
 					}

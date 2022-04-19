@@ -34,29 +34,29 @@ import (
 )
 
 var (
-	roundUint8   func([]uint8, []uint8, int64) []uint8
-	roundUint16  func([]uint16, []uint16, int64) []uint16
-	roundUint32  func([]uint32, []uint32, int64) []uint32
-	roundUint64  func([]uint64, []uint64, int64) []uint64
-	roundInt8    func([]int8, []int8, int64) []int8
-	roundInt16   func([]int16, []int16, int64) []int16
-	roundInt32   func([]int32, []int32, int64) []int32
-	roundInt64   func([]int64, []int64, int64) []int64
-	roundFloat32 func([]float32, []float32, int64) []float32
-	roundFloat64 func([]float64, []float64, int64) []float64
+	RoundUint8   func([]uint8, []uint8, int64) []uint8
+	RoundUint16  func([]uint16, []uint16, int64) []uint16
+	RoundUint32  func([]uint32, []uint32, int64) []uint32
+	RoundUint64  func([]uint64, []uint64, int64) []uint64
+	RoundInt8    func([]int8, []int8, int64) []int8
+	RoundInt16   func([]int16, []int16, int64) []int16
+	RoundInt32   func([]int32, []int32, int64) []int32
+	RoundInt64   func([]int64, []int64, int64) []int64
+	RoundFloat32 func([]float32, []float32, int64) []float32
+	RoundFloat64 func([]float64, []float64, int64) []float64
 )
 
 func init() {
-	roundUint8 = roundUint8Pure
-	roundUint16 = roundUint16Pure
-	roundUint32 = roundUint32Pure
-	roundUint64 = roundUint64Pure
-	roundInt8 = roundInt8Pure
-	roundInt16 = roundInt16Pure
-	roundInt32 = roundInt32Pure
-	roundInt64 = roundInt64Pure
-	roundFloat32 = roundFloat32Pure
-	roundFloat64 = roundFloat64Pure
+	RoundUint8 = roundUint8
+	RoundUint16 = roundUint16
+	RoundUint32 = roundUint32
+	RoundUint64 = roundUint64
+	RoundInt8 = roundInt8
+	RoundInt16 = roundInt16
+	RoundInt32 = roundInt32
+	RoundInt64 = roundInt64
+	RoundFloat32 = roundFloat32
+	RoundFloat64 = roundFloat64
 }
 
 var maxUint8digits = floor.MaxUint8digits
@@ -70,11 +70,7 @@ var maxInt64digits = floor.MaxInt64digits
 
 var scaleTable = floor.ScaleTable
 
-func RoundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
-	return roundUint8(xs, rs, digits)
-}
-
-func roundUint8Pure(xs []uint8, rs []uint8, digits int64) []uint8 {
+func roundUint8(xs []uint8, rs []uint8, digits int64) []uint8 {
 	// maximum uint8 number is 255, so we only need to worry about a few digit cases,
 	switch {
 	case digits >= 0:
@@ -99,11 +95,7 @@ func roundUint8Pure(xs []uint8, rs []uint8, digits int64) []uint8 {
 	return rs
 }
 
-func RoundUint16(xs []uint16, rs []uint16, digits int64) []uint16 {
-	return roundUint16(xs, rs, digits)
-}
-
-func roundUint16Pure(xs []uint16, rs []uint16, digits int64) []uint16 {
+func roundUint16(xs []uint16, rs []uint16, digits int64) []uint16 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -127,11 +119,7 @@ func roundUint16Pure(xs []uint16, rs []uint16, digits int64) []uint16 {
 	return rs
 }
 
-func RoundUint32(xs []uint32, rs []uint32, digits int64) []uint32 {
-	return roundUint32(xs, rs, digits)
-}
-
-func roundUint32Pure(xs []uint32, rs []uint32, digits int64) []uint32 {
+func roundUint32(xs []uint32, rs []uint32, digits int64) []uint32 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -155,16 +143,12 @@ func roundUint32Pure(xs []uint32, rs []uint32, digits int64) []uint32 {
 	return rs
 }
 
-func RoundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
-	return roundUint64(xs, rs, digits)
-}
-
-func roundUint64Pure(xs []uint64, rs []uint64, digits int64) []uint64 {
+func roundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
 	switch {
 	case digits >= 0:
 		return xs
 	case digits > -maxUint64digits:
-		scale := uint64(scaleTable[-digits])
+		scale := scaleTable[-digits]
 		for i := range xs {
 			quotient := (xs[i] + scale/2) / scale
 			if quotient*scale == xs[i]+scale/2 {
@@ -183,11 +167,7 @@ func roundUint64Pure(xs []uint64, rs []uint64, digits int64) []uint64 {
 	return rs
 }
 
-func RoundInt8(xs []int8, rs []int8, digits int64) []int8 {
-	return roundInt8(xs, rs, digits)
-}
-
-func roundInt8Pure(xs []int8, rs []int8, digits int64) []int8 {
+func roundInt8(xs []int8, rs []int8, digits int64) []int8 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -217,11 +197,7 @@ func roundInt8Pure(xs []int8, rs []int8, digits int64) []int8 {
 	return rs
 }
 
-func RoundInt16(xs []int16, rs []int16, digits int64) []int16 {
-	return roundInt16(xs, rs, digits)
-}
-
-func roundInt16Pure(xs []int16, rs []int16, digits int64) []int16 {
+func roundInt16(xs []int16, rs []int16, digits int64) []int16 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -251,11 +227,7 @@ func roundInt16Pure(xs []int16, rs []int16, digits int64) []int16 {
 	return rs
 }
 
-func RoundInt32(xs []int32, rs []int32, digits int64) []int32 {
-	return roundInt32(xs, rs, digits)
-}
-
-func roundInt32Pure(xs []int32, rs []int32, digits int64) []int32 {
+func roundInt32(xs []int32, rs []int32, digits int64) []int32 {
 	switch {
 	case digits >= 0:
 		return xs
@@ -285,15 +257,11 @@ func roundInt32Pure(xs []int32, rs []int32, digits int64) []int32 {
 	return rs
 }
 
-func RoundInt64(xs []int64, rs []int64, digits int64) []int64 {
-	return roundInt64(xs, rs, digits)
-}
-
-func roundInt64Pure(xs []int64, rs []int64, digits int64) []int64 {
+func roundInt64(xs []int64, rs []int64, digits int64) []int64 {
 	switch {
 	case digits >= 0:
 		return xs
-	case digits > -maxInt32digits:
+	case digits > -maxInt64digits:
 		scale := int64(scaleTable[-digits])
 		for i := range xs {
 			value := xs[i]
@@ -311,7 +279,7 @@ func roundInt64Pure(xs []int64, rs []int64, digits int64) []int64 {
 				rs[i] = quotient * scale
 			}
 		}
-	case digits <= maxInt32digits:
+	case digits <= maxInt64digits:
 		for i := range xs {
 			rs[i] = 0
 		}
@@ -319,25 +287,21 @@ func roundInt64Pure(xs []int64, rs []int64, digits int64) []int64 {
 	return rs
 }
 
-func RoundFloat32(xs []float32, rs []float32, digits int64) []float32 {
-	return roundFloat32(xs, rs, digits)
-}
-
-func roundFloat32Pure(xs []float32, rs []float32, digits int64) []float32 {
+func roundFloat32(xs []float32, rs []float32, digits int64) []float32 {
 	if digits == 0 {
 		for i := range xs {
 			rs[i] = float32(math.RoundToEven(float64(xs[i])))
 		}
 	} else if digits < 0 {
 		scale := float64(scaleTable[-digits])
-		for i, _ := range xs {
+		for i := range xs {
 			value := float64(xs[i]) / scale
 			roundResult := math.RoundToEven(value)
 			rs[i] = float32(roundResult * scale)
 		}
 	} else {
 		scale := float64(scaleTable[digits])
-		for i, _ := range xs {
+		for i := range xs {
 			value := float64(xs[i]) * scale
 			roundResult := math.RoundToEven(value)
 			rs[i] = float32(roundResult / scale)
@@ -346,25 +310,21 @@ func roundFloat32Pure(xs []float32, rs []float32, digits int64) []float32 {
 	return rs
 }
 
-func RoundFloat64(xs []float64, rs []float64, digits int64) []float64 {
-	return roundFloat64(xs, rs, digits)
-}
-
-func roundFloat64Pure(xs []float64, rs []float64, digits int64) []float64 {
+func roundFloat64(xs []float64, rs []float64, digits int64) []float64 {
 	if digits == 0 {
 		for i := range xs {
 			rs[i] = math.RoundToEven(xs[i])
 		}
 	} else if digits < 0 {
 		scale := float64(scaleTable[-digits])
-		for i, _ := range xs {
+		for i := range xs {
 			value := xs[i] / scale
-			roundResult := math.RoundToEven(value) 
+			roundResult := math.RoundToEven(value)
 			rs[i] = roundResult * scale
 		}
 	} else {
 		scale := float64(scaleTable[digits])
-		for i, _ := range xs {
+		for i := range xs {
 			value := xs[i] * scale
 			roundResult := math.RoundToEven(value)
 			rs[i] = roundResult / scale

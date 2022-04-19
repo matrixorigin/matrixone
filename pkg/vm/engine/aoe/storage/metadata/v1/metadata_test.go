@@ -1424,7 +1424,7 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, len(spec.Specs), 4)
 
 	dbSpecs := make([]*DBSpec, len(keys))
-	for i, _ := range dbSpecs {
+	for i := range dbSpecs {
 		dbSpec := new(DBSpec)
 		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec
@@ -1512,7 +1512,7 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, len(spec.Specs), 4)
 
 	dbSpecs := make([]*DBSpec, len(keys))
-	for i, _ := range dbSpecs {
+	for i := range dbSpecs {
 		dbSpec := new(DBSpec)
 		dbSpec.Name = fmt.Sprintf("db-%d", i)
 		dbSpecs[i] = dbSpec

@@ -76,7 +76,7 @@ func init() {
 				rs = rs[:len(lvs)]
 				vec.Col = rs
 				nulls.Set(vec.Nsp, lv.Nsp)
-				vector.SetCol(vec, date.DateTimeToDate(lvs, rs))
+				vector.SetCol(vec, date.DatetimeToDate(lvs, rs))
 				return vec, nil
 			},
 		},

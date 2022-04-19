@@ -16,39 +16,40 @@ package min
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (
-	BoolMin func([]bool) bool
-	BoolMinSels func([]bool, []int64) bool
-	Int8Min func([]int8) int8
-	Int8MinSels func([]int8, []int64) int8
-	Int16Min func([]int16) int16
-	Int16MinSels func([]int16, []int64) int16
-	Int32Min func([]int32) int32
-	Int32MinSels func([]int32, []int64) int32
-	Int64Min func([]int64) int64
-	Int64MinSels func([]int64, []int64) int64
-	Uint8Min func([]uint8) uint8
-	Uint8MinSels func([]uint8, []int64) uint8
-	Uint16Min func([]uint16) uint16
-	Uint16MinSels func([]uint16, []int64) uint16
-	Uint32Min func([]uint32) uint32
-	Uint32MinSels func([]uint32, []int64) uint32
-	Uint64Min func([]uint64) uint64
-	Uint64MinSels func([]uint64, []int64) uint64
-	Float32Min func([]float32) float32
+	BoolMin        func([]bool) bool
+	BoolMinSels    func([]bool, []int64) bool
+	Int8Min        func([]int8) int8
+	Int8MinSels    func([]int8, []int64) int8
+	Int16Min       func([]int16) int16
+	Int16MinSels   func([]int16, []int64) int16
+	Int32Min       func([]int32) int32
+	Int32MinSels   func([]int32, []int64) int32
+	Int64Min       func([]int64) int64
+	Int64MinSels   func([]int64, []int64) int64
+	Uint8Min       func([]uint8) uint8
+	Uint8MinSels   func([]uint8, []int64) uint8
+	Uint16Min      func([]uint16) uint16
+	Uint16MinSels  func([]uint16, []int64) uint16
+	Uint32Min      func([]uint32) uint32
+	Uint32MinSels  func([]uint32, []int64) uint32
+	Uint64Min      func([]uint64) uint64
+	Uint64MinSels  func([]uint64, []int64) uint64
+	Float32Min     func([]float32) float32
 	Float32MinSels func([]float32, []int64) float32
-	Float64Min func([]float64) float64
+	Float64Min     func([]float64) float64
 	Float64MinSels func([]float64, []int64) float64
-	StrMin func(*types.Bytes) []byte
-	StrMinSels func(*types.Bytes, []int64) []byte
+	StrMin         func(*types.Bytes) []byte
+	StrMinSels     func(*types.Bytes, []int64) []byte
 )
 
 func boolMin(xs []bool) bool {
 	for _, x := range xs {
-		if x == false {
+		if !x {
 			return false
 		}
 	}
@@ -57,7 +58,7 @@ func boolMin(xs []bool) bool {
 
 func boolMinSels(xs []bool, sels []int64) bool {
 	for _, sel := range sels {
-		if xs[sel] == false {
+		if !xs[sel] {
 			return false
 		}
 	}

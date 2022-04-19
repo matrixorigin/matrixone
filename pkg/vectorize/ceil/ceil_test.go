@@ -26,12 +26,12 @@ func TestCeilUint8(t *testing.T) {
 	res := make([]uint8, len(nums))
 	res0 := ceilUint8(nums, res, 0)
 	correctRes0 := []uint8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 199, 233}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := ceilUint8(nums, res, -1)
 	correctResMinus1 := []uint8{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 200, 240}
-	for i, _ := range resMinus1 {
+	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 	resMinus2 := ceilUint8(nums, res, -2)
@@ -45,17 +45,17 @@ func TestCeilUint16(t *testing.T) {
 	res := make([]uint16, len(nums))
 	res0 := CeilUint16(nums, res, 0)
 	correctRes0 := []uint16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := CeilUint16(nums, res, -1)
 	correctResMinus1 := []uint16{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 6770, 10950, 17720, 28660, 46370}
-	for i, _ := range resMinus1 {
+	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 	resMinus2 := CeilUint16(nums, res, -2)
 	correctResMinus2 := []uint16{100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 200, 300, 400, 700, 1000, 1600, 2600, 4200, 6800, 11000, 17800, 28700, 46400}
-	for i, _ := range resMinus2 {
+	for i := range resMinus2 {
 		require.Equal(t, correctResMinus2[i], resMinus2[i])
 	}
 }
@@ -64,18 +64,18 @@ func TestCeilUint32(t *testing.T) {
 	res := make([]uint32, len(nums))
 	res0 := CeilUint32(nums, res, 0)
 	correctRes0 := []uint32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := CeilUint32(nums, res, -1)
 	correctResMinus1 := []uint32{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 6770, 10950, 17720, 28660, 46370, 75030, 121400, 196420, 317820}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, resMinus1[i], correctResMinus1[i])
 	}
 	resMinus2 := CeilUint32(nums, res, -2)
 
 	correctResMinus2 := []uint32{100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 200, 300, 400, 700, 1000, 1600, 2600, 4200, 6800, 11000, 17800, 28700, 46400, 75100, 121400, 196500, 317900}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, resMinus2[i], correctResMinus2[i])
 	}
 }
@@ -85,18 +85,18 @@ func TestCeilUint64(t *testing.T) {
 	res := make([]uint64, len(nums))
 	res0 := CeilUint64(nums, res, 0)
 	correctRes0 := []uint64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, 6765, 10946, 17711, 28657, 46368, 75025, 121393, 196418, 317811}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, res0[i], correctRes0[i])
 	}
 	resMinus1 := CeilUint64(nums, res, -1)
 	correctResMinus1 := []uint64{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 6770, 10950, 17720, 28660, 46370, 75030, 121400, 196420, 317820}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, resMinus1[i], correctResMinus1[i])
 	}
 	resMinus2 := CeilUint64(nums, res, -2)
 
 	correctResMinus2 := []uint64{100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 200, 300, 400, 700, 1000, 1600, 2600, 4200, 6800, 11000, 17800, 28700, 46400, 75100, 121400, 196500, 317900}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, resMinus2[i], correctResMinus2[i])
 	}
 }
@@ -106,12 +106,12 @@ func TestCeilInt8(t *testing.T) {
 	res := make([]int8, len(nums))
 	res0 := CeilInt8(nums, res, 0)
 	correctRes0 := []int8{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := CeilInt8(nums, res, -1)
 	correctResMinus1 := []int8{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 0, 0, 0, 0, 0, -10, -20, -30, -50, -80}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 }
@@ -121,13 +121,13 @@ func TestCeilInt16(t *testing.T) {
 	res := make([]int16, len(nums))
 	res0 := CeilInt16(nums, res, 0)
 	correctRes0 := []int16{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := CeilInt16(nums, res, -1)
 
 	correctResMinus1 := []int16{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 0, 0, 0, 0, 0, -10, -20, -30, -50, -80, -140, -230, -370, -610, -980, -1590, -2580, -4180}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 }
@@ -137,13 +137,13 @@ func TestCeilInt32(t *testing.T) {
 	res := make([]int32, len(nums))
 	res0 := CeilInt32(nums, res, 0)
 	correctRes0 := []int32{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := CeilInt32(nums, res, -1)
 
 	correctResMinus1 := []int32{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 0, 0, 0, 0, 0, -10, -20, -30, -50, -80, -140, -230, -370, -610, -980, -1590, -2580, -4180}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 }
@@ -153,12 +153,12 @@ func TestCeilInt64(t *testing.T) {
 	res := make([]int64, len(nums))
 	res0 := CeilInt64(nums, res, 0)
 	correctRes0 := []int64{1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584, 4181, -1, -2, -3, -5, -8, -13, -21, -34, -55, -89, -144, -233, -377, -610, -987, -1597, -2584, -4181, 32768, 1234567}
-	for i, _ := range res0 {
+	for i := range res0 {
 		require.Equal(t, correctRes0[i], res0[i])
 	}
 	resMinus1 := CeilInt64(nums, res, -1)
 	correctResMinus1 := []int64{10, 10, 10, 10, 10, 20, 30, 40, 60, 90, 150, 240, 380, 610, 990, 1600, 2590, 4190, 0, 0, 0, 0, 0, -10, -20, -30, -50, -80, -140, -230, -370, -610, -980, -1590, -2580, -4180, 32770, 1234570}
-	for i, _ := range resMinus1 {
+	for i := range resMinus1 {
 		require.Equal(t, correctResMinus1[i], resMinus1[i])
 	}
 }
@@ -177,19 +177,19 @@ func floatCompare(x, y float64) bool {
 func TestCeilCeil32(t *testing.T) {
 	nums := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
 	res := make([]float32, len(nums))
-	res0 := ceilFloat32Pure(nums, res, 0)
+	res0 := ceilFloat32(nums, res, 0)
 	correctRes0 := []float32{2, -1, 3, -2, 2, 13, 124, 1235, 12346, 1235, -1, -12, -123, -1234, -12345}
-	for i, _ := range nums {
+	for i := range nums {
 		assert.True(t, floatCompare(float64(correctRes0[i]), float64(res0[i])))
 	}
-	resMinus1 := ceilFloat32Pure(nums, res, -1)
+	resMinus1 := ceilFloat32(nums, res, -1)
 	correctResMinus1 := []float32{10, 0, 10, 0, 10, 20, 130, 1240, 12350, 1240, 0, -10, -120, -1230, -12340}
-	for i, _ := range nums {
+	for i := range nums {
 		assert.True(t, floatCompare(float64(correctResMinus1[i]), float64(resMinus1[i])))
 	}
-	res1 := ceilFloat32Pure(nums, res, 1)
+	res1 := ceilFloat32(nums, res, 1)
 	correctRes1 := []float32{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.6, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-	for i, _ := range res1 {
+	for i := range res1 {
 		assert.True(t, floatCompare(float64(correctRes1[i]), float64(res1[i])))
 	}
 }
@@ -197,19 +197,19 @@ func TestCeilCeil32(t *testing.T) {
 func TestCeilFloat64(t *testing.T) {
 	nums := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.567, -1.2, -12.3, -123.4, -1234.5, -12345.6}
 	res := make([]float64, len(nums))
-	res0 := ceilFloat64Pure(nums, res, 0)
+	res0 := ceilFloat64(nums, res, 0)
 	correctRes0 := []float64{2, -1, 3, -2, 2, 13, 124, 1235, 12346, 1235, -1, -12, -123, -1234, -12345}
-	for i, _ := range nums {
+	for i := range nums {
 		assert.True(t, floatCompare(correctRes0[i], res0[i]))
 	}
-	resMinus1 := ceilFloat64Pure(nums, res, -1)
+	resMinus1 := ceilFloat64(nums, res, -1)
 	correctResMinus1 := []float64{10, 0, 10, 0, 10, 20, 130, 1240, 12350, 1240, 0, -10, -120, -1230, -12340}
-	for i, _ := range nums {
+	for i := range nums {
 		assert.True(t, floatCompare(correctResMinus1[i], resMinus1[i]))
 	}
-	res1 := ceilFloat64Pure(nums, res, 1)
+	res1 := ceilFloat64(nums, res, 1)
 	correctRes1 := []float64{1.5, -1.5, 2.5, -2.5, 1.2, 12.3, 123.4, 1234.5, 12345.6, 1234.6, -1.2, -12.3, -123.4, -1234.5, -12345.6}
-	for i, _ := range res1 {
+	for i := range res1 {
 		assert.True(t, floatCompare(correctRes1[i], res1[i]))
 	}
 }

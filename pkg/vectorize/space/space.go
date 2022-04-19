@@ -24,15 +24,15 @@ import (
 )
 
 func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
-	switch originalVecCol.(type) {
+	switch col := originalVecCol.(type) {
 	case []uint8:
-		return int64(sum.Uint8Sum(originalVecCol.([]uint8)))
+		return int64(sum.Uint8Sum(col))
 	case []uint16:
-		return int64(sum.Uint16Sum(originalVecCol.([]uint16)))
+		return int64(sum.Uint16Sum(col))
 	case []uint32:
-		return int64(sum.Uint32Sum(originalVecCol.([]uint32)))
+		return int64(sum.Uint32Sum(col))
 	case []uint64:
-		return int64(sum.Uint64Sum(originalVecCol.([]uint64)))
+		return int64(sum.Uint64Sum(col))
 	default:
 		return 0
 	}
@@ -41,15 +41,15 @@ func CountSpacesForUnsignedInt(originalVecCol interface{}) int64 {
 func CountSpacesForSignedInt(originalVecCol interface{}) int64 {
 	var result int64
 
-	switch originalVecCol.(type) {
+	switch col := originalVecCol.(type) {
 	case []int8:
-		result = sum.Int8Sum(originalVecCol.([]int8))
+		result = sum.Int8Sum(col)
 	case []int16:
-		result = sum.Int16Sum(originalVecCol.([]int16))
+		result = sum.Int16Sum(col)
 	case []int32:
-		result = sum.Int32Sum(originalVecCol.([]int32))
+		result = sum.Int32Sum(col)
 	case []int64:
-		result = sum.Int64Sum(originalVecCol.([]int64))
+		result = sum.Int64Sum(col)
 	}
 
 	if result < 0 {
@@ -62,9 +62,9 @@ func CountSpacesForSignedInt(originalVecCol interface{}) int64 {
 func CountSpacesForFloat(originalVecCol interface{}) int64 {
 	var result int64
 
-	switch originalVecCol.(type) {
+	switch col := originalVecCol.(type) {
 	case []float32:
-		for _, i := range originalVecCol.([]float32) {
+		for _, i := range col {
 			if i < 0 {
 				continue
 			}
@@ -72,7 +72,7 @@ func CountSpacesForFloat(originalVecCol interface{}) int64 {
 			result += int64(math.Round(float64(i)))
 		}
 	case []float64:
-		for _, i := range originalVecCol.([]float64) {
+		for _, i := range col {
 			if i < 0 {
 				continue
 			}
@@ -172,9 +172,9 @@ func FillSpacesUint16(originalVecCol []uint16, result *types.Bytes) *types.Bytes
 func FillSpacesUint32(originalVecCol []uint32, result *types.Bytes) *types.Bytes {
 	var offset uint32 = 0
 	for i, length := range originalVecCol {
-		result.Lengths[i] = uint32(length)
+		result.Lengths[i] = length
 		result.Offsets[i] = offset
-		offset += uint32(length)
+		offset += length
 	}
 
 	for i := range result.Data {
@@ -299,7 +299,7 @@ func FillSpacesCharVarChar(originalVecCol, result *types.Bytes) *types.Bytes {
 		length := parseStringAsInt64(string(originalVecCol.Data[offset : offset+originalVecCol.Lengths[i]]))
 
 		result.Lengths[i] = uint32(length)
-		result.Offsets[i] = uint32(bytesWriten)
+		result.Offsets[i] = bytesWriten
 		bytesWriten += uint32(length)
 	}
 
