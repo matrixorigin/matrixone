@@ -330,11 +330,11 @@ func (e *Exec) compileUpdate(qry *plan.Update) (*Scope, error) {
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op: vm.UpdateTag,
 		Arg: &updateTag.Argument{
-			Relation:        rel,
-			AffectedRows:    0,
-			UpdateList:      qry.UpdateList,
-			UpdateAttrs:     qry.UpdateAttrs,
-			OtherAttrs:      qry.OtherAttrs,
+			Relation:     rel,
+			AffectedRows: 0,
+			UpdateList:   qry.UpdateList,
+			UpdateAttrs:  qry.UpdateAttrs,
+			OtherAttrs:   qry.OtherAttrs,
 		},
 	})
 	e.scope = s

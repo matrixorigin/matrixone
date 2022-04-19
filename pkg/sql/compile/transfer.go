@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
+// Transfer is used to transfer a Scope to protocol.Scope
 func Transfer(s *Scope) protocol.Scope {
 	var ps protocol.Scope
 
@@ -52,6 +53,7 @@ func Transfer(s *Scope) protocol.Scope {
 	return ps
 }
 
+// Untransfer is used to transfer a protocol.Scope to Scope
 func Untransfer(s *Scope, ps protocol.Scope) {
 	UntransferIns(s.Instructions, ps.Ins)
 	s.Magic = ps.Magic
@@ -70,6 +72,7 @@ func Untransfer(s *Scope, ps protocol.Scope) {
 	}
 }
 
+// UntransferIns is used to transfer Instructions
 func UntransferIns(ins, pins vm.Instructions) {
 	for i, in := range ins {
 		switch in.Op {

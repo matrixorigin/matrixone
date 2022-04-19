@@ -35,10 +35,12 @@ func init() {
 	}
 }
 
+// String is used to format times operator
 func String(_ interface{}, buf *bytes.Buffer) {
 	buf.WriteString(" ⨝ ")
 }
 
+// Prepare the times operator
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
@@ -101,6 +103,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
+// Call is used to do times
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
@@ -735,7 +738,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		}
 		ctr.h8.keys = ctr.h8.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -1005,7 +1008,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -1363,7 +1366,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 	copy(ctr.keyOffs, ctr.zKeyOffs)
 	copy(ctr.h8.keys, ctr.h8.zKeys)
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -1632,7 +1635,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -2097,7 +2100,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		ctr.h24.keys = ctr.h24.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[0])), cap(ctr.h24.keys)*24)[:len(ctr.h24.keys)*24]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -2366,7 +2369,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -2728,7 +2731,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h24.keys, ctr.h24.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[0])), cap(ctr.h24.keys)*24)[:len(ctr.h24.keys)*24]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -2996,7 +2999,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -3460,7 +3463,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		ctr.h32.keys = ctr.h32.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[0])), cap(ctr.h32.keys)*32)[:len(ctr.h32.keys)*32]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -3729,7 +3732,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -4091,7 +4094,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h32.keys, ctr.h32.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[0])), cap(ctr.h32.keys)*32)[:len(ctr.h32.keys)*32]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -4359,7 +4362,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -4823,7 +4826,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		ctr.h40.keys = ctr.h40.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -5092,7 +5095,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -5454,7 +5457,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h40.keys, ctr.h40.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -5722,7 +5725,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -6179,7 +6182,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 			ctr.hstr.keys = make([][]byte, len(rows))
 		}
 		ctr.hstr.keys = ctr.hstr.keys[:len(rows)]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -6419,7 +6422,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -6755,7 +6758,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 		}
 	}
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -6994,7 +6997,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:

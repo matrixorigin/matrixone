@@ -41,7 +41,7 @@ const (
 	HStr
 )
 
-// a slice whose size is equal to UnitLimit and whose value is all 1
+// OneInt64s is a slice whose size is equal to UnitLimit and whose value is all 1
 var OneInt64s []int64
 
 // a view represent a dimension table with a hashtable
@@ -95,6 +95,7 @@ type probeContainer struct {
 	strHashMap *hashtable.StringHashMap
 }
 
+// Container is used for times operator
 type Container struct {
 	isPure bool // true: primary key join
 
@@ -158,6 +159,7 @@ type Container struct {
 	pctr *probeContainer // container for probe and store result
 }
 
+// Argument is the argument of times operator
 type Argument struct {
 	// attributes of join result
 	Result []string

@@ -25,11 +25,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/viewexec/join"
 )
 
+// size limit on the number of tuples to be processed at a time
 const (
 	UnitLimit = 256
 )
 
-// a slice whose size is equal to UnitLimit and whose value is all 1
+// OneInt64s is a slice whose size is equal to UnitLimit and whose value is all 1
 var OneInt64s []int64
 
 func init() {

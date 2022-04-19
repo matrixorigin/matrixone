@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 )
 
+// Print is to format scope list
 func Print(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
 		if s.Magic == Merge || s.Magic == Remote {
