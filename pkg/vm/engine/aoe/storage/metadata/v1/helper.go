@@ -32,7 +32,7 @@ func NewCleaner(catalog *Catalog) *Cleaner {
 
 func (cleaner *Cleaner) TryCompactDB(db *Database, dropTableFn func(*Table) error) error {
 	if !db.IsDeleted() {
-		return errors.New("Cannot compact active database")
+		return errors.New("cannot compact active database")
 	}
 	tables := make([]*Table, 0)
 	processor := new(LoopProcessor)
@@ -46,13 +46,15 @@ func (cleaner *Cleaner) TryCompactDB(db *Database, dropTableFn func(*Table) erro
 	}
 
 	db.RLock()
-	db.LoopLocked(processor)
+	err := db.LoopLocked(processor)
 	db.RUnlock()
+	if err != nil {
+		return err
+	}
 
 	if len(tables) == 0 {
 		return db.SimpleHardDelete()
 	}
-	var err error
 	for _, t := range tables {
 		if t.IsDeleted() {
 			continue

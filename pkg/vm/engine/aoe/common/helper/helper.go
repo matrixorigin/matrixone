@@ -65,9 +65,9 @@ func Transfer(sid, tid, typ uint64, name string,
 
 func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.TableDef, error) {
 	var err error
-	var defs []engine.TableDef
 	var pdef *engine.PartitionByDef
 	var comment *engine.CommentDef
+	defs := make([]engine.TableDef, 0)
 
 	if len(tbl.Partition) > 0 {
 		if pdef, _, err = protocol.DecodePartition(tbl.Partition); err != nil {

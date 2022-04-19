@@ -366,8 +366,8 @@ func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 	return vec, nil
 }
 
-func (vec *StrVector) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := vec.Marshal()
+func (v *StrVector) WriteTo(w io.Writer) (n int64, err error) {
+	buf, err := v.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -375,7 +375,7 @@ func (vec *StrVector) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (vec *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
+func (v *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 	capBuf := make([]byte, 8)
 	_, err = r.Read(capBuf)
 	if err != nil {
@@ -394,61 +394,61 @@ func (vec *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 	copy(buf[0:], capBuf)
-	err = vec.Unmarshal(buf)
+	err = v.Unmarshal(buf)
 	return int64(realSize), err
 }
 
-func (vec *StrVector) Unmarshal(data []byte) error {
+func (v *StrVector) Unmarshal(data []byte) error {
 	buf := data
-	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
+	v.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
-	vec.StatMask = encoding.DecodeUint64(buf[:8])
+	v.StatMask = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
-	vec.Type = encoding.DecodeType(buf[:encoding.TypeSize])
+	v.Type = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
 	nb := encoding.DecodeUint32(buf[:4])
 	buf = buf[4:]
 	if nb > 0 {
-		if err := vec.VMask.Read(buf[:nb]); err != nil {
+		if err := v.VMask.Read(buf[:nb]); err != nil {
 			return err
 		}
 		buf = buf[nb:]
 	}
 	cnt := encoding.DecodeInt32(buf[:4])
 	buf = buf[4:]
-	if vec.Data != nil {
-		vec.Data.Reset()
+	if v.Data != nil {
+		v.Data.Reset()
 	} else {
-		vec.Data = &types.Bytes{}
+		v.Data = &types.Bytes{}
 	}
 	if cnt == 0 {
 		return nil
 	}
 	lengths := encoding.DecodeUint32Slice(buf[:4*cnt])
-	if len(lengths) > cap(vec.Data.Lengths) {
-		vec.Data.Offsets = make([]uint32, cnt)
-		vec.Data.Lengths = lengths
+	if len(lengths) > cap(v.Data.Lengths) {
+		v.Data.Offsets = make([]uint32, cnt)
+		v.Data.Lengths = lengths
 	} else {
-		vec.Data.Lengths = vec.Data.Lengths[:len(lengths)]
-		vec.Data.Offsets = vec.Data.Offsets[:len(lengths)]
-		copy(vec.Data.Lengths, lengths)
+		v.Data.Lengths = v.Data.Lengths[:len(lengths)]
+		v.Data.Offsets = v.Data.Offsets[:len(lengths)]
+		copy(v.Data.Lengths, lengths)
 	}
-	vec.Data.Data = buf[4*cnt:]
+	v.Data.Data = buf[4*cnt:]
 	offset := uint32(0)
-	for i, n := range vec.Data.Lengths {
-		vec.Data.Offsets[i] = offset
+	for i, n := range v.Data.Lengths {
+		v.Data.Offsets[i] = offset
 		offset += n
 	}
 
 	return nil
 }
 
-func (vec *StrVector) Marshal() ([]byte, error) {
+func (v *StrVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(uint64(0)))
-	buf.Write(encoding.EncodeUint64(vec.StatMask))
-	buf.Write(encoding.EncodeType(vec.Type))
-	nb, err := vec.VMask.Show()
+	buf.Write(encoding.EncodeUint64(v.StatMask))
+	buf.Write(encoding.EncodeType(v.Type))
+	nb, err := v.VMask.Show()
 	if err != nil {
 		return nil, err
 	}
@@ -456,20 +456,20 @@ func (vec *StrVector) Marshal() ([]byte, error) {
 	if len(nb) > 0 {
 		buf.Write(nb)
 	}
-	cnt := int32(len(vec.Data.Lengths))
+	cnt := int32(len(v.Data.Lengths))
 	buf.Write(encoding.EncodeInt32(cnt))
 	if cnt > 0 {
-		buf.Write(encoding.EncodeUint32Slice(vec.Data.Lengths))
-		buf.Write(vec.Data.Data)
+		buf.Write(encoding.EncodeUint32Slice(v.Data.Lengths))
+		buf.Write(v.Data.Data)
 	}
 
 	buffer := buf.Bytes()
 	capBuf := encoding.EncodeUint64(uint64(len(buffer)))
 	copy(buffer[0:], capBuf)
-	vec.NodeCapacity = uint64(len(buffer))
+	v.NodeCapacity = uint64(len(buffer))
 	return buf.Bytes(), nil
 }
 
-func (vec *StrVector) Reset() {
-	vec.Data = nil
+func (v *StrVector) Reset() {
+	v.Data = nil
 }
