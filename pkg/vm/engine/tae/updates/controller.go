@@ -28,12 +28,28 @@ func newSharedLock(locker *sync.RWMutex) *sharedLock {
 	}
 }
 
+type appendInfo struct {
+	prevTS uint64
+	commitTS uint64
+	maxRow uint32
+}
+
+func newAppendInfo(prev, ts uint64, end uint32) appendInfo {
+	return appendInfo{
+		prevTS: prev,
+		commitTS: ts,
+		maxRow:   end,
+	}
+}
+
 type MutationController struct {
 	*sync.RWMutex
 	columns    map[uint16]*ColumnChain
 	deletes    *DeleteChain
 	meta       *catalog.BlockEntry
 	maxVisible uint64
+	appendInfos []appendInfo
+	nextRow uint32
 }
 
 func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
@@ -41,8 +57,12 @@ func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
 		RWMutex: new(sync.RWMutex),
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
+		appendInfos: make([]appendInfo, 0),
 	}
 	node.deletes = NewDeleteChain(nil, node)
+	if meta == nil {
+		return node
+	}
 	for i := uint16(0); i < uint16(len(meta.GetSchema().ColDefs)); i++ {
 		col := NewColumnChain(nil, i, node)
 		node.columns[i] = col
@@ -140,4 +160,51 @@ func (n *MutationController) GetColumnChain(colIdx uint16) *ColumnChain {
 
 func (n *MutationController) GetDeleteChain() *DeleteChain {
 	return n.deletes
+}
+
+func (n *MutationController) UpdateVisibility(rows uint32, commitTS uint64) {
+	xLock := n.GetExclusiveLock()
+	defer xLock.Unlock()
+	n.nextRow += rows
+	prevTS := uint64(0)
+	if len(n.appendInfos) != 0 {
+		prevTS = n.appendInfos[len(n.appendInfos)-1].commitTS
+	}
+	info := newAppendInfo(prevTS, commitTS, n.nextRow - 1)
+	n.appendInfos = append(n.appendInfos, info)
+	if commitTS > n.LoadMaxVisible() {
+		n.SetMaxVisible(commitTS)
+	}
+	return
+}
+
+func (n *MutationController) IsVisible(row uint32, startTS uint64) bool {
+	maxVisible := n.FetchMaxVisibleRow(startTS)
+	return maxVisible >= row
+}
+
+func (n *MutationController) FetchMaxVisibleRow(startTS uint64) uint32 {
+	sLock := n.GetSharedLock()
+	defer sLock.Unlock()
+	if len(n.appendInfos) != 0 && n.appendInfos[len(n.appendInfos)-1].commitTS < startTS {
+		return n.appendInfos[len(n.appendInfos)-1].maxRow
+	}
+	start, end := 0, len(n.appendInfos) - 1
+	var mid int
+	for start <= end {
+		mid = start + (end - start) / 2
+		info := n.appendInfos[mid]
+		if info.commitTS < startTS {
+			start = mid + 1
+			continue
+		} else if info.prevTS > startTS {
+			end = mid - 1
+			continue
+		}
+		break
+	}
+	if mid == 0 {
+		panic("nothing visible to the txn")
+	}
+	return n.appendInfos[mid-1].maxRow
 }
