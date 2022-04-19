@@ -170,7 +170,7 @@ func (f *TransientBlockFile) init() {
 
 func (f *TransientBlockFile) close() {
 	f.Close()
-	f.Destory()
+	f.Destroy()
 }
 
 func (f *TransientBlockFile) PreSync(pos uint32) bool {
@@ -337,7 +337,7 @@ func (f *TransientBlockFile) DataCompressAlgo(common.ID) int {
 	return compress.Lz4
 }
 
-func (f *TransientBlockFile) Destory() {
+func (f *TransientBlockFile) Destroy() {
 	for _, file := range f.files {
 		file.Unref()
 	}

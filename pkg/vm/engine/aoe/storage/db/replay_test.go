@@ -152,20 +152,20 @@ func TestReplay3(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
 	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
-	blkfiles := make([]string, 0)
-	tblkfiles := make([]string, 0)
+	// blkfiles := make([]string, 0)
+	// tblkfiles := make([]string, 0)
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-1; i++ {
 		blk := seg.BlockSet[i]
 		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
 		err := blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
-		name := mockBlkFile(*blk.AsCommonID(), dir, t)
-		blkfiles = append(blkfiles, name)
+		// name := mockBlkFile(*blk.AsCommonID(), dir, t)
+		// blkfiles = append(blkfiles, name)
 	}
-	tblk := seg.BlockSet[len(seg.BlockSet)-1]
-	name := mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
-	tblkfiles = append(tblkfiles, name)
+	// tblk := seg.BlockSet[len(seg.BlockSet)-1]
+	// name := mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
+	// tblkfiles = append(tblkfiles, name)
 
 	catalog.Close()
 	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
@@ -739,7 +739,7 @@ func TestReplay11(t *testing.T) {
 	name := mockBlkFile(*tblk.AsCommonID(), dir, t)
 	toRemove = append(toRemove, name)
 
-	name = mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
+	// name = mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
 
 	blk := seg.BlockSet[len(seg.BlockSet)-2]
 	name = mockBlkFile(*blk.AsCommonID(), dir, t)

@@ -261,7 +261,8 @@ func TestShardManager(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		pool.Submit(ff(uint64(i)))
+		err := pool.Submit(ff(uint64(i)))
+		assert.Nil(t, err)
 	}
 	wg.Wait()
 	mgr.Close()

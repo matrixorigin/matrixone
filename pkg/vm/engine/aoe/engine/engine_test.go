@@ -187,7 +187,7 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
 	attrs := helper.Attribute(*mockTbl)
-	var typs []types.Type
+	typs := make([]types.Type, 0)
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
@@ -332,14 +332,14 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	//Wait shard state change
 	logutil.Infof("ddl test begin")
 
-	tbs, err := c[0].ListTables(99)
+	_, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
 	dbid, err := c[0].CreateDatabase(0, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c[0].ListTables(dbid)
+	tbs, err := c[0].ListTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 

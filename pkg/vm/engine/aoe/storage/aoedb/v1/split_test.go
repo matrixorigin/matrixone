@@ -200,7 +200,7 @@ func TestSplit2(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
@@ -347,7 +347,7 @@ func TestSplit3(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
@@ -496,7 +496,7 @@ func TestSplit4(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)

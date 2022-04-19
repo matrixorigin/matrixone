@@ -57,7 +57,7 @@ func (msf *MockSegmentFile) Stat() common.FileInfo {
 	return msf.Info
 }
 
-func (bf *MockSegmentFile) GetFileType() common.FileType {
+func (msf *MockSegmentFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 
@@ -73,7 +73,7 @@ func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	logutil.Debugf("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
-func (sf *MockSegmentFile) GetBlockSize(_ common.ID) int64 {
+func (msf *MockSegmentFile) GetBlockSize(_ common.ID) int64 {
 	return 0
 }
 
@@ -81,11 +81,11 @@ func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf 
 	logutil.Debugf("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
-func (sf *MockSegmentFile) DataCompressAlgo(id common.ID) int {
+func (msf *MockSegmentFile) DataCompressAlgo(id common.ID) int {
 	return 0
 }
 
-func (sf *MockSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
+func (msf *MockSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	return nil
 }
 
@@ -102,7 +102,7 @@ func (msf *MockSegmentFile) Close() error {
 	return nil
 }
 
-func (msf *MockSegmentFile) Destory() {
+func (msf *MockSegmentFile) Destroy() {
 	logutil.Debugf("%s:%s | Destroy", msf.TypeName, msf.FileName)
 }
 
@@ -113,7 +113,7 @@ func (msf *MockSegmentFile) Ref() {
 
 func (msf *MockSegmentFile) close() {
 	msf.Close()
-	msf.Destory()
+	msf.Destroy()
 }
 
 func (msf *MockSegmentFile) Unref() {
@@ -157,7 +157,7 @@ func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id common.ID, meta *base.Ind
 	return nil
 }
 
-func (sf *MockSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
+func (msf *MockSegmentFile) MakeVirtualSeparateIndexFile(file *os.File, id *common.ID, meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 

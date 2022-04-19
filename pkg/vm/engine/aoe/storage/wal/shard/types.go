@@ -47,8 +47,8 @@ type SafeId struct {
 
 func (id *SafeId) Marshal() ([]byte, error) {
 	buf := make([]byte, SafeIdSize)
-	id.MarshalTo(buf)
-	return buf, nil
+	err := id.MarshalTo(buf)
+	return buf, err
 }
 
 func (id *SafeId) MarshalTo(buf []byte) error {
@@ -71,7 +71,10 @@ func (ids *SafeIds) Marshal() ([]byte, error) {
 	size := len(ids.Ids) * SafeIdSize
 	buf := make([]byte, size)
 	for i, id := range ids.Ids {
-		id.MarshalTo(buf[i*SafeIdSize : (i+1)*SafeIdSize])
+		err := id.MarshalTo(buf[i*SafeIdSize : (i+1)*SafeIdSize])
+		if err != nil {
+			return nil, err
+		}
 	}
 	return buf, nil
 }
@@ -79,7 +82,10 @@ func (ids *SafeIds) Marshal() ([]byte, error) {
 func (ids *SafeIds) Unmarshal(buf []byte) error {
 	ids.Ids = make([]SafeId, len(buf)/SafeIdSize)
 	for i := range ids.Ids {
-		ids.Ids[i].Unmarshal(buf[i*SafeIdSize : (i+1)*SafeIdSize])
+		err := ids.Ids[i].Unmarshal(buf[i*SafeIdSize : (i+1)*SafeIdSize])
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

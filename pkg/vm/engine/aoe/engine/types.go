@@ -113,6 +113,6 @@ type relation struct {
 	segments []SegmentInfo              //segments of the table
 	tablets  []aoe.TabletInfo           //tablets of the table
 	mp       map[string]*aoedb.Relation //a map of each tablet and its relation
-	reader   *store
-	cfg      *EngineConfig
+	// reader   *store // Unused
+	cfg *EngineConfig
 }

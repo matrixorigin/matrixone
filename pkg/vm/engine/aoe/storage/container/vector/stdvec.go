@@ -479,8 +479,8 @@ func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 	return vec, nil
 }
 
-func (vec *StdVector) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := vec.Marshal()
+func (v *StdVector) WriteTo(w io.Writer) (n int64, err error) {
+	buf, err := v.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -488,7 +488,7 @@ func (vec *StdVector) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
+func (v *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 	capBuf := make([]byte, 8)
 	_, err = r.Read(capBuf)
 	if err != nil {
@@ -507,41 +507,41 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 	copy(buf[0:], capBuf)
-	err = vec.Unmarshal(buf)
+	err = v.Unmarshal(buf)
 	return int64(realSize), err
 }
 
-func (vec *StdVector) Unmarshal(data []byte) error {
+func (v *StdVector) Unmarshal(data []byte) error {
 	buf := data
-	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
+	v.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
-	vec.StatMask = encoding.DecodeUint64(buf[:8])
+	v.StatMask = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
-	vec.Type = encoding.DecodeType(buf[:encoding.TypeSize])
+	v.Type = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
 	nb := encoding.DecodeUint32(buf[:4])
 	buf = buf[4:]
 	if nb > 0 {
-		if err := vec.VMask.Read(buf[:nb]); err != nil {
+		if err := v.VMask.Read(buf[:nb]); err != nil {
 			return err
 		}
 		buf = buf[nb:]
 	}
-	if vec.MNode != nil {
-		vec.Data = vec.Data[:len(buf)]
-		copy(vec.Data[0:], buf)
+	if v.MNode != nil {
+		v.Data = v.Data[:len(buf)]
+		copy(v.Data[0:], buf)
 	} else {
-		vec.Data = buf
+		v.Data = buf
 	}
 	return nil
 }
 
-func (vec *StdVector) Marshal() ([]byte, error) {
+func (v *StdVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(uint64(0)))
-	buf.Write(encoding.EncodeUint64(vec.StatMask))
-	buf.Write(encoding.EncodeType(vec.Type))
-	nb, err := vec.VMask.Show()
+	buf.Write(encoding.EncodeUint64(v.StatMask))
+	buf.Write(encoding.EncodeType(v.Type))
+	nb, err := v.VMask.Show()
 	if err != nil {
 		return nil, err
 	}
@@ -549,14 +549,14 @@ func (vec *StdVector) Marshal() ([]byte, error) {
 	if len(nb) > 0 {
 		buf.Write(nb)
 	}
-	buf.Write(vec.Data)
+	buf.Write(v.Data)
 	buffer := buf.Bytes()
 	capBuf := encoding.EncodeUint64(uint64(len(buffer)))
 	copy(buffer[0:], capBuf)
-	vec.NodeCapacity = uint64(len(buffer))
+	v.NodeCapacity = uint64(len(buffer))
 	return buf.Bytes(), nil
 }
 
-func (vec *StdVector) Reset() {
-	vec.Data = nil
+func (v *StdVector) Reset() {
+	v.Data = nil
 }
