@@ -31,6 +31,8 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
+require github.com/coreos/etcd v3.3.13+incompatible // indirect
+
 require (
 	cloud.google.com/go v0.99.0 // indirect
 	github.com/DataDog/zstd v1.5.0 // indirect
@@ -91,6 +93,7 @@ require (
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
+	go.etcd.io/etcd v3.3.27+incompatible
 	go.etcd.io/etcd/api/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/v2 v2.305.1 // indirect
