@@ -273,5 +273,6 @@ func (n *ColumnNode) ApplyCommit() (err error) {
 		panic("not expected")
 	}
 	n.txn = nil
+	n.chain.controller.SetMaxVisible(n.commitTs)
 	return
 }

@@ -54,7 +54,7 @@ func (chain *ColumnChain) GetColumnName() string {
 }
 
 func (chain *ColumnChain) TryUpdateNodeLocked(row uint32, v interface{}, n txnif.UpdateNode) (err error) {
-	if err = chain.view.Insert(row, n); err != nil {
+	if err = chain.PrepareUpdate(row, n); err != nil {
 		return
 	}
 	n.UpdateLocked(row, v)

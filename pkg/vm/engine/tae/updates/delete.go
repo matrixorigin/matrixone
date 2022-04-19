@@ -136,6 +136,9 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 		panic("not expected")
 	}
 	node.txn = nil
+	if node.chain.controller != nil {
+		node.chain.controller.SetMaxVisible(node.commitTs)
+	}
 	return
 }
 

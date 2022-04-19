@@ -3,6 +3,7 @@ package updates
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -29,9 +30,10 @@ func newSharedLock(locker *sync.RWMutex) *sharedLock {
 
 type MutationController struct {
 	*sync.RWMutex
-	columns map[uint16]*ColumnChain
-	deletes *DeleteChain
-	meta    *catalog.BlockEntry
+	columns    map[uint16]*ColumnChain
+	deletes    *DeleteChain
+	meta       *catalog.BlockEntry
+	maxVisible uint64
 }
 
 func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
@@ -46,6 +48,14 @@ func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MutationController) SetMaxVisible(ts uint64) {
+	atomic.StoreUint64(&n.maxVisible, ts)
+}
+
+func (n *MutationController) LoadMaxVisible() uint64 {
+	return atomic.LoadUint64(&n.maxVisible)
 }
 
 func (n *MutationController) GetID() *common.ID { return n.meta.AsCommonID() }

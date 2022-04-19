@@ -4,6 +4,7 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
 )
 
@@ -30,26 +31,27 @@ func (appender *blockAppender) Close() error {
 }
 
 func (appender *blockAppender) GetID() *common.ID {
-	return appender.node.meta.AsCommonID()
+	return appender.node.block.meta.AsCommonID()
 }
 
 func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) {
 	return appender.node.PrepareAppend(rows)
 }
 
-func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, ctx interface{}) (from uint32, err error) {
+func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
 
+	writeLock := appender.node.block.controller.GetExclusiveLock()
+	defer writeLock.Unlock()
 	err = appender.node.Expand(0, func() error {
 		var err error
-		from, err = appender.node.ApplyAppend(bat, offset, length, ctx)
+		from, err = appender.node.ApplyAppend(bat, offset, length, txn)
 		return err
 	})
 
-	schema := appender.node.meta.GetSegment().GetTable().GetSchema()
-	pkIdx := schema.PrimaryKey
-	pks := bat.Vecs[pkIdx]
+	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
 	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
+	appender.node.block.controller.SetMaxVisible(txn.GetCommitTS())
 
 	return
 }

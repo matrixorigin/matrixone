@@ -3,8 +3,7 @@ package dataio
 import (
 	"fmt"
 
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 )
 
@@ -14,13 +13,14 @@ var SegmentFileMockFactory = func(dir string, id uint64) SegmentFile {
 
 type mockBlockFile struct {
 	NoopBlockFile
-	id       uint64
-	rows     uint32
-	segFile  SegmentFile
-	maxTs    uint64
-	data     batch.IBatch
-	logIndex *shard.Index
-	ts       *gvec.Vector
+	id         uint64
+	rows       uint32
+	segFile    SegmentFile
+	data       batch.IBatch
+	masks      map[uint16]*roaring.Bitmap
+	vals       map[uint16]map[uint32]interface{}
+	deletes    *roaring.Bitmap
+	maxVisible uint64
 }
 
 type mockSegmentFile struct {
@@ -46,16 +46,17 @@ func mockSegment(dir string, id uint64) *mockSegmentFile {
 	}
 }
 
-func (bf *mockBlockFile) Rows() uint32   { return bf.rows }
-func (bf *mockBlockFile) IsSorted() bool { return bf.rows > 0 && bf.ts == nil }
+func (bf *mockBlockFile) Rows() uint32 { return bf.rows }
 
 func (bf *mockBlockFile) GetSegmentFile() SegmentFile { return bf.segFile }
 
-func (bf *mockBlockFile) WriteData(bat batch.IBatch, logIndex *shard.Index, ts *gvec.Vector) error {
+func (bf *mockBlockFile) WriteData(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) error {
 	bf.data = bat
 	bf.rows = uint32(bat.Length())
-	bf.logIndex = logIndex
-	bf.ts = ts
+	bf.maxVisible = ts
+	bf.masks = masks
+	bf.vals = vals
+	bf.deletes = deletes
 	return nil
 }
 
@@ -64,13 +65,8 @@ func (bf *mockBlockFile) LoadData() (bat batch.IBatch, err error) {
 	return
 }
 
-func (bf *mockBlockFile) GetMaxIndex() *shard.Index {
-	return bf.logIndex
-}
-
-func (bf *mockBlockFile) GetTimeStamps() (ts *gvec.Vector, err error) {
-	ts = bf.ts
-	return
+func (bf *mockBlockFile) GetMaxVisble() uint64 {
+	return bf.maxVisible
 }
 
 func (sf *mockSegmentFile) IsSorted() bool { return sf.sorted }

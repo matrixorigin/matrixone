@@ -3,6 +3,7 @@ package dataio
 import (
 	"io"
 
+	"github.com/RoaringBitmap/roaring"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -15,7 +16,7 @@ type SegmentFile interface {
 	common.IRef
 	io.Closer
 	Destory() error
-	WriteBlock(id uint64, data batch.IBatch, maxIndex *shard.Index, ts *gvec.Vector) error
+	WriteBlock(uint64, batch.IBatch, uint64, map[uint16]*roaring.Bitmap, map[uint16]map[uint32]interface{}, *roaring.Bitmap) error
 	LoadBlock(id uint64) (batch.IBatch, error)
 	GetBlockMaxIndex(id uint64) *shard.Index
 	LoadBlockTimeStamps(id uint64) (*gvec.Vector, error)
@@ -35,11 +36,10 @@ type BlockFile interface {
 	Destory() error
 	Rows() uint32
 	GetSegmentFile() SegmentFile
-	WriteData(batch.IBatch, *shard.Index, *gvec.Vector) error
+	WriteData(batch.IBatch, uint64, map[uint16]*roaring.Bitmap, map[uint16]map[uint32]interface{}, *roaring.Bitmap) error
 	LoadData() (batch.IBatch, error)
 	Sync() error
-	GetMaxIndex() *shard.Index
-	GetTimeStamps() (*gvec.Vector, error)
+	GetMaxVisble() uint64
 	// GetColumnFile(idx uint16) common.IVFile
 	// IsSorted() bool
 	// GetColumnStat(idx uint16) common.FileInfo

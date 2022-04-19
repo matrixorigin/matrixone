@@ -486,6 +486,19 @@ func (tbl *txnTable) GetValue(id *common.ID, row uint32, col uint16) (v interfac
 	return block.GetValue(tbl.txn, row, col)
 }
 
+func (tbl *txnTable) updateWithFineLock(node *updates.ColumnNode, txn txnif.AsyncTxn, row uint32, v interface{}) (err error) {
+	chain := node.GetChain().(*updates.ColumnChain)
+	controller := chain.GetController()
+	sharedLock := controller.GetSharedLock()
+	if err = controller.CheckNotDeleted(row, row, txn.GetStartTS()); err == nil {
+		chain.Lock()
+		err = chain.TryUpdateNodeLocked(row, v, node)
+		chain.Unlock()
+	}
+	sharedLock.Unlock()
+	return
+}
+
 func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32, col uint16, v interface{}) (err error) {
 	if inode != 0 {
 		return tbl.UpdateLocalValue(row, col, v)
@@ -497,17 +510,7 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 		Idx:       col,
 	}]
 	if node != nil {
-		chain := node.GetChain().(*updates.ColumnChain)
-		controller := chain.GetController()
-		sharedLock := controller.GetSharedLock()
-		err = controller.CheckNotDeleted(row, row, tbl.txn.GetStartTS())
-		if err == nil {
-			chain.Lock()
-			err = chain.TryUpdateNodeLocked(row, v, node)
-			chain.Unlock()
-		}
-		sharedLock.Unlock()
-		return
+		return tbl.updateWithFineLock(node, tbl.txn, row, v)
 	}
 	seg, err := tbl.entry.GetSegmentByID(segmentId)
 	if err != nil {
@@ -702,7 +705,7 @@ func (tbl *txnTable) applyAppendInode(node InsertNode) (err error) {
 		toAppend, err := appender.PrepareAppend(node.Rows() - appended)
 		bat, err := node.Window(appended, appended+toAppend-1)
 		var destOff uint32
-		if destOff, err = appender.ApplyAppend(bat, 0, toAppend, nil); err != nil {
+		if destOff, err = appender.ApplyAppend(bat, 0, toAppend, tbl.txn); err != nil {
 			panic(err)
 		}
 		appender.Close()
