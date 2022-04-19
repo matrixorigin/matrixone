@@ -23,3 +23,8 @@ type Optimizer interface {
 	Optimize(stmt tree.Statement) (*Query, error) //todo confirm interface change
 	CurrentContext() CompilerContext
 }
+
+type AliasContext struct {
+	tableAlias  map[string]*plan.TableDef
+	columnAlias map[string]*plan.Expr
+}

@@ -25,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query) error {
+func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
 	for _, table := range stmt {
-		err := buildTable(table, ctx, query)
+		err := buildTable(table, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
@@ -35,7 +35,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query) error {
 	return nil
 }
 
-func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) error {
+func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		buildSelect(tbl, ctx, query)
@@ -46,7 +46,6 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) error {
 			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
 		}
 		obj, tableDef := ctx.Resolve(name)
-
 		nodeLength := int32(len(query.Nodes))
 		node := &plan.Node{
 			NodeType: plan.Node_TABLE_SCAN, //todo confirm NodeType
@@ -58,12 +57,17 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) error {
 		return nil
 	case *tree.JoinTableExpr:
 		//todo confirm how to deal with alias
-		return buildJoinTable(tbl, ctx, query)
+		return buildJoinTable(tbl, ctx, query, aliasCtx)
 	case *tree.ParenTableExpr:
-		return buildTable(tbl.Expr, ctx, query)
+		return buildTable(tbl.Expr, ctx, query, aliasCtx)
 	case *tree.AliasedTableExpr:
-		//todo confirm how to deal with alias
-		return buildTable(tbl.Expr, ctx, query)
+		err := buildTable(tbl.Expr, ctx, query, aliasCtx)
+		if err != nil {
+			return err
+		}
+		aliasCtx.tableAlias[string(tbl.As.Alias)] = query.Nodes[len(query.Nodes)-1].TableDef
+		// fmt.Printf("[%v], [%v]", tbl.As.Alias, aliasCtx.tableAlias[string(tbl.As.Alias)])
+		return nil
 	case *tree.StatementSource:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 	}
@@ -71,15 +75,15 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query) error {
 	return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 }
 
-func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query) error {
-	err := buildTable(tbl.Right, ctx, query)
+func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
+	err := buildTable(tbl.Right, ctx, query, aliasCtx)
 	if err != nil {
 		return err
 	}
 	rightNodeId := query.Nodes[len(query.Nodes)-1].NodeId
 	rightTableDef := query.Nodes[len(query.Nodes)-1].TableDef
 
-	err = buildTable(tbl.Left, ctx, query)
+	err = buildTable(tbl.Left, ctx, query, aliasCtx)
 	if err != nil {
 		return err
 	}
@@ -89,24 +93,21 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query) 
 	var onList []*plan.Expr
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query)
+		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
 		onList = exprs
 	case *tree.UsingJoinCond:
-		for _, identifiers := range cond.Cols {
-			if len(identifiers) > 1 { //todo confirm
-				return errors.New(errno.SyntaxError, fmt.Sprintf("column identifiers more than one '%v'", tree.String(tbl.Cond, dialect.MYSQL)))
-			}
-			name := string(identifiers[0])
+		for _, identifier := range cond.Cols {
+			name := string(identifier)
 			leftColIndex := getColumnIndex(leftTableDef, name)
 			if leftColIndex < 0 {
-				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", string(identifiers[0])))
+				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", name))
 			}
 			rightColIndex := getColumnIndex(rightTableDef, name)
 			if rightColIndex < 0 {
-				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", string(identifiers[0])))
+				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", name))
 			}
 
 			col := &plan.Expr_Col{
@@ -120,10 +121,16 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query) 
 				Expr: col,
 			})
 		}
-	case *tree.NaturalJoinCond:
-		onList = append(onList, getColumnsWithSameName(leftTableDef, rightTableDef)...)
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", tree.String(tbl.Cond, dialect.MYSQL)))
+		if tbl.JoinType == tree.JOIN_TYPE_NATURAL { //natural join.  the cond will be nil
+			columns := getColumnsWithSameName(leftTableDef, rightTableDef)
+			if len(columns) == 0 {
+				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("donot have same column name when using natural join"))
+			}
+			onList = append(onList, columns...)
+		} else {
+			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", tree.String(tbl.Cond, dialect.MYSQL)))
+		}
 
 	}
 
@@ -136,26 +143,4 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query) 
 	query.Nodes = append(query.Nodes, node)
 
 	return nil
-}
-
-func getColumnsWithSameName(left *plan.TableDef, right *plan.TableDef) []*plan.Expr {
-	var exprs []*plan.Expr
-
-	for leftIdx, leftCol := range left.Cols {
-		for rightIdx, rightCol := range right.Cols {
-			if leftCol.Name == rightCol.Name {
-				exprs = append(exprs, &plan.Expr{
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							Name:   leftCol.Name,
-							RelPos: int32(rightIdx), //todo confirm what RelPos means
-							ColPos: int32(leftIdx),
-						},
-					},
-				})
-			}
-		}
-	}
-
-	return exprs
 }
