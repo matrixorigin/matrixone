@@ -16,14 +16,14 @@ package dayofyear
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 var (
-	getDayOfYear func([]types.Date, []uint16) []uint16
+	GetDayOfYear func([]types.Date, []uint16) []uint16
 )
 
 func init() {
-	getDayOfYear = GetDayOfYear
+	GetDayOfYear = getDayOfYear
 }
 
-func GetDayOfYear(xs []types.Date, rs []uint16) []uint16 {
+func getDayOfYear(xs []types.Date, rs []uint16) []uint16 {
 	for i, d := range xs {
 		rs[i] = d.DayOfYear()
 	}

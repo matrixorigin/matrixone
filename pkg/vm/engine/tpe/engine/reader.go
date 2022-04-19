@@ -96,7 +96,6 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 			DumpData:			 tr.dumpData,
 			Opt: 				 tr.opt,
 		}
-
 		if tr.readCtx.ParallelReader || tr.readCtx.MultiNode {
 			tr.readCtx.ParallelReaderContext = tuplecodec.ParallelReaderContext{
 				ID:                   tr.id,
@@ -157,7 +156,9 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 						tr.shardInfos[tr.readCtx.ShardIndex],
 						tr.readCtx.ParallelReaderContext,
 					)
-				tr.readCtx.ShardIndex++
+					logutil.Infof("reader %d info --> readCtx %v\n",
+						tr.id,
+						tr.readCtx.ParallelReaderContext)
 				} else {
 					return nil, nil
 				}
@@ -169,218 +170,10 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 	if err != nil {
 		return nil, err
 	}
-
 	//for test
 	if tr.readCtx.ParallelReader && tr.multiNode && tr.printBatch {
-		cnt := 0
-		if bat != nil {
-			cnt = vector.Length(bat.Vecs[0])
-
-			var indexes []int = make([]int, len(bat.Vecs))
-			for i := 0; i < len(bat.Vecs); i++ {
-				indexes[i] = i
-			}
-
-			sort.Slice(indexes, func(i, j int) bool {
-				ai := indexes[i]
-				bi := indexes[j]
-				a := attrs[ai]
-				b := attrs[bi]
-				return strings.Compare(a, b) < 0
-			})
-
-			logutil.Infof("store id %d reader %d readCount %d parallelContext %v ", tr.storeID, tr.id, cnt, tr.readCtx.ParallelReaderContext)
-			row := make([]interface{}, len(bat.Vecs))
-
-			var names []string
-			for _, index := range indexes {
-				names = append(names, attrs[index])
-			}
-			logutil.Infof("attrs %v", attrs)
-			logutil.Infof("attrs_names %v", names)
-			for rowIndex := 0; rowIndex < cnt; rowIndex++ {
-				buf := &bytes.Buffer{}
-				buf.WriteString(fmt.Sprintf("batchrow rowIndex %d ]", rowIndex))
-				for i := 0; i < len(bat.Vecs); i++ {
-					k := indexes[i]
-					vec := bat.Vecs[k]
-					switch vec.Typ.Oid { //get col
-					case types.T_int8:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]int8)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int8)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_uint8:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]uint8)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint8)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_int16:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]int16)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int16)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_uint16:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]uint16)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint16)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_int32:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]int32)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int32)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_uint32:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]uint32)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint32)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_int64:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]int64)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]int64)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_uint64:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]uint64)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]uint64)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_float32:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]float32)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float32)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_float64:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]float64)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]float64)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_char:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = string(vs.Get(int64(rowIndex)))
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = string(vs.Get(int64(rowIndex)))
-							}
-						}
-					case types.T_varchar:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = string(vs.Get(int64(rowIndex)))
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.(*types.Bytes)
-								row[i] = string(vs.Get(int64(rowIndex)))
-							}
-						}
-					case types.T_date:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]types.Date)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]types.Date)
-								row[i] = vs[rowIndex]
-							}
-						}
-					case types.T_datetime:
-						if !nulls.Any(vec.Nsp) { //all data in this column are not null
-							vs := vec.Col.([]types.Datetime)
-							row[i] = vs[rowIndex]
-						} else {
-							if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-								row[i] = nil
-							} else {
-								vs := vec.Col.([]types.Datetime)
-								row[i] = vs[rowIndex]
-							}
-						}
-					default:
-						logutil.Errorf("reader.Read : unsupported type %d \n", vec.Typ.Oid)
-						return nil, fmt.Errorf("reader.Read : unsupported type %d \n", vec.Typ.Oid)
-					}
-					buf.WriteString(fmt.Sprintf("colname %v typ %v value %v ", attrs[k], vec.Typ, row[i]))
-				}
-				logutil.Infof("%s", buf.String())
-			}
+		if err := printBatch(tr, bat, attrs); err != nil {
+			return nil, err
 		}
 	}
 	/*
@@ -417,4 +210,218 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 		}
 	}
 	return bat, err
+}
+
+func printBatch(tr *TpeReader, bat *batch.Batch, attrs []string) error {
+	cnt := 0
+	if bat != nil {
+		cnt = vector.Length(bat.Vecs[0])
+
+		var indexes []int = make([]int, len(bat.Vecs))
+		for i := 0; i < len(bat.Vecs); i++ {
+			indexes[i] = i
+		}
+
+		sort.Slice(indexes, func(i, j int) bool {
+			ai := indexes[i]
+			bi := indexes[j]
+			a := attrs[ai]
+			b := attrs[bi]
+			return strings.Compare(a, b) < 0
+		})
+
+		logutil.Infof("store id %d reader %d readCount %d parallelContext %v ", tr.storeID, tr.id, cnt, tr.readCtx.ParallelReaderContext)
+		row := make([]interface{}, len(bat.Vecs))
+
+		var names []string
+		for _, index := range indexes {
+			names = append(names, attrs[index])
+		}
+		logutil.Infof("attrs %v", attrs)
+		logutil.Infof("attrs_names %v", names)
+		for rowIndex := 0; rowIndex < cnt; rowIndex++ {
+			buf := &bytes.Buffer{}
+			buf.WriteString(fmt.Sprintf("batchrow rowIndex %d ]", rowIndex))
+			for i := 0; i < len(bat.Vecs); i++ {
+				k := indexes[i]
+				vec := bat.Vecs[k]
+				switch vec.Typ.Oid { //get col
+				case types.T_int8:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]int8)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int8)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_uint8:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]uint8)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint8)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_int16:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]int16)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int16)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_uint16:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]uint16)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint16)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_int32:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]int32)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int32)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_uint32:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]uint32)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint32)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_int64:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]int64)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]int64)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_uint64:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]uint64)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]uint64)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_float32:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]float32)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]float32)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_float64:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]float64)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]float64)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_char:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.(*types.Bytes)
+						row[i] = string(vs.Get(int64(rowIndex)))
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.(*types.Bytes)
+							row[i] = string(vs.Get(int64(rowIndex)))
+						}
+					}
+				case types.T_varchar:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.(*types.Bytes)
+						row[i] = string(vs.Get(int64(rowIndex)))
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.(*types.Bytes)
+							row[i] = string(vs.Get(int64(rowIndex)))
+						}
+					}
+				case types.T_date:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]types.Date)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]types.Date)
+							row[i] = vs[rowIndex]
+						}
+					}
+				case types.T_datetime:
+					if !nulls.Any(vec.Nsp) { //all data in this column are not null
+						vs := vec.Col.([]types.Datetime)
+						row[i] = vs[rowIndex]
+					} else {
+						if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+							row[i] = nil
+						} else {
+							vs := vec.Col.([]types.Datetime)
+							row[i] = vs[rowIndex]
+						}
+					}
+				default:
+					logutil.Errorf("reader.Read : unsupported type %d \n", vec.Typ.Oid)
+					return fmt.Errorf("reader.Read : unsupported type %d \n", vec.Typ.Oid)
+				}
+				buf.WriteString(fmt.Sprintf("colname %v typ %v value %v ", attrs[k], vec.Typ, row[i]))
+			}
+			logutil.Infof("%s", buf.String())
+		}
+	}
+	return nil
 }

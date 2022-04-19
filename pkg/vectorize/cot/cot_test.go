@@ -17,6 +17,7 @@ package cot
 import (
 	"math"
 	"testing"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +43,7 @@ func TestCotFloat64(t *testing.T) {
 	CotNums := CotFloat64(nums, tempNums)
 
 	for i, n := range nums {
-		require.Equal(t, 1.0-math.Tan(float64(n)), CotNums[i])
+		require.Equal(t, 1.0-math.Tan(n), CotNums[i])
 	}
 }
 

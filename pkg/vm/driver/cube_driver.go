@@ -126,7 +126,7 @@ type CubeDriver interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error)
+	TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool, tryCount int, timeout time.Duration) ([][]byte, [][]byte, bool, []byte, error)
 	// TpeCheckKeysExist checks the shard has keys.
 	// return the index of the key that existed in the shard.
 	TpeAsyncCheckKeysExist(shardID uint64, keys [][]byte, timeout time.Duration, cb func(CustomRequest, []byte, error))
@@ -149,7 +149,7 @@ type CubeDriver interface {
 	//[][]byte : return values
 	//bool: true - the scanner accomplished in all shards.
 	//[]byte : the start key for the next scan. If last parameter is false, this parameter is nil.
-	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([][]byte, [][]byte, bool, []byte, error)
+	TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64, tryCount int, timeout time.Duration) ([][]byte, [][]byte, bool, []byte, error)
 	// PrefixScan returns the values whose key starts with prefix.
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	// PrefixKeysWithGroup scans prefix with specific group.
@@ -185,6 +185,7 @@ type CubeDriver interface {
 	AsyncExec(interface{}, func(CustomRequest, []byte, error), interface{})
 	// ExecWithGroup exec command with group
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
+	TpeExecWithGroup(interface{}, pb.Group,int,time.Duration) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
 	AsyncExecWithGroup(interface{}, pb.Group, func(CustomRequest, []byte, error), interface{})
 	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(CustomRequest, []byte, error), interface{})
@@ -557,7 +558,7 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 	return pairs, err
 }
 
-func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey bool, tryCount int, timeout time.Duration) ([][]byte, [][]byte, bool, []byte, error) {
 	req := pb.Request{
 		Type:  pb.TpeScan,
 		Group: pb.KVGroup,
@@ -574,7 +575,7 @@ func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey 
 	var data []byte
 	var keys [][]byte = nil
 
-	data, err = h.ExecWithGroup(req, pb.KVGroup)
+	data, err = h.TpeExecWithGroup(req, pb.KVGroup,tryCount,timeout)
 	if err != nil {
 		return nil, nil, false, nil, err
 	}
@@ -650,7 +651,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	return pairs, err
 }
 
-func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64) ([][]byte, [][]byte, bool, []byte, error) {
+func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefixEnd []byte, needKeyOnly bool, limit uint64, tryCount int, timeout time.Duration) ([][]byte, [][]byte, bool, []byte, error) {
 	if prefixLength > len(startKeyOrPrefix) {
 		return nil, nil, false, nil, errorPrefixLengthIsLongerThanStartKey
 	}
@@ -669,7 +670,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 	var err error
 	var data []byte
 
-	data, err = h.ExecWithGroup(req, pb.KVGroup)
+	data, err = h.TpeExecWithGroup(req, pb.KVGroup,tryCount,timeout)
 	if err != nil {
 		return nil, nil, false, nil, err
 	}
@@ -1012,6 +1013,24 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err
 			break
 		}
 		time.Sleep(defaultRetryWaitTime)
+	}
+	return
+}
+
+func (h *driver) TpeExecWithGroup(cmd interface{}, group pb.Group,tryCount int,timeout time.Duration) (res []byte, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
+	}()
+	cr := CustomRequest{}
+	cr.Group = uint64(group)
+	h.BuildRequest(&cr, cmd)
+	for i := 0; i < tryCount; i++ {
+		res, err = h.doExecWithRequest(cr)
+		if err == nil {
+			break
+		}
+		time.Sleep(timeout)
 	}
 	return
 }

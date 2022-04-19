@@ -15,8 +15,9 @@
 package aoedb
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -33,7 +34,7 @@ func TestSnapshot1(t *testing.T) {
 	shardId := database.GetShardId()
 	idxGen := gen.Shard(shardId)
 	schemas := make([]*metadata.Schema, 10)
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx := &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -91,7 +92,7 @@ func TestSnapshot2(t *testing.T) {
 	shardId := database.GetShardId()
 	idxGen := gen.Shard(shardId)
 	schemas := make([]*metadata.Schema, 3)
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx := &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -164,7 +165,7 @@ func TestSnapshot3(t *testing.T) {
 	shardId := database.GetShardId()
 	idxGen := gen.Shard(shardId)
 	schemas := make([]*metadata.Schema, 2)
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx := &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -253,7 +254,7 @@ func TestSnapshot4(t *testing.T) {
 	shardId := database.GetShardId()
 	idxGen := gen.Shard(shardId)
 	schemas := make([]*metadata.Schema, 3)
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx := &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -335,7 +336,7 @@ func TestSnapshot4(t *testing.T) {
 // 	shardId := database.GetShardId()
 // 	idxGen := gen.Shard(shardId)
 // 	schemas := make([]*metadata.Schema, 3)
-// 	for i, _ := range schemas {
+// 	for i := range schemas {
 // 		schema := metadata.MockSchema(i + 1)
 // 		createCtx := &CreateTableCtx{
 // 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -461,7 +462,7 @@ func TestSnapshot6(t *testing.T) {
 
 	// 2. Create 3 tables
 	schemas := make([]*metadata.Schema, 3)
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx := &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -668,7 +669,7 @@ func TestSnapshot8(t *testing.T) {
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -793,7 +794,7 @@ func TestSnapshot9(t *testing.T) {
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -913,7 +914,7 @@ func TestSnapshot10(t *testing.T) {
 	// 2. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),

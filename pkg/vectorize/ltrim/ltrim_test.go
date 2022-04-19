@@ -94,7 +94,7 @@ func TestLtrim(t *testing.T) {
 		Offsets: make([]uint32, len(multiStringCase.Offsets)),
 	}
 
-	Ltrim(&multiStringCase, &rs)
+	ltrim(&multiStringCase, &rs)
 	require.Equal(t, 10, len(rs.Lengths))
 	require.Equal(t, 10, len(rs.Offsets))
 	require.Equal(t, int(spacesCount), len(multiStringCase.Data)-len(rs.Data))

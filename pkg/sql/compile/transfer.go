@@ -45,6 +45,7 @@ func Transfer(s *Scope) protocol.Scope {
 	}
 	ps.NodeInfo.Id = s.NodeInfo.Id
 	ps.NodeInfo.Addr = s.NodeInfo.Addr
+	ps.NodeInfo.Data = s.NodeInfo.Data
 	ps.PreScopes = make([]protocol.Scope, len(s.PreScopes))
 	for i := range s.PreScopes {
 		ps.PreScopes[i] = Transfer(s.PreScopes[i])
@@ -64,6 +65,7 @@ func Untransfer(s *Scope, ps protocol.Scope) {
 	}
 	s.NodeInfo.Id = ps.NodeInfo.Id
 	s.NodeInfo.Addr = ps.NodeInfo.Addr
+	s.NodeInfo.Data = ps.NodeInfo.Data
 
 	for i := 0; i < len(s.PreScopes); i++ {
 		Untransfer(s.PreScopes[i], ps.PreScopes[i])

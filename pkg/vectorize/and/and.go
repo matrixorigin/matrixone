@@ -18,6 +18,10 @@ var (
 	SelAnd func([]int64, []int64, []int64) int64
 )
 
+func init() {
+	SelAnd = selAnd
+}
+
 // rs can't equal ys
 func selAnd(xs, ys, rs []int64) int64 {
 	cnt := 0

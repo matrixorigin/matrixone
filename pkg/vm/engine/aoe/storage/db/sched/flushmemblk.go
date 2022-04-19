@@ -46,7 +46,7 @@ func (e *flushMemblockEvent) Execute() error {
 		meta := mut.GetMeta()
 		data := mut.GetData()
 		var vecs []*vector.Vector
-		for attri, _ := range data.GetAttrs() {
+		for attri := range data.GetAttrs() {
 			v, err := data.GetVectorByAttr(attri)
 			if err != nil {
 				return err

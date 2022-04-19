@@ -16,6 +16,7 @@ package max
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -48,7 +49,7 @@ var (
 
 func boolMax(xs []bool) bool {
 	for _, x := range xs {
-		if x == true {
+		if x {
 			return true
 		}
 	}
@@ -57,7 +58,7 @@ func boolMax(xs []bool) bool {
 
 func boolMaxSels(xs []bool, sels []int64) bool {
 	for _, sel := range sels {
-		if xs[sel] == true {
+		if xs[sel] {
 			return true
 		}
 	}

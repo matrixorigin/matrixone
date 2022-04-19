@@ -19,13 +19,13 @@ import (
 )
 
 var (
-	rtrimChar    func(*types.Bytes, *types.Bytes) *types.Bytes
-	rtrimVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
+	RtrimChar    func(*types.Bytes, *types.Bytes) *types.Bytes
+	RtrimVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
 )
 
 func init() {
-	rtrimChar = Rtrim
-	rtrimVarChar = Rtrim
+	RtrimChar = rtrim
+	RtrimVarChar = rtrim
 }
 
 func CountSpacesFromRight(xs *types.Bytes) int32 {
@@ -52,7 +52,7 @@ func CountSpacesFromRight(xs *types.Bytes) int32 {
 	return spaceCount
 }
 
-func Rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
+func rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 	var resultCursor uint32 = 0
 
 	for i, offset := range xs.Offsets {

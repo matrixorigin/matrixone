@@ -54,7 +54,7 @@ func NewSplitter(database *metadata.Database, newDBNames []string, rename Rename
 		flushsegs:   make([]*metadata.Segment, 0),
 	}
 	splitter.dbSpecs = make([]*metadata.DBSpec, len(splitter.keys))
-	for i, _ := range splitter.dbSpecs {
+	for i := range splitter.dbSpecs {
 		dbSpec := new(metadata.DBSpec)
 		dbSpec.Name = newDBNames[i]
 		splitter.dbSpecs[i] = dbSpec

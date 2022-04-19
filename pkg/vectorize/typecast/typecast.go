@@ -15,8 +15,9 @@
 package typecast
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"golang.org/x/sys/cpu"
 )
@@ -3074,7 +3075,7 @@ func bytesToInt64Pure(xs *types.Bytes, rs []int64) ([]int64, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs[i] = int64(val)
+		rs[i] = val
 	}
 	return rs, nil
 }
@@ -3266,7 +3267,7 @@ func bytesToFloat64Pure(xs *types.Bytes, rs []float64) ([]float64, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs[i] = float64(val)
+		rs[i] = val
 	}
 	return rs, nil
 }

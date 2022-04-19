@@ -30,7 +30,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
 	}
 
-	sortUnstable(dataWithIdx)
+	SortUnstable(dataWithIdx)
 
 	for i, v := range dataWithIdx {
 		data[i], idx[i] = v.data, v.idx
@@ -91,16 +91,16 @@ func Merge(col []*vector.Vector, src *[]uint16) {
 		heap[i] = heapElem{data: data[i][0], src: uint16(i), next: 1}
 		merged[i] = make([]types.Date, nElem)
 	}
-	heapInit(heap)
+	HeapInit(heap)
 
 	k := 0
 	for i := 0; i < nBlk; i++ {
 		for j := 0; j < nElem; j++ {
-			top := heapPop(&heap)
+			top := HeapPop(&heap)
 			merged[i][j], (*src)[k] = top.data, top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
+				HeapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
 			}
 		}
 	}
@@ -111,7 +111,7 @@ func Merge(col []*vector.Vector, src *[]uint16) {
 }
 
 func Multiplex(col []*vector.Vector, src []uint16) {
-	for i, _ := range col {
+	for i := range col {
 		if nulls.Any(col[i].Nsp) {
 			multiplexNullableBlocks(col, src)
 			return

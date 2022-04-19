@@ -21,17 +21,17 @@ import (
 )
 
 var (
-	endsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	endsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	endsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	endsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	EndsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	EndsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	EndsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
+	EndsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
 )
 
 func init() {
-	endsWith = EndsWith
-	endsWithRightConst = EndsWithRightConst
-	endsWithLeftConst = EndsWithLeftConst
-	endsWithAllConst = EndsWithAllConst
+	EndsWith = endsWith
+	EndsWithRightConst = endsWithRightConst
+	EndsWithLeftConst = endsWithLeftConst
+	EndsWithAllConst = endsWithAllConst
 }
 
 func isEqualSuffix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) uint8 {
@@ -41,7 +41,7 @@ func isEqualSuffix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) ui
 	return 0
 }
 
-func EndsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func endsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	for i := range lv.Offsets {
 		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
 		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
@@ -51,7 +51,7 @@ func EndsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func EndsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func endsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
 	for i := range lv.Offsets {
 		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
@@ -61,7 +61,7 @@ func EndsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func EndsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func endsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
 	for i := range rv.Offsets {
 		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
@@ -71,7 +71,7 @@ func EndsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	return rs
 }
 
-func EndsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
+func endsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
 	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
 	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
 	rs[0] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)

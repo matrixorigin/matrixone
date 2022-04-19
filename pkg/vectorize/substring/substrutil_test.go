@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSliceFromLeftConstantOffsetUnbounded(t *testing.T) {
+func TestSubstringFromLeftConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
 		args1 *types.Bytes
@@ -80,13 +80,13 @@ func TestSliceFromLeftConstantOffsetUnbounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
 
-			got := SliceFromLeftConstantOffsetUnbounded(c.args1, out, c.start-1)
+			got := SubstringFromLeftConstOffsetUnbounded(c.args1, out, c.start-1)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceFromRightConstantOffsetUnbounded(t *testing.T) {
+func TestSubstringFromRightConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
 		args1 *types.Bytes
@@ -145,13 +145,13 @@ func TestSliceFromRightConstantOffsetUnbounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
 
-			got := SliceFromRightConstantOffsetUnbounded(c.args1, out, -c.start)
+			got := SubstringFromRightConstOffsetUnbounded(c.args1, out, -c.start)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceFromZeroConstantOffsetUnbounded(t *testing.T) {
+func TestSubstringFromZeroConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
 		args1 *types.Bytes
@@ -196,13 +196,13 @@ func TestSliceFromZeroConstantOffsetUnbounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
 
-			got := SliceFromZeroConstantOffsetUnbounded(c.args1, out)
+			got := SubstringFromZeroConstOffsetUnbounded(c.args1, out)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceDynamicOffsetUnbounded(t *testing.T) {
+func TestSubstringDynamicOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name      string
 		srcArgs   *types.Bytes
@@ -370,7 +370,7 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
 
-			got := SliceDynamicOffsetUnbounded(c.srcArgs, out, c.startArgs, c.startType)
+			got := SubstringDynamicOffsetUnbounded(c.srcArgs, out, c.startArgs, c.startType)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
@@ -379,7 +379,7 @@ func TestSliceDynamicOffsetUnbounded(t *testing.T) {
 
 //-------------------------------------------------------------
 
-func TestSliceFromLeftConstantOffsetBounded(t *testing.T) {
+func TestSubstringFromLeftConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
 		args   *types.Bytes
@@ -486,13 +486,13 @@ func TestSliceFromLeftConstantOffsetBounded(t *testing.T) {
 				Lengths: make([]uint32, len(c.args.Lengths)),
 				Offsets: make([]uint32, len(c.args.Offsets)),
 			}
-			got := SliceFromLeftConstantOffsetBounded(c.args, out, c.start-1, c.length)
+			got := SubstringFromLeftConstOffsetBounded(c.args, out, c.start-1, c.length)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceFromRightConstantOffsetBounded(t *testing.T) {
+func TestSubstringFromRightConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
 		args   *types.Bytes
@@ -674,13 +674,13 @@ func TestSliceFromRightConstantOffsetBounded(t *testing.T) {
 				Lengths: make([]uint32, len(c.args.Lengths)),
 				Offsets: make([]uint32, len(c.args.Offsets)),
 			}
-			got := SliceFromRightConstantOffsetBounded(c.args, out, -c.start, c.length)
+			got := SubstringFromRightConstOffsetBounded(c.args, out, -c.start, c.length)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceFromZeroConstantOffsetBounded(t *testing.T) {
+func TestSubstringFromZeroConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
 		args1  *types.Bytes
@@ -728,13 +728,13 @@ func TestSliceFromZeroConstantOffsetBounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
 
-			got := SliceFromZeroConstantOffsetBounded(c.args1, out)
+			got := SubstringFromZeroConstOffsetBounded(c.args1, out)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}
 }
 
-func TestSliceDynamicOffsetBounded(t *testing.T) {
+func TestSubstringDynamicOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name       string
 		srcArgs    *types.Bytes
@@ -1044,7 +1044,7 @@ func TestSliceDynamicOffsetBounded(t *testing.T) {
 				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
 
-			got := SliceDynamicOffsetBounded(c.srcArgs, out, c.startArgs, c.startType, c.lengthArgs, c.lengthType, c.cs)
+			got := SubstringDynamicOffsetBounded(c.srcArgs, out, c.startArgs, c.startType, c.lengthArgs, c.lengthType, c.cs)
 			require.Equal(t, c.want.String(), got.String())
 		})
 	}

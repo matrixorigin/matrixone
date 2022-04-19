@@ -15,8 +15,9 @@
 package power
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestPower(t *testing.T) {
@@ -27,9 +28,9 @@ func TestPower(t *testing.T) {
 	//Predefined Correct Values
 	expected := []float64{4, 9, 64, 125, 1296, 2401, 64, 81}
 
-	newNums := powerPure(lvs, rvs, rvs)
+	newNums := power(lvs, rvs, rvs)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, expected[i], newNums[i])
 	}
 }
@@ -42,9 +43,9 @@ func TestPowerScalarLeftConst(t *testing.T) {
 	//Predefined Correct Values
 	expected := []float64{4, 8, 16, 32, 64, 128, 256, 512}
 
-	newNums := powerScalarLeftConstPure(lc, rvs, rvs)
+	newNums := powerScalarLeftConst(lc, rvs, rvs)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, expected[i], newNums[i])
 	}
 }
@@ -57,9 +58,9 @@ func TestPowerScalarRightConst(t *testing.T) {
 	//Predefined Correct Values
 	expected := []float64{4, 9, 16, 25, 36, 49, 64, 81}
 
-	newNums := powerScalarRightConstPure(rc, lvs, lvs)
+	newNums := powerScalarRightConst(rc, lvs, lvs)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, expected[i], newNums[i])
 	}
 }

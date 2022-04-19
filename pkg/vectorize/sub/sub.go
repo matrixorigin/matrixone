@@ -74,7 +74,6 @@ var (
 	Float32SubScalarSels   func(float32, []float32, []float32, []int64) []float32
 	Float32SubByScalar     func(float32, []float32, []float32) []float32
 	Float32SubByScalarSels func(float32, []float32, []float32, []int64) []float32
-
 	Float64Sub             func([]float64, []float64, []float64) []float64
 	Float64SubSels         func([]float64, []float64, []float64, []int64) []float64
 	Float64SubScalar       func(float64, []float64, []float64) []float64
