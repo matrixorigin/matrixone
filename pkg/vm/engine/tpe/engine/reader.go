@@ -156,7 +156,9 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 						tr.shardInfos[tr.readCtx.ShardIndex],
 						tr.readCtx.ParallelReaderContext,
 					)
-					tr.readCtx.ShardIndex++
+					logutil.Infof("reader %d info --> readCtx %v\n",
+						tr.id,
+						tr.readCtx.ParallelReaderContext)
 				} else {
 					return nil, nil
 				}

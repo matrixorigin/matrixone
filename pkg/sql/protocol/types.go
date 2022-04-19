@@ -262,6 +262,7 @@ type Source struct {
 type Node struct {
 	Id   string
 	Addr string
+	Data []byte
 }
 
 type Scope struct {

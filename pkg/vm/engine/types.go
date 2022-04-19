@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +30,10 @@ type Node struct {
 	Id   string `json:"id"`
 	Addr string `json:"address"`
 	Data []byte `json:"payload"`
+}
+
+func (n Node) String() string {
+	return fmt.Sprintf("Id %v \n Addr %v \n Data len %d\n",n.Id,n.Addr,len(n.Data))
 }
 
 type Attribute struct {

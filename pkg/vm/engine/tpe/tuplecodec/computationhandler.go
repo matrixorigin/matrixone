@@ -15,6 +15,7 @@
 package tuplecodec
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -429,6 +430,7 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 			{
 				Id:   "0",
 				Addr: "localhost:20000",
+				Data: nil,
 			},
 		}
 		return nds, &Shards{}, nil
@@ -452,9 +454,14 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	var nodes engine.Nodes
 	for i, node := range shards.nodes {
 		logutil.Infof("xindex %d all_nodes %v", i, node)
+		nodeShards, err := json.Marshal(node.Shards)
+		if err != nil {
+			return nil, nil, err
+		}
 		nodes = append(nodes, engine.Node{
 			Id:   node.StoreIDbytes,
 			Addr: node.Addr,
+			Data: nodeShards, //put the shards info here
 		})
 	}
 
