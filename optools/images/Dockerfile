@@ -1,4 +1,4 @@
-FROM golang:1.17.3-buster as builder
+FROM golang:1.18-buster as builder
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
