@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 	"github.com/sirupsen/logrus"
@@ -24,6 +25,7 @@ type appendableNode struct {
 	data  batch.IBatch
 	rows  uint32
 	mgr   base.INodeManager
+	cond  *flusher.FlushCond
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file dataio.BlockFile) *appendableNode {
@@ -36,6 +38,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file dataio.BlockFile) *ap
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
+	impl.cond = flusher.NewFlushCond()
 	mgr.RegisterNode(impl)
 	return impl
 }
@@ -56,14 +59,22 @@ func (node *appendableNode) OnDestory() {
 	}
 }
 
-// TODO: Apply updates and txn sels
-func (node *appendableNode) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+func (node *appendableNode) GetVectorView(ts uint64, attr string) (vec vector.IVector, err error) {
 	colIdx := node.block.meta.GetSchema().GetColIdx(attr)
 	ivec, err := node.data.GetVectorByAttr(colIdx)
 	if err != nil {
-		return nil, err
+		return
 	}
-	ro := ivec.GetLatestView()
+	vec = ivec.GetLatestView()
+	return
+}
+
+// TODO: Apply updates and txn sels
+func (node *appendableNode) GetVectorCopy(ts uint64, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+	ro, err := node.GetVectorView(ts, attr)
+	if err != nil {
+		return
+	}
 	return ro.CopyToVectorWithBuffer(compressed, decompressed)
 }
 
@@ -73,6 +84,8 @@ func (node *appendableNode) OnLoad() {
 		panic(err)
 	}
 }
+
+// func (node *appendableNode) makeSnapshot(ts uint64,)
 
 func (node *appendableNode) OnUnload() {
 	logrus.Infof("Unloading block %s", node.block.meta.AsCommonID().String())

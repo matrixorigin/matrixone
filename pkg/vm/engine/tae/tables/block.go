@@ -7,7 +7,9 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/impl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -83,6 +85,48 @@ func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
+func (blk *dataBlock) makeColumnView(colIdx uint16, view *updates.BlockView) (err error) {
+	chain := blk.controller.GetColumnChain(colIdx)
+	chain.RLock()
+	updateMask, updateVals := chain.CollectUpdatesLocked(view.Ts)
+	chain.RUnlock()
+	if updateMask != nil {
+		view.UpdateMasks[colIdx] = updateMask
+		view.UpdateVals[colIdx] = updateVals
+	}
+	return
+}
+
+func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
+	controller := blk.controller
+	readLock := controller.GetSharedLock()
+	ts := controller.LoadMaxVisible()
+	view = updates.NewBlockView(ts)
+	for i := range blk.meta.GetSchema().ColDefs {
+		blk.makeColumnView(uint16(i), view)
+	}
+	deleteChain := controller.GetDeleteChain()
+	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	if dnode != nil {
+		view.DeleteMask = dnode.GetDeleteMaskLocked()
+	}
+	if blk.node != nil {
+		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
+		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
+		for i, colDef := range blk.meta.GetSchema().ColDefs {
+			attrs[i] = i
+			vecs[i], _ = blk.node.GetVectorView(ts, colDef.Name)
+		}
+		view.Raw, _ = batch.NewBatch(attrs, vecs)
+	}
+	readLock.Unlock()
+	if blk.node == nil {
+		// Load from block file
+		panic("TODO")
+	}
+	return
+}
+
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	if !blk.IsAppendable() {
 		err = data.ErrNotAppendable
@@ -93,10 +137,10 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
-	return blk.getVectorCopy(txn, attr, compressed, decompressed, false)
+	return blk.getVectorCopy(txn.GetStartTS(), attr, compressed, decompressed, false)
 }
 
-func (blk *dataBlock) getVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
 	h := blk.node.mgr.Pin(blk.node)
 	if h == nil {
 		panic("not expected")
@@ -107,14 +151,14 @@ func (blk *dataBlock) getVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	readLock := blk.controller.GetSharedLock()
 	chain := blk.controller.GetColumnChain(uint16(colIdx))
 	chain.RLock()
-	updateMask, updateVals := chain.CollectUpdatesLocked(txn.GetStartTS())
+	updateMask, updateVals := chain.CollectUpdatesLocked(ts)
 	chain.RUnlock()
 	deleteChain := blk.controller.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(txn.GetStartTS()).(*updates.DeleteNode)
+	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
 	readLock.Unlock()
 
 	blk.RLock()
-	vec, err = blk.node.GetVectorCopy(txn, attr, compressed, decompressed)
+	vec, err = blk.node.GetVectorCopy(ts, attr, compressed, decompressed)
 	blk.RUnlock()
 	if err != nil || raw {
 		return
@@ -210,7 +254,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 	var comp bytes.Buffer
 	var decomp bytes.Buffer
 	attr := blk.meta.GetSegment().GetTable().GetSchema().ColDefs[col].Name
-	raw, _, _ := blk.getVectorCopy(txn, attr, &comp, &decomp, true)
+	raw, _, _ := blk.getVectorCopy(txn.GetStartTS(), attr, &comp, &decomp, true)
 	v = compute.GetValue(raw, row)
 	return
 }

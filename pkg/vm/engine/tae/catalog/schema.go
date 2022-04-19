@@ -143,6 +143,14 @@ func (s *Schema) GetPKType() types.Type {
 	return s.ColDefs[s.PrimaryKey].Type
 }
 
+func (s *Schema) Attrs() []string {
+	attrs := make([]string, len(s.ColDefs))
+	for i, colDef := range s.ColDefs {
+		attrs[i] = colDef.Name
+	}
+	return attrs
+}
+
 func (s *Schema) Types() []types.Type {
 	ts := make([]types.Type, len(s.ColDefs))
 	for i, colDef := range s.ColDefs {
