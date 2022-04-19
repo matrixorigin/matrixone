@@ -15,12 +15,15 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"testing"
 
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
@@ -202,4 +205,145 @@ func TestSort(t *testing.T) {
 	fmt.Println()
 	sort.Strings(attrs)
 	fmt.Printf("%v\n", attrs)
+}
+
+func Test_ParallelReader(t *testing.T) {
+	convey.Convey("read with ParallelReader or multiNode", t, func() {
+
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		err = tpe.Create(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
+
+		dbDesc, err := tpe.Database("test")
+		convey.So(err, convey.ShouldBeNil)
+
+		//(a,b,c)
+		//(uint64,uint64,uint64)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_uint64)
+
+		attrNames := []string{
+			"a", "b", "c",
+		}
+		var defs []engine.TableDef
+		var rawDefs []*engine.AttributeDef
+		for i, def := range attrDefs {
+			def.Attr.Name = attrNames[i]
+			defs = append(defs, def)
+			rawDefs = append(rawDefs, def)
+		}
+
+		err = dbDesc.Create(0, "A", defs)
+		convey.So(err, convey.ShouldBeNil)
+
+		tableDesc, err := dbDesc.Relation("A")
+		convey.So(err, convey.ShouldBeNil)
+
+		//make data
+		bat := tuplecodec.MakeBatch(10, attrNames, rawDefs)
+
+		bat.Zs = nil
+		err = tableDesc.Write(0, bat)
+		convey.So(err, convey.ShouldBeNil)
+
+		readers := tableDesc.NewReader(1, nil, nil)
+		readers[0].(*TpeReader).parallelReader = false
+		readers[0].(*TpeReader).multiNode = false
+
+		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "b"})
+		convey.So(err, convey.ShouldBeNil)
+
+		readers = tableDesc.NewReader(1, nil, nil)
+		readers[0].(*TpeReader).parallelReader = true
+
+		readers[0].(*TpeReader).shardInfos = make([]ShardInfo, 2)
+		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "b"})
+		convey.So(err, convey.ShouldResemble, errors.New("unsupported in memory kv"))
+
+		readers[0].(*TpeReader).multiNode = true
+		readers[0].(*TpeReader).printBatch = true
+		readers[0].(*TpeReader).readCtx.CompleteInShard = true
+		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "b"})
+		convey.So(err, convey.ShouldResemble, errors.New("unsupported in memory kv"))
+
+		_, err = readers[0].Read([]uint64{}, []string{"a", "b"})
+		convey.So(err, convey.ShouldResemble, errorInvalidParameters)
+
+		_, err = readers[0].Read([]uint64{1}, []string{"a", "b"})
+		convey.So(err, convey.ShouldResemble, errorMismatchRefcntWithAttributeCnt)
+
+		_, err = readers[0].Read([]uint64{1, 1}, []string{"a", "d"})
+		convey.So(err, convey.ShouldResemble, errorSomeAttributeNamesAreNotInAttributeDesc)
+	})
+}
+
+
+func Test_printBatch(t *testing.T) {
+	convey.Convey("test printBatch", t, func() {
+		tpe, err := NewTpeEngine(&TpeConfig{
+			KvType:                    tuplecodec.KV_MEMORY,
+			SerialType:                tuplecodec.ST_JSON,
+			ValueLayoutSerializerType: "default",
+			KVLimit:                   10000})
+		convey.So(err, convey.ShouldBeNil)
+		err = tpe.Create(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
+
+		dbDesc, err := tpe.Database("test")
+		convey.So(err, convey.ShouldBeNil)
+
+		//(a,b,c)
+		//(uint64,uint64,uint64)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_int8, types.T_uint8, types.T_int16, types.T_uint16, types.T_int32, 
+										types.T_uint32, types.T_int64, types.T_uint64, types.T_float32, types.T_float64, 
+										types.T_char, types.T_varchar, types.T_date, types.T_datetime)
+
+		attrNames := []string{
+			"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n",
+		}
+		var defs []engine.TableDef
+		var rawDefs []*engine.AttributeDef
+		for i, def := range attrDefs {
+			def.Attr.Name = attrNames[i]
+			defs = append(defs, def)
+			rawDefs = append(rawDefs, def)
+		}
+
+		err = dbDesc.Create(0, "A", defs)
+		convey.So(err, convey.ShouldBeNil)
+
+		tableDesc, err := dbDesc.Relation("A")
+		convey.So(err, convey.ShouldBeNil)
+
+		cnt := 1
+		bat := tuplecodec.MakeBatch(cnt, attrNames, attrDefs)
+		lines := [][]string{{"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "2022-04-19", "2022-04-19 12:20:00"}}
+		tuplecodec.FillBatch(lines, bat)
+
+		bat.Zs = nil
+		err = tableDesc.Write(0, bat)
+
+		convey.So(err, convey.ShouldBeNil)
+
+		var get *batch.Batch
+		readers := tableDesc.NewReader(1, nil, nil)
+		get, err = readers[0].Read(make([]uint64, 14), attrNames)
+		printBatch(readers[0].(*TpeReader), get, attrNames)
+
+		for i := 0; i < len(bat.Vecs); i++ {
+			bat.Vecs[i].Nsp = &nulls.Nulls{Np: roaring.New()}
+			bat.Vecs[i].Nsp.Np.AddInt(1)	
+		}
+		printBatch(readers[0].(*TpeReader), bat, attrNames)
+
+		for i := 0; i < len(bat.Vecs); i++ {
+			bat.Vecs[i].Nsp = &nulls.Nulls{Np: roaring.New()}
+			bat.Vecs[i].Nsp.Np.AddInt(0)	
+		}
+		printBatch(readers[0].(*TpeReader), bat, attrNames)
+	})
 }
