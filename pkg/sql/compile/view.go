@@ -77,7 +77,8 @@ func constructView(bat *batch.Batch, vars []string) {
 		}
 		// zValues is used to flag null, in sql null is not equal to any value (including null), so special flagging is needed.
 		copy(zValues[:n], OneInt64s[:n])
-		for j, vec := range vecs { // // combine multiple attributes into a single key
+		// combine multiple attributes into a single key
+		for j, vec := range vecs {
 			switch vec.Typ.Oid {
 			case types.T_int8:
 				vs := vecs[j].Col.([]int8)

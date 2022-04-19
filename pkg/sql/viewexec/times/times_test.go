@@ -35,7 +35,8 @@ import (
 )
 
 const (
-	Rows = 10 // default rows
+	Rows          = 10      // default rows
+	BenchmarkRows = 1000000 // default rows for benchmark
 )
 
 // add unit tests for cases
@@ -52,12 +53,157 @@ type timesTestCase struct {
 }
 
 var (
-	tcs []timesTestCase
+	h0tc   timesTestCase
+	h8tc   timesTestCase
+	h24tc  timesTestCase
+	h32tc  timesTestCase
+	h40tc  timesTestCase
+	hstrtc timesTestCase
+	tcs    []timesTestCase
 )
 
 func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
+	h0tc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"1"},
+		dimensionAttrs: [][]string{
+			{"1"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int8},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int8}},
+		},
+		arg: &Argument{
+			Result: []string{},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+	h8tc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"1"},
+		dimensionAttrs: [][]string{
+			{"1"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int8},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int8}},
+		},
+		arg: &Argument{
+			Result: []string{"1"},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+	h24tc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"1"},
+		dimensionAttrs: [][]string{
+			{"1"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int64},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int64}},
+		},
+		arg: &Argument{
+			Result: []string{"1"},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+	h32tc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"0", "1"},
+		dimensionAttrs: [][]string{
+			{"1", "2"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
+		},
+		arg: &Argument{
+			Result: []string{"0", "1", "2"},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+	h40tc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"0", "1", "3"},
+		dimensionAttrs: [][]string{
+			{"1", "2"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
+		},
+		arg: &Argument{
+			Result: []string{"0", "1", "2", "3"},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+	hstrtc = timesTestCase{
+		flg:       false,
+		hasNull:   false,
+		proc:      process.New(mheap.New(gm)),
+		factAttrs: []string{"0", "1", "3", "4"},
+		dimensionAttrs: [][]string{
+			{"1", "2"},
+		},
+
+		factTypes: []types.Type{
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+			types.Type{Oid: types.T_int64},
+		},
+		dimensionTypes: [][]types.Type{
+			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
+		},
+		arg: &Argument{
+			Result: []string{"0", "1", "2", "3", "4"},
+			Vars: [][]string{
+				{"1"},
+			},
+		},
+	}
+
 	tcs = []timesTestCase{
 		{
 			flg:       false,
@@ -836,6 +982,102 @@ func TestTimes(t *testing.T) {
 	}
 }
 
+func BenchmarkTimesH0(b *testing.B) {
+	t := new(testing.T)
+	tc := h0tc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
+func BenchmarkTimesH8(b *testing.B) {
+	t := new(testing.T)
+	tc := h8tc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
+func BenchmarkTimesH24(b *testing.B) {
+	t := new(testing.T)
+	tc := h24tc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
+func BenchmarkTimesH32(b *testing.B) {
+	t := new(testing.T)
+	tc := h32tc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
+func BenchmarkTimesH40(b *testing.B) {
+	t := new(testing.T)
+	tc := h40tc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
+func BenchmarkTimesHstr(b *testing.B) {
+	t := new(testing.T)
+	tc := hstrtc
+	for i, dmAttrs := range tc.dimensionAttrs {
+		tc.arg.Bats = append(tc.arg.Bats, newBatch(t, tc.flg, tc.hasNull, tc.dimensionTypes[i], dmAttrs, tc.proc))
+	}
+	constructViews(tc.arg.Bats, tc.arg.Vars)
+	Prepare(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = newLargeBatch(tc.flg, tc.hasNull, tc.factTypes, tc.factAttrs, tc.proc)
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = &batch.Batch{}
+	Call(tc.proc, tc.arg)
+	tc.proc.Reg.InputBatch = nil
+	Call(tc.proc, tc.arg)
+}
+
 // create a new block based on the attribute information, flg indicates if the data is all duplicated
 func newBatch(t *testing.T, flg, isNull bool, ts []types.Type, attrs []string, proc *process.Process) *batch.Batch {
 	bat := batch.New(true, attrs)
@@ -1055,6 +1297,230 @@ func newBatch(t *testing.T, flg, isNull bool, ts []types.Type, attrs []string, p
 			}
 			data, err := mheap.Alloc(proc.Mp, int64(size))
 			require.NoError(t, err)
+			data = data[:0]
+			col := new(types.Bytes)
+			o := uint32(0)
+			for _, v := range vs {
+				data = append(data, v...)
+				col.Offsets = append(col.Offsets, o)
+				o += uint32(len(v))
+				col.Lengths = append(col.Lengths, uint32(len(v)))
+			}
+			col.Data = data
+			vec.Col = col
+			vec.Data = data
+		}
+		bat.Vecs[i] = vec
+	}
+	return bat
+}
+
+// create a new large block based on the attribute information, flg indicates if the data is all duplicated
+func newLargeBatch(flg, isNull bool, ts []types.Type, attrs []string, proc *process.Process) *batch.Batch {
+	bat := batch.New(true, attrs)
+	bat.Zs = make([]int64, BenchmarkRows)
+	bat.Ht = []*vector.Vector{}
+	for i := range bat.Zs {
+		bat.Zs[i] = 1
+	}
+	for i := range bat.Vecs {
+		vec := vector.New(ts[i])
+		switch vec.Typ.Oid {
+		case types.T_int8:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*1)
+			vec.Data = data
+			vs := encoding.DecodeInt8Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int8(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int16:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*2)
+			vec.Data = data
+			vs := encoding.DecodeInt16Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int16(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int32:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*4)
+			vec.Data = data
+			vs := encoding.DecodeInt32Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_int64:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*8)
+			vec.Data = data
+			vs := encoding.DecodeInt64Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = int64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint8:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows)
+			vec.Data = data
+			vs := encoding.DecodeUint8Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint8(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint16:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*2)
+			vec.Data = data
+			vs := encoding.DecodeUint16Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint16(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint32:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*4)
+			vec.Data = data
+			vs := encoding.DecodeUint32Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_uint64:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*8)
+			vec.Data = data
+			vs := encoding.DecodeUint64Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = uint64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_float32:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*4)
+			vec.Data = data
+			vs := encoding.DecodeFloat32Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = float32(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_float64:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*8)
+			vec.Data = data
+			vs := encoding.DecodeFloat64Slice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = float64(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_date:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*4)
+			vec.Data = data
+			vs := encoding.DecodeDateSlice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = types.Date(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_datetime:
+			data, _ := mheap.Alloc(proc.Mp, BenchmarkRows*8)
+			vec.Data = data
+			vs := encoding.DecodeDatetimeSlice(vec.Data)[:BenchmarkRows]
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = 0
+				} else {
+					vs[i] = types.Datetime(i)
+				}
+			}
+			vec.Col = vs
+		case types.T_char, types.T_varchar:
+			size := 0
+			vs := make([][]byte, BenchmarkRows)
+			if isNull {
+				nulls.Add(vec.Nsp, 0)
+			}
+			for i := range vs {
+				if flg {
+					vs[i] = []byte("0")
+				} else {
+					vs[i] = []byte(strconv.Itoa(i))
+				}
+				size += len(vs[i])
+			}
+			data, _ := mheap.Alloc(proc.Mp, int64(size))
 			data = data[:0]
 			col := new(types.Bytes)
 			o := uint32(0)

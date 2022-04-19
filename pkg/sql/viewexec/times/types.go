@@ -46,20 +46,28 @@ var OneInt64s []int64
 
 // a view represent a dimension table with a hashtable
 type view struct {
-	isPure bool // true: primary key join
+	// true: primary key join
+	isPure bool
 
-	is  []int // subscript in the result attribute
-	ris []int // subscript in the result ring
-	ois []int // subscript in the origin batch
+	// subscript in the result attribute
+	is []int
+	// subscript in the result ring
+	ris []int
+	// subscript in the origin batch
+	ois []int
 
-	attrs []string // attributes of dimension table
+	// attributes of dimension table
+	attrs []string
 	// each element corresponds to a specific group number.
 	//   group number is  an indication of the location of join key in the hashtable,
 	//	 and this location information is provided by the hashtable.
 	values []uint64
-	sels   [][]int64        // row list
-	bat    *batch.Batch     // tuples of dimension table
-	vecs   []*vector.Vector // vector of dimension table
+	// row list
+	sels [][]int64
+	// tuples of dimension table
+	bat *batch.Batch
+	// vector of dimension table
+	vecs []*vector.Vector
 	// only one type of hashtable will exist in a view,
 	// if the join key size is zero, then hashtable does not need.
 	//  intHashMap:  0 < key size <= 8
