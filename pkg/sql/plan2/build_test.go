@@ -34,7 +34,7 @@ func outPutQuery(query *Query, toFile bool, t *testing.T) {
 		t.Logf("%+v", query)
 	}
 	if toFile {
-		err := ioutil.WriteFile("/Users/ouyuanning/test.json", []byte(out.String()), 777)
+		err := ioutil.WriteFile("/Users/ouyuanning/test.json", out.Bytes(), 0777)
 		if err != nil {
 			t.Logf("%+v", err)
 		}

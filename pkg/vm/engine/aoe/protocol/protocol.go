@@ -56,12 +56,12 @@ func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.From = append(def.From, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -69,12 +69,12 @@ func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.To = append(def.To, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]

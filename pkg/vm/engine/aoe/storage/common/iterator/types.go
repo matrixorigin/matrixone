@@ -14,8 +14,6 @@
 
 package iterator
 
-import ()
-
 type ExecutorT func(interface{}, Iterator) error
 type HandleT func(interface{}) error
 
