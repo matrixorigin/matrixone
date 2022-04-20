@@ -22,28 +22,6 @@ import (
 Substring function rule description
 */
 
-var (
-	SubstringFromLeftConstOffsetUnbounded  func(*types.Bytes, *types.Bytes, int64) *types.Bytes
-	SubstringFromRightConstOffsetUnbounded func(*types.Bytes, *types.Bytes, int64) *types.Bytes
-	SubstringFromZeroConstOffsetUnbounded  func(*types.Bytes, *types.Bytes) *types.Bytes
-	SubstringFromZeroConstOffsetBounded    func(*types.Bytes, *types.Bytes) *types.Bytes
-	SubstringDynamicOffsetUnbounded        func(*types.Bytes, *types.Bytes, interface{}, types.T) *types.Bytes
-	SubstringFromLeftConstOffsetBounded    func(*types.Bytes, *types.Bytes, int64, int64) *types.Bytes
-	SubstringFromRightConstOffsetBounded   func(*types.Bytes, *types.Bytes, int64, int64) *types.Bytes
-	SubstringDynamicOffsetBounded          func(*types.Bytes, *types.Bytes, interface{}, types.T, interface{}, types.T, []bool) *types.Bytes
-)
-
-func init() {
-	SubstringFromLeftConstOffsetUnbounded = substringFromLeftConstOffsetUnbounded
-	SubstringFromRightConstOffsetUnbounded = substringFromRightConstOffsetUnbounded
-	SubstringFromZeroConstOffsetUnbounded = substringFromZeroConstOffsetUnbounded
-	SubstringDynamicOffsetUnbounded = substringDynamicOffsetUnbounded
-	SubstringFromZeroConstOffsetBounded = substringFromZeroConstOffsetBounded
-	SubstringFromLeftConstOffsetBounded = substringFromLeftConstOffsetBounded
-	SubstringFromRightConstOffsetBounded = substringFromRightConstOffsetBounded
-	SubstringDynamicOffsetBounded = substringDynamicOffsetBounded
-}
-
 //Slice from left to right, starting from 0
 func getSliceFromLeft(bytes []byte, offset int64) ([]byte, int64) {
 	elemsize := int64(len(bytes))

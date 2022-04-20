@@ -21,6 +21,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	SubstringFromLeftConstOffsetUnbounded  func(*types.Bytes, *types.Bytes, int64) *types.Bytes
+	SubstringFromRightConstOffsetUnbounded func(*types.Bytes, *types.Bytes, int64) *types.Bytes
+	SubstringFromZeroConstOffsetUnbounded  func(*types.Bytes, *types.Bytes) *types.Bytes
+	SubstringFromZeroConstOffsetBounded    func(*types.Bytes, *types.Bytes) *types.Bytes
+	SubstringDynamicOffsetUnbounded        func(*types.Bytes, *types.Bytes, interface{}, types.T) *types.Bytes
+	SubstringFromLeftConstOffsetBounded    func(*types.Bytes, *types.Bytes, int64, int64) *types.Bytes
+	SubstringFromRightConstOffsetBounded   func(*types.Bytes, *types.Bytes, int64, int64) *types.Bytes
+	SubstringDynamicOffsetBounded          func(*types.Bytes, *types.Bytes, interface{}, types.T, interface{}, types.T, []bool) *types.Bytes
+)
+
+func init() {
+	SubstringFromLeftConstOffsetUnbounded = substringFromLeftConstOffsetUnbounded
+	SubstringFromRightConstOffsetUnbounded = substringFromRightConstOffsetUnbounded
+	SubstringFromZeroConstOffsetUnbounded = substringFromZeroConstOffsetUnbounded
+	SubstringDynamicOffsetUnbounded = substringDynamicOffsetUnbounded
+	SubstringFromZeroConstOffsetBounded = substringFromZeroConstOffsetBounded
+	SubstringFromLeftConstOffsetBounded = substringFromLeftConstOffsetBounded
+	SubstringFromRightConstOffsetBounded = substringFromRightConstOffsetBounded
+	SubstringDynamicOffsetBounded = substringDynamicOffsetBounded
+}
+
 func TestSubstringFromLeftConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
