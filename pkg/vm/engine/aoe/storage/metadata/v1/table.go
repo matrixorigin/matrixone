@@ -756,8 +756,7 @@ func (e *Table) PString(level PPLevel, depth int) string {
 }
 
 func MockDBTable(catalog *Catalog, dbName string, schema *Schema, indice *IndexSchema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
-	var index *LogIndex
-	index = idxGen.Next()
+	index := idxGen.Next()
 	if catalog.IndexWal != nil {
 		catalog.IndexWal.SyncLog(index)
 	}

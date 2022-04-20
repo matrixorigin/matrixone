@@ -1019,7 +1019,7 @@ func (c *Catalog) preSplitKey(db uint64) []byte {
 }
 
 func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent, error) {
-	oldInterface, err := aoedb.IdToNameFactory.Decode(aoeSplitEvent.DB)
+	oldInterface, err := aoedb.IDToNameFactory.Decode(aoeSplitEvent.DB)
 	if err != nil {
 		return nil, err
 	}
@@ -1029,7 +1029,7 @@ func (c *Catalog) decodeSplitEvent(aoeSplitEvent *event.SplitEvent) (*SplitEvent
 	}
 	news := make(map[uint64][]uint64)
 	for newshard, tbls := range aoeSplitEvent.Names {
-		newInterface, err := aoedb.IdToNameFactory.Decode(newshard)
+		newInterface, err := aoedb.IDToNameFactory.Decode(newshard)
 		if err != nil {
 			return nil, err
 		}

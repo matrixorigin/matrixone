@@ -123,7 +123,7 @@ func (s *mockShard) createTable(schema *metadata.Schema) error {
 
 func (s *mockShard) dropTable(ctx *DropTableCtx) error {
 	ctx.DB = s.database.Name
-	ctx.Id = s.gen.Alloc()
+	ctx.ID = s.gen.Alloc()
 	ctx.Size = 1
 	_, err := s.inst.DropTable(ctx)
 	return err
@@ -131,13 +131,13 @@ func (s *mockShard) dropTable(ctx *DropTableCtx) error {
 
 func (s *mockShard) insert(ctx *AppendCtx) error {
 	ctx.DB = s.database.Name
-	ctx.Id = s.gen.Alloc()
+	ctx.ID = s.gen.Alloc()
 	ctx.Size = 1
 	err := s.inst.Append(ctx)
 	return err
 }
 
-func (s *mockShard) getSafeId() uint64 {
+func (s *mockShard) getSafeID() uint64 {
 	return s.database.GetCheckpointId()
 }
 
@@ -247,10 +247,10 @@ func TestShard1(t *testing.T) {
 	wg.Wait()
 	for _, shard := range shards {
 		testutils.WaitExpect(200, func() bool {
-			return shard.gen.Get() == shard.getSafeId()
+			return shard.gen.Get() == shard.getSafeID()
 		})
-		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
-		t.Logf("shard-%d safeid %d, logid-%d", shard.gen.ShardId, shard.getSafeId(), shard.gen.Get())
+		assert.Equal(t, shard.gen.Get(), shard.getSafeID())
+		t.Logf("shard-%d safeid %d, logid-%d", shard.gen.ShardId, shard.getSafeID(), shard.gen.Get())
 		shard.Stop()
 	}
 	inst.Close()
@@ -308,11 +308,11 @@ func TestShard2(t *testing.T) {
 
 	wg.Wait()
 	for _, shard := range shards {
-		testutils.WaitExpect(400, func() bool {
-			return shard.gen.Get() == shard.getSafeId()
+		testutils.WaitExpect(4000, func() bool {
+			return shard.gen.Get() == shard.getSafeID()
 		})
-		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
-		t.Logf("shard-%d safeid %d, logid-%d", shard.gen.ShardId, shard.getSafeId(), shard.gen.Get())
+		assert.Equal(t, shard.gen.Get(), shard.getSafeID())
+		t.Logf("shard-%d safeid %d, logid-%d", shard.gen.ShardId, shard.getSafeID(), shard.gen.Get())
 		shard.Stop()
 	}
 
@@ -320,15 +320,15 @@ func TestShard2(t *testing.T) {
 	for _, shard := range shards {
 		view := shard.database.View(0)
 		assert.Empty(t, view.Database.TableSet)
-		view = shard.database.View(shard.getSafeId())
+		view = shard.database.View(shard.getSafeID())
 		total += len(view.Database.TableSet)
 	}
 	assert.Equal(t, 0, total)
 	for _, shard := range shards {
 		testutils.WaitExpect(800, func() bool {
-			return shard.gen.Get() == shard.getSafeId()
+			return shard.gen.Get() == shard.getSafeID()
 		})
-		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
+		assert.Equal(t, shard.gen.Get(), shard.getSafeID())
 	}
 	dbCompacts := 0
 	tblCompacts := 0
@@ -351,9 +351,9 @@ func TestShard2(t *testing.T) {
 	}
 	for _, shard := range shards {
 		testutils.WaitExpect(400, func() bool {
-			return (shard.gen.Get() == shard.getSafeId()) && (shard.database.IsHardDeleted())
+			return (shard.gen.Get() == shard.getSafeID()) && (shard.database.IsHardDeleted())
 		})
-		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
+		assert.Equal(t, shard.gen.Get(), shard.getSafeID())
 	}
 	dbCompacts = 0
 	tblCompacts = 0
@@ -423,9 +423,14 @@ func TestShard3(t *testing.T) {
 			Path: getSnapshotPath(defaultSnapshotPath, t),
 			Sync: true,
 		}
-		idx, err := inst.CreateSnapshot(ctx)
+		var idx uint64
+		var err error
+		testutils.WaitExpect(4000, func() bool {
+			idx, err = inst.CreateSnapshot(ctx)
+			return err == nil
+		})
 		assert.Nil(t, err)
-		assert.Equal(t, shard.getSafeId(), idx)
+		assert.Equal(t, shard.getSafeID(), idx)
 		costs[shard.database.Id] = time.Since(now)
 	}
 	for id, cost := range costs {

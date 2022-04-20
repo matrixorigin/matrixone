@@ -56,7 +56,7 @@ func main() {
 	createTableCtx := new(aoedb.CreateTableCtx)
 	createTableCtx.DB = createDBCtx.DB
 	createTableCtx.Schema = schema
-	createTableCtx.Id = gen.Alloc(database.GetShardId())
+	createTableCtx.ID = gen.Alloc(database.GetShardId())
 	createTableCtx.Size = 1
 	_, err = inst.CreateTable(createTableCtx)
 	if err != nil {
@@ -81,7 +81,7 @@ func main() {
 			ctx := new(aoedb.AppendCtx)
 			ctx.DB = database.Name
 			ctx.Table = tName
-			ctx.Id = gen.Alloc(database.GetShardId())
+			ctx.ID = gen.Alloc(database.GetShardId())
 			ctx.Size = 1
 			ctx.Data = ck
 			err = inst.Append(ctx)
@@ -139,7 +139,7 @@ func main() {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 	dropTableCtx := new(aoedb.DropTableCtx)
-	dropTableCtx.Id = gen.Alloc(database.GetShardId())
+	dropTableCtx.ID = gen.Alloc(database.GetShardId())
 	dropTableCtx.Size = 1
 	dropTableCtx.DB = database.Name
 	dropTableCtx.Table = tName

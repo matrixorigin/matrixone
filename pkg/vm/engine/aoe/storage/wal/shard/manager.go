@@ -312,7 +312,7 @@ func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {
 	defer mgr.mu.RUnlock()
 	for _, s := range mgr.shards {
 		stat := &shard.ItemsToCheckpointStat{
-			ShardId: s.id,
+			ShardID: s.id,
 			Count:   int(s.GetPendingEntries()),
 		}
 		stats = append(stats, stat)

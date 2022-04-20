@@ -228,12 +228,12 @@ func (f *driver) onPengdingItems(items []*shard.ItemsToCheckpointStat) {
 		if stat.Count == 0 {
 			continue
 		}
-		s := f.getShard(stat.ShardId)
+		s := f.getShard(stat.ShardID)
 		if s == nil {
-			logutil.Warnf("Specified shard %d not found", stat.ShardId)
+			logutil.Warnf("Specified shard %d not found", stat.ShardID)
 			continue
 		}
-		toFlush.Add(stat.ShardId)
+		toFlush.Add(stat.ShardID)
 	}
 	if toFlush.GetCardinality() > 0 {
 		err, _ := f.EnqueueCheckpoint(toFlush)

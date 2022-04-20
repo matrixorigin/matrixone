@@ -53,7 +53,7 @@ func newSortedSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, cb PostCl
 	holder.self.droppedVersion = make(map[int]uint64)
 	holder.versionAllocator = ColumnsAllocator{
 		RWMutex:    sync.RWMutex{},
-		Allocators: make(map[int]*common.IdAlloctor),
+		Allocators: make(map[int]*common.IDAlloctor),
 	}
 	holder.OnZeroCB = holder.close
 	holder.Ref()

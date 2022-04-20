@@ -80,7 +80,8 @@ func TestManager2(t *testing.T) {
 	b0 := mgr.Pin(h0)
 	assert.Nil(t, b0)
 	new_cap := h0.GetCapacity() * 2
-	mgr.SetCapacity(new_cap)
+	err := mgr.SetCapacity(new_cap)
+	assert.Nil(t, err)
 	assert.Equal(t, mgr.GetCapacity(), new_cap)
 
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 1)
@@ -168,7 +169,8 @@ func TestManager4(t *testing.T) {
 	h0 := mgr.RegisterSpillableNode(common.NewMemFile(node_capacity), id0, constructor)
 	assert.Nil(t, h0)
 	num_nodes := uint64(3)
-	mgr.SetCapacity(num_nodes * uint64(node_capacity))
+	err := mgr.SetCapacity(num_nodes * uint64(node_capacity))
+	assert.Nil(t, err)
 
 	h0_1 := mgr.RegisterSpillableNode(common.NewMemFile(node_capacity), id0, constructor)
 	assert.NotNil(t, h0_1)
@@ -197,7 +199,8 @@ func TestManager5(t *testing.T) {
 	h0 := mgr.RegisterMemory(common.NewMemFile(node_capacity), false, constructor)
 	assert.Nil(t, h0)
 
-	mgr.SetCapacity(uint64(node_capacity))
+	err := mgr.SetCapacity(uint64(node_capacity))
+	assert.Nil(t, err)
 
 	h0_1 := mgr.RegisterMemory(common.NewMemFile(node_capacity), true, constructor)
 	assert.NotNil(t, h0_1)

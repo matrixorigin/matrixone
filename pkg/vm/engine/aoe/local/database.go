@@ -43,7 +43,7 @@ func (d *localRoDatabase) Relations() (names []string){
 }
 
 func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
-	impl, err := d.dbimpl.Relation(aoedb.IdToNameFactory.Encode(1), name)
+	impl, err := d.dbimpl.Relation(aoedb.IDToNameFactory.Encode(1), name)
 	if err != nil {
 		return nil, err
 	}

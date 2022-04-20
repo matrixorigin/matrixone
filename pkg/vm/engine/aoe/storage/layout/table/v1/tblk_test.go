@@ -191,7 +191,7 @@ func TestTBlock(t *testing.T) {
 
 	t.Log(common.GPool.String())
 
-	testutils.WaitExpect(100, func() bool {
+	testutils.WaitExpect(1000, func() bool {
 		return idx5.Id.Id == blk1.GetMeta().Segment.Table.Database.GetCheckpointId()
 	})
 	assert.Equal(t, idx5.Id.Id, blk1.GetMeta().Segment.Table.Database.GetCheckpointId())

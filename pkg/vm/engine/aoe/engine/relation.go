@@ -151,7 +151,7 @@ func (r *relation) update() error {
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
-				aoedbName.IdToNameFactory.Encode(
+				aoedbName.IDToNameFactory.Encode(
 					tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}

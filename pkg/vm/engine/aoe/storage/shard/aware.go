@@ -26,6 +26,6 @@ type Node interface {
 
 type NodeAware interface {
 	Aware
-	ShardNodeCreated(shardId, nodeId uint64)
-	ShardNodeDeleted(shardId, nodeId uint64)
+	ShardNodeCreated(shardId, nodeID uint64)
+	ShardNodeDeleted(shardId, nodeID uint64)
 }

@@ -23,7 +23,7 @@ import (
 )
 
 var (
-	eventId     uint64 = 0
+	eventID     uint64 = 0
 	EventPrefix string = "Event"
 )
 
@@ -35,8 +35,8 @@ const (
 	CustomizedEvent
 )
 
-func GetNextEventId() uint64 {
-	return atomic.AddUint64(&eventId, uint64(1))
+func GetNextEventID() uint64 {
+	return atomic.AddUint64(&eventID, uint64(1))
 }
 
 type BaseEvent struct {
