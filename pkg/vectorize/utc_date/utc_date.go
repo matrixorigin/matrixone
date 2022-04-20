@@ -24,5 +24,5 @@ func init() {
 }
 
 func GetUTCDate() types.Date {
-	return types.Today()
+	return types.UTC_Today()
 }

@@ -119,10 +119,16 @@ func (a Date) String() string {
 	return fmt.Sprintf("%04d-%02d-%02d", y, m, d)
 }
 
-// Holds number of days since January 1, year 1 in Gregorian calendar
+// Holds number of days since January 1, year 1 in Gregorian calendar for Local Time
 func Today() Date {
 	sec := Now().sec()
 	return Date((sec + localTZ) / secsPerDay)
+}
+
+// Holds number of days since January 1, year 1 in Gregorian calendar for UTC Time
+func UTC_Today() Date {
+	sec := Now().UTC().sec()
+	return Date(sec / secsPerDay)
 }
 
 const dayInfoTableMinYear = 1924
