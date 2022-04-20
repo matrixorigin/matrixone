@@ -69,7 +69,7 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -115,7 +115,7 @@ func TestSplit2(t *testing.T) {
 	// 2. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -169,7 +169,7 @@ func TestSplit2(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -200,11 +200,11 @@ func TestSplit2(t *testing.T) {
 		return nil
 	}
 
-	dbs := make([]*metadata.Database, 0)
+	// dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
-		dbs = append(dbs, db)
+		// dbs = append(dbs, db)
 		db.RLock()
 		err = db.RecurLoopLocked(processor)
 		assert.Nil(t, err)
@@ -215,7 +215,8 @@ func TestSplit2(t *testing.T) {
 		return t0.IsHardDeleted() && t1.IsHardDeleted()
 	})
 	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
-	inst.ForceCompactCatalog()
+	err = inst.ForceCompactCatalog()
+	assert.Nil(t, err)
 	t.Log(database.Catalog.PString(metadata.PPL0, 0))
 	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
 
@@ -255,12 +256,13 @@ func TestSplit3(t *testing.T) {
 	inst, gen, database := initTestDB1(t)
 
 	// 2. Disable upgrade segment
-	inst.Scheduler.ExecCmd(sched.TurnOffUpgradeSegmentMetaCmd)
+	err := inst.Scheduler.ExecCmd(sched.TurnOffUpgradeSegmentMetaCmd)
+	assert.Nil(t, err)
 
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -275,7 +277,7 @@ func TestSplit3(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
 	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
-	err := inst.Append(appendCtx)
+	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	// 5. Append rows to 1-2
@@ -314,11 +316,12 @@ func TestSplit3(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	// 8. Turn on upgrade segment meta
-	inst.Scheduler.ExecCmd(sched.TurnOnUpgradeSegmentMetaCmd)
+	err = inst.Scheduler.ExecCmd(sched.TurnOnUpgradeSegmentMetaCmd)
+	assert.Nil(t, err)
 
 	// 9. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -347,11 +350,11 @@ func TestSplit3(t *testing.T) {
 		return nil
 	}
 
-	dbs := make([]*metadata.Database, 0)
+	// dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
-		dbs = append(dbs, db)
+		// dbs = append(dbs, db)
 		db.RLock()
 		err = db.RecurLoopLocked(processor)
 		assert.Nil(t, err)
@@ -362,7 +365,8 @@ func TestSplit3(t *testing.T) {
 		return t0.IsHardDeleted() && t1.IsHardDeleted()
 	})
 	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
-	inst.ForceCompactCatalog()
+	err = inst.ForceCompactCatalog()
+	assert.Nil(t, err)
 	t.Log(database.Catalog.PString(metadata.PPL0, 0))
 	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
 
@@ -402,12 +406,13 @@ func TestSplit4(t *testing.T) {
 	inst, gen, database := initTestDB1(t)
 
 	// 2. Disable flush segment
-	inst.Scheduler.ExecCmd(sched.TurnOffFlushSegmentCmd)
+	err := inst.Scheduler.ExecCmd(sched.TurnOffFlushSegmentCmd)
+	assert.Nil(t, err)
 
 	// 3. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -422,7 +427,7 @@ func TestSplit4(t *testing.T) {
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 35 / 10
 	ck0 := mock.MockBatch(schemas[0].Types(), rows)
 	appendCtx := CreateAppendCtx(database, gen, schemas[0].Name, ck0)
-	err := inst.Append(appendCtx)
+	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
 	// 5. Append rows to 1-2
@@ -461,11 +466,12 @@ func TestSplit4(t *testing.T) {
 	assert.Equal(t, 2, len(keys))
 
 	// 8. Turn on flush segment
-	inst.Scheduler.ExecCmd(sched.TurnOnFlushSegmentCmd)
+	err = inst.Scheduler.ExecCmd(sched.TurnOnFlushSegmentCmd)
+	assert.Nil(t, err)
 
 	// 9. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -496,11 +502,11 @@ func TestSplit4(t *testing.T) {
 		return nil
 	}
 
-	dbs := make([]*metadata.Database, 0)
+	// dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
-		dbs = append(dbs, db)
+		// dbs = append(dbs, db)
 		db.RLock()
 		err = db.RecurLoopLocked(processor)
 		assert.Nil(t, err)
@@ -511,7 +517,8 @@ func TestSplit4(t *testing.T) {
 		return t0.IsHardDeleted() && t1.IsHardDeleted()
 	})
 	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
-	inst.ForceCompactCatalog()
+	err = inst.ForceCompactCatalog()
+	assert.Nil(t, err)
 	t.Log(database.Catalog.PString(metadata.PPL0, 0))
 	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
 
@@ -539,7 +546,7 @@ func TestSplit5(t *testing.T) {
 	// 2. Create 2 tables
 	schemas := make([]*metadata.Schema, 2)
 	var createCtx *CreateTableCtx
-	for i, _ := range schemas {
+	for i := range schemas {
 		schema := metadata.MockSchema(i + 1)
 		createCtx = &CreateTableCtx{
 			DBMutationCtx: *CreateDBMutationCtx(database, gen),
@@ -584,7 +591,7 @@ func TestSplit5(t *testing.T) {
 	size := coarseSize
 
 	// 6. Append rows to 1-2
-	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.ID = gen.Alloc(database.GetShardId())
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
@@ -599,7 +606,7 @@ func TestSplit5(t *testing.T) {
 
 	// 8. Exec split
 	newNames := make([]string, len(keys))
-	for i, _ := range newNames {
+	for i := range newNames {
 		newNames[i] = fmt.Sprintf("splitted-%d", i)
 	}
 	renameTable := func(oldName, newDBName string) string {
@@ -643,7 +650,8 @@ func TestSplit5(t *testing.T) {
 		return t0.IsHardDeleted() && t1.IsHardDeleted()
 	})
 	assert.True(t, t0.IsHardDeleted() && t1.IsHardDeleted())
-	inst.ForceCompactCatalog()
+	err = inst.ForceCompactCatalog()
+	assert.Nil(t, err)
 	t.Log(database.Catalog.PString(metadata.PPL0, 0))
 	assert.Equal(t, 2, len(database.Catalog.SimpleGetDatabaseNames()))
 

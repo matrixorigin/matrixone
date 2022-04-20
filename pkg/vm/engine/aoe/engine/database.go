@@ -110,7 +110,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ClientAddress
 			storeId := db.catalog.Driver.RaftStore().GetRouter().LeaderReplicaStore(tbl.ShardId).ID
-			if lRelation, err := ldb.Relation(aoedbName.IdToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(aoedbName.IDToNameFactory.Encode(tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
 			logutil.Debugf("ClientAddr: %v, shardId: %d, storeId: %d", addr, tbl.ShardId, storeId)

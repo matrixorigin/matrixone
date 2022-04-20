@@ -98,7 +98,7 @@ func TestCreateDuplicateTable(t *testing.T) {
 	}
 	_, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
-	createCtx.Id = gen.Alloc(database.GetShardId())
+	createCtx.ID = gen.Alloc(database.GetShardId())
 	_, err = inst.CreateTable(createCtx)
 	assert.Equal(t, metadata.ErrDuplicate, err)
 }
@@ -157,7 +157,7 @@ func TestDropTable(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, ss)
 
-	createCtx.Id = gen.Alloc(database.GetShardId())
+	createCtx.ID = gen.Alloc(database.GetShardId())
 	createMeta2, err := inst.CreateTable(createCtx)
 	assert.Nil(t, err)
 	assert.NotEqual(t, createMeta.Id, createMeta2.Id)
@@ -192,8 +192,9 @@ func TestSSOnMutation(t *testing.T) {
 	assert.Equal(t, database.GetCheckpointId(), gen.Get(database.GetShardId()))
 
 	idx := database.GetCheckpointId()
-	appendCtx.Id = gen.Alloc(database.GetShardId())
+	appendCtx.ID = gen.Alloc(database.GetShardId())
 	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
 
 	view := database.View(idx)
 	t.Log(view.Database.PString(metadata.PPL1, 0))
@@ -223,7 +224,7 @@ func TestAppend(t *testing.T) {
 	insertCnt := 8
 	appendCtx.Table = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
-		appendCtx.Id = gen.Alloc(database.GetShardId())
+		appendCtx.ID = gen.Alloc(database.GetShardId())
 		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
 	}
@@ -293,11 +294,12 @@ func TestAppend(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 	err = inst.FlushTable(database2.Name, schema.Name)
+	assert.Nil(t, err)
 	t.Log(inst.Wal.String())
-	gen.Reset(database2.GetShardId(), appendCtx.Id)
+	gen.Reset(database2.GetShardId(), appendCtx.ID)
 
 	schema2 := metadata.MockSchema(3)
-	createCtx.Id = gen.Alloc(database2.GetShardId())
+	createCtx.ID = gen.Alloc(database2.GetShardId())
 	createCtx.Schema = schema2
 	_, err = inst.CreateTable(createCtx)
 	assert.Nil(t, err)
@@ -321,7 +323,7 @@ func TestConcurrency(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
 
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -379,7 +381,8 @@ func TestConcurrency(t *testing.T) {
 						ss.Close()
 					}
 				}
-				p.Submit(f)
+				err := p.Submit(f)
+				assert.Nil(t, err)
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
@@ -419,7 +422,7 @@ func TestConcurrency(t *testing.T) {
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
-				ShardId:    shardId,
+				ShardId:    shardID,
 				DBName:     database.Name,
 				TableName:  schema.Name,
 				SegmentIds: segIds,
@@ -442,7 +445,7 @@ func TestConcurrency(t *testing.T) {
 
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
-		ShardId:   shardId,
+		ShardId:   shardID,
 		DBName:    database.Name,
 		TableName: schema.Name,
 		Cols:      cols,
@@ -532,7 +535,7 @@ func TestMultiTables(t *testing.T) {
 	}
 	tblMeta := database.SimpleGetTableByName(names[0])
 	assert.NotNil(t, tblMeta)
-	rows := uint64(tblMeta.Database.Catalog.Cfg.BlockMaxRows / 2)
+	rows := tblMeta.Database.Catalog.Cfg.BlockMaxRows / 2
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	p1, _ := ants.NewPool(4)
 	p2, _ := ants.NewPool(4)
@@ -558,7 +561,8 @@ func TestMultiTables(t *testing.T) {
 				}
 			}
 			wg.Add(1)
-			p1.Submit(task(name))
+			err := p1.Submit(task(name))
+			assert.Nil(t, err)
 		}
 	}
 
@@ -574,8 +578,8 @@ func TestMultiTables(t *testing.T) {
 					}
 					rel, err := inst.Relation(database.Name, tname)
 					assert.Nil(t, err)
-					for _, segId := range rel.SegmentIds().Ids {
-						seg := rel.Segment(segId)
+					for _, segID := range rel.SegmentIds().Ids {
+						seg := rel.Segment(segID)
 						for _, id := range seg.Blocks() {
 							blk := seg.Block(id)
 							cds := make([]*bytes.Buffer, len(attrs))
@@ -596,18 +600,18 @@ func TestMultiTables(t *testing.T) {
 							for _, attr := range attrs {
 								v := batch.GetVector(bat, attr)
 								// if attri == 0 && vector.Length(v) > 5000 {
-									// edata := baseCk.Vecs[attri].Col.([]int32)
+								// edata := baseCk.Vecs[attri].Col.([]int32)
 
-									// odata := v.Col.([]int32)
+								// odata := v.Col.([]int32)
 
-									// assert.Equal(t, edata[4999], data[4999])
-									// assert.Equal(t, edata[5000], data[5000])
+								// assert.Equal(t, edata[4999], data[4999])
+								// assert.Equal(t, edata[5000], data[5000])
 
-									// t.Logf("data[4998]=%d", data[4998])
-									// t.Logf("data[4999]=%d", data[4999])
+								// t.Logf("data[4998]=%d", data[4998])
+								// t.Logf("data[4999]=%d", data[4999])
 
-									// t.Logf("data[5000]=%d", data[5000])
-									// t.Logf("data[5001]=%d", data[5001])
+								// t.Logf("data[5000]=%d", data[5000])
+								// t.Logf("data[5001]=%d", data[5001])
 								// }
 								assert.True(t, vector.Length(v) <= int(tblMeta.Database.Catalog.Cfg.BlockMaxRows))
 								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, vector.Length(v))
@@ -618,7 +622,8 @@ func TestMultiTables(t *testing.T) {
 				}
 			}
 			wg.Add(1)
-			p2.Submit(task(uint64(i), name, doneCB))
+			err := p2.Submit(task(uint64(i), name, doneCB))
+			assert.Nil(t, err)
 		}
 	}
 	wg.Wait()
@@ -628,8 +633,8 @@ func TestMultiTables(t *testing.T) {
 			rel, err := inst.Relation(database.Name, name)
 			assert.Nil(t, err)
 			sids := rel.SegmentIds().Ids
-			segId := sids[len(sids)-1]
-			seg := rel.Segment(segId)
+			segID := sids[len(sids)-1]
+			seg := rel.Segment(segID)
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1])
 			cds := make([]*bytes.Buffer, len(attrs))
@@ -683,7 +688,8 @@ func TestDropTable2(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
+				err := inst.Append(appendCtx)
+				assert.Nil(t, err)
 				wg.Done()
 			}()
 		}
@@ -716,7 +722,7 @@ func TestDropTable2(t *testing.T) {
 	assert.Nil(t, err)
 	dropDBCtx := &DropDBCtx{
 		DB: database.Name,
-		Id: gen.Alloc(database.GetShardId()),
+		ID: gen.Alloc(database.GetShardId()),
 	}
 	_, err = inst.DropDatabase(dropDBCtx)
 	assert.Nil(t, err)
@@ -753,7 +759,8 @@ func DisabledTestBuildIndex(t *testing.T) {
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
 	indice := metadata.NewIndexSchema()
-	indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	_, err := indice.MakeIndex("idx-1", metadata.NumBsi, 1)
+	assert.Nil(t, err)
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -774,7 +781,8 @@ func DisabledTestBuildIndex(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
+				err := inst.Append(appendCtx)
+				assert.Nil(t, err)
 				wg.Done()
 			}()
 		}
@@ -787,8 +795,8 @@ func DisabledTestBuildIndex(t *testing.T) {
 	// t.Log(tblData.GetIndexHolder().String())
 
 	segs := tblData.SegmentIds()
-	for _, segId := range segs {
-		seg := tblData.WeakRefSegment(segId)
+	for _, segID := range segs {
+		seg := tblData.WeakRefSegment(segID)
 		//seg.GetIndexHolder().Init(seg.GetSegmentFile())
 		//t.Log(seg.GetIndexHolder().Inited)
 		segment := &db.Segment{
@@ -853,7 +861,8 @@ func DisabledTestRebuildIndices(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
+				err := inst.Append(appendCtx)
+				assert.Nil(t, err)
 				wg.Done()
 			}()
 		}
@@ -866,8 +875,8 @@ func DisabledTestRebuildIndices(t *testing.T) {
 	//t.Log(tblData.GetIndexHolder().String())
 
 	segs := tblData.SegmentIds()
-	for _, segId := range segs {
-		seg := tblData.WeakRefSegment(segId)
+	for _, segID := range segs {
+		seg := tblData.WeakRefSegment(segID)
 		if seg.GetType() != base.SORTED_SEG {
 			continue
 		}
@@ -888,26 +897,32 @@ func DisabledTestRebuildIndices(t *testing.T) {
 		//t.Log(sumr.Count("mock_0", nil))
 		t.Log(inst.IndexBufMgr.String())
 		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
-		inst.Scheduler.Schedule(e)
+		err := inst.Scheduler.Schedule(e)
+		assert.Nil(t, err)
 		time.Sleep(10 * time.Millisecond)
 		t.Log(inst.IndexBufMgr.String())
 	}
 	time.Sleep(10 * time.Millisecond)
 	t.Log(tblData.GetIndexHolder().StringIndicesRefs())
-	inst.Close()
+	err = inst.Close()
+	assert.Nil(t, err)
 	// manually delete some index files, and during replaying the file could
 	// be flushed automatically.
-	os.Remove(filepath.Join(inst.Dir, "data/1_1_7_1.bsi"))
+	err = os.Remove(filepath.Join(inst.Dir, "data/1_1_7_1.bsi"))
+	assert.Nil(t, err)
 
 	// manually create useless index files, and during replaying the file
 	// would be GCed automatically.
-	os.Create(filepath.Join(inst.Dir, "data/1_1_11_1.bsi"))
+	_, err = os.Create(filepath.Join(inst.Dir, "data/1_1_11_1.bsi"))
+	assert.Nil(t, err)
 
 	// manually rename some index files to higher version, create a stale version
 	// to simulate upgrade scenario. And during replaying, stale index file woould
 	// be GCed as well.
-	os.Rename(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"), filepath.Join(inst.Dir, "data/2_1_6_1.bsi"))
-	os.Create(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
+	err = os.Rename(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"), filepath.Join(inst.Dir, "data/2_1_6_1.bsi"))
+	assert.Nil(t, err)
+	_, err = os.Create(filepath.Join(inst.Dir, "data/1_1_6_1.bsi"))
+	assert.Nil(t, err)
 
 	inst, gen, database = initTestDB3(t)
 	_, err = inst.Store.DataTables.WeakRefTable(tblMeta.Id)
@@ -953,7 +968,8 @@ func DisabledTestManyLoadAndDrop(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				appendCtx := CreateAppendCtx(database, gen, schema.Name, baseCk)
-				inst.Append(appendCtx)
+				err := inst.Append(appendCtx)
+				assert.Nil(t, err)
 				wg.Done()
 			}()
 		}
@@ -963,19 +979,22 @@ func DisabledTestManyLoadAndDrop(t *testing.T) {
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 
-	segId := tblData.SegmentIds()[0]
-	seg := tblData.StrongRefSegment(segId)
+	segID := tblData.SegmentIds()[0]
+	seg := tblData.StrongRefSegment(segID)
 	holder := seg.GetIndexHolder()
 	f1 := func() {
-		holder.Count(1, nil)
+		_, err := holder.Count(1, nil)
+		assert.Nil(t, err)
 		wg.Done()
 	}
 	f2 := func() {
-		holder.Min(1, nil)
+		_, err := holder.Min(1, nil)
+		assert.Nil(t, err)
 		wg.Done()
 	}
 	f3 := func() {
-		holder.Max(1, nil)
+		_, err := holder.Max(1, nil)
+		assert.Nil(t, err)
 		wg.Done()
 	}
 	cnt := 100
@@ -992,14 +1011,15 @@ func DisabledTestManyLoadAndDrop(t *testing.T) {
 	wg.Wait()
 
 	// test continuously load new index, check if stale versions are GCed correctly
-	segId = tblData.SegmentIds()[1]
-	seg = tblData.StrongRefSegment(segId)
+	segID = tblData.SegmentIds()[1]
+	seg = tblData.StrongRefSegment(segID)
 	holder = seg.GetIndexHolder()
 
 	loader := func(i uint64) {
 		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
-		inst.Scheduler.Schedule(e)
+		err := inst.Scheduler.Schedule(e)
+		assert.Nil(t, err)
 		wg.Done()
 	}
 	for i := 1; i < 10; i++ {
@@ -1028,14 +1048,15 @@ func DisabledTestManyLoadAndDrop(t *testing.T) {
 
 	// test continuous load and dropping, speculative dropping could be
 	// handled correctly.
-	segId = tblData.SegmentIds()[2]
-	seg = tblData.StrongRefSegment(segId)
+	segID = tblData.SegmentIds()[2]
+	seg = tblData.StrongRefSegment(segID)
 	holder = seg.GetIndexHolder()
 
 	loader = func(i uint64) {
 		e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 		e.Cols = []uint16{1}
-		inst.Scheduler.Schedule(e)
+		err := inst.Scheduler.Schedule(e)
+		assert.Nil(t, err)
 		wg.Done()
 	}
 
@@ -1060,7 +1081,7 @@ func TestEngine(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -1099,7 +1120,8 @@ func TestEngine(t *testing.T) {
 				twg.Done()
 			}
 		}
-		p.Submit(f(i))
+		err := p.Submit(f(i))
+		assert.Nil(t, err)
 	}
 
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -1114,8 +1136,8 @@ func TestEngine(t *testing.T) {
 			defer searchWg.Done()
 			rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 			assert.Nil(t, err)
-			for _, segId := range rel.SegmentIds().Ids {
-				seg := rel.Segment(segId)
+			for _, segID := range rel.SegmentIds().Ids {
+				seg := rel.Segment(segID)
 				for _, id := range seg.Blocks() {
 					blk := seg.Block(id)
 					blk.Prefetch(attrs)
@@ -1147,7 +1169,8 @@ func TestEngine(t *testing.T) {
 					blkHandle := blkIt.GetHandle()
 					hh := blkHandle.Prefetch()
 					for idx := range attrs {
-						hh.GetReaderByAttr(idx)
+						_, err := hh.GetReaderByAttr(idx)
+						assert.Nil(t, err)
 						atomic.AddUint32(&loadCnt, uint32(1))
 					}
 					hh.Close()
@@ -1169,7 +1192,8 @@ func TestEngine(t *testing.T) {
 			case <-ctx.Done():
 				return
 			case req := <-searchCh:
-				p.Submit(task2(req))
+				err := p.Submit(task2(req))
+				assert.Nil(t, err)
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
@@ -1201,7 +1225,7 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < searchCnt; i++ {
 			req := &dbi.GetSnapshotCtx{
-				ShardId:   shardId,
+				ShardId:   shardID,
 				DBName:    database.Name,
 				TableName: schema.Name,
 				ScanAll:   true,
@@ -1220,6 +1244,7 @@ func TestEngine(t *testing.T) {
 	t.Log(inst.SSTBufMgr.String())
 	t.Logf("Load: %d", loadCnt)
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
+	assert.Nil(t, err)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
 	t.Log(tbl.GetRowCount())
 	attr := tblMeta.Schema.ColDefs[0].Name
@@ -1239,7 +1264,7 @@ func TestLogIndex(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB3(t)
 	schema := metadata.MockSchema(2)
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -1261,10 +1286,10 @@ func TestLogIndex(t *testing.T) {
 	_, err = inst.DropTable(dropCtx)
 	assert.Nil(t, err)
 	testutils.WaitExpect(500, func() bool {
-		return inst.GetShardCheckpointId(shardId) == inst.Wal.GetShardCurrSeqNum(shardId)
+		return inst.GetShardCheckpointId(shardID) == inst.Wal.GetShardCurrSeqNum(shardID)
 	})
 	// assert.Equal(t, gen.Get(shardId), inst.Wal.GetShardCurrSeqNum(shardId))
-	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(shardId), inst.GetShardCheckpointId(shardId))
+	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(shardID), inst.GetShardCheckpointId(shardID))
 
 	inst.Close()
 }
@@ -1284,11 +1309,11 @@ func TestMultiInstance(t *testing.T) {
 	}
 
 	gen := shard.NewMockIndexAllocator()
-	shardId := uint64(100)
+	shardID := uint64(100)
 
 	var schema *metadata.Schema
 	for _, inst := range insts {
-		db, err := inst.Store.Catalog.SimpleCreateDatabase("db1", gen.Next(shardId))
+		db, err := inst.Store.Catalog.SimpleCreateDatabase("db1", gen.Next(shardID))
 		assert.Nil(t, err)
 		schema = metadata.MockSchema(2)
 		schema.Name = "xxx"
@@ -1361,8 +1386,8 @@ func TestFilterUnclosedSegment(t *testing.T) {
 
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
-	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
-	seg := tblData.WeakRefSegment(segId)
+	segID := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segID)
 	//t.Logf("%+v", seg.GetIndexHolder())
 	segment := &db.Segment{
 		Data: seg,
@@ -1711,8 +1736,8 @@ func TestFilter(t *testing.T) {
 
 	tblData, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
-	segId := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
-	seg := tblData.WeakRefSegment(segId)
+	segID := inst.GetSegmentIds(database.Name, tblMeta.Schema.Name).Ids[0]
+	seg := tblData.WeakRefSegment(segID)
 	//seg.GetIndexHolder().Init(seg.GetSegmentFile())
 	segment := &db.Segment{
 		Data: seg,
@@ -3090,7 +3115,8 @@ func matchStringArray(a, b []string) bool {
 	}
 	mapper := make(map[string]int)
 	for _, e := range a {
-		if _, ok := mapper[e]; ok {
+		_, ok := mapper[e]
+		if ok {
 			mapper[e] += 1
 		} else {
 			mapper[e] = 1

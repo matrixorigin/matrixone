@@ -488,7 +488,7 @@ func TestSplit(t *testing.T) {
 }
 
 func checkSplit(s *aoe3.Storage, old uint64) bool {
-	dbName := aoedb.IdToNameFactory.Encode(old)
+	dbName := aoedb.IDToNameFactory.Encode(old)
 	logutil.Infof("before checkSplit")
 	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	logutil.Infof("checkSplit, db is %v, err is %v", db, err)

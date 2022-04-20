@@ -22,7 +22,7 @@ import (
 )
 
 type DBMutationCtx struct {
-	Id     uint64
+	ID     uint64
 	Offset int
 	Size   int
 	DB     string
@@ -70,13 +70,13 @@ type CreateTableCtx struct {
 
 type CreateIndexCtx struct {
 	DBMutationCtx
-	Table string
+	Table   string
 	Indices *db.IndexSchema
 }
 
 type DropIndexCtx struct {
 	DBMutationCtx
-	Table string
+	Table      string
 	IndexNames []string
 }
 
@@ -89,7 +89,7 @@ func (ctx *DBMutationCtx) ToLogIndex(database *metadata.Database) *db.LogIndex {
 	return &db.LogIndex{
 		ShardId: database.GetShardId(),
 		Id: db.IndexId{
-			Id:     ctx.Id,
+			Id:     ctx.ID,
 			Offset: uint32(ctx.Offset),
 			Size:   uint32(ctx.Size),
 		},

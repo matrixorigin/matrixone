@@ -123,7 +123,7 @@ func creatTable(impl *aoedb.DB) {
 	ctx.DB = dbName
 	ctx.Schema = schema
 	ctx.Size = 1
-	ctx.Id = gen.Alloc(shardId)
+	ctx.ID = gen.Alloc(shardId)
 	_, err = impl.CreateTable(ctx)
 	if err != nil {
 		panic(err)
@@ -144,7 +144,7 @@ func makeFiles(impl *aoedb.DB) {
 		ctx := new(aoedb.AppendCtx)
 		ctx.DB = dbName
 		ctx.Table = tableName
-		ctx.Id = gen.Alloc(shardId)
+		ctx.ID = gen.Alloc(shardId)
 		ctx.Size = 1
 		ctx.Data = ibat
 		if err := impl.Append(ctx); err != nil {
