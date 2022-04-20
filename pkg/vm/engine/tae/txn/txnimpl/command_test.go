@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -71,7 +70,7 @@ func TestComposedCmd(t *testing.T) {
 
 	schema := catalog.MockSchema(4)
 	for i := 0; i < batCnt; i++ {
-		data := mock.MockBatch(schema.Types(), (uint64(i)+1)*5)
+		data := compute.MockBatch(schema.Types(), (uint64(i)+1)*5, int(schema.PrimaryKey), nil)
 		bat, err := compute.CopyToIBatch(data, uint64(txnbase.MaxNodeRows))
 		assert.Nil(t, err)
 		batCmd := txnbase.NewBatchCmd(bat, schema.Types())

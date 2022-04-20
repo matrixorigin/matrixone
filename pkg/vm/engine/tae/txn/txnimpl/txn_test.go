@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -69,9 +68,10 @@ func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 
 func TestInsertNode(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	tbl := makeTable(t, dir, 1, common.K*6)
+	tbl := makeTable(t, dir, 2, common.K*6)
 	defer tbl.driver.Close()
-	bat := mock.MockBatch(tbl.GetSchema().Types(), 1024)
+	tbl.GetSchema().PrimaryKey = 1
+	bat := compute.MockBatch(tbl.GetSchema().Types(), common.K, int(tbl.GetSchema().PrimaryKey), nil)
 	p, _ := ants.NewPool(5)
 
 	var wg sync.WaitGroup
@@ -211,7 +211,7 @@ func TestAppend(t *testing.T) {
 	tbl := table.(*txnTable)
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
-	bat := mock.MockBatch(tbl.GetSchema().Types(), rows)
+	bat := compute.MockBatch(tbl.GetSchema().Types(), rows, int(tbl.GetSchema().PrimaryKey), nil)
 
 	bats := compute.SplitBatch(bat, 3)
 
@@ -255,7 +255,8 @@ func TestIndex(t *testing.T) {
 	assert.NotNil(t, err)
 
 	schema := catalog.MockSchemaAll(14)
-	bat := mock.MockBatch(schema.Types(), 500)
+	schema.PrimaryKey = 1
+	bat := compute.MockBatch(schema.Types(), 500, int(schema.PrimaryKey), nil)
 
 	idx := NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[0])

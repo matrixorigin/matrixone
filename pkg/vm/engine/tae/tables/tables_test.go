@@ -24,7 +24,7 @@ func TestInsertInfo(t *testing.T) {
 		txn := newMockTxn()
 		txn.TxnCtx.CommitTS = common.NextGlobalSeqNum()
 		txn.TxnCtx.State = txnif.TxnStateCommitted
-		info.RecordTxnLocked(uint32(i), txn, nil)
+		info.RecordTxnLocked(uint32(i), txn)
 		txns = append(txns, txn)
 	}
 	t.Logf("Record takes %s", time.Since(now))
@@ -32,7 +32,7 @@ func TestInsertInfo(t *testing.T) {
 		txn := newMockTxn()
 		txn.TxnCtx.CommitTS = common.NextGlobalSeqNum()
 		txn.TxnCtx.State = txnif.TxnStateCommitted
-		info.RecordTxnLocked(uint32(cnt), txn, nil)
+		info.RecordTxnLocked(uint32(cnt), txn)
 		txns = append(txns, txn)
 	}
 	now = time.Now()

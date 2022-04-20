@@ -32,6 +32,7 @@ type dataBlock struct {
 	bufMgr               base.INodeManager
 	updatableIndexHolder accessif.IAppendableBlockIndexHolder
 	controller           *updates.MutationController
+	maxCkp               uint64
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile dataio.SegmentFile, bufMgr base.INodeManager) *dataBlock {
@@ -50,6 +51,12 @@ func newBlock(meta *catalog.BlockEntry, segFile dataio.SegmentFile, bufMgr base.
 		block.updatableIndexHolder = impl.NewAppendableBlockIndexHolder(pkType)
 	}
 	return block
+}
+
+func (blk *dataBlock) GetID() uint64 { return blk.meta.ID }
+func (blk *dataBlock) IsDirty() bool { return true }
+func (blk *dataBlock) TryCheckpoint() {
+
 }
 
 func (blk *dataBlock) IsAppendable() bool {

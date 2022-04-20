@@ -4,21 +4,19 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type insertInfo struct {
-	rwlocker    *sync.RWMutex
-	offsets     vector.IVector
-	ts          vector.IVector
-	offsetTxns  map[uint32]txnif.TxnReader
-	txnMap      map[uint64]uint32
-	maxLogIndex *shard.Index
-	maxTs       uint64
-	minTs       uint64
-	maxOffset   uint32
+	rwlocker   *sync.RWMutex
+	offsets    vector.IVector
+	ts         vector.IVector
+	offsetTxns map[uint32]txnif.TxnReader
+	txnMap     map[uint64]uint32
+	maxTs      uint64
+	minTs      uint64
+	maxOffset  uint32
 }
 
 func newInsertInfo(rwlocker *sync.RWMutex, maxTs uint64, capacity uint32) *insertInfo {
@@ -45,13 +43,12 @@ func newInsertInfo(rwlocker *sync.RWMutex, maxTs uint64, capacity uint32) *inser
 	}
 }
 
-func (info *insertInfo) RecordTxnLocked(offset uint32, txn txnif.TxnReader, index *shard.Index) {
+func (info *insertInfo) RecordTxnLocked(offset uint32, txn txnif.TxnReader) {
 	pos := uint32(info.offsets.Length())
 	info.offsets.Append(1, []uint32{offset})
 	info.ts.Append(1, []uint64{txn.GetCommitTS()})
 	info.txnMap[txn.GetID()] = pos
 	info.offsetTxns[pos] = txn
-	info.maxLogIndex = index
 	info.maxTs = txn.GetCommitTS()
 	info.maxOffset = offset
 }

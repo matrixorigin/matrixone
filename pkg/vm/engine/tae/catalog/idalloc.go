@@ -1,6 +1,6 @@
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 
 type IDAlloctor struct {
 	dbAlloc  *common.IdAlloctor

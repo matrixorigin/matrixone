@@ -12,6 +12,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
+type CheckpointUnit interface {
+	GetID() uint64
+	TryCheckpoint()
+	IsDirty() bool
+}
+
 type BlockAppender interface {
 	io.Closer
 	GetID() *common.ID
@@ -20,6 +26,7 @@ type BlockAppender interface {
 }
 
 type Block interface {
+	CheckpointUnit
 	MakeAppender() (BlockAppender, error)
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int

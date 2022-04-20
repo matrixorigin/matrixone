@@ -12,20 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package flusher
-
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/shard"
-
-type NodeDriver interface {
-	GetId() uint64
-	FlushNode(id uint64) error
-}
-
-type DriverFactory = func(id uint64) NodeDriver
-
-type Driver interface {
-	shard.NodeAware
-	Start()
-	Stop()
-	String() string
-}
+package gc

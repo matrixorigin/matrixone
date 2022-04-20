@@ -10,26 +10,29 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
+// limitations under the License.
 
-package buffer
+package checkpoint
 
 import (
-// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
-// Unused
-// type fileNode struct {
-// 	node base.INode
-// 	mgr  base.INodeManager
-// 	// file *dataio.TransientBlockFile // Unused
-// }
+type DBDriver interface {
+	GetDatabaseID() uint64
+	Checkpoint(id *common.ID) error
+}
 
-// Unused
-// func (n *fileNode) GetHandle() base.INodeHandle {
-// 	h := n.mgr.Pin(n.node)
-// 	for h == nil {
-// 		h = n.mgr.Pin(n.node)
-// 	}
-// 	return h
-// }
+type DriverFactory = func(id uint64) DBDriver
+
+type Aware interface {
+	OnChange(uint64, data.CheckpointUnit)
+}
+
+type Driver interface {
+	Aware
+	Start()
+	Stop()
+	String() string
+}
