@@ -26,15 +26,16 @@ func Compress(raw []byte, ctyp CompressType) []byte {
 	return raw
 }
 
-func Decompress(compressed []byte, ctyp CompressType) []byte {
-	return compressed
+func Decompress(src []byte, dst []byte, ctyp CompressType) error {
+	copy(dst, src)
+	return nil
 }
 
 type IndexMeta struct {
 	IdxType IndexType
 	CompType CompressType
 	ColIdx uint16
-	PartOffset uint32
+	//PartOffset uint32
 	StartOffset uint32
 	Size uint32
 	RawSize uint32
@@ -59,9 +60,9 @@ func (meta *IndexMeta) SetIndexedColumn(colIdx uint16) {
 	meta.ColIdx = colIdx
 }
 
-func (meta *IndexMeta) SetPartOffset(offset uint32) {
-	meta.PartOffset = offset
-}
+//func (meta *IndexMeta) SetPartOffset(offset uint32) {
+//	meta.PartOffset = offset
+//}
 
 func (meta *IndexMeta) SetStartOffset(offset uint32) {
 	meta.StartOffset = offset
@@ -77,7 +78,7 @@ func (meta *IndexMeta) Marshal() ([]byte, error) {
 	buf.Write(encoding.EncodeUint8(uint8(meta.IdxType)))
 	buf.Write(encoding.EncodeUint8(uint8(meta.CompType)))
 	buf.Write(encoding.EncodeUint16(meta.ColIdx))
-	buf.Write(encoding.EncodeUint32(meta.PartOffset))
+	//buf.Write(encoding.EncodeUint32(meta.PartOffset))
 	buf.Write(encoding.EncodeUint32(meta.StartOffset))
 	buf.Write(encoding.EncodeUint32(meta.Size))
 	buf.Write(encoding.EncodeUint32(meta.RawSize))
@@ -91,8 +92,8 @@ func (meta *IndexMeta) Unmarshal(buf []byte) error {
 	buf = buf[1:]
 	meta.ColIdx = encoding.DecodeUint16(buf[:2])
 	buf = buf[2:]
-	meta.PartOffset = encoding.DecodeUint32(buf[:4])
-	buf = buf[4:]
+	//meta.PartOffset = encoding.DecodeUint32(buf[:4])
+	//buf = buf[4:]
 	meta.StartOffset = encoding.DecodeUint32(buf[:4])
 	buf = buf[4:]
 	meta.Size = encoding.DecodeUint32(buf[:4])

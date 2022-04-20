@@ -10,7 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/impl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
@@ -30,7 +30,7 @@ type dataBlock struct {
 	node                 *appendableNode
 	file                 dataio.BlockFile
 	bufMgr               base.INodeManager
-	updatableIndexHolder accessif.IAppendableBlockIndexHolder
+	updatableIndexHolder acif.IAppendableBlockIndexHolder
 	controller           *updates.MutationController
 	maxCkp               uint64
 }

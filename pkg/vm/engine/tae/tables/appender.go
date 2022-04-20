@@ -5,16 +5,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/accessif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 )
 
 type blockAppender struct {
 	node          *appendableNode
 	handle        base.INodeHandle
-	indexAppender accessif.IAppendableBlockIndexHolder
+	indexAppender acif.IAppendableBlockIndexHolder
 }
 
-func newAppender(node *appendableNode, idxApd accessif.IAppendableBlockIndexHolder) *blockAppender {
+func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
 	appender.handle = node.mgr.Pin(node)

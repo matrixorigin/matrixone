@@ -49,3 +49,10 @@ type BlockInfo interface {
 	Rows() uint32
 	TSRange() (uint64, uint64)
 }
+
+// IndexFile is only used for mocking
+type IndexFile interface {
+	Append(data []byte) (startOffset uint32, err error)
+	Read(offset uint32, size uint32) (data []byte)
+	AllocIndexNodeId() common.ID
+}

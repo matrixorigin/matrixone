@@ -28,6 +28,14 @@ func NewZoneMap(typ types.Type, mutex *sync.RWMutex) *ZoneMap {
 	return zm
 }
 
+func NewZoneMapFromSource(data []byte) (*ZoneMap, error) {
+	zm := ZoneMap{}
+	if err := zm.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return &zm, nil
+}
+
 func (zm *ZoneMap) GetType() types.Type {
 	return zm.typ
 }

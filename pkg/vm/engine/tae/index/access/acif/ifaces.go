@@ -1,4 +1,4 @@
-package accessif
+package acif
 
 import "github.com/matrixorigin/matrixone/pkg/container/vector"
 
