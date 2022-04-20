@@ -250,5 +250,170 @@ func initMinus(){
             },
         },
         {{end}}
+
+
+		{
+			LeftType:   types.T_decimal64,
+			RightType:  types.T_decimal64,
+			ReturnType: types.T_decimal64,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+				lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+				resultScale := lvScale
+				if lvScale < rvScale {
+					resultScale = rvScale
+				}
+				resultTyp := types.Type{Oid: types.T_decimal64, Size: 8, Width: 18, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					if rv.Ref == 1 || rv.Ref == 0 {
+						rv.Ref = 0
+						sub.Decimal64SubScalar(lvs[0], rvs, lvScale, rvScale, rvs)
+						rv.Typ = resultTyp
+						return rv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal64Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, sub.Decimal64SubScalar(lvs[0], rvs, lvScale, rvScale, rs))
+					return vec, nil
+				case !lc && rc:
+					if lv.Ref == 1 || lv.Ref == 0 {
+						lv.Ref = 0
+						sub.Decimal64SubByScalar(rvs[0], lvs, rvScale, lvScale, lvs)
+						lv.Typ = resultTyp
+						return lv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal64Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, sub.Decimal64SubScalar(rvs[0], lvs, rvScale, lvScale, rs))
+					return vec, nil
+				case lv.Ref == 1 || lv.Ref == 0:
+					lv.Ref = 0
+					sub.Decimal64Sub(lvs, rvs, lvScale, rvScale, lvs)
+					lv.Nsp = lv.Nsp.Or(rv.Nsp)
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					lv.Typ = resultTyp
+					return lv, nil
+				case rv.Ref == 1 || rv.Ref == 0:
+					rv.Ref = 0
+					sub.Decimal64Sub(lvs, rvs, lvScale, rvScale, rvs)
+					rv.Nsp = rv.Nsp.Or(lv.Nsp)
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					rv.Typ = resultTyp
+					return rv, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal64Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				vector.SetCol(vec, sub.Decimal64Sub(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				return vec, nil
+			},
+		},
+		{
+			LeftType:   types.T_decimal128,
+			RightType:  types.T_decimal128,
+			ReturnType: types.T_decimal128,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+				lvScale := lv.Typ.Scale
+				rvScale := rv.Typ.Scale
+				resultScale := lvScale
+				if lvScale < rvScale {
+					resultScale = rvScale
+				}
+				resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					if rv.Ref == 1 || rv.Ref == 0 {
+						rv.Ref = 0
+						sub.Decimal128SubScalar(lvs[0], rvs, lvScale, rvScale, rvs)
+						rv.Typ = resultTyp
+						return rv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, sub.Decimal128SubScalar(lvs[0], rvs, lvScale, rvScale, rs))
+					return vec, nil
+				case !lc && rc:
+					if lv.Ref == 1 || lv.Ref == 0 {
+						lv.Ref = 0
+						sub.Decimal128SubByScalar(rvs[0], lvs, rvScale, lvScale, lvs)
+						lv.Typ = resultTyp
+						return lv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, sub.Decimal128SubScalar(rvs[0], lvs, rvScale, lvScale, rs))
+					return vec, nil
+				case lv.Ref == 1 || lv.Ref == 0:
+					lv.Ref = 0
+					sub.Decimal128Sub(lvs, rvs, lvScale, rvScale, lvs)
+					lv.Nsp = lv.Nsp.Or(rv.Nsp)
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					lv.Typ = resultTyp
+					return lv, nil
+				case rv.Ref == 1 || rv.Ref == 0:
+					rv.Ref = 0
+					sub.Decimal128Sub(lvs, rvs, lvScale, rvScale, rvs)
+					rv.Nsp = rv.Nsp.Or(lv.Nsp)
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					rv.Typ = resultTyp
+					return rv, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal128Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				vector.SetCol(vec, sub.Decimal128Sub(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				return vec, nil
+			},
+		},
     }
 }

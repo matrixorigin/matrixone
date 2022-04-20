@@ -56,6 +56,15 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create table deci_table (a decimal(10, 5))",
+	}, {
+		input: "create table deci_table (a decimal(20, 5))",
+	}, {
+		input:  "create table deci_table (a decimal)",
+		output: "create table deci_table (a decimal(10))",
+	}, {
+		input: "create table deci_table (a decimal(20))",
+	}, {
 		input: "select substr(name, 5) from t1",
 	}, {
 		input: "select substring(name, 5) from t1",

@@ -224,6 +224,11 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 			return &types.Type{Oid: types.T_date, Size: 4}, nil
 		case defines.MYSQL_TYPE_DATETIME:
 			return &types.Type{Oid: types.T_datetime, Size: 8}, nil
+		case defines.MYSQL_TYPE_DECIMAL:
+			if n.InternalType.DisplayWith > 18 {
+				return &types.Type{Oid: types.T_decimal128, Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
+			}
+			return &types.Type{Oid: types.T_decimal64, Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 		}
 	}
 	return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ))
@@ -354,7 +359,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case types.Date, types.Datetime:
+	case types.Date, types.Datetime, types.Decimal64, types.Decimal128:
 		return v, nil
 	default:
 		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")

@@ -429,6 +429,32 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						row[i] = vs[rowIndex]
 					}
 				}
+			case types.T_decimal64:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal64)
+					row[i] = vs[rowIndex].Decimal64ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal64)
+						row[i] = vs[rowIndex].Decimal64ToString(scale)
+					}
+				}
+			case types.T_decimal128:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal128)
+					row[i] = vs[rowIndex].Decimal128ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal128)
+						row[i] = vs[rowIndex].Decimal128ToString(scale)
+					}
+				}
 			default:
 				logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 				return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
@@ -1378,6 +1404,10 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_decimal64:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

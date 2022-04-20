@@ -32,10 +32,11 @@ var (
 	float32Shuffle func([]float32, []float32, []int64) []float32
 	float64Shuffle func([]float64, []float64, []int64) []float64
 
-	decimalShuffle func([]types.Decimal, []int64) []types.Decimal
-
 	dateShuffle     func([]types.Date, []types.Date, []int64) []types.Date
 	datetimeShuffle func([]types.Datetime, []types.Datetime, []int64) []types.Datetime
+
+	decimal64Shuffle  func([]types.Decimal64, []types.Decimal64, []int64) []types.Decimal64
+	decimal128Shuffle func([]types.Decimal128, []types.Decimal128, []int64) []types.Decimal128
 
 	tupleShuffle func([][]interface{}, [][]interface{}, []int64) [][]interface{}
 
@@ -56,7 +57,8 @@ func init() {
 	float32Shuffle = float32ShufflePure
 	float64Shuffle = float64ShufflePure
 
-	decimalShuffle = decimalShufflePure
+	decimal64Shuffle = decimal64ShufflePure
+	decimal128Shuffle = decimal128ShufflePure
 
 	dateShuffle = dateShufflePure
 	datetimeShuffle = datetimeShufflePure
@@ -106,8 +108,12 @@ func Float64Shuffle(vs, ws []float64, sels []int64) []float64 {
 	return float64Shuffle(vs, ws, sels)
 }
 
-func DecimalShuffle(vs []types.Decimal, sels []int64) []types.Decimal {
-	return decimalShuffle(vs, sels)
+func Decimal64Shuffle(vs, ws []types.Decimal64, sels []int64) []types.Decimal64 {
+	return decimal64Shuffle(vs, ws, sels)
+}
+
+func Decimal128Shuffle(vs, ws []types.Decimal128, sels []int64) []types.Decimal128 {
+	return decimal128Shuffle(vs, ws, sels)
 }
 
 func DateShuffle(vs []types.Date, ws []types.Date, sels []int64) []types.Date {
@@ -206,10 +212,19 @@ func float64ShufflePure(vs, ws []float64, sels []int64) []float64 {
 	return vs[:len(sels)]
 }
 
-func decimalShufflePure(vs []types.Decimal, sels []int64) []types.Decimal {
+func decimal64ShufflePure(vs []types.Decimal64, ws []types.Decimal64, sels []int64) []types.Decimal64 {
 	for i, sel := range sels {
-		vs[i] = vs[sel]
+		ws[i] = vs[sel]
 	}
+	copy(vs, ws)
+	return vs[:len(sels)]
+}
+
+func decimal128ShufflePure(vs []types.Decimal128, ws []types.Decimal128, sels []int64) []types.Decimal128 {
+	for i, sel := range sels {
+		ws[i] = vs[sel]
+	}
+	copy(vs, ws)
 	return vs[:len(sels)]
 }
 

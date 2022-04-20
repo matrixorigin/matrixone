@@ -309,5 +309,140 @@ func initEq() {
 				return vec, nil
 			},
 		},
+
+		{
+			LeftType:   types.T_decimal64,
+			RightType:  types.T_decimal64,
+			ReturnType: types.T_sel,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+				rtl := 8
+				switch {
+				case lc && !rc:
+					vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), SelsType)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeInt64Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					if nulls.Any(rv.Nsp) {
+						vector.SetCol(vec, eq.Decimal64EqNullableScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rv.Nsp.Np, rs))
+					} else {
+						vector.SetCol(vec, eq.Decimal64EqScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+					}
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					return vec, nil
+				case !lc && rc:
+					vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeInt64Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					if nulls.Any(lv.Nsp) {
+						vector.SetCol(vec, eq.Decimal64EqNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
+					} else {
+						vector.SetCol(vec, eq.Decimal64EqScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
+					}
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					return vec, nil
+				}
+				vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeInt64Slice(vec.Data)
+				rs = rs[:len(lvs)]
+				switch {
+				case nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal64EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal64EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rv.Nsp.Np, rs))
+				case nulls.Any(lv.Nsp) && !nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal64EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
+				default:
+					vector.SetCol(vec, eq.Decimal64Eq(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+				}
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				return vec, nil
+			},
+		},
+
+		{
+			LeftType:   types.T_decimal128,
+			RightType:  types.T_decimal128,
+			ReturnType: types.T_sel,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+				rtl := 8
+				switch {
+				case lc && !rc:
+					vec, err := process.Get(proc, int64(rtl)*int64(len(rvs)), SelsType)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeInt64Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					if nulls.Any(rv.Nsp) {
+						vector.SetCol(vec, eq.Decimal128EqNullableScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rv.Nsp.Np, rs))
+					} else {
+						vector.SetCol(vec, eq.Decimal128EqScalar(lvs[0], rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+					}
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					return vec, nil
+				case !lc && rc:
+					vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeInt64Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					if nulls.Any(lv.Nsp) {
+						vector.SetCol(vec, eq.Decimal128EqNullableScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, lv.Nsp.Np, rs))
+					} else {
+						vector.SetCol(vec, eq.Decimal128EqScalar(rvs[0], lvs, rv.Typ.Scale, lv.Typ.Scale, rs))
+					}
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					return vec, nil
+				}
+				vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), SelsType)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeInt64Slice(vec.Data)
+				rs = rs[:len(lvs)]
+				switch {
+				case nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal128EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !nulls.Any(lv.Nsp) && nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal128EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rv.Nsp.Np, rs))
+				case nulls.Any(lv.Nsp) && !nulls.Any(rv.Nsp):
+					vector.SetCol(vec, eq.Decimal128EqNullable(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, lv.Nsp.Np, rs))
+				default:
+					vector.SetCol(vec, eq.Decimal128Eq(lvs, rvs, lv.Typ.Scale, rv.Typ.Scale, rs))
+				}
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				return vec, nil
+			},
+		},
+
     }
 }

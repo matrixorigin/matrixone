@@ -47,10 +47,10 @@ func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 			Name: name,
 			Alg:  0,
 			Type: types.Type{
-				Oid:       t,
-				Size:      0,
-				Width:     0,
-				Precision: 0,
+				Oid:   t,
+				Size:  0,
+				Width: 0,
+				Scale: 0,
 			},
 			Default: engine.DefaultExpr{},
 		}}

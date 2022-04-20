@@ -143,6 +143,17 @@ var (
 	float32ToBytes func([]float32, *types.Bytes) (*types.Bytes, error)
 	bytesToFloat64 func(*types.Bytes, []float64) ([]float64, error)
 	float64ToBytes func([]float64, *types.Bytes) (*types.Bytes, error)
+
+	decimal64ToDecimal128 func([]types.Decimal64, []types.Decimal128) ([]types.Decimal128, error)
+
+	int8ToDecimal128   func([]int8, []types.Decimal128) ([]types.Decimal128, error)
+	int16ToDecimal128  func([]int16, []types.Decimal128) ([]types.Decimal128, error)
+	int32ToDecimal128  func([]int32, []types.Decimal128) ([]types.Decimal128, error)
+	int64ToDecimal128  func([]int64, []types.Decimal128) ([]types.Decimal128, error)
+	uint8ToDecimal128  func([]uint8, []types.Decimal128) ([]types.Decimal128, error)
+	uint16ToDecimal128 func([]uint16, []types.Decimal128) ([]types.Decimal128, error)
+	uint32ToDecimal128 func([]uint32, []types.Decimal128) ([]types.Decimal128, error)
+	uint64ToDecimal128 func([]uint64, []types.Decimal128) ([]types.Decimal128, error)
 )
 
 func init() {
@@ -247,6 +258,12 @@ func init() {
 		uint64ToFloat64 = uint64ToFloat64Pure
 		float32ToFloat64 = float32ToFloat64Pure
 
+		decimal64ToDecimal128 = decimal64ToDecimal128Pure
+
+		int8ToDecimal128 = int8ToDecimal128Pure
+		int16ToDecimal128 = int16ToDecimal128Pure
+		int32ToDecimal128 = int32ToDecimal128Pure
+		int64ToDecimal128 = int64ToDecimal128Pure
 	} else if cpu.X86.HasAVX2 {
 		int16ToInt8 = int16ToInt8Pure
 		int32ToInt8 = int32ToInt8Pure
@@ -348,6 +365,12 @@ func init() {
 		uint64ToFloat64 = uint64ToFloat64Pure
 		float32ToFloat64 = float32ToFloat64Pure
 
+		decimal64ToDecimal128 = decimal64ToDecimal128Pure
+
+		int8ToDecimal128 = int8ToDecimal128Pure
+		int16ToDecimal128 = int16ToDecimal128Pure
+		int32ToDecimal128 = int32ToDecimal128Pure
+		int64ToDecimal128 = int64ToDecimal128Pure
 	} else {
 		int16ToInt8 = int16ToInt8Pure
 		int32ToInt8 = int32ToInt8Pure
@@ -449,6 +472,12 @@ func init() {
 		uint64ToFloat64 = uint64ToFloat64Pure
 		float32ToFloat64 = float32ToFloat64Pure
 
+		decimal64ToDecimal128 = decimal64ToDecimal128Pure
+
+		int8ToDecimal128 = int8ToDecimal128Pure
+		int16ToDecimal128 = int16ToDecimal128Pure
+		int32ToDecimal128 = int32ToDecimal128Pure
+		int64ToDecimal128 = int64ToDecimal128Pure
 	}
 
 	bytesToInt8 = bytesToInt8Pure
@@ -3255,6 +3284,61 @@ func float64ToBytesPure(xs []float64, rs *types.Bytes) (*types.Bytes, error) {
 		rs.Offsets = append(rs.Offsets, oldLen)
 		rs.Lengths = append(rs.Lengths, newLen-oldLen)
 		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func Decimal64ToDecimal128(xs []types.Decimal64, rs []types.Decimal128) ([]types.Decimal128, error) {
+	return decimal64ToDecimal128(xs, rs)
+}
+
+func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.Decimal64ToDecimal128(x)
+	}
+	return rs, nil
+}
+
+func Int8ToDecimal128(xs []int8, rs []types.Decimal128) ([]types.Decimal128, error) {
+	return int8ToDecimal128(xs, rs)
+}
+
+func int8ToDecimal128Pure(xs []int8, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal128(int64(x))
+	}
+	return rs, nil
+}
+
+func Int16ToDecimal128(xs []int16, rs []types.Decimal128) ([]types.Decimal128, error) {
+	return int16ToDecimal128(xs, rs)
+}
+
+func int16ToDecimal128Pure(xs []int16, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal128(int64(x))
+	}
+	return rs, nil
+}
+
+func Int32ToDecimal128(xs []int32, rs []types.Decimal128) ([]types.Decimal128, error) {
+	return int32ToDecimal128(xs, rs)
+}
+
+func int32ToDecimal128Pure(xs []int32, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal128(int64(x))
+	}
+	return rs, nil
+}
+
+func Int64ToDecimal128(xs []int64, rs []types.Decimal128) ([]types.Decimal128, error) {
+	return int64ToDecimal128(xs, rs)
+}
+
+func int64ToDecimal128Pure(xs []int64, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal128(x)
 	}
 	return rs, nil
 }

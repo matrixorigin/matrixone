@@ -5144,7 +5144,7 @@ decimal_type:
 	    },
         }
     }
-|   FLOAT_TYPE decimal_length_opt
+|   FLOAT_TYPE float_length_opt
     {
         locale := ""
         if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
@@ -5174,6 +5174,43 @@ decimal_type:
 			Width:  32,
 			Locale: &locale,
 			Oid:    uint32(defines.MYSQL_TYPE_FLOAT),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+                }
+        }
+    }
+
+|   DECIMAL decimal_length_opt
+    {
+        locale := ""
+        if $2.Precision != tree.NotDefineDec && $2.Precision > $2.DisplayWith {
+		yylex.Error("For float(M,D), double(M,D) or decimal(M,D), M must be >= D (column 'a'))")
+		return 1
+        }
+        if $2.DisplayWith > 38 || $2.DisplayWith < 0 {
+        	yylex.Error("For decimal(M), M must between 0 and 38.")
+                return 1
+        } else if $2.DisplayWith <= 18 {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  64,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
+			DisplayWith: $2.DisplayWith,
+			Precision: $2.Precision,
+		    },
+		}
+        } else {
+        	$$ = &tree.T{
+		    InternalType: tree.InternalType{
+			Family: tree.FloatFamily,
+			FamilyString: $1,
+			Width:  128,
+			Locale: &locale,
+			Oid:    uint32(defines.MYSQL_TYPE_DECIMAL),
 			DisplayWith: $2.DisplayWith,
 			Precision: $2.Precision,
 		    },
@@ -5530,7 +5567,14 @@ float_length_opt:
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.NotDefineDisplayWidth,
-            Precision:  tree.NotDefineDec,
+            Precision: tree.NotDefineDec,
+        }
+    }
+|   '(' INTEGRAL ')'
+    {
+        $$ = tree.LengthScaleOpt{
+            DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
+            Precision: tree.NotDefineDec,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'
@@ -5545,15 +5589,15 @@ decimal_length_opt:
     /* EMPTY */
     {
         $$ = tree.LengthScaleOpt{
-            DisplayWith: tree.NotDefineDisplayWidth,
-            Precision: tree.NotDefineDec,
+            DisplayWith: 10,           // this is the default precision for decimal
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ')'
     {
         $$ = tree.LengthScaleOpt{
             DisplayWith: tree.GetDisplayWith(int32($2.(int64))),
-            Precision: tree.NotDefineDec,
+            Precision: 0,
         }
     }
 |   '(' INTEGRAL ',' INTEGRAL ')'

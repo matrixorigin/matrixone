@@ -29,6 +29,10 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "create table def2 (id int default 1, name varchar(255) unique, age int);"},
 		{sql: "create table def3 (i int default -1, v varchar(10) default 'abc', c char(10) default '', price double default 0.00);"},
 		{sql: "create table def4 (d1 int, d2 int, d3 int, d4 int default 1);"},
+		{sql: "create table deci_table1 (d1 decimal(5, 3));"},
+		{sql: "create table deci_table2 (d1 decimal(20, 3));"},
+		{sql: "create table deci_table3 (d1 decimal);"},
+		{sql: "create table deci_table4 (d1 decimal(20));"},
 		{sql: "insert into iis values (1, 2, 3, 4), (1+1, 2-2, 3*3, 4/4), (1 div 1, 2+2/3, 3 mod 3, 4 + 0.5), (0, 0, 0, 0);"},
 		{sql: "insert into uus values (0, 0, 1, 1), (0.5, 3+4, 4-1, 2*7), (3/4, 4 div 5, 5 mod 6, 0);"},
 		{sql: "insert into ffs values (1.1, 2.2), (1, 2), (1+0.5, 2.5*3.5);"},
@@ -43,6 +47,8 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "create table cha2 (a char);"},
 		{sql: "insert into cha2 values ('1');"},
 		{sql: "insert into cha1 values ('');"},
+		{sql: "insert into deci_table1 values (12.345);"},
+		{sql: "insert into deci_table2 values (12.345), (-12.345);"},
 		{sql: "select * from iis;", res: executeResult{
 			attr: []string{"i1", "i2", "i3", "i4"},
 			data: [][]string{
@@ -214,7 +220,18 @@ func TestInsertAndSelectFunction(t *testing.T) {
 				{"1"},
 			},
 		}},
-
+		{sql: "select * from deci_table1;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{
+				{"12345"},
+			},
+		}},
+		{sql: "select * from deci_table2;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{
+				{"{12345 0}"}, {"{-12345 -1}"},
+			},
+		}},
 		{sql: "create table issue1660 (a int, b int);"},
 		{sql: "insert into issue1660 values (0, 0), (1, 2);"},
 

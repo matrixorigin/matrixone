@@ -570,6 +570,20 @@ func toFloat64(e *extend.ValueExtend) error {
 	return nil
 }
 
+func toDecimal(e *extend.ValueExtend) error {
+	vec := vector.New(types.Type{Oid: types.T_decimal128, Size: 16})
+	vec.Ref = 1
+	value, scale, err := types.ParseStringToDecimal128WithoutTable(e.OrigStr)
+	if err != nil {
+		return err
+	}
+	vec.Col = []types.Decimal128{value}
+	vec.Typ.Width = 38
+	vec.Typ.Scale = scale
+	e.V = vec
+	return nil
+}
+
 func toChar(e *extend.ValueExtend) error {
 	switch e.V.Typ.Oid {
 	case types.T_varchar:

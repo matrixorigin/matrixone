@@ -41,20 +41,20 @@ var (
 	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
 )
 
-func buildValue(val constant.Value) (extend.Extend, error) {
+func buildValue(val constant.Value, origString string) (extend.Extend, error) {
 	switch val.Kind() {
 	case constant.Int:
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		v, _ := constant.Int64Val(val)
 		vec.Col = []int64{v}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	case constant.Float:
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		v, _ := constant.Float64Val(val)
 		vec.Col = []float64{v}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	case constant.String:
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
 		vec.Ref = 1
@@ -64,7 +64,7 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 			Offsets: []uint32{0},
 			Lengths: []uint32{uint32(len(v))},
 		}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
 	}
@@ -660,6 +660,10 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				}
 				return int64(v), nil
 			}
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			v, _ := constant.Uint64Val(val)
 			if num.Negative() {
@@ -744,6 +748,10 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return float64(v), nil
 		case types.T_datetime:
 			return types.ParseDatetime(str)
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		}
 	case constant.String:
 		if !num.Negative() {

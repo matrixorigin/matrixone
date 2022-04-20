@@ -43,8 +43,8 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpEq,
-		Val:     val,
+		Op:  index.OpEq,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -98,8 +98,8 @@ func (f *SegmentSparseFilter) Ne(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpNe,
-		Val:     val,
+		Op:  index.OpNe,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -152,8 +152,8 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpLt,
-		Val:     val,
+		Op:  index.OpLt,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -206,8 +206,8 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpLe,
-		Val:     val,
+		Op:  index.OpLe,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -260,8 +260,8 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpGt,
-		Val:     val,
+		Op:  index.OpGt,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -314,8 +314,8 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpGe,
-		Val:     val,
+		Op:  index.OpGe,
+		Val: val,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -368,7 +368,7 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	ctx := index.FilterCtx{
-		Op:      index.OpIn,
+		Op:     index.OpIn,
 		ValMin: minv,
 		ValMax: maxv,
 	}
@@ -445,8 +445,10 @@ func compare(val1, val2 interface{}, typ types.Type) int {
 		return int(val1.(types.Datetime) - val2.(types.Datetime))
 	case types.T_date:
 		return int(val1.(types.Date) - val2.(types.Date))
+	case types.T_decimal64:
+		return 1 // todo: add a types.CompareDecimal64Decimal64 function
+	case types.T_decimal128:
+		return int(types.CompareDecimal128Decimal128Aligned(val1.(types.Decimal128), val2.(types.Decimal128)))
 	}
 	panic("unsupported")
 }
-
-

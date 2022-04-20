@@ -23,94 +23,110 @@ import (
 )
 
 var (
-	Int8Eq                      func([]int8, []int8, []int64) []int64
-	Int8EqNullable              func([]int8, []int8, *roaring.Bitmap, []int64) []int64
-	Int8EqSels                  func([]int8, []int8, []int64, []int64) []int64
-	Int8EqNullableSels          func([]int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
-	Int8EqScalar                func(int8, []int8, []int64) []int64
-	Int8EqNullableScalar        func(int8, []int8, *roaring.Bitmap, []int64) []int64
-	Int8EqScalarSels            func(int8, []int8, []int64, []int64) []int64
-	Int8EqNullableScalarSels    func(int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
-	Int16Eq                     func([]int16, []int16, []int64) []int64
-	Int16EqNullable             func([]int16, []int16, *roaring.Bitmap, []int64) []int64
-	Int16EqSels                 func([]int16, []int16, []int64, []int64) []int64
-	Int16EqNullableSels         func([]int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
-	Int16EqScalar               func(int16, []int16, []int64) []int64
-	Int16EqNullableScalar       func(int16, []int16, *roaring.Bitmap, []int64) []int64
-	Int16EqScalarSels           func(int16, []int16, []int64, []int64) []int64
-	Int16EqNullableScalarSels   func(int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
-	Int32Eq                     func([]int32, []int32, []int64) []int64
-	Int32EqNullable             func([]int32, []int32, *roaring.Bitmap, []int64) []int64
-	Int32EqSels                 func([]int32, []int32, []int64, []int64) []int64
-	Int32EqNullableSels         func([]int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
-	Int32EqScalar               func(int32, []int32, []int64) []int64
-	Int32EqNullableScalar       func(int32, []int32, *roaring.Bitmap, []int64) []int64
-	Int32EqScalarSels           func(int32, []int32, []int64, []int64) []int64
-	Int32EqNullableScalarSels   func(int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
-	Int64Eq                     func([]int64, []int64, []int64) []int64
-	Int64EqNullable             func([]int64, []int64, *roaring.Bitmap, []int64) []int64
-	Int64EqSels                 func([]int64, []int64, []int64, []int64) []int64
-	Int64EqNullableSels         func([]int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
-	Int64EqScalar               func(int64, []int64, []int64) []int64
-	Int64EqNullableScalar       func(int64, []int64, *roaring.Bitmap, []int64) []int64
-	Int64EqScalarSels           func(int64, []int64, []int64, []int64) []int64
-	Int64EqNullableScalarSels   func(int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
-	Uint8Eq                     func([]uint8, []uint8, []int64) []int64
-	Uint8EqNullable             func([]uint8, []uint8, *roaring.Bitmap, []int64) []int64
-	Uint8EqSels                 func([]uint8, []uint8, []int64, []int64) []int64
-	Uint8EqNullableSels         func([]uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
-	Uint8EqScalar               func(uint8, []uint8, []int64) []int64
-	Uint8EqNullableScalar       func(uint8, []uint8, *roaring.Bitmap, []int64) []int64
-	Uint8EqScalarSels           func(uint8, []uint8, []int64, []int64) []int64
-	Uint8EqNullableScalarSels   func(uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
-	Uint16Eq                    func([]uint16, []uint16, []int64) []int64
-	Uint16EqNullable            func([]uint16, []uint16, *roaring.Bitmap, []int64) []int64
-	Uint16EqSels                func([]uint16, []uint16, []int64, []int64) []int64
-	Uint16EqNullableSels        func([]uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
-	Uint16EqScalar              func(uint16, []uint16, []int64) []int64
-	Uint16EqNullableScalar      func(uint16, []uint16, *roaring.Bitmap, []int64) []int64
-	Uint16EqScalarSels          func(uint16, []uint16, []int64, []int64) []int64
-	Uint16EqNullableScalarSels  func(uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
-	Uint32Eq                    func([]uint32, []uint32, []int64) []int64
-	Uint32EqNullable            func([]uint32, []uint32, *roaring.Bitmap, []int64) []int64
-	Uint32EqSels                func([]uint32, []uint32, []int64, []int64) []int64
-	Uint32EqNullableSels        func([]uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
-	Uint32EqScalar              func(uint32, []uint32, []int64) []int64
-	Uint32EqNullableScalar      func(uint32, []uint32, *roaring.Bitmap, []int64) []int64
-	Uint32EqScalarSels          func(uint32, []uint32, []int64, []int64) []int64
-	Uint32EqNullableScalarSels  func(uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
-	Uint64Eq                    func([]uint64, []uint64, []int64) []int64
-	Uint64EqNullable            func([]uint64, []uint64, *roaring.Bitmap, []int64) []int64
-	Uint64EqSels                func([]uint64, []uint64, []int64, []int64) []int64
-	Uint64EqNullableSels        func([]uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
-	Uint64EqScalar              func(uint64, []uint64, []int64) []int64
-	Uint64EqNullableScalar      func(uint64, []uint64, *roaring.Bitmap, []int64) []int64
-	Uint64EqScalarSels          func(uint64, []uint64, []int64, []int64) []int64
-	Uint64EqNullableScalarSels  func(uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
-	Float32Eq                   func([]float32, []float32, []int64) []int64
-	Float32EqNullable           func([]float32, []float32, *roaring.Bitmap, []int64) []int64
-	Float32EqSels               func([]float32, []float32, []int64, []int64) []int64
-	Float32EqNullableSels       func([]float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
-	Float32EqScalar             func(float32, []float32, []int64) []int64
-	Float32EqNullableScalar     func(float32, []float32, *roaring.Bitmap, []int64) []int64
-	Float32EqScalarSels         func(float32, []float32, []int64, []int64) []int64
-	Float32EqNullableScalarSels func(float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
-	Float64Eq                   func([]float64, []float64, []int64) []int64
-	Float64EqNullable           func([]float64, []float64, *roaring.Bitmap, []int64) []int64
-	Float64EqSels               func([]float64, []float64, []int64, []int64) []int64
-	Float64EqNullableSels       func([]float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
-	Float64EqScalar             func(float64, []float64, []int64) []int64
-	Float64EqNullableScalar     func(float64, []float64, *roaring.Bitmap, []int64) []int64
-	Float64EqScalarSels         func(float64, []float64, []int64, []int64) []int64
-	Float64EqNullableScalarSels func(float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
-	StrEq                       func(*types.Bytes, *types.Bytes, []int64) []int64
-	StrEqNullable               func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) []int64
-	StrEqSels                   func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-	StrEqNullableSels           func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
-	StrEqScalar                 func([]byte, *types.Bytes, []int64) []int64
-	StrEqNullableScalar         func([]byte, *types.Bytes, *roaring.Bitmap, []int64) []int64
-	StrEqScalarSels             func([]byte, *types.Bytes, []int64, []int64) []int64
-	StrEqNullableScalarSels     func([]byte, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
+	Int8Eq                         func([]int8, []int8, []int64) []int64
+	Int8EqNullable                 func([]int8, []int8, *roaring.Bitmap, []int64) []int64
+	Int8EqSels                     func([]int8, []int8, []int64, []int64) []int64
+	Int8EqNullableSels             func([]int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
+	Int8EqScalar                   func(int8, []int8, []int64) []int64
+	Int8EqNullableScalar           func(int8, []int8, *roaring.Bitmap, []int64) []int64
+	Int8EqScalarSels               func(int8, []int8, []int64, []int64) []int64
+	Int8EqNullableScalarSels       func(int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
+	Int16Eq                        func([]int16, []int16, []int64) []int64
+	Int16EqNullable                func([]int16, []int16, *roaring.Bitmap, []int64) []int64
+	Int16EqSels                    func([]int16, []int16, []int64, []int64) []int64
+	Int16EqNullableSels            func([]int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
+	Int16EqScalar                  func(int16, []int16, []int64) []int64
+	Int16EqNullableScalar          func(int16, []int16, *roaring.Bitmap, []int64) []int64
+	Int16EqScalarSels              func(int16, []int16, []int64, []int64) []int64
+	Int16EqNullableScalarSels      func(int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
+	Int32Eq                        func([]int32, []int32, []int64) []int64
+	Int32EqNullable                func([]int32, []int32, *roaring.Bitmap, []int64) []int64
+	Int32EqSels                    func([]int32, []int32, []int64, []int64) []int64
+	Int32EqNullableSels            func([]int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
+	Int32EqScalar                  func(int32, []int32, []int64) []int64
+	Int32EqNullableScalar          func(int32, []int32, *roaring.Bitmap, []int64) []int64
+	Int32EqScalarSels              func(int32, []int32, []int64, []int64) []int64
+	Int32EqNullableScalarSels      func(int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
+	Int64Eq                        func([]int64, []int64, []int64) []int64
+	Int64EqNullable                func([]int64, []int64, *roaring.Bitmap, []int64) []int64
+	Int64EqSels                    func([]int64, []int64, []int64, []int64) []int64
+	Int64EqNullableSels            func([]int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
+	Int64EqScalar                  func(int64, []int64, []int64) []int64
+	Int64EqNullableScalar          func(int64, []int64, *roaring.Bitmap, []int64) []int64
+	Int64EqScalarSels              func(int64, []int64, []int64, []int64) []int64
+	Int64EqNullableScalarSels      func(int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
+	Uint8Eq                        func([]uint8, []uint8, []int64) []int64
+	Uint8EqNullable                func([]uint8, []uint8, *roaring.Bitmap, []int64) []int64
+	Uint8EqSels                    func([]uint8, []uint8, []int64, []int64) []int64
+	Uint8EqNullableSels            func([]uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
+	Uint8EqScalar                  func(uint8, []uint8, []int64) []int64
+	Uint8EqNullableScalar          func(uint8, []uint8, *roaring.Bitmap, []int64) []int64
+	Uint8EqScalarSels              func(uint8, []uint8, []int64, []int64) []int64
+	Uint8EqNullableScalarSels      func(uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
+	Uint16Eq                       func([]uint16, []uint16, []int64) []int64
+	Uint16EqNullable               func([]uint16, []uint16, *roaring.Bitmap, []int64) []int64
+	Uint16EqSels                   func([]uint16, []uint16, []int64, []int64) []int64
+	Uint16EqNullableSels           func([]uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
+	Uint16EqScalar                 func(uint16, []uint16, []int64) []int64
+	Uint16EqNullableScalar         func(uint16, []uint16, *roaring.Bitmap, []int64) []int64
+	Uint16EqScalarSels             func(uint16, []uint16, []int64, []int64) []int64
+	Uint16EqNullableScalarSels     func(uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
+	Uint32Eq                       func([]uint32, []uint32, []int64) []int64
+	Uint32EqNullable               func([]uint32, []uint32, *roaring.Bitmap, []int64) []int64
+	Uint32EqSels                   func([]uint32, []uint32, []int64, []int64) []int64
+	Uint32EqNullableSels           func([]uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
+	Uint32EqScalar                 func(uint32, []uint32, []int64) []int64
+	Uint32EqNullableScalar         func(uint32, []uint32, *roaring.Bitmap, []int64) []int64
+	Uint32EqScalarSels             func(uint32, []uint32, []int64, []int64) []int64
+	Uint32EqNullableScalarSels     func(uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
+	Uint64Eq                       func([]uint64, []uint64, []int64) []int64
+	Uint64EqNullable               func([]uint64, []uint64, *roaring.Bitmap, []int64) []int64
+	Uint64EqSels                   func([]uint64, []uint64, []int64, []int64) []int64
+	Uint64EqNullableSels           func([]uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
+	Uint64EqScalar                 func(uint64, []uint64, []int64) []int64
+	Uint64EqNullableScalar         func(uint64, []uint64, *roaring.Bitmap, []int64) []int64
+	Uint64EqScalarSels             func(uint64, []uint64, []int64, []int64) []int64
+	Uint64EqNullableScalarSels     func(uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
+	Float32Eq                      func([]float32, []float32, []int64) []int64
+	Float32EqNullable              func([]float32, []float32, *roaring.Bitmap, []int64) []int64
+	Float32EqSels                  func([]float32, []float32, []int64, []int64) []int64
+	Float32EqNullableSels          func([]float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
+	Float32EqScalar                func(float32, []float32, []int64) []int64
+	Float32EqNullableScalar        func(float32, []float32, *roaring.Bitmap, []int64) []int64
+	Float32EqScalarSels            func(float32, []float32, []int64, []int64) []int64
+	Float32EqNullableScalarSels    func(float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
+	Float64Eq                      func([]float64, []float64, []int64) []int64
+	Float64EqNullable              func([]float64, []float64, *roaring.Bitmap, []int64) []int64
+	Float64EqSels                  func([]float64, []float64, []int64, []int64) []int64
+	Float64EqNullableSels          func([]float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
+	Float64EqScalar                func(float64, []float64, []int64) []int64
+	Float64EqNullableScalar        func(float64, []float64, *roaring.Bitmap, []int64) []int64
+	Float64EqScalarSels            func(float64, []float64, []int64, []int64) []int64
+	Float64EqNullableScalarSels    func(float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
+	StrEq                          func(*types.Bytes, *types.Bytes, []int64) []int64
+	StrEqNullable                  func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) []int64
+	StrEqSels                      func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
+	StrEqNullableSels              func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
+	StrEqScalar                    func([]byte, *types.Bytes, []int64) []int64
+	StrEqNullableScalar            func([]byte, *types.Bytes, *roaring.Bitmap, []int64) []int64
+	StrEqScalarSels                func([]byte, *types.Bytes, []int64, []int64) []int64
+	StrEqNullableScalarSels        func([]byte, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal64Eq                    func([]types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64EqNullable            func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64EqSels                func([]types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64EqNullableSels        func([]types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal64EqScalar              func(types.Decimal64, []types.Decimal64, int32, int32, []int64) []int64
+	Decimal64EqNullableScalar      func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal64EqScalarSels          func(types.Decimal64, []types.Decimal64, int32, int32, []int64, []int64) []int64
+	Decimal64EqNullableScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal128Eq                   func([]types.Decimal128, []types.Decimal128, int32, int32, []int64) []int64
+	Decimal128EqNullable           func([]types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal128EqSels               func([]types.Decimal128, []types.Decimal128, int32, int32, []int64, []int64) []int64
+	Decimal128EqNullableSels       func([]types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
+	Decimal128EqScalar             func(types.Decimal128, []types.Decimal128, int32, int32, []int64) []int64
+	Decimal128EqNullableScalar     func(types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64) []int64
+	Decimal128EqScalarSels         func(types.Decimal128, []types.Decimal128, int32, int32, []int64, []int64) []int64
+	Decimal128EqNullableScalarSels func(types.Decimal128, []types.Decimal128, int32, int32, *roaring.Bitmap, []int64, []int64) []int64
 )
 
 func init() {
@@ -202,6 +218,22 @@ func init() {
 	StrEqNullableScalar = strEqNullableScalar
 	StrEqScalarSels = strEqScalarSels
 	StrEqNullableScalarSels = strEqNullableScalarSels
+	Decimal64Eq = decimal64Eq
+	Decimal64EqNullable = decimal64EqNullable
+	Decimal64EqSels = decimal64EqSels
+	Decimal64EqNullableSels = decimal64EqNullableSels
+	Decimal64EqScalar = decimal64EqScalar
+	Decimal64EqNullableScalar = decimal64EqNullableScalar
+	Decimal64EqScalarSels = decimal64EqScalarSels
+	Decimal64EqNullableScalarSels = decimal64EqNullableScalarSels
+	Decimal128Eq = decimal128Eq
+	Decimal128EqNullable = decimal128EqNullable
+	Decimal128EqSels = decimal128EqSels
+	Decimal128EqNullableSels = decimal128EqNullableSels
+	Decimal128EqScalar = decimal128EqScalar
+	Decimal128EqNullableScalar = decimal128EqNullableScalar
+	Decimal128EqScalarSels = decimal128EqScalarSels
+	Decimal128EqNullableScalarSels = decimal128EqNullableScalarSels
 }
 
 func int8Eq(xs, ys []int8, rs []int64) []int64 {
@@ -1506,6 +1538,379 @@ func strEqNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, r
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && bytes.Equal(x, ys.Get(sel)) {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64Eq(xs, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	// to compare two decimal values, first we need to align them to the same scale
+	// for example,    							Decimal(20, 3)  Decimal(20, 5)
+	// 				value: 						12.3 			123.45
+	// 				internal representation: 	12300  			12345000
+	// align to the same scale by scale the smaller scale decimal to the same scale as the bigger one:
+	// 											1230000         12345000
+	// 				then do integer comparison
+
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		scaleDiff := xScale - yScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, y := range ys {
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ysScaled[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xsScaled := make([]types.Decimal64, len(xs))
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		for i, x := range xs {
+			xsScaled[i] = types.ScaleDecimal64(x, scale)
+		}
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xsScaled[i], y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, x := range xs {
+			if types.CompareDecimal64Decimal64Aligned(x, ys[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64EqNullable(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, ys[i], xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqSels(xs, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqNullableSels(xs, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal64, len(ys))
+		for i, y := range ys {
+			scaleDiff := xScale - yScale
+			scale := int64(math.Pow10(int(scaleDiff)))
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
+		}
+		for i, yScaled := range ysScaled {
+			if types.CompareDecimal64Decimal64Aligned(x, yScaled) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		scaleDiff := yScale - xScale
+		scale := int64(math.Pow10(int(scaleDiff)))
+		xScaled := types.ScaleDecimal64(x, scale)
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(xScaled, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, y := range ys {
+			if types.CompareDecimal64Decimal64Aligned(x, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal64EqNullableScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal64Decimal64(x, y, xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal64EqNullableScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal64Decimal64(x, ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128Eq(xs, ys []types.Decimal128, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	// to compare two decimal values, first we need to align them to the same scale
+	// for example,    							Decimal(20, 3)  Decimal(20, 5)
+	// 				value: 						12.3 			123.45
+	// 				internal representation: 	12300  			12345000
+	// align to the same scale by scale the smaller scale decimal to the same scale as the bigger one:
+	// 											1230000         12345000
+	// 				then do integer comparison
+
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal128, len(ys))
+		scaleDiff := xScale - yScale
+		for i, y := range ys {
+			ysScaled[i] = y
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for j := 0; j < int(scaleDiff); j++ {
+				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
+			}
+		}
+		for i, x := range xs {
+			if types.CompareDecimal128Decimal128Aligned(x, ysScaled[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xsScaled := make([]types.Decimal128, len(xs))
+		scaleDiff := yScale - xScale
+		for i, x := range xs {
+			xsScaled[i] = x
+			for i := 0; i < int(scaleDiff); i++ {
+				xsScaled[i] = types.ScaleDecimal128By10(xsScaled[i])
+			}
+		}
+		for i, y := range ys {
+			if types.CompareDecimal128Decimal128Aligned(xsScaled[i], y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, x := range xs {
+			if types.CompareDecimal128Decimal128Aligned(x, ys[i]) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal128EqNullable(xs, ys []types.Decimal128, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal128Decimal128(x, ys[i], xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128EqSels(xs, ys []types.Decimal128, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal128Decimal128(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128EqNullableSels(xs, ys []types.Decimal128, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal128Decimal128(xs[sel], ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128EqScalar(x types.Decimal128, ys []types.Decimal128, xScale, yScale int32, rs []int64) []int64 {
+	rsi := 0
+	if xScale > yScale {
+		ysScaled := make([]types.Decimal128, len(ys))
+		for i, y := range ys {
+			scaleDiff := xScale - yScale
+			ysScaled[i] = y
+			// since the possible scale difference is (0, 38], and 10**38 can not fit in a int64, double loop is necessary
+			for j := 0; j < int(scaleDiff); j++ {
+				ysScaled[i] = types.ScaleDecimal128By10(ysScaled[i])
+			}
+
+		}
+		for i, yScaled := range ysScaled {
+			if types.CompareDecimal128Decimal128Aligned(x, yScaled) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else if xScale < yScale {
+		xScaled := x
+		scaleDiff := yScale - xScale
+		for i := 0; i < int(scaleDiff); i++ {
+			xScaled = types.ScaleDecimal128By10(xScaled)
+		}
+		for i, y := range ys {
+			if types.CompareDecimal128Decimal128Aligned(xScaled, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	} else {
+		for i, y := range ys {
+			if types.CompareDecimal128Decimal128Aligned(x, y) == 0 {
+				rs[rsi] = int64(i)
+				rsi++
+			}
+		}
+		return rs[:rsi]
+	}
+}
+
+func decimal128EqNullableScalar(x types.Decimal128, ys []types.Decimal128, xScale, yScale int32, nulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if types.CompareDecimal128Decimal128(x, y, xScale, yScale) == 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128EqScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, yScale int32, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if types.CompareDecimal128Decimal128(x, ys[sel], xScale, yScale) == 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func decimal128EqNullableScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, yScale int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	for _, sel := range sels {
+		if !nulls.Contains(uint64(sel)) && types.CompareDecimal128Decimal128(x, ys[sel], xScale, yScale) == 0 {
 			rs[rsi] = sel
 			rsi++
 		}

@@ -37,9 +37,6 @@ const (
 	T_uint32 T = T(plan.Type_UINT32)
 	T_uint64 T = T(plan.Type_UINT64)
 
-	// numeric/decimal family - unsigned attribute is deprecated
-	T_decimal T = T(plan.Type_DECIMAL)
-
 	// numeric/float family - unsigned attribute is deprecated
 	T_float32 T = T(plan.Type_FLOAT32)
 	T_float64 T = T(plan.Type_FLOAT64)
@@ -55,6 +52,10 @@ const (
 	// json family
 	T_json T = T(plan.Type_JSON)
 
+	// numeric/decimal family - unsigned attribute is deprecated
+	T_decimal64  = T(plan.Type_DECIMAL64)
+	T_decimal128 = T(plan.Type_DECIMAL128)
+
 	// system family
 	T_sel   T = T(plan.Type_SEL)   //selection
 	T_tuple T = T(plan.Type_TUPLE) // immutable, size = 24
@@ -67,8 +68,9 @@ type Type struct {
 	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
 	Width int32 `json:"width,string"`
 
-	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
-	Precision int32 `json:"precision,string"`
+	Scale int32 `json:"Scale,string"`
+
+	Precision int32 `json:"Precision,string"`
 }
 
 type Bytes struct {
@@ -81,7 +83,10 @@ type Date int32
 
 type Datetime int64
 
-type Decimal struct {
+type Decimal64 int64
+type Decimal128 struct {
+	lo int64
+	hi int64
 }
 
 var Types map[string]T = map[string]T{
@@ -97,7 +102,8 @@ var Types map[string]T = map[string]T{
 	"integer unsigned":  T_uint32,
 	"bigint unsigned":   T_uint64,
 
-	"decimal": T_decimal,
+	"decimal64":  T_decimal64,
+	"decimal128": T_decimal128,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -116,7 +122,7 @@ func (t Type) String() string {
 }
 
 func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Precision == b.Precision
+	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
 }
 
 func (t T) ToType() Type {
@@ -150,6 +156,10 @@ func (t T) ToType() Type {
 		typ.Size = 24
 	case T_sel:
 		typ.Size = 8
+	case T_decimal64:
+		typ.Size = 8
+	case T_decimal128:
+		typ.Size = 16
 	}
 	return typ
 }
@@ -172,8 +182,6 @@ func (t T) String() string {
 		return "INT UNSIGNED"
 	case T_uint64:
 		return "BIGINT UNSIGNED"
-	case T_decimal:
-		return "DECIMAL"
 	case T_float32:
 		return "FLOAT"
 	case T_float64:
@@ -192,6 +200,10 @@ func (t T) String() string {
 		return "SEL"
 	case T_tuple:
 		return "TUPLE"
+	case T_decimal64:
+		return "DECIMAL64"
+	case T_decimal128:
+		return "DECIMAL128"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -231,6 +243,10 @@ func (t T) OidString() string {
 		return "T_date"
 	case T_datetime:
 		return "T_datetime"
+	case T_decimal64:
+		return "T_decimal64"
+	case T_decimal128:
+		return "T_decimal128"
 	}
 	return "unknown_type"
 }
@@ -268,6 +284,10 @@ func (t T) GoType() string {
 		return "date"
 	case T_datetime:
 		return "datetime"
+	case T_decimal64:
+		return "decimal64"
+	case T_decimal128:
+		return "decimal128"
 	}
 	return "unknown type"
 }
@@ -310,6 +330,10 @@ func (t T) TypeLen() int {
 		return 24
 	case T_sel:
 		return 8
+	case T_decimal64:
+		return 8
+	case T_decimal128:
+		return 16
 	}
 	return -1
 }

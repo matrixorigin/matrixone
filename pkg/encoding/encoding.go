@@ -28,13 +28,15 @@ import (
 var TypeSize int
 var DateSize int
 var DatetimeSize int
-var DecimalSize int
+var Decimal64Size int
+var Decimal128Size int
 
 func init() {
 	TypeSize = int(unsafe.Sizeof(types.Type{}))
 	DateSize = int(unsafe.Sizeof(types.Date(0)))
 	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
-	DecimalSize = int(unsafe.Sizeof(types.Decimal{}))
+	Decimal64Size = int(unsafe.Sizeof(types.Decimal64(0)))
+	Decimal128Size = int(unsafe.Sizeof(types.Decimal128{}))
 }
 
 func Encode(v interface{}) ([]byte, error) {
@@ -152,6 +154,22 @@ func EncodeDatetime(v types.Datetime) []byte {
 
 func DecodeDatetime(v []byte) types.Datetime {
 	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeDecimal64(v types.Decimal64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal64Size)
+}
+
+func DecodeDecimal64(v []byte) types.Decimal64 {
+	return *(*types.Decimal64)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeDecimal128(v types.Decimal128) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal128Size)
+}
+
+func DecodeDecimal128(v []byte) types.Decimal128 {
+	return *(*types.Decimal128)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt8Slice(v []int8) []byte {
@@ -310,16 +328,30 @@ func DecodeDatetimeSlice(v []byte) (ret []types.Datetime) {
 	return
 }
 
-func EncodeDecimalSlice(v []types.Decimal) (ret []byte) {
+func EncodeDecimal64Slice(v []types.Decimal64) (ret []byte) {
 	if len(v) > 0 {
-		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*DecimalSize)[:len(v)*DecimalSize]
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*Decimal64Size)[:len(v)*Decimal64Size]
 	}
 	return
 }
 
-func DecodeDecimalSlice(v []byte) (ret []types.Decimal) {
+func DecodeDecimal64Slice(v []byte) (ret []types.Decimal64) {
 	if len(v) > 0 {
-		ret = unsafe.Slice((*types.Decimal)(unsafe.Pointer(&v[0])), cap(v)/DecimalSize)[:len(v)/DecimalSize]
+		ret = unsafe.Slice((*types.Decimal64)(unsafe.Pointer(&v[0])), cap(v)/Decimal64Size)[:len(v)/Decimal64Size]
+	}
+	return
+}
+
+func EncodeDecimal128Slice(v []types.Decimal128) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*16)[:len(v)*16]
+	}
+	return
+}
+
+func DecodeDecimal128Slice(v []byte) (ret []types.Decimal128) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*types.Decimal128)(unsafe.Pointer(&v[0])), cap(v)/Decimal128Size)[:len(v)/Decimal128Size]
 	}
 	return
 }

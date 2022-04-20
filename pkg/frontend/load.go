@@ -362,6 +362,10 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]types.Date, batchSize)
 		case types.T_datetime:
 			vec.Col = make([]types.Datetime, batchSize)
+		case types.T_decimal64:
+			vec.Col = make([]types.Decimal64, batchSize)
+		case types.T_decimal128:
+			vec.Col = make([]types.Decimal128, batchSize)
 		default:
 			panic("unsupported vector type")
 		}

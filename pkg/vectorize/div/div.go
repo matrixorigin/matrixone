@@ -14,6 +14,8 @@
 
 package div
 
+import "github.com/matrixorigin/matrixone/pkg/container/types"
+
 var (
 	Int8Div                func([]int8, []int8, []int8) []int8
 	Int8DivSels            func([]int8, []int8, []int8, []int64) []int8
@@ -89,6 +91,19 @@ var (
 	Float64IntegerDivScalarSels   func(float64, []float64, []int64, []int64) []int64
 	Float64IntegerDivByScalar     func(float64, []float64, []int64) []int64
 	Float64IntegerDivByScalarSels func(float64, []float64, []int64, []int64) []int64
+
+	Decimal64Div              func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal64DivSels          func([]types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal64DivScalar        func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal64DivScalarSels    func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal64DivByScalar      func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal64DivByScalarSels  func(types.Decimal64, []types.Decimal64, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128Div             func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128DivSels         func([]types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128DivScalar       func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128DivScalarSels   func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
+	Decimal128DivByScalar     func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128) []types.Decimal128
+	Decimal128DivByScalarSels func(types.Decimal128, []types.Decimal128, int32, int32, []types.Decimal128, []int64) []types.Decimal128
 )
 
 func init() {
@@ -152,6 +167,18 @@ func init() {
 	Float64DivScalarSels = float64DivScalarSels
 	Float64DivByScalar = float64DivByScalar
 	Float64DivByScalarSels = float64DivByScalarSels
+	Decimal64Div = decimal64Div
+	Decimal64DivSels = decimal64DivSels
+	Decimal64DivScalar = decimal64DivScalar
+	Decimal64DivScalarSels = decimal64DivScalarSels
+	Decimal64DivByScalar = decimal64DivByScalar
+	Decimal64DivByScalarSels = decimal64DivByScalarSels
+	Decimal128Div = decimal128Div
+	Decimal128DivSels = decimal128DivSels
+	Decimal128DivScalar = decimal128DivScalar
+	Decimal128DivScalarSels = decimal128DivScalarSels
+	Decimal128DivByScalar = decimal128DivByScalar
+	Decimal128DivByScalarSels = decimal128DivByScalarSels
 
 	Float32IntegerDiv = float32IntegerDiv
 	Float32IntegerDivSels = float32IntegerDivSels
@@ -668,6 +695,100 @@ func float64IntegerDivByScalar(x float64, ys []float64, rs []int64) []int64 {
 func float64IntegerDivByScalarSels(x float64, ys []float64, rs []int64, sels []int64) []int64 {
 	for _, sel := range sels {
 		rs[sel] = int64(ys[sel] / x)
+	}
+	return rs
+}
+
+func decimal64Div(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	// a / b
+	// to divide two decimal value
+	// 1. scale dividend using divisor's scale
+	// 2. perform integer division
+	// division result precision: 38(decimal64) division result scale: dividend's scale
+	for i, x := range xs {
+		rs[i] = types.Decimal64Decimal64Div(x, ys[i], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64DivSels(xs, ys []types.Decimal64, xsScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal64Decimal64Div(xs[sel], ys[sel], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64DivScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	for i, y := range ys {
+		rs[i] = types.Decimal64Decimal64Div(x, y, xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64DivScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal64Decimal64Div(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal64DivByScalar(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	for i, y := range ys {
+		rs[i] = types.Decimal64Decimal64Div(y, x, ysScale, xScale)
+	}
+	return rs
+}
+
+func decimal64DivByScalarSels(x types.Decimal64, ys []types.Decimal64, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal64Decimal64Div(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128Div(xs, ys []types.Decimal128, xsScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	// a / b
+	// to divide two decimal value
+	// 1. scale dividend using divisor's scale
+	// 2. perform integer division
+	// division result precision: 38(decimal128) division result scale: dividend's scale
+	for i, x := range xs {
+		rs[i] = types.Decimal128Decimal128Div(x, ys[i], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128DivSels(xs, ys []types.Decimal128, xsScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal128Decimal128Div(xs[sel], ys[sel], xsScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128DivScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	for i, y := range ys {
+		rs[i] = types.Decimal128Decimal128Div(x, y, xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128DivScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal128Decimal128Div(x, ys[sel], xScale, ysScale)
+	}
+	return rs
+}
+
+func decimal128DivByScalar(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128) []types.Decimal128 {
+	for i, y := range ys {
+		rs[i] = types.Decimal128Decimal128Div(y, x, ysScale, xScale)
+	}
+	return rs
+}
+
+func decimal128DivByScalarSels(x types.Decimal128, ys []types.Decimal128, xScale, ysScale int32, rs []types.Decimal128, sels []int64) []types.Decimal128 {
+	for _, sel := range sels {
+		rs[sel] = types.Decimal128Decimal128Div(x, ys[sel], xScale, ysScale)
 	}
 	return rs
 }

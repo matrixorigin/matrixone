@@ -82,7 +82,7 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) (extend.Extend, []*Join
 func (b *build) buildWhereExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, e.String())
 	case *tree.ParenExpr:
 		return b.buildWhereExpr(e.Expr, qry)
 	case *tree.OrExpr:
