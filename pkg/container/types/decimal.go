@@ -42,8 +42,8 @@
 
 package types
 
-import "C"
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -150,9 +150,6 @@ import (
 // 		*(__int128*)result = *(int64_t*)a;
 // }
 import "C"
-import (
-	"errors"
-)
 
 func ScaleDecimal64(a Decimal64, b int64) (result Decimal64) {
 	return Decimal64(int64(a) * b)

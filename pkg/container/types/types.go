@@ -341,26 +341,18 @@ func (t T) TypeLen() int {
 
 func (t T) FixedLength() int {
 	switch t {
-	case T_int8:
+	case T_int8, T_uint8:
 		return 1
-	case T_int16:
+	case T_int16, T_uint16:
 		return 2
-	case T_int32, T_date:
+	case T_int32, T_uint32, T_date, T_float32:
 		return 4
-	case T_int64, T_datetime:
+	case T_int64, T_uint64, T_datetime, T_float64:
 		return 8
-	case T_uint8:
-		return 1
-	case T_uint16:
-		return 2
-	case T_uint32:
-		return 4
-	case T_uint64:
+	case T_decimal64:
 		return 8
-	case T_float32:
-		return 4
-	case T_float64:
-		return 8
+	case T_decimal128:
+		return 16
 	case T_char:
 		return -24
 	case T_varchar:

@@ -29,6 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+func DecodeFixedCol[T any](v *Vector, sz int) []T {
+	return encoding.DecodeFixedSlice[T](v.Data, sz)
+}
+
 func New(typ types.Type) *Vector {
 	switch typ.Oid {
 	case types.T_int8:
@@ -277,58 +281,44 @@ func Length(v *Vector) int {
 	}
 }
 
+func setLengthFixed[T any](v *Vector, n int) {
+	vs := v.Col.([]T)
+	m := len(vs)
+	v.Col = vs[:n]
+	nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+}
+
 func SetLength(v *Vector, n int) {
 	switch v.Typ.Oid {
 	case types.T_int8:
-		vs := v.Col.([]int8)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[int8](v, n)
 	case types.T_int16:
-		vs := v.Col.([]int16)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[int16](v, n)
 	case types.T_int32:
-		vs := v.Col.([]int32)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[int32](v, n)
 	case types.T_int64:
-		vs := v.Col.([]int64)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[int64](v, n)
 	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[uint8](v, n)
 	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[uint16](v, n)
 	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[uint32](v, n)
 	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[uint64](v, n)
 	case types.T_float32:
-		vs := v.Col.([]float32)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[float32](v, n)
 	case types.T_float64:
-		vs := v.Col.([]float64)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+		setLengthFixed[float64](v, n)
+	case types.T_date:
+		setLengthFixed[types.Date](v, n)
+	case types.T_datetime:
+		setLengthFixed[types.Datetime](v, n)
+	case types.T_decimal64:
+		setLengthFixed[types.Decimal64](v, n)
+	case types.T_decimal128:
+		setLengthFixed[types.Decimal128](v, n)
+
 	case types.T_sel:
 		vs := v.Col.([]int64)
 		m := len(vs)
@@ -345,26 +335,6 @@ func SetLength(v *Vector, n int) {
 		vs.Data = vs.Data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
 		vs.Offsets = vs.Offsets[:n]
 		vs.Lengths = vs.Lengths[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		m := len(vs)
-		v.Col = vs[:n]
 		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.SetLength", v.Typ))

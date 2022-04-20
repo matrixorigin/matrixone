@@ -16,6 +16,7 @@ package times
 
 import (
 	"bytes"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -670,6 +671,29 @@ func (ctr *Container) processPureJoinH0(n, start int, bat *batch.Batch, proc *pr
 	return nil
 }
 
+func fillGroup[T any](ctr *Container, vec *vector.Vector, sz uint32) {
+	rows := ctr.mx[0]
+	vs := vector.DecodeFixedCol[T](vec, int(sz))
+	if !nulls.Any(vec.Nsp) {
+		for k, row := range rows {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
+		}
+		add.Uint32AddScalar(1+sz, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
+	} else {
+		for k, row := range rows {
+			if vec.Nsp.Np.Contains(uint64(row)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
+				ctr.keyOffs[k]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
+				*(*T)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
+				ctr.keyOffs[k] += 1 + sz
+			}
+		}
+	}
+}
+
 func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *process.Process) error {
 	{
 		var flg bool
@@ -736,248 +760,22 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
-			switch vec.Typ.Oid {
-			case types.T_int8:
-				vs := vec.Col.([]int8)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(2, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 2
-						}
-					}
+			typLen := vec.Typ.Oid.FixedLength()
+			switch typLen {
+			case 1:
+				fillGroup[uint8](ctr, vec, 1)
+			case 2:
+				fillGroup[uint16](ctr, vec, 2)
+			case 4:
+				fillGroup[uint32](ctr, vec, 4)
+			case 8:
+				fillGroup[uint64](ctr, vec, 8)
+			case 16:
+				fillGroup[types.Decimal128](ctr, vec, 16)
+			default:
+				if typLen >= 0 {
+					panic(fmt.Sprintf("Unsupported typLen %d", typLen))
 				}
-			case types.T_uint8:
-				vs := vec.Col.([]uint8)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(2, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 2
-						}
-					}
-				}
-			case types.T_int16:
-				vs := vec.Col.([]int16)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(3, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 3
-						}
-					}
-				}
-			case types.T_uint16:
-				vs := vec.Col.([]uint16)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(3, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 3
-						}
-					}
-				}
-			case types.T_int32:
-				vs := vec.Col.([]int32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_uint32:
-				vs := vec.Col.([]uint32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_int64:
-				vs := vec.Col.([]int64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_uint64:
-				vs := vec.Col.([]uint64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_float32:
-				vs := vec.Col.([]float32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_float64:
-				vs := vec.Col.([]float64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_date:
-				vs := vec.Col.([]types.Date)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*types.Date)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*types.Date)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_datetime:
-				vs := vec.Col.([]types.Datetime)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*types.Datetime)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*types.Datetime)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_char, types.T_varchar:
 				vs := vec.Col.(*types.Bytes)
 				vData := vs.Data
 				vOff := vs.Offsets
@@ -1002,6 +800,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 				}
 			}
 		}
+
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
 			for i := range v.is {

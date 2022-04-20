@@ -16,10 +16,11 @@ package encoding
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func TestEncodeType(t *testing.T) {
@@ -267,4 +268,26 @@ func TestStringSliceEncoding(t *testing.T) {
 	data := EncodeStringSlice(xs)
 	ys := DecodeStringSlice(data)
 	fmt.Printf("ys: %v\n", ys)
+}
+
+func BenchmarkEncodeSliceFloat64(b *testing.B) {
+	v := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	for i := 0; i < b.N; i++ {
+		x := EncodeFloat64Slice(v)
+		y := DecodeFloat64Slice(x)
+		if len(y) != len(v) {
+			panic("Encode decode error")
+		}
+	}
+}
+
+func BenchmarkEncodeSliceFloat64_Old(b *testing.B) {
+	v := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	for i := 0; i < b.N; i++ {
+		x := EncodeFloat64SliceForBenchmark(v)
+		y := DecodeFloat64SliceForBenchmark(x)
+		if len(y) != len(v) {
+			panic("Encode decode error")
+		}
+	}
 }
