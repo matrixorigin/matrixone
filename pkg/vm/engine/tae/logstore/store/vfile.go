@@ -133,7 +133,9 @@ func (vf *vFile) Commit() {
 	vf.WriteMeta()
 	vf.Sync()
 	fmt.Printf("sync-%s\n", vf.String())
+	vf.Lock()
 	vf.buf = nil
+	vf.Unlock()
 	vf.commitCond.L.Lock()
 	atomic.StoreInt32(&vf.committed, int32(1))
 	vf.commitCond.Broadcast()
@@ -143,6 +145,8 @@ func (vf *vFile) Commit() {
 
 //TODO reuse wait sync
 func (vf *vFile) Sync() error {
+	vf.Lock()
+	defer vf.Unlock()
 	if vf.bsInfo != nil {
 		vf.bsInfo.syncTimes++
 	}
@@ -150,7 +154,6 @@ func (vf *vFile) Sync() error {
 		vf.File.Sync()
 		return nil
 	}
-	vf.Lock()
 	targetSize := vf.size //TODO race size, bufpos
 	targetpos := vf.bufpos
 	t0 := time.Now()
@@ -180,7 +183,6 @@ func (vf *vFile) Sync() error {
 	if vf.bsInfo != nil {
 		vf.bsInfo.syncDuration += time.Since(t0)
 	}
-	vf.Unlock()
 	return nil
 }
 

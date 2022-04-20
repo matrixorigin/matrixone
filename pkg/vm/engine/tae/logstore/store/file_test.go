@@ -31,6 +31,9 @@ func TestVFile(t *testing.T) {
 	}
 	buf := bs.Bytes()
 	val := int32(1)
+	t.Logf("waiting v0 commit")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&val))
+	
 	go func() {
 		defer wg.Done()
 		v0.PrepareWrite(len(buf))
@@ -38,13 +41,11 @@ func TestVFile(t *testing.T) {
 		assert.Nil(t, err)
 		v0.FinishWrite()
 		t.Logf("committing v0")
-		v0.Commit()
 		assert.True(t, atomic.CompareAndSwapInt32(&val, int32(1), int32(2)))
+		v0.Commit()
 		t.Logf("committed v0")
 	}()
 
-	t.Logf("waiting v0 commit")
-	assert.Equal(t, int32(1), atomic.LoadInt32(&val))
 	v0.WaitCommitted()
 	assert.Equal(t, int32(2), atomic.LoadInt32(&val))
 	t.Logf("WaitDone")
