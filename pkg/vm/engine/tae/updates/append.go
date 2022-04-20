@@ -48,7 +48,7 @@ func (n *AppendNode) ApplyCommit() error {
 	}
 	n.txn = nil
 	if n.controller != nil {
-		logutil.Debugf("Set %s MaxCommitTS=%d, MaxVisibleRow=%d", n.controller.meta.String(), n.commitTs, n.maxRow)
+		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", n.commitTs, n.maxRow)
 		n.controller.SetMaxVisible(n.commitTs)
 	}
 	return nil
