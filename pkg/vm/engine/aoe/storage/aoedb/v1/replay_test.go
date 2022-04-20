@@ -439,7 +439,7 @@ func TestReplay4(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
+	testutils.WaitExpect(2000, func() bool {
 		return uint64(insertCnt) == inst.GetShardCheckpointId(shardId)
 	})
 	segmentedIdx := inst.GetShardCheckpointId(shardId)

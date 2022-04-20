@@ -51,7 +51,7 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 }
 
 func (sf *UnsortedSegmentFile) close() {
-	sf.Destory()
+	sf.Destroy()
 }
 
 func (sf *UnsortedSegmentFile) GetFileType() common.FileType {
@@ -135,7 +135,7 @@ func (sf *UnsortedSegmentFile) Close() error {
 	return nil
 }
 
-func (sf *UnsortedSegmentFile) Destory() {
+func (sf *UnsortedSegmentFile) Destroy() {
 	for _, blk := range sf.Blocks {
 		blk.Unref()
 	}

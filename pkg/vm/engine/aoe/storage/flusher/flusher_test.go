@@ -134,8 +134,8 @@ func TestFlusher(t *testing.T) {
 	driver.ShardNodeCreated(shard_id, uint64(2))
 	driver.ShardNodeCreated(shard_id2, uint64(11))
 	driver.OnStats([]*shard.ItemsToCheckpointStat{
-		{ShardId: shard_id, Count: 10},
-		{ShardId: shard_id, Count: 2},
+		{ShardID: shard_id, Count: 10},
+		{ShardID: shard_id, Count: 2},
 	})
 	testutils.WaitExpect(100, func() bool {
 		o := hub.get(shard_id)
@@ -148,7 +148,7 @@ func TestFlusher(t *testing.T) {
 	assert.Equal(t, uint64(2), hub.get(shard_id).GetFlushed())
 
 	driver.OnStats([]*shard.ItemsToCheckpointStat{
-		{ShardId: shard_id2, Count: 10},
+		{ShardID: shard_id2, Count: 10},
 	})
 	testutils.WaitExpect(100, func() bool {
 		o := hub.get(shard_id2)

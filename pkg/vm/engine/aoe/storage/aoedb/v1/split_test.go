@@ -628,11 +628,11 @@ func TestSplit5(t *testing.T) {
 		return nil
 	}
 
-	var dbs []*metadata.Database
+	// dbs := make([]*metadata.Database, 0)
 	for _, name := range newNames {
 		db, err := inst.Store.Catalog.SimpleGetDatabaseByName(name)
 		assert.Nil(t, err)
-		dbs = append(dbs, db)
+		// dbs = append(dbs, db)
 		db.RLock()
 		err = db.RecurLoopLocked(processor)
 		assert.Nil(t, err)

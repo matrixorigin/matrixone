@@ -121,7 +121,10 @@ func TestDatabase3(t *testing.T) {
 	testutils.WaitExpect(200, func() bool {
 		return gen.Get() == db3.GetCheckpointId()
 	})
-	err = db3.SimpleHardDelete()
+	testutils.WaitExpect(2000, func() bool {
+		err = db3.SimpleHardDelete()
+		return err != ErrCannotHardDelete
+	})
 	assert.Nil(t, err)
 
 	gen = shard.NewMockIndexAllocator().Shard(103)

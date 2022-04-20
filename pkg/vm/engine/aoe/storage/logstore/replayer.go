@@ -15,7 +15,6 @@
 package logstore
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -69,7 +68,7 @@ func (replayer *simpleReplayer) Truncate(s Store) error {
 func (replayer *simpleReplayer) RegisterEntryHandler(eType EntryType, handler EntryHandler) error {
 	duplicate := replayer.handlers[eType]
 	if duplicate != nil {
-		return errors.New(fmt.Sprintf("duplicate handler found for %d", eType))
+		return fmt.Errorf("duplicate handler found for %d", eType)
 	}
 	replayer.handlers[eType] = handler
 	return nil
@@ -86,7 +85,7 @@ func (replayer *simpleReplayer) doReplay(r *VersionFile, observer ReplayObserver
 	handler := replayer.handlers[eType]
 	if handler == nil {
 		logutil.Infof("Replaying (%d, %d, %d) - %d", eType, meta.PayloadSize(), replayer.offset, replayer.count)
-		return errors.New(fmt.Sprintf("no handler for type: %d", eType))
+		return fmt.Errorf("no handler for type: %d", eType)
 	}
 	if entry, n, err := handler(r, meta); err != nil {
 		return err

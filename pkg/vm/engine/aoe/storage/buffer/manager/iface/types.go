@@ -55,8 +55,8 @@ type IBufferManager interface {
 	GetNextTransientID() uint64
 
 	RegisterMemory(vf common.IVFile, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle
-	RegisterSpillableNode(vf common.IVFile, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
-	RegisterNode(vf common.IVFile, useCompress bool, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
+	RegisterSpillableNode(vf common.IVFile, nodeID uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
+	RegisterNode(vf common.IVFile, useCompress bool, nodeID uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
 	CreateNode(vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor) INode

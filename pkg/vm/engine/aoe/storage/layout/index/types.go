@@ -28,7 +28,7 @@ type OpType uint8
 
 type ColumnsAllocator struct {
 	sync.RWMutex
-	Allocators map[int]*common.IdAlloctor
+	Allocators map[int]*common.IDAlloctor
 }
 
 const (

@@ -41,7 +41,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	aoeMeta "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -431,7 +430,10 @@ func (s *Storage) SplitCheck(shard metapb.Shard, size uint64) (currentApproximat
 
 //CreateSnapshot create a snapshot
 func (s *Storage) CreateSnapshot(shardID uint64, path string) error {
-	s.DB.FlushDatabase(aoedb.IdToNameFactory.Encode(shardID))
+	err := s.DB.FlushDatabase(aoedb.IdToNameFactory.Encode(shardID))
+	if err != nil {
+		return err
+	}
 	ctx := aoedb.CreateSnapshotCtx{
 		DB:   aoedb.IdToNameFactory.Encode(shardID),
 		Path: path,
@@ -663,7 +665,10 @@ func (s *Storage) RemoveShard(shard metapb.Shard, removeData bool) error {
 	if err != nil {
 		return err
 	}
-	s.DB.FlushDatabase(dbName)
+	err = s.DB.FlushDatabase(dbName)
+	if err != nil && err != metadata.ErrDatabaseNotFound {
+		return err
+	}
 	logIndex := db.GetCheckpointId()
 	defer func() {
 		logutil.Infof(
@@ -681,13 +686,13 @@ func (s *Storage) RemoveShard(shard metapb.Shard, removeData bool) error {
 	return err
 }
 
-func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *aoeMeta.Database, dbExisted bool, err error) {
+func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size int) (db *metadata.Database, dbExisted bool, err error) {
 	dbName := aoedb.IdToNameFactory.Encode(sid)
 	db, err = s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	if db != nil {
 		return db, true, err
 	}
-	if err != nil && err != aoeMeta.ErrDatabaseNotFound {
+	if err != nil && err != metadata.ErrDatabaseNotFound {
 		return nil, false, err
 	}
 	if logIndex == math.MaxUint64 {
@@ -705,14 +710,14 @@ func (s *Storage) createAOEDatabaseIfNotExist(sid, logIndex uint64, offset, size
 	return db, false, err
 }
 
-func (s *Storage) createAOEMetaTableIfNotExist(sid, logIndex uint64, offset, size int) (tbl *aoeMeta.Table, tblExisted bool, err error) {
+func (s *Storage) createAOEMetaTableIfNotExist(sid, logIndex uint64, offset, size int) (tbl *metadata.Table, tblExisted bool, err error) {
 	dbName := aoedb.IdToNameFactory.Encode(sid)
 	tableName := encodeMetatableName(sid)
 	tbl, err = s.DB.Store.Catalog.SimpleGetTableByName(dbName, tableName)
 	if tbl != nil {
 		return tbl, true, err
 	}
-	if err != nil && err != aoeMeta.ErrTableNotFound {
+	if err != nil && err != metadata.ErrTableNotFound {
 		return nil, false, err
 	}
 	metaTblInfo := createMetadataTableInfo(sid)
@@ -821,7 +826,7 @@ func (s *Storage) Split(old metapb.ShardMetadata, news []metapb.ShardMetadata, c
 
 	db, _ := s.DB.Store.Catalog.GetDatabaseByName(aoedb.IdToNameFactory.Encode(old.ShardID))
 	tbnames := s.tableNames()
-	metaTbls := make([]*aoeMeta.Table, 0)
+	metaTbls := make([]*metadata.Table, 0)
 	for _, tb := range tbnames {
 		metaTbl := db.SimpleGetTableByName(tb)
 		metaTbls = append(metaTbls, metaTbl)
@@ -859,7 +864,10 @@ func (s *Storage) Split(old metapb.ShardMetadata, news []metapb.ShardMetadata, c
 	})
 
 	for _, shard := range news {
-		s.saveShardMetadata(&shard, true)
+		err := s.saveShardMetadata(&shard, true)
+		if err != nil {
+			return err
+		}
 
 		dropCtx := aoedb.DropTableCtx{
 			DBMutationCtx: aoedb.DBMutationCtx{
@@ -870,7 +878,10 @@ func (s *Storage) Split(old metapb.ShardMetadata, news []metapb.ShardMetadata, c
 			},
 			Table: oldtableName,
 		}
-		s.DB.DropTable(&dropCtx)
+		_, err = s.DB.DropTable(&dropCtx)
+		if err != nil && err != metadata.ErrTableNotFound {
+			return err
+		}
 	}
 	return err
 }

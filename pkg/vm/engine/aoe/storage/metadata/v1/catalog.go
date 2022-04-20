@@ -714,7 +714,10 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.SetAuxilaryInfo(checkpointRange)
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err = logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 

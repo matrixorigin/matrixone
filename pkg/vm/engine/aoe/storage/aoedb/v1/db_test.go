@@ -1146,7 +1146,7 @@ func TestEngine(t *testing.T) {
 				for blkIt.Valid() {
 					blkHandle := blkIt.GetHandle()
 					hh := blkHandle.Prefetch()
-					for idx, _ := range attrs {
+					for idx := range attrs {
 						hh.GetReaderByAttr(idx)
 						atomic.AddUint32(&loadCnt, uint32(1))
 					}
@@ -2868,13 +2868,13 @@ func TestFilter(t *testing.T) {
 //	dropper(0, 2)()
 //	assert.Equal(t, 2, tblMeta.GetIndexSchema().IndiceNum())
 //	for i := 0; i < 2; i++ {
-//		creater(i)()
+//		creator(i)()
 //	}
 //	time.Sleep(50 * time.Millisecond)
 //	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 //	dropper(0, 1)()
 //	assert.Equal(t, 3, tblMeta.GetIndexSchema().IndiceNum())
-//	creater(0)()
+//	creatoFr(0)()
 //	time.Sleep(50 * time.Millisecond)
 //	assert.Equal(t, 4, tblMeta.GetIndexSchema().IndiceNum())
 //
@@ -2982,7 +2982,7 @@ func TestFilter(t *testing.T) {
 //	wg.Wait()
 //	time.Sleep(waitTime)
 //
-//	creater := func(i int) func() {
+//	creator := func(i int) func() {
 //		return func() {
 //			indice := metadata.NewIndexSchema()
 //			indice.MakeIndex(fmt.Sprintf("idx-%d", i), metadata.NumBsi, i)
@@ -3011,7 +3011,7 @@ func TestFilter(t *testing.T) {
 //	}
 //
 //	for i := 0; i < 10; i++ {
-//		creater(1)()
+//		creator(1)()
 //		dropper(1, 2)()
 //	}
 //

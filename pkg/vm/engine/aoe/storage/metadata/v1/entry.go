@@ -99,7 +99,10 @@ func (e *databaseLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	buf, _ := e.Marshal()
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 
@@ -157,10 +160,16 @@ func (e *dbReplaceLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	buf, _ := e.Marshal()
+	buf, err := e.Marshal()
+	if err != nil {
+		panic(err)
+	}
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err = logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 

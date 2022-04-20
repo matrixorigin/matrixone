@@ -164,7 +164,10 @@ func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	// log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
 		if node_id >= TRANSIENT_START_ID {
-			h.Clean()
+			err := h.Clean()
+			if err != nil {
+				panic(err)
+			}
 			return
 		} else {
 			mgr.Lock()
@@ -242,7 +245,10 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 			return nil
 		}
 		buf := node.NewNodeBuffer(handle.GetID(), n)
-		handle.SetBuffer(buf)
+		err := handle.SetBuffer(buf)
+		if err != nil {
+			panic(err)
+		}
 		if err := handle.CommitLoad(); err != nil {
 			handle.RollbackLoad()
 			panic(err.Error())

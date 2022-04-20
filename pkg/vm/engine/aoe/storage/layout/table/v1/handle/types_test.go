@@ -37,12 +37,12 @@ var (
 func TestSnapshot(t *testing.T) {
 	dir := testutils.InitTestEnv(moduleName, t)
 	schema := metadata.MockSchema(2)
-	row_count := uint64(64)
-	seg_cnt := 4
-	blk_cnt := 2
+	rowCount := uint64(64)
+	segCnt := 4
+	blkCnt := 2
 	cfg := storage.MetaCfg{
-		BlockMaxRows:     row_count,
-		SegmentMaxBlocks: uint64(blk_cnt),
+		BlockMaxRows:     rowCount,
+		SegmentMaxBlocks: uint64(blkCnt),
 	}
 	opts := new(storage.Options)
 	opts.Meta.Conf = &cfg
@@ -51,7 +51,7 @@ func TestSnapshot(t *testing.T) {
 	opts.Meta.Catalog.Start()
 
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
-	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
+	capacity := typeSize * rowCount * uint64(segCnt) * uint64(blkCnt) * 2
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
@@ -60,14 +60,14 @@ func TestSnapshot(t *testing.T) {
 	catalog := opts.Meta.Catalog
 	defer catalog.Close()
 	gen := shard.NewMockIndexAllocator()
-	shardId := uint64(100)
-	tableMeta := metadata.MockDBTable(catalog, "db1", schema, nil, uint64(blk_cnt*seg_cnt), gen.Shard(shardId))
+	shardID := uint64(100)
+	tableMeta := metadata.MockDBTable(catalog, "db1", schema, nil, uint64(blkCnt*segCnt), gen.Shard(shardID))
 
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	t.Logf("TableData RefCount=%d", tableData.RefCount())
 	segIDs := table.MockSegments(tableMeta, tableData)
-	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
+	assert.Equal(t, uint32(segCnt), tableData.GetSegmentCount())
 
 	root := tableData.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
@@ -97,8 +97,8 @@ func TestSnapshot(t *testing.T) {
 		segIt.Next()
 	}
 	segIt.Close()
-	assert.Equal(t, seg_cnt, actualSegCnt)
-	assert.Equal(t, seg_cnt*blk_cnt, actualBlkCnt)
+	assert.Equal(t, segCnt, actualSegCnt)
+	assert.Equal(t, segCnt*blkCnt, actualBlkCnt)
 	du := time.Since(now)
 	t.Log(du)
 	t.Log(sstBufMgr.String())
@@ -128,8 +128,8 @@ func TestSnapshot(t *testing.T) {
 		linkSegIt.Next()
 	}
 	linkSegIt.Close()
-	assert.Equal(t, seg_cnt, actualSegCnt)
-	assert.Equal(t, seg_cnt*blk_cnt, actualBlkCnt)
+	assert.Equal(t, segCnt, actualSegCnt)
+	assert.Equal(t, segCnt*blkCnt, actualBlkCnt)
 
 	linkSegIt = ss2.NewIt()
 	for linkSegIt.Valid() {

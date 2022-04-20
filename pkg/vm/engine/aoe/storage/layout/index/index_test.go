@@ -246,20 +246,24 @@ func TestZM(t *testing.T) {
 	int32zm := NewBlockZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
 	ctx := NewFilterCtx(OpEq)
 	ctx.Val = int32(9)
-	ctx.Eval(int32zm)
+	err := ctx.Eval(int32zm)
+	assert.Nil(t, err)
 	assert.False(t, ctx.BoolRes)
 	ctx.Reset()
 	ctx.Val = int32(10)
 	ctx.Op = OpEq
-	ctx.Eval(int32zm)
+	err = ctx.Eval(int32zm)
+	assert.Nil(t, err)
 	assert.True(t, ctx.BoolRes)
 	ctx.Val = int32(100)
 	ctx.Op = OpEq
-	ctx.Eval(int32zm)
+	err = ctx.Eval(int32zm)
+	assert.Nil(t, err)
 	assert.True(t, ctx.BoolRes)
 	ctx.Val = int32(101)
 	ctx.Op = OpEq
-	ctx.Eval(int32zm)
+	err = ctx.Eval(int32zm)
+	assert.Nil(t, err)
 	assert.False(t, ctx.BoolRes)
 }
 

@@ -308,7 +308,7 @@ func TestShard2(t *testing.T) {
 
 	wg.Wait()
 	for _, shard := range shards {
-		testutils.WaitExpect(400, func() bool {
+		testutils.WaitExpect(4000, func() bool {
 			return shard.gen.Get() == shard.getSafeId()
 		})
 		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
@@ -423,7 +423,12 @@ func TestShard3(t *testing.T) {
 			Path: getSnapshotPath(defaultSnapshotPath, t),
 			Sync: true,
 		}
-		idx, err := inst.CreateSnapshot(ctx)
+		var idx uint64
+		var err error
+		testutils.WaitExpect(4000, func() bool {
+			idx, err = inst.CreateSnapshot(ctx)
+			return err == nil
+		})
 		assert.Nil(t, err)
 		assert.Equal(t, shard.getSafeId(), idx)
 		costs[shard.database.Id] = time.Since(now)

@@ -76,10 +76,10 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		host:    blk,
 		sllnode: *common.NewSLLNode(new(sync.RWMutex)),
 	}
-	blkId := blk.GetMeta().AsCommonID().AsBlockID()
-	blkId.Idx = uint16(blk.GetColIdx())
-	descId := blk.GetMeta().DescId()
-	descId.Idx = uint16(blk.GetColIdx())
+	blkID := blk.GetMeta().AsCommonID().AsBlockID()
+	blkID.Idx = uint16(blk.GetColIdx())
+	descID := blk.GetMeta().DescId()
+	descID.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
 	var constructor buf.MemoryNodeConstructor
 	switch blk.GetType() {
@@ -94,11 +94,11 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		vf = common.NewMemFile(int64(capacity))
 	case base.PERSISTENT_BLK:
 		bufMgr = host.GetSSTBufMgr()
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkID)
 		constructor = vector.VectorWrapperConstructor
 	case base.PERSISTENT_SORTED_BLK:
 		bufMgr = host.GetSSTBufMgr()
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descID)
 		constructor = vector.VectorWrapperConstructor
 	default:
 		panic("not support")
@@ -118,18 +118,18 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 func (part *columnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
 	defer blk.Unref()
 	cloned := &columnPart{host: blk}
-	blkId := blk.GetMeta().AsCommonID().AsBlockID()
-	blkId.Idx = uint16(blk.GetColIdx())
-	descId := blk.GetMeta().DescId()
-	descId.Idx = uint16(blk.GetColIdx())
+	blkID := blk.GetMeta().AsCommonID().AsBlockID()
+	blkID.Idx = uint16(blk.GetColIdx())
+	descID := blk.GetMeta().DescId()
+	descID.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
 		panic("logic error")
 	case base.PERSISTENT_BLK:
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkID)
 	case base.PERSISTENT_SORTED_BLK:
-		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descId)
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&descID)
 	default:
 		panic("not supported")
 	}
