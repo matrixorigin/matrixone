@@ -32,6 +32,8 @@ var (
 type IBatch interface {
 	dbi.IBatchReader
 	GetVectorByAttr(attrId int) (vector.IVector, error)
+    Marshal() ([]byte, error)
+    Unmarshal([]byte) error
 }
 
 type Batch struct {

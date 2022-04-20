@@ -43,11 +43,14 @@ type IVectorWriter interface {
 }
 
 type IVector interface {
+	ResetReadonly()
 	IsReadonly() bool
 	dbi.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
 	PlacementNew(t types.Type)
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
 }
 
 type IVectorNode interface {

@@ -70,3 +70,29 @@ func TestBatch(t *testing.T) {
 	err = bat1.Close()
 	assert.Nil(t, err)
 }
+
+func TestMarshal(t *testing.T){
+	colTypes := mock.MockColTypes(14)
+	rows := uint64(64)
+	attrs1 := make([]int, 0)
+	vecs1 := make([]vector.IVector, 0)
+	for i, colType := range colTypes {
+		attrs1 = append(attrs1, i)
+		vecs1 = append(vecs1, vector.MockVector(colType, rows))
+	}
+	bat, err := NewBatch(attrs1, vecs1)
+	assert.Nil(t, err)
+	buf,err:=bat.Marshal()
+	assert.Nil(t,err)
+	bat2:=&Batch{}
+	err=bat2.Unmarshal(buf)
+	assert.Nil(t,err)
+	assert.Equal(t,len(attrs1),len(bat2.Attrs))
+	for _,idx:=range attrs1{
+		vec1,err:=bat.GetVectorByAttr(idx)
+		assert.Nil(t,err)
+		vec2,err:=bat2.GetVectorByAttr(idx)
+		assert.Nil(t,err)
+		assert.Equal(t,vec1.GetType(),vec2.GetType())
+	}
+}

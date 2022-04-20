@@ -15,10 +15,12 @@
 package batch
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
@@ -124,6 +126,63 @@ func (bat *Batch) Close() error {
 			}
 			bat.ClosedMask.Add(uint64(i))
 		}
+	}
+	return nil
+}
+
+func (bat *Batch) Marshal() ([]byte, error) {
+	var buf bytes.Buffer
+	attrs := bat.GetAttrs()
+	length := len(attrs)
+	buf.Write(encoding.EncodeUint16(uint16(length)))
+	for _, attr := range attrs {
+		buf.Write(encoding.EncodeUint64(uint64(attr)))
+		vec, err := bat.GetVectorByAttr(attr)
+		if err != nil {
+			return nil, err
+		}
+		vecType := vec.GetType()
+		buf.Write(encoding.EncodeUint8(uint8(vecType)))
+		vecBuf, err := vec.Marshal()
+		if err != nil {
+			return nil, err
+		}
+		vecLength := len(vecBuf)
+		buf.Write(encoding.EncodeUint64(uint64(vecLength)))
+		buf.Write(vecBuf)
+	}
+	return buf.Bytes(), nil
+}
+
+func (bat *Batch) Unmarshal(buf []byte) error {
+	pos := 0
+	attrLength := encoding.DecodeUint16(buf[pos : pos+2])
+	pos += 2
+	bat.Attrs = make([]int, attrLength)
+	bat.Vecs = make([]vector.IVector, attrLength)
+	for i := 0; i < int(attrLength); i++ {
+		bat.Attrs[i] = int(encoding.DecodeUint64(buf[pos : pos+8]))
+		pos += 8
+		vecType := encoding.DecodeUint8(buf[pos : pos+1])
+		pos += 1
+		vecLength := encoding.DecodeUint64(buf[pos : pos+8])
+		pos += 8
+		switch vecType {
+		case uint8(dbi.StdVec):
+			bat.Vecs[i] = vector.NewEmptyStdVector()
+		case uint8(dbi.StrVec):
+			bat.Vecs[i] = vector.NewEmptyStrVector()
+		}
+		err := bat.Vecs[i].Unmarshal(buf[pos : pos+int(vecLength)])
+		pos += int(vecLength)
+		if err != nil {
+			return err
+		}
+	}
+	bat.ClosedMask = roaring.NewBitmap()
+	bat.AttrsMap = make(map[int]int)
+	for i, idx := range bat.Attrs {
+		bat.AttrsMap[idx] = i
 	}
 	return nil
 }

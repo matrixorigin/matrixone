@@ -16,7 +16,6 @@ package vector
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"os"
 	"sync/atomic"
@@ -125,7 +124,73 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) error {
-	return errors.New("not supported")
+	if idx >= v.Length() || idx < 0 {
+		return ErrVecInvalidOffset
+	}
+	if v.IsReadonly() {
+		return ErrVecWriteRo
+	}
+	v.Lock()
+	defer v.Unlock()
+
+	if v.VMask != nil && v.VMask.Np != nil && v.VMask.Np.Contains(uint64(idx)) {
+		v.VMask.Np.Flip(uint64(idx), uint64(idx))
+	}
+
+	start := idx * int(v.Type.Size)
+	switch v.Type.Oid {
+	case types.T_int8:
+		data := encoding.EncodeInt8(val.(int8))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_int16:
+		data := encoding.EncodeInt16(val.(int16))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_int32:
+		data := encoding.EncodeInt32(val.(int32))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_int64:
+		data := encoding.EncodeInt64(val.(int64))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_uint8:
+		data := encoding.EncodeUint8(val.(uint8))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_uint16:
+		data := encoding.EncodeUint16(val.(uint16))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_uint32:
+		data := encoding.EncodeUint32(val.(uint32))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_uint64:
+		data := encoding.EncodeUint64(val.(uint64))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_float32:
+		data := encoding.EncodeFloat32(val.(float32))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_float64:
+		data := encoding.EncodeFloat64(val.(float64))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	// case types.T_decimal:
+	case types.T_date:
+		data := encoding.EncodeDate(val.(types.Date))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	case types.T_datetime:
+		data := encoding.EncodeDatetime(val.(types.Datetime))
+		copy(v.Data[start:start+int(v.Type.Size)], data)
+		return nil
+	default:
+		return ErrVecTypeNotSupport
+	}
 }
 
 func (v *StdVector) GetValue(idx int) (interface{}, error) {
