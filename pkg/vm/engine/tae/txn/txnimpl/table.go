@@ -75,6 +75,7 @@ type txnTable struct {
 	appendable  base.INodeHandle
 	updateNodes map[common.ID]*updates.ColumnNode
 	deleteNodes map[common.ID]*updates.DeleteNode
+	appendNodes map[common.ID]txnif.AppendNode
 	driver      txnbase.NodeDriver
 	entry       *catalog.TableEntry
 	handle      handle.Relation
@@ -104,6 +105,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		index:       NewSimpleTableIndex(),
 		updateNodes: make(map[common.ID]*updates.ColumnNode),
 		deleteNodes: make(map[common.ID]*updates.DeleteNode),
+		appendNodes: make(map[common.ID]txnif.AppendNode),
 		csegs:       make([]*catalog.SegmentEntry, 0),
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
@@ -275,6 +277,7 @@ func (tbl *txnTable) Close() error {
 	tbl.inodes = nil
 	tbl.updateNodes = nil
 	tbl.deleteNodes = nil
+	tbl.appendNodes = nil
 	tbl.csegs = nil
 	tbl.dsegs = nil
 	tbl.cblks = nil
@@ -705,10 +708,13 @@ func (tbl *txnTable) applyAppendInode(node InsertNode) (err error) {
 		toAppend, err := appender.PrepareAppend(node.Rows() - appended)
 		bat, err := node.Window(appended, appended+toAppend-1)
 		var destOff uint32
-		if destOff, err = appender.ApplyAppend(bat, 0, toAppend, tbl.txn); err != nil {
+		var appendNode txnif.AppendNode
+		if appendNode, destOff, err = appender.ApplyAppend(bat, 0, toAppend, tbl.txn); err != nil {
 			panic(err)
 		}
 		appender.Close()
+		id = appender.GetID()
+		tbl.appendNodes[*id] = appendNode
 		info := node.AddApplyInfo(appended, toAppend, destOff, toAppend, appender.GetID())
 		logutil.Debug(info.String())
 		appended += toAppend
@@ -797,6 +803,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	for _, blk := range tbl.cblks {
 		if err = blk.ApplyCommit(); err != nil {
 			break
+		}
+	}
+	for _, app := range tbl.appendNodes {
+		if err = app.ApplyCommit(); err != nil {
+			return
 		}
 	}
 	for _, update := range tbl.updateNodes {

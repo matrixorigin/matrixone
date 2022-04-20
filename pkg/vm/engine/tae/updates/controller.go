@@ -28,28 +28,13 @@ func newSharedLock(locker *sync.RWMutex) *sharedLock {
 	}
 }
 
-type appendInfo struct {
-	prevTS uint64
-	commitTS uint64
-	maxRow uint32
-}
-
-func newAppendInfo(prev, ts uint64, end uint32) appendInfo {
-	return appendInfo{
-		prevTS: prev,
-		commitTS: ts,
-		maxRow:   end,
-	}
-}
-
 type MutationController struct {
 	*sync.RWMutex
 	columns    map[uint16]*ColumnChain
 	deletes    *DeleteChain
 	meta       *catalog.BlockEntry
 	maxVisible uint64
-	appendInfos []appendInfo
-	nextRow uint32
+	appends    []*AppendNode
 }
 
 func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
@@ -57,7 +42,7 @@ func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
 		RWMutex: new(sync.RWMutex),
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
-		appendInfos: make([]appendInfo, 0),
+		appends: make([]*AppendNode, 0),
 	}
 	node.deletes = NewDeleteChain(nil, node)
 	if meta == nil {
@@ -162,49 +147,61 @@ func (n *MutationController) GetDeleteChain() *DeleteChain {
 	return n.deletes
 }
 
-func (n *MutationController) UpdateVisibility(rows uint32, commitTS uint64) {
-	xLock := n.GetExclusiveLock()
-	defer xLock.Unlock()
-	n.nextRow += rows
-	prevTS := uint64(0)
-	if len(n.appendInfos) != 0 {
-		prevTS = n.appendInfos[len(n.appendInfos)-1].commitTS
-	}
-	info := newAppendInfo(prevTS, commitTS, n.nextRow - 1)
-	n.appendInfos = append(n.appendInfos, info)
-	if commitTS > n.LoadMaxVisible() {
-		n.SetMaxVisible(commitTS)
-	}
-	return
+func (n *MutationController) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
+	an := NewAppendNode(txn, maxRow, n)
+	n.appends = append(n.appends, an)
+	return an
 }
 
-func (n *MutationController) IsVisible(row uint32, startTS uint64) bool {
-	maxVisible := n.FetchMaxVisibleRow(startTS)
-	return maxVisible >= row
+func (n *MutationController) IsVisibleLocked(row uint32, ts uint64) bool {
+	maxRow, ok := n.GetMaxVisibleRowLocked(ts)
+	if !ok {
+		return ok
+	}
+	return maxRow >= row
 }
 
-func (n *MutationController) FetchMaxVisibleRow(startTS uint64) uint32 {
-	sLock := n.GetSharedLock()
-	defer sLock.Unlock()
-	if len(n.appendInfos) != 0 && n.appendInfos[len(n.appendInfos)-1].commitTS < startTS {
-		return n.appendInfos[len(n.appendInfos)-1].maxRow
+func (n *MutationController) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
+	if len(n.appends) == 0 {
+		return 0, false
 	}
-	start, end := 0, len(n.appendInfos) - 1
+	readLock := n.GetSharedLock()
+	maxVisible := n.LoadMaxVisible()
+	lastAppend := n.appends[len(n.appends)-1]
+
+	// 1. Last append node is in the window and it was already committed
+	if ts > lastAppend.GetCommitTS() && maxVisible >= lastAppend.GetCommitTS() {
+		return lastAppend.GetMaxRow(), true
+	}
+	start, end := 0, len(n.appends)-1
 	var mid int
 	for start <= end {
-		mid = start + (end - start) / 2
-		info := n.appendInfos[mid]
-		if info.commitTS < startTS {
+		mid = (start + end) / 2
+		if n.appends[mid].GetCommitTS() < ts {
 			start = mid + 1
-			continue
-		} else if info.prevTS > startTS {
+		} else if n.appends[mid].GetCommitTS() > ts {
 			end = mid - 1
-			continue
+		} else {
+			break
 		}
-		break
 	}
-	if mid == 0 {
-		panic("nothing visible to the txn")
+	if mid == 0 && n.appends[mid].GetCommitTS() > ts {
+		// 2. The first node is found and it was committed after ts
+		readLock.Unlock()
+		return 0, false
+	} else if mid != 0 && n.appends[mid].GetCommitTS() > ts {
+		// 3. A node (not first) is found and it was committed after ts. Use the prev node
+		mid = mid - 1
 	}
-	return n.appendInfos[mid-1].maxRow
+	node := n.appends[mid]
+	readLock.Unlock()
+	if node.GetCommitTS() < n.LoadMaxVisible() {
+		node.RLock()
+		txn := node.txn
+		node.RUnlock()
+		if txn != nil {
+			txn.GetTxnState(true)
+		}
+	}
+	return node.GetMaxRow(), true
 }

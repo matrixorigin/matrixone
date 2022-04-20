@@ -116,6 +116,14 @@ type DeleteChain interface {
 	CollectDeletesLocked(ts uint64) DeleteNode
 }
 
+type AppendNode interface {
+	// sync.Locker
+	// RLock()
+	// RUnlock()
+	PrepareCommit() error
+	ApplyCommit() error
+}
+
 type DeleteNode interface {
 	sync.Locker
 	RLock()

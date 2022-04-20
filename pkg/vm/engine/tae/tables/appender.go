@@ -38,8 +38,7 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 	return appender.node.PrepareAppend(rows)
 }
 
-func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
-
+func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
 	writeLock := appender.node.block.controller.GetExclusiveLock()
 	defer writeLock.Unlock()
 	err = appender.node.Expand(0, func() error {
@@ -51,7 +50,11 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 	pks := bat.Vecs[appender.node.block.meta.GetSchema().PrimaryKey]
 	// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 	err = appender.indexAppender.BatchInsert(pks, offset, int(length), from, false)
-	appender.node.block.controller.SetMaxVisible(txn.GetCommitTS())
+	if err != nil {
+		panic(err)
+	}
+	node = appender.node.block.controller.AddAppendNodeLocked(txn, appender.node.rows)
+	// appender.node.block.controller.SetMaxVisible(txn.GetCommitTS())
 
 	return
 }

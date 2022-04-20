@@ -22,7 +22,7 @@ type BlockAppender interface {
 	io.Closer
 	GetID() *common.ID
 	PrepareAppend(rows uint32) (n uint32, err error)
-	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (uint32, error)
+	ApplyAppend(bat *batch.Batch, offset, length uint32, txn txnif.AsyncTxn) (txnif.AppendNode, uint32, error)
 }
 
 type Block interface {
