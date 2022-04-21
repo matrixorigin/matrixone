@@ -38,7 +38,7 @@ func initTestContext(t *testing.T, dir string, txnBufSize, mutBufSize uint64) (*
 
 func TestTables1(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver, txnBufMgr, mutBufMgr := initTestContext(t, dir, 100000, 1000000)
+	c, mgr, driver, txnBufMgr, _ := initTestContext(t, dir, 100000, 1000000)
 	defer driver.Close()
 	defer c.Close()
 	defer mgr.Stop()
@@ -53,15 +53,14 @@ func TestTables1(t *testing.T) {
 	dataFactory := tables.NewDataFactory(dataio.SegmentFileMockFactory, txnBufMgr)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
-	_, _, err := table.GetAppender()
+	handle := table.GetHandle()
+	_, err := handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
 	seg, _ := rel.CreateSegment()
 	blk, _ := seg.CreateBlock()
 	id := blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-	appender, err := table.SetAppender(id)
-	assert.Nil(t, err)
+	appender := handle.SetAppender(id)
 	assert.NotNil(t, appender)
-	t.Log(txnBufMgr.String())
 
 	blkCnt := 3
 	rows := schema.BlockMaxRows * uint32(blkCnt)
@@ -69,45 +68,33 @@ func TestTables1(t *testing.T) {
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
 	assert.Nil(t, err)
 	t.Log(toAppend)
-	bat := compute.MockBatch(schema.Types(), uint64(rows), int(schema.PrimaryKey), nil)
-	_, _, err = appender.ApplyAppend(bat, 0, toAppend, txn)
-	assert.Nil(t, err)
-	assert.True(t, table.HasAppendableSegment())
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Equal(t, uint32(0), toAppend)
 	appender.Close()
 
-	_, _, err = table.GetAppender()
+	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableBlockNotFound, err)
+
 	blk, _ = seg.CreateBlock()
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-	appender, err = table.SetAppender(id)
-	assert.Nil(t, err)
+	appender = handle.SetAppender(id)
 
 	toAppend, err = appender.PrepareAppend(rows - toAppend)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	_, _, err = appender.ApplyAppend(bat, toAppend, toAppend, txn)
-	assert.Nil(t, err)
-	assert.False(t, table.HasAppendableSegment())
+	appender.Close()
 
-	_, _, err = table.GetAppender()
+	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
+	t.Log(c.SimplePPString(common.PPL1))
 
 	seg, _ = rel.CreateSegment()
 	blk, _ = seg.CreateBlock()
-	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
-	appender, err = table.SetAppender(id)
-	assert.Nil(t, err)
-	toAppend, err = appender.PrepareAppend(rows - toAppend*2)
-	assert.Equal(t, schema.BlockMaxRows, toAppend)
-	_, _, err = appender.ApplyAppend(bat, toAppend*2, toAppend, txn)
-	assert.Nil(t, err)
-	assert.True(t, table.HasAppendableSegment())
 
-	t.Log(txnBufMgr.String())
-	t.Log(mutBufMgr.String())
-	t.Log(c.SimplePPString(common.PPL1))
+	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
+	appender = handle.SetAppender(id)
+	toAppend, err = appender.PrepareAppend(rows - 2*toAppend)
+	assert.Equal(t, schema.BlockMaxRows, toAppend)
 }
 
 func TestTxn1(t *testing.T) {

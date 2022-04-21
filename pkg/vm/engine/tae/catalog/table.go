@@ -146,3 +146,16 @@ func (entry *TableEntry) String() string {
 func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
 
 func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
+
+func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
+	it := entry.MakeSegmentIt(false)
+	for it.Valid() {
+		itSeg := it.Get().GetPayload().(*SegmentEntry)
+		if itSeg.IsAppendable() {
+			seg = itSeg
+			break
+		}
+		it.Next()
+	}
+	return seg
+}

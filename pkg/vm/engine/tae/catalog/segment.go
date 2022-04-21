@@ -127,6 +127,7 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 		itBlk := it.Get().GetPayload().(*BlockEntry)
 		if itBlk.IsAppendable() {
 			blk = itBlk
+			break
 		}
 		it.Next()
 	}

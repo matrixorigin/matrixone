@@ -375,9 +375,12 @@ func (store *txnStore) PrepareCommit() (err error) {
 			break
 		}
 	}
+	for _, table := range store.tables {
+		table.ApplyAppend()
+	}
 	if store.dropEntry != nil {
 		if err = store.dropEntry.PrepareCommit(); err != nil {
-			return
+			panic(err)
 		}
 	}
 	// TODO: prepare commit inserts and updates

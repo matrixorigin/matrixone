@@ -12,6 +12,8 @@ type blockAppender struct {
 	node          *appendableNode
 	handle        base.INodeHandle
 	indexAppender acif.IAppendableBlockIndexHolder
+	placeholder   uint32
+	rows          uint32
 }
 
 func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) *blockAppender {
@@ -19,6 +21,7 @@ func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) 
 	appender.node = node
 	appender.handle = node.mgr.Pin(node)
 	appender.indexAppender = idxApd
+	appender.rows = node.Rows(nil, true)
 	return appender
 }
 
@@ -34,8 +37,22 @@ func (appender *blockAppender) GetID() *common.ID {
 	return appender.node.block.meta.AsCommonID()
 }
 
+func (appender *blockAppender) IsAppendable() bool {
+	return appender.rows+appender.placeholder < appender.node.block.meta.GetSchema().BlockMaxRows
+}
+
 func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) {
-	return appender.node.PrepareAppend(rows)
+	left := appender.node.block.meta.GetSchema().BlockMaxRows - appender.rows - appender.placeholder
+	if left == 0 {
+		return
+	}
+	if rows > left {
+		n = left
+	} else {
+		n = rows
+	}
+	appender.placeholder += n
+	return
 }
 
 func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {

@@ -13,6 +13,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/flusher"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 	"github.com/sirupsen/logrus"
@@ -119,6 +120,7 @@ func (node *appendableNode) OnUnload() {
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
 	if left == 0 {
+		err = data.ErrNotAppendable
 		return
 	}
 	if rows > left {

@@ -171,6 +171,7 @@ func (n *MutationController) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
 
 	// 1. Last append node is in the window and it was already committed
 	if ts > lastAppend.GetCommitTS() && maxVisible >= lastAppend.GetCommitTS() {
+		readLock.Unlock()
 		return lastAppend.GetMaxRow(), true
 	}
 	start, end := 0, len(n.appends)-1

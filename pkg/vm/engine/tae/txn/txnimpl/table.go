@@ -46,6 +46,7 @@ type Table interface {
 	IsDeleted() bool
 	PreCommit() error
 	PreCommitDededup() error
+	ApplyAppend()
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit() error
@@ -76,6 +77,8 @@ type txnTable struct {
 	updateNodes map[common.ID]*updates.ColumnNode
 	deleteNodes map[common.ID]*updates.DeleteNode
 	appendNodes map[common.ID]txnif.AppendNode
+	appends     []*appendCtx
+	tableHandle data.TableHandle
 	driver      txnbase.NodeDriver
 	entry       *catalog.TableEntry
 	handle      handle.Relation
@@ -106,6 +109,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		updateNodes: make(map[common.ID]*updates.ColumnNode),
 		deleteNodes: make(map[common.ID]*updates.DeleteNode),
 		appendNodes: make(map[common.ID]txnif.AppendNode),
+		appends:     make([]*appendCtx, 0),
 		csegs:       make([]*catalog.SegmentEntry, 0),
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
@@ -278,6 +282,7 @@ func (tbl *txnTable) Close() error {
 	tbl.updateNodes = nil
 	tbl.deleteNodes = nil
 	tbl.appendNodes = nil
+	tbl.tableHandle = nil
 	tbl.csegs = nil
 	tbl.dsegs = nil
 	tbl.cblks = nil
@@ -679,44 +684,65 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 	return
 }
 
-func (tbl *txnTable) applyAppendInode(node InsertNode) (err error) {
+func (tbl *txnTable) ApplyAppend() {
+	var err error
+	for _, ctx := range tbl.appends {
+		var (
+			destOff    uint32
+			appendNode txnif.AppendNode
+		)
+		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count-1)
+		if appendNode, destOff, err = ctx.driver.ApplyAppend(bat, 0, ctx.count, tbl.txn); err != nil {
+			panic(err)
+		}
+		ctx.driver.Close()
+		id := ctx.driver.GetID()
+		info := ctx.node.AddApplyInfo(ctx.start, ctx.count, destOff, ctx.count, id)
+		logutil.Debugf(info.String())
+		appendNode.PrepareCommit()
+		tbl.appendNodes[*id] = appendNode
+	}
+	if tbl.tableHandle != nil {
+		tbl.entry.GetTableData().ApplyHandle(tbl.tableHandle)
+	}
+}
+
+func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 	tableData := tbl.entry.GetTableData()
+	if tbl.tableHandle == nil {
+		tbl.tableHandle = tableData.GetHandle()
+	}
 	appended := uint32(0)
 	for appended < node.Rows() {
-		id, appender, err := tableData.GetAppender()
+		appender, err := tbl.tableHandle.GetAppender()
 		if err == data.ErrAppendableSegmentNotFound {
 			seg, err := tbl.CreateSegment()
 			if err != nil {
-				panic(err)
+				return err
 			}
 			blk, err := seg.CreateBlock()
 			if err != nil {
-				panic(err)
+				return err
 			}
-			if appender, err = tableData.SetAppender(blk.Fingerprint()); err != nil {
-				panic(err)
-			}
+			appender = tbl.tableHandle.SetAppender(blk.Fingerprint())
 		} else if err == data.ErrAppendableBlockNotFound {
+			id := appender.GetID()
 			blk, err := tbl.CreateBlock(id.SegmentID)
 			if err != nil {
-				panic(err)
+				return err
 			}
-			if appender, err = tableData.SetAppender(blk.Fingerprint()); err != nil {
-				panic(err)
-			}
+			appender = tbl.tableHandle.SetAppender(blk.Fingerprint())
 		}
 		toAppend, err := appender.PrepareAppend(node.Rows() - appended)
-		bat, err := node.Window(appended, appended+toAppend-1)
-		var destOff uint32
-		var appendNode txnif.AppendNode
-		if appendNode, destOff, err = appender.ApplyAppend(bat, 0, toAppend, tbl.txn); err != nil {
-			panic(err)
+		ctx := &appendCtx{
+			driver: appender,
+			node:   node,
+			start:  appended,
+			count:  toAppend,
 		}
-		appender.Close()
-		id = appender.GetID()
-		tbl.appendNodes[*id] = appendNode
-		info := node.AddApplyInfo(appended, toAppend, destOff, toAppend, appender.GetID())
-		logutil.Debug(info.String())
+		tbl.appends = append(tbl.appends, ctx)
+		id := appender.GetID()
+		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(tbl.appends))
 		appended += toAppend
 		if appended == node.Rows() {
 			break
@@ -727,7 +753,7 @@ func (tbl *txnTable) applyAppendInode(node InsertNode) (err error) {
 
 func (tbl *txnTable) PreCommit() (err error) {
 	for _, node := range tbl.inodes {
-		if err = tbl.applyAppendInode(node); err != nil {
+		if err = tbl.prepareAppend(node); err != nil {
 			break
 		}
 	}

@@ -135,10 +135,6 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
 }
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
-	if !blk.IsAppendable() {
-		err = data.ErrNotAppendable
-		return
-	}
 	appender = newAppender(blk.node, blk.updatableIndexHolder)
 	return
 }
@@ -189,6 +185,7 @@ func (blk *dataBlock) updateWithCoarseLock(txn txnif.AsyncTxn, row uint32, colId
 	err = blk.controller.CheckNotDeleted(row, row, txn.GetStartTS())
 	if err == nil {
 		if err = blk.controller.CheckNotUpdated(row, row, txn.GetStartTS()); err != nil {
+			locker.Unlock()
 			return
 		}
 		chain := blk.controller.GetColumnChain(colIdx)
@@ -270,15 +267,23 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.updatableIndexHolder.Search(filter.Val)
+	readLock := blk.controller.GetSharedLock()
+	defer readLock.Unlock()
+	offset, err = blk.updatableIndexHolder.Search(filter.Val)
+	if err == nil {
+		if !blk.controller.IsVisibleLocked(offset, txn.GetStartTS()) {
+			err = txnbase.ErrNotFound
+		}
+	}
+	return
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
 	if blk.updatableIndexHolder == nil {
 		panic("unexpected error")
 	}
+	readLock := blk.controller.GetSharedLock()
+	defer readLock.Unlock()
 	// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
 	return blk.updatableIndexHolder.BatchDedup(pks)
 }
