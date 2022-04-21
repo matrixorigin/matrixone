@@ -169,8 +169,10 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		return
 	}
 
-	// ivec, err := blk.node.GetVectorView(maxRow, attr)
-	vec, err = blk.node.GetVectorCopy(maxRow, attr, compressed, decompressed)
+	ivec, err := blk.node.GetVectorView(maxRow, attr)
+	if err != nil {
+		return
+	}
 
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	view := updates.NewBlockView(ts)
@@ -184,17 +186,19 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
 
+	// TODO: performance optimization needed
+	srcvec, _ := ivec.CopyToVectorWithBuffer(compressed, decompressed)
+	if maxRow < uint32(gvec.Length(srcvec)) {
+		vec = gvec.New(srcvec.Typ)
+		gvec.Window(srcvec, 0, int(maxRow), vec)
+	} else {
+		vec = srcvec
+	}
+
 	vec = compute.ApplyUpdateToVector(vec, view.UpdateMasks[uint16(colIdx)], view.UpdateVals[uint16(colIdx)])
 
 	deletes = view.DeleteMask
 
-	// vec = compute.ApplyUpdateToVector(vec, updateMask, updateVals)
-	// if dnode != nil {
-	// 	deletes = dnode.GetDeleteMaskLocked()
-	// }
-	// if dnode != nil {
-	// 	vec = dnode.ApplyDeletes(vec)
-	// }
 	return
 }
 

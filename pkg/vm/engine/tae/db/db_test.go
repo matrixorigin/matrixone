@@ -173,6 +173,7 @@ func TestMVCC1(t *testing.T) {
 			t.Log(offset)
 			t.Log(val2)
 			t.Log(vector.Length(bats[0].Vecs[0]))
+			assert.Equal(t, vector.Length(bats[0].Vecs[0]), vector.Length(vec))
 		}
 		it.Next()
 	}
