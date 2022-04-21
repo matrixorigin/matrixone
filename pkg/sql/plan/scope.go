@@ -466,7 +466,7 @@ func (s *Scope) registerRelations(qry *Query) {
 		s.Children[0].registerRelations(qry)
 	case *Rename:
 		if _, ok := s.Children[0].Op.(*Relation); ok {
-			qry.RenameRels[s.Name] = s.Children[0]
+			qry.RenameRels[s.Name] = s
 		} else {
 			s.Children[0].registerRelations(qry)
 		}
