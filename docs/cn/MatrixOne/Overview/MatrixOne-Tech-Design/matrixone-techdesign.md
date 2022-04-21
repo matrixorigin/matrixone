@@ -1,7 +1,7 @@
 # **MatrixOne技术架构详解**
 
-在[MatrixOne简介](../matrixone-introduction.md)中，我们介绍了MatrixOne的核心特性，在[MatrixOne架构](../matrixone-architecture.md)中，我们向您展示了MatrixOne的整体架构与模块组成。  
-而本章主要给出MatrixOne架构的详细解释。
+在[MatrixOne简介](../matrixone-introduction.md)中，我们介绍了MatrixOne的核心特性，在[MatrixOne技术架构](../matrixone-architecture.md)中，我们向您展示了MatrixOne的整体架构与模块组成。  
+而本章主要给出MatrixOne架构的详细解释和组件介绍。
 
 ## **MatrixOne架构特点**  
 MatrixOne当前整体架构可以用NewSQL+MPP来定义，并且正在进化成为一个为OLAP增强的分布式HTAP数据库，之后将开始向面向云边一体的场景进一步演进。另外MatrixOne将极简易用作为重要的设计准则，尽管是分布式数据库，但在部署上只提供单一Binary，每个节点只运行完全同样的单一进程即可。  

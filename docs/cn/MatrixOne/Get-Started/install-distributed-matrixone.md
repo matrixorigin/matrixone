@@ -86,4 +86,4 @@ storage-node = ["ip_address_of_prophet_store1","ip_address_of_prophet_store2","i
 ```
 
 ## **相关信息**
-本节介绍了分布式MatrixOne集群的安装部署流程。若想了解更多关于分布式架构配置参数的信息，可以查阅[分布式配置参数手册](../Reference/System-Parameters/distributed-settings.zh.md). 
+本节介绍了分布式MatrixOne集群的安装部署流程。若想了解更多关于分布式架构配置参数的信息，可以查阅[分布式配置参数手册](../Reference/System-Parameters/distributed-settings.md). 

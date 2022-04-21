@@ -4,7 +4,7 @@ SSB星型模式基准测试是OLAP数据库性能测试的常用场景，通过�
 
 ## **准备工作**
 
-确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务器](../connect-to-matrixone-server.md).
+确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务](../connect-to-matrixone-server.md).
   
 
 ## **1. 编译dbgen**
