@@ -35,14 +35,16 @@ func init() {
 	}
 }
 
+// String is used to format times operator
 func String(_ interface{}, buf *bytes.Buffer) {
 	buf.WriteString(" ⨝ ")
 }
 
+// Prepare the times operator
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
-	{
+	{ // construct a map for attributes of result
 		n.ctr.result = make(map[string]uint8)
 		for _, attr := range n.Result {
 			n.ctr.result[attr] = 0
@@ -52,7 +54,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	n.ctr.zs = make([]int64, UnitLimit)
 	n.ctr.sels = make([]int64, UnitLimit)
 	n.ctr.views = make([]*view, len(n.Vars))
-	{
+	{ // construct some temporary matrix
 		n.ctr.mx = make([][]int64, len(n.Vars)+1)
 		for i := range n.ctr.mx {
 			n.ctr.mx[i] = make([]int64, UnitLimit)
@@ -85,7 +87,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		ht := n.Bats[i].Ht.(*join.HashTable)
 		n.ctr.views[i].sels = ht.Sels
 		n.ctr.views[i].isPure = true
-		for _, sel := range ht.Sels {
+		for _, sel := range ht.Sels { // detects if it is primary key
 			if len(sel) > 1 {
 				n.ctr.isPure = false
 				n.ctr.views[i].isPure = false
@@ -101,17 +103,18 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
+// Call is used to do times
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	if bat == nil {
+	if bat == nil { // end of process, begin eval
 		if n.ctr.pctr.bat != nil {
 			proc.Reg.InputBatch = n.ctr.pctr.bat
 			n.ctr.pctr.bat = nil
 		}
 		return false, nil
 	}
-	if len(bat.Zs) == 0 {
+	if len(bat.Zs) == 0 { // ignore empty batch
 		proc.Reg.InputBatch = &batch.Batch{}
 		return false, nil
 	}
@@ -124,7 +127,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 	defer batch.Clean(bat, proc.Mp)
-	if ctr.attrs == nil {
+	if ctr.attrs == nil { // construct probe information
 		ctr.attrs = make([]string, 0, 4)
 		ctr.oattrs = append(ctr.oattrs, bat.Attrs...)
 		for i, attr := range bat.Attrs {
@@ -169,6 +172,7 @@ func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 				}
 			}
 		}
+		// determine the size of the result attributes and then select the appropriate hashtable
 		size := 0
 		for _, vec := range ctr.pctr.bat.Vecs {
 			switch vec.Typ.Oid {
@@ -272,7 +276,7 @@ func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -294,7 +298,7 @@ func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processPureH0(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -316,7 +320,7 @@ func (ctr *Container) processPureH0(bat *batch.Batch, proc *process.Process) err
 
 func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -338,7 +342,7 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processPureH8(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -360,7 +364,7 @@ func (ctr *Container) processPureH8(bat *batch.Batch, proc *process.Process) err
 
 func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -382,7 +386,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH24(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -404,7 +408,7 @@ func (ctr *Container) processPureH24(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -426,7 +430,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH32(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -448,7 +452,7 @@ func (ctr *Container) processPureH32(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -470,7 +474,7 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH40(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -492,7 +496,7 @@ func (ctr *Container) processPureH40(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -514,7 +518,7 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 
 func (ctr *Container) processPureHStr(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -535,7 +539,7 @@ func (ctr *Container) processPureHStr(bat *batch.Batch, proc *process.Process) e
 }
 
 func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -554,7 +558,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -574,7 +578,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -613,7 +617,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 }
 
 func (ctr *Container) processPureJoinH0(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -671,7 +675,7 @@ func (ctr *Container) processPureJoinH0(n, start int, bat *batch.Batch, proc *pr
 }
 
 func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -690,7 +694,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -710,7 +714,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -1337,7 +1341,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 }
 
 func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -2032,7 +2036,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 }
 
 func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -2051,7 +2055,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -2071,7 +2075,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -2701,7 +2705,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -3395,7 +3399,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -3414,7 +3418,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -3434,7 +3438,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -4064,7 +4068,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -4758,7 +4762,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -4777,7 +4781,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -4797,7 +4801,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -5427,7 +5431,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -6121,7 +6125,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -6140,7 +6144,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -6160,7 +6164,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -6731,7 +6735,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 }
 
 func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -7375,6 +7379,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 	return nil
 }
 
+// matrix multiplication
 func (ctr *Container) product(xs [][]int64, ys []int64) [][]int64 {
 	rs := ctr.mx1[:len(xs)+1]
 	{ // reset
@@ -7401,13 +7406,14 @@ func (ctr *Container) dupMatrix(xs [][]int64) [][]int64 {
 	return mx
 }
 
+// probe hashtable to get matching row numbers
 func (ctr *Container) probeView(i, n int, bat *batch.Batch, v *view) error {
 	if len(v.vecs) == 1 {
 		return ctr.probeViewWithOneVar(i, n, bat, v)
 	}
 	ctr.hstr.keys = ctr.hstr.keys[:UnitLimit]
 	copy(ctr.zValues[:n], OneInt64s[:n])
-	for _, vec := range v.vecs {
+	for _, vec := range v.vecs { // combine multiple attributes into a single key
 		switch vec.Typ.Oid {
 		case types.T_int8:
 			vs := vec.Col.([]int8)
@@ -7630,6 +7636,7 @@ func (ctr *Container) probeView(i, n int, bat *batch.Batch, v *view) error {
 	return nil
 }
 
+// probe hashtable to get matching row numbers with only one attribute
 func (ctr *Container) probeViewWithOneVar(i, n int, bat *batch.Batch, v *view) error {
 	vec := v.vecs[0]
 	ctr.hashes = ctr.hashes[:UnitLimit]
@@ -7896,7 +7903,6 @@ func (ctr *Container) probeViewWithOneVar(i, n int, bat *batch.Batch, v *view) e
 				ctr.hstr.keys[k] = ctr.hstr.keys[k][:0]
 			}
 		}
-
 	}
 	return nil
 }

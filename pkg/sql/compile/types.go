@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// type of scope
 const (
 	Merge = iota
 	Normal
@@ -45,6 +46,7 @@ const (
 	Update
 )
 
+// type of query
 const (
 	BQ  = iota // bare query
 	AQ         // aggregation query
@@ -52,6 +54,7 @@ const (
 	CAQ        // conjunctive aggregation query
 )
 
+// Address is the ip:port of local node
 var Address string
 
 // Source contains information of a relation which will be used in execution,
@@ -86,6 +89,7 @@ type Scope struct {
 	Proc *process.Process
 }
 
+// Col is the information of attribute
 type Col struct {
 	Typ  types.T
 	Name string
