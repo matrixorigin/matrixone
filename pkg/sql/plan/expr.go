@@ -633,6 +633,43 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, e.Op))
 		}
+	case *tree.UnresolvedName:
+		floatResult, err := strconv.ParseFloat(e.Parts[0], 10)
+		if err != nil {
+			return nil, err
+		}
+		switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			if floatResult > 0 {
+				if floatResult+0.5 > math.MaxInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult + 0.5), nil
+			} else if floatResult < 0 {
+				if floatResult-0.5 < math.MinInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult - 0.5), nil
+			}
+			return int64(floatResult), nil
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			if floatResult < 0 || floatResult+0.5 > math.MaxInt64 {
+				return nil, errBinaryOutRange
+			}
+			return uint64(floatResult + 0.5), nil
+		case types.T_float32:
+			if floatResult == 0 {
+				return float32(0), nil
+			}
+			if floatResult > math.MaxFloat32 || floatResult < -math.MaxFloat32 {
+				return nil, errBinaryOutRange
+			}
+			return float32(floatResult), nil
+		case types.T_float64:
+			return floatResult, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, floatResult))
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
