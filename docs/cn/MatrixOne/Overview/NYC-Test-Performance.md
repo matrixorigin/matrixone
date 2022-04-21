@@ -35,4 +35,4 @@
 本节内容展示了使用MatrixOne进行纽约出租车数据测试的结果。若想获取更多相关信息，请见：
 
 * [完成SSB测试](../Get-Started/Tutorial/SSB-test-with-matrixone.md)  
-* [SSB测试结果](SSB Test Performance.md)
+* [SSB测试报告](SSB-Test-Performance.md)
