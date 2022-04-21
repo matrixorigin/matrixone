@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -117,12 +118,13 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
+	maxRow, _ := blk.controller.GetMaxVisibleRowLocked(ts)
 	if blk.node != nil {
 		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
 		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
 		for i, colDef := range blk.meta.GetSchema().ColDefs {
 			attrs[i] = i
-			vecs[i], _ = blk.node.GetVectorView(ts, colDef.Name)
+			vecs[i], _ = blk.node.GetVectorView(maxRow, colDef.Name)
 		}
 		view.Raw, _ = batch.NewBatch(attrs, vecs)
 	}
@@ -149,27 +151,47 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		panic("not expected")
 	}
 	defer h.Close()
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 
-	readLock := blk.controller.GetSharedLock()
-	chain := blk.controller.GetColumnChain(uint16(colIdx))
-	chain.RLock()
-	updateMask, updateVals := chain.CollectUpdatesLocked(ts)
-	chain.RUnlock()
-	deleteChain := blk.controller.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
-	readLock.Unlock()
-
-	blk.RLock()
-	vec, err = blk.node.GetVectorCopy(ts, attr, compressed, decompressed)
-	blk.RUnlock()
-	if err != nil || raw {
+	maxRow := uint32(0)
+	visible := true
+	if blk.meta.IsAppendable() {
+		readLock := blk.controller.GetSharedLock()
+		maxRow, visible = blk.controller.GetMaxVisibleRowLocked(ts)
+		readLock.Unlock()
+		logutil.Infof("maxrow=%d", maxRow)
+	}
+	if !visible {
 		return
 	}
-	vec = compute.ApplyUpdateToVector(vec, updateMask, updateVals)
-	if dnode != nil {
-		deletes = dnode.GetDeleteMaskLocked()
+
+	if raw {
+		vec, err = blk.node.GetVectorCopy(maxRow, attr, compressed, decompressed)
+		return
 	}
+
+	// ivec, err := blk.node.GetVectorView(maxRow, attr)
+	vec, err = blk.node.GetVectorCopy(maxRow, attr, compressed, decompressed)
+
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	view := updates.NewBlockView(ts)
+
+	sharedLock := blk.controller.GetSharedLock()
+	err = blk.makeColumnView(uint16(colIdx), view)
+	deleteChain := blk.controller.GetDeleteChain()
+	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	sharedLock.Unlock()
+	if dnode != nil {
+		view.DeleteMask = dnode.GetDeleteMaskLocked()
+	}
+
+	vec = compute.ApplyUpdateToVector(vec, view.UpdateMasks[uint16(colIdx)], view.UpdateVals[uint16(colIdx)])
+
+	deletes = view.DeleteMask
+
+	// vec = compute.ApplyUpdateToVector(vec, updateMask, updateVals)
+	// if dnode != nil {
+	// 	deletes = dnode.GetDeleteMaskLocked()
+	// }
 	// if dnode != nil {
 	// 	vec = dnode.ApplyDeletes(vec)
 	// }

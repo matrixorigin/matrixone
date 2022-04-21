@@ -461,6 +461,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 	if err == nil {
 		id = &common.ID{}
 		id.PartID = 1
+		id.TableID = tbl.entry.ID
 		err = nil
 		return
 	}

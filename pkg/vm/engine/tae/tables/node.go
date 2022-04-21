@@ -60,7 +60,7 @@ func (node *appendableNode) OnDestory() {
 	}
 }
 
-func (node *appendableNode) GetVectorView(ts uint64, attr string) (vec vector.IVector, err error) {
+func (node *appendableNode) GetVectorView(maxRow uint32, attr string) (vec vector.IVector, err error) {
 	colIdx := node.block.meta.GetSchema().GetColIdx(attr)
 	ivec, err := node.data.GetVectorByAttr(colIdx)
 	if err != nil {
@@ -71,8 +71,8 @@ func (node *appendableNode) GetVectorView(ts uint64, attr string) (vec vector.IV
 }
 
 // TODO: Apply updates and txn sels
-func (node *appendableNode) GetVectorCopy(ts uint64, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
-	ro, err := node.GetVectorView(ts, attr)
+func (node *appendableNode) GetVectorCopy(maxRow uint32, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+	ro, err := node.GetVectorView(maxRow, attr)
 	if err != nil {
 		return
 	}

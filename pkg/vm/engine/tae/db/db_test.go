@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -83,6 +85,95 @@ func TestTableHandle(t *testing.T) {
 	appender, err := handle.GetAppender()
 	assert.Nil(t, appender)
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
+}
 
-	// tableMeta.CreateSegment(txn, catalog.ES_Appendable)
+func TestMVCC1(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 40
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows)*10, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 40)
+
+	txn, _ := db.StartTxn(nil)
+	database, _ := txn.CreateDatabase("db")
+	rel, _ := database.CreateRelation(schema)
+	err := rel.Append(bats[0])
+	assert.Nil(t, err)
+
+	row := uint32(5)
+	expectVal := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], row)
+	filter := &handle.Filter{
+		Op:  handle.FilterEq,
+		Val: expectVal,
+	}
+	id, offset, err := rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	t.Logf("id=%s,offset=%d", id, offset)
+	// Read uncommitted value
+	actualVal, err := rel.GetValue(id, offset, uint16(schema.PrimaryKey))
+	assert.Nil(t, err)
+	assert.Equal(t, expectVal, actualVal)
+	assert.Nil(t, txn.Commit())
+
+	txn, _ = db.StartTxn(nil)
+	database, _ = txn.GetDatabase("db")
+	rel, _ = database.GetRelationByName(schema.Name)
+	id, offset, err = rel.GetByFilter(filter)
+	assert.Nil(t, err)
+	t.Logf("id=%s,offset=%d", id, offset)
+	// Read committed value
+	actualVal, err = rel.GetValue(id, offset, uint16(schema.PrimaryKey))
+	assert.Nil(t, err)
+	assert.Equal(t, expectVal, actualVal)
+
+	txn2, _ := db.StartTxn(nil)
+	database2, _ := txn2.GetDatabase("db")
+	rel2, _ := database2.GetRelationByName(schema.Name)
+
+	err = rel2.Append(bats[1])
+	assert.Nil(t, err)
+
+	val2 := compute.GetValue(bats[1].Vecs[schema.PrimaryKey], row)
+	filter.Val = val2
+	id, offset, err = rel2.GetByFilter(filter)
+	assert.Nil(t, err)
+	actualVal, err = rel2.GetValue(id, offset, uint16(schema.PrimaryKey))
+	assert.Nil(t, err)
+	assert.Equal(t, val2, actualVal)
+
+	assert.Nil(t, txn2.Commit())
+
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		id, offset, err = rel.GetByFilter(filter)
+		t.Log(err)
+		assert.Nil(t, err)
+	}
+
+	it := rel.MakeBlockIt()
+	for it.Valid() {
+		block := it.GetBlock()
+		bid := block.Fingerprint()
+		if bid.BlockID == id.BlockID {
+			var comp bytes.Buffer
+			var decomp bytes.Buffer
+			vec, mask, err := block.GetVectorCopy(schema.ColDefs[schema.PrimaryKey].Name, &comp, &decomp)
+			assert.Nil(t, err)
+			assert.Nil(t, mask)
+			assert.NotNil(t, vec)
+			t.Log(vec.String())
+			t.Log(offset)
+			t.Log(val2)
+			t.Log(vector.Length(bats[0].Vecs[0]))
+		}
+		it.Next()
+	}
 }

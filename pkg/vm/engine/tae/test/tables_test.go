@@ -86,7 +86,6 @@ func TestTables1(t *testing.T) {
 
 	appender, err = handle.GetAppender()
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
-	t.Log(c.SimplePPString(common.PPL1))
 
 	seg, _ = rel.CreateSegment()
 	blk, _ = seg.CreateBlock()
@@ -95,6 +94,9 @@ func TestTables1(t *testing.T) {
 	appender = handle.SetAppender(id)
 	toAppend, err = appender.PrepareAppend(rows - 2*toAppend)
 	assert.Equal(t, schema.BlockMaxRows, toAppend)
+	t.Log(c.SimplePPString(common.PPL1))
+	txn.Rollback()
+	t.Log(c.SimplePPString(common.PPL1))
 }
 
 func TestTxn1(t *testing.T) {
