@@ -2,13 +2,14 @@ package config
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"log"
 	"os"
 	"sort"
 	"testing"
 	"text/template"
 	"unicode"
+
+	"github.com/BurntSushi/toml"
 )
 
 type par struct {
@@ -1460,8 +1461,7 @@ func Test_template(t *testing.T) {
 
 	for i := 0; i < len(paras.Parameter); i++ {
 		p := paras.Parameter[i].Name
-		capName := p
-		capName = string(unicode.ToUpper(rune(p[0]))) + p[1:]
+		capName := string(unicode.ToUpper(rune(p[0]))) + p[1:]
 		paras.Parameter[i].CapitalName = capName
 	}
 

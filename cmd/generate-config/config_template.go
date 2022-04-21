@@ -139,15 +139,9 @@ func (params *parameters) LoadParametersDefinitionFromFile(filename string) erro
 }
 
 func (params *parameters) LoadParametersDefinitionFromString(input string) error {
-	metadata, err := toml.Decode(input, params)
+	_, err := toml.Decode(input, params)
 	if err != nil {
 		return err
-	} else if failed := metadata.Undecoded(); len(failed) > 0 {
-		var failedItems []string
-		for _, item := range failed {
-			failedItems = append(failedItems, item.String())
-		}
-		// return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
 	// check parameter-struct-name
@@ -173,15 +167,15 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	// check parameter
 	for _, p := range params.Parameter {
 		if !isGoIdentifier(p.Name) {
-			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters", p.Name)
+			return fmt.Errorf("name [%s] is not a valid identifier name within ascii characters", p.Name)
 		}
 
 		if !isScope(p.Scope) {
-			return fmt.Errorf("Scope [%s] is not a valid scope", p.Scope)
+			return fmt.Errorf("scope [%s] is not a valid scope", p.Scope)
 		}
 
 		if !isAccess(p.Access) {
-			return fmt.Errorf("Access [%s] is not a valid access", p.Access)
+			return fmt.Errorf("access [%s] is not a valid access", p.Access)
 		}
 
 		if !isDataType(p.DataType) {
@@ -207,19 +201,19 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	if _, ok := dedup[params.ParameterStructName]; !ok {
 		dedup[params.ParameterStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate parameter struct name %s.", params.ParameterStructName)
+		return fmt.Errorf("has duplicate parameter struct name %s", params.ParameterStructName)
 	}
 
 	if _, ok := dedup[params.ConfigurationStructName]; !ok {
 		dedup[params.ConfigurationStructName] = true
 	} else {
-		return fmt.Errorf("has duplicate configuration struct name %s.", params.ConfigurationStructName)
+		return fmt.Errorf("has duplicate configuration struct name %s", params.ConfigurationStructName)
 	}
 
 	if _, ok := dedup[params.OperationFileName]; !ok {
 		dedup[params.OperationFileName] = true
 	} else {
-		return fmt.Errorf("has duplicate operation file name %s.", params.OperationFileName)
+		return fmt.Errorf("has duplicate operation file name %s", params.OperationFileName)
 	}
 
 	if _, ok := dedup[params.ConfigurationFileName]; !ok {
@@ -239,8 +233,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	// make capital name for the name
 	for i := 0; i < len(params.Parameter); i++ {
 		p := params.Parameter[i].Name
-		capName := p
-		capName = string(unicode.ToUpper(rune(p[0]))) + p[1:]
+		capName := string(unicode.ToUpper(rune(p[0]))) + p[1:]
 		params.Parameter[i].CapitalName = capName
 	}
 
@@ -250,28 +243,28 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 /**
 check if x is a valid lowercase ascii character
 */
-func isLowCaseAsciiChar(x byte) bool {
+func isLowCaseASCIIChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x == '_'
 }
 
 /**
 check if x is a valid uppercase ascii character
 */
-func isUpCaseAsciiChar(x byte) bool {
+func isUpCaseASCIIChar(x byte) bool {
 	return x >= 'A' && x <= 'Z'
 }
 
 /**
 check if x is a valid ascii character
 */
-func isAsciiChar(x byte) bool {
+func isASCIIChar(x byte) bool {
 	return x >= 'a' && x <= 'z' || x >= 'A' && x <= 'Z' || x == '_'
 }
 
 /**
 check if x is a valid ascii digit
 */
-func isAsciiDigit(x byte) bool {
+func isASCIIDigit(x byte) bool {
 	return x >= '0' && x <= '9'
 }
 
@@ -293,13 +286,13 @@ func isGoIdentifier(s string) bool {
 	}
 
 	//the first character is a lowercase ascii character.
-	if !isLowCaseAsciiChar(s[0]) {
+	if !isLowCaseASCIIChar(s[0]) {
 		return false
 	}
 
 	//the rest should ascii character | ascii digit | _
 	for i := 1; i < len(s); i++ {
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
+		if !(isASCIIChar(s[i]) || isASCIIDigit(s[i])) {
 			return false
 		}
 	}
@@ -325,13 +318,13 @@ func isExportedGoIdentifier(s string) bool {
 	}
 
 	// the first character is a lowercase ascii character.
-	if !isUpCaseAsciiChar(s[0]) {
+	if !isUpCaseASCIIChar(s[0]) {
 		return false
 	}
 
 	// the rest should ascii character | ascii digit | _
 	for i := 1; i < len(s); i++ {
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
+		if !(isASCIIChar(s[i]) || isASCIIDigit(s[i])) {
 			return false
 		}
 	}
@@ -356,13 +349,13 @@ func isGoStructAndInterfaceIdentifier(s string) bool {
 	}
 
 	// the first character is a lowercase ascii character.
-	if !isAsciiChar(s[0]) {
+	if !isASCIIChar(s[0]) {
 		return false
 	}
 
 	// the rest should ascii character | ascii digit | _
 	for i := 1; i < len(s); i++ {
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
+		if !(isASCIIChar(s[i]) || isASCIIDigit(s[i])) {
 			return false
 		}
 	}
@@ -598,42 +591,6 @@ func isSubset(A []string, B []string) bool {
 check if x in a slice
 */
 func isInSlice(x string, arr []string) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceBool(x bool, arr []bool) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceInt64(x int64, arr []int64) bool {
-	for _, y := range arr {
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-/**
-check if x in a slice
-*/
-func isInSliceFloat64(x float64, arr []float64) bool {
 	for _, y := range arr {
 		if x == y {
 			return true
@@ -1314,7 +1271,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v", err)
+		return fmt.Errorf("Get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	if len(cfgi.configurationOutputDirectory) == 0 {
@@ -1377,25 +1334,6 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	}
 
 	return nil
-}
-
-/**
-load items from configuration file periodly.
-*/
-type ConfigurationFileHotLoader interface {
-	/**
-	register a configuration file into the loader.
-	path : the path of the configuration file
-	period: load the configration every period
-	configObject: the target that will be updated
-	*/
-	Register(path string, period int64, configObject interface{})
-
-	/**
-	unregister a configuration file from the loader.
-	the configuration file will be loaded again.
-	*/
-	Unregister(path string)
 }
 
 func NewConfigurationFileGenerator(defFileName string) ConfigurationFileGenerator {

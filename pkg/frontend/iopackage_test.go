@@ -304,7 +304,7 @@ func echoClient() {
 		}
 		fmt.Printf("client reads %s.\n", value)
 		if value != alphabet[i] {
-			fmt.Printf("echo failed. send %s but reponse %s\n", alphabet[i], value)
+			fmt.Printf("echo failed. send %s but response %s\n", alphabet[i], value)
 			break
 		}
 	}

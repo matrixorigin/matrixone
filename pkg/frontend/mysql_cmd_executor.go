@@ -170,13 +170,6 @@ func (o *outputQueue) flush() error {
 }
 
 /*
-getData returns the data slice in the resultset
-*/
-func (o *outputQueue) getData() [][]interface{} {
-	return o.mrs.Data[:o.rowIdx]
-}
-
-/*
 extract the data from the pipeline.
 obj: routine obj
 TODO:Add error
@@ -903,16 +896,16 @@ func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
 
 func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
 	columns := cw.exec.Columns()
-	var mysqlCols []interface{} = nil
+	var mysqlCols []interface{} = make([]interface{}, len(columns))
 	var err error = nil
-	for _, c := range columns {
+	for i, c := range columns {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
 		err = convertEngineTypeToMysqlType(c.Typ, col)
 		if err != nil {
 			return nil, err
 		}
-		mysqlCols = append(mysqlCols, col)
+		mysqlCols[i] = col
 	}
 	return mysqlCols, err
 }

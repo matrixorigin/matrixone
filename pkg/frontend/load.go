@@ -406,7 +406,7 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	handler.attrName = attrName
 
 	//define the peer column for LOAD DATA's column list.
-	var dataColumnId2TableColumnId []int = nil
+	var dataColumnId2TableColumnId []int
 	if len(load.ColumnList) == 0 {
 		dataColumnId2TableColumnId = make([]int, len(cols))
 		for i := 0; i < len(cols); i++ {

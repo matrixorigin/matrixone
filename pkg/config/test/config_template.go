@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode"
+
+	"github.com/BurntSushi/toml"
 )
 
 /*
@@ -238,8 +239,7 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	//make capital name for the name
 	for i := 0; i < len(params.Parameter); i++ {
 		p := params.Parameter[i].Name
-		capName := p
-		capName = string(unicode.ToUpper(rune(p[0]))) + p[1:]
+		capName := string(unicode.ToUpper(rune(p[0]))) + p[1:]
 		params.Parameter[i].CapitalName = capName
 	}
 
@@ -1278,7 +1278,7 @@ type ConfigurationFileGeneratorImpl struct {
 func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v", err)
+		return fmt.Errorf("Get the directory of parameter definition file failed.error:%v", err)
 	}
 
 	params := &parameters{}
