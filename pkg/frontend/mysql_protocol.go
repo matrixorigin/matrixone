@@ -135,10 +135,6 @@ const (
 
 	// DefaultMySQLState is the default state of the mySQL
 	DefaultMySQLState string = "HY000"
-
-	//for tests
-	dumpUser     string = "dump"
-	dumpPassword string = "111"
 )
 
 type MysqlProtocol interface {
@@ -846,7 +842,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	}
 
 	if (info.capabilities & CLIENT_PLUGIN_AUTH) != 0 {
-		info.clientPluginName, pos, ok = mp.readStringNUL(data, pos)
+		info.clientPluginName, _, ok = mp.readStringNUL(data, pos)
 		if !ok {
 			return false, info, fmt.Errorf("get auth plugin name failed")
 		}
@@ -937,12 +933,12 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 		}
 		info.authResponse = []byte(auth)
 
-		info.database, pos, ok = mp.readStringNUL(data, pos)
+		info.database, _, ok = mp.readStringNUL(data, pos)
 		if !ok {
 			return false, info, fmt.Errorf("get database failed")
 		}
 	} else {
-		info.authResponse, pos, ok = mp.readCountOfBytes(data, pos, len(data)-pos)
+		info.authResponse, _, ok = mp.readCountOfBytes(data, pos, len(data)-pos)
 		if !ok {
 			return false, info, fmt.Errorf("get auth-response failed")
 		}
@@ -1200,8 +1196,6 @@ func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(column Column, cmd int) 
 	var data []byte
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		data = mp.makeColumnDefinition41Payload(mysqlColumn, cmd)
-	} else {
-		//TODO: ColumnDefinition320
 	}
 
 	return mp.writePackets(data)
@@ -1657,7 +1651,7 @@ func (mp *MysqlProtocolImpl) writePackets(payload []byte) error {
 	//position of the first data byte
 	var i = headerLen
 	var length = len(payload)
-	var curLen = 0
+	var curLen int
 	for ; i < length; i += curLen {
 		//var packet []byte = mp.packet[:0]
 		curLen = Min(int(MaxPayloadSize), length-i)

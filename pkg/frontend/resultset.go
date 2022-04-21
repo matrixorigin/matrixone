@@ -263,7 +263,7 @@ func (mrs *MysqlResultSet) GetRow(index uint64) ([]interface{}, error) {
 func (mrs *MysqlResultSet) GetValue(rindex uint64, cindex uint64) (interface{}, error) {
 	if row, err := mrs.GetRow(rindex); err != nil {
 		return nil, err
-	} else if cindex < 0 || cindex >= uint64(len(mrs.Columns)) {
+	} else if cindex >= uint64(len(mrs.Columns)) {
 		return nil, fmt.Errorf("index valid column index %d ", cindex)
 	} else {
 		return row[cindex], nil
@@ -426,9 +426,9 @@ func (mrs *MysqlResultSet) GetFloat64(rindex, cindex uint64) (float64, error) {
 	case float64:
 		return float64(v), nil
 	case string:
-		return strconv.ParseFloat(v, 10)
+		return strconv.ParseFloat(v, 64)
 	case []byte:
-		return strconv.ParseFloat(string(v), 10)
+		return strconv.ParseFloat(string(v), 64)
 	case int:
 		return float64(v), nil
 	case uint:

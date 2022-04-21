@@ -100,7 +100,7 @@ func TestReadIntLenEnc(t *testing.T) {
 				t.Errorf("IntLenEnc %d failed.", value)
 				break
 			}
-			val, p2, ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1], 0)
+			_, p2, ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1], 0)
 			if ok {
 				t.Errorf("read IntLenEnc failed.")
 				break
@@ -130,13 +130,13 @@ func TestReadCountOfBytes(t *testing.T) {
 		}
 	}
 
-	r, pos, ok = client.readCountOfBytes(data, 0, 100)
+	_, pos, ok = client.readCountOfBytes(data, 0, 100)
 	if ok {
 		t.Error("read bytes failed.")
 		return
 	}
 
-	r, pos, ok = client.readCountOfBytes(data, 0, 0)
+	_, pos, ok = client.readCountOfBytes(data, 0, 0)
 	if !ok || pos != 0 {
 		t.Error("read bytes failed.")
 		return
@@ -1279,162 +1279,6 @@ func close_db(t *testing.T, db *sql.DB) {
 	require.NoError(t, err)
 }
 
-func do_query(t *testing.T, db *sql.DB, wantErr bool, query string, mrs *MysqlResultSet) {
-	rows, err := db.Query(query)
-	if wantErr {
-		require.Error(t, err)
-		require.True(t, rows == nil)
-		return
-	}
-	require.NoError(t, err)
-
-	//column check
-	columns, err := rows.Columns()
-	require.NoError(t, err)
-	require.True(t, len(columns) == len(mrs.Columns))
-
-	colType, err := rows.ColumnTypes()
-	require.NoError(t, err)
-	for i, ct := range colType {
-		fmt.Printf("column %d\n", i)
-		fmt.Printf("name %v \n", ct.Name())
-		l, o := ct.Length()
-		fmt.Printf("length %v %v \n", l, o)
-		p, s, o := ct.DecimalSize()
-		fmt.Printf("decimalsize %v %v %v \n", p, s, o)
-		fmt.Printf("scantype %v \n", ct.ScanType())
-		n, o := ct.Nullable()
-		fmt.Printf("nullable %v %v \n", n, o)
-		fmt.Printf("databaseTypeName %s \n", ct.DatabaseTypeName())
-	}
-
-	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
-	// references into such a slice
-	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
-	scanArgs := make([]interface{}, len(columns))
-	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		col, err := mrs.GetColumn(i)
-		require.NoError(t, err)
-
-		switch col.ColumnType() {
-		case defines.MYSQL_TYPE_TINY:
-			if col.IsSigned() {
-				scanArgs[i] = new(int8)
-			} else {
-				scanArgs[i] = new(uint8)
-			}
-		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
-			if col.IsSigned() {
-				scanArgs[i] = new(int16)
-			} else {
-				scanArgs[i] = new(uint16)
-			}
-		case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
-			if col.IsSigned() {
-				scanArgs[i] = new(int32)
-			} else {
-				scanArgs[i] = new(uint32)
-			}
-		case defines.MYSQL_TYPE_LONGLONG:
-			if col.IsSigned() {
-				scanArgs[i] = new(int64)
-			} else {
-				scanArgs[i] = new(uint64)
-			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-			scanArgs[i] = new(string)
-		case defines.MYSQL_TYPE_FLOAT:
-			scanArgs[i] = new(float32)
-		case defines.MYSQL_TYPE_DOUBLE:
-			scanArgs[i] = new(float64)
-		default:
-			require.NoError(t, fmt.Errorf("unsupported type %v", col.ColumnType()))
-		}
-	}
-
-	rowIdx := uint64(0)
-	for rows.Next() {
-		err = rows.Scan(scanArgs...)
-		require.NoError(t, err)
-
-		//check data
-		want_data, err := mrs.GetRow(rowIdx)
-		require.NoError(t, err)
-
-		for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-			arg := scanArgs[i]
-			var val interface{}
-
-			col, err := mrs.GetColumn(i)
-			require.NoError(t, err)
-
-			switch col.ColumnType() {
-			case defines.MYSQL_TYPE_TINY:
-				if col.IsSigned() {
-					val = *(arg.(*int8))
-				} else {
-					val = *(arg.(*uint8))
-				}
-			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
-				if col.IsSigned() {
-					val = *(arg.(*int16))
-				} else {
-					val = *(arg.(*uint16))
-				}
-			case defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_INT24:
-				if col.IsSigned() {
-					val = *(arg.(*int32))
-				} else {
-					val = *(arg.(*uint32))
-				}
-			case defines.MYSQL_TYPE_LONGLONG:
-				if col.IsSigned() {
-					val = *(arg.(*int64))
-				} else {
-					val = *(arg.(*uint64))
-				}
-			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
-				val = *(arg.(*string))
-			case defines.MYSQL_TYPE_FLOAT:
-				val = *(arg.(*float32))
-			case defines.MYSQL_TYPE_DOUBLE:
-				val = *(arg.(*float64))
-			default:
-				require.NoError(t, fmt.Errorf("unsupported type %v", col.ColumnType()))
-			}
-
-			ret := false
-
-			switch col.ColumnType() {
-			case defines.MYSQL_TYPE_FLOAT:
-				a := val.(float32)
-				b := want_data[i].(float32)
-				c := a - b
-				d := math.Abs(float64(c))
-				ret = d <= math.SmallestNonzeroFloat32
-			case defines.MYSQL_TYPE_DOUBLE:
-				a := val.(float64)
-				b := want_data[i].(float64)
-				c := a - b
-				d := math.Abs(c)
-				ret = d <= math.SmallestNonzeroFloat64
-			default:
-				//check
-				ret = reflect.DeepEqual(val, want_data[i])
-			}
-
-			require.True(t, ret)
-		}
-
-		rowIdx++
-	}
-
-	err = rows.Err()
-	require.NoError(t, err)
-
-	require.True(t, rowIdx == mrs.GetRowCount())
-}
-
 func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
 	rows, err := db.Query(query)
 	if wantErr {
@@ -1575,22 +1419,6 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 	require.NoError(t, err)
 }
 
-func do_query_resp_states(t *testing.T, db *sql.DB, wantErr bool, query string) {
-	rows, err := db.Query(query)
-	if wantErr {
-		require.Error(t, err)
-		require.True(t, rows == nil)
-	} else {
-		require.NoError(t, err)
-		for rows.Next() {
-			//never come here
-			require.True(t, false)
-		}
-		err = rows.Err()
-		require.NoError(t, err)
-	}
-}
-
 func Test_writePackets(t *testing.T) {
 	cvey.Convey("writepackets 16MB succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -1604,7 +1432,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		cvey.So(err, cvey.ShouldBeNil)
 	})
 	cvey.Convey("writepackets 16MB failed", t, func() {
@@ -1629,7 +1457,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		cvey.So(err, cvey.ShouldBeError)
 	})
 
@@ -1648,7 +1476,7 @@ func Test_writePackets(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
-		err = proto.writePackets(make([]byte, MaxPayloadSize, MaxPayloadSize))
+		err = proto.writePackets(make([]byte, MaxPayloadSize))
 		cvey.So(err, cvey.ShouldBeError)
 	})
 }
@@ -1695,7 +1523,7 @@ func Test_openpacket(t *testing.T) {
 		err = proto.closePacket(true)
 		cvey.So(err, cvey.ShouldBeNil)
 
-		proto.append(nil, make([]byte, 1024, 1024)...)
+		proto.append(nil, make([]byte, 1024)...)
 	})
 
 	cvey.Convey("closepacket falied.", t, func() {
@@ -1737,7 +1565,7 @@ func Test_openpacket(t *testing.T) {
 
 		mysqlPack := func(payload []byte) []byte {
 			n := len(payload)
-			var curLen int = 0
+			var curLen int
 			var header [4]byte
 			var data []byte = nil
 			var sequenceId byte = 0
@@ -1759,7 +1587,7 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		data16MB := func(cnt int) []byte {
-			data := make([]byte, cnt*int(MaxPayloadSize), cnt*int(MaxPayloadSize))
+			data := make([]byte, cnt * int(MaxPayloadSize))
 			return data
 		}
 
@@ -2045,7 +1873,7 @@ func Test_analyse41resp(t *testing.T) {
 		//int<1>             character set
 		data = append(data, 0x1)
 		//string[23]         reserved (all [0])
-		data = append(data, make([]byte, 23, 23)...)
+		data = append(data, make([]byte, 23)...)
 		//string[NUL]        username
 		username := "abc"
 		data = append(data, []byte(username)...)
