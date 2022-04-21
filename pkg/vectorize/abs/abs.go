@@ -15,9 +15,8 @@
 package abs
 
 import (
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"golang.org/x/exp/constraints"
 )
 
 var (
@@ -34,113 +33,33 @@ var (
 )
 
 func init() {
-	AbsUint8 = absUint8
-	AbsUint16 = absUint16
-	AbsUint32 = absUint32
-	AbsUint64 = absUint64
-	AbsInt8 = absInt8
-	AbsInt16 = absInt16
-	AbsInt32 = absInt32
-	AbsInt64 = absInt64
-	AbsFloat32 = absFloat32
-	AbsFloat64 = absFloat64
+	AbsUint8 = absUnsigned[uint8]
+	AbsUint16 = absUnsigned[uint16]
+	AbsUint32 = absUnsigned[uint32]
+	AbsUint64 = absUnsigned[uint64]
+	AbsInt8 = absSigned[int8]
+	AbsInt16 = absSigned[int16]
+	AbsInt32 = absSigned[int32]
+	AbsInt64 = absSigned[int64]
+	AbsFloat32 = absSigned[float32]
+	AbsFloat64 = absSigned[float64]
 }
 
-// uint8 simply return the input values.
-func absUint8(xs, rs []uint8) []uint8 {
+// Unsigned simply return
+func absUnsigned[T constraints.Unsigned](xs, rs []T) []T {
 	return xs
 }
 
-// uint16 simply return the input values.
-func absUint16(xs, rs []uint16) []uint16 {
-	return xs
-}
-
-// uint32 simply return the input values.
-func absUint32(xs, rs []uint32) []uint32 {
-	return xs
-}
-
-// uint64 simply return the input values.
-func absUint64(xs, rs []uint64) []uint64 {
-	return xs
-}
-
-func absInt8(xs, rs []int8) []int8 {
-	for i := range xs {
-		if xs[i] == int8(math.MinInt8) {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int8 value out of range"))
-		}
-		if xs[i] < 0 {
-			rs[i] = -xs[i]
-		} else {
-			rs[i] = xs[i]
-		}
-	}
-	return rs
-}
-
-func absInt16(xs, rs []int16) []int16 {
-	for i := range xs {
-		if xs[i] == int16(math.MinInt16) {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int16 value out of range"))
-		}
-
-		if xs[i] < 0 {
-			rs[i] = -xs[i]
-		} else {
-			rs[i] = xs[i]
-		}
-	}
-	return rs
-}
-
-func absInt32(xs, rs []int32) []int32 {
-	for i := range xs {
-		if xs[i] == int32(math.MinInt32) {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int32 value out of range"))
-		}
-
-		if xs[i] < 0 {
-			rs[i] = -xs[i]
-		} else {
-			rs[i] = xs[i]
-		}
-	}
-	return rs
-}
-
-func absInt64(xs, rs []int64) []int64 {
-	for i := range xs {
-		if xs[i] == int64(math.MinInt64) {
-			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int64 value out of range"))
-		}
-		if xs[i] < 0 {
-			rs[i] = -xs[i]
-		} else {
-			rs[i] = xs[i]
-		}
-	}
-	return rs
-}
-
-func absFloat32(xs, rs []float32) []float32 {
+// Signed, flip sign and check out of range.
+func absSigned[T constraints.Signed | constraints.Float](xs, rs []T) []T {
 	for i := range xs {
 		if xs[i] < 0 {
 			rs[i] = -xs[i]
 		} else {
 			rs[i] = xs[i]
 		}
-	}
-	return rs
-}
-
-func absFloat64(xs, rs []float64) []float64 {
-	for i := range xs {
-		if xs[i] < 0 {
-			rs[i] = -xs[i]
-		} else {
-			rs[i] = xs[i]
+		if rs[i] < 0 {
+			panic(moerr.NewError(moerr.OUT_OF_RANGE, "abs int value out of range"))
 		}
 	}
 	return rs
