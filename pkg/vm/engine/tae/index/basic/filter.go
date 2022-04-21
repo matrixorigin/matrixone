@@ -46,8 +46,12 @@ func NewBinaryFuseFilter(data *vector.Vector) (StaticFilter, error) {
 	return sf, nil
 }
 
-func GetEmptyFilter() StaticFilter {
-	return &binaryFuseFilter{}
+func NewBinaryFuseFilterFromSource(data []byte) (StaticFilter, error) {
+	sf := binaryFuseFilter{}
+	if err := sf.Unmarshal(data); err != nil {
+		return nil, err
+	}
+	return &sf, nil
 }
 
 func (filter *binaryFuseFilter) MayContainsKey(key interface{}) (bool, error) {
