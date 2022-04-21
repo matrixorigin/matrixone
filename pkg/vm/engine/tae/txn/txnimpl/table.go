@@ -385,16 +385,36 @@ func (tbl *txnTable) RangeDeleteLocalRows(start, end uint32) error {
 	if last == first {
 		node := tbl.inodes[first]
 		err = node.RangeDelete(firstOffset, lastOffset)
+		if err == nil {
+			for i := firstOffset; i <= lastOffset; i++ {
+				v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
+				if err = tbl.index.Delete(v); err != nil {
+					break
+				}
+			}
+		}
 	} else {
 		node := tbl.inodes[first]
 		err = node.RangeDelete(firstOffset, txnbase.MaxNodeRows-1)
 		node = tbl.inodes[last]
 		err = node.RangeDelete(0, lastOffset)
-		if last > first+1 {
+		for i := uint32(0); i <= lastOffset; i++ {
+			v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
+			if err = tbl.index.Delete(v); err != nil {
+				break
+			}
+		}
+		if last > first+1 && err == nil {
 			for i := first + 1; i < last; i++ {
 				node = tbl.inodes[i]
 				if err = node.RangeDelete(0, txnbase.MaxNodeRows); err != nil {
 					break
+				}
+				for i := uint32(0); i <= txnbase.MaxNodeRows; i++ {
+					v, _ := node.GetValue(int(tbl.entry.GetSchema().PrimaryKey), i)
+					if err = tbl.index.Delete(v); err != nil {
+						break
+					}
 				}
 			}
 		}

@@ -68,9 +68,16 @@ func (idx *simpleTableIndex) Insert(v interface{}, row uint32) error {
 	return nil
 }
 
-func (idx *simpleTableIndex) Delete(v interface{}) error {
+func (idx *simpleTableIndex) Delete(vv interface{}) error {
 	idx.Lock()
 	defer idx.Unlock()
+	var v interface{}
+	switch vv.(type) {
+	case []uint8:
+		v = string(vv.([]uint8))
+	default:
+		v = vv
+	}
 	_, ok := idx.tree[v]
 	if !ok {
 		return txnbase.ErrNotFound

@@ -178,3 +178,71 @@ func TestMVCC1(t *testing.T) {
 		it.Next()
 	}
 }
+
+// 1. Txn1 create db, relation and append 10 rows. committed -- PASS
+// 2. Txn2 append 10 rows. Get the 5th append row value -- PASS
+// 3. Txn2 delete the 5th row value in uncommited state -- PASS
+// 4. Txn2 get the 5th row value -- NotFound
+func TestMVCC2(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 10)
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		rel.Append(bats[0])
+		val := compute.GetValue(bats[0].Vecs[schema.PrimaryKey], 5)
+		filter := handle.Filter{
+			Op:  handle.FilterEq,
+			Val: val,
+		}
+		_, _, err := rel.GetByFilter(&filter)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		rel.Append(bats[1])
+		val := compute.GetValue(bats[1].Vecs[schema.PrimaryKey], 5)
+		filter := handle.Filter{
+			Op:  handle.FilterEq,
+			Val: val,
+		}
+		id, offset, err := rel.GetByFilter(&filter)
+		assert.Nil(t, err)
+		err = rel.RangeDelete(id, offset, offset)
+		assert.Nil(t, err)
+
+		_, _, err = rel.GetByFilter(&filter)
+		assert.NotNil(t, err)
+
+		t.Log(err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		var comp bytes.Buffer
+		var decomp bytes.Buffer
+		for it.Valid() {
+			block := it.GetBlock()
+			vec, mask, err := block.GetVectorCopy(schema.ColDefs[schema.PrimaryKey].Name, &comp, &decomp)
+			assert.Nil(t, err)
+			assert.Nil(t, mask)
+			t.Log(vec.String())
+			// TODO: exclude deleted rows when apply appends
+			// assert.Equal(t, vector.Length(bats[1].Vecs[0])*2-1, int(vector.Length(vec)))
+			it.Next()
+		}
+	}
+}
