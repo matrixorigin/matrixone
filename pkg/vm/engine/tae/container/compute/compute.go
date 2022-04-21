@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 func AppendValue(vec *gvec.Vector, v interface{}) {
@@ -474,6 +475,48 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 		if pre != -1 {
 			UpdateOffsets(data, pre, len(data.Lengths)-1)
 		}
+	}
+	return vec
+}
+
+func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uint32]interface{}) vector.IVector {
+	if mask == nil || mask.GetCardinality() == 0 {
+		return vec
+	}
+	updateIterator := mask.Iterator()
+	switch vec.GetType() {
+	case dbi.StdVec:
+		for updateIterator.HasNext() {
+			rowIdx := updateIterator.Next()
+			err := vec.SetValue(int(rowIdx), vals[rowIdx])
+			if err != nil {
+				panic(err)
+			}
+		}
+	case dbi.StrVec:
+		pre := -1
+		strVec := vec.(*vector.StrVector)
+		data := strVec.Data
+		for updateIterator.HasNext() {
+			row := updateIterator.Next()
+			if pre != -1 {
+				UpdateOffsets(data, pre, int(row))
+			}
+			val := vals[row].([]byte)
+			suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
+			data.Lengths[row] = uint32(len(val))
+			val = append(val, suffix...)
+			data.Data = append(data.Data[:data.Offsets[row]], val...)
+			pre = int(row)
+			if strVec.VMask != nil && strVec.VMask.Np != nil && strVec.VMask.Np.Contains(uint64(row)) {
+				strVec.VMask.Np.Flip(uint64(row), uint64(row))
+			}
+		}
+		if pre != -1 {
+			UpdateOffsets(data, pre, len(data.Offsets)-1)
+		}
+	default:
+		panic("not support")
 	}
 	return vec
 }

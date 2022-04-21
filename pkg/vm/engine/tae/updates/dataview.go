@@ -7,8 +7,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 type BlockView struct {
@@ -46,45 +46,12 @@ func (view *BlockView) Eval() {
 	}
 	for colIdx, mask := range view.UpdateMasks {
 		vals := view.UpdateVals[colIdx]
-		updateIterator := mask.Iterator()
 		vec, err := view.Raw.GetVectorByAttr(int(colIdx))
 		if err != nil {
 			panic(err)
 		}
-		switch vec.GetType() {
-		case dbi.StdVec:
-			for updateIterator.HasNext() {
-				rowIdx := updateIterator.Next()
-				err = vec.SetValue(int(rowIdx), vals[rowIdx])
-				if err != nil {
-					panic(err)
-				}
-			}
-		case dbi.StrVec:
-			pre := -1
-			strVec := vec.(*vector.StrVector)
-			data := strVec.Data
-			for updateIterator.HasNext() {
-				row := updateIterator.Next()
-				if pre != -1 {
-					UpdateOffsets(data, pre, int(row))
-				}
-				val := vals[row].([]byte)
-				suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
-				data.Lengths[row] = uint32(len(val))
-				val = append(val, suffix...)
-				data.Data = append(data.Data[:data.Offsets[row]], val...)
-				pre = int(row)
-				if strVec.VMask != nil && strVec.VMask.Np != nil && strVec.VMask.Np.Contains(uint64(row)) {
-					strVec.VMask.Np.Flip(uint64(row), uint64(row))
-				}
-			}
-			if pre != -1 {
-				UpdateOffsets(data, pre, len(data.Offsets)-1)
-			}
-		default:
-			panic("not support")
-		}
+		vec = compute.ApplyUpdateToIVector(vec, mask, vals)
+
 		vecs[colIdx] = vec
 	}
 	view.Applied, err = batch.NewBatch(attrs, vecs)
