@@ -34,7 +34,7 @@ func outPutQuery(query *Query, toFile bool, t *testing.T) {
 		t.Logf("%+v", query)
 	}
 	if toFile {
-		err := ioutil.WriteFile("/Users/ouyuanning/test.json", out.Bytes(), 0777)
+		err := ioutil.WriteFile("/tmp/mo_plan2_test.json", out.Bytes(), 0777)
 		if err != nil {
 			t.Logf("%+v", err)
 		}
@@ -43,20 +43,83 @@ func outPutQuery(query *Query, toFile bool, t *testing.T) {
 	}
 }
 
-func TestSqlBuilder(t *testing.T) {
+func runTestShouldPass(t *testing.T, sqls []string, printJson bool, toFile bool) {
 	mock := newMockOptimizer()
-
-	sql := "SELECT N_NAME,N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0"
-	stmts, err := mysql.Parse(sql)
-	if err != nil {
-		t.Fatalf("%+v", err)
-	}
-
-	for _, stmt := range stmts {
-		query, err := mock.Optimize(stmt)
+	for _, sql := range sqls {
+		stmts, err := mysql.Parse(sql)
 		if err != nil {
 			t.Fatalf("%+v", err)
 		}
-		outPutQuery(query, false, t)
+
+		for _, stmt := range stmts {
+			query, err := mock.Optimize(stmt)
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
+			if printJson {
+				outPutQuery(query, toFile, t)
+			}
+		}
 	}
+}
+
+func runTestShouldError(t *testing.T, sqls []string) {
+	mock := newMockOptimizer()
+	for _, sql := range sqls {
+		stmts, err := mysql.Parse(sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		for _, stmt := range stmts {
+			query, err := mock.Optimize(stmt)
+			if err == nil {
+				t.Fatalf("should error, but pass: %v", query)
+			}
+		}
+	}
+}
+
+func TestSingleTableSqlBuilder(t *testing.T) {
+	//should pass
+	sqls := []string{
+		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE abs(N_REGIONKEY) > 0 ORDER BY a DESC", //test alias
+	}
+	runTestShouldPass(t, sqls, false, false)
+
+	//should error
+	sqls = []string{
+		"SELECT N_NAME, N_REGIONKEY FROM table_not_exist",                   //table not exist
+		"SELECT N_NAME, column_not_exist FROM NATION",                       //column not exist
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION ORDER BY not_exist_alias", //alias not exist
+	}
+	runTestShouldError(t, sqls)
+}
+
+func TestAggregationSqlBuilder(t *testing.T) {
+	//should pass
+	sqls := []string{
+		"SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",
+	}
+	runTestShouldPass(t, sqls, false, false)
+}
+
+func TestJoinTableSqlBuilder(t *testing.T) {
+	//should pass
+	sqls := []string{
+		"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE abs(NATION.N_REGIONKEY) > 0",
+		"SELECT N_NAME, R_REGIONKEY FROM NATION2 join REGION using(R_REGIONKEY) WHERE abs(NATION2.R_REGIONKEY) > 0",
+		"SELECT N_NAME, R_REGIONKEY FROM NATION2 NATURAL JOIN REGION WHERE abs(NATION2.R_REGIONKEY) > 0",
+		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0", //test alias
+	}
+	runTestShouldPass(t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.NotExistColumn",                         //column not exist
+		"SELECT N_NAME, R_REGIONKEY FROM NATION join REGION using(R_REGIONKEY)",                                                   //column not exist
+		"SELECT N_NAME, R_REGIONKEY FROM NATION NATURAL JOIN REGION",                                                              // have no same column
+		"SELECT N_NAME,N_REGIONKEY FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(aaaaa.N_REGIONKEY) > 0", //table alias not exist
+	}
+	runTestShouldError(t, sqls)
 }

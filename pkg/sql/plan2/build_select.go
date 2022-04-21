@@ -25,12 +25,17 @@ import (
 )
 
 func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
+	aliasCtx := &AliasContext{
+		tableAlias:  make(map[string]*plan.TableDef),
+		columnAlias: make(map[string]*plan.Expr),
+	}
+
 	//with
 
 	//clause
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		err := buildSelectClause(selectClause, ctx, query)
+		err := buildSelectClause(selectClause, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
@@ -38,11 +43,13 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 
+	node := getLastSimpleNode(query)
+
 	//orderby.   push down sort operator is not implement
 	if stmt.OrderBy != nil {
 		orderBy := &plan.OrderBySpec{}
 		for _, order := range stmt.OrderBy {
-			expr, err := buildExpr(order.Expr, ctx, query)
+			expr, err := buildExpr(order.Expr, ctx, query, aliasCtx)
 			if err != nil {
 				return err
 			}
@@ -58,24 +65,24 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 			}
 			//todo confirm what OrderByCollations mean
 		}
-		query.Nodes[len(query.Nodes)-1].OrderBy = orderBy
+		node.OrderBy = orderBy
 	}
 
 	//limit
 	if stmt.Limit != nil {
 		//offset
-		expr, err := buildExpr(stmt.Limit.Offset, ctx, query)
+		expr, err := buildExpr(stmt.Limit.Offset, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
-		query.Nodes[len(query.Nodes)-1].Offset = expr
+		node.Offset = expr
 
 		//limit
-		expr, err = buildExpr(stmt.Limit.Count, ctx, query)
+		expr, err = buildExpr(stmt.Limit.Count, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
-		query.Nodes[len(query.Nodes)-1].Limit = expr
+		node.Limit = expr
 	}
 
 	//fetch
@@ -85,26 +92,31 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 	return nil
 }
 
-func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query) error {
+func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
 	var winspec *plan.WindowSpec
 
 	//from
-	err := buildFrom(stmt.From.Tables, ctx, query)
+	err := buildFrom(stmt.From.Tables, ctx, query, aliasCtx)
 	if err != nil {
 		return err
 	}
+
+	node := getLastSimpleNode(query)
 
 	//projection
 	//todo get windowspec, aggregation
 	var projections []*plan.Expr
 	for _, selectExpr := range stmt.Exprs {
-		expr, err := buildExpr(selectExpr.Expr, ctx, query)
+		expr, err := buildExpr(selectExpr.Expr, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
+		if selectExpr.As != "" {
+			aliasCtx.columnAlias[string(selectExpr.As)] = expr
+		}
 		projections = append(projections, expr)
 	}
-	query.Nodes[len(query.Nodes)-1].ProjectList = projections
+	node.ProjectList = projections
 
 	//distinct
 	if stmt.Distinct {
@@ -112,16 +124,16 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 			panic(moerr.NewError(moerr.NYI, "Distinc NYI"))
 		}
 
-		query.Nodes[len(query.Nodes)-1].GroupBy = projections
+		node.GroupBy = projections
 	}
 
 	//filter
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
-		query.Nodes[len(query.Nodes)-1].WhereList = exprs
+		node.WhereList = exprs
 	}
 
 	//group_by
@@ -129,28 +141,28 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		var exprs []*plan.Expr
 
 		for _, groupByExpr := range stmt.GroupBy {
-			expr, err := buildExpr(groupByExpr, ctx, query)
+			expr, err := buildExpr(groupByExpr, ctx, query, aliasCtx)
 			if err != nil {
 				return err
 			}
 			exprs = append(exprs, expr)
 		}
-		query.Nodes[len(query.Nodes)-1].GroupBy = exprs
+		node.GroupBy = exprs
 	}
 
 	//having
 	if stmt.Having != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query)
+		exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
 		//todo confirm
-		query.Nodes[len(query.Nodes)-1].WhereList = append(query.Nodes[len(query.Nodes)-1].WhereList, exprs...)
+		node.WhereList = append(node.WhereList, exprs...)
 	}
 
 	//window
 	if winspec != nil {
-		query.Nodes[len(query.Nodes)-1].WinSpec = winspec
+		node.WinSpec = winspec
 	}
 
 	return nil

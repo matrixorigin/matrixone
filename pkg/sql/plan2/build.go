@@ -18,20 +18,10 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
-	for idx, col := range tableDef.Cols {
-		if col.Name == name {
-			return int32(idx)
-		}
-	}
-	return -1
-}
 
 func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
 	query := &Query{}

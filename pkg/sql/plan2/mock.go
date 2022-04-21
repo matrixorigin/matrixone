@@ -15,10 +15,7 @@
 package plan2
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -46,10 +43,80 @@ func NewMockCompilerContext() *MockCompilerContext {
 		{"N_REGIONKEY", 3, false, 0, 0},
 		{"N_COMMENT", 4, false, 0, 0},
 	}
+	tpchSchema["NATION2"] = []col{ //not exist in tpch, create for test NaturalJoin And UsingJoin
+		{"N_NATIONKEY", 1, false, 0, 0},
+		{"N_NAME", 2, false, 0, 0},
+		{"R_REGIONKEY", 3, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
+		{"N_COMMENT", 4, false, 0, 0},
+	}
 	tpchSchema["REGION"] = []col{
 		{"R_REGIONKEY", 1, false, 0, 0},
 		{"R_NAME", 2, false, 0, 0},
 		{"R_COMMENT", 3, false, 0, 0},
+	}
+	tpchSchema["PART"] = []col{
+		{"P_PARTKEY", 1, false, 0, 0},
+		{"P_NAME", 2, false, 0, 0},
+		{"P_BRAND", 3, false, 0, 0},
+		{"P_TYPE", 4, false, 0, 0},
+		{"P_SIZE", 5, false, 0, 0},
+		{"P_CONTAINER", 6, false, 0, 0},
+		{"P_RETAILPRICE", 7, false, 0, 0},
+		{"P_COMMENT", 8, false, 0, 0},
+	}
+	tpchSchema["SUPPLIER"] = []col{
+		{"S_SUPPKEY", 1, false, 0, 0},
+		{"S_NAME", 2, false, 0, 0},
+		{"S_ADDRESS", 3, false, 0, 0},
+		{"S_NATIONKEY", 4, false, 0, 0},
+		{"S_PHONE", 5, false, 0, 0},
+		{"S_ACCTBAL", 6, false, 0, 0},
+		{"S_COMMENT", 7, false, 0, 0},
+	}
+	tpchSchema["PARTSUPP"] = []col{
+		{"PS_PARTKEY", 1, false, 0, 0},
+		{"PS_SUPPKEY", 2, false, 0, 0},
+		{"PS_AVAILQTY", 3, false, 0, 0},
+		{"PS_SUPPLYCOST", 4, false, 0, 0},
+		{"PS_COMMENT", 5, false, 0, 0},
+	}
+	tpchSchema["CUSTOMER"] = []col{
+		{"C_CUSTKEY", 1, false, 0, 0},
+		{"C_NAME", 2, false, 0, 0},
+		{"C_ADDRESS", 3, false, 0, 0},
+		{"C_NATIONKEY", 4, false, 0, 0},
+		{"C_PHONE", 5, false, 0, 0},
+		{"C_ACCTBAL", 6, false, 0, 0},
+		{"C_MKTSEGMENT", 7, false, 0, 0},
+		{"C_COMMENT", 8, false, 0, 0},
+	}
+	tpchSchema["ORDERS"] = []col{
+		{"O_ORDERKEY", 1, false, 0, 0},
+		{"O_CUSTKEY", 2, false, 0, 0},
+		{"O_TOTALPRICE", 3, false, 0, 0},
+		{"O_ORDERDATE", 4, false, 0, 0},
+		{"O_ORDERPRIORITY", 5, false, 0, 0},
+		{"O_CLERK", 6, false, 0, 0},
+		{"O_SHIPPRIORITY", 7, false, 0, 0},
+		{"O_COMMENT", 8, false, 0, 0},
+	}
+	tpchSchema["LINEITEM"] = []col{
+		{"L_ORDERKEY", 1, false, 0, 0},
+		{"L_PARTKEY", 2, false, 0, 0},
+		{"L_SUPPKEY", 3, false, 0, 0},
+		{"L_LINENUMBER", 4, false, 0, 0},
+		{"L_QUANTITY", 5, false, 0, 0},
+		{"L_EXTENDEDPRICE", 6, false, 0, 0},
+		{"L_DISCOUNT", 7, false, 0, 0},
+		{"L_TAX", 8, false, 0, 0},
+		{"L_RETURNFLAG", 9, false, 0, 0},
+		{"L_LINESTATUS", 10, false, 0, 0},
+		{"L_SHIPDATE", 11, false, 0, 0},
+		{"L_COMMITDATE", 12, false, 0, 0},
+		{"L_RECEIPTDATE", 13, false, 0, 0},
+		{"L_SHIPINSTRUCT", 14, false, 0, 0},
+		{"L_SHIPMODE", 15, false, 0, 0},
+		{"L_COMMENT", 15, false, 0, 0},
 	}
 
 	defaultDbName := "tpch"
@@ -129,7 +196,7 @@ func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
 	query, err := buildPlan(ctx, stmt)
 	if err != nil {
-		fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+		// fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err
 	}
 	return query, nil
