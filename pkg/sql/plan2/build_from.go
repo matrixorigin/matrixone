@@ -124,10 +124,9 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL { //natural join.  the cond will be nil
 			columns := getColumnsWithSameName(leftTableDef, rightTableDef)
-			if len(columns) == 0 {
-				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("donot have same column name when using natural join"))
+			if len(columns) > 0 {
+				onList = append(onList, columns...)
 			}
-			onList = append(onList, columns...)
 		} else {
 			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", tree.String(tbl.Cond, dialect.MYSQL)))
 		}

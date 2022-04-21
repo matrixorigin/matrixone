@@ -24,6 +24,9 @@ type Optimizer interface {
 	CurrentContext() CompilerContext
 }
 
+//use for set and get alias in build context
+//when build_from we may set tableAlias and then use in build_where
+//when build_projection we may set columnAlias and then use in build_orderby
 type AliasContext struct {
 	tableAlias  map[string]*plan.TableDef
 	columnAlias map[string]*plan.Expr
