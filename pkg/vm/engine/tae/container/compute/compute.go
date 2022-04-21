@@ -486,34 +486,100 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 	updateIterator := mask.Iterator()
 	switch vec.GetType() {
 	case dbi.StdVec:
+		if vec.IsReadonly() {
+			vec = vec.(*vector.StdVector).Clone()
+			vec.ResetReadonly()
+		}
 		for updateIterator.HasNext() {
 			rowIdx := updateIterator.Next()
 			err := vec.SetValue(int(rowIdx), vals[rowIdx])
 			if err != nil {
 				panic(err)
 			}
+			if vec.(*vector.StdVector).VMask != nil &&
+				vec.(*vector.StdVector).VMask.Np != nil &&
+				vec.(*vector.StdVector).VMask.Np.Contains(uint64(rowIdx)) {
+				vec.(*vector.StdVector).VMask.Np.Flip(uint64(rowIdx), uint64(rowIdx))
+			}
 		}
 	case dbi.StrVec:
-		pre := -1
 		strVec := vec.(*vector.StrVector)
 		data := strVec.Data
-		for updateIterator.HasNext() {
-			row := updateIterator.Next()
+		pre := -1
+		if vec.IsReadonly() {
+			strVec2 := vector.NewEmptyStrVector()
+			if strVec.VMask != nil && strVec.VMask.Np != nil {
+				strVec2.VMask.Np = strVec.VMask.Np.Clone()
+			}
+			pos2 := 0
+			strVec2.Data.Lengths = make([]uint32, len(data.Lengths))
+			strVec2.Data.Offsets = make([]uint32, len(data.Offsets))
+			for updateIterator.HasNext() {
+				row := updateIterator.Next()
+				val := vals[row].([]byte)
+
+				preOffset := int(data.Offsets[pre+1])
+				length := int(data.Offsets[row] - uint32(preOffset))
+				strVec2.Data.Data = append(strVec2.Data.Data, make([]byte, length+len(val))...)
+				copy(strVec2.Data.Data[pos2:pos2+length], data.Data[preOffset:preOffset+length])
+				pos2 += length
+
+				for i := pre + 1; i < int(row); i++ {
+					strVec2.Data.Lengths[i] = data.Lengths[i]
+					strVec2.Data.Offsets[i+1] = strVec2.Data.Offsets[i] + strVec2.Data.Lengths[i]
+				}
+				copy(strVec2.Data.Data[pos2:pos2+len(val)], val)
+				pos2 += len(val)
+
+				if strVec.VMask != nil && strVec.VMask.Np != nil && strVec.VMask.Np.Contains(uint64(row)) {
+					strVec.VMask.Np.Flip(uint64(row), uint64(row))
+				}
+
+				strVec2.Data.Lengths[row] = uint32(len(val))
+				if int(row) != len(data.Offsets)-1 {
+					strVec2.Data.Offsets[row+1] = strVec2.Data.Offsets[row] + strVec2.Data.Lengths[row]
+				}
+				pre = int(row)
+			}
+			preOffset := int(data.Offsets[pre] + data.Lengths[pre])
+			row := len(data.Offsets)
+			length := int(len(data.Data) - preOffset)
+			strVec2.Data.Data = append(strVec2.Data.Data, make([]byte, length)...)
+			copy(strVec2.Data.Data[pos2:pos2+length], data.Data[preOffset:preOffset+length])
+
+			for i := pre + 1; i < int(row); i++ {
+				strVec2.Data.Lengths[i] = data.Lengths[i]
+				if i != len(data.Offsets)-1 {
+					strVec2.Data.Offsets[i+1] = strVec2.Data.Offsets[i] + strVec2.Data.Lengths[i]
+				}
+			}
+			strVec2.StatMask = strVec.StatMask
+			strVec2.Type = types.Type{
+				Oid:   strVec.Type.Oid,
+				Size:  strVec.Type.Size,
+				Width: strVec.Type.Width,
+			}
+			vec = strVec2
+			vec.ResetReadonly()
+		} else {
+			for updateIterator.HasNext() {
+				row := updateIterator.Next()
+				if pre != -1 {
+					UpdateOffsets(data, pre, int(row))
+				}
+				val := vals[row].([]byte)
+				suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
+				data.Lengths[row] = uint32(len(val))
+				val = append(val, suffix...)
+				data.Data = append(data.Data[:data.Offsets[row]], val...)
+				pre = int(row)
+				if strVec.VMask != nil && strVec.VMask.Np != nil && strVec.VMask.Np.Contains(uint64(row)) {
+					strVec.VMask.Np.Flip(uint64(row), uint64(row))
+				}
+			}
 			if pre != -1 {
-				UpdateOffsets(data, pre, int(row))
+				UpdateOffsets(data, pre, len(data.Offsets)-1)
 			}
-			val := vals[row].([]byte)
-			suffix := data.Data[data.Offsets[row]+data.Lengths[row]:]
-			data.Lengths[row] = uint32(len(val))
-			val = append(val, suffix...)
-			data.Data = append(data.Data[:data.Offsets[row]], val...)
-			pre = int(row)
-			if strVec.VMask != nil && strVec.VMask.Np != nil && strVec.VMask.Np.Contains(uint64(row)) {
-				strVec.VMask.Np.Flip(uint64(row), uint64(row))
-			}
-		}
-		if pre != -1 {
-			UpdateOffsets(data, pre, len(data.Offsets)-1)
 		}
 	default:
 		panic("not support")

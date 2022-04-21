@@ -450,6 +450,27 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	return vec, nil
 }
 
+func (v *StdVector) Clone() *StdVector {
+	data := make([]byte, len(v.Data))
+	copy(data, v.Data)
+	vmask := &nulls.Nulls{}
+	if v.VMask.Np != nil {
+		vmask.Np = v.VMask.Np.Clone()
+	}
+	return &StdVector{
+		Data: data,
+		BaseVector: BaseVector{
+			VMask:    vmask,
+			StatMask: v.StatMask,
+			Type: types.Type{
+				Oid:   v.Type.Oid,
+				Size:  v.Type.Size,
+				Width: v.Type.Width,
+			},
+		},
+	}
+}
+
 func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, ErrVecNotRo
