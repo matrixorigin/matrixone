@@ -24,6 +24,7 @@ import (
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
@@ -85,7 +86,10 @@ func TestUpgradeBlk(t *testing.T) {
 		ctx.RemoveDataScope()
 		tableData.Ref()
 		e := NewUpgradeBlkEvent(ctx, blkMeta, tableData)
-		opts.Scheduler.Schedule(e)
+		err = opts.Scheduler.Schedule(e)
+		if err != nil {
+			assert.Equal(t, sched.ErrSchedule, err)
+		}
 		err = e.WaitDone()
 		assert.Nil(t, err)
 		blk := e.Data
@@ -96,7 +100,10 @@ func TestUpgradeBlk(t *testing.T) {
 		assert.NotNil(t, seg)
 		tableData.Ref()
 		upseg := NewUpgradeSegEvent(ctx, seg, tableData)
-		opts.Scheduler.Schedule(upseg)
+		err := opts.Scheduler.Schedule(upseg)
+		if err != nil {
+			assert.Equal(t, sched.ErrSchedule, err)
+		}
 		err = upseg.WaitDone()
 		assert.Nil(t, err)
 		assert.Equal(t, base.SORTED_SEG, upseg.Segment.GetType())
@@ -147,7 +154,7 @@ func TestUpgradeSeg(t *testing.T) {
 	for _, segMeta := range tableMeta.SegmentSet {
 		for _, blkMeta := range segMeta.BlockSet {
 			blkMeta.Count = blkMeta.Segment.Table.Schema.BlockMaxRows
-			err:=blkMeta.SimpleUpgrade(nil)
+			err := blkMeta.SimpleUpgrade(nil)
 			assert.Nil(t, err)
 		}
 	}
@@ -160,7 +167,10 @@ func TestUpgradeSeg(t *testing.T) {
 		old := tableData.StrongRefSegment(segID)
 		tableData.Ref()
 		e := NewUpgradeSegEvent(ctx, old, tableData)
-		opts.Scheduler.Schedule(e)
+		err = opts.Scheduler.Schedule(e)
+		if err != nil {
+			assert.Equal(t, sched.ErrSchedule, err)
+		}
 		err = e.WaitDone()
 		assert.Nil(t, err)
 		seg := e.Segment

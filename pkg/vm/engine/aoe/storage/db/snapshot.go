@@ -67,7 +67,7 @@ type installContext struct {
 
 func (ctx *installContext) Preprocess() {
 	ctx.unsortedsegs = make(map[common.ID]bool)
-	for id, _ := range ctx.blkfiles {
+	for id := range ctx.blkfiles {
 		ctx.unsortedsegs[id.AsSegmentID()] = true
 	}
 }

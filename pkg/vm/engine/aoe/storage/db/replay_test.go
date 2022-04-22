@@ -104,7 +104,7 @@ func TestReplay2(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := len(seg.BlockSet) - 2; i >= 0; i-- {
 		blk := seg.BlockSet[i]
-		err:=blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
 		assert.Nil(t, err)
 		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
@@ -122,7 +122,7 @@ func TestReplay2(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	err=replayHandle.Replay()
+	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
 
@@ -165,7 +165,7 @@ func TestReplay3(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-1; i++ {
 		blk := seg.BlockSet[i]
-		err:=blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
 		assert.Nil(t, err)
 		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
@@ -186,7 +186,8 @@ func TestReplay3(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
 	replayHandle.Cleanup()
 
 	assert.Equal(t, 0, len(observer.removed))
@@ -207,19 +208,20 @@ func TestReplay4(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-2; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
 	}
 	unblk := seg.BlockSet[len(seg.BlockSet)-2]
-	name := mockBlkFile(*unblk.AsCommonID(), dir, t)
-	toRemove = append(blkfiles, name)
+	mockBlkFile(*unblk.AsCommonID(), dir, t)
+	// toRemove = append(blkfiles, name)
 
 	unblk = seg.BlockSet[len(seg.BlockSet)-1]
-	name = mockBlkFile(*unblk.AsCommonID(), dir, t)
-	toRemove = append(blkfiles, name)
+	mockBlkFile(*unblk.AsCommonID(), dir, t)
+	// toRemove = append(blkfiles, name)
 	sort.Slice(toRemove, func(i, j int) bool {
 		return toRemove[i] < toRemove[j]
 	})
@@ -260,8 +262,9 @@ func TestReplay5(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-2; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -323,13 +326,14 @@ func TestReplay6(t *testing.T) {
 	gen := shard.NewMockIndexAllocator()
 	tbl := metadata.MockDBTable(catalog, "db1", schema, nil, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
-	tblkfiles := make([]string, 0)
+	// tblkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-2; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -345,8 +349,8 @@ func TestReplay6(t *testing.T) {
 	toRemove = append(toRemove, name)
 	name = mockTBlkFile(*unblk.AsCommonID(), uint32(0), dir, t)
 	toRemove = append(toRemove, name)
-	name = mockTBlkFile(*unblk.AsCommonID(), uint32(1), dir, t)
-	tblkfiles = append(tblkfiles, name)
+	mockTBlkFile(*unblk.AsCommonID(), uint32(1), dir, t)
+	// tblkfiles = append(tblkfiles, name)
 
 	sort.Slice(toRemove, func(i, j int) bool {
 		return toRemove[i] < toRemove[j]
@@ -399,8 +403,9 @@ func TestReplay7(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-3; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -470,8 +475,9 @@ func TestReplay8(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-3; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -483,7 +489,7 @@ func TestReplay8(t *testing.T) {
 	blk := seg.BlockSet[len(seg.BlockSet)-3]
 	name = mockBlkFile(*blk.AsCommonID(), dir, t)
 	toRemove = append(toRemove, name)
-	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
+	// name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
 
 	blk = seg.BlockSet[len(seg.BlockSet)-2]
 	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
@@ -507,7 +513,7 @@ func TestReplay8(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	err=replayHandle.Replay()
+	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
@@ -544,8 +550,9 @@ func TestReplay9(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-3; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -557,7 +564,7 @@ func TestReplay9(t *testing.T) {
 	blk := seg.BlockSet[len(seg.BlockSet)-3]
 	name = mockBlkFile(*blk.AsCommonID(), dir, t)
 	toRemove = append(toRemove, name)
-	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
+	// name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
 
 	blk = seg.BlockSet[len(seg.BlockSet)-2]
 	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
@@ -593,7 +600,8 @@ func TestReplay9(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
@@ -663,8 +671,9 @@ func TestReplay10(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet); i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -678,7 +687,7 @@ func TestReplay10(t *testing.T) {
 	name := mockBlkFile(*tblk.AsCommonID(), dir, t)
 	toRemove = append(toRemove, name)
 
-	name = mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
+	// name = mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
 
 	blk := seg.BlockSet[len(seg.BlockSet)-2]
 	name = mockBlkFile(*blk.AsCommonID(), dir, t)
@@ -701,7 +710,8 @@ func TestReplay10(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
@@ -731,8 +741,9 @@ func TestReplay11(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet); i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		toRemove = append(toRemove, name)
@@ -772,7 +783,9 @@ func TestReplay11(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err = replayHandle.Replay()
+	assert.Nil(t, err)
+	assert.NotNil(t, replayHandle)
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
@@ -810,18 +823,19 @@ func ReplayTruncate(size int64, t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-2; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err := blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
 		assert.Nil(t, err)
-		name := mockBlkFile(*blk.AsCommonID(), dir, t)
-		blkfiles = append(blkfiles, name)
+		err = blk.SimpleUpgrade(nil)
+		assert.Nil(t, err)
+		mockBlkFile(*blk.AsCommonID(), dir, t)
+		// blkfiles = append(blkfiles, name)
 	}
 	unblk := seg.BlockSet[len(seg.BlockSet)-2]
-	name := mockBlkFile(*unblk.AsCommonID(), dir, t)
-	toRemove = append(blkfiles, name)
+	mockBlkFile(*unblk.AsCommonID(), dir, t)
+	// toRemove = append(blkfiles, name)
 
 	unblk = seg.BlockSet[len(seg.BlockSet)-1]
-	name = mockBlkFile(*unblk.AsCommonID(), dir, t)
+	name := mockBlkFile(*unblk.AsCommonID(), dir, t)
 	toRemove = append(blkfiles, name)
 	sort.Slice(toRemove, func(i, j int) bool {
 		return toRemove[i] < toRemove[j]
@@ -849,7 +863,7 @@ func ReplayTruncate(size int64, t *testing.T) {
 	sort.Slice(observer.removed, func(i, j int) bool {
 		return observer.removed[i] < observer.removed[j]
 	})
-	err=catalog.Store.Truncate(size)
+	err = catalog.Store.Truncate(size)
 	assert.Nil(t, err)
 	catalog.Close()
 

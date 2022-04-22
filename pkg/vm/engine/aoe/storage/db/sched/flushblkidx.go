@@ -29,7 +29,7 @@ import (
 
 type flushBlockIndexEvent struct {
 	BaseEvent
-	Block  iface.IBlock
+	Block    iface.IBlock
 	Cols     []uint16
 	FlushAll bool
 }
@@ -69,7 +69,6 @@ func (e *flushBlockIndexEvent) Execute() error {
 			}
 		}
 	}
-
 
 	// TODO(zzl): thread safe?
 	if e.Block.GetType() != base.PERSISTENT_BLK {
@@ -115,4 +114,3 @@ func (e *flushBlockIndexEvent) Execute() error {
 	defer release()
 	return nil
 }
-

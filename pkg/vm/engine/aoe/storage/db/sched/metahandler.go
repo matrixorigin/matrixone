@@ -16,7 +16,6 @@ package sched
 
 // import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
-
 // Unused
 // type metaHandler struct {
 // 	sched.EventHandler

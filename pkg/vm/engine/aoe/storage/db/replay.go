@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	storageSched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -258,7 +259,7 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 	if len(usf.files) != maxcnt {
 		return false
 	}
-	for id, _ := range usf.files {
+	for id := range usf.files {
 		meta := usf.meta.SimpleGetBlock(id.BlockID)
 		if meta == nil {
 			panic(metadata.ErrBlockNotFound)
@@ -469,7 +470,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		}
 		flushCtx := &sched.Context{Opts: opts}
 		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
-		opts.Scheduler.Schedule(flushEvent)
+		err := opts.Scheduler.Schedule(flushEvent)
+		if err != nil && err != storageSched.ErrSchedule {
+			panic(err)
+		}
 	}
 	h.flushsegs = h.flushsegs[:0]
 	for id, cols := range h.indicesMap {
@@ -481,7 +485,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		flushCtx := &sched.Context{Opts: opts}
 		flushEvent := sched.NewFlushSegIndexEvent(flushCtx, segment)
 		flushEvent.Cols = cols
-		opts.Scheduler.Schedule(flushEvent)
+		err := opts.Scheduler.Schedule(flushEvent)
+		if err != nil && err != storageSched.ErrSchedule {
+			panic(err)
+		}
 	}
 	h.indicesMap = make(map[common.ID][]uint16)
 	for _, tblData := range tables.Data {
@@ -498,7 +505,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 				flushCtx := &sched.Context{Opts: opts}
 				flushEvent := sched.NewFlushBlockIndexEvent(flushCtx, blk)
 				flushEvent.FlushAll = true
-				opts.Scheduler.Schedule(flushEvent)
+				err := opts.Scheduler.Schedule(flushEvent)
+				if err != nil && err != storageSched.ErrSchedule {
+					panic(err)
+				}
 			}
 		}
 	}

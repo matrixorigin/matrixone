@@ -80,7 +80,10 @@ func (p *metablkCommiter) Register(blkid uint64) {
 func (p *metablkCommiter) doSchedule(meta *metadata.Block) {
 	ctx := &Context{Opts: p.opts}
 	commit := NewCommitBlkEvent(ctx, meta)
-	p.scheduler.Schedule(commit)
+	err := p.scheduler.Schedule(commit)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }
 
 func (p *metablkCommiter) Accept(meta *metadata.Block) {
@@ -247,9 +250,9 @@ func (s *scheduler) onFlushBlkDone(e sched.Event) {
 // new flush table event and an upgrade block event.
 func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	if err := e.GetError(); err != nil {
-		err := s.opts.EventListener.OnBackgroundError(err)
-		if err != nil {
-			panic(err)
+		err2 := s.opts.EventListener.OnBackgroundError(err)
+		if err2 != err {
+			panic(err2)
 		}
 		return
 	}
@@ -261,7 +264,10 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	mctx := &Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.Id)
 	if err != nil {
-		s.opts.EventListener.OnBackgroundError(err)
+		err2 := s.opts.EventListener.OnBackgroundError(err)
+		if err2 != err {
+			panic(err2)
+		}
 		return
 	}
 	logutil.Infof(" %s | Block %d | UpgradeBlkEvent | Started", sched.EventPrefix, newMeta.Id)
@@ -278,9 +284,9 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	event := e.(*upgradeBlkEvent)
 	defer event.TableData.Unref()
 	if err := e.GetError(); err != nil {
-		err := s.opts.EventListener.OnBackgroundError(err)
-		if err != nil {
-			panic(err)
+		err2 := s.opts.EventListener.OnBackgroundError(err)
+		if err2 != err {
+			panic(err2)
 		}
 		return
 	}
@@ -337,7 +343,10 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	td, err := s.tables.StrongRefTable(meta.Table.Id)
 	if err != nil {
 		event.Segment.Unref()
-		event.Rollback("Rollback-TableNotExist")
+		err := event.Rollback("Rollback-TableNotExist")
+		if err != nil {
+			panic(err)
+		}
 		return
 	}
 	logutil.Infof(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.Id)
@@ -355,7 +364,10 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	defer event.TableData.Unref()
 	defer event.OldSegment.Unref()
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.OnBackgroundError(err)
+		err2 := s.opts.EventListener.OnBackgroundError(err)
+		if err2 != err {
+			panic(err2)
+		}
 		return
 	}
 	event.Segment.Unref()

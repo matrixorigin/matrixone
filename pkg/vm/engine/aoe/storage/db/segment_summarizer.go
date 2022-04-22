@@ -34,7 +34,6 @@ type SegmentSummarizer struct {
 	segment *Segment
 }
 
-
 func NewSegmentSummarizer(s *Segment) engine.Summarizer {
 	return &SegmentSummarizer{segment: s}
 }
@@ -70,7 +69,7 @@ func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, 
 					}
 				} else {
 					ranger = roaring.NewBitmap()
-					ranger.AddRange(0, endPos - startPos)
+					ranger.AddRange(0, endPos-startPos)
 				}
 				transientPart += blk.Count(colIdx, ranger)
 			}
