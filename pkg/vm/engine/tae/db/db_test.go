@@ -7,6 +7,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -85,6 +86,64 @@ func TestTableHandle(t *testing.T) {
 	appender, err := handle.GetAppender()
 	assert.Nil(t, appender)
 	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
+}
+
+func TestCreateBlock(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+
+	txn, _ := db.StartTxn(nil)
+	database, _ := txn.CreateDatabase("db")
+	schema := catalog.MockSchemaAll(13)
+	rel, _ := database.CreateRelation(schema)
+	seg, _ := rel.CreateSegment()
+	blk1, err := seg.CreateBlock()
+	assert.Nil(t, err)
+	blk2, err := seg.CreateNonAppendableBlock()
+	assert.Nil(t, err)
+	lastAppendable := seg.GetMeta().(*catalog.SegmentEntry).LastAppendableBlock()
+	assert.Equal(t, blk1.Fingerprint().BlockID, lastAppendable.GetID())
+	assert.True(t, lastAppendable.IsAppendable())
+	blk2Meta := blk2.GetMeta().(*catalog.BlockEntry)
+	assert.False(t, blk2Meta.IsAppendable())
+
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	assert.Nil(t, txn.Commit())
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	assert.True(t, blk2Meta.IsCommitted())
+}
+
+func TestCompactBlock1(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 4
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bat)
+		assert.Nil(t, err)
+		txn.Commit()
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	}
+
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		var block handle.Block
+		for it.Valid() {
+			block = it.GetBlock()
+			break
+		}
+		blkMeta := block.GetMeta().(*catalog.BlockEntry)
+		t.Log(blkMeta.String())
+	}
 }
 
 func TestMVCC1(t *testing.T) {

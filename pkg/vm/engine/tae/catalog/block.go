@@ -75,7 +75,7 @@ func (entry *BlockEntry) String() string {
 }
 
 func (entry *BlockEntry) StringLocked() string {
-	return fmt.Sprintf("BLOCK%s", entry.BaseEntry.String())
+	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.BaseEntry.String())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {

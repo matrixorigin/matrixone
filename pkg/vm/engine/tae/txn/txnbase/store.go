@@ -36,11 +36,19 @@ func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err 
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)        { return }
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)         { return }
 func (store *NoopTxnStore) UseDatabase(name string) (err error)                             { return }
-func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)            { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error)        { return }
-func (store *NoopTxnStore) BatchDedup(uint64, *vector.Vector) (err error)                   { return }
-func (store *NoopTxnStore) Update(*common.ID, uint32, uint16, interface{}) (err error)      { return }
-func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32) (err error)              { return }
+func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)        { return }
+
+func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)     { return }
+func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error) { return }
+func (store *NoopTxnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
+	return
+}
+func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error) {
+	return
+}
+func (store *NoopTxnStore) BatchDedup(uint64, *vector.Vector) (err error)              { return }
+func (store *NoopTxnStore) Update(*common.ID, uint32, uint16, interface{}) (err error) { return }
+func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32) (err error)         { return }
 func (store *NoopTxnStore) GetByFilter(uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
 	return
 }

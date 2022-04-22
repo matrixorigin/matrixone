@@ -56,6 +56,7 @@ func (rel *TxnRelation) MakeReader() handle.Reader                              
 func (rel *TxnRelation) BatchDedup(col *vector.Vector) error                                  { return nil }
 func (rel *TxnRelation) Append(data *batch.Batch) error                                       { return nil }
 func (rel *TxnRelation) GetMeta() interface{}                                                 { return nil }
+func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)                 { return }
 func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)                       { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v interface{}, err error)       { return }
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, interface{}) (err error)           { return }
@@ -79,9 +80,13 @@ func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error)         {
 
 func (seg *TxnSegment) PushDeleteOp(handle.Filter) (err error)                      { return }
 func (seg *TxnSegment) PushUpdateOp(handle.Filter, string, interface{}) (err error) { return }
+func (seg *TxnSegment) SoftDeleteBlock(id uint64) (err error)                       { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)                  { return }
+func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error)     { return }
 func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }
 
+// func (blk *TxnBlock) IsAppendable() bool                                   { return true }
+func (blk *TxnBlock) IsAppendableBlock() bool                              { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                              { return &common.ID{} }
 func (blk *TxnBlock) Rows() int                                            { return 0 }
 func (blk *TxnBlock) ID() uint64                                           { return 0 }

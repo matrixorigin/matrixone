@@ -80,6 +80,16 @@ func (seg *txnSegment) MakeBlockIt() (it handle.BlockIt) {
 	return newBlockIt(seg.Txn, seg.entry)
 }
 
+func (seg *txnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) {
+	return seg.Txn.GetStore().CreateNonAppendableBlock(seg.entry.AsCommonID())
+}
+
+func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
+	fp := seg.entry.AsCommonID()
+	fp.BlockID = id
+	return seg.Txn.GetStore().SoftDeleteBlock(fp)
+}
+
 func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateBlock(seg.entry.GetTable().GetID(), seg.entry.GetID())
 }

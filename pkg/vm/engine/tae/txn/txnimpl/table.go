@@ -63,8 +63,11 @@ type Table interface {
 
 	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
 	GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error)
+	GetSegment(id uint64) (handle.Segment, error)
 	CreateSegment() (handle.Segment, error)
 	CreateBlock(sid uint64) (handle.Block, error)
+	SoftDeleteBlock(id *common.ID) error
+	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
 }
 
@@ -197,6 +200,18 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 	return nil
 }
 
+func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
+	var meta *catalog.SegmentEntry
+	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
+		return
+	}
+	if !meta.TxnCanRead(tbl.txn, nil) {
+		err = txnbase.ErrNotFound
+	}
+	seg = newSegment(tbl.txn, meta)
+	return
+}
+
 func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
@@ -212,7 +227,29 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	return
 }
 
+func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
+	var seg *catalog.SegmentEntry
+	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
+		return
+	}
+	meta, err := seg.DropBlockEntry(id.BlockID, tbl.txn)
+	if err != nil {
+		return
+	}
+	tbl.cblks = append(tbl.cblks, meta)
+	tbl.warChecker.readSegmentVar(seg)
+	return
+}
+
+func (tbl *txnTable) CreateNonAppendableBlock(sid uint64) (blk handle.Block, err error) {
+	return tbl.createBlock(sid, catalog.ES_NotAppendable)
+}
+
 func (tbl *txnTable) CreateBlock(sid uint64) (blk handle.Block, err error) {
+	return tbl.createBlock(sid, catalog.ES_Appendable)
+}
+
+func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -222,7 +259,7 @@ func (tbl *txnTable) CreateBlock(sid uint64) (blk handle.Block, err error) {
 		segData := seg.GetSegmentData()
 		factory = tbl.dataFactory.MakeBlockFactory(segData.GetSegmentFile())
 	}
-	meta, err := seg.CreateBlock(tbl.txn, catalog.ES_Appendable, factory)
+	meta, err := seg.CreateBlock(tbl.txn, state, factory)
 	if err != nil {
 		return
 	}

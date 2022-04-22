@@ -40,6 +40,9 @@ type BlockReader interface {
 	Rows() int
 	BatchDedup(col *vector.Vector) error
 
+	IsAppendableBlock() bool
+	// IsAppendable() bool
+
 	PrepareCompact() error
 }
 

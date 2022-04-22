@@ -45,6 +45,10 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
+	return entry.GetBlockEntryByIDLocked(id)
+}
+
+func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
 		err = ErrNotFound
@@ -139,6 +143,20 @@ func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dat
 	defer entry.Unlock()
 	created = NewBlockEntry(entry, txn, state, dataFactory)
 	entry.addEntryLocked(created)
+	return
+}
+
+func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (deleted *BlockEntry, err error) {
+	blk, err := entry.GetBlockEntryByID(id)
+	if err != nil {
+		return
+	}
+	blk.Lock()
+	defer blk.Unlock()
+	err = blk.DropEntryLocked(txn)
+	if err == nil {
+		deleted = blk
+	}
 	return
 }
 

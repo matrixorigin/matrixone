@@ -108,6 +108,12 @@ func (h *txnRelation) Append(data *batch.Batch) error {
 	return h.Txn.GetStore().Append(h.entry.GetID(), data)
 }
 
+func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
+	fp := h.entry.AsCommonID()
+	fp.SegmentID = id
+	return h.Txn.GetStore().GetSegment(fp)
+}
+
 func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
 	return h.Txn.GetStore().CreateSegment(h.entry.GetID())
 }

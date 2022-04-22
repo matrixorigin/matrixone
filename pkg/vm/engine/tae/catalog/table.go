@@ -159,3 +159,9 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	}
 	return seg
 }
+
+func (entry *TableEntry) AsCommonID() *common.ID {
+	return &common.ID{
+		TableID: entry.GetID(),
+	}
+}

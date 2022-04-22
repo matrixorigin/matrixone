@@ -39,9 +39,17 @@ func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
 		txn:    txn,
 		linkIt: meta.MakeBlockIt(true),
 	}
-	if it.linkIt.Valid() {
-		it.curr = it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
+	for it.linkIt.Valid() {
+		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
+		if curr.TxnCanRead(it.txn, nil) {
+			it.curr = curr
+			break
+		}
+		it.linkIt.Next()
 	}
+	// if it.linkIt.Valid() {
+	// 	it.curr = it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
+	// }
 	return it
 }
 
@@ -89,6 +97,15 @@ func (blk *txnBlock) String() string {
 	return blkData.PPString(common.PPL1, 0, "")
 	// return blk.entry.String()
 }
+
+// func (blk *txnBlock) IsAppendable() bool {
+// 	if !blk.entry.IsAppendable() {
+// 		return false
+// 	}
+// 	return
+// }
+
+func (blk *txnBlock) IsAppendableBlock() bool { return blk.entry.IsAppendable() }
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }
 func (blk *txnBlock) BatchDedup(pks *gvec.Vector) (err error) {

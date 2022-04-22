@@ -10,6 +10,18 @@ const (
 	ES_Frozen
 )
 
+func (es EntryState) Repr() string {
+	switch es {
+	case ES_Appendable:
+		return "Appendable"
+	case ES_NotAppendable:
+		return "NonAppendable"
+	case ES_Frozen:
+		return "Frozen"
+	}
+	panic("not supported")
+}
+
 func EstimateColumnBlockSize(colIdx int, rows uint32, meta *BlockEntry) uint32 {
 	switch meta.GetSegment().GetTable().GetSchema().ColDefs[colIdx].Type.Oid {
 	case types.T_json, types.T_char, types.T_varchar:

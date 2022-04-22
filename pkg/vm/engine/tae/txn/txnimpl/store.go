@@ -274,6 +274,14 @@ func (store *txnStore) GetRelationByName(name string) (relation handle.Relation,
 	return
 }
 
+func (store *txnStore) GetSegment(id *common.ID) (seg handle.Segment, err error) {
+	var table Table
+	if table, err = store.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.GetSegment(id.SegmentID)
+}
+
 func (store *txnStore) CreateSegment(tid uint64) (seg handle.Segment, err error) {
 	var table Table
 	if table, err = store.getOrSetTable(tid); err != nil {
@@ -299,12 +307,28 @@ func (store *txnStore) getOrSetTable(id uint64) (table Table, err error) {
 	return
 }
 
+func (store *txnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
+	var table Table
+	if table, err = store.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.CreateNonAppendableBlock(id.SegmentID)
+}
+
 func (store *txnStore) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
 	var table Table
 	if table, err = store.getOrSetTable(tid); err != nil {
 		return
 	}
 	return table.CreateBlock(sid)
+}
+
+func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
+	var table Table
+	if table, err = store.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.SoftDeleteBlock(id)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {

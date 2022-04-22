@@ -35,6 +35,9 @@ type SegmentWriter interface {
 	PushUpdateOp(filter Filter, attr string, val interface{}) error
 
 	CreateBlock() (Block, error)
+	CreateNonAppendableBlock() (Block, error)
+
+	SoftDeleteBlock(id uint64) (err error)
 }
 
 type Segment interface {

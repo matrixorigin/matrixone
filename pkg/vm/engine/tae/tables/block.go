@@ -305,13 +305,14 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err error) {
-	if blk.updatableIndexHolder == nil {
-		panic("unexpected error")
+	if blk.meta.IsAppendable() {
+		readLock := blk.controller.GetSharedLock()
+		defer readLock.Unlock()
+		// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
+		return blk.updatableIndexHolder.BatchDedup(pks)
 	}
-	readLock := blk.controller.GetSharedLock()
-	defer readLock.Unlock()
-	// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
-	return blk.updatableIndexHolder.BatchDedup(pks)
+	// TODO
+	return
 }
 
 func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (v interface{}) {
