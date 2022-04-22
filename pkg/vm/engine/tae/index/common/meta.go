@@ -32,18 +32,18 @@ func Decompress(src []byte, dst []byte, ctyp CompressType) error {
 }
 
 type IndexMeta struct {
-	IdxType IndexType
+	IdxType  IndexType
 	CompType CompressType
-	ColIdx uint16
+	ColIdx   uint16
 	//PartOffset uint32
 	StartOffset uint32
-	Size uint32
-	RawSize uint32
+	Size        uint32
+	RawSize     uint32
 }
 
 func NewEmptyIndexMeta() *IndexMeta {
 	return &IndexMeta{
-		IdxType: InvalidIndexType,
+		IdxType:  InvalidIndexType,
 		CompType: Plain,
 	}
 }
@@ -109,7 +109,7 @@ type IndicesMeta struct {
 
 func NewEmptyIndicesMeta() *IndicesMeta {
 	return &IndicesMeta{
-		Metas:        make([]IndexMeta, 0),
+		Metas: make([]IndexMeta, 0),
 	}
 }
 

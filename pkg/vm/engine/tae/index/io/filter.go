@@ -13,9 +13,9 @@ import (
 
 type staticFilterIndexNode struct {
 	*buffer.Node
-	mgr  base.INodeManager
-	host dataio.IndexFile
-	meta *common.IndexMeta
+	mgr   base.INodeManager
+	host  dataio.IndexFile
+	meta  *common.IndexMeta
 	inner basic.StaticFilter
 }
 
@@ -98,9 +98,9 @@ func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, v
 
 type StaticFilterIndexWriter struct {
 	cType  common.CompressType
-	host dataio.IndexFile
+	host   dataio.IndexFile
 	inner  basic.StaticFilter
-	data *vector.Vector
+	data   *vector.Vector
 	colIdx uint16
 }
 

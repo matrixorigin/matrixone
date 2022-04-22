@@ -14,9 +14,9 @@ import (
 
 type blockZoneMapIndexNode struct {
 	*buffer.Node
-	mgr  base.INodeManager
-	host dataio.IndexFile
-	meta *common.IndexMeta
+	mgr   base.INodeManager
+	host  dataio.IndexFile
+	meta  *common.IndexMeta
 	inner *basic.ZoneMap
 }
 
@@ -99,7 +99,7 @@ func (reader *BlockZoneMapIndexReader) MayContainsKey(key interface{}) (bool, er
 
 type BlockZoneMapIndexWriter struct {
 	cType  common.CompressType
-	host dataio.IndexFile
+	host   dataio.IndexFile
 	inner  *basic.ZoneMap
 	colIdx uint16
 }

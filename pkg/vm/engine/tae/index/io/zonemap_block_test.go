@@ -11,7 +11,7 @@ import (
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
-	bufManager := buffer.NewNodeManager(1024 * 1024, nil)
+	bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := dataio.MockIndexFile()
 	cType := common.Plain
 	typ := types.Type{Oid: types.T_int32}

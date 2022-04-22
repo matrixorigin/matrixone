@@ -11,7 +11,7 @@ import (
 )
 
 func TestStaticFilterIndex(t *testing.T) {
-	bufManager := buffer.NewNodeManager(1024 * 1024, nil)
+	bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := dataio.MockIndexFile()
 	var err error
 	var res bool

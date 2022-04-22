@@ -10,7 +10,7 @@ import (
 
 type appendableBlockIndexHolder struct {
 	// TODO: add host, and deal with upgrade logic
-	treeIndex basic.ARTMap
+	treeIndex    basic.ARTMap
 	zoneMapIndex *basic.ZoneMap
 }
 
@@ -70,4 +70,3 @@ func (holder *appendableBlockIndexHolder) BatchDedup(keys *vector.Vector) error 
 	}
 	return nil
 }
-

@@ -23,7 +23,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	var batches []*vector.Vector
 	for i := 0; i < 10; i++ {
-		batch := common.MockVec(typ, 100, i * 100)
+		batch := common.MockVec(typ, 100, i*100)
 		batches = append(batches, batch)
 	}
 
@@ -78,7 +78,7 @@ func TestARTIndexNumeric(t *testing.T) {
 
 	updated := make([]uint32, 0)
 	for i := 0; i < 100; i++ {
-		updated = append(updated, uint32(i + 10000))
+		updated = append(updated, uint32(i+10000))
 	}
 	err = idx.BatchUpdate(batches[0], updated, 0)
 	require.NoError(t, err)
@@ -101,7 +101,7 @@ func TestArtIndexString(t *testing.T) {
 
 	var batches []*vector.Vector
 	for i := 0; i < 10; i++ {
-		batch := common.MockVec(typ, 100, i * 100)
+		batch := common.MockVec(typ, 100, i*100)
 		batches = append(batches, batch)
 	}
 
