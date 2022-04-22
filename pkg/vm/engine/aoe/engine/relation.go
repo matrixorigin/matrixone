@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math/rand"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -260,9 +259,6 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 
 func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
 	fcs := getFilterContext(e)
-	{
-		fmt.Printf("++++++fcs: %v\n", len(fcs))
-	}
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++

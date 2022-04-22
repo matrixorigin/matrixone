@@ -33,18 +33,20 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		s.start = true
 		s.mutex.Unlock()
 		logutil.Infof("filter: %v", reader.filter)
-		for _, filter := range reader.filter{
-			filter.blocks = make([]aoe.Block, 0)
-			for _, extent := range filter.extent {
-				s.sparseFilter(&extent,&filter.blocks)
-			}
-			blocks := make([]aoe.Block, 0)
-			for _, block := range filter.blocks {
-				if  blockExist(s.blocks, block.ID()){
-					blocks = append(blocks, block)
+		for _, filter := range reader.filter {
+			if len(filter.extent) > 0 {
+				filter.blocks = make([]aoe.Block, 0)
+				for _, extent := range filter.extent {
+					s.sparseFilter(&extent, &filter.blocks)
 				}
+				blocks := make([]aoe.Block, 0)
+				for _, block := range filter.blocks {
+					if blockExist(s.blocks, block.ID()) {
+						blocks = append(blocks, block)
+					}
+				}
+				s.SetBlocks(blocks)
 			}
-			s.SetBlocks(blocks)
 		}
 		s.ReadStart(refCount, attrs)
 	}
@@ -127,7 +129,7 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 	}
 }
 
-func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
+func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 	switch filter.filterType {
 	case FileterEq:
 		//blocks := make([]aoe.Block, 0)
@@ -135,7 +137,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Eq(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -147,7 +149,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Ne(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -160,7 +162,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Lt(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -173,7 +175,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Le(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -186,7 +188,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Gt(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -199,7 +201,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Ge(filter.attr, filter.param1)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
@@ -212,7 +214,7 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block)  {
 			segment := s.rel.Segment(sid)
 			ids, _ := segment.NewSparseFilter().Btw(filter.attr, filter.param1, filter.param2)
 			for _, id := range ids {
-				if  !blockExist(*eblocks, id){
+				if !blockExist(*eblocks, id) {
 					*eblocks = append(*eblocks, segment.Block(id))
 				}
 			}
