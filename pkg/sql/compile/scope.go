@@ -516,9 +516,11 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var buf bytes.Buffer
 
-	if Address == s.NodeInfo.Addr {
-		return s.ParallelRun(e)
-	}
+	/*
+		if Address == s.NodeInfo.Addr {
+			return s.ParallelRun(e)
+		}
+	*/
 	ps := Transfer(s)
 	err := protocol.EncodeScope(ps, &buf)
 	if err != nil {

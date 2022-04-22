@@ -18,11 +18,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"math/rand"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"math/rand"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -258,6 +260,9 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 
 func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
 	fcs := getFilterContext(e)
+	{
+		fmt.Printf("++++++fcs: %v\n", len(fcs))
+	}
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++
@@ -314,7 +319,7 @@ func getFilterContext(e extend.Extend) []filterContext {
 		fc := new(filterContext)
 		fc.extent = make([]filterExtent, 0)
 		fc = getFilterContextFromExtend(fc, es[i])
-		if fc != nil {
+		if fc != nil && len(fc.extent) > 0 {
 			fcs = append(fcs, *fc)
 		}
 	}
