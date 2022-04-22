@@ -334,7 +334,7 @@ func getFilterContextFromExtend(f *filterContext, e extend.Extend) *filterContex
 
 	switch v.Op {
 	case overload.EQ:
-		f = newFilterContextEq(v,f)
+		f = newFilterContextEq(v, f)
 	case overload.NE:
 		f = newFilterContextNe(v, f)
 	case overload.LT:
@@ -829,7 +829,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 			v, _ := types.ParseDatetime(string(vec.Data))
 			return v
 		}
-		return vec.Data
+		return vec.Col.(*types.Bytes).Data
 	}
 	return nil
 }
