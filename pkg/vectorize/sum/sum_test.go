@@ -38,11 +38,11 @@ func makeFbuffer(l int) []float64 {
 func TestF64Sum(t *testing.T) {
 	xs := makeFbuffer(10000)
 	fmt.Printf("sum: %v\n", Float64Sum(xs))
-	fmt.Printf("pure sum: %v\n", float64Sum(xs))
+	fmt.Printf("pure sum: %v\n", floatSum(xs))
 }
 
 func TestI64Sum(t *testing.T) {
 	xs := makeIbuffer(10000)
 	fmt.Printf("sum: %v\n", Int64Sum(xs))
-	fmt.Printf("pure sum: %v\n", int64Sum(xs))
+	fmt.Printf("pure sum: %v\n", signedSum(xs))
 }

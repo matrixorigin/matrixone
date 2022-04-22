@@ -18,33 +18,36 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
 )
 
 var (
-	BoolMax        func([]bool) bool
-	BoolMaxSels    func([]bool, []int64) bool
-	Int8Max        func([]int8) int8
-	Int8MaxSels    func([]int8, []int64) int8
-	Int16Max       func([]int16) int16
-	Int16MaxSels   func([]int16, []int64) int16
-	Int32Max       func([]int32) int32
-	Int32MaxSels   func([]int32, []int64) int32
-	Int64Max       func([]int64) int64
-	Int64MaxSels   func([]int64, []int64) int64
-	Uint8Max       func([]uint8) uint8
-	Uint8MaxSels   func([]uint8, []int64) uint8
-	Uint16Max      func([]uint16) uint16
-	Uint16MaxSels  func([]uint16, []int64) uint16
-	Uint32Max      func([]uint32) uint32
-	Uint32MaxSels  func([]uint32, []int64) uint32
-	Uint64Max      func([]uint64) uint64
-	Uint64MaxSels  func([]uint64, []int64) uint64
-	Float32Max     func([]float32) float32
-	Float32MaxSels func([]float32, []int64) float32
-	Float64Max     func([]float64) float64
-	Float64MaxSels func([]float64, []int64) float64
-	StrMax         func(*types.Bytes) []byte
-	StrMaxSels     func(*types.Bytes, []int64) []byte
+	BoolMax     = boolMax
+	BoolMaxSels = boolMaxSels
+
+	Int8Max        = numericMax[int8]
+	Int16Max       = numericMax[int16]
+	Int32Max       = numericMax[int32]
+	Int64Max       = numericMax[int64]
+	Uint8Max       = numericMax[uint8]
+	Uint16Max      = numericMax[uint16]
+	Uint32Max      = numericMax[uint32]
+	Uint64Max      = numericMax[uint64]
+	Float32Max     = numericMax[float32]
+	Float64Max     = numericMax[float64]
+	Int8MaxSels    = numericMaxSels[int8]
+	Int16MaxSels   = numericMaxSels[int16]
+	Int32MaxSels   = numericMaxSels[int32]
+	Int64MaxSels   = numericMaxSels[int64]
+	Uint8MaxSels   = numericMaxSels[uint8]
+	Uint16MaxSels  = numericMaxSels[uint16]
+	Uint32MaxSels  = numericMaxSels[uint32]
+	Uint64MaxSels  = numericMaxSels[uint64]
+	Float32MaxSels = numericMaxSels[float32]
+	Float64MaxSels = numericMaxSels[float64]
+
+	StrMax     = strMax
+	StrMaxSels = strMaxSels
 )
 
 func boolMax(xs []bool) bool {
@@ -65,7 +68,7 @@ func boolMaxSels(xs []bool, sels []int64) bool {
 	return false
 }
 
-func int8Max(xs []int8) int8 {
+func numericMax[T constraints.Integer | constraints.Float](xs []T) T {
 	res := xs[0]
 	for _, x := range xs {
 		if x > res {
@@ -75,196 +78,7 @@ func int8Max(xs []int8) int8 {
 	return res
 }
 
-func int8MaxSels(xs []int8, sels []int64) int8 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int16Max(xs []int16) int16 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int16MaxSels(xs []int16, sels []int64) int16 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int32Max(xs []int32) int32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int32MaxSels(xs []int32, sels []int64) int32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int64Max(xs []int64) int64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int64MaxSels(xs []int64, sels []int64) int64 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint8Max(xs []uint8) uint8 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint8MaxSels(xs []uint8, sels []int64) uint8 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint16Max(xs []uint16) uint16 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint16MaxSels(xs []uint16, sels []int64) uint16 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint32Max(xs []uint32) uint32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint32MaxSels(xs []uint32, sels []int64) uint32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint64Max(xs []uint64) uint64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint64MaxSels(xs []uint64, sels []int64) uint64 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float32Max(xs []float32) float32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float32MaxSels(xs []float32, sels []int64) float32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float64Max(xs []float64) float64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float64MaxSels(xs []float64, sels []int64) float64 {
+func numericMaxSels[T constraints.Integer | constraints.Float](xs []T, sels []int64) T {
 	res := xs[sels[0]]
 	for _, sel := range sels {
 		x := xs[sel]

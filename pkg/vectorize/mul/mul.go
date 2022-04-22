@@ -14,625 +14,147 @@
 
 package mul
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
-var (
-	Int8Mul                 func([]int8, []int8, []int8) []int8
-	Int8MulSels             func([]int8, []int8, []int8, []int64) []int8
-	Int8MulScalar           func(int8, []int8, []int8) []int8
-	Int8MulScalarSels       func(int8, []int8, []int8, []int64) []int8
-	Int16Mul                func([]int16, []int16, []int16) []int16
-	Int16MulSels            func([]int16, []int16, []int16, []int64) []int16
-	Int16MulScalar          func(int16, []int16, []int16) []int16
-	Int16MulScalarSels      func(int16, []int16, []int16, []int64) []int16
-	Int32Mul                func([]int32, []int32, []int32) []int32
-	Int32MulSels            func([]int32, []int32, []int32, []int64) []int32
-	Int32MulScalar          func(int32, []int32, []int32) []int32
-	Int32MulScalarSels      func(int32, []int32, []int32, []int64) []int32
-	Int64Mul                func([]int64, []int64, []int64) []int64
-	Int64MulSels            func([]int64, []int64, []int64, []int64) []int64
-	Int64MulScalar          func(int64, []int64, []int64) []int64
-	Int64MulScalarSels      func(int64, []int64, []int64, []int64) []int64
-	Uint8Mul                func([]uint8, []uint8, []uint8) []uint8
-	Uint8MulSels            func([]uint8, []uint8, []uint8, []int64) []uint8
-	Uint8MulScalar          func(uint8, []uint8, []uint8) []uint8
-	Uint8MulScalarSels      func(uint8, []uint8, []uint8, []int64) []uint8
-	Uint16Mul               func([]uint16, []uint16, []uint16) []uint16
-	Uint16MulSels           func([]uint16, []uint16, []uint16, []int64) []uint16
-	Uint16MulScalar         func(uint16, []uint16, []uint16) []uint16
-	Uint16MulScalarSels     func(uint16, []uint16, []uint16, []int64) []uint16
-	Uint32Mul               func([]uint32, []uint32, []uint32) []uint32
-	Uint32MulSels           func([]uint32, []uint32, []uint32, []int64) []uint32
-	Uint32MulScalar         func(uint32, []uint32, []uint32) []uint32
-	Uint32MulScalarSels     func(uint32, []uint32, []uint32, []int64) []uint32
-	Uint64Mul               func([]uint64, []uint64, []uint64) []uint64
-	Uint64MulSels           func([]uint64, []uint64, []uint64, []int64) []uint64
-	Uint64MulScalar         func(uint64, []uint64, []uint64) []uint64
-	Uint64MulScalarSels     func(uint64, []uint64, []uint64, []int64) []uint64
-	Float32Mul              func([]float32, []float32, []float32) []float32
-	Float32MulSels          func([]float32, []float32, []float32, []int64) []float32
-	Float32MulScalar        func(float32, []float32, []float32) []float32
-	Float32MulScalarSels    func(float32, []float32, []float32, []int64) []float32
-	Float64Mul              func([]float64, []float64, []float64) []float64
-	Float64MulSels          func([]float64, []float64, []float64, []int64) []float64
-	Float64MulScalar        func(float64, []float64, []float64) []float64
-	Float64MulScalarSels    func(float64, []float64, []float64, []int64) []float64
-	Decimal64Mul            func([]types.Decimal64, []types.Decimal64, []types.Decimal128) []types.Decimal128
-	Decimal64MulSels        func([]types.Decimal64, []types.Decimal64, []types.Decimal128, []int64) []types.Decimal128
-	Decimal64MulScalar      func(types.Decimal64, []types.Decimal64, []types.Decimal128) []types.Decimal128
-	Decimal64MulScalarSels  func(types.Decimal64, []types.Decimal64, []types.Decimal128, []int64) []types.Decimal128
-	Decimal128Mul           func([]types.Decimal128, []types.Decimal128, []types.Decimal128) []types.Decimal128
-	Decimal128MulSels       func([]types.Decimal128, []types.Decimal128, []types.Decimal128, []int64) []types.Decimal128
-	Decimal128MulScalar     func(types.Decimal128, []types.Decimal128, []types.Decimal128) []types.Decimal128
-	Decimal128MulScalarSels func(types.Decimal128, []types.Decimal128, []types.Decimal128, []int64) []types.Decimal128
-
-	Int32Int64Mul         func([]int32, []int64, []int64) []int64
-	Int32Int64MulSels     func([]int32, []int64, []int64, []int64) []int64
-	Int16Int64Mul         func([]int16, []int64, []int64) []int64
-	Int16Int64MulSels     func([]int16, []int64, []int64, []int64) []int64
-	Int8Int64Mul          func([]int8, []int64, []int64) []int64
-	Int8Int64MulSels      func([]int8, []int64, []int64, []int64) []int64
-	Int16Int32Mul         func([]int16, []int32, []int32) []int32
-	Int16Int32MulSels     func([]int16, []int32, []int32, []int64) []int32
-	Int8Int32Mul          func([]int8, []int32, []int32) []int32
-	Int8Int32MulSels      func([]int8, []int32, []int32, []int64) []int32
-	Int8Int16Mul          func([]int8, []int16, []int16) []int16
-	Int8Int16MulSels      func([]int8, []int16, []int16, []int64) []int16
-	Float32Float64Mul     func([]float32, []float64, []float64) []float64
-	Float32Float64MulSels func([]float32, []float64, []float64, []int64) []float64
-	Uint32Uint64Mul       func([]uint32, []uint64, []uint64) []uint64
-	Uint32Uint64MulSels   func([]uint32, []uint64, []uint64, []int64) []uint64
-	Uint16Uint64Mul       func([]uint16, []uint64, []uint64) []uint64
-	Uint16Uint64MulSels   func([]uint16, []uint64, []uint64, []int64) []uint64
-	Uint8Uint64Mul        func([]uint8, []uint64, []uint64) []uint64
-	Uint8Uint64MulSels    func([]uint8, []uint64, []uint64, []int64) []uint64
-	Uint16Uint32Mul       func([]uint16, []uint32, []uint32) []uint32
-	Uint16Uint32MulSels   func([]uint16, []uint32, []uint32, []int64) []uint32
-	Uint8Uint32Mul        func([]uint8, []uint32, []uint32) []uint32
-	Uint8Uint32MulSels    func([]uint8, []uint32, []uint32, []int64) []uint32
-	Uint8Uint16Mul        func([]uint8, []uint16, []uint16) []uint16
-	Uint8Uint16MulSels    func([]uint8, []uint16, []uint16, []int64) []uint16
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"golang.org/x/exp/constraints"
 )
 
-func init() {
-	Int8Mul = int8Mul
-	Int8MulSels = int8MulSels
-	Int8MulScalar = int8MulScalar
-	Int8MulScalarSels = int8MulScalarSels
-	Int16Mul = int16Mul
-	Int16MulSels = int16MulSels
-	Int16MulScalar = int16MulScalar
-	Int16MulScalarSels = int16MulScalarSels
-	Int32Mul = int32Mul
-	Int32MulSels = int32MulSels
-	Int32MulScalar = int32MulScalar
-	Int32MulScalarSels = int32MulScalarSels
-	Int64Mul = int64Mul
-	Int64MulSels = int64MulSels
-	Int64MulScalar = int64MulScalar
-	Int64MulScalarSels = int64MulScalarSels
-	Uint8Mul = uint8Mul
-	Uint8MulSels = uint8MulSels
-	Uint8MulScalar = uint8MulScalar
-	Uint8MulScalarSels = uint8MulScalarSels
-	Uint16Mul = uint16Mul
-	Uint16MulSels = uint16MulSels
-	Uint16MulScalar = uint16MulScalar
-	Uint16MulScalarSels = uint16MulScalarSels
-	Uint32Mul = uint32Mul
-	Uint32MulSels = uint32MulSels
-	Uint32MulScalar = uint32MulScalar
-	Uint32MulScalarSels = uint32MulScalarSels
-	Uint64Mul = uint64Mul
-	Uint64MulSels = uint64MulSels
-	Uint64MulScalar = uint64MulScalar
-	Uint64MulScalarSels = uint64MulScalarSels
-	Float32Mul = float32Mul
-	Float32MulSels = float32MulSels
-	Float32MulScalar = float32MulScalar
-	Float32MulScalarSels = float32MulScalarSels
-	Float64Mul = float64Mul
-	Float64MulSels = float64MulSels
-	Float64MulScalar = float64MulScalar
-	Float64MulScalarSels = float64MulScalarSels
-	Decimal64Mul = decimal64Mul
-	Decimal64MulSels = decimal64MulSels
-	Decimal64MulScalar = decimal64MulScalar
-	Decimal64MulScalarSels = decimal64MulScalarSels
-	Decimal128Mul = decimal128Mul
-	Decimal128MulSels = decimal128MulSels
-	Decimal128MulScalar = decimal128MulScalar
+var (
+	Int8Mul              = numericMul[int8]
+	Int8MulSels          = numericMulSels[int8]
+	Int8MulScalar        = numericMulScalar[int8]
+	Int8MulScalarSels    = numericMulScalarSels[int8]
+	Int16Mul             = numericMul[int16]
+	Int16MulSels         = numericMulSels[int16]
+	Int16MulScalar       = numericMulScalar[int16]
+	Int16MulScalarSels   = numericMulScalarSels[int16]
+	Int32Mul             = numericMul[int32]
+	Int32MulSels         = numericMulSels[int32]
+	Int32MulScalar       = numericMulScalar[int32]
+	Int32MulScalarSels   = numericMulScalarSels[int32]
+	Int64Mul             = numericMul[int64]
+	Int64MulSels         = numericMulSels[int64]
+	Int64MulScalar       = numericMulScalar[int64]
+	Int64MulScalarSels   = numericMulScalarSels[int64]
+	Uint8Mul             = numericMul[uint8]
+	Uint8MulSels         = numericMulSels[uint8]
+	Uint8MulScalar       = numericMulScalar[uint8]
+	Uint8MulScalarSels   = numericMulScalarSels[uint8]
+	Uint16Mul            = numericMul[uint16]
+	Uint16MulSels        = numericMulSels[uint16]
+	Uint16MulScalar      = numericMulScalar[uint16]
+	Uint16MulScalarSels  = numericMulScalarSels[uint16]
+	Uint32Mul            = numericMul[uint32]
+	Uint32MulSels        = numericMulSels[uint32]
+	Uint32MulScalar      = numericMulScalar[uint32]
+	Uint32MulScalarSels  = numericMulScalarSels[uint32]
+	Uint64Mul            = numericMul[uint64]
+	Uint64MulSels        = numericMulSels[uint64]
+	Uint64MulScalar      = numericMulScalar[uint64]
+	Uint64MulScalarSels  = numericMulScalarSels[uint64]
+	Float32Mul           = numericMul[float32]
+	Float32MulSels       = numericMulSels[float32]
+	Float32MulScalar     = numericMulScalar[float32]
+	Float32MulScalarSels = numericMulScalarSels[float32]
+	Float64Mul           = numericMul[float64]
+	Float64MulSels       = numericMulSels[float64]
+	Float64MulScalar     = numericMulScalar[float64]
+	Float64MulScalarSels = numericMulScalarSels[float64]
+
+	Int32Int64Mul         = numericMul2[int32, int64]
+	Int32Int64MulSels     = numericMulSels2[int32, int64]
+	Int16Int64Mul         = numericMul2[int16, int64]
+	Int16Int64MulSels     = numericMulSels2[int16, int64]
+	Int8Int64Mul          = numericMul2[int8, int64]
+	Int8Int64MulSels      = numericMulSels2[int8, int64]
+	Int16Int32Mul         = numericMul2[int16, int32]
+	Int16Int32MulSels     = numericMulSels2[int16, int32]
+	Int8Int32Mul          = numericMul2[int8, int32]
+	Int8Int32MulSels      = numericMulSels2[int8, int32]
+	Int8Int16Mul          = numericMul2[int8, int16]
+	Int8Int16MulSels      = numericMulSels2[int8, int16]
+	Float32Float64Mul     = numericMul2[float32, float64]
+	Float32Float64MulSels = numericMulSels2[float32, float64]
+	Uint32Uint64Mul       = numericMul2[uint32, uint64]
+	Uint32Uint64MulSels   = numericMulSels2[uint32, uint64]
+	Uint16Uint64Mul       = numericMul2[uint16, uint64]
+	Uint16Uint64MulSels   = numericMulSels2[uint16, uint64]
+	Uint8Uint64Mul        = numericMul2[uint8, uint64]
+	Uint8Uint64MulSels    = numericMulSels2[uint8, uint64]
+	Uint16Uint32Mul       = numericMul2[uint16, uint32]
+	Uint16Uint32MulSels   = numericMulSels2[uint16, uint32]
+	Uint8Uint32Mul        = numericMul2[uint8, uint32]
+	Uint8Uint32MulSels    = numericMulSels2[uint8, uint32]
+	Uint8Uint16Mul        = numericMul2[uint8, uint16]
+	Uint8Uint16MulSels    = numericMulSels2[uint8, uint16]
+
+	Decimal64Mul            = decimal64Mul
+	Decimal64MulSels        = decimal64MulSels
+	Decimal64MulScalar      = decimal64MulScalar
+	Decimal64MulScalarSels  = decimal64MulScalarSels
+	Decimal128Mul           = decimal128Mul
+	Decimal128MulSels       = decimal128MulSels
+	Decimal128MulScalar     = decimal128MulScalar
 	Decimal128MulScalarSels = decimal128MulScalarSels
+)
 
-	Int32Int64Mul = int32Int64Mul
-	Int32Int64MulSels = int32Int64MulSels
-	Int16Int64Mul = int16Int64Mul
-	Int16Int64MulSels = int16Int64MulSels
-	Int8Int64Mul = int8Int64Mul
-	Int8Int64MulSels = int8Int64MulSels
-	Int16Int32Mul = int16Int32Mul
-	Int16Int32MulSels = int16Int32MulSels
-	Int8Int32Mul = int8Int32Mul
-	Int8Int32MulSels = int8Int32MulSels
-	Int8Int16Mul = int8Int16Mul
-	Int8Int16MulSels = int8Int16MulSels
-	Float32Float64Mul = float32Float64Mul
-	Float32Float64MulSels = float32Float64MulSels
-	Uint32Uint64Mul = uint32Uint64Mul
-	Uint32Uint64MulSels = uint32Uint64MulSels
-	Uint16Uint64Mul = uint16Uint64Mul
-	Uint16Uint64MulSels = uint16Uint64MulSels
-	Uint8Uint64Mul = uint8Uint64Mul
-	Uint8Uint64MulSels = uint8Uint64MulSels
-	Uint16Uint32Mul = uint16Uint32Mul
-	Uint16Uint32MulSels = uint16Uint32MulSels
-	Uint8Uint32Mul = uint8Uint32Mul
-	Uint8Uint32MulSels = uint8Uint32MulSels
-	Uint8Uint16Mul = uint8Uint16Mul
-	Uint8Uint16MulSels = uint8Uint16MulSels
-}
-
-func int8Mul(xs, ys, rs []int8) []int8 {
+func numericMul[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x * ys[i]
 	}
 	return rs
 }
 
-func int8MulSels(xs, ys, rs []int8, sels []int64) []int8 {
+func numericMulSels[T constraints.Integer | constraints.Float](xs, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = xs[sel] * ys[sel]
 	}
 	return rs
 }
 
-func int8MulScalar(x int8, ys, rs []int8) []int8 {
+func numericMulScalar[T constraints.Integer | constraints.Float](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x * y
 	}
 	return rs
 }
 
-func int8MulScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
+func numericMulScalarSels[T constraints.Integer | constraints.Float](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = x * ys[sel]
 	}
 	return rs
 }
 
-func int16Mul(xs, ys, rs []int16) []int16 {
+func numericMul2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig) []TBig {
 	for i, x := range xs {
-		rs[i] = x * ys[i]
+		rs[i] = TBig(x) * ys[i]
 	}
 	return rs
 }
 
-func int16MulSels(xs, ys, rs []int16, sels []int64) []int16 {
+func numericMulSels2[TSmall, TBig constraints.Integer | constraints.Float](xs []TSmall, ys, rs []TBig, sels []int64) []TBig {
 	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
+		rs[i] = TBig(xs[sel]) * ys[sel]
 	}
 	return rs
 }
 
-func int16MulScalar(x int16, ys, rs []int16) []int16 {
+/*
+func numericMulScalar2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig) []TBig {
 	for i, y := range ys {
-		rs[i] = x * y
+		rs[i] = TBig(x) * y
 	}
 	return rs
 }
 
-func int16MulScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
+func numericMulScalarSels2[TSmall, TBig constraints.Integer | constraints.Float](x TSmall, ys, rs []TBig, sels []int64) []TBig {
 	for i, sel := range sels {
-		rs[i] = x * ys[sel]
+		rs[i] = TBig(x) * ys[sel]
 	}
 	return rs
 }
-
-func int32Mul(xs, ys, rs []int32) []int32 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func int32MulSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func int32MulScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func int32MulScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func int64Mul(xs, ys, rs []int64) []int64 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func int64MulSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func int64MulScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func int64MulScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func uint8Mul(xs, ys, rs []uint8) []uint8 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func uint8MulSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func uint8MulScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func uint8MulScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func uint16Mul(xs, ys, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func uint16MulSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func uint16MulScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func uint16MulScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func uint32Mul(xs, ys, rs []uint32) []uint32 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func uint32MulSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func uint32MulScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func uint32MulScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func uint64Mul(xs, ys, rs []uint64) []uint64 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func uint64MulSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func uint64MulScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func uint64MulScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func float32Mul(xs, ys, rs []float32) []float32 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func float32MulSels(xs, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func float32MulScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func float32MulScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func float64Mul(xs, ys, rs []float64) []float64 {
-	for i, x := range xs {
-		rs[i] = x * ys[i]
-	}
-	return rs
-}
-
-func float64MulSels(xs, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] * ys[sel]
-	}
-	return rs
-}
-
-func float64MulScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = x * y
-	}
-	return rs
-}
-
-func float64MulScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = x * ys[sel]
-	}
-	return rs
-}
-
-func int32Int64Mul(xs []int32, ys, rs []int64) []int64 {
-	for i := range rs {
-		rs[i] = ys[i] * int64(xs[i])
-	}
-	return rs
-}
-
-func int32Int64MulSels(xs []int32, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int64(xs[sel])
-	}
-	return rs
-}
-
-func int16Int64Mul(xs []int16, ys, rs []int64) []int64 {
-	for i := range rs {
-		rs[i] = ys[i] * int64(xs[i])
-	}
-	return rs
-}
-
-func int16Int64MulSels(xs []int16, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int64(xs[sel])
-	}
-	return rs
-}
-
-func int8Int64Mul(xs []int8, ys, rs []int64) []int64 {
-	for i := range rs {
-		rs[i] = ys[i] * int64(xs[i])
-	}
-	return rs
-}
-
-func int8Int64MulSels(xs []int8, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int64(xs[sel])
-	}
-	return rs
-}
-
-func int16Int32Mul(xs []int16, ys, rs []int32) []int32 {
-	for i := range rs {
-		rs[i] = ys[i] * int32(xs[i])
-	}
-	return rs
-}
-
-func int16Int32MulSels(xs []int16, ys, rs []int32, sels []int64) []int32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int32(xs[sel])
-	}
-	return rs
-}
-
-func int8Int32Mul(xs []int8, ys, rs []int32) []int32 {
-	for i := range rs {
-		rs[i] = ys[i] * int32(xs[i])
-	}
-	return rs
-}
-
-func int8Int32MulSels(xs []int8, ys, rs []int32, sels []int64) []int32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int32(xs[sel])
-	}
-	return rs
-}
-
-func int8Int16Mul(xs []int8, ys, rs []int16) []int16 {
-	for i := range rs {
-		rs[i] = ys[i] * int16(xs[i])
-	}
-	return rs
-}
-
-func int8Int16MulSels(xs []int8, ys, rs []int16, sels []int64) []int16 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * int16(xs[sel])
-	}
-	return rs
-}
-
-func float32Float64Mul(xs []float32, ys, rs []float64) []float64 {
-	for i := range rs {
-		rs[i] = ys[i] * float64(xs[i])
-	}
-	return rs
-}
-
-func float32Float64MulSels(xs []float32, ys, rs []float64, sels []int64) []float64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * float64(xs[sel])
-	}
-	return rs
-}
-
-func uint32Uint64Mul(xs []uint32, ys, rs []uint64) []uint64 {
-	for i := range rs {
-		rs[i] = ys[i] * uint64(xs[i])
-	}
-	return rs
-}
-
-func uint32Uint64MulSels(xs []uint32, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint64(xs[sel])
-	}
-	return rs
-}
-
-func uint16Uint64Mul(xs []uint16, ys, rs []uint64) []uint64 {
-	for i := range rs {
-		rs[i] = ys[i] * uint64(xs[i])
-	}
-	return rs
-}
-
-func uint16Uint64MulSels(xs []uint16, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint64(xs[sel])
-	}
-	return rs
-}
-
-func uint8Uint64Mul(xs []uint8, ys, rs []uint64) []uint64 {
-	for i := range rs {
-		rs[i] = ys[i] * uint64(xs[i])
-	}
-	return rs
-}
-
-func uint8Uint64MulSels(xs []uint8, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint64(xs[sel])
-	}
-	return rs
-}
-
-func uint16Uint32Mul(xs []uint16, ys, rs []uint32) []uint32 {
-	for i := range rs {
-		rs[i] = ys[i] * uint32(xs[i])
-	}
-	return rs
-}
-
-func uint16Uint32MulSels(xs []uint16, ys, rs []uint32, sels []int64) []uint32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint32(xs[sel])
-	}
-	return rs
-}
-
-func uint8Uint32Mul(xs []uint8, ys, rs []uint32) []uint32 {
-	for i := range rs {
-		rs[i] = ys[i] * uint32(xs[i])
-	}
-	return rs
-}
-
-func uint8Uint32MulSels(xs []uint8, ys, rs []uint32, sels []int64) []uint32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint32(xs[sel])
-	}
-	return rs
-}
-
-func uint8Uint16Mul(xs []uint8, ys, rs []uint16) []uint16 {
-	for i := range rs {
-		rs[i] = ys[i] * uint16(xs[i])
-	}
-	return rs
-}
-
-func uint8Uint16MulSels(xs []uint8, ys, rs []uint16, sels []int64) []uint16 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] * uint16(xs[sel])
-	}
-	return rs
-}
+*/
 
 func decimal64Mul(xs []types.Decimal64, ys []types.Decimal64, rs []types.Decimal128) []types.Decimal128 {
 	for i, x := range xs {
