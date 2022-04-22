@@ -159,13 +159,13 @@ func (mgr *Manager) String() string {
 func (mgr *Manager) stringNoLock() string {
 	s := fmt.Sprintf("<Manager:%s>[%v]: Unsorted[%d], Sorted[%d]\n", mgr.Dir, mgr.Mock, len(mgr.UnsortedFiles), len(mgr.SortedFiles))
 	if len(mgr.UnsortedFiles) > 0 {
-		for k, _ := range mgr.UnsortedFiles {
+		for k := range mgr.UnsortedFiles {
 			s = fmt.Sprintf("%s %s", s, k.SegmentString())
 		}
 		s = fmt.Sprintf("%s\n", s)
 	}
 	if len(mgr.SortedFiles) > 0 {
-		for k, _ := range mgr.SortedFiles {
+		for k := range mgr.SortedFiles {
 			s = fmt.Sprintf("%s %s", s, k.SegmentString())
 		}
 	}

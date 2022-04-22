@@ -234,15 +234,15 @@ func BuildBitSlicedIndex(data []*vector.Vector, t types.Type, colIdx int16, star
 		for _, part := range data {
 			column := part.Col.(*types.Bytes)
 			for i := 0; i < len(column.Lengths); i++ {
-					if nulls.Contains(part.Nsp, uint64(row-startPos)) {
-						row++
-						continue
-					}
-					val := column.Get(int64(i))
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
-						return nil, err
-					}
+				if nulls.Contains(part.Nsp, uint64(row-startPos)) {
 					row++
+					continue
+				}
+				val := column.Get(int64(i))
+				if err := bsiIdx.Set(uint64(row), val); err != nil {
+					return nil, err
+				}
+				row++
 			}
 		}
 		return bsiIdx, nil
@@ -260,12 +260,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]int8)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -307,12 +307,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]int16)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -354,12 +354,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]int32)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -401,12 +401,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]int64)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -448,12 +448,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]uint8)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -495,12 +495,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]uint16)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -542,12 +542,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]uint32)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -589,12 +589,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]uint64)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -636,12 +636,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]float32)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -683,12 +683,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]float64)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -730,12 +730,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]types.Datetime)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -777,12 +777,12 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 			for i, vec := range data {
 				part := vec.Col.([]types.Date)
 				partMins = append(partMins, part[0])
-				partMaxs = append(partMaxs, part[len(part) - 1])
+				partMaxs = append(partMaxs, part[len(part)-1])
 				if i == 0 {
 					globalMin = part[0]
 				}
-				if i == len(data) - 1 {
-					globalMax = part[len(part) - 1]
+				if i == len(data)-1 {
+					globalMax = part[len(part)-1]
 				}
 			}
 		} else {
@@ -828,8 +828,8 @@ func BuildSegmentZoneMapIndex(data []*vector.Vector, t types.Type, colIdx int16,
 				if i == 0 {
 					globalMin = part.Get(0)
 				}
-				if i == len(data) - 1 {
-					globalMax = part.Get(int64(len(part.Offsets)-1))
+				if i == len(data)-1 {
+					globalMax = part.Get(int64(len(part.Offsets) - 1))
 				}
 			}
 		} else {

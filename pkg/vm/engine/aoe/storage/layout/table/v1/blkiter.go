@@ -21,18 +21,18 @@ import (
 )
 
 type BacktrackingBlockIterator struct {
-	currColumn   []*vector.Vector
-	blocks       []iface.IBlock
-	currIdx      uint16
-	currBlk      int
-	nodes        []*common.MemNode
+	currColumn []*vector.Vector
+	blocks     []iface.IBlock
+	currIdx    uint16
+	currBlk    int
+	nodes      []*common.MemNode
 }
 
 func NewBacktrackingBlockIterator(blocks []iface.IBlock, col uint16) *BacktrackingBlockIterator {
 	return &BacktrackingBlockIterator{
-		blocks:       blocks,
-		currIdx:      col,
-		currBlk:      0,
+		blocks:  blocks,
+		currIdx: col,
+		currBlk: 0,
 	}
 }
 

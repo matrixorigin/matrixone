@@ -179,7 +179,10 @@ func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *me
 
 func (bw *BlockWriter) GetFileName() string {
 	fname := bw.fileHandle.Name()
-	filepath.Abs(bw.fileHandle.Name())
+	_, err := filepath.Abs(bw.fileHandle.Name())
+	if err != nil {
+		panic(err)
+	}
 	s, _ := common.FilenameFromTmpfile(fname)
 	return s
 }
@@ -258,14 +261,20 @@ func (bw *BlockWriter) executeVecs() error {
 		bw.preExecutor()
 	}
 	if err = bw.vecsSerializer(w, bw.data, bw.meta); err != nil {
-		closeFunc()
+		err := closeFunc()
+		if err != nil {
+			panic(err)
+		}
 		return err
 	}
 	if bw.postExecutor != nil {
 		bw.postExecutor()
 	}
 	filename, _ := filepath.Abs(w.Name())
-	closeFunc()
+	err = closeFunc()
+	if err != nil {
+		panic(err)
+	}
 	stat, _ := os.Stat(filename)
 	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
@@ -277,7 +286,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		buf bytes.Buffer
 	)
 	algo := uint8(compress.Lz4)
-	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+	if err = binary.Write(&buf, binary.BigEndian, algo); err != nil {
 		return err
 	}
 	colCnt := len(meta.Segment.Table.Schema.ColDefs)
@@ -417,7 +426,7 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 		buf bytes.Buffer
 	)
 	algo := uint8(compress.Lz4)
-	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+	if err = binary.Write(&buf, binary.BigEndian, algo); err != nil {
 		return err
 	}
 	colCnt := len(meta.Segment.Table.Schema.ColDefs)
@@ -490,6 +499,9 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 	// for compatibility
 	var indices []index.Index
 	ibuf, err := index.DefaultRWHelper.WriteIndices(indices)
+	if err != nil {
+		return err
+	}
 	_, err = w.Write(ibuf)
 	return err
 }
