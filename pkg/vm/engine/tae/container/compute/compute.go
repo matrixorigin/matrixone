@@ -8,9 +8,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 func AppendValue(vec *gvec.Vector, v interface{}) {
@@ -485,7 +485,7 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 	}
 	updateIterator := mask.Iterator()
 	switch vec.GetType() {
-	case dbi.StdVec:
+	case container.StdVec:
 		if vec.IsReadonly() {
 			vec = vec.(*vector.StdVector).Clone()
 			vec.ResetReadonly()
@@ -502,7 +502,7 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 				vec.(*vector.StdVector).VMask.Np.Flip(uint64(rowIdx), uint64(rowIdx))
 			}
 		}
-	case dbi.StrVec:
+	case container.StrVec:
 		strVec := vec.(*vector.StrVector)
 		data := strVec.Data
 		pre := -1

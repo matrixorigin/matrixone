@@ -185,6 +185,8 @@ type TxnStore interface {
 	CreateBlock(tid, sid uint64) (handle.Block, error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
+
+	PrepareCompactBlock(from, to *common.ID) error
 }
 
 type TxnEntryType int16

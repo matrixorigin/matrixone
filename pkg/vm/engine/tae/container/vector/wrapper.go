@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/pierrec/lz4"
 )
@@ -70,12 +70,12 @@ func (v *VectorWrapper) PlacementNew(t types.Type) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) SliceReference(start, end int) (dbi.IVectorReader, error) {
+func (v *VectorWrapper) SliceReference(start, end int) (container.IVectorReader, error) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) GetType() dbi.VectorType {
-	return dbi.Wrapper
+func (v *VectorWrapper) GetType() container.VectorType {
+	return container.Wrapper
 }
 
 func (v *VectorWrapper) Close() error {

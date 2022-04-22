@@ -15,7 +15,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/sirupsen/logrus"
 )
 

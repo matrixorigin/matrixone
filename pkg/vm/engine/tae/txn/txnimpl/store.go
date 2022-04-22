@@ -52,6 +52,10 @@ func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr bas
 	}
 }
 
+func (store *txnStore) PrepareCompactBlock(from, to *common.ID) (err error) {
+	return
+}
+
 func (store *txnStore) LogSegmentID(tid, sid uint64) {
 	table, _ := store.getOrSetTable(tid)
 	table.LogSegmentID(sid)

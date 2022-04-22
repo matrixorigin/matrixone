@@ -27,6 +27,7 @@ func (store *NoopTxnStore) ApplyRollback() error                                
 func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
+func (store *NoopTxnStore) PrepareCompactBlock(from, to *common.ID) error          { return nil }
 
 func (store *NoopTxnStore) CreateRelation(def interface{}) (rel handle.Relation, err error) { return }
 func (store *NoopTxnStore) DropRelationByName(name string) (rel handle.Relation, err error) { return }

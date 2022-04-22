@@ -28,6 +28,13 @@ type ColumnNode struct {
 	id       *common.ID
 }
 
+func NewSimpleColumnNode() *ColumnNode {
+	n := &ColumnNode{
+		txnMask: roaring.NewBitmap(),
+		txnVals: make(map[uint32]interface{}),
+	}
+	return n
+}
 func NewCommittedColumnNode(startTs, commitTs uint64, id *common.ID, rwlocker *sync.RWMutex) *ColumnNode {
 	if rwlocker == nil {
 		rwlocker = &sync.RWMutex{}

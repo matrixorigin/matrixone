@@ -13,8 +13,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/impl"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/updates"
 
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -312,4 +312,24 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	defer readLock.Unlock()
 	// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
 	return blk.updatableIndexHolder.BatchDedup(pks)
+}
+
+func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (v interface{}) {
+	view := updates.NewBlockView(endTs)
+	readLock := blk.controller.GetSharedLock()
+
+	for i := range blk.meta.GetSchema().ColDefs {
+		chain := blk.controller.GetColumnChain(uint16(i))
+		chain.RLock()
+		updateMask, updateVals := chain.CollectCommittedInRangeLocked(startTs, endTs)
+		chain.RUnlock()
+		if updateMask != nil {
+			view.UpdateMasks[uint16(i)] = updateMask
+			view.UpdateVals[uint16(i)] = updateVals
+		}
+	}
+	deleteChain := blk.controller.GetDeleteChain()
+	view.DeleteMask = deleteChain.CollectDeletesInRange(startTs, endTs)
+	readLock.Unlock()
+	return v
 }

@@ -26,7 +26,7 @@ import (
 	v "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
 
 	"github.com/stretchr/testify/assert"
@@ -43,7 +43,7 @@ func TestStrVector(t *testing.T) {
 		vec := NewStrVector(colType, capacity)
 		vecs = append(vecs, vec)
 	}
-	assert.Equal(t, dbi.StrVec, NewVector(colTypes[12], capacity).GetType())
+	assert.Equal(t, container.StrVec, NewVector(colTypes[12], capacity).GetType())
 	vec0 := vecs[0]
 	assert.False(t, vec0.IsReadonly())
 	var wg sync.WaitGroup

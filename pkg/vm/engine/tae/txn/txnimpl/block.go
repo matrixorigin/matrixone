@@ -115,6 +115,9 @@ func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, 
 func (blk *txnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return blk.entry.GetBlockData().GetVectorCopy(blk.Txn, attr, compressed, decompressed)
 }
+func (blk *txnBlock) PrepareCompactBlock(from, to *common.ID) (err error) {
+	return blk.Txn.GetStore().PrepareCompactBlock(from, to)
+}
 
 func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 	segmentIt := rel.MakeSegmentIt()

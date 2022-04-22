@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 var (
@@ -45,7 +44,7 @@ type IVectorWriter interface {
 type IVector interface {
 	ResetReadonly()
 	IsReadonly() bool
-	dbi.IVectorReader
+	container.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
 	PlacementNew(t types.Type)

@@ -17,8 +17,8 @@ package batch
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mock"
 
 	"github.com/stretchr/testify/assert"
@@ -46,12 +46,12 @@ func TestBatch(t *testing.T) {
 	assert.NotNil(t, err)
 	reader1, err := bat1.GetReaderByAttr(0)
 	assert.Nil(t, err)
-	assert.Equal(t, dbi.StdVec, reader1.GetType())
+	assert.Equal(t, container.StdVec, reader1.GetType())
 	_, err = bat1.GetVectorByAttr(-1)
 	assert.NotNil(t, err)
 	vec1, err := bat1.GetVectorByAttr(13)
 	assert.Nil(t, err)
-	assert.Equal(t, dbi.StrVec, vec1.GetType())
+	assert.Equal(t, container.StrVec, vec1.GetType())
 	closed, err := bat1.IsVectorClosed(0)
 	assert.Nil(t, err)
 	assert.False(t, closed)
@@ -71,7 +71,7 @@ func TestBatch(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestMarshal(t *testing.T){
+func TestMarshal(t *testing.T) {
 	colTypes := mock.MockColTypes(14)
 	rows := uint64(64)
 	attrs1 := make([]int, 0)
@@ -82,17 +82,17 @@ func TestMarshal(t *testing.T){
 	}
 	bat, err := NewBatch(attrs1, vecs1)
 	assert.Nil(t, err)
-	buf,err:=bat.Marshal()
-	assert.Nil(t,err)
-	bat2:=&Batch{}
-	err=bat2.Unmarshal(buf)
-	assert.Nil(t,err)
-	assert.Equal(t,len(attrs1),len(bat2.Attrs))
-	for _,idx:=range attrs1{
-		vec1,err:=bat.GetVectorByAttr(idx)
-		assert.Nil(t,err)
-		vec2,err:=bat2.GetVectorByAttr(idx)
-		assert.Nil(t,err)
-		assert.Equal(t,vec1.GetType(),vec2.GetType())
+	buf, err := bat.Marshal()
+	assert.Nil(t, err)
+	bat2 := &Batch{}
+	err = bat2.Unmarshal(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, len(attrs1), len(bat2.Attrs))
+	for _, idx := range attrs1 {
+		vec1, err := bat.GetVectorByAttr(idx)
+		assert.Nil(t, err)
+		vec2, err := bat2.GetVectorByAttr(idx)
+		assert.Nil(t, err)
+		assert.Equal(t, vec1.GetType(), vec2.GetType())
 	}
 }

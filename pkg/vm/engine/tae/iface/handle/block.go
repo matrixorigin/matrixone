@@ -39,6 +39,8 @@ type BlockReader interface {
 	Fingerprint() *common.ID
 	Rows() int
 	BatchDedup(col *vector.Vector) error
+
+	PrepareCompact() error
 }
 
 type BlockWriter interface {

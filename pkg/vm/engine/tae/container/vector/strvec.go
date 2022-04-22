@@ -24,12 +24,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc base.MemoryFreeFunc) base.IMemoryNode {
@@ -101,8 +100,8 @@ func (v *StrVector) PlacementNew(t types.Type) {
 	}
 }
 
-func (v *StrVector) GetType() dbi.VectorType {
-	return dbi.StrVec
+func (v *StrVector) GetType() container.VectorType {
+	return container.StrVec
 }
 
 func (v *StrVector) Close() error {
@@ -193,8 +192,8 @@ func (v *StrVector) appendWithOffset(offset, n int, vals interface{}) error {
 	return v.Data.Append(vals.([][]byte)[offset : offset+n])
 }
 
-func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
-	if offset < 0 || offset >= ro.Length(vec) {
+func (v *StrVector) AppendVector(vec *gvec.Vector, offset int) (n int, err error) {
+	if offset < 0 || offset >= gvec.Length(vec) {
 		return n, ErrVecInvalidOffset
 	}
 	if v.IsReadonly() {
@@ -203,8 +202,8 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	v.Lock()
 	defer v.Unlock()
 	n = v.Capacity() - v.Length()
-	if n > ro.Length(vec)-offset {
-		n = ro.Length(vec) - offset
+	if n > gvec.Length(vec)-offset {
+		n = gvec.Length(vec) - offset
 	}
 	startRow := v.Length()
 
@@ -221,7 +220,7 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 		return n, err
 	}
 	if vec.Nsp.Np != nil {
-		for row := startRow; row < startRow+ro.Length(vec); row++ {
+		for row := startRow; row < startRow+gvec.Length(vec); row++ {
 			if nulls.Contains(vec.Nsp, uint64(offset+row-startRow)) {
 				nulls.Add(v.VMask, uint64(row))
 			}
@@ -241,7 +240,7 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StrVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
+func (v *StrVector) SliceReference(start, end int) (container.IVectorReader, error) {
 	if !v.IsReadonly() {
 		return nil, ErrVecNotRo
 	}
@@ -293,7 +292,7 @@ func (v *StrVector) GetLatestView() IVector {
 	return vec
 }
 
-func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
+func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*gvec.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, ErrVecNotRo
 	}
@@ -313,7 +312,7 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 		capacity += 4 * rows
 		capacity += len(v.Data.Data)
 	}
-	vec := ro.New(v.Type)
+	vec := gvec.New(v.Type)
 	deCompressed.Reset()
 	if capacity > deCompressed.Cap() {
 		deCompressed.Grow(capacity)
@@ -344,11 +343,11 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	return vec, nil
 }
 
-func (v *StrVector) CopyToVector() (*ro.Vector, error) {
+func (v *StrVector) CopyToVector() (*gvec.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, ErrVecNotRo
 	}
-	vec := ro.New(v.Type)
+	vec := gvec.New(v.Type)
 	vec.Data = v.Data.Data
 	switch v.Type.Oid {
 	case types.T_char, types.T_varchar, types.T_json:

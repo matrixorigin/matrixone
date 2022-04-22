@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -148,13 +149,32 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	return merged
 }
 
+// [startTs, endTs)
+func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap) {
+	startNode := chain.CollectDeletesLocked(startTs).(*DeleteNode)
+	endNode := chain.CollectDeletesLocked(endTs - 1).(*DeleteNode)
+	if endNode == nil {
+		return
+	}
+	if startNode == nil {
+		return endNode.GetDeleteMaskLocked()
+		// return endNode.(*DeleteNode).GetDeleteMaskLocked()
+	}
+	mask = endNode.GetDeleteMaskLocked()
+	mask2 := startNode.GetDeleteMaskLocked()
+	// mask = endNode.(*DeleteNode).GetDeleteMaskLocked()
+	// mask2 := startNode.(*DeleteNode).GetDeleteMaskLocked()
+	mask.AndNot(mask2)
+	return
+}
+
 func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
 		if n.IsMerged() {
 			if n.GetCommitTSLocked() > ts {
-				return false
+				return true
 			}
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
@@ -187,7 +207,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
 			merged.MergeLocked(n)
-		} else if n.GetCommitTSLocked() < ts {
+		} else if n.GetCommitTSLocked() <= ts {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}

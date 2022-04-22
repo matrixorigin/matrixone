@@ -95,6 +95,8 @@ func (blk *TxnBlock) GetVectorCopy(compressed, decompressed *bytes.Buffer) (vec 
 	return
 }
 
+func (blk *TxnBlock) PrepareCompact() (err error) { return }
+
 func (blk *TxnBlock) BatchDedup(*vector.Vector) (err error)                       { return }
 func (blk *TxnBlock) Append(*batch.Batch, uint32) (n uint32, err error)           { return }
 func (blk *TxnBlock) Update(uint32, uint16, interface{}) (err error)              { return }

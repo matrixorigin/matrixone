@@ -18,8 +18,8 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -30,10 +30,10 @@ var (
 )
 
 type IBatch interface {
-	dbi.IBatchReader
+	container.IBatchReader
 	GetVectorByAttr(attrId int) (vector.IVector, error)
-    Marshal() ([]byte, error)
-    Unmarshal([]byte) error
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
 }
 
 type Batch struct {

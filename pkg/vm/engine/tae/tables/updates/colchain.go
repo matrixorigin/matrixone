@@ -135,3 +135,45 @@ func (chain *ColumnChain) GetValueLocked(row uint32, ts uint64) (v interface{}, 
 func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[uint32]interface{}) {
 	return chain.view.CollectUpdates(ts)
 }
+
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}) {
+	var merged *ColumnNode
+	chain.LoopChainLocked(func(n *ColumnNode) bool {
+		n.RLock()
+		// 1. Committed in [endTs, +inf)
+		if n.GetCommitTSLocked() >= endTs {
+			n.RUnlock()
+			return true
+		}
+		// 2. Committed in (-inf, startTs). Skip it and stop looping
+		if n.GetCommitTSLocked() < startTs {
+			n.RUnlock()
+			return false
+		}
+		// 3. Committed in [startTs, endTs)
+		if n.txn != nil {
+			// 3.1. Committing. Wait committed or rollbacked
+			txn := n.txn
+			n.RUnlock()
+			state := txn.GetTxnState(true)
+			// 3.1.1. Rollbacked. Skip it and go to next
+			if state == txnif.TxnStateRollbacked {
+				return true
+			}
+			// 3.1.2. Committed
+			n.RLock()
+		}
+		if merged == nil {
+			merged = NewSimpleColumnNode()
+		}
+		merged.MergeLocked(n)
+		n.RUnlock()
+		return true
+	}, false)
+
+	if merged != nil {
+		mask = merged.txnMask
+		vals = merged.txnVals
+	}
+	return
+}

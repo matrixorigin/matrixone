@@ -1,4 +1,4 @@
-package test
+package db
 
 import (
 	"bytes"
@@ -20,10 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
-)
-
-const (
-	ModuleName = "TAETEST"
 )
 
 var wareHouse *catalog.Schema

@@ -21,8 +21,8 @@ import (
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dbi"
 )
 
 var (
@@ -62,12 +62,12 @@ func (bat *Batch) IsReadonly() bool {
 	return bat.Vecs[len(bat.Vecs)-1].IsReadonly()
 }
 
-func (bat *Batch) GetReaderByAttr(attr int) (dbi.IVectorReader, error) {
+func (bat *Batch) GetReaderByAttr(attr int) (container.IVectorReader, error) {
 	vec, err := bat.GetVectorByAttr(attr)
 	if err != nil {
 		return nil, err
 	}
-	return vec.(dbi.IVectorReader), nil
+	return vec.(container.IVectorReader), nil
 }
 
 func (bat *Batch) GetVectorByAttr(attr int) (vector.IVector, error) {
@@ -168,9 +168,9 @@ func (bat *Batch) Unmarshal(buf []byte) error {
 		vecLength := encoding.DecodeUint64(buf[pos : pos+8])
 		pos += 8
 		switch vecType {
-		case uint8(dbi.StdVec):
+		case uint8(container.StdVec):
 			bat.Vecs[i] = vector.NewEmptyStdVector()
-		case uint8(dbi.StrVec):
+		case uint8(container.StrVec):
 			bat.Vecs[i] = vector.NewEmptyStrVector()
 		}
 		err := bat.Vecs[i].Unmarshal(buf[pos : pos+int(vecLength)])
