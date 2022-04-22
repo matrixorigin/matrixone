@@ -127,8 +127,8 @@ func (getter *tblkFileGetter) Getter(dir string, meta *metadata.Block) (*os.File
 // col01 data | col02 data |  ...
 type TransientBlockFile struct {
 	common.RefHelper
-	host    base.ISegmentFile
-	id      common.ID
+	host base.ISegmentFile
+	id   common.ID
 	// maxver  uint32 // Unused
 	files   []*versionBlockFile
 	currpos uint32

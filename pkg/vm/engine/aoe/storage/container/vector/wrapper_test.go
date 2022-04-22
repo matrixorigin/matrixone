@@ -115,6 +115,7 @@ func TestWrapper(t *testing.T) {
 	f, err := os.Create("/tmp/testwrapper")
 	assert.Nil(t, err)
 	n, err := w1.WriteTo(f)
+	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
 
 	f, err = os.Open("/tmp/testwrapper")

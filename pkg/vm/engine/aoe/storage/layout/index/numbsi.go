@@ -228,4 +228,3 @@ func (i *NumericBsiIndex) Marshal() ([]byte, error) {
 	bw.Write(indexBuf)
 	return bw.Bytes(), nil
 }
-

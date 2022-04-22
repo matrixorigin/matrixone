@@ -32,9 +32,9 @@ type Store = logstore.Store
 func defaultHandler(r io.Reader, entry LogEntry) (LogEntry, int64, error) {
 	n, err := entry.ReadFrom(r)
 	if err != nil {
-		return nil, int64(n), err
+		return nil, n, err
 	}
-	return entry, int64(n), nil
+	return entry, n, nil
 }
 
 type replayEntry struct {
@@ -347,7 +347,7 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logs
 		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {
-			if r.Size == replayer.offset+int64(metaSize)+n {
+			if r.Size == replayer.offset+metaSize+n {
 				// Have read to the end of the file
 				replayer.tryTruncate()
 				return io.EOF

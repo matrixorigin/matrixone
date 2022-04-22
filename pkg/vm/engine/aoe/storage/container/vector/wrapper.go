@@ -237,7 +237,7 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	if vec.UseCompress {
-		allocSize := uint64(vec.GetMemoryCapacity())
+		allocSize := vec.GetMemoryCapacity()
 		vec.MNode = common.GPool.Alloc(allocSize)
 		data := vec.MNode.Buf[:allocSize]
 		nr, err := r.Read(data)

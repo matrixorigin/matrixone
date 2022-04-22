@@ -197,11 +197,11 @@ func (info *CommitInfo) GetSize() int64 {
 	return info.Size
 }
 
-func (info *CommitInfo) ChooseCommitInfo(check func(info *CommitInfo)bool) *CommitInfo {
+func (info *CommitInfo) ChooseCommitInfo(check func(info *CommitInfo) bool) *CommitInfo {
 	var curr common.ISSLLNode
 	curr = info
-	for curr != nil{
-		if check(curr.(*CommitInfo)){
+	for curr != nil {
+		if check(curr.(*CommitInfo)) {
 			return curr.(*CommitInfo)
 		}
 		curr = curr.GetNext()
@@ -246,8 +246,11 @@ func (info *CommitInfo) SetIndex(idx LogIndex) error {
 		info.LogRange = &LogRange{}
 		info.LogRange.ShardId = idx.ShardId
 	}
-	info.LogRange.Range.Append(idx.Id.Id)
-	return nil
+	err := info.LogRange.Range.Append(idx.Id.Id)
+	if err == common.ErrRangeInvalid{
+		return nil
+	}
+	return err
 }
 
 type Sequence struct {
@@ -346,7 +349,7 @@ func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
 
 func EstimateBlockSize(meta *Block) uint64 {
 	size := uint64(0)
-	for colIdx, _ := range meta.Segment.Table.Schema.ColDefs {
+	for colIdx := range meta.Segment.Table.Schema.ColDefs {
 		size += EstimateColumnBlockSize(colIdx, meta)
 	}
 	return size

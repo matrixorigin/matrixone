@@ -77,7 +77,7 @@ func (pool *SimpleMemoryPool) Free(size uint64) {
 	if size == 0 {
 		return
 	}
-	usagesize := atomic.AddUint64(&(pool.Usage), ^uint64(size-1))
+	usagesize := atomic.AddUint64(&(pool.Usage), ^(size - 1))
 	if usagesize > pool.Capacity {
 		panic("")
 	}

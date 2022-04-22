@@ -202,7 +202,7 @@ func (blk *tblock) Sum(colIdx int, filter *roaring64.Bitmap) (int64, uint64) {
 		case types.T_int32:
 			sum += int64(val.(int32))
 		case types.T_int64:
-			sum += int64(val.(int64))
+			sum += val.(int64)
 		case types.T_uint8:
 			sum += int64(val.(uint8))
 		case types.T_uint16:
@@ -509,5 +509,3 @@ func (blk *tblock) Btw(colIdx int, offset uint64, min, max interface{}) *roaring
 	res.And(blk.Le(colIdx, offset, max))
 	return res
 }
-
-

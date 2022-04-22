@@ -16,8 +16,8 @@ package logstore
 
 import (
 	"fmt"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"io"
 )
 
 type EntryHandler = func(io.Reader, *EntryMeta) (Entry, int64, error)
@@ -52,9 +52,9 @@ func (replayer *simpleReplayer) onFlush(r io.Reader, meta *EntryMeta) (Entry, in
 	entry := NewBaseEntryWithMeta(meta)
 	n, err := entry.ReadFrom(r)
 	if err != nil {
-		return nil, int64(n), err
+		return nil, n, err
 	}
-	return entry, int64(n), nil
+	return entry, n, nil
 }
 
 func (replayer *simpleReplayer) GetOffset() int64 {
@@ -81,7 +81,7 @@ func (replayer *simpleReplayer) doReplay(r *VersionFile, observer ReplayObserver
 		return err
 	}
 	eType := meta.GetType()
-	replayer.offset += int64(n)
+	replayer.offset += n
 	handler := replayer.handlers[eType]
 	if handler == nil {
 		logutil.Infof("Replaying (%d, %d, %d) - %d", eType, meta.PayloadSize(), replayer.offset, replayer.count)

@@ -200,7 +200,10 @@ func (sw *SegmentWriter) Execute() error {
 		return err
 	}
 	footer := make([]byte, 64)
-	w.Seek(0, io.SeekEnd)
+	_, err = w.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
 	if _, err = w.Write(footer); err != nil {
 		return err
 	}

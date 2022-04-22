@@ -31,14 +31,14 @@ import (
 
 type sortedSegmentHolder struct {
 	common.RefHelper
-	ID     common.ID
-	BufMgr mgrif.IBufferManager
-	Inited bool
+	ID               common.ID
+	BufMgr           mgrif.IBufferManager
+	Inited           bool
 	versionAllocator ColumnsAllocator
-	self   struct {
+	self             struct {
 		sync.RWMutex
-		colIndices    map[int][]*Node
-		loadedVersion map[int]uint64
+		colIndices     map[int][]*Node
+		loadedVersion  map[int]uint64
 		droppedVersion map[int]uint64
 		fileHelper     map[string]*Node
 	}
@@ -525,7 +525,7 @@ func (holder *sortedSegmentHolder) DropIndex(filename string) {
 				idxes := holder.self.colIndices[int(col)]
 				for i, idx := range idxes {
 					if idx == node {
-						if i == len(idxes) - 1 {
+						if i == len(idxes)-1 {
 							idxes = idxes[:len(idxes)-1]
 						} else {
 							idxes = append(idxes[:i], idxes[i+1:]...)
@@ -603,8 +603,8 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 				idxes := holder.self.colIndices[int(col)]
 				for i, idx := range idxes {
 					if idx == node {
-						if i == len(idxes) - 1 {
-							idxes = idxes[:len(idxes) - 1]
+						if i == len(idxes)-1 {
+							idxes = idxes[:len(idxes)-1]
 						} else {
 							idxes = append(idxes[:i], idxes[i+1:]...)
 						}
@@ -650,9 +650,9 @@ func (holder *sortedSegmentHolder) LoadIndex(segFile base.ISegmentFile, filename
 			default:
 				panic("unsupported index type")
 			}
-			idxes, ok := holder.self.colIndices[col]
+			_, ok := holder.self.colIndices[col]
 			if !ok {
-				idxes = make([]*Node, 0)
+				idxes := make([]*Node, 0)
 				holder.self.colIndices[col] = idxes
 			}
 			holder.self.colIndices[col] = append(holder.self.colIndices[col], node)
@@ -687,4 +687,3 @@ func (holder *sortedSegmentHolder) close() {
 		holder.PostCloseCB(holder)
 	}
 }
-

@@ -58,7 +58,7 @@ type FilterCtx struct {
 	Err     error
 
 	BsiRequired bool
-	BlockSet []uint64
+	BlockSet    []uint64
 }
 
 func NewFilterCtx(t OpType) *FilterCtx {

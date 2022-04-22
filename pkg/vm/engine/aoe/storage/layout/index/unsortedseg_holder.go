@@ -31,10 +31,10 @@ type unsortedSegmentHolder struct {
 	common.RefHelper
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
-	tree struct {
+	tree   struct {
 		sync.RWMutex
 		blockHolders map[uint64]*BlockIndexHolder
-		BlockCnt int32
+		BlockCnt     int32
 	}
 	PostCloseCB PostCloseCB
 }

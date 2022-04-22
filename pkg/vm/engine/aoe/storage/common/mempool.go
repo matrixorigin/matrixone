@@ -61,7 +61,7 @@ var (
 
 func init() {
 	pools = make([]sync.Pool, len(PageSizes))
-	for idx, _ := range PageSizes {
+	for idx := range PageSizes {
 		pools[idx] = sync.Pool{
 			New: func(i int) func() interface{} {
 				return func() interface{} {
@@ -176,7 +176,7 @@ func NewMempool(capacity uint64) *Mempool {
 		pools:    make([]poolWrapper, len(PageSizes)),
 	}
 
-	for idx, _ := range PageSizes {
+	for idx := range PageSizes {
 		mp.pools[idx].idx = idx
 		mp.pools[idx].Pool = sync.Pool{New: pools[idx].New}
 		mp.pools[idx].Pool.Put(pools[idx].Get())
@@ -246,7 +246,7 @@ func (mp *Mempool) Free(n *MemNode) {
 	}
 	size := n.Size()
 	if n.IsQuota() {
-		atomic.AddUint64(&mp.quotausage, ^uint64(uint64(size)-1))
+		atomic.AddUint64(&mp.quotausage, ^(uint64(size)-1))
 		n = nil
 	} else {
 		if n.idx < uint8(len(PageSizes)) {
@@ -257,7 +257,7 @@ func (mp *Mempool) Free(n *MemNode) {
 			n = nil
 		}
 	}
-	usage := atomic.AddUint64(&mp.usage, ^uint64(uint64(size)-1))
+	usage := atomic.AddUint64(&mp.usage, ^(uint64(size)-1))
 	if usage > mp.capacity {
 		logutil.Panicf("logic error")
 	}

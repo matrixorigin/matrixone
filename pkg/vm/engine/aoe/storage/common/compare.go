@@ -63,4 +63,3 @@ func CompareInterface(a, b interface{}) int64 {
 	logutil.Infof("%+v\n%+v\n", a, b)
 	panic("invalid type")
 }
-
