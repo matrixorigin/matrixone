@@ -221,7 +221,10 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 	buf, _ := entry.Marshal()
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 

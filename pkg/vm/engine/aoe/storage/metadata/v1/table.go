@@ -220,7 +220,7 @@ func (e *Table) fillView(filter *Filter) *Table {
 	}
 	e.RLock()
 	segs := make([]*Segment, 0, len(e.SegmentSet))
-		segs = append(segs, e.SegmentSet...)
+	segs = append(segs, e.SegmentSet...)
 	e.RUnlock()
 	for _, seg := range segs {
 		segView := seg.fillView(filter)
@@ -453,9 +453,9 @@ func (e *Table) ToTableLogEntry(info *CommitInfo) tableLogEntry {
 	entry := tableLogEntry{
 		Table: &Table{
 			BaseEntry: &BaseEntry{
-				Id: e.Id, 
+				Id:         e.Id,
 				CommitInfo: info.Clone()},
-			Schema:    e.Schema},
+			Schema: e.Schema},
 		DatabaseId: e.Database.Id,
 	}
 	return entry
@@ -502,7 +502,10 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	}
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 
@@ -675,7 +678,10 @@ func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpe
 			Database:   db,
 			IdIndex:    make(map[uint64]int),
 		}
-		db.onNewTable(table)
+		err := db.onNewTable(table)
+		if err != nil {
+			panic(err)
+		}
 		tables[i] = table
 	}
 	idx := 0
@@ -758,7 +764,10 @@ func (e *Table) PString(level PPLevel, depth int) string {
 func MockDBTable(catalog *Catalog, dbName string, schema *Schema, indice *IndexSchema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
 	index := idxGen.Next()
 	if catalog.IndexWal != nil {
-		catalog.IndexWal.SyncLog(index)
+		err := catalog.IndexWal.SyncLog(index)
+		if err != nil {
+			panic(err)
+		}
 	}
 	db, err := catalog.SimpleCreateDatabase(dbName, index)
 	if err != nil {
@@ -781,7 +790,10 @@ func MockTable(db *Database, schema *Schema, indice *IndexSchema, blkCnt uint64,
 	}
 	logFn := func(index *LogIndex) {
 		if db.Catalog.IndexWal != nil {
-			db.Catalog.IndexWal.SyncLog(index)
+			err := db.Catalog.IndexWal.SyncLog(index)
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 	ckFn := func(index *LogIndex) {

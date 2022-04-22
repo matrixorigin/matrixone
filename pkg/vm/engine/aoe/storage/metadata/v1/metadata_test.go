@@ -980,8 +980,8 @@ func TestUpgrade(t *testing.T) {
 				segment, err := db.SimpleGetSegment(tableId, segmentId)
 				assert.Nil(t, err)
 				err = segment.SimpleUpgrade(mockSegmentSize, nil)
-				if err != nil{
-					assert.Equal(t,ErrUpgradeInfullSegment,err)
+				if err != nil {
+					assert.Equal(t, ErrUpgradeInfullSegment, err)
 				}
 				atomic.AddUint64(&upgradedSegments, uint64(1))
 				// segment.RLock()
@@ -1001,8 +1001,8 @@ func TestUpgrade(t *testing.T) {
 			assert.Equal(t, OpCreate, block.CommitInfo.Op)
 			block.RUnlock()
 			err = block.SimpleUpgrade(nil)
-			if err != nil{
-				assert.Equal(t,ErrUpgradeInfullBlock,err)
+			if err != nil {
+				assert.Equal(t, ErrUpgradeInfullBlock, err)
 			}
 			atomic.AddUint64(&upgradedBlocks, uint64(1))
 			// block.RLock()
@@ -1538,16 +1538,20 @@ func TestSplit2(t *testing.T) {
 	assert.Nil(t, err)
 	indexWal.Checkpoint(gen.Curr(shardId))
 	wg.Add(1)
-	w1.Submit(createBlock(t, 1, gen, shardId, db, 0, wg, w2))
+	err = w1.Submit(createBlock(t, 1, gen, shardId, db, 0, wg, w2))
+	assert.Nil(t, err)
 	wg.Wait()
 	wg.Add(1)
-	w1.Submit(createBlock(t, 1, gen, shardId, db, 1, wg, w2))
+	err = w1.Submit(createBlock(t, 1, gen, shardId, db, 1, wg, w2))
+	assert.Nil(t, err)
 	wg.Wait()
 	wg.Add(1)
-	w1.Submit(createBlock(t, 1, gen, shardId, db, 2, wg, w2))
+	err = w1.Submit(createBlock(t, 1, gen, shardId, db, 2, wg, w2))
+	assert.Nil(t, err)
 	wg.Wait()
 	wg.Add(1)
-	w1.Submit(createBlock(t, 1, gen, shardId, db, 3, wg, w2))
+	err = w1.Submit(createBlock(t, 1, gen, shardId, db, 3, wg, w2))
+	assert.Nil(t, err)
 	wg.Wait()
 	testutils.WaitExpect(100, func() bool {
 		return db.GetCheckpointId() == gen.Get(shardId)
