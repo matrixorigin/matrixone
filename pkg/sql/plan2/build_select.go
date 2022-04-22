@@ -64,6 +64,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 			case tree.Descending:
 				orderBy.OrderByFlags = plan.OrderBySpec_DESC
 			}
+			orderBys = append(orderBys, orderBy)
 		}
 		node.OrderBy = orderBys
 	}
