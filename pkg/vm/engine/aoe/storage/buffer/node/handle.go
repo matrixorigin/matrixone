@@ -230,7 +230,7 @@ func (h *NodeHandle) MakeHandle() nif.IBufferHandle {
 }
 
 func (h *NodeHandle) SetBuffer(buf buf.IBuffer) error {
-	if h.Buff != nil || h.GetCapacity() != uint64(buf.GetCapacity()) {
+	if h.Buff != nil || h.GetCapacity() != buf.GetCapacity() {
 		return errors.New("logic error")
 	}
 	h.Buff = buf

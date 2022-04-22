@@ -41,7 +41,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 			Name: name,
 		}
 		if i == 1 {
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+			colInfo.Type = types.Type{Oid: types.T_varchar, Size: 24}
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
@@ -88,7 +88,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) (*db.Tabl
 		for _, col := range indexInfo.Columns {
 			cols = append(cols, int(col))
 		}
-		tp:=metadata.ZoneMap
+		tp := metadata.ZoneMap
 		// if _, err = indice.MakeIndex(indexInfo.Name, metadata.IndexT(indexInfo.Type), cols...); err != nil {
 		if _, err = indice.MakeIndex(indexInfo.Name, tp, cols...); err != nil {
 			panic(err)
@@ -105,13 +105,13 @@ func IndiceInfoToIndiceSchema(info *aoe.IndexInfo) *db.IndexSchema {
 	}
 	indice := metadata.NewIndexSchema()
 	var tp metadata.IndexT
-	switch info.Type{
+	switch info.Type {
 	case aoe.NumBsi:
-		tp=metadata.NumBsi
+		tp = metadata.NumBsi
 	case aoe.FixStrBsi:
-		tp=metadata.FixStrBsi
+		tp = metadata.FixStrBsi
 	case aoe.ZoneMap:
-		tp=metadata.ZoneMap
+		tp = metadata.ZoneMap
 	}
 	_, err := indice.MakeIndex(info.Name, tp, columns...)
 	if err != nil {

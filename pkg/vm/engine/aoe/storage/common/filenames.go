@@ -38,7 +38,7 @@ const (
 	SegSuffix  = ".seg"
 	LockSuffix = ".lock"
 	NodeSuffix = ".nod"
-	BSISuffix = ".bsi"
+	BSISuffix  = ".bsi"
 	BBSISuffix = ".bbsi"
 
 	SpillDirName = "spill"
@@ -178,7 +178,7 @@ func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblID, se
 	if err != nil {
 		return 0, 0, 0, 0, 0, false
 	}
-	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint64(arr[3]), uint16(arr[4]),true
+	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint64(arr[3]), uint16(arr[4]), true
 }
 
 func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {

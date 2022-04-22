@@ -68,7 +68,8 @@ func TestUpgradeBlk(t *testing.T) {
 	for _, segMeta := range tableMeta.SegmentSet {
 		for _, blkMeta := range segMeta.BlockSet {
 			blkMeta.Count = blkMeta.Segment.Table.Schema.BlockMaxRows
-			blkMeta.SimpleUpgrade(nil)
+			err := blkMeta.SimpleUpgrade(nil)
+			assert.Nil(t, err)
 		}
 	}
 
@@ -146,7 +147,8 @@ func TestUpgradeSeg(t *testing.T) {
 	for _, segMeta := range tableMeta.SegmentSet {
 		for _, blkMeta := range segMeta.BlockSet {
 			blkMeta.Count = blkMeta.Segment.Table.Schema.BlockMaxRows
-			blkMeta.SimpleUpgrade(nil)
+			err:=blkMeta.SimpleUpgrade(nil)
+			assert.Nil(t, err)
 		}
 	}
 

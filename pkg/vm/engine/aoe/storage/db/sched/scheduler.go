@@ -247,7 +247,10 @@ func (s *scheduler) onFlushBlkDone(e sched.Event) {
 // new flush table event and an upgrade block event.
 func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.OnBackgroundError(err)
+		err := s.opts.EventListener.OnBackgroundError(err)
+		if err != nil {
+			panic(err)
+		}
 		return
 	}
 	event := e.(*commitBlkEvent)
@@ -263,7 +266,10 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	}
 	logutil.Infof(" %s | Block %d | UpgradeBlkEvent | Started", sched.EventPrefix, newMeta.Id)
 	newevent := NewUpgradeBlkEvent(mctx, newMeta, tableData)
-	s.Schedule(newevent)
+	err = s.Schedule(newevent)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }
 
 // onUpgradeBlkDone handles the finished upgrade block event, and if segment
@@ -272,7 +278,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	event := e.(*upgradeBlkEvent)
 	defer event.TableData.Unref()
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.OnBackgroundError(err)
+		err := s.opts.EventListener.OnBackgroundError(err)
+		if err != nil {
+			panic(err)
+		}
 		return
 	}
 	if !event.Ctx.HasDataScope() {
@@ -283,7 +292,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	if event.Data.GetType() == base.PERSISTENT_BLK {
 		flushIdxEvent := NewFlushBlockIndexEvent(&Context{Opts: s.opts}, event.Data)
 		flushIdxEvent.FlushAll = true
-		s.Schedule(flushIdxEvent)
+		err := s.Schedule(flushIdxEvent)
+		if err != nil && err != sched.ErrSchedule {
+			panic(err)
+		}
 	}
 	if !event.SegmentClosed {
 		return
@@ -300,7 +312,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.Id)
 	flushCtx := &Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
-	s.Schedule(flushEvent)
+	err := s.Schedule(flushEvent)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }
 
 // onFlushSegDone handles the finished flush segment event, generates a new
@@ -327,7 +342,10 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	}
 	logutil.Infof(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.Id)
 	newevent := NewUpgradeSegEvent(ctx, event.Segment, td)
-	s.Schedule(newevent)
+	err = s.Schedule(newevent)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }
 
 // onUpgradeSegDone handles the finished upgrade segment event and releases the
@@ -345,7 +363,10 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	flushCtx := &Context{Opts: s.opts}
 	newevent := NewFlushSegIndexEvent(flushCtx, event.Segment)
 	newevent.FlushAll = true
-	s.Schedule(newevent)
+	err := s.Schedule(newevent)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }
 
 func (s *scheduler) OnExecDone(op interface{}) {
@@ -421,7 +442,10 @@ func (s *scheduler) ExecCmd(cmd CommandType) error {
 func (s *scheduler) InstallBlock(meta *metadata.Block, tableData iface.ITableData) (block iface.IBlock, err error) {
 	ctx := &Context{Opts: s.opts, Waitable: true}
 	e := NewInstallBlockEvent(ctx, meta, tableData)
-	s.Schedule(e)
+	err = s.Schedule(e)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 	if err = e.WaitDone(); err != nil {
 		return
 	}
@@ -432,5 +456,8 @@ func (s *scheduler) InstallBlock(meta *metadata.Block, tableData iface.ITableDat
 func (s *scheduler) AsyncFlushBlock(block iface.IMutBlock) {
 	ctx := &Context{Opts: s.opts}
 	e := NewFlushMemBlockEvent(ctx, block)
-	s.Schedule(e)
+	err := s.Schedule(e)
+	if err != nil && err != sched.ErrSchedule {
+		panic(err)
+	}
 }

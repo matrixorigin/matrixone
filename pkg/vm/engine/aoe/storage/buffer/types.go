@@ -15,8 +15,8 @@
 package buf
 
 import (
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"io"
 )
 
 type MemoryFreeFunc func(IMemoryNode)

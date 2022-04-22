@@ -57,9 +57,15 @@ func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string
 
 func initDataAndMetaDir(dir string) {
 	dataDir := common.MakeDataDir(dir)
-	os.MkdirAll(dataDir, os.ModePerm)
+	err := os.MkdirAll(dataDir, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
 	metaDir := common.MakeMetaDir(dir)
-	os.MkdirAll(metaDir, os.ModePerm)
+	err = os.MkdirAll(metaDir, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
 }
 
 type replayObserver struct {
@@ -98,8 +104,9 @@ func TestReplay2(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := len(seg.BlockSet) - 2; i >= 0; i-- {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err:=blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		blkfiles = append(blkfiles, name)
@@ -115,7 +122,8 @@ func TestReplay2(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err=replayHandle.Replay()
+	assert.Nil(t, err)
 	replayHandle.Cleanup()
 
 	assert.Equal(t, 0, len(observer.removed))
@@ -157,8 +165,9 @@ func TestReplay3(t *testing.T) {
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet)-1; i++ {
 		blk := seg.BlockSet[i]
-		blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
-		err := blk.SimpleUpgrade(nil)
+		err:=blk.SetCount(opts.Meta.Catalog.Cfg.BlockMaxRows)
+		assert.Nil(t, err)
+		err = blk.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 		// name := mockBlkFile(*blk.AsCommonID(), dir, t)
 		// blkfiles = append(blkfiles, name)
@@ -498,7 +507,8 @@ func TestReplay8(t *testing.T) {
 	}
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
-	replayHandle.Replay()
+	err=replayHandle.Replay()
+	assert.Nil(t, err)
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
@@ -778,7 +788,7 @@ func TestReplay11(t *testing.T) {
 	catalog.Close()
 }
 
-func TestReplay15(t *testing.T)  {
+func TestReplay15(t *testing.T) {
 	// Delete part of the data of the last entry
 	ReplayTruncate(3000, t)
 	// Only keep the meta data of the last entry
@@ -839,7 +849,8 @@ func ReplayTruncate(size int64, t *testing.T) {
 	sort.Slice(observer.removed, func(i, j int) bool {
 		return observer.removed[i] < observer.removed[j]
 	})
-	catalog.Store.Truncate(size)
+	err=catalog.Store.Truncate(size)
+	assert.Nil(t, err)
 	catalog.Close()
 
 	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)

@@ -148,7 +148,7 @@ type blockfile struct {
 	name      string
 	transient bool
 	next      *blockfile
-	committed  bool
+	committed bool
 	meta      *metadata.Block
 	ver       uint64
 }
@@ -185,11 +185,11 @@ type sortedSegmentFile struct {
 }
 
 type unsortedSegmentFile struct {
-	h          *replayHandle
-	id         common.ID
-	files      map[common.ID]*blockfile
+	h           *replayHandle
+	id          common.ID
+	files       map[common.ID]*blockfile
 	uncommitted []*blockfile
-	meta       *metadata.Segment
+	meta        *metadata.Segment
 }
 
 type bsiFile struct {
@@ -204,9 +204,9 @@ func (bf *bsiFile) clean() {
 
 func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
-		h:          h,
-		id:         id,
-		files:      make(map[common.ID]*blockfile),
+		h:           h,
+		id:          id,
+		files:       make(map[common.ID]*blockfile),
 		uncommitted: make([]*blockfile, 0),
 	}
 }
@@ -678,11 +678,14 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 			// as SORTED. For example, a crash happened after creating a sorted segment file and
 			// before committing the metadata as SORTED. These segments will be committed as SORTED
 			// during replaying.
-			segment.SimpleUpgrade(file.size(), nil)
+			err := segment.SimpleUpgrade(file.size(), nil)
+			if err != nil {
+				return err
+			}
 			continue
 		}
 	}
-	for id, _ := range tablesFiles.sortedfiles {
+	for id := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
 		if ok {
 			// There are multi versions for a segment (Ex. Unsorted -> Sorted). Under normal

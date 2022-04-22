@@ -260,7 +260,10 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	if err = loader.CommitLoad(); err != nil {
 		return err
 	}
-	loader.ScheduleEvents(d)
+	err = loader.ScheduleEvents(d)
+	if err != nil {
+		return err
+	}
 	if database != nil {
 		d.ScheduleGCDatabase(database)
 	}

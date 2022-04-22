@@ -74,70 +74,100 @@ func MockVector(t types.Type, rows uint64) IVector {
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int8(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_int16:
 		vec = NewStdVector(t, rows)
 		var vals []int16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int16(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_int32:
 		vec = NewStdVector(t, rows)
 		var vals []int32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_int64:
 		vec = NewStdVector(t, rows)
 		var vals []int64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, int64(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_uint8:
 		vec = NewStdVector(t, rows)
 		var vals []uint8
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint8(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_uint16:
 		vec = NewStdVector(t, rows)
 		var vals []uint16
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint16(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_uint32:
 		vec = NewStdVector(t, rows)
 		var vals []uint32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, uint32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_uint64:
 		vec = NewStdVector(t, rows)
 		var vals []uint64
 		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, uint64(i%5000))
+			vals = append(vals, i%5000)
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_float32:
 		vec = NewStdVector(t, rows)
 		var vals []float32
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float32(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_float64:
 		vec = NewStdVector(t, rows)
 		var vals []float64
 		for i := uint64(0); i < rows; i++ {
 			vals = append(vals, float64(i%5000))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_varchar, types.T_char:
 		vec = NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
@@ -146,21 +176,30 @@ func MockVector(t types.Type, rows uint64) IVector {
 			s := fmt.Sprintf("%s%d", prefix, i)
 			vals = append(vals, []byte(s))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_datetime:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Datetime, 0, rows)
 		for i := uint64(1); i <= rows; i++ {
 			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	case types.T_date:
 		vec = NewStdVector(t, rows)
 		vals := make([]types.Date, 0, rows)
 		for i := int32(1); i <= int32(rows); i++ {
 			vals = append(vals, types.FromCalendar(i*100, 1, 1))
 		}
-		vec.Append(len(vals), vals)
+		err := vec.Append(len(vals), vals)
+		if err != nil {
+			panic(err)
+		}
 	default:
 		panic("not supported")
 	}

@@ -16,9 +16,9 @@ package iface
 
 import (
 	"fmt"
-	"io"
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"io"
 	"sync"
 	"sync/atomic"
 )

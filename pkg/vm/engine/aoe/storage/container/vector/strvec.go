@@ -279,7 +279,7 @@ func (v *StrVector) GetLatestView() IVector {
 			StatMask: container.ReadonlyMask | mask,
 			Type:     v.Type,
 		},
-		Data: v.Data.Window(0, int(endPos)),
+		Data: v.Data.Window(0, endPos),
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
@@ -385,7 +385,10 @@ func (v *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 	// TODO: will remove below os.File type check.
 	switch f := r.(type) {
 	case *os.File:
-		f.Seek(0, io.SeekStart)
+		_, err := f.Seek(0, io.SeekStart)
+		if err != nil {
+			return 0, err
+		}
 	}
 	realSize := encoding.DecodeUint64(capBuf)
 	buf := make([]byte, realSize)

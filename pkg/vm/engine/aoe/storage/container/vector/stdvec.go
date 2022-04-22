@@ -507,7 +507,10 @@ func (v *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 	// TODO: will remove below os.File type check.
 	switch f := r.(type) {
 	case *os.File:
-		f.Seek(0, io.SeekStart)
+		_, err := f.Seek(0, io.SeekStart)
+		if err != nil {
+			return 0, err
+		}
 	}
 	realSize := encoding.DecodeUint64(capBuf)
 	buf := make([]byte, realSize)

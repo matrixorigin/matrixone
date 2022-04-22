@@ -37,8 +37,10 @@ func (d *DB) DoFlushDatabase(meta *metadata.Database) error {
 		tables = append(tables, t)
 		return nil
 	}
-	meta.ForLoopTables(fn)
-	var err error
+	err := meta.ForLoopTables(fn)
+	if err != nil {
+		return err
+	}
 	for _, t := range tables {
 		if err = d.DoFlushTable(t); err != nil {
 			break
@@ -161,7 +163,10 @@ func (d *DB) MakeMutationHandle(meta *metadata.Table) (iface.MutationHandle, err
 func (d *DB) GetTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.Id)
 	if err != nil {
-		d.Store.DataTables.RegisterTable(meta)
+		_, err := d.Store.DataTables.RegisterTable(meta)
+		if err != nil {
+			return nil, err
+		}
 		if data, err = d.Store.DataTables.StrongRefTable(meta.Id); err != nil {
 			return nil, err
 		}

@@ -88,7 +88,7 @@ func TestStdVector(t *testing.T) {
 	assert.True(t, view.HasNull())
 
 	vvec = v.New(schema.ColDefs[2].Type)
-	assert.Nil(t, v.Append(vvec,  make([]int32, 9999)))
+	assert.Nil(t, v.Append(vvec, make([]int32, 9999)))
 	nulls.Add(vvec.Nsp, 0)
 	vec2 := vecs[2]
 	_, err = vec2.AppendVector(vvec, 0)
@@ -119,7 +119,7 @@ func TestStdVector(t *testing.T) {
 
 	newCap := uint64(1024 * 1024)
 	vvec = v.New(schema.ColDefs[2].Type)
-	err = v.Append(vvec,  []int32{0, 1, 2, 3, 4})
+	err = v.Append(vvec, []int32{0, 1, 2, 3, 4})
 	assert.Nil(t, err)
 	nulls.Add(vvec.Nsp, 2, 3)
 	var lens []int
@@ -213,10 +213,12 @@ func TestStdVector(t *testing.T) {
 	assert.True(t, tmpv.Type.Eq(schema.ColDefs[2].Type))
 
 	f, err := os.Create("/tmp/teststdvec")
+	assert.Nil(t, err)
 	_, err = vecs[1].WriteTo(f)
 	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
 	f, err = os.Open("/tmp/teststdvec")
+	assert.Nil(t, err)
 	tmpv = NewEmptyStdVector()
 	_, err = tmpv.ReadFrom(f)
 	assert.Nil(t, f.Close())

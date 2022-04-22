@@ -285,7 +285,10 @@ func (ss *ssLoader) ScheduleEvents(d *DB) error {
 		segment := table.StrongRefSegment(meta.Id)
 		flushCtx := &sched.Context{Opts: d.Opts}
 		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
-		d.Scheduler.Schedule(flushEvent)
+		err := d.Scheduler.Schedule(flushEvent)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
