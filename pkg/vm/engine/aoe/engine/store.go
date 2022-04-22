@@ -32,7 +32,7 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 		}
 		s.start = true
 		s.mutex.Unlock()
-		logutil.Infof("filter is %v", reader.filter)
+		logutil.Infof("filter: %v", reader.filter)
 		for _, filter := range reader.filter{
 			filter.blocks = make([]aoe.Block, 0)
 			for _, extent := range filter.extent {
@@ -45,7 +45,6 @@ func (s *store) GetBatch(refCount []uint64, attrs []string, reader *aoeReader) *
 				}
 			}
 			s.SetBlocks(blocks)
-			//s.sparseFilter(&filter)
 		}
 		s.ReadStart(refCount, attrs)
 	}
@@ -91,7 +90,6 @@ func (s *store) ReadStart(refCount []uint64, attrs []string) {
 		return
 	}
 	num := s.iodepth
-	logutil.Infof("blockssss is %d", len(s.blocks))
 	mod := len(s.blocks) / num
 	if mod == 0 {
 		mod = 1
