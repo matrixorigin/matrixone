@@ -90,6 +90,12 @@ func (seg *txnSegment) SoftDeleteBlock(id uint64) (err error) {
 	return seg.Txn.GetStore().SoftDeleteBlock(fp)
 }
 
+func (seg *txnSegment) GetBlock(id uint64) (blk handle.Block, err error) {
+	fp := seg.entry.AsCommonID()
+	fp.BlockID = id
+	return seg.Txn.GetStore().GetBlock(fp)
+}
+
 func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
 	return seg.Txn.GetStore().CreateBlock(seg.entry.GetTable().GetID(), seg.entry.GetID())
 }

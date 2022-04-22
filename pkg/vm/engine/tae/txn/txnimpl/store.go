@@ -315,6 +315,14 @@ func (store *txnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block
 	return table.CreateNonAppendableBlock(id.SegmentID)
 }
 
+func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
+	var table Table
+	if table, err = store.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.GetBlock(id)
+}
+
 func (store *txnStore) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
 	var table Table
 	if table, err = store.getOrSetTable(tid); err != nil {

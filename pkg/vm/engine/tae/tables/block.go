@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -158,7 +157,7 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		readLock := blk.controller.GetSharedLock()
 		maxRow, visible = blk.controller.GetMaxVisibleRowLocked(ts)
 		readLock.Unlock()
-		logutil.Infof("maxrow=%d", maxRow)
+		// logutil.Infof("maxrow=%d", maxRow)
 	}
 	if !visible {
 		return
@@ -332,5 +331,6 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (v interface{
 	deleteChain := blk.controller.GetDeleteChain()
 	view.DeleteMask = deleteChain.CollectDeletesInRange(startTs, endTs)
 	readLock.Unlock()
-	return v
+	v = view
+	return
 }

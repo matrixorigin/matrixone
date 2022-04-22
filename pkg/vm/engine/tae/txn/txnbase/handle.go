@@ -81,6 +81,7 @@ func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error)         {
 func (seg *TxnSegment) PushDeleteOp(handle.Filter) (err error)                      { return }
 func (seg *TxnSegment) PushUpdateOp(handle.Filter, string, interface{}) (err error) { return }
 func (seg *TxnSegment) SoftDeleteBlock(id uint64) (err error)                       { return }
+func (seg *TxnSegment) GetBlock(id uint64) (blk handle.Block, err error)            { return }
 func (seg *TxnSegment) CreateBlock() (blk handle.Block, err error)                  { return }
 func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error)     { return }
 func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }

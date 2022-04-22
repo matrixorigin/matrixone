@@ -184,6 +184,7 @@ type TxnStore interface {
 	GetSegment(id *common.ID) (handle.Segment, error)
 	CreateSegment(tid uint64) (handle.Segment, error)
 	CreateBlock(tid, sid uint64) (handle.Block, error)
+	GetBlock(id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(id *common.ID) (handle.Block, error)
 	SoftDeleteBlock(id *common.ID) error
 

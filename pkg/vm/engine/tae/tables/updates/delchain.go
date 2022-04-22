@@ -162,8 +162,6 @@ func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *ro
 	}
 	mask = endNode.GetDeleteMaskLocked()
 	mask2 := startNode.GetDeleteMaskLocked()
-	// mask = endNode.(*DeleteNode).GetDeleteMaskLocked()
-	// mask2 := startNode.(*DeleteNode).GetDeleteMaskLocked()
 	mask.AndNot(mask2)
 	return
 }

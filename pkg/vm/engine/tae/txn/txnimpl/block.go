@@ -41,10 +41,13 @@ func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
 	}
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
+		curr.RLock()
 		if curr.TxnCanRead(it.txn, nil) {
+			curr.RUnlock()
 			it.curr = curr
 			break
 		}
+		curr.RUnlock()
 		it.linkIt.Next()
 	}
 	// if it.linkIt.Valid() {

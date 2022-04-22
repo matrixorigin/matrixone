@@ -12,6 +12,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 )
@@ -131,6 +133,12 @@ func TestCompactBlock1(t *testing.T) {
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	}
 
+	v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 2)
+	filter := handle.Filter{
+		Op:  handle.FilterEq,
+		Val: v,
+	}
+	// 1. No updates and deletes
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
@@ -143,6 +151,77 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		t.Log(blkMeta.String())
+		task := tasks.NewCompactBlockTask(txn, block)
+		data, err := task.PrepareData()
+		assert.Nil(t, err)
+		assert.NotNil(t, data)
+		for col := 0; col < len(data.Vecs); col++ {
+			for row := 0; row < vector.Length(bat.Vecs[0]); row++ {
+				exp := compute.GetValue(bat.Vecs[col], uint32(row))
+				act := compute.GetValue(data.Vecs[col], uint32(row))
+				assert.Equal(t, exp, act)
+			}
+		}
+		id, offset, err := rel.GetByFilter(&filter)
+		assert.Nil(t, err)
+
+		err = rel.RangeDelete(id, offset, offset)
+		assert.Nil(t, err)
+
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 3)
+		filter.Val = v
+		id, _, err := rel.GetByFilter(&filter)
+		assert.Nil(t, err)
+		seg, err := rel.GetSegment(id.SegmentID)
+		block, err := seg.GetBlock(id.BlockID)
+		assert.Nil(t, err)
+		task := tasks.NewCompactBlockTask(txn, block)
+		data, err := task.PrepareData()
+		assert.Nil(t, err)
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
+		{
+			txn, _ := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			v = compute.GetValue(bat.Vecs[schema.PrimaryKey], 4)
+			filter.Val = v
+			id, offset, err := rel.GetByFilter(&filter)
+			assert.Nil(t, err)
+			err = rel.RangeDelete(id, offset, offset)
+			assert.Nil(t, err)
+			err = rel.Update(id, offset+1, uint16(schema.PrimaryKey), int32(99))
+			assert.Nil(t, err)
+			assert.Nil(t, txn.Commit())
+		}
+		task = tasks.NewCompactBlockTask(txn, block)
+		data, err = task.PrepareData()
+		assert.Nil(t, err)
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
+		var maxTs uint64
+		{
+			txn, _ := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			seg, _ := rel.GetSegment(id.SegmentID)
+			blk, _ := seg.GetBlock(id.BlockID)
+			task := tasks.NewCompactBlockTask(txn, blk)
+			data, err := task.PrepareData()
+			assert.Nil(t, err)
+			assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(data.Vecs[0]))
+			t.Log(blk.String())
+			maxTs = txn.GetStartTS()
+		}
+
+		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		changes := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1).(*updates.BlockView)
+		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
+		// t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	}
 }
 

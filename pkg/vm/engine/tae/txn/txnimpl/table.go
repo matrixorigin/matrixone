@@ -66,6 +66,7 @@ type Table interface {
 	GetSegment(id uint64) (handle.Segment, error)
 	CreateSegment() (handle.Segment, error)
 	CreateBlock(sid uint64) (handle.Block, error)
+	GetBlock(id *common.ID) (handle.Block, error)
 	SoftDeleteBlock(id *common.ID) error
 	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
@@ -238,6 +239,19 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	tbl.cblks = append(tbl.cblks, meta)
 	tbl.warChecker.readSegmentVar(seg)
+	return
+}
+
+func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
+	var seg *catalog.SegmentEntry
+	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
+		return
+	}
+	meta, err := seg.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		return
+	}
+	blk = newBlock(tbl.txn, meta)
 	return
 }
 

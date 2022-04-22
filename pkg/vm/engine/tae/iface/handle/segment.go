@@ -21,6 +21,8 @@ type SegmentReader interface {
 	String() string
 	GetMeta() interface{}
 
+	GetBlock(id uint64) (Block, error)
+
 	BatchDedup(col *vector.Vector) error
 }
 
