@@ -47,6 +47,7 @@ func (v *BaseVector) ResetReadonly() {
 	atomic.StoreUint64(&v.StatMask, mask)
 }
 
+func (v *BaseVector) GetDataType() types.Type { return v.Type }
 func (v *BaseVector) IsReadonly() bool {
 	return atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask != 0
 }

@@ -42,6 +42,7 @@ type IVectorWriter interface {
 }
 
 type IVector interface {
+	GetDataType() types.Type
 	ResetReadonly()
 	IsReadonly() bool
 	container.IVectorReader

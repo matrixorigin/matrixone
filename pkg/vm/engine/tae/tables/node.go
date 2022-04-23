@@ -11,9 +11,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/sirupsen/logrus"
@@ -21,7 +21,7 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file  dataio.BlockFile
+	file  file.Block
 	block *dataBlock
 	data  batch.IBatch
 	rows  uint32
@@ -29,7 +29,7 @@ type appendableNode struct {
 	cond  *flusher.FlushCond
 }
 
-func newNode(mgr base.INodeManager, block *dataBlock, file dataio.BlockFile) *appendableNode {
+func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
 	impl := new(appendableNode)
 	id := block.meta.AsCommonID()
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
@@ -55,9 +55,7 @@ func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 }
 
 func (node *appendableNode) OnDestory() {
-	if err := node.file.Destory(); err != nil {
-		panic(err)
-	}
+	node.file.Unref()
 }
 
 func (node *appendableNode) GetVectorView(maxRow uint32, attr string) (vec vector.IVector, err error) {
@@ -84,7 +82,8 @@ func (node *appendableNode) GetVectorCopy(maxRow uint32, attr string, compressed
 
 func (node *appendableNode) OnLoad() {
 	var err error
-	if node.data, err = node.file.LoadData(); err != nil {
+	schema := node.block.meta.GetSchema()
+	if node.data, err = node.file.LoadIBatch(schema.Types(), schema.BlockMaxRows); err != nil {
 		panic(err)
 	}
 }
@@ -112,7 +111,7 @@ func (node *appendableNode) OnUnload() {
 	deleteChain := controller.GetDeleteChain()
 	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
 	readLock.Unlock()
-	if err := node.file.WriteData(node.data, ts, masks, vals, dnode.GetDeleteMaskLocked()); err != nil {
+	if err := node.file.WriteIBatch(node.data, ts, masks, vals, dnode.GetDeleteMaskLocked()); err != nil {
 		panic(err)
 	}
 	if err := node.file.Sync(); err != nil {

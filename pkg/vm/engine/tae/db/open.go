@@ -5,7 +5,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -46,7 +46,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil)
 
-	dataFactory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr)
 	db.TxnLogDriver = txnbase.NewNodeDriver(dirname, WALDir, nil)
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.TxnLogDriver, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)

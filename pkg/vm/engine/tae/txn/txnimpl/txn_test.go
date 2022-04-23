@@ -13,7 +13,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -563,7 +563,8 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	driver := txnbase.NewNodeDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
+	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr)
+	// factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
 	mgr.Start()
 	return c, mgr, driver

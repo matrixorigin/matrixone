@@ -4,18 +4,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type dataSegment struct {
 	meta   *catalog.SegmentEntry
-	file   dataio.SegmentFile
+	file   file.Segment
 	bufMgr base.INodeManager
 }
 
-func newSegment(meta *catalog.SegmentEntry, factory dataio.SegmentFileFactory, bufMgr base.INodeManager) *dataSegment {
+func newSegment(meta *catalog.SegmentEntry, factory file.SegmentFileFactory, bufMgr base.INodeManager) *dataSegment {
 	segFile := factory("xxx", meta.GetID())
 	seg := &dataSegment{
 		meta:   meta,
@@ -25,7 +25,7 @@ func newSegment(meta *catalog.SegmentEntry, factory dataio.SegmentFileFactory, b
 	return seg
 }
 
-func (segment *dataSegment) GetSegmentFile() dataio.SegmentFile {
+func (segment *dataSegment) GetSegmentFile() file.Segment {
 	return segment.file
 }
 

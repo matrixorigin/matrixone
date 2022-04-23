@@ -14,7 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -30,7 +30,7 @@ func initTestContext(t *testing.T, dir string, txnBufSize, mutBufSize uint64) (*
 	driver := txnbase.NewNodeDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(txnBufSize, nil)
 	mutBufMgr := buffer.NewNodeManager(mutBufSize, nil)
-	factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
+	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr)
 	mgr := txnbase.NewTxnManager(txnimpl.TxnStoreFactory(c, driver, txnBufMgr, factory), txnimpl.TxnFactory(c))
 	mgr.Start()
 	return c, mgr, driver, txnBufMgr, mutBufMgr
@@ -50,7 +50,7 @@ func TestTables1(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
 
-	dataFactory := tables.NewDataFactory(dataio.SegmentFileMockFactory, txnBufMgr)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, txnBufMgr)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()

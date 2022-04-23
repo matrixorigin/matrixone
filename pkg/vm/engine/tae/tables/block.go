@@ -18,8 +18,8 @@ import (
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -28,15 +28,21 @@ type dataBlock struct {
 	*sync.RWMutex
 	meta                 *catalog.BlockEntry
 	node                 *appendableNode
-	file                 dataio.BlockFile
+	file                 file.Block
 	bufMgr               base.INodeManager
 	updatableIndexHolder acif.IAppendableBlockIndexHolder
 	controller           *updates.MutationController
 	maxCkp               uint64
 }
 
-func newBlock(meta *catalog.BlockEntry, segFile dataio.SegmentFile, bufMgr base.INodeManager) *dataBlock {
-	file := segFile.GetBlockFile(meta.GetID())
+func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager) *dataBlock {
+	colCnt := len(meta.GetSchema().ColDefs)
+	indexCnt := make(map[int]int)
+	indexCnt[int(meta.GetSchema().PrimaryKey)] = 2
+	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
+	if err != nil {
+		panic(err)
+	}
 	var node *appendableNode
 	block := &dataBlock{
 		RWMutex:    new(sync.RWMutex),
@@ -74,7 +80,7 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 		rows := int(blk.node.Rows(txn, coarse))
 		return rows
 	}
-	return int(blk.file.Rows())
+	return int(blk.file.ReadRows())
 }
 
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {

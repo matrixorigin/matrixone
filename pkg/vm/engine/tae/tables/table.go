@@ -3,18 +3,18 @@ package tables
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type dataTable struct {
 	meta        *catalog.TableEntry
-	fileFactory dataio.SegmentFileFactory
+	fileFactory file.SegmentFileFactory
 	bufMgr      base.INodeManager
 	aBlk        *dataBlock
 }
 
-func newTable(meta *catalog.TableEntry, fileFactory dataio.SegmentFileFactory, bufMgr base.INodeManager) *dataTable {
+func newTable(meta *catalog.TableEntry, fileFactory file.SegmentFileFactory, bufMgr base.INodeManager) *dataTable {
 	return &dataTable{
 		meta:        meta,
 		fileFactory: fileFactory,

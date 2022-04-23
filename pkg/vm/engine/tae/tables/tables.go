@@ -3,16 +3,16 @@ package tables
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 type DataFactory struct {
-	fileFactory  dataio.SegmentFileFactory
+	fileFactory  file.SegmentFileFactory
 	appendBufMgr base.INodeManager
 }
 
-func NewDataFactory(fileFactory dataio.SegmentFileFactory, appendBufMgr base.INodeManager) *DataFactory {
+func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
@@ -31,7 +31,7 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 	}
 }
 
-func (factory *DataFactory) MakeBlockFactory(segFile dataio.SegmentFile) catalog.BlockDataFactory {
+func (factory *DataFactory) MakeBlockFactory(segFile file.Segment) catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
 		return newBlock(meta, segFile, factory.appendBufMgr)
 	}
