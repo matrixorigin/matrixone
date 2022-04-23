@@ -130,7 +130,7 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
 	readLock.Unlock()
 	if blk.node == nil {
 		// Load from block file
-		panic("TODO")
+		panic("TODO: non-appendable")
 	}
 	return
 }
@@ -141,7 +141,11 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 }
 
 func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
-	return blk.getVectorCopy(txn.GetStartTS(), attr, compressed, decompressed, false)
+	if blk.meta.IsAppendable() {
+		return blk.getVectorCopy(txn.GetStartTS(), attr, compressed, decompressed, false)
+	}
+	panic("TODO: non-appendable")
+	return
 }
 
 func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
@@ -153,12 +157,9 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 
 	maxRow := uint32(0)
 	visible := true
-	if blk.meta.IsAppendable() {
-		readLock := blk.controller.GetSharedLock()
-		maxRow, visible = blk.controller.GetMaxVisibleRowLocked(ts)
-		readLock.Unlock()
-		// logutil.Infof("maxrow=%d", maxRow)
-	}
+	readLock := blk.controller.GetSharedLock()
+	maxRow, visible = blk.controller.GetMaxVisibleRowLocked(ts)
+	readLock.Unlock()
 	if !visible {
 		return
 	}
@@ -299,7 +300,11 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	}
 	readLock := blk.controller.GetSharedLock()
 	defer readLock.Unlock()
-	offset, err = blk.updatableIndexHolder.Search(filter.Val)
+	if blk.meta.IsAppendable() {
+		offset, err = blk.updatableIndexHolder.Search(filter.Val)
+	} else {
+		panic("TODO: non-appendable")
+	}
 	if err == nil {
 		if !blk.controller.IsVisibleLocked(offset, txn.GetStartTS()) {
 			err = txnbase.ErrNotFound
@@ -315,7 +320,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 		// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
 		return blk.updatableIndexHolder.BatchDedup(pks)
 	}
-	// TODO
+	// "TODO: non-appendable"
 	return
 }
 
