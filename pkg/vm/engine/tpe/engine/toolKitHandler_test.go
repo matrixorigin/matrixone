@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -112,6 +113,8 @@ func Test_getParamFromCommand(t *testing.T) {
 			err = DumpDatabaseInfo(tpeMock, args)
 			convey.So(err, convey.ShouldBeNil)
 
+			err = os.Remove("a.txt")
+			convey.So(err, convey.ShouldBeNil)
 		})
 
 		convey.Convey("GetAllvalues of table", func() {
