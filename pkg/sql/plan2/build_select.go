@@ -47,25 +47,26 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 
 	//orderby.   push down sort operator is not implement
 	if stmt.OrderBy != nil {
-		orderBy := &plan.OrderBySpec{}
+		var orderBys []*plan.OrderBySpec
 		for _, order := range stmt.OrderBy {
+			orderBy := &plan.OrderBySpec{}
 			expr, err := buildExpr(order.Expr, ctx, query, aliasCtx)
 			if err != nil {
 				return err
 			}
-			orderBy.OrderBy = append(orderBy.OrderBy, expr)
+			orderBy.OrderBy = expr
 
 			switch order.Direction {
 			case tree.DefaultDirection:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_INTERNAL)
+				orderBy.OrderByFlags = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_ASC)
+				orderBy.OrderByFlags = plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_DESC)
+				orderBy.OrderByFlags = plan.OrderBySpec_DESC
 			}
-			//todo confirm what OrderByCollations mean
+			orderBys = append(orderBys, orderBy)
 		}
-		node.OrderBy = orderBy
+		node.OrderBy = orderBys
 	}
 
 	//limit
