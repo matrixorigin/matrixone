@@ -186,7 +186,12 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 	}
 
 	// TODO: performance optimization needed
-	srcvec, _ := ivec.CopyToVectorWithBuffer(compressed, decompressed)
+	var srcvec *gvec.Vector
+	if decompressed == nil {
+		srcvec, _ = ivec.CopyToVector()
+	} else {
+		srcvec, _ = ivec.CopyToVectorWithBuffer(compressed, decompressed)
+	}
 	if maxRow < uint32(gvec.Length(srcvec)) {
 		vec = gvec.New(srcvec.Typ)
 		gvec.Window(srcvec, 0, int(maxRow), vec)

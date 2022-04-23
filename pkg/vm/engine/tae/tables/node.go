@@ -76,6 +76,9 @@ func (node *appendableNode) GetVectorCopy(maxRow uint32, attr string, compressed
 	if err != nil {
 		return
 	}
+	if decompressed == nil {
+		return ro.CopyToVector()
+	}
 	return ro.CopyToVectorWithBuffer(compressed, decompressed)
 }
 

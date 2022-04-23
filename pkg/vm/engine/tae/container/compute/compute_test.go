@@ -60,5 +60,32 @@ func TestApplyUpdateToIVector2(t *testing.T) {
 	val, err = vec2.GetValue(9)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("TestApplyUpdateToIVector9"), val)
-	t.Logf("%v",vec2)
+	t.Logf("%v", vec2)
+}
+
+func TestShuffleByDeletes(t *testing.T) {
+	origMask := roaring.New()
+	origVals := make(map[uint32]interface{})
+	origMask.Add(1)
+	origVals[1] = 1
+	origMask.Add(10)
+	origVals[10] = 10
+	origMask.Add(20)
+	origVals[20] = 20
+	origMask.Add(30)
+	origVals[30] = 30
+
+	deletes := roaring.New()
+	deletes.Add(0)
+	deletes.Add(8)
+	deletes.Add(22)
+
+	destMask, destVals, destDelets := ShuffleByDeletes(origMask, origVals, deletes)
+	t.Log(destMask.String())
+	t.Log(destVals)
+	t.Log(destDelets.String())
+	assert.True(t, destMask.Contains(0))
+	assert.True(t, destMask.Contains(8))
+	assert.True(t, destMask.Contains(18))
+	assert.True(t, destMask.Contains(27))
 }

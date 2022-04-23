@@ -70,6 +70,8 @@ type Table interface {
 	SoftDeleteBlock(id *common.ID) error
 	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
+
+	PrepareCompactBlock(from, to *common.ID) (err error)
 }
 
 type txnTable struct {
@@ -98,6 +100,8 @@ type txnTable struct {
 	logs        []txnbase.NodeEntry
 	maxSegId    uint64
 	maxBlkId    uint64
+
+	blocksCompactionCtx *blocksCompactionCtx
 }
 
 func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.NodeDriver, mgr base.INodeManager, checker *warChecker, dataFactory *tables.DataFactory) *txnTable {
@@ -242,6 +246,35 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	return
 }
 
+func (tbl *txnTable) PrepareCompactBlock(from, to *common.ID) (err error) {
+	if tbl.blocksCompactionCtx == nil {
+		tbl.blocksCompactionCtx = newBlocksCompactionCtx()
+	}
+	if tbl.blocksCompactionCtx.GetCtx(from) != nil {
+		return txnif.TxnWWConflictErr
+	}
+	srcSeg, err := tbl.entry.GetSegmentByID(from.SegmentID)
+	if err != nil {
+		return
+	}
+	srcBlk, err := srcSeg.GetBlockEntryByID(from.BlockID)
+	if err != nil {
+		return
+	}
+	destSeg, err := tbl.entry.GetSegmentByID(to.SegmentID)
+	if err != nil {
+		return
+	}
+	destBlk, err := destSeg.GetBlockEntryByID(to.BlockID)
+	if err != nil {
+		return
+	}
+	tbl.blocksCompactionCtx.AddCtx(tbl.txn, newBlock(tbl.txn, srcBlk), newBlock(tbl.txn, destBlk))
+	tbl.warChecker.readBlockVar(srcBlk)
+	tbl.warChecker.readSegmentVar(destSeg)
+	return
+}
+
 func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(id.SegmentID); err != nil {
@@ -334,6 +367,7 @@ func (tbl *txnTable) Close() error {
 	tbl.deleteNodes = nil
 	tbl.appendNodes = nil
 	tbl.tableHandle = nil
+	tbl.blocksCompactionCtx = nil
 	tbl.csegs = nil
 	tbl.dsegs = nil
 	tbl.cblks = nil
@@ -848,6 +882,13 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	} else if tbl.dropEntry != nil {
 		if err = tbl.dropEntry.PrepareCommit(); err != nil {
 			return
+		}
+	}
+	if tbl.blocksCompactionCtx != nil {
+		for _, ctx := range tbl.blocksCompactionCtx.contexts {
+			if ctx.PrepareCommit(); err != nil {
+				return
+			}
 		}
 	}
 

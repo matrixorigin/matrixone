@@ -141,3 +141,7 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32) error {
 func (h *txnRelation) GetValue(id *common.ID, row uint32, col uint16) (interface{}, error) {
 	return h.Txn.GetStore().GetValue(id, row, col)
 }
+
+func (h *txnRelation) PrepareCompactBlock(from, to *common.ID) (err error) {
+	return h.Txn.GetStore().PrepareCompactBlock(from, to)
+}

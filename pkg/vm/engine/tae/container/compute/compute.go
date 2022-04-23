@@ -1,6 +1,8 @@
 package compute
 
 import (
+	"math"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -585,4 +587,63 @@ func ApplyUpdateToIVector(vec vector.IVector, mask *roaring.Bitmap, vals map[uin
 		panic("not support")
 	}
 	return vec
+}
+
+type deleteRange struct {
+	pos     uint32
+	deleted uint32
+}
+
+func findDeleteRange(pos uint32, ranges []*deleteRange) *deleteRange {
+	left, right := 0, len(ranges)-1
+	var mid int
+	for left <= right {
+		mid = (left + right) / 2
+		if ranges[mid].pos < pos {
+			left = mid + 1
+		} else if ranges[mid].pos > pos {
+			right = mid - 1
+		} else {
+			break
+		}
+	}
+	if mid == 0 && ranges[mid].pos < pos {
+		mid = mid + 1
+	}
+	// logutil.Infof("pos=%d, mid=%d, range.pos=%d,range.deleted=%d", pos, mid, ranges[mid].pos, ranges[mid].deleted)
+	return ranges[mid]
+}
+
+func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{}, deletes *roaring.Bitmap) (*roaring.Bitmap, map[uint32]interface{}, *roaring.Bitmap) {
+	if deletes == nil {
+		return origMask, origVals, deletes
+	}
+	destDelets := roaring.New()
+	ranges := make([]*deleteRange, 0, 10)
+	deletesIt := deletes.Iterator()
+	deletedCnt := uint32(0)
+	for deletesIt.HasNext() {
+		pos := deletesIt.Next()
+		destDelets.Add(pos - deletedCnt)
+		ranges = append(ranges, &deleteRange{pos: pos, deleted: deletedCnt})
+		deletedCnt++
+	}
+	if origMask == nil || origMask.GetCardinality() == 0 {
+		return origMask, origVals, destDelets
+	}
+
+	ranges = append(ranges, &deleteRange{pos: math.MaxUint32, deleted: deletedCnt})
+	destMask := roaring.New()
+	destVals := make(map[uint32]interface{})
+	origIt := origMask.Iterator()
+	for origIt.HasNext() {
+		pos := origIt.Next()
+		drange := findDeleteRange(pos, ranges)
+		destMask.Add(pos - drange.deleted)
+		destVals[pos-drange.deleted] = origVals[pos]
+	}
+	// for i, r := range ranges {
+	// 	logutil.Infof("%d range.pos=%d,range.deleted=%d", i, r.pos, r.deleted)
+	// }
+	return destMask, destVals, destDelets
 }

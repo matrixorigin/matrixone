@@ -2,6 +2,7 @@ package db
 
 import (
 	"bytes"
+	"math"
 	"testing"
 	"time"
 
@@ -221,7 +222,18 @@ func TestCompactBlock1(t *testing.T) {
 		dataBlock := block.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		changes := dataBlock.CollectChangesInRange(txn.GetStartTS(), maxTs+1).(*updates.BlockView)
 		assert.Equal(t, uint64(1), changes.DeleteMask.GetCardinality())
-		// t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+
+		destBlock, err := seg.CreateNonAppendableBlock()
+		assert.Nil(t, err)
+		err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
+		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		assert.Nil(t, err)
+		err = txn.Commit()
+		assert.Nil(t, err)
+		t.Log(destBlockData.PPString(common.PPL1, 0, ""))
+
+		view := destBlockData.CollectChangesInRange(0, math.MaxUint64).(*updates.BlockView)
+		assert.True(t, view.DeleteMask.Equals(changes.DeleteMask))
 	}
 }
 

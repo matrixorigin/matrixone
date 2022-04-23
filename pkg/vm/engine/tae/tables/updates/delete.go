@@ -122,8 +122,11 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.Lock()
 	defer node.chain.Unlock()
 	if node.commitTs != txnif.UncommitTS {
-		panic("logic error")
+		return
 	}
+	// if node.commitTs != txnif.UncommitTS {
+	// 	panic("logic error")
+	// }
 	node.commitTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return

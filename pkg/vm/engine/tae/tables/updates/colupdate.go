@@ -265,8 +265,11 @@ func (n *ColumnNode) PrepareCommit() (err error) {
 	n.chain.Lock()
 	defer n.chain.Unlock()
 	if n.commitTs != txnif.UncommitTS {
-		panic("logic error")
+		return
 	}
+	// if n.commitTs != txnif.UncommitTS {
+	// 	panic("logic error")
+	// }
 	n.commitTs = n.txn.GetCommitTS()
 	n.chain.UpdateLocked(n)
 	// TODO: merge updates

@@ -36,6 +36,8 @@ type Relation interface {
 	GetMeta() interface{}
 	CreateSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
+
+	PrepareCompactBlock(from, to *common.ID) error
 }
 
 type RelationIt interface {

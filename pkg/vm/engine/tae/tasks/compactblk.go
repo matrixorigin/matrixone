@@ -1,8 +1,6 @@
 package tasks
 
 import (
-	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -14,33 +12,41 @@ import (
 type compactBlockTask struct {
 	txn   txnif.AsyncTxn
 	block handle.Block
+	meta  *catalog.BlockEntry
 }
 
 func NewCompactBlockTask(txn txnif.AsyncTxn, block handle.Block) *compactBlockTask {
+	meta := block.GetMeta().(*catalog.BlockEntry)
 	return &compactBlockTask{
 		txn:   txn,
 		block: block,
+		meta:  meta,
 	}
 }
 
 func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
-	meta := task.block.GetMeta().(*catalog.BlockEntry)
-	attrs := meta.GetSchema().Attrs()
+	attrs := task.meta.GetSchema().Attrs()
 	bat = batch.New(true, attrs)
 
-	for i, colDef := range meta.GetSchema().ColDefs {
-		var comp bytes.Buffer
-		var decomp bytes.Buffer
-		vec, mask, err := task.block.GetVectorCopy(colDef.Name, &comp, &decomp)
+	for i, colDef := range task.meta.GetSchema().ColDefs {
+		// var comp bytes.Buffer
+		// var decomp bytes.Buffer
+		vec, mask, err := task.block.GetVectorCopy(colDef.Name, nil, nil)
 		if err != nil {
 			return bat, err
 		}
 		vec = compute.ApplyDeleteToVector(vec, mask)
 		bat.Vecs[i] = vec
 	}
-	if err = mergesort.SortBlockColumns(bat.Vecs, int(meta.GetSchema().PrimaryKey)); err != nil {
+	if err = mergesort.SortBlockColumns(bat.Vecs, int(task.meta.GetSchema().PrimaryKey)); err != nil {
 		return
 	}
+	return
+}
+
+func (task *compactBlockTask) PrepareUpdates() (err error) {
+	blockData := task.meta.GetBlockData()
+	blockData.CollectChangesInRange(task.txn.GetStartTS(), task.txn.GetCommitTS())
 	return
 }
 

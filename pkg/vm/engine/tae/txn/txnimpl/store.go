@@ -53,6 +53,19 @@ func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr bas
 }
 
 func (store *txnStore) PrepareCompactBlock(from, to *common.ID) (err error) {
+	var srcTable Table
+	var destTable Table
+	if srcTable, err = store.getOrSetTable(from.TableID); err != nil {
+		return
+	}
+	if destTable, err = store.getOrSetTable(to.TableID); err != nil {
+		return
+	}
+	if srcTable == destTable {
+		err = srcTable.PrepareCompactBlock(from, to)
+	} else {
+		panic("TODO: compact block from a table to another table")
+	}
 	return
 }
 
