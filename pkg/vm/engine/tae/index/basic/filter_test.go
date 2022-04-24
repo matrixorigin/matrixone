@@ -17,6 +17,7 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
 	var res bool
+	var exist bool
 
 	res, err = sf.MayContainsKey(int32(1209))
 	require.NoError(t, err)
@@ -34,18 +35,20 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.ErrorIs(t, err, errors.ErrTypeMismatch)
 
 	query := common.MockVec(typ, 2000, 1000)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
+	require.True(t, exist)
 
 	visibility := roaring.NewBitmap()
 	visibility.AddRange(uint64(0), uint64(1000))
-	positive, err = sf.MayContainsAnyKeys(query, visibility)
+	exist, positive, err = sf.MayContainsAnyKeys(query, visibility)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1000), positive.GetCardinality())
+	require.True(t, exist)
 
 	query = common.MockVec(typ, 20000, 40000)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -60,9 +63,10 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.NoError(t, err)
 
 	query = common.MockVec(typ, 40000, 0)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
+	require.True(t, exist)
 }
 
 func TestStaticFilterString(t *testing.T) {
@@ -72,6 +76,7 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 	var positive *roaring.Bitmap
 	var res bool
+	var exist bool
 
 	res, err = sf.MayContainsKey([]byte(strconv.Itoa(1209)))
 	require.NoError(t, err)
@@ -82,12 +87,13 @@ func TestStaticFilterString(t *testing.T) {
 	require.False(t, res)
 
 	query := common.MockVec(typ, 2000, 1000)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2000), positive.GetCardinality())
+	require.True(t, exist)
 
 	query = common.MockVec(typ, 20000, 40000)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	fpRate := float32(positive.GetCardinality()) / float32(20000)
 	require.True(t, fpRate < float32(0.01))
@@ -102,7 +108,8 @@ func TestStaticFilterString(t *testing.T) {
 	require.NoError(t, err)
 
 	query = common.MockVec(typ, 40000, 0)
-	positive, err = sf.MayContainsAnyKeys(query, nil)
+	exist, positive, err = sf.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.Equal(t, uint64(40000), positive.GetCardinality())
+	require.True(t, exist)
 }

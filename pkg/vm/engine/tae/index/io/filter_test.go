@@ -15,6 +15,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	file := dataio.MockIndexFile()
 	var err error
 	var res bool
+	var exist bool
 	var ans *roaring.Bitmap
 	var meta *common.IndexMeta
 	cType := common.Plain
@@ -47,9 +48,10 @@ func TestStaticFilterIndex(t *testing.T) {
 	require.False(t, res)
 
 	query := common.MockVec(typ, 1000, 1500)
-	ans, err = reader.MayContainsAnyKeys(query, nil)
+	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.True(t, ans.GetCardinality() < uint64(10))
+	require.True(t, exist)
 
 	//t.Log(bufManager.String())
 }

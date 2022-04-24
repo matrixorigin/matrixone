@@ -13,7 +13,7 @@ import (
 
 type StaticFilter interface {
 	MayContainsKey(key interface{}) (bool, error)
-	MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (*roaring.Bitmap, error)
+	MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error)
 	Marshal() ([]byte, error)
 	Unmarshal(buf []byte) error
 	GetMemoryUsage() uint32
@@ -65,9 +65,10 @@ func (filter *binaryFuseFilter) MayContainsKey(key interface{}) (bool, error) {
 	return false, nil
 }
 
-func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (*roaring.Bitmap, error) {
+func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
 	positive := roaring.NewBitmap()
 	row := uint32(0)
+	exist := false
 
 	collector := func(v interface{}) error {
 		hash, err := common.Hash(v, filter.typ)
@@ -82,9 +83,12 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys *vector.Vector, visibili
 	}
 
 	if err := common.ProcessVector(keys, 0, -1, collector, visibility); err != nil {
-		return nil, err
+		return false, nil, err
 	}
-	return positive, nil
+	if positive.GetCardinality() != 0 {
+		exist = true
+	}
+	return exist, positive, nil
 }
 
 func (filter *binaryFuseFilter) Marshal() ([]byte, error) {

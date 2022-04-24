@@ -4,18 +4,21 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
 type appendableBlockIndexHolder struct {
-	// TODO: add host, and deal with upgrade logic
+	host         data.Block
 	treeIndex    basic.ARTMap
 	zoneMapIndex *basic.ZoneMap
 }
 
-func NewAppendableBlockIndexHolder(pkType types.Type) *appendableBlockIndexHolder {
+func NewAppendableBlockIndexHolder(pkType types.Type, host data.Block) *appendableBlockIndexHolder {
 	holder := new(appendableBlockIndexHolder)
+	holder.host = host
 	holder.treeIndex = basic.NewSimpleARTMap(pkType, nil)
 	holder.zoneMapIndex = basic.NewZoneMap(pkType, nil)
 	return holder
@@ -69,4 +72,13 @@ func (holder *appendableBlockIndexHolder) BatchDedup(keys *vector.Vector) error 
 		return errors.ErrKeyDuplicate
 	}
 	return nil
+}
+
+func (holder *appendableBlockIndexHolder) Upgrade() (acif.INonAppendableBlockIndexHolder, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+func (holder *appendableBlockIndexHolder) GetHostBlockId() uint64 {
+	return holder.host.GetID()
 }

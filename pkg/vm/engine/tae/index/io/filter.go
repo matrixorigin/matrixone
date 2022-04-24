@@ -90,7 +90,7 @@ func (reader *StaticFilterIndexReader) MayContainsKey(key interface{}) (bool, er
 	return handle.GetNode().(*staticFilterIndexNode).inner.MayContainsKey(key)
 }
 
-func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (*roaring.Bitmap, error) {
+func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
 	handle := reader.inode.mgr.Pin(reader.inode)
 	defer handle.Close()
 	return handle.GetNode().(*staticFilterIndexNode).inner.MayContainsAnyKeys(keys, visibility)

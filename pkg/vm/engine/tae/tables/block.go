@@ -26,13 +26,13 @@ import (
 
 type dataBlock struct {
 	*sync.RWMutex
-	meta                 *catalog.BlockEntry
-	node                 *appendableNode
-	file                 file.Block
-	bufMgr               base.INodeManager
-	updatableIndexHolder acif.IAppendableBlockIndexHolder
-	controller           *updates.MutationController
-	maxCkp               uint64
+	meta        *catalog.BlockEntry
+	node        *appendableNode
+	file        file.Block
+	bufMgr      base.INodeManager
+	indexHolder acif.IBlockIndexHolder
+	controller  *updates.MutationController
+	maxCkp      uint64
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager) *dataBlock {
@@ -54,7 +54,10 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		node = newNode(bufMgr, block, file)
 		block.node = node
 		pkType := meta.GetSegment().GetTable().GetSchema().GetPKType()
-		block.updatableIndexHolder = impl.NewAppendableBlockIndexHolder(pkType)
+		block.indexHolder = impl.NewAppendableBlockIndexHolder(pkType, block)
+	} else {
+		// TODO: deal with initializing non-appendable block index holder from meta
+		block.indexHolder = impl.NewNonAppendableBlockIndexHolder()
 	}
 	return block
 }
@@ -146,7 +149,10 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView, err error) {
 }
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
-	appender = newAppender(blk.node, blk.updatableIndexHolder)
+	if !blk.IsAppendable() {
+		panic("can not create appender on non-appendable block")
+	}
+	appender = newAppender(blk.node, blk.indexHolder.(acif.IAppendableBlockIndexHolder))
 	return
 }
 
@@ -368,9 +374,13 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 	readLock := blk.controller.GetSharedLock()
 	defer readLock.Unlock()
 	if blk.meta.IsAppendable() {
-		offset, err = blk.updatableIndexHolder.Search(filter.Val)
+		offset, err = blk.indexHolder.(acif.IAppendableBlockIndexHolder).Search(filter.Val)
 	} else {
-		panic("TODO: non-appendable")
+		mayExists := blk.indexHolder.(acif.INonAppendableBlockIndexHolder).MayContainsKey(filter.Val)
+		if mayExists {
+			// TODO: load exact column data from source and get the row offset if exists and visible
+			panic("implement me")
+		}
 	}
 	if err == nil {
 		if !blk.controller.IsVisibleLocked(offset, txn.GetStartTS()) {
@@ -385,9 +395,17 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 		readLock := blk.controller.GetSharedLock()
 		defer readLock.Unlock()
 		// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
-		return blk.updatableIndexHolder.BatchDedup(pks)
+		return blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchDedup(pks)
 	}
-	// "TODO: non-appendable"
+	var visibilityMap *roaring.Bitmap
+	err, visibilityMap = blk.indexHolder.(acif.INonAppendableBlockIndexHolder).MayContainsAnyKeys(pks)
+	if err == nil {
+		return nil
+	}
+	// TODO: use the visibility map of the `pks` with `txn` to confirm the duplicated rows in `pks`
+	if visibilityMap == nil {
+		panic("unexpected error")
+	}
 	return
 }
 
