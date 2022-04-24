@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
@@ -12,12 +13,14 @@ import (
 )
 
 type BlockView struct {
-	Ts          uint64
-	Raw         batch.IBatch
-	UpdateMasks map[uint16]*roaring.Bitmap
-	UpdateVals  map[uint16]map[uint32]interface{}
-	DeleteMask  *roaring.Bitmap
-	Applied     batch.IBatch
+	Ts           uint64
+	Raw          batch.IBatch
+	RawBatch     *gbat.Batch
+	UpdateMasks  map[uint16]*roaring.Bitmap
+	UpdateVals   map[uint16]map[uint32]interface{}
+	DeleteMask   *roaring.Bitmap
+	Applied      batch.IBatch
+	AppliedBatch *gbat.Batch
 }
 
 func NewBlockView(ts uint64) *BlockView {

@@ -1,6 +1,8 @@
 package mockio
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -61,4 +63,9 @@ func (sf *segmentFile) WriteTS(ts uint64) error {
 
 func (sf *segmentFile) ReadTS() uint64 {
 	return sf.ts
+}
+
+func (sf *segmentFile) String() string {
+	s := fmt.Sprintf("SegmentFile[%d][\"%s\"][TS=%d][BCnt=%d]", sf.id, sf.name, sf.ts, len(sf.blocks))
+	return s
 }

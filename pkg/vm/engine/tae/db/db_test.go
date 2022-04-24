@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -114,6 +115,43 @@ func TestCreateBlock(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	assert.True(t, blk2Meta.IsCommitted())
+}
+
+func TestNonAppendableBlock(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 1
+
+	bat := compute.MockBatch(schema.Types(), 8, int(schema.PrimaryKey), nil)
+
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		database.CreateRelation(schema)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		seg, _ := rel.CreateSegment()
+		blk, err := seg.CreateNonAppendableBlock()
+		assert.Nil(t, err)
+		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		blockFile := dataBlk.GetBlockFile()
+		blockFile.WriteBatch(bat, txn.GetStartTS())
+
+		v, err := dataBlk.GetValue(txn, 4, 2)
+		assert.Nil(t, err)
+		expectVal := compute.GetValue(bat.Vecs[2], 4)
+		assert.Equal(t, expectVal, v)
+		assert.Equal(t, gvec.Length(bat.Vecs[0]), blk.Rows())
+
+		assert.Nil(t, txn.Commit())
+	}
 }
 
 func TestCompactBlock1(t *testing.T) {

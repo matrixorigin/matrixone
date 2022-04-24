@@ -59,6 +59,10 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
+func (blk *dataBlock) GetBlockFile() file.Block {
+	return blk.file
+}
+
 func (blk *dataBlock) GetID() uint64 { return blk.meta.ID }
 func (blk *dataBlock) IsDirty() bool { return true }
 func (blk *dataBlock) TryCheckpoint() {
@@ -110,7 +114,7 @@ func (blk *dataBlock) makeColumnView(colIdx uint16, view *updates.BlockView) (er
 	return
 }
 
-func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
+func (blk *dataBlock) MakeBlockView() (view *updates.BlockView, err error) {
 	controller := blk.controller
 	readLock := controller.GetSharedLock()
 	ts := controller.LoadMaxVisible()
@@ -131,12 +135,12 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView) {
 			attrs[i] = i
 			vecs[i], _ = blk.node.GetVectorView(maxRow, colDef.Name)
 		}
-		view.Raw, _ = batch.NewBatch(attrs, vecs)
+		view.Raw, err = batch.NewBatch(attrs, vecs)
 	}
 	readLock.Unlock()
 	if blk.node == nil {
 		// Load from block file
-		panic("TODO: non-appendable")
+		view.RawBatch, err = blk.file.LoadBatch(blk.meta.GetSchema().Attrs(), blk.meta.GetSchema().Types())
 	}
 	return
 }
@@ -292,11 +296,34 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 	if v != nil || err != nil {
 		return
 	}
-	var comp bytes.Buffer
-	var decomp bytes.Buffer
-	attr := blk.meta.GetSegment().GetTable().GetSchema().ColDefs[col].Name
-	raw, _, _ := blk.getVectorCopy(txn.GetStartTS(), attr, &comp, &decomp, true)
+	var raw *gvec.Vector
+	if blk.meta.IsAppendable() {
+		var comp bytes.Buffer
+		var decomp bytes.Buffer
+		attr := blk.meta.GetSegment().GetTable().GetSchema().ColDefs[col].Name
+		raw, _, _ = blk.getVectorCopy(txn.GetStartTS(), attr, &comp, &decomp, true)
+	} else {
+		wrapper, _ := blk.getVectorWrapper(int(col))
+		defer common.GPool.Free(wrapper.MNode)
+		raw = &wrapper.Vector
+	}
 	v = compute.GetValue(raw, row)
+	return
+}
+
+func (blk *dataBlock) getVectorWrapper(colIdx int) (wrapper *vector.VectorWrapper, err error) {
+	colBlk, _ := blk.file.OpenColumn(colIdx)
+	vfile, _ := colBlk.OpenDataFile()
+
+	wrapper = vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
+	wrapper.File = vfile
+	_, err = wrapper.ReadFrom(vfile)
+	if err != nil {
+		return
+	}
+
+	vfile.Unref()
+	colBlk.Close()
 	return
 }
 

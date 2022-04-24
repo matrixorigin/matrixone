@@ -77,6 +77,10 @@ func (cb *columnBlock) ReadIndex(idx int, buf []byte) (err error) {
 	return
 }
 
+func (cb *columnBlock) GetDataFileStat() (stat common.FileInfo) {
+	return cb.data.stat
+}
+
 func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) {
 	if idx >= len(cb.indexes) {
 		err = file.ErrInvalidParam

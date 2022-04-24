@@ -4,6 +4,7 @@ import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
+	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +33,11 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	bf.deletes = newDeletes(bf)
 	bf.OnZeroCB = bf.close
 	for i, _ := range bf.columns {
-		bf.columns[i] = newColumnBlock(bf, indexCnt[i])
+		cnt := 0
+		if indexCnt != nil {
+			cnt = indexCnt[i]
+		}
+		bf.columns[i] = newColumnBlock(bf, cnt)
 	}
 	bf.Ref()
 	return bf
@@ -109,14 +114,12 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 	var f common.IRWFile
 	for i, colBlk := range bf.columns {
 		if f, err = colBlk.OpenDataFile(); err != nil {
-			panic(err)
 			return
 		}
 		defer f.Unref()
 		size := f.Stat().Size()
 		buf := make([]byte, size)
 		if _, err = f.Read(buf); err != nil {
-			panic(err)
 			return
 		}
 		vec := vector.NewVector(colTypes[i], uint64(maxRow))
@@ -124,6 +127,54 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 		attrs[i] = i
 	}
 	bat, err = batch.NewBatch(attrs, vecs)
+	return
+}
+
+func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error) {
+	bat = gbat.New(true, attrs)
+	var f common.IRWFile
+	for i, colBlk := range bf.columns {
+		if f, err = colBlk.OpenDataFile(); err != nil {
+			return
+		}
+		defer f.Unref()
+		size := f.Stat().Size()
+		buf := make([]byte, size)
+		if _, err = f.Read(buf); err != nil {
+			return
+		}
+		vec := gvec.New(colTypes[i])
+		if err = vec.Read(buf); err != nil {
+			return
+		}
+		bat.Vecs[i] = vec
+	}
+	return
+}
+
+func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
+	if err = bf.WriteTS(ts); err != nil {
+		return
+	}
+	if err = bf.WriteRows(uint32(gvec.Length(bat.Vecs[0]))); err != nil {
+		return
+	}
+	for colIdx := range bat.Attrs {
+		cb, err := bf.OpenColumn(colIdx)
+		if err != nil {
+			return err
+		}
+		defer cb.Close()
+		cb.WriteTS(ts)
+		col := bat.Vecs[colIdx]
+		buf, err := col.Show()
+		if err != nil {
+			return err
+		}
+		if err = cb.WriteData(buf); err != nil {
+			return err
+		}
+	}
 	return
 }
 

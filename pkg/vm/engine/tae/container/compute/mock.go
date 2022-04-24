@@ -237,8 +237,8 @@ func MockBatch(types []types.Type, rows uint64, uniqueIdx int, provider *MockDat
 			unique = true
 		}
 		vec := MockIVector(colType, rows, unique, provider.GetColumnProvider(i))
-		vec = vec.GetLatestView()
-		bat.Vecs[i], err = vec.CopyToVector()
+		vec2 := vec.GetLatestView()
+		bat.Vecs[i], err = vec2.CopyToVector()
 		if err != nil {
 			panic(err)
 		}

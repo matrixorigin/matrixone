@@ -7,5 +7,6 @@ type Segment interface {
 	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
 	WriteTS(ts uint64) error
 	ReadTS() uint64
+	String() string
 	// IsAppendable() bool
 }
