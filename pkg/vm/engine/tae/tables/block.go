@@ -149,7 +149,7 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView, err error) {
 }
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
-	if !blk.IsAppendable() {
+	if !blk.meta.IsAppendable() {
 		panic("can not create appender on non-appendable block")
 	}
 	appender = newAppender(blk.node, blk.indexHolder.(acif.IAppendableBlockIndexHolder))
@@ -397,6 +397,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 		// logutil.Infof("BatchDedup %s: PK=%s", txn.String(), pks.String())
 		return blk.indexHolder.(acif.IAppendableBlockIndexHolder).BatchDedup(pks)
 	}
+	return
 	var visibilityMap *roaring.Bitmap
 	err, visibilityMap = blk.indexHolder.(acif.INonAppendableBlockIndexHolder).MayContainsAnyKeys(pks)
 	if err == nil {
