@@ -12,42 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package builtin
+package lengthutf8
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-
-const (
-	Length = iota + overload.NE + 1
-	Space
-	Reverse
-	Substring
-	Ltrim
-	Rtrim
-	StartsWith
-	Lpad
-	Rpad
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Sin
-	Sinh
-	Cos
-	Acos
-	Tan
-	Atan
-	Cot
-	UTCTimestamp
-	DayOfYear
-	Month
-	Year
-	Weekday
-	EndsWith
-	Date
-	LengthUTF8
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"unicode/utf8"
 )
+
+var (
+	StrLengthUTF8 func(*types.Bytes, []uint64) []uint64
+)
+
+func init() {
+	StrLengthUTF8 = strLengthUTF8
+}
+
+func strLengthUTF8(xs *types.Bytes, rs []uint64) []uint64 {
+	for i := range xs.Lengths {
+		x := xs.Get(int64(i))
+		rs[i] = uint64(utf8.RuneCount(x))
+	}
+	return rs
+}
