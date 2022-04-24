@@ -38,11 +38,11 @@ func (w *worker) alloc(attrs []string) *batData {
 				dds[a] = bytes.NewBuffer(make([]byte, 1<<20))
 			}
 			w.batDatas[i] = &batData{
-				bat:      nil,
-				cds:      cds,
-				dds:      dds,
-				use:      false,
-				id:       int8(i),
+				bat: nil,
+				cds: cds,
+				dds: dds,
+				use: false,
+				id:  int8(i),
 			}
 		}
 		for j := range w.batDatas {

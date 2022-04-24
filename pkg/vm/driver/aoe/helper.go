@@ -16,7 +16,7 @@ package aoe
 
 import "strconv"
 
-func encodeMetatableName(sid uint64) string{
+func encodeMetatableName(sid uint64) string {
 	tableName := sPrefix + strconv.Itoa(int(sid))
 	return tableName
 }
