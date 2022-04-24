@@ -80,11 +80,11 @@ func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
 		data = data[4:]
 	}
 	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
+		sub, remaining, err := DecodePartition(data)
 		if err != nil {
 			return def, nil, err
 		}
-		data = remaing
+		data = remaining
 		def.Subpartition = sub
 	}
 	return def, data, nil
@@ -219,22 +219,22 @@ func DecodeListPartition(data []byte) (engine.ListPartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.Extends = append(def.Extends, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
 	}
 	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
+		sub, remaining, err := DecodePartition(data)
 		if err != nil {
 			return def, nil, err
 		}
-		data = remaing
+		data = remaining
 		def.Subpartition = sub
 	}
 	return def, data, nil
@@ -284,12 +284,12 @@ func DecodePartition(data []byte) (*engine.PartitionByDef, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			ldef, remaing, err := DecodeListPartition(data)
+			ldef, remaining, err := DecodeListPartition(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			def.List = append(def.List, ldef)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -297,12 +297,12 @@ func DecodePartition(data []byte) (*engine.PartitionByDef, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			rdef, remaing, err := DecodeRangePartition(data)
+			rdef, remaining, err := DecodeRangePartition(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			def.Range = append(def.Range, rdef)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -351,12 +351,12 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			vec, remaing, err := DecodeVector(data)
+			vec, remaining, err := DecodeVector(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			bat.Vecs = append(bat.Vecs, vec)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]

@@ -33,7 +33,7 @@ func (d *localRoDatabase) Type() int {
 	panic("not supported")
 }
 
-func (d *localRoDatabase) Relations() (names []string){
+func (d *localRoDatabase) Relations() (names []string) {
 	dbs := d.dbimpl.DatabaseNames()
 	for _, db := range dbs {
 		tbNames := d.dbimpl.TableNames(db)

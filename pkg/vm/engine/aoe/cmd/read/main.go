@@ -62,9 +62,9 @@ var (
 	readPool *ants.Pool
 	// proc     *process.Process // Unused
 	// hm       *host.Mmu // Unused
-	gen      *shard.MockIndexAllocator
-	dbName   string
-	shardId  uint64
+	gen     *shard.MockIndexAllocator
+	dbName  string
+	shardId uint64
 )
 
 func init() {
@@ -248,7 +248,10 @@ func (h *gcHandle) OnStopped() { runtime.GC() }
 
 func main() {
 	go func() {
-		http.ListenAndServe(":8080", nil)
+		err := http.ListenAndServe(":8080", nil)
+		if err != nil {
+			panic(err)
+		}
 	}()
 	gc := w.NewHeartBeater(time.Duration(1)*time.Second, &gcHandle{})
 	gc.Start()

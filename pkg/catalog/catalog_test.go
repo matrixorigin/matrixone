@@ -39,12 +39,12 @@ const (
 	blockRows          = 10000
 	blockCntPerSegment = 2
 	colCnt             = 4
-	segmentCnt         = 5
-	blockCnt           = blockCntPerSegment * segmentCnt
-	restart            = false
-	tableCount         = 5
-	databaseCount      = 10
-	preAllocShardNum   = 20
+	// segmentCnt         = 5
+	// blockCnt           = blockCntPerSegment * segmentCnt
+	// restart            = false
+	tableCount       = 5
+	databaseCount    = 10
+	preAllocShardNum = 20
 )
 
 var (
@@ -73,7 +73,7 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 			Name: name,
 		}
 		if i == 1 {
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+			colInfo.Type = types.Type{Oid: types.T_varchar, Size: 24}
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
@@ -94,7 +94,7 @@ func MockTableInfoWithProperties(colCnt int, i, bucket int) *aoe.TableInfo {
 			Name: name,
 		}
 		if i == 1 {
-			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+			colInfo.Type = types.Type{Oid: types.T_varchar, Size: 24}
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
