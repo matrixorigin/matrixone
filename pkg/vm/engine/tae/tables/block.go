@@ -154,7 +154,25 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	if blk.meta.IsAppendable() {
 		return blk.getVectorCopy(txn.GetStartTS(), attr, compressed, decompressed, false)
 	}
-	panic("TODO: non-appendable")
+
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	if compressed == nil {
+		compressed = &bytes.Buffer{}
+		decompressed = &bytes.Buffer{}
+	}
+	vec, err = blk.getVectorWithBuffer(colIdx, compressed, decompressed)
+
+	view := updates.NewBlockView(txn.GetStartTS())
+	sharedLock := blk.controller.GetSharedLock()
+	err = blk.makeColumnView(uint16(colIdx), view)
+	deleteChain := blk.controller.GetDeleteChain()
+	dnode := deleteChain.CollectDeletesLocked(txn.GetStartTS()).(*updates.DeleteNode)
+	sharedLock.Unlock()
+	if dnode != nil {
+		view.DeleteMask = dnode.GetDeleteMaskLocked()
+	}
+	vec = compute.ApplyUpdateToVector(vec, view.UpdateMasks[uint16(colIdx)], view.UpdateVals[uint16(colIdx)])
+	deletes = view.DeleteMask
 	return
 }
 
@@ -308,6 +326,22 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 		raw = &wrapper.Vector
 	}
 	v = compute.GetValue(raw, row)
+	return
+}
+
+func (blk *dataBlock) getVectorWithBuffer(colIdx int, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+	colBlk, _ := blk.file.OpenColumn(colIdx)
+	vfile, _ := colBlk.OpenDataFile()
+
+	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
+	wrapper.File = vfile
+	_, err = wrapper.ReadWithBuffer(vfile, compressed, decompressed)
+	if err != nil {
+		return
+	}
+	vfile.Unref()
+	colBlk.Close()
+	vec = &wrapper.Vector
 	return
 }
 

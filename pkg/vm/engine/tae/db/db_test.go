@@ -150,7 +150,39 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Equal(t, expectVal, v)
 		assert.Equal(t, gvec.Length(bat.Vecs[0]), blk.Rows())
 
-		assert.Nil(t, txn.Commit())
+		vec, mask, err := dataBlk.GetVectorCopy(txn, schema.ColDefs[2].Name, nil, nil)
+		assert.Nil(t, err)
+		assert.Nil(t, mask)
+		t.Log(vec.String())
+		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(vec))
+
+		// filter := handle.Filter{
+		// 	Op:handle.FilterEq,
+		// 	Val:
+		// }
+		_, err = dataBlk.RangeDelete(txn, 1, 2)
+		assert.Nil(t, err)
+
+		vec, mask, err = dataBlk.GetVectorCopy(txn, schema.ColDefs[2].Name, nil, nil)
+		assert.Nil(t, err)
+		assert.True(t, mask.Contains(1))
+		assert.True(t, mask.Contains(2))
+		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(vec))
+
+		_, err = dataBlk.Update(txn, 3, 2, int32(999))
+		assert.Nil(t, err)
+		t.Log(vec.String())
+
+		vec, mask, err = dataBlk.GetVectorCopy(txn, schema.ColDefs[2].Name, nil, nil)
+		assert.Nil(t, err)
+		assert.True(t, mask.Contains(1))
+		assert.True(t, mask.Contains(2))
+		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(vec))
+		v = compute.GetValue(vec, 3)
+		assert.Equal(t, int32(999), v)
+		t.Log(vec.String())
+
+		// assert.Nil(t, txn.Commit())
 	}
 }
 
