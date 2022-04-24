@@ -247,7 +247,7 @@ func (info *CommitInfo) SetIndex(idx LogIndex) error {
 		info.LogRange.ShardId = idx.ShardId
 	}
 	err := info.LogRange.Range.Append(idx.Id.Id)
-	if err == common.ErrRangeInvalid{
+	if err == common.ErrRangeInvalid {
 		return nil
 	}
 	return err

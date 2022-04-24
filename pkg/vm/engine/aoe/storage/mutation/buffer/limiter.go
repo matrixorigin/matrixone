@@ -29,7 +29,7 @@ func newSizeLimiter(maxactivesize uint64) *sizeLimiter {
 }
 
 func (l *sizeLimiter) RetuernQuota(size uint64) uint64 {
-	return atomic.AddUint64(&l.activesize, ^uint64(size-1))
+	return atomic.AddUint64(&l.activesize, ^(size - 1))
 }
 
 func (l *sizeLimiter) ApplyQuota(size uint64) bool {

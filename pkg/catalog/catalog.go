@@ -114,7 +114,12 @@ func (l *CatalogListener) OnPostSplit(res error, event *event.SplitEvent) error 
 	if err != nil {
 		panic(err)
 	}
-	go l.catalog.OnDatabaseSplitted()
+	go func() {
+		err := l.catalog.OnDatabaseSplitted()
+		if err != nil {
+			panic(err)
+		}
+	}()
 	preKey := l.catalog.preSplitKey(catalogSplitEvent.Old)
 	err = l.catalog.Driver.Delete(preKey)
 	if err != nil {
@@ -327,7 +332,7 @@ func (c *Catalog) DeletePrimaryKey(epoch, dbId uint64, tableName string) (err er
 	for _, col := range tbl.Columns {
 		if col.PrimaryKey {
 			col.PrimaryKey = false
-			c.updateTableInfo(dbId, tbl)
+			err = c.updateTableInfo(dbId, tbl)
 			return
 		}
 	}
@@ -350,7 +355,10 @@ func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string
 			col.PrimaryKey = true
 		}
 	}
-	c.updateTableInfo(dbId, tbl)
+	err = c.updateTableInfo(dbId, tbl)
+	if err != nil {
+		return err
+	}
 	if columnExist {
 		return nil
 	}
@@ -943,7 +951,10 @@ func (c *Catalog) GetShardIDsByTid(tid uint64) ([]uint64, error) {
 			break
 		}
 		time.Sleep(1 * time.Second)
-		c.OnDatabaseSplitted()
+		err := c.OnDatabaseSplitted()
+		if err != nil {
+			return nil, err
+		}
 	}
 	logutil.Infof("wait pending keys for %vms", time.Since(t0).Milliseconds())
 	return c.getShardids(tid)

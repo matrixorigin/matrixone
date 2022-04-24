@@ -44,7 +44,6 @@ type SegmentInfo struct {
 	Node     engine.Node
 }
 
-
 type filterExtent struct {
 	filterType int32
 	attr       string

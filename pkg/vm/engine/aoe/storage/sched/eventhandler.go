@@ -57,8 +57,8 @@ func (h *BaseEventHandler) Enqueue(e Event) {
 	if !h.SendOp(e) {
 		e.SetError(ErrEventHandleEnqueue)
 		err := e.Cancel()
-		if err != nil{
-		logutil.Warnf("%v", err)
+		if err != nil {
+			logutil.Warnf("%v", err)
 		}
 	}
 }

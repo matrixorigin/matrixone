@@ -246,7 +246,7 @@ func (mp *Mempool) Free(n *MemNode) {
 	}
 	size := n.Size()
 	if n.IsQuota() {
-		atomic.AddUint64(&mp.quotausage, ^(uint64(size)-1))
+		atomic.AddUint64(&mp.quotausage, ^(uint64(size) - 1))
 		n = nil
 	} else {
 		if n.idx < uint8(len(PageSizes)) {
@@ -257,7 +257,7 @@ func (mp *Mempool) Free(n *MemNode) {
 			n = nil
 		}
 	}
-	usage := atomic.AddUint64(&mp.usage, ^(uint64(size)-1))
+	usage := atomic.AddUint64(&mp.usage, ^(uint64(size) - 1))
 	if usage > mp.capacity {
 		logutil.Panicf("logic error")
 	}

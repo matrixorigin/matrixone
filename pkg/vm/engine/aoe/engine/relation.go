@@ -500,7 +500,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 	case types.T_int8:
 		switch typ {
 		case types.T_int8:
-			return int8(vec.Col.([]int8)[0])
+			return vec.Col.([]int8)[0]
 		case types.T_int16:
 			return int16(vec.Col.([]int8)[0])
 		case types.T_int32:
@@ -529,7 +529,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_int8:
 			return int8(vec.Col.([]int16)[0])
 		case types.T_int16:
-			return int16(vec.Col.([]int16)[0])
+			return vec.Col.([]int16)[0]
 		case types.T_int32:
 			return int32(vec.Col.([]int16)[0])
 		case types.T_int64:
@@ -558,7 +558,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_int16:
 			return int16(vec.Col.([]int32)[0])
 		case types.T_int32:
-			return int32(vec.Col.([]int32)[0])
+			return vec.Col.([]int32)[0]
 		case types.T_int64:
 			return int64(vec.Col.([]int32)[0])
 		case types.T_uint8:
@@ -587,7 +587,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_int32:
 			return int32(vec.Col.([]int64)[0])
 		case types.T_int64:
-			return int64(vec.Col.([]int64)[0])
+			return vec.Col.([]int64)[0]
 		case types.T_uint8:
 			return uint8(vec.Col.([]int64)[0])
 		case types.T_uint16:
@@ -616,7 +616,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_int64:
 			return int64(vec.Col.([]uint8)[0])
 		case types.T_uint8:
-			return uint8(vec.Col.([]uint8)[0])
+			return vec.Col.([]uint8)[0]
 		case types.T_uint16:
 			return uint16(vec.Col.([]uint8)[0])
 		case types.T_uint32:
@@ -645,7 +645,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_uint8:
 			return uint8(vec.Col.([]uint16)[0])
 		case types.T_uint16:
-			return uint16(vec.Col.([]uint16)[0])
+			return vec.Col.([]uint16)[0]
 		case types.T_uint32:
 			return uint32(vec.Col.([]uint16)[0])
 		case types.T_uint64:
@@ -674,7 +674,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_uint16:
 			return uint16(vec.Col.([]uint32)[0])
 		case types.T_uint32:
-			return uint32(vec.Col.([]uint32)[0])
+			return vec.Col.([]uint32)[0]
 		case types.T_uint64:
 			return uint64(vec.Col.([]uint32)[0])
 		case types.T_float32:
@@ -703,7 +703,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_uint32:
 			return uint32(vec.Col.([]uint64)[0])
 		case types.T_uint64:
-			return uint64(vec.Col.([]uint64)[0])
+			return vec.Col.([]uint64)[0]
 		case types.T_float32:
 			return float32(vec.Col.([]uint64)[0])
 		case types.T_float64:
@@ -732,7 +732,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_uint64:
 			return uint64(vec.Col.([]float32)[0])
 		case types.T_float32:
-			return float32(vec.Col.([]float32)[0])
+			return vec.Col.([]float32)[0]
 		case types.T_float64:
 			return float64(vec.Col.([]float32)[0])
 		case types.T_date:
@@ -761,7 +761,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_float32:
 			return float32(vec.Col.([]float64)[0])
 		case types.T_float64:
-			return float64(vec.Col.([]float64)[0])
+			return vec.Col.([]float64)[0]
 		case types.T_date:
 			return types.Date(vec.Col.([]float64)[0])
 		case types.T_datetime:
@@ -790,7 +790,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_float64:
 			return float64(vec.Col.([]types.Date)[0])
 		case types.T_date:
-			return types.Date(vec.Col.([]types.Date)[0])
+			return vec.Col.([]types.Date)[0]
 		case types.T_datetime:
 			return types.Datetime(vec.Col.([]types.Date)[0])
 		}
@@ -819,7 +819,7 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 		case types.T_date:
 			return types.Date(vec.Col.([]types.Datetime)[0])
 		case types.T_datetime:
-			return types.Datetime(vec.Col.([]types.Datetime)[0])
+			return vec.Col.([]types.Datetime)[0]
 		}
 	case types.T_char, types.T_varchar:
 		switch typ {
