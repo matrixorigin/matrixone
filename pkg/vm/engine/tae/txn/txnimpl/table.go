@@ -543,6 +543,11 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 			}
 		}
 		writeLock.Unlock()
+		if err != nil {
+			seg, _ := tbl.entry.GetSegmentByID(segmentId)
+			blk, _ := seg.GetBlockEntryByID(blockId)
+			tbl.warChecker.readBlockVar(blk)
+		}
 		return
 	}
 	seg, err := tbl.entry.GetSegmentByID(segmentId)
@@ -557,6 +562,7 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 	node2, err := blkData.RangeDelete(tbl.txn, start, end)
 	if err == nil {
 		tbl.AddDeleteNode(blk.AsCommonID(), node2.(*updates.DeleteNode))
+		tbl.warChecker.readBlockVar(blk)
 	}
 	return
 }
@@ -624,7 +630,13 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 		Idx:       col,
 	}]
 	if node != nil {
-		return tbl.updateWithFineLock(node, tbl.txn, row, v)
+		err = tbl.updateWithFineLock(node, tbl.txn, row, v)
+		if err != nil {
+			seg, _ := tbl.entry.GetSegmentByID(segmentId)
+			blk, _ := seg.GetBlockEntryByID(blockId)
+			tbl.warChecker.readBlockVar(blk)
+		}
+		return
 	}
 	seg, err := tbl.entry.GetSegmentByID(segmentId)
 	if err != nil {
@@ -638,6 +650,7 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 	node2, err := blkData.Update(tbl.txn, row, col, v)
 	if err == nil {
 		tbl.AddUpdateNode(node2)
+		tbl.warChecker.readBlockVar(blk)
 	}
 	return
 }
@@ -845,6 +858,10 @@ func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 			node:   node,
 			start:  appended,
 			count:  toAppend,
+		}
+		{
+			meta := appender.GetMeta().(*catalog.BlockEntry)
+			tbl.warChecker.readBlockVar(meta)
 		}
 		tbl.appends = append(tbl.appends, ctx)
 		id := appender.GetID()

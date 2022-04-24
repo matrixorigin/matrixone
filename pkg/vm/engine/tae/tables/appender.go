@@ -33,6 +33,10 @@ func (appender *blockAppender) Close() error {
 	return nil
 }
 
+func (appender *blockAppender) GetMeta() interface{} {
+	return appender.node.block.meta
+}
+
 func (appender *blockAppender) GetID() *common.ID {
 	return appender.node.block.meta.AsCommonID()
 }

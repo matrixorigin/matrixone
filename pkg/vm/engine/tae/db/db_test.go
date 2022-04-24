@@ -307,6 +307,144 @@ func TestCompactBlock1(t *testing.T) {
 	}
 }
 
+func TestCompactBlock2(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bat)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	var newBlockFp *common.ID
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		var block handle.Block
+		for it.Valid() {
+			block = it.GetBlock()
+			break
+		}
+		task := tasks.NewCompactBlockTask(txn, block)
+		err := task.OnExecute()
+		assert.Nil(t, err)
+		newBlockFp = task.GetNewBlock().Fingerprint()
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		t.Log(rel.SimplePPString(common.PPL1))
+		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
+		blk, _ := seg.GetBlock(newBlockFp.BlockID)
+		err := blk.RangeDelete(1, 2)
+		assert.Nil(t, err)
+		err = blk.Update(3, 3, int64(999))
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		t.Log(rel.SimplePPString(common.PPL1))
+		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
+		blk, _ := seg.GetBlock(newBlockFp.BlockID)
+		task := tasks.NewCompactBlockTask(txn, blk)
+		err := task.OnExecute()
+		assert.Nil(t, err)
+		newBlockFp = task.GetNewBlock().Fingerprint()
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		t.Log(rel.SimplePPString(common.PPL1))
+		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
+		blk, _ := seg.GetBlock(newBlockFp.BlockID)
+		// blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		// blkData.GetVectorCopyById()
+		vec, mask, err := blk.GetVectorCopyById(3, nil, nil)
+		assert.Nil(t, err)
+		assert.Nil(t, mask)
+		v := compute.GetValue(vec, 1)
+		assert.Equal(t, int64(999), v)
+		assert.Equal(t, gvec.Length(bat.Vecs[0])-2, gvec.Length(vec))
+
+		cnt := 0
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			cnt++
+			it.Next()
+		}
+		assert.Equal(t, 1, cnt)
+
+		task := tasks.NewCompactBlockTask(txn, blk)
+		err = task.OnExecute()
+		assert.Nil(t, err)
+		newBlockFp = task.GetNewBlock().Fingerprint()
+		{
+			txn, _ := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			seg, _ := rel.GetSegment(newBlockFp.SegmentID)
+			blk, _ := seg.GetBlock(newBlockFp.BlockID)
+			err := blk.RangeDelete(4, 5)
+			assert.Nil(t, err)
+			err = blk.Update(3, 3, int64(1999))
+			assert.Nil(t, err)
+			assert.Nil(t, txn.Commit())
+		}
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		t.Log(rel.SimplePPString(common.PPL1))
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
+		blk, _ := seg.GetBlock(newBlockFp.BlockID)
+		vec, mask, err := blk.GetVectorCopyById(3, nil, nil)
+		assert.Nil(t, err)
+		assert.True(t, mask.Contains(4))
+		assert.True(t, mask.Contains(5))
+		v := compute.GetValue(vec, 3)
+		assert.Equal(t, int64(1999), v)
+		assert.Equal(t, gvec.Length(bat.Vecs[0])-2, gvec.Length(vec))
+
+		txn2, _ := db.StartTxn(nil)
+		database2, _ := txn2.GetDatabase("db")
+		rel2, _ := database2.GetRelationByName(schema.Name)
+		seg2, _ := rel2.GetSegment(newBlockFp.SegmentID)
+		blk2, _ := seg2.GetBlock(newBlockFp.BlockID)
+		err = blk2.RangeDelete(7, 7)
+		assert.Nil(t, err)
+
+		task := tasks.NewCompactBlockTask(txn, blk)
+		err = task.OnExecute()
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+
+		err = txn2.Commit()
+		assert.NotNil(t, err)
+	}
+}
+
 func TestMVCC1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()

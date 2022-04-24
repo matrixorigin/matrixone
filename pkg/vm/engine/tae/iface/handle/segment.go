@@ -22,6 +22,7 @@ type SegmentReader interface {
 	GetMeta() interface{}
 
 	GetBlock(id uint64) (Block, error)
+	GetRelation() Relation
 
 	BatchDedup(col *vector.Vector) error
 }

@@ -35,6 +35,7 @@ type BlockReader interface {
 	String() string
 	GetByFilter(filter Filter) (uint32, error)
 	GetVectorCopy(string, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
+	GetVectorCopyById(int, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
 	GetMeta() interface{}
 	Fingerprint() *common.ID
 	Rows() int
@@ -44,6 +45,8 @@ type BlockReader interface {
 	// IsAppendable() bool
 
 	PrepareCompact() error
+
+	GetSegment() Segment
 }
 
 type BlockWriter interface {

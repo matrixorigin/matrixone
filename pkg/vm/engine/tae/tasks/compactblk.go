@@ -10,9 +10,10 @@ import (
 )
 
 type compactBlockTask struct {
-	txn   txnif.AsyncTxn
-	block handle.Block
-	meta  *catalog.BlockEntry
+	txn      txnif.AsyncTxn
+	block    handle.Block
+	newBlock handle.Block
+	meta     *catalog.BlockEntry
 }
 
 func NewCompactBlockTask(txn txnif.AsyncTxn, block handle.Block) *compactBlockTask {
@@ -44,17 +45,30 @@ func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 	return
 }
 
-func (task *compactBlockTask) PrepareUpdates() (err error) {
-	blockData := task.meta.GetBlockData()
-	blockData.CollectChangesInRange(task.txn.GetStartTS(), task.txn.GetCommitTS())
-	return
-}
+func (task *compactBlockTask) GetNewBlock() handle.Block { return task.newBlock }
 
 func (task *compactBlockTask) OnExecute() (err error) {
+	data, err := task.PrepareData()
+	if err != nil {
+		return
+	}
+	seg := task.block.GetSegment()
+	rel := seg.GetRelation()
+	newBlk, err := seg.CreateNonAppendableBlock()
+	if err != nil {
+		return err
+	}
+	if err = seg.SoftDeleteBlock(task.block.Fingerprint().BlockID); err != nil {
+		return err
+	}
+	newBlkData := newBlk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blockFile := newBlkData.GetBlockFile()
+	if err = blockFile.WriteBatch(data, task.txn.GetStartTS()); err != nil {
+		return
+	}
+	if err = rel.PrepareCompactBlock(task.block.Fingerprint(), newBlk.Fingerprint()); err != nil {
+		return
+	}
+	task.newBlock = newBlk
 	return
-	// bat, err := task.PrepareData()
-	// if err != nil {
-	// 	return
-	// }
-	// return
 }

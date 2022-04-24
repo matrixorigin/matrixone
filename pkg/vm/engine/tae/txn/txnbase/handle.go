@@ -75,6 +75,7 @@ func (seg *TxnSegment) MakeReader() (reader handle.Reader) { return }
 // 	return
 // }
 
+func (seg *TxnSegment) GetRelation() (rel handle.Relation)                     { return }
 func (seg *TxnSegment) Append(*batch.Batch, uint32) (n uint32, err error)      { return }
 func (seg *TxnSegment) Update(uint64, uint32, uint16, interface{}) (err error) { return }
 func (seg *TxnSegment) RangeDelete(uint64, uint32, uint32) (err error)         { return }
@@ -97,12 +98,15 @@ func (blk *TxnBlock) Close() error                                         { ret
 func (blk *TxnBlock) GetMeta() interface{}                                 { return nil }
 func (blk *TxnBlock) GetByFilter(handle.Filter) (offset uint32, err error) { return }
 
-// func (blk *TxnBlock) GetBatch(ctx interface{}) (bat *batch.Batch, err error)        { return }
-func (blk *TxnBlock) GetVectorCopy(compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *TxnBlock) GetVectorCopyById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+	return
+}
+func (blk *TxnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return
 }
 
-func (blk *TxnBlock) PrepareCompact() (err error) { return }
+func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
+func (blk *TxnBlock) PrepareCompact() (err error)      { return }
 
 func (blk *TxnBlock) BatchDedup(*vector.Vector) (err error)                       { return }
 func (blk *TxnBlock) Append(*batch.Batch, uint32) (n uint32, err error)           { return }

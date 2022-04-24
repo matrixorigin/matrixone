@@ -1,6 +1,8 @@
 package txnimpl
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -51,7 +53,7 @@ func (checker *warChecker) readSegmentVar(seg *catalog.SegmentEntry) {
 func (checker *warChecker) readBlockVar(blk *catalog.BlockEntry) {
 	buf := txnbase.KeyEncoder.EncodeDB(blk.GetSegment().GetTable().GetDB().GetID())
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(blk.GetSegment().GetTable().GetID(), blk.GetSegment().GetTable().GetID())
+	buf = txnbase.KeyEncoder.EncodeTable(blk.GetSegment().GetTable().GetDB().GetID(), blk.GetSegment().GetTable().GetID())
 	checker.readSymbol(string(buf))
 	buf = txnbase.KeyEncoder.EncodeSegment(blk.GetSegment().GetTable().GetDB().GetID(), blk.GetSegment().GetTable().GetID(), blk.GetSegment().GetID())
 	checker.readSymbol(string(buf))
@@ -64,7 +66,7 @@ func (checker *warChecker) check() (err error) {
 	for key, _ := range checker.symTable {
 		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
 		if checker.db != nil && checker.db.GetID() != did {
-			panic("not expected")
+			panic(fmt.Sprintf("not expected: %d, %d", checker.db.GetID(), did))
 		}
 		switch keyt {
 		case txnbase.KeyT_DBEntry:
