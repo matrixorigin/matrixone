@@ -53,6 +53,7 @@ jobs:
           cd $GITHUB_WORKSPACE && make clean && make config
 
       - name: Static Code Analysis
+        continue-on-error: true
         run: |
           make sca 
 
