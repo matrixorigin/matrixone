@@ -15,7 +15,7 @@ The STDDEV_POP(expr) function returns the population standard deviation of expr.
 ## **Arguments**
 |  Arguments   | Description  |
 |  ----  | ----  |
-| expr  | UINT data types |
+| expr  | Any numerical expressions |
 
 
 ## **Examples**
