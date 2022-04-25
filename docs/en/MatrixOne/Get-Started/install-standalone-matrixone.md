@@ -8,7 +8,7 @@ Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with C
 
 #### 1. Install Go as necessary
 
-Go version 1.17+ is required.
+Go version 1.18 is required.
   
 #### 2. Get the MatrixOne code
 

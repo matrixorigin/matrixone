@@ -80,7 +80,7 @@ For contributing documentation, [matrixone](https://github.com/matrixorigin/matr
 ### **Go Environment**
 MatrixOne is written in Go. Before you start contributing code to MatrixOne, you need to set up your GO development environment.
 
-1. Install `Go` version **1.17** or above. You can see [How to Write Go Code](http://golang.org/doc/code.html) for more information.  
+1. Install `Go` version **1.18**. You can see [How to Write Go Code](http://golang.org/doc/code.html) for more information.  
 2. Define `GOPATH` environment variable and modify `PATH` to access your Go binaries. A common setup is as follows. You could always specify it based on your own flavor.
 
 ```sh
