@@ -832,7 +832,7 @@ func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 		tbl.tableHandle = tableData.GetHandle()
 	}
 	appended := uint32(0)
-	for appended < node.Rows() {
+	for appended < node.RowsWithoutDeletes() {
 		appender, err := tbl.tableHandle.GetAppender()
 		if err == data.ErrAppendableSegmentNotFound {
 			seg, err := tbl.CreateSegment()
@@ -852,12 +852,13 @@ func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 			}
 			appender = tbl.tableHandle.SetAppender(blk.Fingerprint())
 		}
-		toAppend, err := appender.PrepareAppend(node.Rows() - appended)
+		toAppend, err := appender.PrepareAppend(node.RowsWithoutDeletes() - appended)
+		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
 		ctx := &appendCtx{
 			driver: appender,
 			node:   node,
 			start:  appended,
-			count:  toAppend,
+			count:  toAppendWithDeletes,
 		}
 		{
 			meta := appender.GetMeta().(*catalog.BlockEntry)

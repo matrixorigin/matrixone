@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -285,6 +286,42 @@ func (v *StrVector) GetLatestView() IVector {
 			vec.VMask = nulls.Range(v.VMask, 0, uint64(endPos), &nulls.Nulls{})
 		} else {
 			vec.VMask = nulls.Range(v.VMask, 0, uint64(endPos), &nulls.Nulls{})
+		}
+	} else {
+		vec.VMask = &nulls.Nulls{}
+	}
+	return vec
+}
+
+func (v *StrVector) Window(start, end uint32) IVector {
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RUnlock()
+	}
+	mask := atomic.LoadUint64(&v.StatMask)
+	endPos := int(mask & container.PosMask)
+	mask = mask & ^container.PosMask
+	if end > uint32(endPos) {
+		end = uint32(endPos)
+	}
+	newPos := uint64(end-start) & container.PosMask
+	newMask := mask | newPos
+	vec := &StrVector{
+		BaseVector: BaseVector{
+			StatMask: container.ReadonlyMask | newMask,
+			Type:     v.Type,
+		},
+		Data: v.Data.Window(int(start), int(end)),
+	}
+	if mask&container.HasNullMask != 0 {
+		if mask&container.ReadonlyMask == 0 {
+			var np *roaring64.Bitmap
+			if v.VMask != nil {
+				np = common.BitMap64Window(v.VMask.Np, int(start), int(end))
+			}
+			vec.VMask = &nulls.Nulls{Np: np}
+		} else {
+			vec.VMask = nulls.Range(v.VMask, uint64(start), uint64(end), &nulls.Nulls{})
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}

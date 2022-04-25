@@ -48,6 +48,7 @@ type IVector interface {
 	container.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
+	Window(start, end uint32) IVector
 	PlacementNew(t types.Type)
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error

@@ -621,7 +621,7 @@ func TestMVCC2(t *testing.T) {
 			assert.Nil(t, mask)
 			t.Log(vec.String())
 			// TODO: exclude deleted rows when apply appends
-			// assert.Equal(t, vector.Length(bats[1].Vecs[0])*2-1, int(vector.Length(vec)))
+			assert.Equal(t, vector.Length(bats[1].Vecs[0])*2-1, int(vector.Length(vec)))
 			it.Next()
 		}
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -45,6 +46,8 @@ type InsertNode interface {
 	MakeCommand(uint32, bool) (txnif.TxnCmd, txnbase.NodeEntry, error)
 	ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
+	RowsWithoutDeletes() uint32
+	LengthWithDeletes(appended, toAppend uint32) uint32
 }
 
 type appendInfo struct {
@@ -266,6 +269,38 @@ func (n *insertNode) Rows() uint32 {
 	return n.rows
 }
 
+func (n *insertNode) RowsWithoutDeletes() uint32 {
+	deletes := uint32(0)
+	if n.deletes != nil {
+		deletes = uint32(n.deletes.GetCardinality())
+	}
+	return n.rows - deletes
+}
+
+func (n *insertNode) LengthWithDeletes(appended, toAppend uint32) uint32 {
+	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+		return toAppend
+	}
+	appendedOffset := n.offsetWithDeletes(appended)
+	toAppendOffset := n.offsetWithDeletes(toAppend)
+	return toAppendOffset - appendedOffset
+}
+
+func (n *insertNode) offsetWithDeletes(count uint32) uint32 {
+	if n.deletes == nil || n.deletes.GetCardinality() == 0 {
+		return count
+	}
+	offset := count
+	for offset < n.rows {
+		deletes := n.deletes.Rank(offset)
+		if offset == count+uint32(deletes) {
+			break
+		}
+		offset = count + uint32(deletes)
+	}
+	return offset
+}
+
 func (n *insertNode) GetValue(col int, row uint32) (interface{}, error) {
 	vec, err := n.data.GetVectorByAttr(col)
 	if err != nil {
@@ -309,10 +344,10 @@ func (n *insertNode) Window(start, end uint32) (*gbat.Batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		srcVec, _ := src.GetLatestView().CopyToVector()
-		destVec := gvec.New(srcVec.Typ)
-		gvec.Window(srcVec, int(start), int(end)+1, destVec)
-		ret.Vecs[i] = destVec
+		srcVec, _ := src.Window(start, end+1).CopyToVector()
+		deletes := common.BitMapWindow(n.deletes, int(start), int(end))
+		srcVec = compute.ApplyDeleteToVector(srcVec, deletes)
+		ret.Vecs[i] = srcVec
 	}
 	return ret, nil
 }
