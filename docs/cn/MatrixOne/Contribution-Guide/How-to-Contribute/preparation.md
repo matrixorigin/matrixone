@@ -66,7 +66,7 @@
 
 ## **开发环境**  
 MO主要由Go语言编写，因此需要提前安装部署好相关的开发环境，简要的示例流程如下：
-1. 安装版本不低于1.17的Go，您可以通过[Download Go](https://go.dev/dl/)与[Installation instructions](https://go.dev/doc/install)教程来完成整个过程。
+1. 安装版本为1.18的Go，您可以通过[Download Go](https://go.dev/dl/)与[Installation instructions](https://go.dev/doc/install)教程来完成整个过程。
 2. 定义环境变量并修改路径，您可以遵循以下示例流程：
 ```sh
 export GOPATH=$HOME/go  
