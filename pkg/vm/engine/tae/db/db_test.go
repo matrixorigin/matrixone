@@ -14,9 +14,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -209,6 +211,7 @@ func TestCompactBlock1(t *testing.T) {
 		Op:  handle.FilterEq,
 		Val: v,
 	}
+	ctx := tasks.Context{Waitable: true}
 	// 1. No updates and deletes
 	{
 		txn, _ := db.StartTxn(nil)
@@ -222,7 +225,8 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		t.Log(blkMeta.String())
-		task := tasks.NewCompactBlockTask(txn, block)
+		task, err := tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
 		assert.NotNil(t, data)
@@ -252,7 +256,9 @@ func TestCompactBlock1(t *testing.T) {
 		seg, err := rel.GetSegment(id.SegmentID)
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
-		task := tasks.NewCompactBlockTask(txn, block)
+		blkMeta := block.GetMeta().(*catalog.BlockEntry)
+		task, err := tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
@@ -270,7 +276,8 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
-		task = tasks.NewCompactBlockTask(txn, block)
+		task, err = tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		assert.Nil(t, err)
 		data, err = task.PrepareData()
 		assert.Nil(t, err)
 		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(data.Vecs[0]))
@@ -281,7 +288,9 @@ func TestCompactBlock1(t *testing.T) {
 			rel, _ := database.GetRelationByName(schema.Name)
 			seg, _ := rel.GetSegment(id.SegmentID)
 			blk, _ := seg.GetBlock(id.BlockID)
-			task := tasks.NewCompactBlockTask(txn, blk)
+			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
+			task, err = tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+			assert.Nil(t, err)
 			data, err := task.PrepareData()
 			assert.Nil(t, err)
 			assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(data.Vecs[0]))
@@ -310,6 +319,10 @@ func TestCompactBlock1(t *testing.T) {
 func TestCompactBlock2(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
+
+	worker := ops.NewOpWorker("xx")
+	worker.Start()
+	defer worker.Stop()
 	schema := catalog.MockSchemaAll(13)
 	schema.BlockMaxRows = 20
 	schema.SegmentMaxBlocks = 2
@@ -323,6 +336,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
+	ctx := &tasks.Context{Waitable: true}
 	var newBlockFp *common.ID
 	{
 		txn, _ := db.StartTxn(nil)
@@ -334,8 +348,10 @@ func TestCompactBlock2(t *testing.T) {
 			block = it.GetBlock()
 			break
 		}
-		task := tasks.NewCompactBlockTask(txn, block)
-		err := task.OnExecute()
+		task, err := tables.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry))
+		assert.Nil(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone()
 		assert.Nil(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		assert.Nil(t, txn.Commit())
@@ -362,8 +378,10 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(rel.SimplePPString(common.PPL1))
 		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
 		blk, _ := seg.GetBlock(newBlockFp.BlockID)
-		task := tasks.NewCompactBlockTask(txn, blk)
-		err := task.OnExecute()
+		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		assert.Nil(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone()
 		assert.Nil(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		assert.Nil(t, txn.Commit())
@@ -393,8 +411,10 @@ func TestCompactBlock2(t *testing.T) {
 		}
 		assert.Equal(t, 1, cnt)
 
-		task := tasks.NewCompactBlockTask(txn, blk)
-		err = task.OnExecute()
+		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		assert.Nil(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone()
 		assert.Nil(t, err)
 		newBlockFp = task.GetNewBlock().Fingerprint()
 		{
@@ -435,8 +455,10 @@ func TestCompactBlock2(t *testing.T) {
 		err = blk2.RangeDelete(7, 7)
 		assert.Nil(t, err)
 
-		task := tasks.NewCompactBlockTask(txn, blk)
-		err = task.OnExecute()
+		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		assert.Nil(t, err)
+		worker.SendOp(task)
+		err = task.WaitDone()
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 

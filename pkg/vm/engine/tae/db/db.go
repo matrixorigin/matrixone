@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -25,6 +26,8 @@ type DB struct {
 
 	TxnMgr       *txnbase.TxnManager
 	TxnLogDriver txnbase.NodeDriver
+
+	CKPDriver checkpoint.Driver
 
 	DBLocker io.Closer
 
@@ -57,10 +60,12 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) (err error) {
 }
 
 func (db *DB) startWorkers() (err error) {
+	db.CKPDriver.Start()
 	return
 }
 
 func (db *DB) stopWorkers() (err error) {
+	db.CKPDriver.Stop()
 	return
 }
 

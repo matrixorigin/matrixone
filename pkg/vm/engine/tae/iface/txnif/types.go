@@ -10,6 +10,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
+type TxnClient interface {
+	StartTxn(info []byte) (AsyncTxn, error)
+}
+
 type Txn2PC interface {
 	PreCommit() error
 	PrepareRollback() error

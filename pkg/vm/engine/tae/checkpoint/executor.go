@@ -23,15 +23,8 @@ import (
 )
 
 var (
-	ErrDuplicateNode = errors.New("duplicate node")
-	ErrNotFoundNode  = errors.New("not found node")
+	ErrNotFoundNode = errors.New("not found node")
 )
-
-type Unit interface {
-	GetID() uint64
-	TryCheckpoint() uint64
-	IsDirty() bool
-}
 
 type dbCheckpointer struct {
 	mu    *sync.RWMutex
@@ -79,7 +72,7 @@ func (ck *dbCheckpointer) deleteUnit(id uint64) (err error) {
 func (ck *dbCheckpointer) doCheckpoint() {
 	units := ck.getUnits()
 	for _, unit := range units {
-		unit.TryCheckpoint()
+		unit.TryCheckpoint(0)
 	}
 }
 

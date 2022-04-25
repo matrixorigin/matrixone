@@ -14,24 +14,9 @@
 
 package checkpoint
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-)
-
-type DBDriver interface {
-	GetDatabaseID() uint64
-	Checkpoint(id *common.ID) error
-}
-
-type DriverFactory = func(id uint64) DBDriver
-
-type Aware interface {
-	OnChange(uint64, data.CheckpointUnit)
-}
-
 type Driver interface {
-	Aware
+	// aware.ChangeAware
+	// aware.DataMutationAware
 	Start()
 	Stop()
 	String() string

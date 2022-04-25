@@ -15,8 +15,8 @@ import (
 
 type CheckpointUnit interface {
 	GetID() uint64
-	TryCheckpoint()
-	IsDirty() bool
+	TryCheckpoint(score int) error
+	EstimateScore(base int) int
 }
 
 type BlockAppender interface {
@@ -30,6 +30,7 @@ type BlockAppender interface {
 
 type Block interface {
 	CheckpointUnit
+	GetID() uint64
 	MakeAppender() (BlockAppender, error)
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
