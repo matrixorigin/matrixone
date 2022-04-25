@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from R inner join S on R.uid = S.uid",
+		input:  "with t1 as (select * from t2) select a from t where c_acctbal > 0.00 and substring(c_phone from 1 for 2) in ('10')",
+		output: "with t1 AS (select * from t2) select a from t where c_acctbal > 0.00 and substring(c_phone, 1, 2) in (10)",
 	}
 )
 
@@ -56,6 +56,14 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select a as promo_revenue from (select * from r) as c_orders (c_custkey, c_count)",
+	}, {
+		input:  "select extract(year from l_shipdate) as l_year from t",
+		output: "select extract(year, l_shipdate) as l_year from t",
+	}, {
+		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112 day'",
+		output: "select * from R inner join S on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
+	}, {
 		input: "create table deci_table (a decimal(10, 5))",
 	}, {
 		input: "create table deci_table (a decimal(20, 5))",
@@ -313,6 +321,7 @@ var (
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
 		input: "select u.a, interval 1 second from t",
+		output: "select u.a, interval(1, second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 	}, {

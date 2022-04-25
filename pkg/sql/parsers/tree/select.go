@@ -29,10 +29,15 @@ type Select struct {
 	Select  SelectStatement
 	OrderBy OrderBy
 	Limit   *Limit
+	With	*With
 	Ep *ExportParam
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
+	if node.With != nil {
+		node.With.Format(ctx)
+		ctx.WriteByte(' ')
+	}
 	node.Select.Format(ctx)
 	if len(node.OrderBy) > 0 {
 		ctx.WriteByte(' ')
@@ -378,19 +383,25 @@ func NewParenTableExpr(e TableExpr) *ParenTableExpr {
 type AliasClause struct {
 	NodeFormatter
 	Alias Identifier
+	Cols  IdentifierList
 }
 
 func (node *AliasClause) Format(ctx *FmtCtx) {
 	if node.Alias != "" {
 		ctx.WriteString(string(node.Alias))
 	}
+	if node.Cols != nil {
+		ctx.WriteByte('(')
+		node.Cols.Format(ctx)
+		ctx.WriteByte(')')
+	}
 }
 
 //the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr TableExpr
-	As   AliasClause
+	Expr 	TableExpr
+	As   	AliasClause
 }
 
 func (node *AliasedTableExpr) Format(ctx *FmtCtx) {

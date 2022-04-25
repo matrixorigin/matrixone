@@ -17,6 +17,7 @@ package mysql
     
 import (
     "strings"
+    "strconv"
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -118,7 +119,6 @@ import (
     subPartitions []*tree.SubPartition
 
     subquery *tree.Subquery
-    intervalType tree.IntervalType
     funcExpr *tree.FuncExpr
 
     roles []*tree.Role
@@ -154,6 +154,12 @@ import (
     properties []tree.Property
     property tree.Property
     exportParm *tree.ExportParam
+
+	whenClause *tree.When
+    whenClauseList []*tree.When
+    withClause *tree.With
+    cte *tree.CTE
+    cteList []*tree.CTE
 }
 
 %token LEX_ERROR
@@ -265,6 +271,15 @@ import (
 %token <str> SEPARATOR
 %token <str> CURRENT_DATE CURRENT_USER CURRENT_ROLE
 
+// Time unit
+%token <str> SECOND_MICROSECOND MINUTE_MICROSECOND MINUTE_SECOND HOUR_MICROSECOND
+%token <str> HOUR_SECOND HOUR_MINUTE DAY_MICROSECOND DAY_SECOND DAY_MINUTE DAY_HOUR YEAR_MONTH
+%token <str> SQL_TSI_HOUR SQL_TSI_DAY SQL_TSI_WEEK SQL_TSI_MONTH SQL_TSI_QUARTER SQL_TSI_YEAR
+%token <str> SQL_TSI_SECOND SQL_TSI_MINUTE
+
+// With
+%token <str> RECURSIVE
+
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
 
@@ -310,7 +325,7 @@ import (
 %type <orderBy> order_list order_by_clause order_by_opt
 %type <limit> limit_opt limit_clause
 %type <str> insert_column
-%type <identifierList> column_list partition_clause_opt partition_id_list insert_column_list
+%type <identifierList> column_list column_list_opt partition_clause_opt partition_id_list insert_column_list
 %type <joinCond> join_condition join_condition_opt on_expression_opt
 
 %type <tableDefs> table_elem_list_opt table_elem_list
@@ -365,8 +380,8 @@ import (
 %type <expr> literal
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
-%type <expr> simple_expr
-%type <expr> expression like_escape_opt boolean_primary col_tuple
+%type <expr> simple_expr else_opt
+%type <expr> expression like_escape_opt boolean_primary col_tuple expression_opt
 %type <exprs> expression_list_opt
 %type <exprs> expression_list row_value
 %type <expr> datatime_precision_opt datatime_precision
@@ -423,7 +438,6 @@ import (
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
-%type <intervalType> interval_type
 %type <numVal> int_num_val
 
 %type <lengthOpt> length_opt length_option_opt length
@@ -460,7 +474,13 @@ import (
 %type <property> property_elem
 %type <assignments> set_value_list
 %type <assignment> set_value
-%type <str> row_opt
+%type <str> row_opt substr_option
+%type <str> time_unit time_stamp_unit
+%type <whenClause> when_clause
+%type <whenClauseList> when_clause_list
+%type <withClause> with_clause
+%type <cte> common_table_expr
+%type <cteList> cte_list
 
 %start start_command
 
@@ -2191,9 +2211,9 @@ force_quote_list:
 
 select_stmt:
     select_no_parens
-|   select_with_parens export_data_param_opt
+|   select_with_parens
     {
-        $$ = &tree.Select{Select: $1, Ep: $2}
+        $$ = &tree.Select{Select: $1}
     }
 
 select_no_parens:
@@ -2209,6 +2229,62 @@ select_no_parens:
     {
         $$ = &tree.Select{Select: $1, OrderBy: $2, Limit: $3, Ep: $4}
     }
+|	with_clause simple_select order_by_opt limit_opt export_data_param_opt // select_lock_opt
+    {
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+    }
+|   with_clause select_with_parens order_by_clause export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Ep: $4, With: $1}
+    }
+|   with_clause select_with_parens order_by_opt limit_clause export_data_param_opt
+    {
+        $$ = &tree.Select{Select: $2, OrderBy: $3, Limit: $4, Ep: $5, With: $1}
+    }
+
+with_clause:
+	WITH cte_list
+	{
+		$$ = &tree.With{
+			IsRecursive: false,
+			CTEs: $2,
+		}
+	}
+|	WITH RECURSIVE cte_list
+	{
+		$$ = &tree.With{
+        	IsRecursive: true,
+        	CTEs: $3,
+        }
+	}
+
+cte_list:
+	common_table_expr
+	{
+		$$ = []*tree.CTE{$1}
+	}
+|	cte_list ',' common_table_expr
+	{
+		$$ = append($1, $3)
+	}
+
+common_table_expr:
+	ident column_list_opt AS '(' stmt ')'
+	{
+		$$ = &tree.CTE{
+			Name: &tree.AliasClause{Alias: tree.Identifier($1), Cols: $2},
+			Stmt: $5,
+		}
+	}
+
+column_list_opt:
+	{
+		$$ = nil
+	}
+|	'(' column_list ')'
+	{
+		$$ = $2
+	}
 
 limit_opt:
     {
@@ -2616,12 +2692,13 @@ table_factor:
     {
         $$ = $1
     }
-|   derived_table as_opt table_id
+|   derived_table as_opt ident column_list_opt
     {
         $$ = &tree.AliasedTableExpr{
             Expr: $1,
             As: tree.AliasClause{
                 Alias: tree.Identifier($3),
+                Cols: $4,
             },
         }
     }
@@ -4147,6 +4224,14 @@ simple_expr:
         $2.Exists = true
         $$ = $2
     }
+|	CASE expression_opt when_clause_list else_opt END
+	{
+		$$ = &tree.CaseExpr{
+			Expr: $2,
+			Whens: $3,
+			Else: $4,
+		}
+	}
 |   CAST '(' expression AS cast_type ')' 
     {
         $$ = tree.NewCastExpr($3, $5)
@@ -4180,6 +4265,43 @@ simple_expr:
     {
         $$ = $1
     }
+
+else_opt:
+	{
+		$$ = nil
+	}
+|	ELSE expression
+	{
+		$$ = $2
+	}
+
+expression_opt:
+	{
+		$$ = nil
+	}
+|	expression
+	{
+		$$ = $1
+	}
+
+when_clause_list:
+	when_clause
+	{
+		$$ = []*tree.When{$1}
+	}
+|	when_clause_list when_clause
+	{
+		$$ = append($1, $2)
+	}
+
+when_clause:
+	WHEN expression THEN expression
+	{
+		$$ = &tree.When{
+			Cond: $2,
+			Val: $4,
+		}
+	}
 
 cast_type:
     decimal_type
@@ -4447,30 +4569,79 @@ function_call_generic:
             Exprs: $3,
         }
     }
-|   SUBSTRING '(' expression_list_opt ')'
+|   substr_option '(' expression_list_opt ')'
     {
-            name := tree.SetUnresolvedName(strings.ToLower($1))
-            $$ = &tree.FuncExpr{
-                Func: tree.FuncName2ResolvableFunctionReference(name),
-                Exprs: $3,
-            }
+    	name := tree.SetUnresolvedName(strings.ToLower($1))
+       	$$ = &tree.FuncExpr{
+           	Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: $3,
+        }
     }
-|   SUBSTR '(' expression_list_opt ')'
+|   substr_option '(' expression FROM expression ')'
     {
-                name := tree.SetUnresolvedName(strings.ToLower($1))
-                $$ = &tree.FuncExpr{
-                    Func: tree.FuncName2ResolvableFunctionReference(name),
-                    Exprs: $3,
-                }
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$3, $5},
+        }
     }
-// |   identifier '.' identifier '(' expression_list_opt ')'
-//     {
-//         name := tree.SetUnresolvedName(strings.ToLower($1), strings.ToLower($3))
-//         $$ = &tree.FuncExpr{
-//             Func: tree.FuncName2ResolvableFunctionReference(name),
-//             Exprs: $5,
-//         }
-//     }
+|   substr_option '(' expression FROM expression FOR expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{$3, $5, $7},
+        }
+    }
+|   EXTRACT '(' time_unit FROM expression ')'
+    {
+        name := tree.SetUnresolvedName(strings.ToLower($1))
+        timeUinit := tree.SetUnresolvedName(strings.ToLower($3))
+        $$ = &tree.FuncExpr{
+             Func: tree.FuncName2ResolvableFunctionReference(name),
+             Exprs: tree.Exprs{timeUinit, $5},
+       }
+    }
+
+substr_option:
+	SUBSTRING
+|	SUBSTR
+
+time_unit:
+	time_stamp_unit
+	{
+		$$ = $1
+	}
+|	SECOND_MICROSECOND
+|	MINUTE_MICROSECOND
+|	MINUTE_SECOND
+|	HOUR_MICROSECOND
+|	HOUR_SECOND
+|	HOUR_MINUTE
+|	DAY_MICROSECOND
+|	DAY_SECOND
+|	DAY_MINUTE
+|	DAY_HOUR
+|	YEAR_MONTH
+
+time_stamp_unit:
+	MICROSECOND
+|	SECOND
+|	MINUTE
+|	HOUR
+|	DAY
+|	WEEK
+|	MONTH
+|	QUARTER
+|	YEAR
+|	SQL_TSI_SECOND
+|	SQL_TSI_MINUTE
+|	SQL_TSI_HOUR
+|	SQL_TSI_DAY
+|	SQL_TSI_WEEK
+|	SQL_TSI_MONTH
+|	SQL_TSI_QUARTER
+|	SQL_TSI_YEAR
 
 function_call_nonkeyword:
     CURTIME datatime_precision
@@ -4676,11 +4847,25 @@ name_confict:
 |   YEAR
 
 interval_expr:
-    INTERVAL expression interval_type
+    INTERVAL STRING
+	{
+		name := tree.SetUnresolvedName("interval")
+		es := tree.NewNumVal(constant.MakeString($2), $2, false)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{es},
+        }
+	}
+|   INTERVAL INTEGRAL time_unit
     {
-        $$ = &tree.IntervalExpr{
-            Expr: $2, 
-            Type: $3,
+        name := tree.SetUnresolvedName("interval")
+        ival := util.GetUint64($2)
+        ustr := strconv.FormatUint(ival, 10)
+        e1 := tree.NewNumVal(constant.MakeUint64(ival), ustr, false)
+        e2 := tree.NewNumVal(constant.MakeString($3), $3, false)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{e1, e2},
         }
     }
 
@@ -4695,12 +4880,6 @@ func_type_opt:
 |   ALL
     {
         $$ = tree.FUNC_TYPE_ALL
-    }
-
-interval_type:
-    SECOND
-    {
-        $$ = tree.INTERVAL_TYPE_SECOND
     }
 
 tuple_expression:
@@ -5753,6 +5932,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
+|   RECURSIVE
 |   REVERSE
 |   SCHEMA
 |   SELECT
@@ -5781,6 +5961,7 @@ reserved_keyword:
 |   WHEN
 |   WHERE
 |   WEEK
+|   WITH
 |   QUARTER
 |   PASSWORD
 |   TERMINATED
@@ -5948,7 +6129,6 @@ non_reserved_keyword:
 |   VARCHAR
 |   VARIABLES
 |   VIEW
-|   WITH
 |   WRITE
 |   WARNINGS
 |   WORK
