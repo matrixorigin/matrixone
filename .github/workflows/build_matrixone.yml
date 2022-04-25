@@ -100,6 +100,5 @@ jobs:
         with:
           name: test_reports
           path: |
-            ${{ github.workspace }}/coverage.html
-            ${{ github.workspace }}/lint.out
+            ${{ github.workspace }}
           retention-days: 7 
