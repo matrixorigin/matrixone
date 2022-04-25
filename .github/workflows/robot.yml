@@ -1,0 +1,95 @@
+# This is a basic workflow to help you get started with Actions
+
+name: WeWork Robot
+
+# Controls when the workflow will run
+on:
+  pull_request:
+    branches: [ main ]
+    types: [ opened, reopened ]
+    paths-ignore:
+      - 'docs/**'
+  issues:
+    types: [opened, reopened]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build on CentOS/x64
+
+    steps:
+
+      # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: 1.18
+
+      - name: Build MO
+        run: |
+          cd $GITHUB_WORKSPACE
+          make clean
+          make config
+          make build
+
+      - name: Install static check tools
+        run: |
+          cd $GITHUB_WORKSPACE
+          make install-static-check-tools
+
+      - name: Static check
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          golangci-lint version
+          make static-check &>lint.out
+
+      - name: count sca failed files
+        run: |
+          cd $GITHUB_WORKSPACE
+          echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
+
+      - name: code coverage
+        continue-on-error: true
+        run: |
+          go test -v -tags matrixone_test -p 1 -covermode=count -coverprofile=cover.out -coverpkg=./pkg/... $(go list ./...) | tee UT-Report.out
+
+      - name: calc pkg code coverage
+        run: |
+          echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' cover.out)" >> $GITHUB_ENV
+
+
+
+      - name: WeChat Work notification by markdown
+        if : github.event_name == 'pull_request'
+        uses: chf007/action-wechat-work@master
+        env:
+          WECHAT_WORK_BOT_WEBHOOK: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
+        with:
+          msgtype: markdown
+          content: "New Pull Request Opened: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ join(github.event.pull_request.requested_reviewers.*.login, ', ') }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>"
+
+      - name : ISSUE Triggered
+        if : github.event_name == 'issues'
+        uses: chf007/action-wechat-work@master
+        env:
+          WECHAT_WORK_BOT_WEBHOOK: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
+        with:
+          msgtype: markdown
+          mentioned_list: '["@all"]'
+          content: "New Issue Opened: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
+
+      - name: upload
+        uses: actions/upload-artifact@v2
+        with:
+          name: sca-log
+          path: lint.out
+          retention-days: 7
