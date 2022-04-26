@@ -182,7 +182,7 @@ const (
 
 type Timeout struct {
 	//last record of the time
-	lastTime time.Time
+	lastTime atomic.Value //time.Time
 
 	//period
 	timeGap time.Duration
@@ -192,15 +192,16 @@ type Timeout struct {
 }
 
 func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
-	return &Timeout{
-		lastTime:   time.Now(),
+	ret := &Timeout{
 		timeGap:    tg,
 		autoUpdate: autoUpdateWhenChecked,
 	}
+	ret.lastTime.Store(time.Now())
+	return ret
 }
 
 func (t *Timeout) UpdateTime(tn time.Time) {
-	t.lastTime = tn
+	t.lastTime.Store(tn)
 }
 
 /*
@@ -211,12 +212,12 @@ return true  :  is timeout. the lastTime has been updated.
 return false :  is not timeout. the lastTime has not been updated.
 */
 func (t *Timeout) isTimeout() bool {
-	if time.Since(t.lastTime) <= t.timeGap {
+	if time.Since(t.lastTime.Load().(time.Time)) <= t.timeGap {
 		return false
 	}
 
 	if t.autoUpdate {
-		t.lastTime = time.Now()
+		t.lastTime.Store(time.Now())
 	}
 	return true
 }

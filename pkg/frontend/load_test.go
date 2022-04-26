@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -382,11 +383,12 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 	convey.Convey("getLineOutFromSimdCsvRoutine succ", t, func() {
 		handler := &ParseLineHandler{
 			closeRef:                  &CloseLoadData{stopLoadData: make(chan interface{}, 1)},
-			simdCsvGetParsedLinesChan: make(chan simdcsv.LineOut, 100),
+			simdCsvGetParsedLinesChan: atomic.Value{},
 			SharePart: SharePart{
 				load:             &tree.Load{IgnoredLines: 1},
 				simdCsvLineArray: make([][]string, 100)},
 		}
+		handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, 100))
 		handler.closeRef.stopLoadData <- 1
 		gostub.StubFunc(&saveLinesToStorage, nil)
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldBeNil)
@@ -395,7 +397,7 @@ func Test_getLineOutFromSimdCsvRoutine(t *testing.T) {
 		gostub.StubFunc(&saveLinesToStorage, errors.New("1"))
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
 
-		getParsedLinesChan(handler.simdCsvGetParsedLinesChan)
+		getParsedLinesChan(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		stubs := gostub.StubFunc(&saveLinesToStorage, nil)
 		defer stubs.Reset()
 		convey.So(handler.getLineOutFromSimdCsvRoutine(), convey.ShouldNotBeNil)
