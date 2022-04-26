@@ -123,6 +123,9 @@ func (bf *blockFile) LoadIBatch(colTypes []types.Type, maxRow uint32) (bat batch
 			return
 		}
 		vec := vector.NewVector(colTypes[i], uint64(maxRow))
+		if err = vec.Unmarshal(buf); err != nil {
+			return
+		}
 		vecs[i] = vec
 		attrs[i] = i
 	}

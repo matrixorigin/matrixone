@@ -63,7 +63,7 @@ func main() {
 	gm := guest.New(1<<30, hm)
 	proc := process.New(mheap.New(gm))
 	for _, query := range querys {
-		txn, _ := tae.StartTxn(nil)
+		txn := tae.StartTxn(nil)
 		e := moengine.NewEngine(txn)
 		processQuery(query, e, proc)
 		if err := txn.Commit(); err != nil {

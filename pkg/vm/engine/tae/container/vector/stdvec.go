@@ -430,7 +430,7 @@ func (v *StdVector) Window(start, end uint32) IVector {
 			StatMask: container.ReadonlyMask | newMask,
 			Type:     v.Type,
 		},
-		Data: v.Data[startIdx : endIdx],
+		Data: v.Data[startIdx:endIdx],
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
@@ -634,6 +634,9 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *StdVector) Unmarshal(data []byte) error {
+	if data == nil || len(data) == 0 {
+		return nil
+	}
 	buf := data
 	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]

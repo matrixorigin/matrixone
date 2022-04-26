@@ -48,7 +48,7 @@ func main() {
 
 	var schema *catalog.Schema
 	{
-		txn, _ := tae.StartTxn(nil)
+		txn := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
 		err := eng.Create(0, dbName, 0)
 		if err != nil {
@@ -80,7 +80,7 @@ func main() {
 	doAppend := func(b *batch.Batch) func() {
 		return func() {
 			defer wg.Done()
-			txn, err := tae.StartTxn(nil)
+			txn := tae.StartTxn(nil)
 			// {
 			// 	db, _ := txn.GetDatabase(dbName)
 			// 	rel, _ := db.GetRelationByName(schema.Name)
@@ -113,7 +113,7 @@ func main() {
 	stopProfile()
 	logrus.Infof("Append takes: %s", time.Since(now))
 	{
-		txn, _ := tae.StartTxn(nil)
+		txn := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
 		db, err := eng.Database(dbName)
 		if err != nil {

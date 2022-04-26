@@ -12,7 +12,7 @@ func TestCatalog1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
 
-	txn, _ := db.StartTxn(nil)
+	txn := db.StartTxn(nil)
 	schema := catalog.MockSchema(1)
 	database, _ := txn.CreateDatabase("db")
 	rel, _ := database.CreateRelation(schema)
@@ -23,7 +23,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
-	txn, _ = db.StartTxn(nil)
+	txn = db.StartTxn(nil)
 	database, _ = txn.GetDatabase("db")
 	rel, _ = database.GetRelationByName(schema.Name)
 	sseg, err := rel.GetSegment(seg.GetID())
@@ -40,7 +40,7 @@ func TestCatalog1(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn, _ = db.StartTxn(nil)
+		txn = db.StartTxn(nil)
 		database, _ = txn.GetDatabase("db")
 		rel, _ = database.GetRelationByName(schema.Name)
 		t.Log(txn.String())

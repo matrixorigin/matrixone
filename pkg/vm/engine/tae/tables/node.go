@@ -6,6 +6,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -16,7 +17,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/sirupsen/logrus"
 )
 
 type appendableNode struct {
@@ -88,16 +88,14 @@ func (node *appendableNode) OnLoad() {
 	}
 }
 
-// func (node *appendableNode) makeSnapshot(ts uint64,)
-
 func (node *appendableNode) OnUnload() {
-	logrus.Infof("Unloading block %s", node.block.meta.AsCommonID().String())
+	logutil.Infof("Unloading block %s", node.block.meta.AsCommonID().String())
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]interface{})
 	controller := node.block.controller
 	readLock := controller.GetSharedLock()
 	ts := controller.LoadMaxVisible()
-	for i, _ := range node.block.meta.GetSchema().ColDefs {
+	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := controller.GetColumnChain(uint16(i))
 
 		chain.RLock()
@@ -111,12 +109,18 @@ func (node *appendableNode) OnUnload() {
 	deleteChain := controller.GetDeleteChain()
 	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
 	readLock.Unlock()
-	if err := node.file.WriteIBatch(node.data, ts, masks, vals, dnode.GetDeleteMaskLocked()); err != nil {
+	var deletes *roaring.Bitmap
+	if dnode != nil {
+		deletes = dnode.GetDeleteMaskLocked()
+	}
+	if err := node.file.WriteIBatch(node.data, ts, masks, vals, deletes); err != nil {
 		panic(err)
 	}
 	if err := node.file.Sync(); err != nil {
 		panic(err)
 	}
+	node.data.Close()
+	node.data = nil
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {

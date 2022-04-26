@@ -49,7 +49,7 @@ func main() {
 	batchCnt := uint64(200)
 	batchRows := uint64(schema.BlockMaxRows) * 1 / 20 * batchCnt
 	{
-		txn, _ := tae.StartTxn(nil)
+		txn := tae.StartTxn(nil)
 		db, _ := txn.CreateDatabase(dbName)
 		db.CreateRelation(schema)
 		if err := txn.Commit(); err != nil {
@@ -62,7 +62,7 @@ func main() {
 	doAppend := func(b *batch.Batch) func() {
 		return func() {
 			defer wg.Done()
-			txn, _ := tae.StartTxn(nil)
+			txn := tae.StartTxn(nil)
 			db, err := txn.GetDatabase(dbName)
 			if err != nil {
 				panic(err)

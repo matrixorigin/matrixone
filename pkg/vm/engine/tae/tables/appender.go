@@ -2,7 +2,6 @@ package tables
 
 import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
@@ -10,7 +9,6 @@ import (
 
 type blockAppender struct {
 	node          *appendableNode
-	handle        base.INodeHandle
 	indexAppender acif.IAppendableBlockIndexHolder
 	placeholder   uint32
 	rows          uint32
@@ -19,17 +17,16 @@ type blockAppender struct {
 func newAppender(node *appendableNode, idxApd acif.IAppendableBlockIndexHolder) *blockAppender {
 	appender := new(blockAppender)
 	appender.node = node
-	appender.handle = node.mgr.Pin(node)
 	appender.indexAppender = idxApd
 	appender.rows = node.Rows(nil, true)
 	return appender
 }
 
 func (appender *blockAppender) Close() error {
-	if appender.handle != nil {
-		appender.handle.Close()
-		appender.handle = nil
-	}
+	// if appender.handle != nil {
+	// 	appender.handle.Close()
+	// 	appender.handle = nil
+	// }
 	return nil
 }
 
@@ -60,6 +57,11 @@ func (appender *blockAppender) PrepareAppend(rows uint32) (n uint32, err error) 
 }
 
 func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (node txnif.AppendNode, from uint32, err error) {
+	h := appender.node.mgr.Pin(appender.node)
+	if h == nil {
+		panic("not expected")
+	}
+	defer h.Close()
 	writeLock := appender.node.block.controller.GetExclusiveLock()
 	defer writeLock.Unlock()
 	err = appender.node.Expand(0, func() error {

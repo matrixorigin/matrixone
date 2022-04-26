@@ -435,6 +435,9 @@ func (vec *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *StrVector) Unmarshal(data []byte) error {
+	if data == nil || len(data) == 0 {
+		return nil
+	}
 	buf := data
 	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]

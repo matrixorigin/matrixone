@@ -24,7 +24,7 @@ func TestCheckpoint1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
 	{
-		txn, _ := db.StartTxn(nil)
+		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
@@ -32,7 +32,7 @@ func TestCheckpoint1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn, _ := db.StartTxn(nil)
+		txn := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()
@@ -64,7 +64,7 @@ func TestSchedule1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
 	{
-		txn, _ := db.StartTxn(nil)
+		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
 		rel, _ := database.CreateRelation(schema)
 		err := rel.Append(bat)
@@ -72,7 +72,7 @@ func TestSchedule1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	{
-		txn, _ := db.StartTxn(nil)
+		txn := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
 		it := rel.MakeBlockIt()

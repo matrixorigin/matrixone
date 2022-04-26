@@ -20,10 +20,7 @@ func NewScheduledTxnTask(ctx *tasks.Context, db *DB, factory tasks.TxnTaskFactor
 }
 
 func (task *ScheduledTxnTask) Execute() (err error) {
-	txn, err := task.db.StartTxn(nil)
-	if err != nil {
-		return
-	}
+	txn := task.db.StartTxn(nil)
 	ctx := &tasks.Context{Waitable: false}
 	txnTask, err := task.factory(ctx, txn)
 	if err != nil {

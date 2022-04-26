@@ -42,28 +42,16 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
-func (db *DB) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
-	if err := db.Closed.Load(); err != nil {
-		panic(err)
-	}
-	txn = db.TxnMgr.StartTxn(info)
-	return
+func (db *DB) StartTxn(info []byte) txnif.AsyncTxn {
+	return db.TxnMgr.StartTxn(info)
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
-	if err := db.Closed.Load(); err != nil {
-		panic(err)
-	}
-	err = txn.Commit()
-	return
+	return txn.Commit()
 }
 
-func (db *DB) RollbackTxn(txn txnif.AsyncTxn) (err error) {
-	if err := db.Closed.Load(); err != nil {
-		panic(err)
-	}
-	err = txn.Rollback()
-	return
+func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
+	return txn.Rollback()
 }
 
 func (db *DB) startWorkers() (err error) {
@@ -82,6 +70,7 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
+	db.startWorkers()
 	db.Closed.Store(ErrClosed)
 	close(db.ClosedC)
 	db.TaskScheduler.Stop()
