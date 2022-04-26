@@ -4,7 +4,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/checkpoint"
@@ -13,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
 )
 
 const (
