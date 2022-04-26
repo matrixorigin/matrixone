@@ -181,3 +181,18 @@ func (entry *SegmentEntry) AsCommonID() *common.ID {
 func (entry *SegmentEntry) GetCatalog() *Catalog { return entry.table.db.catalog }
 
 func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData }
+
+func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
+	if n, ok := entry.entries[block.GetID()]; !ok {
+		return ErrNotFound
+	} else {
+		entry.link.Delete(n)
+	}
+	return nil
+}
+
+func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	return entry.deleteEntryLocked(block)
+}

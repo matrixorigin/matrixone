@@ -142,6 +142,8 @@ func (node *DeleteNode) ApplyCommit() (err error) {
 	if node.chain.controller != nil {
 		node.chain.controller.SetMaxVisible(node.commitTs)
 	}
+	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
+	node.chain.controller.IncChangeNodeCnt()
 	return
 }
 

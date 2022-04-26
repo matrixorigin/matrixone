@@ -800,6 +800,12 @@ func (tbl *txnTable) PrepareRollback() (err error) {
 		chain.RemoveNodeLocked(node)
 		chain.Unlock()
 	}
+	for _, blk := range tbl.cblks {
+		blk.GetSegment().RemoveEntry(blk)
+	}
+	for _, seg := range tbl.csegs {
+		seg.GetTable().RemoveEntry(seg)
+	}
 	return
 }
 

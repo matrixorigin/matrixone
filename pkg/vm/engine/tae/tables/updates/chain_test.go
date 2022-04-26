@@ -327,7 +327,8 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	chain := NewDeleteChain(nil, nil)
+	controller := NewMutationNode(nil)
+	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
 	n1 := chain.AddNodeLocked(txn1).(*DeleteNode)
@@ -419,7 +420,8 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
-	chain := NewDeleteChain(nil, nil)
+	controller := NewMutationNode(nil)
+	chain := NewDeleteChain(nil, controller)
 
 	txn1 := mockTxn()
 	n1 := chain.AddNodeLocked(txn1).(*DeleteNode)

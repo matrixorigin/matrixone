@@ -3,6 +3,7 @@ package updates
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -14,6 +15,7 @@ type DeleteChain struct {
 	*sync.RWMutex
 	*common.Link
 	controller *MutationController
+	cnt        uint32
 }
 
 func NewDeleteChain(rwlocker *sync.RWMutex, controller *MutationController) *DeleteChain {
@@ -26,6 +28,14 @@ func NewDeleteChain(rwlocker *sync.RWMutex, controller *MutationController) *Del
 		controller: controller,
 	}
 	return chain
+}
+
+func (chain *DeleteChain) AddDeleteCnt(cnt uint32) {
+	atomic.AddUint32(&chain.cnt, cnt)
+}
+
+func (chain *DeleteChain) GetDeleteCnt() uint32 {
+	return atomic.LoadUint32(&chain.cnt)
 }
 
 func (chain *DeleteChain) StringLocked() string {

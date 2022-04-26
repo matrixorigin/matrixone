@@ -42,7 +42,7 @@ func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
 		curr.RLock()
-		if curr.TxnCanRead(it.txn, nil) {
+		if curr.TxnCanRead(it.txn, curr.RWMutex) {
 			curr.RUnlock()
 			it.curr = curr
 			break

@@ -31,15 +31,23 @@ func (sm *stateMachine) EnqueueCheckpoint(item interface{}) (interface{}, error)
 }
 
 func (sm *stateMachine) Start() {
-	sm.checkpointQueue.Start()
-	sm.receiveQueue.Start()
+	if sm.checkpointQueue != nil {
+		sm.checkpointQueue.Start()
+	}
+	if sm.receiveQueue != nil {
+		sm.receiveQueue.Start()
+	}
 }
 
 func (sm *stateMachine) Stop() {
 	if !sm.closed.TryClose() {
 		return
 	}
-	sm.receiveQueue.Stop()
-	sm.checkpointQueue.Stop()
+	if sm.checkpointQueue != nil {
+		sm.checkpointQueue.Stop()
+	}
+	if sm.receiveQueue != nil {
+		sm.receiveQueue.Stop()
+	}
 	sm.wg.Wait()
 }

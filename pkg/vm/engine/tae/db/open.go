@@ -2,7 +2,9 @@ package db
 
 import (
 	"sync/atomic"
+	"time"
 
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/checkpoint"
@@ -44,7 +46,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		ClosedC:     make(chan struct{}),
 		Closed:      new(atomic.Value),
 	}
-	db.CKPDriver = checkpoint.NewDriver()
 
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil)
 
@@ -56,5 +57,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.DBLocker, dbLocker = dbLocker, nil
 	db.TxnMgr.Start()
+	db.IOScheduler = newIOScheduler(db)
+	db.TaskScheduler = newTaskScheduler(db)
+	db.CKPDriver = checkpoint.NewDriver(db.TaskScheduler)
+	handle := newTimedLooper(db, newCalibrationProcessor(db))
+	db.CalibrationTimer = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.CalibrationInterval)*time.Millisecond, handle)
+	db.startWorkers()
+
 	return
 }

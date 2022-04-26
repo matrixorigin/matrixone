@@ -190,6 +190,10 @@ func (be *BaseEntry) IsDroppedUncommitted() bool {
 	return false
 }
 
+func (be *BaseEntry) IsDroppedCommitted() bool {
+	return be.Txn == nil && be.CurrOp == OpSoftDelete
+}
+
 func (be *BaseEntry) HasActiveTxn() bool {
 	return be.Txn != nil
 }

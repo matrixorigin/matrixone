@@ -2,6 +2,7 @@ package updates
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -15,6 +16,7 @@ type ColumnChain struct {
 	id         *common.ID
 	view       *ColumnView
 	controller *MutationController
+	cnt        uint32
 }
 
 func MockColumnUpdateChain() *ColumnChain {
@@ -41,6 +43,14 @@ func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, controller *MutationC
 	}
 	chain.view = NewColumnView()
 	return chain
+}
+
+func (chain *ColumnChain) LoadUpdateCnt() uint32 {
+	return atomic.LoadUint32(&chain.cnt)
+}
+
+func (chain *ColumnChain) SetUpdateCnt(cnt uint32) {
+	atomic.StoreUint32(&chain.cnt, cnt)
 }
 
 func (chain *ColumnChain) GetMeta() *catalog.BlockEntry       { return chain.controller.meta }
@@ -79,6 +89,7 @@ func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
 		chain.view.Delete(row, n)
 	}
 	chain.Delete(node)
+	chain.SetUpdateCnt(uint32(chain.view.mask.GetCardinality()))
 }
 
 func (chain *ColumnChain) AddNode(txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -107,7 +118,11 @@ func (chain *ColumnChain) DepthLocked() int {
 }
 
 func (chain *ColumnChain) PrepareUpdate(row uint32, n txnif.UpdateNode) error {
-	return chain.view.Insert(row, n)
+	err := chain.view.Insert(row, n)
+	if err == nil {
+		chain.SetUpdateCnt(uint32(chain.view.mask.GetCardinality()))
+	}
+	return err
 }
 
 func (chain *ColumnChain) UpdateLocked(node *ColumnNode) {

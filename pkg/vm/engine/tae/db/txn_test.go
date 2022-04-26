@@ -16,6 +16,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
@@ -457,11 +458,15 @@ func (app1 *APP1) Init(factor int) {
 }
 
 func TestApp1(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver, _, _ := initTestContext(t, dir, common.G*1, common.G)
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
+	option := new(options.Options)
+	option.CacheCfg = new(options.CacheCfg)
+	option.CacheCfg.IndexCapacity = common.G
+	option.CacheCfg.InsertCapacity = common.G
+	option.CacheCfg.TxnCapacity = common.G
+	db := initDB(t, option)
+	defer db.Close()
+	mgr := db.TxnMgr
+	c := db.Opts.Catalog
 
 	app1 := NewApp1(mgr, "app1")
 	app1.Init(1)

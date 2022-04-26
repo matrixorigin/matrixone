@@ -284,5 +284,6 @@ func (n *ColumnNode) ApplyCommit() (err error) {
 	}
 	n.txn = nil
 	n.chain.controller.SetMaxVisible(n.commitTs)
+	n.chain.controller.IncChangeNodeCnt()
 	return
 }

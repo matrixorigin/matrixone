@@ -12,10 +12,14 @@ const (
 
 	DefaultBlockMaxRows     = uint32(40000)
 	DefaultBlocksPerSegment = uint16(40)
+
+	DefaultCalibrationInterval = int64(5000) // millisecond
+	DefaultExecutionInterval   = int64(1000) // millisecond
 )
 
 type Options struct {
-	CacheCfg   *CacheCfg   `toml:"cache-cfg"`
-	StorageCfg *StorageCfg `toml:"storage-cfg"`
-	Catalog    *catalog.Catalog
+	CacheCfg      *CacheCfg      `toml:"cache-cfg"`
+	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
+	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
+	Catalog       *catalog.Catalog
 }

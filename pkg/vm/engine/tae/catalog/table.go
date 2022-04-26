@@ -165,3 +165,29 @@ func (entry *TableEntry) AsCommonID() *common.ID {
 		TableID: entry.GetID(),
 	}
 }
+
+func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
+	segIt := entry.MakeSegmentIt(true)
+	for segIt.Valid() {
+		segment := segIt.Get().GetPayload().(*SegmentEntry)
+		if err = processor.OnSegment(segment); err != nil {
+			return
+		}
+		blkIt := segment.MakeBlockIt(true)
+		for blkIt.Valid() {
+			block := blkIt.Get().GetPayload().(*BlockEntry)
+			if err = processor.OnBlock(block); err != nil {
+				return
+			}
+			blkIt.Next()
+		}
+		segIt.Next()
+	}
+	return err
+}
+
+func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
+	entry.Lock()
+	defer entry.Unlock()
+	return entry.deleteEntryLocked(segment)
+}

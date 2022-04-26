@@ -108,6 +108,8 @@ func (catalog *Catalog) addEntryLocked(database *DBEntry) error {
 }
 
 func (catalog *Catalog) MakeDBIt(reverse bool) *common.LinkIt {
+	catalog.RLock()
+	defer catalog.RUnlock()
 	return common.NewLinkIt(catalog.RWMutex, catalog.link, reverse)
 }
 
@@ -219,4 +221,19 @@ func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEn
 	catalog.Unlock()
 
 	return entry, err
+}
+
+func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
+	dbIt := catalog.MakeDBIt(true)
+	for dbIt.Valid() {
+		dbEntry := dbIt.Get().GetPayload().(*DBEntry)
+		if err = processor.OnDatabase(dbEntry); err != nil {
+			return
+		}
+		if err = dbEntry.RecurLoop(processor); err != nil {
+			return
+		}
+		dbIt.Next()
+	}
+	return err
 }

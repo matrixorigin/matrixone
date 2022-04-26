@@ -9,7 +9,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
 )
 
 var (
@@ -28,6 +30,11 @@ type DB struct {
 	TxnLogDriver txnbase.NodeDriver
 
 	CKPDriver checkpoint.Driver
+
+	TaskScheduler tasks.TaskScheduler
+	IOScheduler   tasks.Scheduler
+
+	CalibrationTimer wb.IHeartbeater
 
 	DBLocker io.Closer
 
@@ -61,10 +68,12 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) (err error) {
 
 func (db *DB) startWorkers() (err error) {
 	db.CKPDriver.Start()
+	db.CalibrationTimer.Start()
 	return
 }
 
 func (db *DB) stopWorkers() (err error) {
+	db.CalibrationTimer.Stop()
 	db.CKPDriver.Stop()
 	return
 }
@@ -75,6 +84,8 @@ func (db *DB) Close() error {
 	}
 	db.Closed.Store(ErrClosed)
 	close(db.ClosedC)
+	db.TaskScheduler.Stop()
+	db.IOScheduler.Stop()
 	db.TxnMgr.Stop()
 	db.TxnLogDriver.Close()
 	db.Opts.Catalog.Close()

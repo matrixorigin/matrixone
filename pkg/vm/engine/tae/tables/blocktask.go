@@ -10,8 +10,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-var CompactBlockTaskFactory = func(ctx *tasks.Context, meta *catalog.BlockEntry) tasks.TxnTaskFactory {
-	return func(txn txnif.AsyncTxn) (tasks.Task, error) {
+var CompactBlockTaskFactory = func(meta *catalog.BlockEntry) tasks.TxnTaskFactory {
+	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
 		return NewCompactBlockTask(ctx, txn, meta)
 	}
 }

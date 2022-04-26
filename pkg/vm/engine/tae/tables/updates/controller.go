@@ -35,6 +35,7 @@ type MutationController struct {
 	meta       *catalog.BlockEntry
 	maxVisible uint64
 	appends    []*AppendNode
+	changes    uint32
 }
 
 func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
@@ -53,6 +54,26 @@ func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MutationController) IncChangeNodeCnt() {
+	atomic.AddUint32(&n.changes, uint32(1))
+}
+
+func (n *MutationController) ResetChangeNodeCnt() {
+	atomic.StoreUint32(&n.changes, uint32(0))
+}
+
+func (n *MutationController) GetChangeNodeCnt() uint32 {
+	return atomic.LoadUint32(&n.changes)
+}
+
+func (n *MutationController) GetColumnUpdateCnt(colIdx uint16) uint32 {
+	return n.columns[colIdx].LoadUpdateCnt()
+}
+
+func (n *MutationController) GetDeleteCnt() uint32 {
+	return n.deletes.GetDeleteCnt()
 }
 
 func (n *MutationController) SetMaxVisible(ts uint64) {

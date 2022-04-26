@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -34,6 +35,7 @@ type dataBlock struct {
 	indexHolder acif.IBlockIndexHolder
 	controller  *updates.MutationController
 	maxCkp      uint64
+	nice        uint32
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager) *dataBlock {
@@ -67,13 +69,76 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 	return blk.file
 }
 
-func (blk *dataBlock) GetID() uint64                       { return blk.meta.ID }
-func (blk *dataBlock) EstimateScore(base int) int          { return 0 }
-func (blk *dataBlock) TryCheckpoint(score int) (err error) { return }
+func (blk *dataBlock) GetID() uint64 { return blk.meta.ID }
 
-func (blk *dataBlock) BuildCheckpointTaskFactory(ctx *tasks.Context) (factory tasks.TxnTaskFactory, err error) {
+func (blk *dataBlock) RunCalibration() {
+	score := blk.estimateRawScore()
+	if score == 0 {
+		return
+	}
+	atomic.AddUint32(&blk.nice, uint32(1))
+}
+
+func (blk *dataBlock) estimateRawScore() int {
+	if blk.controller.GetChangeNodeCnt() == 0 {
+		return 0
+	}
+	cols := 0
+	factor := float64(0)
+	rows := blk.Rows(nil, true)
+	for i := range blk.meta.GetSchema().ColDefs {
+		cols++
+		cnt := blk.controller.GetColumnUpdateCnt(uint16(i))
+		colFactor := float64(cnt) / float64(rows)
+		if colFactor < 0.005 {
+			colFactor *= 10
+		} else if colFactor >= 0.005 && colFactor < 0.10 {
+			colFactor *= 20
+		} else if colFactor >= 0.10 {
+			colFactor *= 40
+		}
+		factor += colFactor
+	}
+	factor = factor / float64(cols)
+	deleteCnt := blk.controller.GetDeleteCnt()
+	factor += float64(deleteCnt) / float64(rows) * 50
+	ret := int(factor * 100)
+	if ret == 0 {
+		ret += 1
+	}
+	return ret
+}
+
+func (blk *dataBlock) MutationInfo() string {
+	totalChanges := blk.controller.GetChangeNodeCnt()
+	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d", blk.meta.AsCommonID().ToBlockFilePath(), totalChanges)
+	if totalChanges == 0 {
+		return s
+	}
+	rows := blk.Rows(nil, true)
+	for i := range blk.meta.GetSchema().ColDefs {
+		cnt := blk.controller.GetColumnUpdateCnt(uint16(i))
+		if cnt == 0 {
+			continue
+		}
+		s = fmt.Sprintf("%s, Col[%d]:%d/%d", s, i, cnt, rows)
+	}
+	deleteCnt := blk.controller.GetDeleteCnt()
+	if deleteCnt != 0 {
+		s = fmt.Sprintf("%s, Del:%d/%d", s, deleteCnt, rows)
+	}
+	return s
+}
+
+func (blk *dataBlock) EstimateScore() int {
+	score := blk.estimateRawScore()
+	score += int(atomic.LoadUint32(&blk.nice))
+	return score
+}
+
+func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory, err error) {
 	if !blk.meta.IsAppendable() {
-		factory = CompactBlockTaskFactory(ctx, blk.meta)
+		factory = CompactBlockTaskFactory(blk.meta)
 		return
 	}
 	return

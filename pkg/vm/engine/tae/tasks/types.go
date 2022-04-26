@@ -12,6 +12,7 @@ var taskIdAlloctor *common.IdAlloctor
 
 const (
 	NoopTask TaskType = iota
+	TxnTask
 	MockTask
 	CustomizedTask
 
@@ -22,7 +23,7 @@ func init() {
 	taskIdAlloctor = common.NewIdAlloctor(1)
 }
 
-type TxnTaskFactory = func(txn txnif.AsyncTxn) (Task, error)
+type TxnTaskFactory = func(ctx *Context, txn txnif.AsyncTxn) (Task, error)
 
 func NextTaskId() uint64 {
 	return taskIdAlloctor.Alloc()

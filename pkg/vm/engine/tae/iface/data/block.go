@@ -11,12 +11,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type CheckpointUnit interface {
-	GetID() uint64
-	TryCheckpoint(score int) error
-	EstimateScore(base int) int
+	RunCalibration()
+	EstimateScore() int
+	BuildCheckpointTaskFactory() (tasks.TxnTaskFactory, error)
 }
 
 type BlockAppender interface {
@@ -31,6 +32,7 @@ type BlockAppender interface {
 type Block interface {
 	CheckpointUnit
 	GetID() uint64
+	MutationInfo() string
 	MakeAppender() (BlockAppender, error)
 	IsAppendable() bool
 	Rows(txn txnif.AsyncTxn, coarse bool) int
