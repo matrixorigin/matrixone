@@ -16,130 +16,226 @@ package plan2
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
-	for _, table := range stmt {
-		err := buildTable(table, ctx, query, aliasCtx)
+	if len(stmt) == 1 {
+		_, err := buildTable(stmt[0], ctx, query, aliasCtx)
+		return err
+	}
+
+	//build first and second table as join
+	joinTbl := &tree.JoinTableExpr{
+		JoinType: tree.JOIN_TYPE_INNER,
+		Left:     stmt[0],
+		Right:    stmt[1],
+	}
+	err := buildJoinTable(joinTbl, ctx, query, aliasCtx)
+	if err != nil {
+		return err
+	}
+
+	//build the rest table with preNode as join step by step
+	i := 2
+	for i < len(stmt) {
+		leftNode := query.Nodes[len(query.Nodes)-1]
+
+		_, err := buildTable(stmt[i], ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
+		rightNode := query.Nodes[len(query.Nodes)-1]
+		rightNode.JoinType = plan.Node_INNER
+
+		node := &plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{leftNode.NodeId, rightNode.NodeId},
+		}
+		fillJoinProjectList(node, leftNode, rightNode)
+		appendQueryNode(query, node, true)
+		i++
 	}
 	return nil
 }
 
-func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
+func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) (bool, error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		buildSelect(tbl, ctx, query)
-		return nil
+		err := buildSelect(tbl, ctx, query)
+		if err != nil {
+			return true, err
+		}
+		return true, nil
 	case *tree.TableName:
 		name := string(tbl.ObjectName)
 		if len(tbl.SchemaName) > 0 {
 			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
 		}
 		obj, tableDef := ctx.Resolve(name)
-		nodeLength := int32(len(query.Nodes))
+		if tableDef == nil {
+			return false, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
+		}
 		node := &plan.Node{
-			NodeType: plan.Node_TABLE_SCAN, //todo confirm NodeType
-			NodeId:   nodeLength,
+			NodeType: plan.Node_TABLE_SCAN,
 			ObjRef:   obj,
 			TableDef: tableDef,
 		}
-		query.Nodes = append(query.Nodes, node)
-		return nil
+		fillProjectList(node)
+		aliasCtx.tableAlias[tableDef.Name] = tableDef.Name
+		appendQueryNode(query, node, false)
+		return false, nil
 	case *tree.JoinTableExpr:
 		//todo confirm how to deal with alias
-		return buildJoinTable(tbl, ctx, query, aliasCtx)
+		err := buildJoinTable(tbl, ctx, query, aliasCtx)
+		if err != nil {
+			return true, err
+		}
+		return false, nil
 	case *tree.ParenTableExpr:
 		return buildTable(tbl.Expr, ctx, query, aliasCtx)
-	case *tree.AliasedTableExpr:
-		err := buildTable(tbl.Expr, ctx, query, aliasCtx)
-		if err != nil {
-			return err
+	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
+		alias := string(tbl.As.Alias)
+		if alias == "" {
+			return buildTable(tbl.Expr, ctx, query, aliasCtx)
 		}
-		aliasCtx.tableAlias[string(tbl.As.Alias)] = query.Nodes[len(query.Nodes)-1].TableDef
-		// fmt.Printf("[%v], [%v]", tbl.As.Alias, aliasCtx.tableAlias[string(tbl.As.Alias)])
-		return nil
+
+		isDerivedTable, err := buildTable(tbl.Expr, ctx, query, aliasCtx)
+		if err != nil {
+			return isDerivedTable, err
+		}
+		if isDerivedTable {
+			setDerivedTableAlias(query, ctx, aliasCtx, alias)
+		} else {
+			delete(aliasCtx.tableAlias, query.Nodes[len(query.Nodes)-1].TableDef.Name)
+			aliasCtx.tableAlias[alias] = query.Nodes[len(query.Nodes)-1].TableDef.Name
+		}
+		//todo add tableAlias(colAlias1, colAlias2) support (ast not support now)
+		return isDerivedTable, nil
 	case *tree.StatementSource:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		log.Printf("StatementSource")
+		return false, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 	}
 	// Values table not support
-	return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+	return false, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 }
 
 func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) error {
-	err := buildTable(tbl.Right, ctx, query, aliasCtx)
+	var leftJoinType plan.Node_JoinFlag
+	var rightJoinType plan.Node_JoinFlag
+
+	//todo need confirm
+	switch tbl.JoinType {
+	case tree.JOIN_TYPE_FULL:
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_INNER
+	case tree.JOIN_TYPE_LEFT:
+		leftJoinType = plan.Node_OUTER
+		rightJoinType = plan.Node_INNER
+	case tree.JOIN_TYPE_CROSS:
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_INNER
+	case tree.JOIN_TYPE_RIGHT:
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_OUTER
+	case tree.JOIN_TYPE_NATURAL:
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_INNER
+	case tree.JOIN_TYPE_INNER:
+		// if tbl.Cond == nil {
+		// 	leftJoinType = plan.Node_INNER
+		// 	rightJoinType = plan.Node_INNER
+		// } else {
+		leftJoinType = plan.Node_INNER
+		rightJoinType = plan.Node_INNER
+		// }
+	}
+
+	isDerivedTable, err := buildTable(tbl.Left, ctx, query, aliasCtx)
 	if err != nil {
 		return err
 	}
-	rightNodeId := query.Nodes[len(query.Nodes)-1].NodeId
-	rightTableDef := query.Nodes[len(query.Nodes)-1].TableDef
+	if isDerivedTable {
+		query.Nodes = query.Nodes[:len(query.Nodes)-1]
+	}
+	lefNode := query.Nodes[len(query.Nodes)-1]
+	lefNode.JoinType = rightJoinType
 
-	err = buildTable(tbl.Left, ctx, query, aliasCtx)
+	isDerivedTable, err = buildTable(tbl.Right, ctx, query, aliasCtx)
 	if err != nil {
 		return err
 	}
-	leftNodeId := query.Nodes[len(query.Nodes)-1].NodeId
-	leftTableDef := query.Nodes[len(query.Nodes)-1].TableDef
+	if isDerivedTable {
+		query.Nodes = query.Nodes[:len(query.Nodes)-1]
+	}
+	rightNode := query.Nodes[len(query.Nodes)-1]
+	rightNode.JoinType = leftJoinType
 
-	var onList []*plan.Expr
+	node := &plan.Node{
+		NodeType: plan.Node_JOIN,
+		Children: []int32{lefNode.NodeId, rightNode.NodeId},
+	}
+	fillJoinProjectList(node, lefNode, rightNode)
+	appendQueryNode(query, node, true)
+
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
 		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, aliasCtx)
 		if err != nil {
 			return err
 		}
-		onList = exprs
+		node.OnList = exprs
 	case *tree.UsingJoinCond:
 		for _, identifier := range cond.Cols {
 			name := string(identifier)
-			leftColIndex := getColumnIndex(leftTableDef, name)
+			leftColIndex := getColumnIndex(lefNode.TableDef, name)
 			if leftColIndex < 0 {
 				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", name))
 			}
-			rightColIndex := getColumnIndex(rightTableDef, name)
+			rightColIndex := getColumnIndex(rightNode.TableDef, name)
 			if rightColIndex < 0 {
 				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", name))
 			}
-
-			col := &plan.Expr_Col{
-				Col: &plan.ColRef{
-					Name:   name,
-					RelPos: rightColIndex,
-					ColPos: leftColIndex,
+			funName := getFunctionObjRef("=")
+			node.OnList = append(node.OnList, &plan.Expr{
+				Expr: &plan.Expr_F{
+					F: &plan.Function{
+						Func: funName,
+						Args: []*plan.Expr{
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										Name:   name,
+										RelPos: 0,
+										ColPos: leftColIndex,
+									},
+								},
+							},
+							{
+								Expr: &plan.Expr_Col{
+									Col: &plan.ColRef{
+										Name:   name,
+										RelPos: 1,
+										ColPos: rightColIndex,
+									},
+								},
+							},
+						},
+					},
 				},
-			}
-			onList = append(onList, &plan.Expr{
-				Expr: col,
 			})
 		}
 	default:
 		if tbl.JoinType == tree.JOIN_TYPE_NATURAL { //natural join.  the cond will be nil
-			columns := getColumnsWithSameName(leftTableDef, rightTableDef)
-			if len(columns) > 0 {
-				onList = append(onList, columns...)
-			}
-		} else {
-			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", tree.String(tbl.Cond, dialect.MYSQL)))
+			columns := getColumnsWithSameName(lefNode.TableDef, rightNode.TableDef)
+			node.OnList = columns
 		}
-
 	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_JOIN,
-		NodeId:   int32(len(query.Nodes)),
-		OnList:   onList,
-		Children: []int32{rightNodeId, leftNodeId},
-	}
-	query.Nodes = append(query.Nodes, node)
-
 	return nil
 }

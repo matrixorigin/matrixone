@@ -100,9 +100,9 @@ message ColRef {
 	int32 col_pos = 3;
 }
 
-// Set alias
-message Alias {
-	string name = 1;
+// ExprList is a type of Expr
+message ExprList {
+	repeated Expr list = 1;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -148,13 +148,14 @@ message Function {
 
 message Expr {
 	Type typ	= 1;
+	string alias = 2;
 	oneof expr {
-		Const		c	= 2;
-		ParamRef	p	= 3;
-		VarRef		v	= 4;
-		ColRef		col = 5;
-		Function	f	= 6;
-		Alias       a   = 7;
+		Const		c	  = 3;
+		ParamRef	p	  = 4;
+		VarRef		v	  = 5;
+		ColRef		col   = 6;
+		Function	f	  = 7;
+		ExprList    list  = 8;
 	}
 }
 
