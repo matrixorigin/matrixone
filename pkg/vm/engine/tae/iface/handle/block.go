@@ -47,6 +47,8 @@ type BlockReader interface {
 	PrepareCompact() error
 
 	GetSegment() Segment
+
+	GetTotalChanges() int
 }
 
 type BlockWriter interface {

@@ -27,11 +27,17 @@ import (
 type ckpDriver struct {
 	common.ClosedState
 	sm.StateMachine
-	schedule tasks.TaskScheduler
+	scheduler tasks.TaskScheduler
+	units     *LeveledUnits
 }
 
-func NewDriver(schedule tasks.TaskScheduler) *ckpDriver {
-	f := &ckpDriver{}
+func NewDriver(scheduler tasks.TaskScheduler) *ckpDriver {
+	policy := DefaultLeveledPolicy
+	units := NewLeveledUnits(scheduler, policy)
+	f := &ckpDriver{
+		scheduler: scheduler,
+		units:     units,
+	}
 	wg := new(sync.WaitGroup)
 	rqueue := sm.NewSafeQueue(10000, 100, f.onRequests)
 	f.StateMachine = sm.NewStateMachine(wg, f, rqueue, nil)
@@ -48,29 +54,20 @@ func (f *ckpDriver) onCheckpoint(items ...interface{}) {
 }
 
 func (f *ckpDriver) onRequests(items ...interface{}) {
-	// for _, item := range items {
-
-	// }
-	// changes := make(map[uint64]*changeRequests)
-	// for _, item := range items {
-	// 	switch req := item.(type) {
-	// 	case *changeRequest:
-	// 		requests := changes[req.dbId]
-	// 		if requests == nil {
-	// 			requests = newChangeRequests(req.dbId)
-	// 			changes[req.dbId] = requests
-	// 		}
-	// 		requests.addUnit(req.unit)
-	// 	}
-	// }
-	// if len(changes) != 0 {
-	// 	for _, req := range changes {
-	// 		f.onChangeRequest(req)
-	// 	}
-	// }
+	for _, item := range items {
+		unit := item.(data.CheckpointUnit)
+		f.units.AddUnit(unit)
+	}
+	f.units.Scan()
 }
 
 func (f *ckpDriver) OnUpdateColumn(unit data.CheckpointUnit) {
+	if _, err := f.EnqueueRecevied(unit); err != nil {
+		logutil.Warnf("%v", err)
+	}
+}
+
+func (f *ckpDriver) EnqueueCheckpointUnit(unit data.CheckpointUnit) {
 	if _, err := f.EnqueueRecevied(unit); err != nil {
 		logutil.Warnf("%v", err)
 	}

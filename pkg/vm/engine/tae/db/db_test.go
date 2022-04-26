@@ -191,7 +191,7 @@ func TestNonAppendableBlock(t *testing.T) {
 func TestCompactBlock1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.CalibrationInterval = 10
+	opts.CheckpointCfg.CalibrationInterval = 10000
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13)

@@ -1,8 +1,6 @@
 package db
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -22,10 +20,12 @@ func newCalibrationProcessor(db *DB) *calibrationProcessor {
 }
 
 func (processor *calibrationProcessor) onBlock(blockEntry *catalog.BlockEntry) (err error) {
-	now := time.Now()
 	data := blockEntry.GetBlockData()
 	data.RunCalibration()
-	logutil.Infof("%s Score: %d, Time: %s", data.MutationInfo(), data.EstimateScore(), time.Since(now))
+	score := data.EstimateScore()
+	if score > 0 {
+		processor.db.CKPDriver.EnqueueCheckpointUnit(data)
+	}
 	// blockEntry.RLock()
 	// if blockEntry.IsDroppedCommitted() {
 	// 	blockEntry.RUnlock()

@@ -89,6 +89,7 @@ func (seg *TxnSegment) CreateNonAppendableBlock() (blk handle.Block, err error) 
 func (blk *TxnSegment) BatchDedup(*vector.Vector) (err error)                       { return }
 
 // func (blk *TxnBlock) IsAppendable() bool                                   { return true }
+func (blk *TxnBlock) GetTotalChanges() int                                 { return 0 }
 func (blk *TxnBlock) IsAppendableBlock() bool                              { return true }
 func (blk *TxnBlock) Fingerprint() *common.ID                              { return &common.ID{} }
 func (blk *TxnBlock) Rows() int                                            { return 0 }

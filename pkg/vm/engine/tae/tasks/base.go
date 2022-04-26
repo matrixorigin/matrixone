@@ -44,7 +44,9 @@ func NewBaseTask(impl base.IOpInternal, taskType TaskType, ctx *Context) *BaseTa
 	return task
 }
 
-func (task *BaseTask) onDone(_ base.IOp)   { /* Noop */ }
+func (task *BaseTask) onDone(_ base.IOp) {
+	/* Noop */
+}
 func (task *BaseTask) Type() TaskType      { return task.taskType }
 func (task *BaseTask) Cancel() (err error) { panic("todo") }
 func (task *BaseTask) ID() uint64          { return task.id }

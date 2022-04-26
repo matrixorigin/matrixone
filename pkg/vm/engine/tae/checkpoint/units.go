@@ -60,15 +60,16 @@ func (units *Units) PrepareConsume(maxDuration time.Duration) bool {
 }
 
 type LeveledUnits struct {
-	levels   []*Units
-	policy   LeveledPolicy
-	schedule tasks.Scheduler
+	levels    []*Units
+	policy    LeveledPolicy
+	scheduler tasks.TaskScheduler
 }
 
-func NewLeveledUnits(schedule tasks.Scheduler, policy LeveledPolicy) *LeveledUnits {
+func NewLeveledUnits(scheduler tasks.TaskScheduler, policy LeveledPolicy) *LeveledUnits {
 	lunits := &LeveledUnits{
-		levels: make([]*Units, policy.TotalLevels()),
-		policy: policy,
+		levels:    make([]*Units, policy.TotalLevels()),
+		policy:    policy,
+		scheduler: scheduler,
 	}
 	for i := range lunits.levels {
 		lunits.levels[i] = NewUnits()
@@ -105,7 +106,17 @@ func (lunits *LeveledUnits) Scan() {
 		units := level.ConsumeAll()
 		level.UpdateTS()
 		for unit, _ := range units {
-			lunits.AddUnit(unit)
+			if lunits.policy.DecideLevel(unit.EstimateScore()) < i {
+				lunits.AddUnit(unit)
+				continue
+			}
+			logutil.Infof("%s", unit.MutationInfo())
+			taskFactory, err := unit.BuildCheckpointTaskFactory()
+			if err != nil || taskFactory == nil {
+				logutil.Warnf("%s: %v", unit.MutationInfo(), err)
+				continue
+			}
+			lunits.scheduler.ScheduleTxnTask(nil, taskFactory)
 		}
 	}
 }
@@ -124,6 +135,6 @@ func (lunits *LeveledUnits) ProcessUnit(currLevel int, unit data.CheckpointUnit)
 		logutil.Warnf("Build checkpoint task failed:  %v", err)
 	}
 	if taskFactory != nil {
-		// lunits.schedule.Scheduler()
+		// lunits.scheduler.Scheduler()
 	}
 }

@@ -108,6 +108,9 @@ func (blk *txnBlock) String() string {
 // 	return
 // }
 
+func (blk *txnBlock) GetTotalChanges() int {
+	return blk.entry.GetBlockData().GetTotalChanges()
+}
 func (blk *txnBlock) IsAppendableBlock() bool { return blk.entry.IsAppendable() }
 func (blk *txnBlock) ID() uint64              { return blk.entry.GetID() }
 func (blk *txnBlock) Fingerprint() *common.ID { return blk.entry.AsCommonID() }

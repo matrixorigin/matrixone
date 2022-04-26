@@ -14,9 +14,12 @@
 
 package checkpoint
 
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+
 type Driver interface {
 	// aware.ChangeAware
 	// aware.DataMutationAware
+	EnqueueCheckpointUnit(unit data.CheckpointUnit)
 	Start()
 	Stop()
 	String() string

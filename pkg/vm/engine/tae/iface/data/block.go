@@ -15,6 +15,7 @@ import (
 )
 
 type CheckpointUnit interface {
+	MutationInfo() string
 	RunCalibration()
 	EstimateScore() int
 	BuildCheckpointTaskFactory() (tasks.TxnTaskFactory, error)
@@ -48,4 +49,5 @@ type Block interface {
 	GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (interface{}, error)
 	PPString(level common.PPLevel, depth int, prefix string) string
 	GetBlockFile() file.Block
+	GetTotalChanges() int
 }

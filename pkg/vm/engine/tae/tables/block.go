@@ -110,12 +110,12 @@ func (blk *dataBlock) estimateRawScore() int {
 }
 
 func (blk *dataBlock) MutationInfo() string {
+	rows := blk.Rows(nil, true)
 	totalChanges := blk.controller.GetChangeNodeCnt()
-	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d", blk.meta.AsCommonID().ToBlockFilePath(), totalChanges)
+	s := fmt.Sprintf("Block %s Mutation Info: Changes=%d/%d", blk.meta.AsCommonID().ToBlockFilePath(), totalChanges, rows)
 	if totalChanges == 0 {
 		return s
 	}
-	rows := blk.Rows(nil, true)
 	for i := range blk.meta.GetSchema().ColDefs {
 		cnt := blk.controller.GetColumnUpdateCnt(uint16(i))
 		if cnt == 0 {
@@ -137,11 +137,11 @@ func (blk *dataBlock) EstimateScore() int {
 }
 
 func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory, err error) {
-	if !blk.meta.IsAppendable() {
-		factory = CompactBlockTaskFactory(blk.meta)
-		return
-	}
+	factory = CompactBlockTaskFactory(blk.meta)
 	return
+	// if !blk.meta.IsAppendable() {
+	// }
+	// return
 }
 
 func (blk *dataBlock) IsAppendable() bool {
@@ -152,6 +152,10 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 	return true
+}
+
+func (blk *dataBlock) GetTotalChanges() int {
+	return int(blk.controller.GetChangeNodeCnt())
 }
 
 func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
@@ -279,19 +283,6 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 	if err != nil {
 		return
 	}
-
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
-	view := updates.NewBlockView(ts)
-
-	sharedLock := blk.controller.GetSharedLock()
-	err = blk.makeColumnView(uint16(colIdx), view)
-	deleteChain := blk.controller.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
-	sharedLock.Unlock()
-	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
-
 	// TODO: performance optimization needed
 	var srcvec *gvec.Vector
 	if decompressed == nil {
@@ -304,6 +295,18 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		gvec.Window(srcvec, 0, int(maxRow), vec)
 	} else {
 		vec = srcvec
+	}
+
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	view := updates.NewBlockView(ts)
+
+	sharedLock := blk.controller.GetSharedLock()
+	err = blk.makeColumnView(uint16(colIdx), view)
+	deleteChain := blk.controller.GetDeleteChain()
+	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	sharedLock.Unlock()
+	if dnode != nil {
+		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
 
 	vec = compute.ApplyUpdateToVector(vec, view.UpdateMasks[uint16(colIdx)], view.UpdateVals[uint16(colIdx)])

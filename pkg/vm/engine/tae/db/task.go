@@ -1,6 +1,8 @@
 package db
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+)
 
 type ScheduledTxnTask struct {
 	*tasks.BaseTask
