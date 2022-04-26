@@ -49,4 +49,5 @@ const (
 	Weekday
 	EndsWith
 	Date
+	Bin
 )
