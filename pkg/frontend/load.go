@@ -68,10 +68,10 @@ type DebugTime struct {
 	// field_skip_bytes  time.Duration
 
 	callback       time.Duration
-	asyncChan      time.Duration
-	csvLineArray1  time.Duration
+	asyncChan      atomic.Value // time.Duration
+	csvLineArray1  atomic.Value // time.Duration
 	csvLineArray2  time.Duration
-	asyncChanLoop  time.Duration
+	asyncChanLoop  atomic.Value // time.Duration
 	saveParsedLine time.Duration
 	choose_true    time.Duration
 	choose_false   time.Duration
@@ -174,7 +174,7 @@ type ParseLineHandler struct {
 	simdCsvReader               *simdcsv.Reader
 	closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
-	simdCsvGetParsedLinesChan chan simdcsv.LineOut
+	simdCsvGetParsedLinesChan atomic.Value // chan simdcsv.LineOut
 	//the count of writing routine
 	simdCsvConcurrencyCountOfWriteBatch int
 	//wait write routines to quit
@@ -219,10 +219,14 @@ func (cld *CloseLoadData) Close() {
 	})
 }
 
+func getLineOutChan(v atomic.Value) chan simdcsv.LineOut {
+	return v.Load().(chan simdcsv.LineOut)
+}
+
 func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	wait_a := time.Now()
 	defer func() {
-		plh.asyncChan += time.Since(wait_a)
+		AtomicAddDuration(plh.asyncChan, time.Since(wait_a))
 	}()
 
 	var lineOut simdcsv.LineOut
@@ -232,7 +236,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 		case <-plh.closeRef.stopLoadData:
 			logutil.Infof("----- get stop in getLineOutFromSimdCsvRoutine")
 			quit = true
-		case lineOut = <-plh.simdCsvGetParsedLinesChan:
+		case lineOut = <-getLineOutChan(plh.simdCsvGetParsedLinesChan):
 		}
 
 		if quit {
@@ -281,7 +285,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
 			plh.bytes += bytes
 
-			plh.csvLineArray1 += time.Since(wait_b)
+			AtomicAddDuration(plh.csvLineArray1, time.Since(wait_b))
 
 			if plh.lineIdx == plh.batchSize {
 				//logutil.Infof("+++++ batch bytes %v B %v MB",plh.bytes,plh.bytes / 1024.0 / 1024.0)
@@ -295,7 +299,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 				plh.bytes = 0
 			}
 		}
-		plh.asyncChanLoop += time.Since(wait_d)
+		AtomicAddDuration(plh.asyncChanLoop, time.Since(wait_d))
 	}
 
 	//last batch
@@ -306,9 +310,27 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	return nil
 }
 
+func AtomicAddDuration(v atomic.Value, t interface{}) {
+	var ti time.Duration = 0
+	switch t.(type) {
+	case time.Duration:
+		ti = t.(time.Duration)
+	case atomic.Value:
+		tx, _ := t.(atomic.Value)
+		if tx.Load() != nil {
+			ti = tx.Load().(time.Duration)
+		}
+	}
+	if v.Load() == nil {
+		v.Store(time.Duration(0) + ti)
+	} else {
+		v.Store(v.Load().(time.Duration) + ti)
+	}
+}
+
 func (plh *ParseLineHandler) close() {
 	plh.closeOnceGetParsedLinesChan.Do(func() {
-		close(plh.simdCsvGetParsedLinesChan)
+		close(getLineOutChan(plh.simdCsvGetParsedLinesChan))
 	})
 	plh.closeOnce.Do(func() {
 		close(plh.simdCsvBatchPool)
@@ -522,9 +544,9 @@ func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, e
 
 	//
 	handler.callback += wh.callback
-	handler.asyncChan += wh.asyncChan
-	handler.asyncChanLoop += wh.asyncChanLoop
-	handler.csvLineArray1 += wh.csvLineArray1
+	AtomicAddDuration(handler.asyncChan, wh.asyncChan)
+	AtomicAddDuration(handler.asyncChanLoop, wh.asyncChanLoop)
+	AtomicAddDuration(handler.csvLineArray1, wh.csvLineArray1)
 	handler.csvLineArray2 += wh.csvLineArray2
 	handler.saveParsedLine += wh.saveParsedLine
 	handler.choose_true += wh.choose_true
@@ -1499,6 +1521,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	}()
 	ses := mce.GetSession()
 
+	var m sync.Mutex
 	//begin:=  time.Now()
 	//defer func() {
 	//	logutil.Infof("-----load loop exit %s",time.Since(begin))
@@ -1541,9 +1564,10 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			skipWriteBatch:       ses.Pu.SV.GetLoadDataSkipWritingBatch(),
 		},
 		threadInfo:                    make(map[int]*ThreadInfo),
-		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),
+		simdCsvGetParsedLinesChan:     atomic.Value{},
 		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
 	}
+	handler.simdCsvGetParsedLinesChan.Store(make(chan simdcsv.LineOut, channelSize))
 
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()), runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
@@ -1619,7 +1643,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		defer wg.Done()
 		wait_b := time.Now()
 
-		err := handler.simdCsvReader.ReadLoop(handler.simdCsvGetParsedLinesChan)
+		m.Lock()
+		defer m.Unlock()
+		err := handler.simdCsvReader.ReadLoop(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 		if err != nil {
 			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}
@@ -1670,7 +1696,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				//
 				handler.simdCsvReader.Close()
 				handler.closeOnceGetParsedLinesChan.Do(func() {
-					close(handler.simdCsvGetParsedLinesChan)
+					m.Lock()
+					defer m.Unlock()
+					close(getLineOutChan(handler.simdCsvGetParsedLinesChan))
 				})
 
 				break

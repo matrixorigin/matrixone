@@ -109,6 +109,8 @@ type PDCallbackImpl struct {
 		the limit of cube load
 	*/
 	limitOfCubeLoad int
+
+	mutex sync.Mutex
 }
 
 /*
@@ -317,6 +319,8 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 		logutil.Infof("-------PDC Stop close channel\n")
 	}
 	closeChan := func() {
+		pci.mutex.Lock()
+		defer pci.mutex.Unlock()
 		close(pci.msgChan)
 		pci.msgChan = nil
 	}
@@ -468,6 +472,8 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 
 	//get the message
 	//put the body into kv
+	pci.mutex.Lock()
+	defer pci.mutex.Unlock()
 	for msg := range pci.msgChan {
 		switch msg.tp {
 		case MSG_TYPE_CLUSTER_EPOCH:
