@@ -15,8 +15,9 @@
 package bin
 
 import (
-	"fmt"
+	"bytes"
 	"math"
+	"math/bits"
 	"strconv"
 	"testing"
 
@@ -55,8 +56,12 @@ func TestCountBitLenForFloat(t *testing.T) {
 }
 
 func TestUnsignedIntToBinary(t *testing.T) {
-	cases := []uint64{0, 1, 2, 3}
-	want := "011011"
+	cases := []uint64{0, 1, 2, 3, 127, 128}
+	var buf bytes.Buffer
+	for _, x := range cases {
+		buf.WriteString(strconv.FormatUint(x, 2))
+	}
+
 	bytesNeed := Uint64BitLen(cases)
 	ret := &types.Bytes{
 		Data:    make([]byte, bytesNeed),
@@ -64,25 +69,29 @@ func TestUnsignedIntToBinary(t *testing.T) {
 		Offsets: make([]uint32, len(cases)),
 	}
 	ret = Uint64ToBinary(cases, ret)
+	var (
+		len, offset int
+	)
+	for i, x := range cases {
+		len = bits.Len64(x)
+		if x == 0 {
+			len = 1
+		}
+		require.Equal(t, uint32(len), ret.Lengths[i])
+		require.Equal(t, uint32(offset), ret.Offsets[i])
+		offset += len
+	}
 
-	require.Equal(t, uint32(1), ret.Lengths[0])
-	require.Equal(t, uint32(0), ret.Offsets[0])
-
-	require.Equal(t, uint32(1), ret.Lengths[1])
-	require.Equal(t, uint32(1), ret.Offsets[1])
-
-	require.Equal(t, uint32(2), ret.Lengths[2])
-	require.Equal(t, uint32(1+1), ret.Offsets[2])
-
-	require.Equal(t, uint32(2), ret.Lengths[3])
-	require.Equal(t, uint32(1+1+2), ret.Offsets[3])
-
-	require.Equal(t, []byte(want), ret.Data)
+	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
 func TestIntToBinary(t *testing.T) {
-	cases := []int64{-1, 127, -128}
-	want := "111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111110000000"
+	cases := []int64{-1, 127, -128, 1e9, 1e7, -1e9}
+	var buf bytes.Buffer
+	for _, x := range cases {
+		buf.WriteString(strconv.FormatUint(uint64(x), 2))
+	}
+
 	bytesNeed := Int64BitLen(cases)
 	ret := &types.Bytes{
 		Data:    make([]byte, bytesNeed),
@@ -90,22 +99,27 @@ func TestIntToBinary(t *testing.T) {
 		Offsets: make([]uint32, len(cases)),
 	}
 	ret = Int64ToBinary(cases, ret)
-	fmt.Println("bin:", strconv.FormatInt(cases[0], 2))
-	require.Equal(t, uint32(64), ret.Lengths[0])
-	require.Equal(t, uint32(0), ret.Offsets[0])
 
-	require.Equal(t, uint32(7), ret.Lengths[1])
-	require.Equal(t, uint32(64), ret.Offsets[1])
+	var (
+		len, offset int
+	)
+	for i, x := range cases {
+		len = bits.Len64(uint64(x))
+		require.Equal(t, uint32(len), ret.Lengths[i])
+		require.Equal(t, uint32(offset), ret.Offsets[i])
+		offset += len
+	}
 
-	require.Equal(t, uint32(64), ret.Lengths[2])
-	require.Equal(t, uint32(64+7), ret.Offsets[2])
-
-	require.Equal(t, []byte(want), ret.Data)
+	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
 func TestFloatToBinary(t *testing.T) {
 	cases := []float64{float64(math.Phi), float64(math.E), float64(math.Pi)}
-	want := "11011"
+	var buf bytes.Buffer
+	for _, x := range cases {
+		buf.WriteString(strconv.FormatUint(uint64(x), 2))
+	}
+
 	bytesNeed := Float64BitLen(cases)
 	ret := &types.Bytes{
 		Data:    make([]byte, bytesNeed),
@@ -114,14 +128,15 @@ func TestFloatToBinary(t *testing.T) {
 	}
 	ret = Float64ToBinary(cases, ret)
 
-	require.Equal(t, uint32(1), ret.Lengths[0])
-	require.Equal(t, uint32(0), ret.Offsets[0])
+	var (
+		len, offset int
+	)
+	for i, x := range cases {
+		len = bits.Len64(uint64(x))
+		require.Equal(t, uint32(len), ret.Lengths[i])
+		require.Equal(t, uint32(offset), ret.Offsets[i])
+		offset += len
+	}
 
-	require.Equal(t, uint32(2), ret.Lengths[1])
-	require.Equal(t, uint32(1), ret.Offsets[1])
-
-	require.Equal(t, uint32(2), ret.Lengths[2])
-	require.Equal(t, uint32(1+2), ret.Offsets[2])
-
-	require.Equal(t, []byte(want), ret.Data)
+	require.Equal(t, buf.Bytes(), ret.Data)
 }
