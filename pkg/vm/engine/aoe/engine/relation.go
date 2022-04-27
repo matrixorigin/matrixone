@@ -824,10 +824,10 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 	case types.T_char, types.T_varchar:
 		switch typ {
 		case types.T_date:
-			v, _ := types.ParseDate(string(vec.Data))
+			v, _ := types.ParseDate(string(vec.Col.(*types.Bytes).Data))
 			return v
 		case types.T_datetime:
-			v, _ := types.ParseDatetime(string(vec.Data))
+			v, _ := types.ParseDatetime(string(vec.Col.(*types.Bytes).Data))
 			return v
 		}
 		return vec.Col.(*types.Bytes).Data
