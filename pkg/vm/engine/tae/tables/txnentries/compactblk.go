@@ -25,21 +25,21 @@ func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block) *compactBlo
 	}
 }
 
-func (node *compactBlockEntry) PrepareRollback() (err error) {
+func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	return
 }
-func (node *compactBlockEntry) ApplyRollback() (err error) { return }
-func (node *compactBlockEntry) ApplyCommit() (err error)   { return }
-func (node *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
+func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
+func (entry *compactBlockEntry) ApplyCommit() (err error)   { return }
+func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	// TODO:
 	// 1. make command
 	return
 }
 
-func (node *compactBlockEntry) PrepareCommit() (err error) {
-	dataBlock := node.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
-	v := dataBlock.CollectChangesInRange(node.txn.GetStartTS(), node.txn.GetCommitTS())
+func (entry *compactBlockEntry) PrepareCommit() (err error) {
+	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
+	v := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
 	view := v.(*updates.BlockView)
 	if view == nil {
 		return
@@ -49,7 +49,7 @@ func (node *compactBlockEntry) PrepareCommit() (err error) {
 		vals := view.UpdateVals[colIdx]
 		view.UpdateMasks[colIdx], view.UpdateVals[colIdx], view.DeleteMask = compute.ShuffleByDeletes(mask, vals, deletes)
 		for row, v := range view.UpdateVals[colIdx] {
-			if err = node.to.Update(row, colIdx, v); err != nil {
+			if err = entry.to.Update(row, colIdx, v); err != nil {
 				return
 			}
 		}
@@ -61,7 +61,7 @@ func (node *compactBlockEntry) PrepareCommit() (err error) {
 		it := view.DeleteMask.Iterator()
 		for it.HasNext() {
 			row := it.Next()
-			if err = node.to.RangeDelete(row, row); err != nil {
+			if err = entry.to.RangeDelete(row, row); err != nil {
 				return
 			}
 		}
