@@ -79,7 +79,7 @@ func (db *database) Relations(_ engine.Snapshot) []string {
 func (db *database) Relation(name string, _ engine.Snapshot) (engine.Relation, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
+		logutil.Debugf("Relation time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
