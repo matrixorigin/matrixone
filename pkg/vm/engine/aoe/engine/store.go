@@ -208,19 +208,6 @@ func (s *store) sparseFilter(filter *filterExtent, eblocks *[]aoe.Block) {
 		}
 		//s.SetBlocks(blocks)
 		break
-	case FileterBtw:
-		//blocks := make([]aoe.Block, 0)
-		for _, sid := range s.rel.segments {
-			segment := s.rel.Segment(sid)
-			ids, _ := segment.NewSparseFilter().Btw(filter.attr, filter.param1, filter.param2)
-			for _, id := range ids {
-				if !blockExist(*eblocks, id) {
-					*eblocks = append(*eblocks, segment.Block(id))
-				}
-			}
-		}
-		//s.SetBlocks(blocks)
-		break
 	default:
 		panic("No Support")
 	}
