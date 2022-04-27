@@ -99,7 +99,10 @@ func (h *RWHelper) ReadIndices(f os.File) (indices []Index, err error) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		indices[i].Unmarshal(buf)
+		err = indices[i].Unmarshal(buf)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return indices, err
 }

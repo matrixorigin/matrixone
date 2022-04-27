@@ -27,28 +27,28 @@ func GetGlobalSeqNum() uint64 {
 	return atomic.LoadUint64(&GlobalSeqNum)
 }
 
-type IdAlloctor struct {
+type IDAlloctor struct {
 	id uint64
 }
 
-func NewIdAlloctor(from uint64) *IdAlloctor {
+func NewIdAlloctor(from uint64) *IDAlloctor {
 	if from == 0 {
 		panic("should not be 0")
 	}
 
-	return &IdAlloctor{
+	return &IDAlloctor{
 		id: from - 1,
 	}
 }
 
-func (alloc *IdAlloctor) Alloc() uint64 {
+func (alloc *IDAlloctor) Alloc() uint64 {
 	return atomic.AddUint64(&alloc.id, uint64(1))
 }
 
-func (alloc *IdAlloctor) Get() uint64 {
+func (alloc *IDAlloctor) Get() uint64 {
 	return atomic.LoadUint64(&alloc.id)
 }
 
-func (alloc *IdAlloctor) SetStart(start uint64) {
+func (alloc *IDAlloctor) SetStart(start uint64) {
 	alloc.id = start
 }

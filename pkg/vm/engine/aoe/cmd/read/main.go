@@ -62,9 +62,9 @@ var (
 	readPool *ants.Pool
 	// proc     *process.Process // Unused
 	// hm       *host.Mmu // Unused
-	gen      *shard.MockIndexAllocator
-	dbName   string
-	shardId  uint64
+	gen     *shard.MockIndexAllocator
+	dbName  string
+	shardId uint64
 )
 
 func init() {
@@ -123,7 +123,7 @@ func creatTable(impl *aoedb.DB) {
 	ctx.DB = dbName
 	ctx.Schema = schema
 	ctx.Size = 1
-	ctx.Id = gen.Alloc(shardId)
+	ctx.ID = gen.Alloc(shardId)
 	_, err = impl.CreateTable(ctx)
 	if err != nil {
 		panic(err)
@@ -144,7 +144,7 @@ func makeFiles(impl *aoedb.DB) {
 		ctx := new(aoedb.AppendCtx)
 		ctx.DB = dbName
 		ctx.Table = tableName
-		ctx.Id = gen.Alloc(shardId)
+		ctx.ID = gen.Alloc(shardId)
 		ctx.Size = 1
 		ctx.Data = ibat
 		if err := impl.Append(ctx); err != nil {
@@ -248,7 +248,10 @@ func (h *gcHandle) OnStopped() { runtime.GC() }
 
 func main() {
 	go func() {
-		http.ListenAndServe(":8080", nil)
+		err := http.ListenAndServe(":8080", nil)
+		if err != nil {
+			panic(err)
+		}
 	}()
 	gc := w.NewHeartBeater(time.Duration(1)*time.Second, &gcHandle{})
 	gc.Start()

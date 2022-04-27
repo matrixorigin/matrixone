@@ -169,7 +169,10 @@ func (r *Rotational) ApplyCheckpoint(rng common.Range) {
 }
 
 func (r *Rotational) ApplyCommit(id uint64) {
-	r.currInfo.AppendCommit(id)
+	err := r.currInfo.AppendCommit(id)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (r *Rotational) OnReplayCheckpoint(rng common.Range) {

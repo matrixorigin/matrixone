@@ -109,7 +109,10 @@ func (req *catalogCompactionRequest) DoRun() error {
 		return nil
 	}
 	req.catalog.RLock()
-	req.catalog.LoopLocked(processor)
+	err := req.catalog.LoopLocked(processor)
+	if err != nil {
+		return err
+	}
 	req.catalog.RUnlock()
 	if len(deleted) > 0 {
 		req.hardDeleteDatabases(deleted)

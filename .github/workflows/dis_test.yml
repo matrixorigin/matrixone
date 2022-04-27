@@ -50,7 +50,10 @@ jobs:
         env:
           DOCKER_BUILDKIT: 1
           COMPOSE_DOCKER_CLI_BUILD: 1
-        run: docker-compose -f ./optools/test/docker-compose.yaml up -d --no-build
+        run: |
+          mkdir log
+          touch log/console.log
+          docker-compose -f ./optools/test/docker-compose.yaml up --no-build > ./log/console.log &
 
       - name: Check running containers
         run: docker ps -a
@@ -67,8 +70,9 @@ jobs:
           docker-compose -f ./optools/test/docker-compose.yaml down --remove-orphans
 
       - name: Step to run on filure or cancelled    
-        if : ${{ failure() || cancelled() }}
+        if : ${{ always() }}
         uses: actions/upload-artifact@v2
         with:
           name: distributed-tests-log
           path: log/
+          retention-days: 7 

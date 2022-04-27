@@ -16,11 +16,12 @@ package db
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"io/ioutil"
 	"os"
 	"path"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -30,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	storageSched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -147,7 +149,7 @@ type blockfile struct {
 	name      string
 	transient bool
 	next      *blockfile
-	commited  bool
+	committed bool
 	meta      *metadata.Block
 	ver       uint64
 }
@@ -161,12 +163,13 @@ func (bf *blockfile) version() uint64 {
 }
 
 func (bf *blockfile) markCommited() {
-	bf.commited = true
+	bf.committed = true
 }
 
-func (bf *blockfile) isCommited() bool {
-	return bf.commited
-}
+// Unused
+// func (bf *blockfile) isCommited() bool {
+// 	return bf.committed
+// }
 
 func (bf *blockfile) isTransient() bool {
 	return bf.transient
@@ -183,11 +186,11 @@ type sortedSegmentFile struct {
 }
 
 type unsortedSegmentFile struct {
-	h          *replayHandle
-	id         common.ID
-	files      map[common.ID]*blockfile
-	uncommited []*blockfile
-	meta       *metadata.Segment
+	h           *replayHandle
+	id          common.ID
+	files       map[common.ID]*blockfile
+	uncommitted []*blockfile
+	meta        *metadata.Segment
 }
 
 type bsiFile struct {
@@ -202,10 +205,10 @@ func (bf *bsiFile) clean() {
 
 func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
-		h:          h,
-		id:         id,
-		files:      make(map[common.ID]*blockfile),
-		uncommited: make([]*blockfile, 0),
+		h:           h,
+		id:          id,
+		files:       make(map[common.ID]*blockfile),
+		uncommitted: make([]*blockfile, 0),
 	}
 }
 
@@ -256,7 +259,7 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 	if len(usf.files) != maxcnt {
 		return false
 	}
-	for id, _ := range usf.files {
+	for id := range usf.files {
 		meta := usf.meta.SimpleGetBlock(id.BlockID)
 		if meta == nil {
 			panic(metadata.ErrBlockNotFound)
@@ -313,7 +316,7 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *meta
 				continue
 			}
 			head.meta = blk
-			usf.uncommited = append(usf.uncommited, head)
+			usf.uncommitted = append(usf.uncommitted, head)
 			file = head
 		}
 
@@ -354,9 +357,9 @@ func (tdf *tableDataFiles) HasSegementFile(id *common.ID) bool {
 	return sorted != nil
 }
 
-func (ctx *tableDataFiles) PresentedBsiFiles(id common.ID) []string {
+func (tdf *tableDataFiles) PresentedBsiFiles(id common.ID) []string {
 	files := make([]string, 0)
-	for cid, file := range ctx.bsifiles {
+	for cid, file := range tdf.bsifiles {
 		if cid.IsSameSegment(id) {
 			files = append(files, file.name)
 		}
@@ -467,7 +470,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		}
 		flushCtx := &sched.Context{Opts: opts}
 		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
-		opts.Scheduler.Schedule(flushEvent)
+		err := opts.Scheduler.Schedule(flushEvent)
+		if err != nil && err != storageSched.ErrSchedule {
+			panic(err)
+		}
 	}
 	h.flushsegs = h.flushsegs[:0]
 	for id, cols := range h.indicesMap {
@@ -479,7 +485,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		flushCtx := &sched.Context{Opts: opts}
 		flushEvent := sched.NewFlushSegIndexEvent(flushCtx, segment)
 		flushEvent.Cols = cols
-		opts.Scheduler.Schedule(flushEvent)
+		err := opts.Scheduler.Schedule(flushEvent)
+		if err != nil && err != storageSched.ErrSchedule {
+			panic(err)
+		}
 	}
 	h.indicesMap = make(map[common.ID][]uint16)
 	for _, tblData := range tables.Data {
@@ -496,7 +505,10 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 				flushCtx := &sched.Context{Opts: opts}
 				flushEvent := sched.NewFlushBlockIndexEvent(flushCtx, blk)
 				flushEvent.FlushAll = true
-				opts.Scheduler.Schedule(flushEvent)
+				err := opts.Scheduler.Schedule(flushEvent)
+				if err != nil && err != storageSched.ErrSchedule {
+					panic(err)
+				}
 			}
 		}
 	}
@@ -676,11 +688,14 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 			// as SORTED. For example, a crash happened after creating a sorted segment file and
 			// before committing the metadata as SORTED. These segments will be committed as SORTED
 			// during replaying.
-			segment.SimpleUpgrade(file.size(), nil)
+			err := segment.SimpleUpgrade(file.size(), nil)
+			if err != nil {
+				return err
+			}
 			continue
 		}
 	}
-	for id, _ := range tablesFiles.sortedfiles {
+	for id := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
 		if ok {
 			// There are multi versions for a segment (Ex. Unsorted -> Sorted). Under normal
@@ -731,13 +746,13 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 }
 
 func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
-	if len(file.uncommited) == 0 {
+	if len(file.uncommitted) == 0 {
 		return
 	}
-	sort.Slice(file.uncommited, func(i, j int) bool {
-		return file.uncommited[i].id.BlockID < file.uncommited[j].id.BlockID
+	sort.Slice(file.uncommitted, func(i, j int) bool {
+		return file.uncommitted[i].id.BlockID < file.uncommitted[j].id.BlockID
 	})
-	bf := file.uncommited[0]
+	bf := file.uncommitted[0]
 	if !bf.isTransient() {
 		h.addCleanable(bf)
 		return
@@ -750,8 +765,8 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 		return
 	}
 
-	files := file.uncommited[1:]
-	// TODO: uncommited block file can be converted to committed
+	files := file.uncommitted[1:]
+	// TODO: uncommitted block file can be converted to committed
 	for _, f := range files {
 		h.addCleanable(f)
 	}
@@ -794,6 +809,12 @@ func (h *replayHandle) Replay() error {
 			if err := h.rebuildTable(tbl); err != nil {
 				return err
 			}
+			// In the Replay process, IdempotentIndex needs to
+			// be corrected after rebuilding Table, because
+			// InitIdempotentIndex is called before rebuilding tblk,
+			// IdempotentIndex does not update the logindex of tblk,
+			// and the same data may be repeatedly appended.
+			tbl.InitIdempotentIndex(tbl.MaxLogIndex())
 		}
 		if database.IsDeleted() && !database.IsHardDeleted() {
 			h.compactdbs = append(h.compactdbs, database)

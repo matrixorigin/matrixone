@@ -15,19 +15,21 @@
 package compile
 
 import (
-	_ "github.com/matrixorigin/matrixone/pkg/builtin/binary"
-	_ "github.com/matrixorigin/matrixone/pkg/builtin/multi"
-	_ "github.com/matrixorigin/matrixone/pkg/builtin/unary"
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/binary" // default import
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/multi"  // default import
+	_ "github.com/matrixorigin/matrixone/pkg/builtin/unary"  // default import
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// InitAddress is used to set address of local node
 func InitAddress(addr string) {
 	Address = addr
 }
 
+// New is used to new an object of compile
 func New(db string, sql string, uid string,
 	e engine.Engine, proc *process.Process) *compile {
 	return &compile{

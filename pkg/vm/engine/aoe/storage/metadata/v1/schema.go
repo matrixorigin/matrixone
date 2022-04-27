@@ -333,6 +333,18 @@ func MockSchemaAll(colCnt int) *Schema {
 				Size:  24,
 				Width: 100,
 			}
+		case 14:
+			typ = types.Type{
+				Oid:   types.T_decimal64,
+				Size:  8,
+				Width: 64,
+			}
+		case 15:
+			typ = types.Type{
+				Oid:   types.T_decimal128,
+				Size:  16,
+				Width: 128,
+			}
 		}
 		schema.AppendCol(name, typ)
 	}

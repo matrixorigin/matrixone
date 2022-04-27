@@ -69,7 +69,7 @@ func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, 
 					}
 				} else {
 					ranger = roaring.NewBitmap()
-					ranger.AddRange(0, endPos - startPos)
+					ranger.AddRange(0, endPos-startPos)
 				}
 				transientPart += blk.Count(colIdx, ranger)
 			}
@@ -229,7 +229,3 @@ func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uin
 		return sum, cnt, nil
 	}
 }
-
-
-
-

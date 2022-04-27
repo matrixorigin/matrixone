@@ -3,6 +3,7 @@
 BIN_NAME := mo-server
 BUILD_CFG := gen_config
 UNAME_S := $(shell uname -s)
+GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
@@ -60,12 +61,6 @@ debug: cmd/db-server/$(wildcard *.go)
 	go build -ldflags="-X 'main.GoVersion=$(GO_VERSION)' -X 'main.BranchName=$(BRANCH_NAME)' -X 'main.LastCommitId=$(LAST_COMMIT_ID)' -X 'main.BuildTime=$(BUILD_TIME)' -X 'main.MoVersion=$(MO_Version)'" -o $(BIN_NAME) ./cmd/db-server/
 
 
-# Run Static Code Analysis
-.PHONY: sca
-sca:
-	@go generate ./pkg/sql/colexec/extend/overload
-	$(info [Static code analysis])
-	@cd optools && ./run_ut.sh SCA
 
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
@@ -115,12 +110,9 @@ endif
 
 .PHONY: install-static-check-tools
 install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOROOT)/bin v1.45.2
+	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
 
-# TODO: switch to the following two lists after some major cleanups
-# TODO: switch to a more recent version of golangci-lint, currently on v1.23.8
-# PKGS=$(shell go list ./...)
-# DIRS=$(subst $(PKGNAME), ,$(subst $(PKGNAME)/, ,$(CHECKED_PKGS))) .
+# TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
 DIRS=pkg/... \
 	 cmd/...
 
@@ -129,7 +121,15 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconv
 
 .PHONY: static-check
 static-check:
+	@go generate ./pkg/sql/colexec/extend/overload
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
-  
+
+.PHONY: install-molint
+install-molint:
+	@go install github.com/matrixorigin/linter/cmd/molint@latest
+
+.PHONY: molint
+molint:
+	@go vet -vettool=$(shell which molint) ./...

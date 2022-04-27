@@ -48,7 +48,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe"
 	tpeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -253,8 +252,11 @@ func main() {
 		tpeConf.PBKV = kvs
 		tpeConf.KVLimit = uint64(config.GlobalSystemVariables.GetTpeKVLimit())
 		tpeConf.ParallelReader = config.GlobalSystemVariables.GetTpeParallelReader()
+		tpeConf.MultiNode = config.GlobalSystemVariables.GetTpeMultiNode()
 		tpeConf.TpeDedupSetBatchTimeout = time.Duration(config.GlobalSystemVariables.GetTpeDedupSetBatchTimeout())
 		tpeConf.TpeDedupSetBatchTrycount = int(config.GlobalSystemVariables.GetTpeDedupSetBatchTryCount())
+		tpeConf.TpeScanTimeout = time.Duration(config.GlobalSystemVariables.GetTpeScanTimeout())
+		tpeConf.TpeScanTryCount = int(config.GlobalSystemVariables.GetTpeScanTryCount())
 		tpeConf.ValueLayoutSerializerType = config.GlobalSystemVariables.GetTpeValueLayoutSerializer()
 		configKvTyp := strings.ToLower(config.GlobalSystemVariables.GetTpeKVType())
 		if configKvTyp == "memorykv" {
@@ -329,7 +331,7 @@ func main() {
 
 	//test cluster nodes
 	config.ClusterNodes = engine.Nodes{}
-	err = tpe.DumpDatabaseInfo(eng, args)
+	err = tpeEngine.DumpDatabaseInfo(eng, args)
 	if err != nil {
 		logutil.Errorf("%s", err)
 	}

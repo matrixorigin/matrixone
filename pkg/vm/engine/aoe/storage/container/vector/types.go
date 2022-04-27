@@ -16,7 +16,6 @@ package vector
 
 import (
 	"errors"
-	"io"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,13 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"io"
 	"sync"
 )
 
 var (
-	ErrVecNotRo = errors.New("should only be called in read-only mode")
-	ErrVecWriteRo       = errors.New("write on readonly vector")
-	ErrVecInvalidOffset = errors.New("invalid offset error")
+	ErrVecNotRo          = errors.New("should only be called in read-only mode")
+	ErrVecWriteRo        = errors.New("write on readonly vector")
+	ErrVecInvalidOffset  = errors.New("invalid offset error")
 	ErrVecTypeNotSupport = errors.New("type not supported yet")
 )
 

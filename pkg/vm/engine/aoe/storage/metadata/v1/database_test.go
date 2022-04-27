@@ -121,7 +121,10 @@ func TestDatabase3(t *testing.T) {
 	testutils.WaitExpect(200, func() bool {
 		return gen.Get() == db3.GetCheckpointId()
 	})
-	err = db3.SimpleHardDelete()
+	testutils.WaitExpect(2000, func() bool {
+		err = db3.SimpleHardDelete()
+		return err != ErrCannotHardDelete
+	})
 	assert.Nil(t, err)
 
 	gen = shard.NewMockIndexAllocator().Shard(103)
@@ -171,7 +174,8 @@ func TestDatabase3(t *testing.T) {
 		}
 		return nil
 	}
-	catalog.RecurLoopLocked(processor)
+	err = catalog.RecurLoopLocked(processor)
+	assert.Nil(t, err)
 	assert.Equal(t, 1, dbDeleted)
 	assert.Equal(t, 1, tableDeleted)
 	assert.Equal(t, 3, dbCnt)
@@ -181,7 +185,8 @@ func TestDatabase3(t *testing.T) {
 	dbDeleted = 0
 	tableDeleted = 0
 	dbCnt, tblCnt = 0, 0
-	catalog.RecurLoopLocked(processor)
+	err = catalog.RecurLoopLocked(processor)
+	assert.Nil(t, err)
 	assert.Equal(t, 0, dbDeleted)
 	assert.Equal(t, 0, tableDeleted)
 	assert.Equal(t, 3, dbCnt)
@@ -197,7 +202,8 @@ func TestDatabase3(t *testing.T) {
 	dbDeleted = 0
 	tableDeleted = 0
 	dbCnt, tblCnt = 0, 0
-	catalog2.RecurLoopLocked(processor)
+	err = catalog2.RecurLoopLocked(processor)
+	assert.Nil(t, err)
 	t.Log(indexWal.String())
 	t.Log(indexWal2.String())
 	assert.Equal(t, 0, dbDeleted)

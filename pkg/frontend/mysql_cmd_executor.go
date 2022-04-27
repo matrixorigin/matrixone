@@ -99,7 +99,7 @@ type outputQueue struct {
 	mrs    *MysqlResultSet
 	rowIdx uint64
 	length uint64
-	ep *tree.ExportParam
+	ep     *tree.ExportParam
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
@@ -111,7 +111,7 @@ func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *
 		mrs:    mrs,
 		rowIdx: 0,
 		length: length,
-		ep: ep,
+		ep:     ep,
 	}
 }
 
@@ -167,13 +167,6 @@ func (o *outputQueue) flush() error {
 	}
 	o.rowIdx = 0
 	return nil
-}
-
-/*
-getData returns the data slice in the resultset
-*/
-func (o *outputQueue) getData() [][]interface{} {
-	return o.mrs.Data[:o.rowIdx]
 }
 
 /*
@@ -236,10 +229,13 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	for j := 0; j < n; j++ { //row index
 		if oq.ep.Outfile {
 			select {
-				case <- ses.closeRef.stopExportData: {
+			case <-ses.closeRef.stopExportData:
+				{
 					return nil
 				}
-				default:{}
+			default:
+				{
+				}
 			}
 		}
 
@@ -424,6 +420,32 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					} else {
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_decimal64:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal64)
+					row[i] = vs[rowIndex].Decimal64ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal64)
+						row[i] = vs[rowIndex].Decimal64ToString(scale)
+					}
+				}
+			case types.T_decimal128:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal128)
+					row[i] = vs[rowIndex].Decimal128ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal128)
+						row[i] = vs[rowIndex].Decimal128ToString(scale)
 					}
 				}
 			default:
@@ -765,7 +787,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid), col)
+		err = convertEngineTypeToMysqlType(c.Type.Oid, col)
 		if err != nil {
 			return err
 		}
@@ -874,16 +896,16 @@ func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
 
 func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
 	columns := cw.exec.Columns()
-	var mysqlCols []interface{} = nil
+	var mysqlCols []interface{} = make([]interface{}, len(columns))
 	var err error = nil
-	for _, c := range columns {
+	for i, c := range columns {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
+		err = convertEngineTypeToMysqlType(c.Typ, col)
 		if err != nil {
 			return nil, err
 		}
-		mysqlCols = append(mysqlCols, col)
+		mysqlCols[i] = col
 	}
 	return mysqlCols, err
 }
@@ -1160,7 +1182,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 			}
-			
+
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
@@ -1341,7 +1363,7 @@ func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 /*
 convert the type in computation engine to the type in mysql.
 */
-func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
+func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)
@@ -1375,6 +1397,10 @@ func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_decimal64:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

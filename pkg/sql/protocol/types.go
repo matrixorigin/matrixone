@@ -42,8 +42,10 @@ const (
 	// Max
 	MaxInt8Ring
 	MaxInt32Ring
+	MaxDateRing
 	MaxInt16Ring
 	MaxInt64Ring
+	MaxDatetimeRing
 	MaxUInt8Ring
 	MaxUInt16Ring
 	MaxUInt32Ring
@@ -54,8 +56,10 @@ const (
 	// Min
 	MinInt8Ring
 	MinInt32Ring
+	MinDateRing
 	MinInt16Ring
 	MinInt64Ring
+	MinDatetimeRing
 	MinUInt8Ring
 	MinUInt16Ring
 	MinUInt32Ring
@@ -258,6 +262,7 @@ type Source struct {
 type Node struct {
 	Id   string
 	Addr string
+	Data []byte
 }
 
 type Scope struct {

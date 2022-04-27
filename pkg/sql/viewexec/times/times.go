@@ -16,6 +16,7 @@ package times
 
 import (
 	"bytes"
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -35,14 +36,16 @@ func init() {
 	}
 }
 
+// String is used to format times operator
 func String(_ interface{}, buf *bytes.Buffer) {
 	buf.WriteString(" ⨝ ")
 }
 
+// Prepare the times operator
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	n.ctr = new(Container)
-	{
+	{ // construct a map for attributes of result
 		n.ctr.result = make(map[string]uint8)
 		for _, attr := range n.Result {
 			n.ctr.result[attr] = 0
@@ -52,7 +55,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	n.ctr.zs = make([]int64, UnitLimit)
 	n.ctr.sels = make([]int64, UnitLimit)
 	n.ctr.views = make([]*view, len(n.Vars))
-	{
+	{ // construct some temporary matrix
 		n.ctr.mx = make([][]int64, len(n.Vars)+1)
 		for i := range n.ctr.mx {
 			n.ctr.mx[i] = make([]int64, UnitLimit)
@@ -85,7 +88,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		ht := n.Bats[i].Ht.(*join.HashTable)
 		n.ctr.views[i].sels = ht.Sels
 		n.ctr.views[i].isPure = true
-		for _, sel := range ht.Sels {
+		for _, sel := range ht.Sels { // detects if it is primary key
 			if len(sel) > 1 {
 				n.ctr.isPure = false
 				n.ctr.views[i].isPure = false
@@ -101,17 +104,18 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
+// Call is used to do times
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.InputBatch
-	if bat == nil {
+	if bat == nil { // end of process, begin eval
 		if n.ctr.pctr.bat != nil {
 			proc.Reg.InputBatch = n.ctr.pctr.bat
 			n.ctr.pctr.bat = nil
 		}
 		return false, nil
 	}
-	if len(bat.Zs) == 0 {
+	if len(bat.Zs) == 0 { // ignore empty batch
 		proc.Reg.InputBatch = &batch.Batch{}
 		return false, nil
 	}
@@ -124,7 +128,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 	defer batch.Clean(bat, proc.Mp)
-	if ctr.attrs == nil {
+	if ctr.attrs == nil { // construct probe information
 		ctr.attrs = make([]string, 0, 4)
 		ctr.oattrs = append(ctr.oattrs, bat.Attrs...)
 		for i, attr := range bat.Attrs {
@@ -169,6 +173,7 @@ func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 				}
 			}
 		}
+		// determine the size of the result attributes and then select the appropriate hashtable
 		size := 0
 		for _, vec := range ctr.pctr.bat.Vecs {
 			switch vec.Typ.Oid {
@@ -272,7 +277,7 @@ func (ctr *Container) probe(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -294,7 +299,7 @@ func (ctr *Container) processH0(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processPureH0(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -316,7 +321,7 @@ func (ctr *Container) processPureH0(bat *batch.Batch, proc *process.Process) err
 
 func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -338,7 +343,7 @@ func (ctr *Container) processH8(bat *batch.Batch, proc *process.Process) error {
 
 func (ctr *Container) processPureH8(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -360,7 +365,7 @@ func (ctr *Container) processPureH8(bat *batch.Batch, proc *process.Process) err
 
 func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -382,7 +387,7 @@ func (ctr *Container) processH24(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH24(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -404,7 +409,7 @@ func (ctr *Container) processPureH24(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -426,7 +431,7 @@ func (ctr *Container) processH32(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH32(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -448,7 +453,7 @@ func (ctr *Container) processPureH32(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -470,7 +475,7 @@ func (ctr *Container) processH40(bat *batch.Batch, proc *process.Process) error 
 
 func (ctr *Container) processPureH40(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -492,7 +497,7 @@ func (ctr *Container) processPureH40(bat *batch.Batch, proc *process.Process) er
 
 func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -514,7 +519,7 @@ func (ctr *Container) processHStr(bat *batch.Batch, proc *process.Process) error
 
 func (ctr *Container) processPureHStr(bat *batch.Batch, proc *process.Process) error {
 	count := len(bat.Zs)
-	for i := 0; i < count; i += UnitLimit {
+	for i := 0; i < count; i += UnitLimit { // process UnitLimit tuples at a time
 		n := count - i
 		if n > UnitLimit {
 			n = UnitLimit
@@ -535,7 +540,7 @@ func (ctr *Container) processPureHStr(bat *batch.Batch, proc *process.Process) e
 }
 
 func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -554,7 +559,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -574,7 +579,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -613,7 +618,7 @@ func (ctr *Container) processJoinH0(n, start int, bat *batch.Batch, proc *proces
 }
 
 func (ctr *Container) processPureJoinH0(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -670,8 +675,31 @@ func (ctr *Container) processPureJoinH0(n, start int, bat *batch.Batch, proc *pr
 	return nil
 }
 
+func fillGroup[T any](ctr *Container, vec *vector.Vector, sz uint32) {
+	rows := ctr.mx[0]
+	vs := vector.DecodeFixedCol[T](vec, int(sz))
+	if !nulls.Any(vec.Nsp) {
+		for k, row := range rows {
+			*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
+			*(*T)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
+		}
+		add.Uint32AddScalar(1+sz, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
+	} else {
+		for k, row := range rows {
+			if vec.Nsp.Np.Contains(uint64(row)) {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
+				ctr.keyOffs[k]++
+			} else {
+				*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
+				*(*T)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
+				ctr.keyOffs[k] += 1 + sz
+			}
+		}
+	}
+}
+
 func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -690,7 +718,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -710,7 +738,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -734,250 +762,24 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 		}
 		ctr.h8.keys = ctr.h8.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
-			switch vec.Typ.Oid {
-			case types.T_int8:
-				vs := vec.Col.([]int8)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(2, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 2
-						}
-					}
+			typLen := vec.Typ.Oid.FixedLength()
+			switch typLen {
+			case 1:
+				fillGroup[uint8](ctr, vec, 1)
+			case 2:
+				fillGroup[uint16](ctr, vec, 2)
+			case 4:
+				fillGroup[uint32](ctr, vec, 4)
+			case 8:
+				fillGroup[uint64](ctr, vec, 8)
+			case 16:
+				fillGroup[types.Decimal128](ctr, vec, 16)
+			default:
+				if typLen >= 0 {
+					panic(fmt.Sprintf("Unsupported typLen %d", typLen))
 				}
-			case types.T_uint8:
-				vs := vec.Col.([]uint8)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(2, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 2
-						}
-					}
-				}
-			case types.T_int16:
-				vs := vec.Col.([]int16)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(3, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 3
-						}
-					}
-				}
-			case types.T_uint16:
-				vs := vec.Col.([]uint16)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(3, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint16)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 3
-						}
-					}
-				}
-			case types.T_int32:
-				vs := vec.Col.([]int32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_uint32:
-				vs := vec.Col.([]uint32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_int64:
-				vs := vec.Col.([]int64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*int64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_uint64:
-				vs := vec.Col.([]uint64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*uint64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_float32:
-				vs := vec.Col.([]float32)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*float32)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_float64:
-				vs := vec.Col.([]float64)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*float64)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_date:
-				vs := vec.Col.([]types.Date)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*types.Date)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(5, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*types.Date)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 5
-						}
-					}
-				}
-			case types.T_datetime:
-				vs := vec.Col.([]types.Datetime)
-				if !nulls.Any(vec.Nsp) {
-					for k, row := range rows {
-						*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-						*(*types.Datetime)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-					}
-					add.Uint32AddScalar(9, ctr.keyOffs[:len(rows)], ctr.keyOffs[:len(rows)])
-				} else {
-					for k, row := range rows {
-						if vec.Nsp.Np.Contains(uint64(row)) {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 1
-							ctr.keyOffs[k]++
-						} else {
-							*(*int8)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k])) = 0
-							*(*types.Datetime)(unsafe.Add(unsafe.Pointer(&ctr.h8.keys[k]), ctr.keyOffs[k]+1)) = vs[row]
-							ctr.keyOffs[k] += 9
-						}
-					}
-				}
-			case types.T_char, types.T_varchar:
 				vs := vec.Col.(*types.Bytes)
 				vData := vs.Data
 				vOff := vs.Offsets
@@ -1002,9 +804,10 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 				}
 			}
 		}
+
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -1337,7 +1140,7 @@ func (ctr *Container) processJoinH8(n, start int, bat *batch.Batch, proc *proces
 }
 
 func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -1362,7 +1165,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 	copy(ctr.keyOffs, ctr.zKeyOffs)
 	copy(ctr.h8.keys, ctr.h8.zKeys)
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -1631,7 +1434,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -2032,7 +1835,7 @@ func (ctr *Container) processPureJoinH8(n, start int, bat *batch.Batch, proc *pr
 }
 
 func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -2051,7 +1854,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -2071,7 +1874,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -2096,7 +1899,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		ctr.h24.keys = ctr.h24.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[0])), cap(ctr.h24.keys)*24)[:len(ctr.h24.keys)*24]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -2365,7 +2168,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -2701,7 +2504,7 @@ func (ctr *Container) processJoinH24(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -2727,7 +2530,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h24.keys, ctr.h24.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h24.keys[0])), cap(ctr.h24.keys)*24)[:len(ctr.h24.keys)*24]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -2995,7 +2798,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -3395,7 +3198,7 @@ func (ctr *Container) processPureJoinH24(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -3414,7 +3217,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -3434,7 +3237,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -3459,7 +3262,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		ctr.h32.keys = ctr.h32.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[0])), cap(ctr.h32.keys)*32)[:len(ctr.h32.keys)*32]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -3728,7 +3531,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -4064,7 +3867,7 @@ func (ctr *Container) processJoinH32(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -4090,7 +3893,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h32.keys, ctr.h32.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h32.keys[0])), cap(ctr.h32.keys)*32)[:len(ctr.h32.keys)*32]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -4358,7 +4161,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -4758,7 +4561,7 @@ func (ctr *Container) processPureJoinH32(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -4777,7 +4580,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -4797,7 +4600,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -4822,7 +4625,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		ctr.h40.keys = ctr.h40.keys[:len(rows)]
 		ctr.keyOffs = ctr.keyOffs[:len(rows)]
 		data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -5091,7 +4894,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -5427,7 +5230,7 @@ func (ctr *Container) processJoinH40(n, start int, bat *batch.Batch, proc *proce
 }
 
 func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -5453,7 +5256,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 	copy(ctr.h40.keys, ctr.h40.zKeys)
 	data := unsafe.Slice((*byte)(unsafe.Pointer(&ctr.h40.keys[0])), cap(ctr.h40.keys)*40)[:len(ctr.h40.keys)*40]
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -5721,7 +5524,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -6059,7 +5862,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 	}
 	ctr.hashes[0] = 0
 	vecs := bat.Ht.([]*vector.Vector)
-	ctr.pctr.strHashMap.InsertStringBatchWithRing(ctr.zs, ctr.strHashStates, ctr.hstr.keys[:n], ctr.values)
+	ctr.pctr.strHashMap.InsertString40BatchWithRing(ctr.zs, ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
 	{ // batch
 		for k, v := range ctr.values[:n] {
 			if ctr.zs[k] == 0 {
@@ -6121,7 +5924,7 @@ func (ctr *Container) processPureJoinH40(n, start int, bat *batch.Batch, proc *p
 }
 
 func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		for i := 0; i < n; i++ {
@@ -6140,7 +5943,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 	for j := range ctr.mx {
 		ctr.mx[j] = ctr.mx[j][:0]
 	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < n; i++ { // product for matching tuples
 		if bat.Zs[i+start] == 0 {
 			continue
 		}
@@ -6160,7 +5963,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 		ctr.zs = make([]int64, len(ctr.mx[0]))
 	}
 	ctr.zs = ctr.zs[:len(ctr.mx[0])]
-	for j, rows := range ctr.mx {
+	for j, rows := range ctr.mx { // calculates the final number of occurrences of a result tuple
 		if j == 0 {
 			for x, row := range rows {
 				ctr.zs[x] = bat.Zs[row]
@@ -6178,7 +5981,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 			ctr.hstr.keys = make([][]byte, len(rows))
 		}
 		ctr.hstr.keys = ctr.hstr.keys[:len(rows)]
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -6418,7 +6221,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 		}
 		for vi, v := range ctr.views {
 			rows := ctr.mx[vi+1]
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -6731,7 +6534,7 @@ func (ctr *Container) processJoinHStr(n, start int, bat *batch.Batch, proc *proc
 }
 
 func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *process.Process) error {
-	{
+	{ // filter mismatched tuples
 		var flg bool
 
 		ctr.zs = ctr.zs[:n]
@@ -6754,7 +6557,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 		}
 	}
 	{ // fill group
-		for i, _ := range ctr.is {
+		for i := range ctr.is {
 			vec := bat.Vecs[ctr.ois[i]]
 			switch vec.Typ.Oid {
 			case types.T_int8:
@@ -6993,7 +6796,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 			}
 		}
 		for _, v := range ctr.views {
-			for i, _ := range v.is {
+			for i := range v.is {
 				vec := v.bat.Vecs[v.ois[i]]
 				switch vec.Typ.Oid {
 				case types.T_int8:
@@ -7375,6 +7178,7 @@ func (ctr *Container) processPureJoinHStr(n, start int, bat *batch.Batch, proc *
 	return nil
 }
 
+// matrix multiplication
 func (ctr *Container) product(xs [][]int64, ys []int64) [][]int64 {
 	rs := ctr.mx1[:len(xs)+1]
 	{ // reset
@@ -7401,13 +7205,14 @@ func (ctr *Container) dupMatrix(xs [][]int64) [][]int64 {
 	return mx
 }
 
+// probe hashtable to get matching row numbers
 func (ctr *Container) probeView(i, n int, bat *batch.Batch, v *view) error {
 	if len(v.vecs) == 1 {
 		return ctr.probeViewWithOneVar(i, n, bat, v)
 	}
 	ctr.hstr.keys = ctr.hstr.keys[:UnitLimit]
 	copy(ctr.zValues[:n], OneInt64s[:n])
-	for _, vec := range v.vecs {
+	for _, vec := range v.vecs { // combine multiple attributes into a single key
 		switch vec.Typ.Oid {
 		case types.T_int8:
 			vs := vec.Col.([]int8)
@@ -7630,6 +7435,7 @@ func (ctr *Container) probeView(i, n int, bat *batch.Batch, v *view) error {
 	return nil
 }
 
+// probe hashtable to get matching row numbers with only one attribute
 func (ctr *Container) probeViewWithOneVar(i, n int, bat *batch.Batch, v *view) error {
 	vec := v.vecs[0]
 	ctr.hashes = ctr.hashes[:UnitLimit]
@@ -7896,7 +7702,6 @@ func (ctr *Container) probeViewWithOneVar(i, n int, bat *batch.Batch, v *view) e
 				ctr.hstr.keys[k] = ctr.hstr.keys[k][:0]
 			}
 		}
-
 	}
 	return nil
 }

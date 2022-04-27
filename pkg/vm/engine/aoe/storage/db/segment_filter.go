@@ -45,9 +45,9 @@ func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpEq,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpEq,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -83,9 +83,9 @@ func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpNe,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpNe,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -118,9 +118,9 @@ func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpLt,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpLt,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -156,9 +156,9 @@ func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpLe,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpLe,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -194,9 +194,9 @@ func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpGt,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpGt,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -232,9 +232,9 @@ func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, err
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:    index.OpGe,
-		Val:   val,
-		BMRes: bmRes,
+		Op:          index.OpGe,
+		Val:         val,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
@@ -270,10 +270,10 @@ func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*r
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
 	ctx := index.FilterCtx{
-		Op:     index.OpIn,
-		ValMin: minv,
-		ValMax: maxv,
-		BMRes:  bmRes,
+		Op:          index.OpIn,
+		ValMin:      minv,
+		ValMax:      maxv,
+		BMRes:       bmRes,
 		BsiRequired: true,
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)

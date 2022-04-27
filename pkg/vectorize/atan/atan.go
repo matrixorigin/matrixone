@@ -17,135 +17,95 @@ package atan
 import "math"
 
 var (
-	atanUint8   func([]uint8, []float64) []float64
-	atanUint16  func([]uint16, []float64) []float64
-	atanUint32  func([]uint32, []float64) []float64
-	atanUint64  func([]uint64, []float64) []float64
-	atanInt8    func([]int8, []float64) []float64
-	atanInt16   func([]int16, []float64) []float64
-	atanInt32   func([]int32, []float64) []float64
-	atanInt64   func([]int64, []float64) []float64
-	atanFloat32 func([]float32, []float64) []float64
-	atanFloat64 func([]float64, []float64) []float64
+	AtanUint8   func([]uint8, []float64) []float64
+	AtanUint16  func([]uint16, []float64) []float64
+	AtanUint32  func([]uint32, []float64) []float64
+	AtanUint64  func([]uint64, []float64) []float64
+	AtanInt8    func([]int8, []float64) []float64
+	AtanInt16   func([]int16, []float64) []float64
+	AtanInt32   func([]int32, []float64) []float64
+	AtanInt64   func([]int64, []float64) []float64
+	AtanFloat32 func([]float32, []float64) []float64
+	AtanFloat64 func([]float64, []float64) []float64
 )
 
 func init() {
-	atanUint8 = atanUint8Pure
-	atanUint16 = atanUint16Pure
-	atanUint32 = atanUint32Pure
-	atanUint64 = atanUint64Pure
-	atanInt8 = atanInt8Pure
-	atanInt16 = atanInt16Pure
-	atanInt32 = atanInt32Pure
-	atanInt64 = atanInt64Pure
-	atanFloat32 = atanFloat32Pure
-	atanFloat64 = atanFloat64Pure
+	AtanUint8 = atanUint8
+	AtanUint16 = atanUint16
+	AtanUint32 = atanUint32
+	AtanUint64 = atanUint64
+	AtanInt8 = atanInt8
+	AtanInt16 = atanInt16
+	AtanInt32 = atanInt32
+	AtanInt64 = atanInt64
+	AtanFloat32 = atanFloat32
+	AtanFloat64 = atanFloat64
 }
 
-func AtanUint8(xs []uint8, rs []float64) []float64 {
-	return atanUint8(xs, rs)
-}
-
-func atanUint8Pure(xs []uint8, rs []float64) []float64 {
+func atanUint8(xs []uint8, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanUint16(xs []uint16, rs []float64) []float64 {
-	return atanUint16(xs, rs)
-}
-
-func atanUint16Pure(xs []uint16, rs []float64) []float64 {
+func atanUint16(xs []uint16, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanUint32(xs []uint32, rs []float64) []float64 {
-	return atanUint32(xs, rs)
-}
-
-func atanUint32Pure(xs []uint32, rs []float64) []float64 {
+func atanUint32(xs []uint32, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanUint64(xs []uint64, rs []float64) []float64 {
-	return atanUint64(xs, rs)
-}
-
-func atanUint64Pure(xs []uint64, rs []float64) []float64 {
+func atanUint64(xs []uint64, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanInt8(xs []int8, rs []float64) []float64 {
-	return atanInt8(xs, rs)
-}
-
-func atanInt8Pure(xs []int8, rs []float64) []float64 {
+func atanInt8(xs []int8, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanInt16(xs []int16, rs []float64) []float64 {
-	return atanInt16(xs, rs)
-}
-
-func atanInt16Pure(xs []int16, rs []float64) []float64 {
+func atanInt16(xs []int16, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanInt32(xs []int32, rs []float64) []float64 {
-	return atanInt32(xs, rs)
-}
-
-func atanInt32Pure(xs []int32, rs []float64) []float64 {
+func atanInt32(xs []int32, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanInt64(xs []int64, rs []float64) []float64 {
-	return atanInt64(xs, rs)
-}
-
-func atanInt64Pure(xs []int64, rs []float64) []float64 {
+func atanInt64(xs []int64, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanFloat32(xs []float32, rs []float64) []float64 {
-	return atanFloat32(xs, rs)
-}
-
-func atanFloat32Pure(xs []float32, rs []float64) []float64 {
+func atanFloat32(xs []float32, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(float64(xs[i]))
 	}
 	return rs
 }
 
-func AtanFloat64(xs []float64, rs []float64) []float64 {
-	return atanFloat64(xs, rs)
-}
-
-func atanFloat64Pure(xs []float64, rs []float64) []float64 {
+func atanFloat64(xs []float64, rs []float64) []float64 {
 	for i := range xs {
 		rs[i] = math.Atan(xs[i])
 	}

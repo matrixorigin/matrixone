@@ -37,6 +37,10 @@ func (_ *ValueExtend) Attributes() []string {
 	return nil
 }
 
+func (_ *ValueExtend) ExtendAttributes() []*Attribute {
+	return nil
+}
+
 func (a *ValueExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
 	return a.V, a.V.Typ.Oid, nil
 }

@@ -15,7 +15,6 @@
 package common
 
 import (
-	"errors"
 	"fmt"
 	"path"
 	"strconv"
@@ -39,7 +38,7 @@ const (
 	SegSuffix  = ".seg"
 	LockSuffix = ".lock"
 	NodeSuffix = ".nod"
-	BSISuffix = ".bsi"
+	BSISuffix  = ".bsi"
 	BBSISuffix = ".bbsi"
 
 	SpillDirName = "spill"
@@ -68,12 +67,12 @@ func MakeTBlockFileName(dirname, name string, isTmp bool) string {
 	return MakeFilename(dirname, FTTBlock, name, isTmp)
 }
 
-func MakeBlockFileName(dirname, name string, tableId uint64, isTmp bool) string {
+func MakeBlockFileName(dirname, name string, tableID uint64, isTmp bool) string {
 	dir := dirname
 	return MakeFilename(dir, FTBlock, name, isTmp)
 }
 
-func MakeSegmentFileName(dirname, name string, tableId uint64, isTmp bool) string {
+func MakeSegmentFileName(dirname, name string, tableID uint64, isTmp bool) string {
 	dir := dirname
 	return MakeFilename(dir, FTSegment, name, isTmp)
 }
@@ -130,7 +129,7 @@ func ParseBitSlicedIndexFileName(filename string) (name string, ok bool) {
 	return name, true
 }
 
-func ParseBitSlicedIndexFileNameToInfo(filename string) (version, tblId, segId uint64, colIdx uint16, ok bool) {
+func ParseBitSlicedIndexFileNameToInfo(filename string) (version, tblID, segID uint64, colIdx uint16, ok bool) {
 	filename = strings.Trim(filename, BSISuffix)
 	infos := strings.Split(filename, "_")
 	arr := make([]int, 4)
@@ -154,7 +153,7 @@ func ParseBitSlicedIndexFileNameToInfo(filename string) (version, tblId, segId u
 	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint16(arr[3]), true
 }
 
-func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblId, segId, blkId uint64, colIdx uint16, ok bool) {
+func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblID, segID, blkID uint64, colIdx uint16, ok bool) {
 	filename = strings.Trim(filename, BBSISuffix)
 	infos := strings.Split(filename, "_")
 	arr := make([]int, 5)
@@ -179,7 +178,7 @@ func ParseBlockBitSlicedIndexFileNameToInfo(filename string) (version, tblId, se
 	if err != nil {
 		return 0, 0, 0, 0, 0, false
 	}
-	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint64(arr[3]), uint16(arr[4]),true
+	return uint64(arr[0]), uint64(arr[1]), uint64(arr[2]), uint64(arr[3]), uint16(arr[4]), true
 }
 
 func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
@@ -224,7 +223,7 @@ func IsSegmentFile(name string) bool {
 func FilenameFromTmpfile(tmpFile string) (fname string, err error) {
 	fname = strings.TrimSuffix(tmpFile, TmpSuffix)
 	if len(fname) == len(tmpFile) {
-		return "", errors.New(fmt.Sprintf("Cannot extract filename from temp file %s", tmpFile))
+		return "", fmt.Errorf("cannot extract filename from temp file %s", tmpFile)
 	}
 	return fname, nil
 }

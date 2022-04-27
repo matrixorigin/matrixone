@@ -24,386 +24,386 @@ import (
 )
 
 func TestComputationHandlerImpl_CreateDatabase(t *testing.T) {
-	convey.Convey("create database",t, func() {
+	convey.Convey("create database", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
 		for i := 0; i < 20; i++ {
-			dbName := fmt.Sprintf("test%d",i)
-			dbID, err := chi.CreateDatabase(0,dbName,0)
-			convey.So(err,convey.ShouldBeNil)
+			dbName := fmt.Sprintf("test%d", i)
+			dbID, err := chi.CreateDatabase(0, dbName, 0)
+			convey.So(err, convey.ShouldBeNil)
 
 			desc, err := dhi.LoadDatabaseDescByID(dbID)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(desc.ID,convey.ShouldEqual,dbID)
-			convey.So(desc.Name,convey.ShouldEqual,dbName)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(desc.ID, convey.ShouldEqual, dbID)
+			convey.So(desc.Name, convey.ShouldEqual, dbName)
 
-			_, err = chi.CreateDatabase(0,dbName,0)
-			convey.So(err,convey.ShouldBeError)
+			_, err = chi.CreateDatabase(0, dbName, 0)
+			convey.So(err, convey.ShouldBeError)
 		}
 	})
 }
 
 func TestComputationHandlerImpl_CreateTable(t *testing.T) {
-	convey.Convey("create table",t, func() {
+	convey.Convey("create table", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
-		dbID, err := chi.CreateDatabase(0,"test",0)
-		convey.So(err,convey.ShouldBeNil)
+		dbID, err := chi.CreateDatabase(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
 			*table = *InternalDescriptorTableDesc
 
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 			table.Name = tableName
-			tableID, err := chi.CreateTable(0,dbID,table)
-			convey.So(err,convey.ShouldBeNil)
+			tableID, err := chi.CreateTable(0, dbID, table)
+			convey.So(err, convey.ShouldBeNil)
 
-			get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(get.Name,convey.ShouldEqual,tableName)
-			convey.So(get.ID,convey.ShouldEqual,tableID)
+			get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(get.Name, convey.ShouldEqual, tableName)
+			convey.So(get.ID, convey.ShouldEqual, tableID)
 
-			_, err = chi.CreateTable(0,dbID,table)
-			convey.So(err,convey.ShouldBeError)
+			_, err = chi.CreateTable(0, dbID, table)
+			convey.So(err, convey.ShouldBeError)
 		}
 
 	})
 }
 
 func TestComputationHandlerImpl_DropTable(t *testing.T) {
-	convey.Convey("drop table",t, func() {
+	convey.Convey("drop table", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
-		dbID, err := chi.CreateDatabase(0,"test",0)
-		convey.So(err,convey.ShouldBeNil)
+		dbID, err := chi.CreateDatabase(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
 			*table = *InternalDescriptorTableDesc
 
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 			table.Name = tableName
-			tableID, err := chi.CreateTable(0,dbID,table)
-			convey.So(err,convey.ShouldBeNil)
+			tableID, err := chi.CreateTable(0, dbID, table)
+			convey.So(err, convey.ShouldBeNil)
 
-			get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(get.Name,convey.ShouldEqual,tableName)
-			convey.So(get.ID,convey.ShouldEqual,tableID)
+			get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(get.Name, convey.ShouldEqual, tableName)
+			convey.So(get.ID, convey.ShouldEqual, tableID)
 
-			_, err = chi.DropTable(0,dbID,tableName)
-			convey.So(err,convey.ShouldBeNil)
+			_, err = chi.DropTable(0, dbID, tableName)
+			convey.So(err, convey.ShouldBeNil)
 
-			_, err = chi.DropTable(0,dbID,tableName)
-			convey.So(err,convey.ShouldBeError)
+			_, err = chi.DropTable(0, dbID, tableName)
+			convey.So(err, convey.ShouldBeError)
 		}
 	})
 }
 
 func TestComputationHandlerImpl_ListTables(t *testing.T) {
-	convey.Convey("list tables",t, func() {
+	convey.Convey("list tables", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
-		dbID, err := chi.CreateDatabase(0,"test",0)
-		convey.So(err,convey.ShouldBeNil)
+		dbID, err := chi.CreateDatabase(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		var tables []*descriptor.RelationDesc
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
 			*table = *InternalDescriptorTableDesc
 
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 			table.Name = tableName
 
-			tables = append(tables,table)
+			tables = append(tables, table)
 
-			tableID, err := chi.CreateTable(0,dbID,table)
-			convey.So(err,convey.ShouldBeNil)
+			tableID, err := chi.CreateTable(0, dbID, table)
+			convey.So(err, convey.ShouldBeNil)
 
-			get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(get.Name,convey.ShouldEqual,tableName)
-			convey.So(get.ID,convey.ShouldEqual,tableID)
+			get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(get.Name, convey.ShouldEqual, tableName)
+			convey.So(get.ID, convey.ShouldEqual, tableID)
 
 		}
 
 		wantTables, err := chi.ListTables(dbID)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
-			convey.So(reflect.DeepEqual(*wantTables[i],*tables[i]),convey.ShouldBeTrue)
+			convey.So(reflect.DeepEqual(*wantTables[i], *tables[i]), convey.ShouldBeTrue)
 		}
 
 		for i := 0; i < 10; i++ {
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 
-			if i & 2 == 0 {
-				_, err = chi.DropTable(0,dbID,tableName)
-				convey.So(err,convey.ShouldBeNil)
+			if i&2 == 0 {
+				_, err = chi.DropTable(0, dbID, tableName)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 
 		wantTables, err = chi.ListTables(dbID)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 
-			get, err := chi.dh.LoadRelationDescByName(dbID,tableName)
-			if i & 2 == 0 {
-				convey.So(err,convey.ShouldBeError)
-			}else{
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(get.Name,convey.ShouldEqual,tableName)
+			get, err := chi.dh.LoadRelationDescByName(dbID, tableName)
+			if i&2 == 0 {
+				convey.So(err, convey.ShouldBeError)
+			} else {
+				convey.So(err, convey.ShouldBeNil)
+				convey.So(get.Name, convey.ShouldEqual, tableName)
 			}
 		}
 	})
 }
 
 func TestComputationHandlerImpl_DropDatabase(t *testing.T) {
-	convey.Convey("drop database",t, func() {
+	convey.Convey("drop database", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 3; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
-			dbID, err := chi.CreateDatabase(0,dbName,0)
-			convey.So(err,convey.ShouldBeNil)
+			dbID, err := chi.CreateDatabase(0, dbName, 0)
+			convey.So(err, convey.ShouldBeNil)
 
-			dbIDs = append(dbIDs,dbID)
+			dbIDs = append(dbIDs, dbID)
 
 			var tables []*descriptor.RelationDesc
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
 				*table = *InternalDescriptorTableDesc
 
-				tableName := fmt.Sprintf("A%d",j)
+				tableName := fmt.Sprintf("A%d", j)
 				table.Name = tableName
 
-				tables = append(tables,table)
+				tables = append(tables, table)
 
-				tableID, err := chi.CreateTable(0,dbID,table)
-				convey.So(err,convey.ShouldBeNil)
+				tableID, err := chi.CreateTable(0, dbID, table)
+				convey.So(err, convey.ShouldBeNil)
 
-				get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(get.Name,convey.ShouldEqual,tableName)
-				convey.So(get.ID,convey.ShouldEqual,tableID)
+				get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+				convey.So(err, convey.ShouldBeNil)
+				convey.So(get.Name, convey.ShouldEqual, tableName)
+				convey.So(get.ID, convey.ShouldEqual, tableID)
 			}
 
 			wantTables, err := chi.ListTables(dbID)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			for j := 0; j < 10; j++ {
-				convey.So(reflect.DeepEqual(*wantTables[j],*tables[j]),convey.ShouldBeTrue)
+				convey.So(reflect.DeepEqual(*wantTables[j], *tables[j]), convey.ShouldBeTrue)
 			}
 		}
 
 		for i := 0; i < 3; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
 			err := chi.DropDatabase(0, dbName)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
 			_, err = chi.dh.LoadDatabaseDescByID(dbIDs[i])
-			convey.So(err,convey.ShouldBeError)
+			convey.So(err, convey.ShouldBeError)
 
-			_,err = chi.ListTables(dbIDs[i])
-			convey.So(err,convey.ShouldBeError)
+			_, err = chi.ListTables(dbIDs[i])
+			convey.So(err, convey.ShouldBeError)
 		}
 	})
 }
 
 func TestComputationHandlerImpl_GetDatabase(t *testing.T) {
-	convey.Convey("get database",t, func() {
+	convey.Convey("get database", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 3; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
-			dbID, err := chi.CreateDatabase(0,dbName,0)
-			convey.So(err,convey.ShouldBeNil)
+			dbID, err := chi.CreateDatabase(0, dbName, 0)
+			convey.So(err, convey.ShouldBeNil)
 
-			dbIDs = append(dbIDs,dbID)
+			dbIDs = append(dbIDs, dbID)
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
 				*table = *InternalDescriptorTableDesc
 
-				tableName := fmt.Sprintf("A%d",j)
+				tableName := fmt.Sprintf("A%d", j)
 				table.Name = tableName
 
-				tableID, err := chi.CreateTable(0,dbID,table)
-				convey.So(err,convey.ShouldBeNil)
+				tableID, err := chi.CreateTable(0, dbID, table)
+				convey.So(err, convey.ShouldBeNil)
 
-				get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(get.Name,convey.ShouldEqual,tableName)
-				convey.So(get.ID,convey.ShouldEqual,tableID)
+				get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+				convey.So(err, convey.ShouldBeNil)
+				convey.So(get.Name, convey.ShouldEqual, tableName)
+				convey.So(get.ID, convey.ShouldEqual, tableID)
 			}
 
 			dbDesc, err := chi.GetDatabase(dbName)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(dbDesc.ID,convey.ShouldEqual,dbID)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(dbDesc.ID, convey.ShouldEqual, dbID)
 		}
 
 		for i := 0; i < 3; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
 			err := chi.DropDatabase(0, dbName)
-			convey.So(err,convey.ShouldBeNil)
+			convey.So(err, convey.ShouldBeNil)
 
-			_,err = chi.ListTables(dbIDs[i])
-			convey.So(err,convey.ShouldBeError)
+			_, err = chi.ListTables(dbIDs[i])
+			convey.So(err, convey.ShouldBeError)
 
 			_, err = chi.GetDatabase(dbName)
-			convey.So(err,convey.ShouldBeError)
+			convey.So(err, convey.ShouldBeError)
 		}
 	})
 }
 
 func TestComputationHandlerImpl_ListDatabases(t *testing.T) {
-	convey.Convey("list databases",t, func() {
+	convey.Convey("list databases", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
 		var dbIDs []uint64
 		for i := 0; i < 10; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
-			dbID, err := chi.CreateDatabase(0,dbName,0)
-			convey.So(err,convey.ShouldBeNil)
+			dbID, err := chi.CreateDatabase(0, dbName, 0)
+			convey.So(err, convey.ShouldBeNil)
 
-			dbIDs = append(dbIDs,dbID)
+			dbIDs = append(dbIDs, dbID)
 
 			for j := 0; j < 10; j++ {
 				table := &descriptor.RelationDesc{}
 				*table = *InternalDescriptorTableDesc
 
-				tableName := fmt.Sprintf("A%d",j)
+				tableName := fmt.Sprintf("A%d", j)
 				table.Name = tableName
 
-				tableID, err := chi.CreateTable(0,dbID,table)
-				convey.So(err,convey.ShouldBeNil)
+				tableID, err := chi.CreateTable(0, dbID, table)
+				convey.So(err, convey.ShouldBeNil)
 
-				get, err := chi.dh.LoadRelationDescByID(dbID,tableID)
-				convey.So(err,convey.ShouldBeNil)
-				convey.So(get.Name,convey.ShouldEqual,tableName)
-				convey.So(get.ID,convey.ShouldEqual,tableID)
+				get, err := chi.dh.LoadRelationDescByID(dbID, tableID)
+				convey.So(err, convey.ShouldBeNil)
+				convey.So(get.Name, convey.ShouldEqual, tableName)
+				convey.So(get.ID, convey.ShouldEqual, tableID)
 			}
 
 			dbDesc, err := chi.GetDatabase(dbName)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(dbDesc.ID,convey.ShouldEqual,dbID)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(dbDesc.ID, convey.ShouldEqual, dbID)
 		}
 
 		for i := 0; i < 10; i++ {
-			dbName := fmt.Sprintf("test%d",i)
+			dbName := fmt.Sprintf("test%d", i)
 
-			if i % 2 == 0{
+			if i%2 == 0 {
 				err := chi.DropDatabase(0, dbName)
-				convey.So(err,convey.ShouldBeNil)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 
 		dbDescs, err := chi.ListDatabases()
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 		for _, desc := range dbDescs {
-			convey.So(desc.Is_deleted,convey.ShouldBeFalse)
+			convey.So(desc.Is_deleted, convey.ShouldBeFalse)
 		}
 	})
 }
 
 func TestComputationHandlerImpl_GetTable(t *testing.T) {
-	convey.Convey("get table",t, func() {
+	convey.Convey("get table", t, func() {
 		tch := NewTupleCodecHandler(SystemTenantID)
 		kv := NewMemoryKV()
 		serial := &DefaultValueSerializer{}
 		kvLimit := uint64(2)
-		dhi := NewDescriptorHandlerImpl(tch,kv,serial,kvLimit)
+		dhi := NewDescriptorHandlerImpl(tch, kv, serial, kvLimit)
 		epoch := NewEpochHandler(tch, dhi, kv)
-		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false)
+		chi := NewComputationHandlerImpl(dhi, kv, tch, &DefaultValueSerializer{}, nil, epoch, false, false)
 
-		dbID, err := chi.CreateDatabase(0,"test",0)
-		convey.So(err,convey.ShouldBeNil)
+		dbID, err := chi.CreateDatabase(0, "test", 0)
+		convey.So(err, convey.ShouldBeNil)
 
 		for i := 0; i < 10; i++ {
 			table := &descriptor.RelationDesc{}
 			*table = *InternalDescriptorTableDesc
 
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 			table.Name = tableName
 
-			_, err := chi.CreateTable(0,dbID,table)
-			convey.So(err,convey.ShouldBeNil)
+			_, err := chi.CreateTable(0, dbID, table)
+			convey.So(err, convey.ShouldBeNil)
 
 			getTable, err := chi.GetTable(dbID, tableName)
-			convey.So(err,convey.ShouldBeNil)
-			convey.So(reflect.DeepEqual(*table,*getTable),convey.ShouldBeTrue)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(reflect.DeepEqual(*table, *getTable), convey.ShouldBeTrue)
 
 		}
 
 		for i := 0; i < 10; i++ {
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 
-			if i & 2 == 0 {
-				_, err = chi.DropTable(0,dbID,tableName)
-				convey.So(err,convey.ShouldBeNil)
+			if i&2 == 0 {
+				_, err = chi.DropTable(0, dbID, tableName)
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 
 		for i := 0; i < 10; i++ {
-			tableName := fmt.Sprintf("A%d",i)
+			tableName := fmt.Sprintf("A%d", i)
 
 			_, err := chi.GetTable(dbID, tableName)
-			if i & 2 == 0 {
-				convey.So(err,convey.ShouldBeError)
-			}else{
-				convey.So(err,convey.ShouldBeNil)
+			if i&2 == 0 {
+				convey.So(err, convey.ShouldBeError)
+			} else {
+				convey.So(err, convey.ShouldBeNil)
 			}
 		}
 	})

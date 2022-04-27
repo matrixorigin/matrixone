@@ -10,6 +10,7 @@ import (
 	roaring64 "github.com/RoaringBitmap/roaring/roaring64"
 	gomock "github.com/golang/mock/gomock"
 	batch "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	engine "github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -117,6 +118,10 @@ func NewMockRelation(ctrl *gomock.Controller) *MockRelation {
 	return mock
 }
 
+func (m *MockRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 // EXPECT returns an object that allows the caller to indicate expected use.
 func (m *MockRelation) EXPECT() *MockRelationMockRecorder {
 	return m.recorder
@@ -205,7 +210,7 @@ func (mr *MockRelationMockRecorder) ID() *gomock.Call {
 }
 
 // NewReader mocks base method.
-func (m *MockRelation) NewReader(arg0 int) []engine.Reader {
+func (m *MockRelation) NewReader(arg0 int, _ extend.Extend, _ []byte) []engine.Reader {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "NewReader", arg0)
 	ret0, _ := ret[0].([]engine.Reader)

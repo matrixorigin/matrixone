@@ -16,7 +16,6 @@ package table
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -67,7 +66,7 @@ func newBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 
 func (blk *block) initColumns() error {
 	blk.data.sizes = make([]uint64, 0)
-	for idx, _ := range blk.meta.Segment.Table.Schema.ColDefs {
+	for idx := range blk.meta.Segment.Table.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.cols = append(blk.data.cols, colBlk)
@@ -154,7 +153,7 @@ func (blk *block) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+		return nil, fmt.Errorf("column %s not found", attr)
 	}
 	vec, err := blk.data.cols[colIdx].ForceLoad(compressed, deCompressed)
 	if err != nil {
@@ -166,7 +165,7 @@ func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buf
 func (blk *block) Prefetch(attr string) error {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return errors.New(fmt.Sprintf("column %s not found", attr))
+		return fmt.Errorf("column %s not found", attr)
 	}
 	return blk.data.cols[colIdx].Prefetch()
 }
@@ -230,7 +229,7 @@ func (blk *block) Sum(colIdx int, filter *roaring64.Bitmap) (int64, uint64) {
 		case types.T_int32:
 			sum += int64(val.(int32))
 		case types.T_int64:
-			sum += int64(val.(int64))
+			sum += val.(int64)
 		case types.T_uint8:
 			sum += int64(val.(uint8))
 		case types.T_uint16:
@@ -375,4 +374,3 @@ func (blk *block) Lt(colIdx int, offset uint64, val interface{}) *roaring.Bitmap
 func (blk *block) Btw(colIdx int, offset uint64, min, max interface{}) *roaring.Bitmap {
 	return nil
 }
-

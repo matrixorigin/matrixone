@@ -17,56 +17,61 @@ package types
 import (
 	"fmt"
 	"strings"
-)
 
-const (
-	// any family
-	T_any = 0
-
-	// numeric/integer family
-	T_int8   = 1
-	T_int16  = 2
-	T_int32  = 3
-	T_int64  = 5
-	T_uint8  = 6
-	T_uint16 = 7
-	T_uint32 = 9
-	T_uint64 = 10
-
-	// numeric/decimal family - unsigned attribute is deprecated
-	T_decimal = 11
-
-	// numeric/float family - unsigned attribute is deprecated
-	T_float32 = 12
-	T_float64 = 13
-
-	// date family
-	T_date     = 15 // 3 byte
-	T_datetime = 18 // 8 byte
-
-	// string family
-	T_char    = 20
-	T_varchar = 21
-
-	// json family
-	T_json = 32
-
-	// system family
-	T_sel   = 200 //selection
-	T_tuple = 201 // immutable, size = 24
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type T uint8
 
+const (
+	// any family
+	T_any T = T(plan.Type_ANY)
+
+	// numeric/integer family
+	T_int8   T = T(plan.Type_INT8)
+	T_int16  T = T(plan.Type_INT16)
+	T_int32  T = T(plan.Type_INT32)
+	T_int64  T = T(plan.Type_INT64)
+	T_uint8  T = T(plan.Type_UINT8)
+	T_uint16 T = T(plan.Type_UINT16)
+	T_uint32 T = T(plan.Type_UINT32)
+	T_uint64 T = T(plan.Type_UINT64)
+
+	// numeric/float family - unsigned attribute is deprecated
+	T_float32 T = T(plan.Type_FLOAT32)
+	T_float64 T = T(plan.Type_FLOAT64)
+
+	// date family
+	T_date     T = T(plan.Type_DATE)
+	T_datetime T = T(plan.Type_DATETIME)
+
+	// string family
+	T_char    T = T(plan.Type_CHAR)
+	T_varchar T = T(plan.Type_VARCHAR)
+
+	// json family
+	T_json T = T(plan.Type_JSON)
+
+	// numeric/decimal family - unsigned attribute is deprecated
+	T_decimal64  = T(plan.Type_DECIMAL64)
+	T_decimal128 = T(plan.Type_DECIMAL128)
+
+	// system family
+	T_sel   T = T(plan.Type_SEL)   //selection
+	T_tuple T = T(plan.Type_TUPLE) // immutable, size = 24
+)
+
 type Type struct {
-	Oid       T		`json:"oid,string"`
-	Size      int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+	Oid  T     `json:"oid,string"`
+	Size int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
 
 	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
-	Width     int32	`json:"width,string"`
+	Width int32 `json:"width,string"`
 
-	// Precision means dec (length of Fractional part) for float and double // todo: need to add new attribute Dec ?
-	Precision int32	`json:"precision,string"`
+	Scale int32 `json:"Scale,string"`
+
+	Precision int32 `json:"Precision,string"`
 }
 
 type Bytes struct {
@@ -79,7 +84,10 @@ type Date int32
 
 type Datetime int64
 
-type Decimal struct {
+type Decimal64 int64
+type Decimal128 struct {
+	lo int64
+	hi int64
 }
 
 var Types map[string]T = map[string]T{
@@ -89,13 +97,14 @@ var Types map[string]T = map[string]T{
 	"integer":  T_int32,
 	"bigint":   T_int64,
 
-	"tinyint unsigned":  T_int8,
-	"smallint unsigned": T_int16,
-	"int unsigned":      T_int32,
-	"integer unsigned":  T_int32,
-	"bigint unsigned":   T_int64,
+	"tinyint unsigned":  T_uint8,
+	"smallint unsigned": T_uint16,
+	"int unsigned":      T_uint32,
+	"integer unsigned":  T_uint32,
+	"bigint unsigned":   T_uint64,
 
-	"decimal": T_decimal,
+	"decimal64":  T_decimal64,
+	"decimal128": T_decimal128,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -114,7 +123,7 @@ func (t Type) String() string {
 }
 
 func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Precision == b.Precision
+	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Scale == b.Scale
 }
 
 func (t T) ToType() Type {
@@ -148,6 +157,10 @@ func (t T) ToType() Type {
 		typ.Size = 24
 	case T_sel:
 		typ.Size = 8
+	case T_decimal64:
+		typ.Size = 8
+	case T_decimal128:
+		typ.Size = 16
 	}
 	return typ
 }
@@ -170,8 +183,6 @@ func (t T) String() string {
 		return "INT UNSIGNED"
 	case T_uint64:
 		return "BIGINT UNSIGNED"
-	case T_decimal:
-		return "DECIMAL"
 	case T_float32:
 		return "FLOAT"
 	case T_float64:
@@ -190,6 +201,10 @@ func (t T) String() string {
 		return "SEL"
 	case T_tuple:
 		return "TUPLE"
+	case T_decimal64:
+		return "DECIMAL64"
+	case T_decimal128:
+		return "DECIMAL128"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -229,6 +244,10 @@ func (t T) OidString() string {
 		return "T_date"
 	case T_datetime:
 		return "T_datetime"
+	case T_decimal64:
+		return "T_decimal64"
+	case T_decimal128:
+		return "T_decimal128"
 	}
 	return "unknown_type"
 }
@@ -266,6 +285,10 @@ func (t T) GoType() string {
 		return "date"
 	case T_datetime:
 		return "datetime"
+	case T_decimal64:
+		return "decimal64"
+	case T_decimal128:
+		return "decimal128"
 	}
 	return "unknown type"
 }
@@ -308,6 +331,34 @@ func (t T) TypeLen() int {
 		return 24
 	case T_sel:
 		return 8
+	case T_decimal64:
+		return 8
+	case T_decimal128:
+		return 16
 	}
-	return -1
+	panic(moerr.NewInternalError("Unknow type %s", t))
+}
+
+func (t T) FixedLength() int {
+	switch t {
+	case T_int8, T_uint8:
+		return 1
+	case T_int16, T_uint16:
+		return 2
+	case T_int32, T_uint32, T_date, T_float32:
+		return 4
+	case T_int64, T_uint64, T_datetime, T_float64:
+		return 8
+	case T_decimal64:
+		return 8
+	case T_decimal128:
+		return 16
+	case T_char:
+		return -24
+	case T_varchar:
+		return -24
+	case T_sel:
+		return -8
+	}
+	panic(moerr.NewInternalError("Unknow type %s", t))
 }

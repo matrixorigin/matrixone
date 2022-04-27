@@ -28,7 +28,7 @@ type OpType uint8
 
 type ColumnsAllocator struct {
 	sync.RWMutex
-	Allocators map[int]*common.IdAlloctor
+	Allocators map[int]*common.IDAlloctor
 }
 
 const (
@@ -58,7 +58,7 @@ type FilterCtx struct {
 	Err     error
 
 	BsiRequired bool
-	BlockSet []uint64
+	BlockSet    []uint64
 }
 
 func NewFilterCtx(t OpType) *FilterCtx {

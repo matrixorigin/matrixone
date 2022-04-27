@@ -149,16 +149,6 @@ func NewSum(typ types.Type) (ring.Ring, error) {
 	return nil, errors.New(fmt.Sprintf("'%v' not support Sum", typ))
 }
 
-func NewAvg(typ types.Type) (ring.Ring, error) {
-	switch typ.Oid {
-	case types.T_float32, types.T_float64:
-		return avg.NewAvg(typ), nil
-	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-		return avg.NewAvg(typ), nil
-	}
-	return nil, errors.New(fmt.Sprintf("'%v' not support Avg", typ))
-}
-
 func NewMax(typ types.Type) (ring.Ring, error) {
 	switch typ.Oid {
 	case types.T_int8:

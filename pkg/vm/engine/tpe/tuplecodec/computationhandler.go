@@ -15,10 +15,14 @@
 package tuplecodec
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
 	"math"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -56,6 +60,7 @@ type ComputationHandlerImpl struct {
 	indexHandler   index.IndexHandler
 	epochHandler   *EpochHandler
 	parallelReader bool
+	multiNode      bool
 }
 
 func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, error) {
@@ -68,16 +73,33 @@ func (chi *ComputationHandlerImpl) Read(readCtx interface{}) (*batch.Batch, erro
 	return bat, nil
 }
 
+// judge the operation is delete or insert, true for delete, false for insert
+func GetDeleteFlag(bat *batch.Batch) bool {
+	deleteFlag := false
+	if len(bat.Zs) > 0 {
+		deleteFlag = true
+	}
+	for i := 0; i < len(bat.Zs); i++ {
+		if bat.Zs[i] != -1 {
+			deleteFlag = false
+			break
+		}
+	}
+	return deleteFlag
+}
+
 func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch) error {
 	if bat == nil {
 		return nil
 	}
 
 	var err error
-	if len(bat.Zs) == 2 && bat.Zs[0] == -1 && bat.Zs[1] == -1 {
+	if GetDeleteFlag(bat) {
 		err = chi.indexHandler.DeleteFromIndex(writeCtx, bat)
-	} else {
+	} else if bat.Zs == nil {
 		err = chi.indexHandler.WriteIntoIndex(writeCtx, bat)
+	} else {
+		err = chi.indexHandler.UpdateIntoIndex(writeCtx, bat)
 	}
 
 	if err != nil {
@@ -86,7 +108,7 @@ func (chi *ComputationHandlerImpl) Write(writeCtx interface{}, bat *batch.Batch)
 	return nil
 }
 
-func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool) *ComputationHandlerImpl {
+func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tch *TupleCodecHandler, serial ValueSerializer, ih index.IndexHandler, epoch *EpochHandler, parallelReader bool, multiNode bool) *ComputationHandlerImpl {
 	return &ComputationHandlerImpl{
 		dh:             dh,
 		kv:             kv,
@@ -95,6 +117,7 @@ func NewComputationHandlerImpl(dh descriptor.DescriptorHandler, kv KVHandler, tc
 		indexHandler:   ih,
 		epochHandler:   epoch,
 		parallelReader: parallelReader,
+		multiNode:      multiNode,
 	}
 }
 
@@ -404,10 +427,24 @@ func (chi *ComputationHandlerImpl) RemoveDeletedTable(epoch uint64) (int, error)
 
 func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descriptor.RelationDesc) (engine.Nodes, interface{}, error) {
 	if chi.kv.GetKVType() == KV_MEMORY {
+		dumpShards := &CubeShards{
+			Shards: []metapb.Shard{
+				{
+					ID: 0,
+					Start: nil,
+					End: nil,
+				},
+			},
+		}
+		payload, err := json.Marshal(dumpShards)
+		if err != nil {
+			return nil, nil, err
+		}
 		var nds = []engine.Node{
 			{
 				Id:   "0",
 				Addr: "localhost:20000",
+				Data: payload,
 			},
 		}
 		return nds, &Shards{}, nil
@@ -429,10 +466,16 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 	}
 
 	var nodes engine.Nodes
-	for _, node := range shards.nodes {
+	for i, node := range shards.nodes {
+		logutil.Infof("xindex %d all_nodes %v", i, node)
+		nodeShards, err := json.Marshal(node.Shards)
+		if err != nil {
+			return nil, nil, err
+		}
 		nodes = append(nodes, engine.Node{
 			Id:   node.StoreIDbytes,
 			Addr: node.Addr,
+			Data: nodeShards, //put the shards info here
 		})
 	}
 
@@ -445,6 +488,10 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 
 func (chi *ComputationHandlerImpl) ParallelReader() bool {
 	return chi.parallelReader
+}
+
+func (chi *ComputationHandlerImpl) MultiNode() bool {
+	return chi.multiNode
 }
 
 type AttributeStateForWrite struct {
@@ -481,6 +528,7 @@ type WriteContext struct {
 	keys   []TupleKey
 	values []TupleValue
 	t0     time.Duration
+	colIndex	map[string]int
 }
 
 func (wc *WriteContext) resetWriteCache() {
@@ -595,6 +643,8 @@ type ReadContext struct {
 	ReadAttributeDescs []*descriptor.AttributeDesc
 
 	ParallelReader bool
+
+	MultiNode bool
 
 	//for test
 	ReadCount int

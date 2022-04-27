@@ -61,7 +61,10 @@ func (store *TxnStore) ToLogEntry(eType LogEntryType) LogEntry {
 	buf, _ := store.Marshal()
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
+	err := logEntry.Unmarshal(buf)
+	if err != nil {
+		panic(err)
+	}
 	return logEntry
 }
 

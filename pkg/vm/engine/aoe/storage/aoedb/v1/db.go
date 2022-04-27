@@ -62,7 +62,10 @@ func (d *DB) CreateDatabase(ctx *CreateDBCtx) (*metadata.Database, error) {
 	if index.Id.Size == 0 {
 		index.Id.Size = 1
 	}
-	d.Wal.SyncLog(index)
+	err = d.Wal.SyncLog(index)
+	if err != nil {
+		return nil, err
+	}
 	d.Wal.Checkpoint(index)
 
 	return database, err
@@ -200,18 +203,21 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 		// currently, only num/str bsi is supported for one column, if
 		// more kinds of indices are loaded for one column at the same
 		// time, need some refactor.
-		for _, segId := range tblData.SegmentIds() {
-			seg := tblData.StrongRefSegment(segId)
+		for _, segID := range tblData.SegmentIds() {
+			seg := tblData.StrongRefSegment(segID)
 			segMeta := seg.GetMeta()
 			segMeta.RLock()
 			if !segMeta.IsSortedLocked() {
-				for _, blkId := range seg.BlockIds() {
-					blk := seg.WeakRefBlock(blkId)
+				for _, blkID := range seg.BlockIds() {
+					blk := seg.WeakRefBlock(blkID)
 					// TODO(zzl): thread safe?
 					if blk != nil && blk.GetType() == base.PERSISTENT_BLK {
 						e := sched.NewFlushBlockIndexEvent(&sched.Context{}, blk)
 						e.Cols = cols
-						d.Scheduler.Schedule(e)
+						err := d.Scheduler.Schedule(e)
+						if err != nil {
+							return nil
+						}
 					}
 				}
 				seg.Unref()
@@ -221,7 +227,10 @@ func (d *DB) CreateIndex(ctx *CreateIndexCtx) error {
 			segMeta.RUnlock()
 			e := sched.NewFlushSegIndexEvent(&sched.Context{}, seg)
 			e.Cols = cols
-			d.Scheduler.Schedule(e)
+			err := d.Scheduler.Schedule(e)
+			if err != nil {
+				panic(err)
+			}
 			seg.Unref()
 		}
 	}
@@ -260,13 +269,13 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 	}
 
 	names := ctx.IndexNames
-	tblId := meta.Id
+	tblID := meta.Id
 	tblData, err := d.GetTableData(meta)
 	if err != nil {
 		return err
 	}
-	for _, segId := range tblData.SegmentIds() {
-		seg := tblData.StrongRefSegment(segId)
+	for _, segID := range tblData.SegmentIds() {
+		seg := tblData.StrongRefSegment(segID)
 		holder := seg.GetIndexHolder()
 		for _, info := range meta.GetIndexSchema().Indice {
 			if !util.ContainsString(names, info.Name) {
@@ -276,17 +285,17 @@ func (d *DB) DropIndex(ctx *DropIndexCtx) error {
 			for _, col := range cols {
 				if holder.HolderType() == base.SORTED_SEG {
 					currVersion := holder.FetchCurrentVersion(col, 0)
-					bn := common.MakeBitSlicedIndexFileName(currVersion, tblId, segId, col)
+					bn := common.MakeBitSlicedIndexFileName(currVersion, tblID, segID, col)
 					fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
 					holder.DropIndex(fullname)
 				} else if holder.HolderType() == base.UNSORTED_SEG {
-					for _, blkId := range seg.BlockIds() {
+					for _, blkID := range seg.BlockIds() {
 						// TODO(zzl): thread safe?
-						if seg.WeakRefBlock(blkId).GetType() != base.PERSISTENT_BLK {
+						if seg.WeakRefBlock(blkID).GetType() != base.PERSISTENT_BLK {
 							continue
 						}
-						currVersion := holder.FetchCurrentVersion(col, blkId)
-						bn := common.MakeBlockBitSlicedIndexFileName(currVersion, tblId, segId, blkId, col)
+						currVersion := holder.FetchCurrentVersion(col, blkID)
+						bn := common.MakeBlockBitSlicedIndexFileName(currVersion, tblID, segID, blkID, col)
 						fullname := filepath.Join(filepath.Join(d.Dir, "data"), bn)
 						holder.DropIndex(fullname)
 					}
@@ -386,7 +395,10 @@ func (d *DB) ExecSplitDatabase(ctx *ExecSplitCtx) error {
 	if err = splitter.Commit(); err != nil {
 		return err
 	}
-	splitter.ScheduleEvents(&d.Impl)
+	err = splitter.ScheduleEvents(&d.Impl)
+	if err != nil {
+		return err
+	}
 	d.ScheduleGCDatabase(database)
 	return err
 }

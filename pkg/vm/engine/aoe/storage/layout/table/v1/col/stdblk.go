@@ -67,11 +67,11 @@ func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 	}
 	cloned := &stdColumnBlock{
 		columnBlock: columnBlock{
-			typ:         host.GetType(),
-			colIdx:      blk.colIdx,
-			meta:        host.GetMeta(),
+			typ:    host.GetType(),
+			colIdx: blk.colIdx,
+			meta:   host.GetMeta(),
 			//indexHolder: host.GetIndexHolder(),
-			segFile:     host.GetSegmentFile(),
+			segFile: host.GetSegmentFile(),
 		},
 	}
 	cloned.Ref()

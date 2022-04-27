@@ -18,16 +18,16 @@ import (
 )
 
 var (
-	reverseChar    func(*types.Bytes, *types.Bytes) *types.Bytes
-	reverseVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
+	ReverseChar    func(*types.Bytes, *types.Bytes) *types.Bytes
+	ReverseVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
 )
 
 func init() {
-	reverseChar = Reverse
-	reverseVarChar = Reverse
+	ReverseChar = reverse
+	ReverseVarChar = reverse
 }
 
-func Reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
+func reverse(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
 	var retCursor uint32
 
 	for idx, offset := range xs.Offsets {

@@ -155,9 +155,9 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 
 	scanner := executor.NewKVBasedDataStorageScanner(ce.kv)
 
-	var keys [][]byte = nil
-	var values [][]byte = nil
-	var rep []byte = nil
+	var keys [][]byte
+	var values [][]byte
+	var rep []byte
 
 	options := []executor.ScanOption{
 		executor.WithScanStartKey(userReq.GetStart()),
@@ -173,19 +173,12 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 	}
 
 	needKey := userReq.GetNeedKey()
-	var lastKey []byte = nil
-	var copyValue []byte = nil
-	var err error = nil
-
-	nf := mallocedBuffers{}
-	defer func() {
-		//!!!NOTE return the buffer to pool
-		ce.malloc.freeMallocedBuffers(&nf)
-	}()
+	var lastKey []byte
+	var copyValue []byte
+	var err error
 
 	callback := func(key []byte, value []byte) error {
 		keyBuf := ce.malloc.malloc(len(key))
-		nf.collect(keyBuf)
 		lastKey = ce.copy(keyBuf, key)
 
 		if needKey {
@@ -193,7 +186,6 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		}
 
 		valueBuf := ce.malloc.malloc(len(value))
-		nf.collect(valueBuf)
 		copyValue = ce.copy(valueBuf, value)
 
 		values = append(values, copyValue)
@@ -206,7 +198,7 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		return rep, nil
 	}
 
-	var nextKey []byte = nil
+	var nextKey []byte
 
 	if !completed {
 		switch policy {
@@ -225,19 +217,26 @@ func (ce *kvExecutor) tpeScan(readCtx storage.ReadContext, shard metapb.Shard, r
 		return rep, nil
 	}
 
-	//TODO: to remove the check after the adjust function been fixed
+	//!!!Note: Reserve the logic here for the regression test even after the adjust function been fixed.
 	//the check ensure the endKey is not nil.
-	r := 0
-	for _, key := range keys {
-		if bytes.Compare(key, userReq.GetEnd()) >= 0 {
-			break
-		}
-		r++
-	}
+	//r := 0
+	//for _, key := range keys {
+	//	if bytes.Compare(key, userReq.GetEnd()) >= 0 {
+	//		break
+	//	}
+	//	r++
+	//}
+	//
+	//tsr := pb.TpeScanResponse{
+	//	Keys:                keys[:r],
+	//	Values:              values[:r],
+	//	CompleteInAllShards: completed,
+	//	NextScanKey:         nextKey,
+	//}
 
 	tsr := pb.TpeScanResponse{
-		Keys:                keys[:r],
-		Values:              values[:r],
+		Keys:                keys,
+		Values:              values,
 		CompleteInAllShards: completed,
 		NextScanKey:         nextKey,
 	}
@@ -325,22 +324,15 @@ func (ce *kvExecutor) tpePrefixScan(readCtx storage.ReadContext, shard metapb.Sh
 	var values [][]byte
 	var copyValue []byte
 	needKeyOnly := userReq.GetNeedKeyOnly()
-	nf := mallocedBuffers{}
-	defer func() {
-		//!!!NOTE return buffer to the pool
-		ce.malloc.freeMallocedBuffers(&nf)
-	}()
 
 	callback := func(key []byte, value []byte) error {
 		keyBuf := ce.malloc.malloc(len(key))
-		nf.collect(keyBuf)
 		lastKey = ce.copy(keyBuf, key)
 
 		keys = append(keys, lastKey)
 
 		if !needKeyOnly {
 			valueBuf := ce.malloc.malloc(len(value))
-			nf.collect(valueBuf)
 			copyValue = ce.copy(valueBuf, value)
 
 			values = append(values, copyValue)
@@ -574,17 +566,17 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 	for j := range requests {
 		switch requests[j].CmdType {
 		case uint64(pb.Set):
-			writtenBytes, rep := ce.set(wb, requests[j])
+			writtenByte, rep := ce.set(wb, requests[j])
 			ctx.AppendResponse(rep)
-			writtenBytes += writtenBytes
+			writtenBytes += writtenByte
 		case uint64(pb.TpeSetBatch):
 			bytes, rep := ce.tpeSetBatch(ctx, wb, requests[j])
 			ctx.AppendResponse(rep)
 			writtenBytes += bytes
 		case uint64(pb.Del):
-			writtenBytes, rep := ce.del(wb, requests[j])
+			writtenByte, rep := ce.del(wb, requests[j])
 			ctx.AppendResponse(rep)
-			writtenBytes += writtenBytes
+			writtenBytes += writtenByte
 		case uint64(pb.TpeDeleteBatch):
 			bytes, rep := ce.tpeDeleteBatch(ctx, wb, requests[j])
 			ctx.AppendResponse(rep)

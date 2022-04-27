@@ -56,12 +56,12 @@ func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.From = append(def.From, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -69,22 +69,22 @@ func DecodeRangePartition(data []byte) (engine.RangePartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.To = append(def.To, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
 	}
 	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
+		sub, remaining, err := DecodePartition(data)
 		if err != nil {
 			return def, nil, err
 		}
-		data = remaing
+		data = remaining
 		def.Subpartition = sub
 	}
 	return def, data, nil
@@ -219,22 +219,22 @@ func DecodeListPartition(data []byte) (engine.ListPartition, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			e, remaing, err := DecodeExtend(data)
+			e, remaining, err := DecodeExtend(data)
 			if err != nil {
 				return def, nil, err
 			}
 			def.Extends = append(def.Extends, e)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
 	}
 	if typ == ListWithSub {
-		sub, remaing, err := DecodePartition(data)
+		sub, remaining, err := DecodePartition(data)
 		if err != nil {
 			return def, nil, err
 		}
-		data = remaing
+		data = remaining
 		def.Subpartition = sub
 	}
 	return def, data, nil
@@ -284,12 +284,12 @@ func DecodePartition(data []byte) (*engine.PartitionByDef, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			ldef, remaing, err := DecodeListPartition(data)
+			ldef, remaining, err := DecodeListPartition(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			def.List = append(def.List, ldef)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -297,12 +297,12 @@ func DecodePartition(data []byte) (*engine.PartitionByDef, []byte, error) {
 	if n := encoding.DecodeUint32(data[:4]); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			rdef, remaing, err := DecodeRangePartition(data)
+			rdef, remaining, err := DecodeRangePartition(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			def.Range = append(def.Range, rdef)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -351,12 +351,12 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	if n := encoding.DecodeUint32(data); n > 0 {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
-			vec, remaing, err := DecodeVector(data)
+			vec, remaining, err := DecodeVector(data)
 			if err != nil {
 				return nil, nil, err
 			}
 			bat.Vecs = append(bat.Vecs, vec)
-			data = remaing
+			data = remaining
 		}
 	} else {
 		data = data[4:]
@@ -580,6 +580,34 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		vs := v.Col.([]types.Datetime)
 		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
 		buf.Write(encoding.EncodeDatetimeSlice(vs))
+	case types.T_decimal64:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]types.Decimal64)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeDecimal64Slice(vs))
+	case types.T_decimal128:
+		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		vs := v.Col.([]types.Decimal128)
+		buf.Write(encoding.EncodeUint32(uint32(len(vs))))
+		buf.Write(encoding.EncodeDecimal128Slice(vs))
 	default:
 		return fmt.Errorf("unsupport vector type '%s'", v.Typ)
 	}
@@ -912,6 +940,50 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeDatetimeSlice(data[:n*8])
 			data = data[n*8:]
+		} else {
+			data = data[4:]
+		}
+		return v, data, nil
+	case types.T_decimal64:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeDecimal64Slice(data[:n*8])
+			data = data[n*8:]
+		} else {
+			data = data[4:]
+		}
+		return v, data, nil
+	case types.T_decimal128:
+		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Col = encoding.DecodeDecimal128Slice(data[:n*16])
+			data = data[n*16:]
 		} else {
 			data = data[4:]
 		}

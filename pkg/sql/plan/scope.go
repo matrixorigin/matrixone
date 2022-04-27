@@ -36,7 +36,7 @@ func (s *Scope) Rows() int64 {
 	return rows
 }
 
-func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
+func (s *Scope) Prune(attrsMap map[string]uint64, fvars []string) {
 	switch op := s.Op.(type) {
 	case *Join:
 		for k, _ := range attrsMap {
@@ -56,25 +56,25 @@ func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 		}
 		ms := s.classifying()
 		for i := 0; i < len(s.Children); i++ {
-			s.Children[i].prune(ms[i], fvars)
+			s.Children[i].Prune(ms[i], fvars)
 		}
 	case *Order:
 		for _, f := range op.Fs {
 			attrsMap[f.Attr]++
 		}
-		s.Children[0].prune(attrsMap, fvars)
+		s.Children[0].Prune(attrsMap, fvars)
 	case *Dedup:
-		s.Children[0].prune(attrsMap, fvars)
+		s.Children[0].Prune(attrsMap, fvars)
 	case *Limit:
-		s.Children[0].prune(attrsMap, fvars)
+		s.Children[0].Prune(attrsMap, fvars)
 	case *Offset:
-		s.Children[0].prune(attrsMap, fvars)
+		s.Children[0].Prune(attrsMap, fvars)
 	case *Restrict:
 		attrs := op.E.Attributes()
 		for _, attr := range attrs {
 			attrsMap[attr]++
 		}
-		s.Children[0].prune(attrsMap, fvars)
+		s.Children[0].Prune(attrsMap, fvars)
 	case *Projection:
 		for i := 0; i < len(op.As); i++ {
 			if ref, ok := attrsMap[op.As[i]]; ok {
@@ -95,7 +95,7 @@ func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 				mp[attr]++
 			}
 		}
-		s.Children[0].prune(mp, fvars)
+		s.Children[0].Prune(mp, fvars)
 	case *ResultProjection:
 		for i := 0; i < len(op.As); i++ {
 			if ref, ok := attrsMap[op.As[i]]; ok {
@@ -116,7 +116,7 @@ func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 				mp[attr]++
 			}
 		}
-		s.Children[0].prune(mp, fvars)
+		s.Children[0].Prune(mp, fvars)
 	case *Relation:
 		{ // fill boundvars
 			if len(fvars) > 0 || len(op.BoundVars) > 0 {
@@ -252,12 +252,12 @@ func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 				mp[attr]++
 			}
 		}
-		s.Children[0].prune(mp, nil)
+		s.Children[0].Prune(mp, nil)
 	case *Untransform:
 		for _, fvar := range op.FreeVars {
 			attrsMap[fvar]++
 		}
-		s.Children[0].prune(attrsMap, op.FreeVars)
+		s.Children[0].Prune(attrsMap, op.FreeVars)
 	case *Rename:
 		for i := 0; i < len(op.As); i++ {
 			if ref, ok := attrsMap[op.As[i]]; ok {
@@ -278,7 +278,7 @@ func (s *Scope) prune(attrsMap map[string]uint64, fvars []string) {
 				mp[attr]++
 			}
 		}
-		s.Children[0].prune(mp, fvars)
+		s.Children[0].Prune(mp, fvars)
 	}
 }
 
@@ -466,7 +466,7 @@ func (s *Scope) registerRelations(qry *Query) {
 		s.Children[0].registerRelations(qry)
 	case *Rename:
 		if _, ok := s.Children[0].Op.(*Relation); ok {
-			qry.RenameRels[s.Name] = s.Children[0]
+			qry.RenameRels[s.Name] = s
 		} else {
 			s.Children[0].registerRelations(qry)
 		}

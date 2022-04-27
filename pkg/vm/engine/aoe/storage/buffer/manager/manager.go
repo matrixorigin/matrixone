@@ -16,12 +16,14 @@ package manager
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
+
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -164,12 +166,18 @@ func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	// log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
 		if node_id >= TRANSIENT_START_ID {
-			h.Clean()
+			err := h.Clean()
+			if err != nil {
+				panic(err)
+			}
 			return
 		} else {
 			mgr.Lock()
 			delete(mgr.Nodes, node_id)
-			h.Clean()
+			err := h.Clean()
+			if err != nil && !strings.Contains(err.Error(), "no such file or directory") {
+				panic(err)
+			}
 			mgr.Unlock()
 			return
 		}
@@ -242,7 +250,10 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 			return nil
 		}
 		buf := node.NewNodeBuffer(handle.GetID(), n)
-		handle.SetBuffer(buf)
+		err := handle.SetBuffer(buf)
+		if err != nil {
+			panic(err)
+		}
 		if err := handle.CommitLoad(); err != nil {
 			handle.RollbackLoad()
 			panic(err.Error())

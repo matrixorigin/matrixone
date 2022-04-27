@@ -187,7 +187,7 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
 	attrs := helper.Attribute(*mockTbl)
-	var typs []types.Type
+	typs := make([]types.Type, 0)
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
@@ -243,17 +243,19 @@ func TestAOEEngine(t *testing.T) {
 	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
-	readers := tb.NewReader(6)
+	readers := tb.NewReader(6, nil, nil)
 	for _, reader := range readers {
-		fileter := reader.NewSparseFilter()
-		reader, _ = fileter.Eq("mock_0", int32(0))
+		/*
+			fileter := reader.NewSparseFilter()
+			reader, _ = fileter.Eq("mock_0", int32(0))
+		*/
 		bat, err := reader.Read([]uint64{uint64(1)}, []string{"mock_0"})
 		if bat != nil {
 			fmt.Printf("bat is %v", bat.Vecs[0].Col.([]int32)[0])
 		}
 		require.NoError(t, err)
 	}
-	num := tb.NewReader(15)
+	num := tb.NewReader(15, nil, nil)
 	require.Equal(t, 15, len(num))
 	tb.Close()
 
@@ -330,14 +332,14 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	//Wait shard state change
 	logutil.Infof("ddl test begin")
 
-	tbs, err := c[0].ListTables(99)
+	_, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
 	dbid, err := c[0].CreateDatabase(0, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c[0].ListTables(dbid)
+	tbs, err := c[0].ListTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 

@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/startsWith"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/startswith"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,13 +48,13 @@ func fn(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vect
 	nulls.Or(lv.Nsp, rv.Nsp, resultVector.Nsp)
 
 	if lc && rc {
-		vector.SetCol(resultVector, startsWith.StartsWithAllConst(lvs, rvs, results))
+		vector.SetCol(resultVector, startswith.StartsWithAllConst(lvs, rvs, results))
 	} else if !lc && rc {
-		vector.SetCol(resultVector, startsWith.StartsWithRightConst(lvs, rvs, results))
+		vector.SetCol(resultVector, startswith.StartsWithRightConst(lvs, rvs, results))
 	} else if lc && !rc {
-		vector.SetCol(resultVector, startsWith.StartsWithLeftConst(lvs, rvs, results))
+		vector.SetCol(resultVector, startswith.StartsWithLeftConst(lvs, rvs, results))
 	} else {
-		vector.SetCol(resultVector, startsWith.StartsWith(lvs, rvs, results))
+		vector.SetCol(resultVector, startswith.StartsWith(lvs, rvs, results))
 	}
 
 	return resultVector, nil

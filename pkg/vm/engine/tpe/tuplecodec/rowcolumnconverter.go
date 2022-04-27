@@ -546,6 +546,7 @@ func (tbi *RowColumnConverterImpl) FillBatchFromDecodedIndexKey(
 				vBytes.Data = append(vBytes.Data, d...)
 				vBytes.Lengths[rowIdx] = uint32(len(d))
 			}
+			vec.Data = vBytes.Data
 		case types.T_date:
 			cols := vec.Col.([]types.Date)
 			if isNullOrEmpty {
@@ -624,6 +625,17 @@ func (ba *BatchAdapter) ForEachTuple(callbackCtx interface{},
 	return nil
 }
 
+func InitColIndex(indexWriteCtx *WriteContext, bat *batch.Batch) {
+	indexWriteCtx.colIndex = map[string]int{}
+	for _, attr := range bat.Attrs {
+		for j, attr2 := range indexWriteCtx.TableDesc.Attributes {
+			if attr == attr2.Name {
+				indexWriteCtx.colIndex[attr] = j
+			}
+		}
+	}
+}
+
 func GetRow(writeCtx interface{}, bat *batch.Batch, row []interface{}, j int) error {
 	indexWriteCtx, ok := writeCtx.(*WriteContext)
 	if !ok {
@@ -633,20 +645,17 @@ func GetRow(writeCtx interface{}, bat *batch.Batch, row []interface{}, j int) er
 	if len(bat.Sels) != 0 {
 		rowIndex = bat.Sels[j]
 	}
-
-	offset := 0
-	if len(bat.Zs) == 2 && bat.Zs[0] == -1 && bat.Zs[1] == 1 {
-		offset = 0
-	} else if len(indexWriteCtx.TableDesc.Attributes) > 0 && indexWriteCtx.TableDesc.Attributes[0].Is_hidden {
-		offset = 1
+	if indexWriteCtx.colIndex == nil {
+		InitColIndex(indexWriteCtx, bat)
 	}
+
 	//get the row
 	for i, vec := range bat.Vecs { //col index
-		if vec.Typ.Oid != indexWriteCtx.TableDesc.Attributes[i+offset].TypesType.Oid {
+		if vec.Typ.Oid != indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid {
 			logutil.Errorf("the input dataType is not consistent, the defined datatype is %d, the actual input dataType is %d\n",
-				indexWriteCtx.TableDesc.Attributes[i+offset].TypesType.Oid, vec.Typ.Oid)
+							indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
 			return fmt.Errorf("the input dataType is not consistent, the defined datatype is %d, the actual input dataType is %d\n",
-				indexWriteCtx.TableDesc.Attributes[i+offset].TypesType.Oid, vec.Typ.Oid)
+							indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
 		}
 		switch vec.Typ.Oid { //get col
 		case types.T_int8:

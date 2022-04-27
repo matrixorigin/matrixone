@@ -16,12 +16,15 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb/v1"
+
 	//"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type localRoRelation struct {
@@ -44,7 +47,7 @@ func (r *localRoRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
-func (r *localRoRelation) NewReader(i int) []engine.Reader {
+func (r *localRoRelation) NewReader(i int, _ extend.Extend, _ []byte) []engine.Reader {
 	panic("implement me")
 }
 
@@ -74,13 +77,17 @@ func (r *localRoRelation) Close() {
 	r.impl.Close()
 }
 
+func (r *localRoRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
+}
+
 func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }
-func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error {
 	panic("not supported")
 }
-func (r *localRoRelation) DropIndex(epoch uint64, name string) error{
+func (r *localRoRelation) DropIndex(epoch uint64, name string) error {
 	panic("not supported")
 }
 func (r *localRoRelation) Segment(segInfo aoe.Segment, proc *process.Process) aoe.Segment {

@@ -27,6 +27,8 @@ func TestPlusOperator(t *testing.T) {
 		{sql: "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
 		{sql: "create table uus2 (u11 tinyint unsigned, u12 tinyint unsigned, u21 smallint unsigned, u22 smallint unsigned, u31 int unsigned, u32 int unsigned, " +
 			"u41 bigint unsigned, u42 bigint unsigned);"},
+		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
+		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
 
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into iis2 values (1, 1, 22, 22, 333, 333, 4444, 4444);"},
@@ -34,6 +36,8 @@ func TestPlusOperator(t *testing.T) {
 		{sql: "insert into ffs2 values (22.2, 22.2, 222.222, 222.222), (null, null, null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into uus2 values (1, 1, 22, 22, 33, 33, 444, 444);"},
+		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
 		// table iis:
 		// i1,	i2, i3, i4
 		// 1,	11, 111, 1111
@@ -139,6 +143,16 @@ func TestPlusOperator(t *testing.T) {
 			attr: []string{"f11 + f12", "f21 + f22", "f11", "f21"},
 			data: [][]string{[]string{"44.400002", "444.444000", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
 		}},
+		{sql: "select i1 + d1, i2 + d1, i3 + d1, i4 + d1, d1 + 1, d1 + 12.34, d1 + d1 from int_decimal;", res: executeResult{
+			null: false,
+			attr: []string{"i1 + d1", "i2 + d1", "i3 + d1", "i4 + d1", "d1 + 1", "d1 + 12.34", "d1 + d1"},
+			data: [][]string{{"{33433300 0}", "{33433300 0}", "{35533300 0}", "{35533300 0}", "{33433300 0}", "{34567300 0}", "66666600"}},
+		}},
+		{sql: "select i1 + d1, i2 + d1, i3 + d1, i4 + d1, d1 + 1, d1 + 12.34, d1 + d1 from int_decimal1;", res: executeResult{
+			null: false,
+			attr: []string{"i1 + d1", "i2 + d1", "i3 + d1", "i4 + d1", "d1 + 1", "d1 + 12.34", "d1 + d1"},
+			data: [][]string{{"{33433300 0}", "{33433300 0}", "{35533300 0}", "{35533300 0}", "{33433300 0}", "{34567300 0}", "{66666600 0}"}},
+		}},
 	}
 	test(t, testCases)
 }
@@ -155,6 +169,8 @@ func TestMinusOperator(t *testing.T) {
 		{sql: "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
 		{sql: "create table uus2 (u11 tinyint unsigned, u12 tinyint unsigned, u21 smallint unsigned, u22 smallint unsigned, u31 int unsigned, u32 int unsigned, " +
 			"u41 bigint unsigned, u42 bigint unsigned);"},
+		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
+		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
 
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into iis2 values (1, 1, 22, 22, 333, 333, 4444, 4444);"},
@@ -162,6 +178,8 @@ func TestMinusOperator(t *testing.T) {
 		{sql: "insert into ffs2 values (22.2, 22.2, 222.222, 222.222), (null, null, null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into uus2 values (1, 1, 22, 22, 33, 33, 444, 444);"},
+		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
 		// Test -
 		{sql: "select i1 - i1, i1 - i2, i1 - i3, i1 - i4, i1 - 2, 3 - i1 from iis;", res: executeResult{
 			null: false,
@@ -237,6 +255,16 @@ func TestMinusOperator(t *testing.T) {
 			attr: []string{"u11 - u12", "u21 - u22", "u31 - u32", "u41 - u42", "u11", "u21", "u31", "u41"},
 			data: [][]string{[]string{"0", "0", "0", "0", "1", "22", "33", "444"}},
 		}},
+		{sql: "select i1 - d1, i2 - d1, i3 - d1, i4 - d1, d1 - 1, d1 - 12.34, d1 - d1 from int_decimal;", res: executeResult{
+			null: false,
+			attr: []string{"i1 - d1", "i2 - d1", "i3 - d1", "i4 - d1", "d1 - 1", "d1 - 12.34", "d1 - d1"},
+			data: [][]string{{"{-33233300 -1}", "{-33233300 -1}", "{-31133300 -1}", "{-31133300 -1}", "{33233300 0}", "{32099300 0}", "0"}},
+		}},
+		{sql: "select i1 - d1, i2 - d1, i3 - d1, i4 - d1, d1 - 1, d1 - 12.34, d1 - d1 from int_decimal1;", res: executeResult{
+			null: false,
+			attr: []string{"i1 - d1", "i2 - d1", "i3 - d1", "i4 - d1", "d1 - 1", "d1 - 12.34", "d1 - d1"},
+			data: [][]string{{"{-33233300 -1}", "{-33233300 -1}", "{-31133300 -1}", "{-31133300 -1}", "{33233300 0}", "{32099300 0}", "{0 0}"}},
+		}},
 	}
 	test(t, testCases)
 }
@@ -252,6 +280,8 @@ func TestMultiOperator(t *testing.T) {
 		{sql: "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
 		{sql: "create table uus2 (u11 tinyint unsigned, u12 tinyint unsigned, u21 smallint unsigned, u22 smallint unsigned, u31 int unsigned, u32 int unsigned, " +
 			"u41 bigint unsigned, u42 bigint unsigned);"},
+		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
+		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
 
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into iis2 values (1, 1, 22, 22, 333, 333, 4444, 4444);"},
@@ -259,6 +289,8 @@ func TestMultiOperator(t *testing.T) {
 		{sql: "insert into ffs2 values (22.2, 22.2, 222.222, 222.222), (null, null, null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into uus2 values (1, 1, 22, 22, 33, 33, 444, 444);"},
+		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
 
 		// Test *
 		{sql: "select i1 * i1, i1 * i2, i1 * i3, i1 * i4, i1 * 2, 3 * i1 from iis;", res: executeResult{
@@ -325,6 +357,16 @@ func TestMultiOperator(t *testing.T) {
 			null: false,
 			data: [][]string{{"1", "484", "1089", "197136", "1", "22", "33", "444"}},
 		}},
+		{sql: "select i1 * d1, i2 * d1, i3 * d1, i4 * d1, d1 * 1, d1 * 12.34, d1 * d1 from int_decimal;", res: executeResult{
+			null: false,
+			attr: []string{"i1 * d1", "i2 * d1", "i3 * d1", "i4 * d1", "d1 * 1", "d1 * 12.34", "d1 * d1"},
+			data: [][]string{{"{33333300 0}", "{33333300 0}", "{733332600 0}", "{733332600 0}", "{33333300 0}", "{41133292200 0}", "{1111108888890000 0}"}},
+		}},
+		{sql: "select i1 * d1, i2 * d1, i3 * d1, i4 * d1, d1 * 1, d1 * 12.34, d1 * d1 from int_decimal1;", res: executeResult{
+			null: false,
+			attr: []string{"i1 * d1", "i2 * d1", "i3 * d1", "i4 * d1", "d1 * 1", "d1 * 12.34", "d1 * d1"},
+			data: [][]string{{"{33333300 0}", "{33333300 0}", "{733332600 0}", "{733332600 0}", "{33333300 0}", "{41133292200 0}", "{1111108888890000 0}"}},
+		}},
 	}
 	test(t, testCases)
 }
@@ -340,6 +382,8 @@ func TestDivOperator(t *testing.T) {
 		{sql: "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
 		{sql: "create table uus2 (u11 tinyint unsigned, u12 tinyint unsigned, u21 smallint unsigned, u22 smallint unsigned, u31 int unsigned, u32 int unsigned, " +
 			"u41 bigint unsigned, u42 bigint unsigned);"},
+		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
+		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
 
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into iis2 values (1, 1, 22, 22, 333, 333, 4444, 4444);"},
@@ -347,6 +391,8 @@ func TestDivOperator(t *testing.T) {
 		{sql: "insert into ffs2 values (22.2, 22.2, 222.222, 222.222), (null, null, null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into uus2 values (1, 1, 22, 22, 33, 33, 444, 444);"},
+		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
 
 		// Test `/` and `div`
 		{sql: "select i1 / i1, i1 / i2, i1 / i3, i1 / i4, i1 / 2, 3 / i1 from iis;", res: executeResult{
@@ -473,6 +519,16 @@ func TestDivOperator(t *testing.T) {
 		{sql: "select f11 div f12, f21 div f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
 			data: [][]string{[]string{"1", "1", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+		}},
+		{sql: "select i1 / d1, i2 / d1, i3 / d1, i4 / d1, d1 / 1, d1 / 12.34, d1 / d1 from int_decimal;", res: executeResult{
+			null: false,
+			attr: []string{"i1 / d1", "i2 / d1", "i3 / d1", "i4 / d1", "d1 / 1", "d1 / 12.34", "d1 / d1"},
+			data: [][]string{[]string{"{0 0}", "{0 0}", "{0 0}", "{0 0}", "{33333300 0}", "{2701239 0}", "{100000 0}"}},
+		}},
+		{sql: "select i1 / d1, i2 / d1, i3 / d1, i4 / d1, d1 / 1, d1 / 12.34, d1 / d1 from int_decimal1;", res: executeResult{
+			null: false,
+			attr: []string{"i1 / d1", "i2 / d1", "i3 / d1", "i4 / d1", "d1 / 1", "d1 / 12.34", "d1 / d1"},
+			data: [][]string{{"{0 0}", "{0 0}", "{0 0}", "{0 0}", "{33333300 0}", "{2701239 0}", "{100000 0}"}},
 		}},
 	}
 	test(t, testCases)
@@ -976,11 +1032,14 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "create table ffs (f1 float, f2 double);"},
 		{sql: "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
 		{sql: "create table ccs (c1 char(10), c2 varchar(20));"},
+		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
+		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into ffs values (22.2, 222.222), (null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into ccs values ('kpi', 'b'), ('c', 'e'), (null, null);"},
-
+		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
 		// Test =, >, <, >=, <=, !=
 		{sql: "select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;", res: executeResult{
 			data: [][]string{
@@ -1509,6 +1568,26 @@ func TestComparisonOperator(t *testing.T) {
 			null: false,
 			data: [][]string{{"c", "e"}},
 		}},
+		{sql: "select * from int_decimal where d1 = d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "33333300"}},
+		}},
+		{sql: "select * from int_decimal where i1 < d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "33333300"}},
+		}},
+		{sql: "select * from int_decimal where i1 <= d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "33333300"}},
+		}},
+		{sql: "select * from int_decimal where i1 > d1;", res: executeResult{}},
+		{sql: "select * from int_decimal1 where d1 = d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "{33333300 0}"}},
+		}},
+		{sql: "select * from int_decimal1 where i1 < d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "{33333300 0}"}},
+		}},
+		{sql: "select * from int_decimal1 where i1 <= d1;", res: executeResult{
+			data: [][]string{{"1", "1", "22", "22", "{33333300 0}"}},
+		}},
+		{sql: "select * from int_decimal1 where i1 > d1;", res: executeResult{}},
 	}
 	test(t, testCases)
 }

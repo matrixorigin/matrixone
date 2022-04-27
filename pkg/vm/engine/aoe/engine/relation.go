@@ -20,6 +20,11 @@ import (
 	"errors"
 	"math/rand"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -150,7 +155,7 @@ func (r *relation) update() error {
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
-				aoedbName.IdToNameFactory.Encode(
+				aoedbName.IDToNameFactory.Encode(
 					tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
@@ -227,8 +232,16 @@ func (r *relation) Size(attr string) int64 {
 	return totalSize
 }
 
+func (r *relation) Cardinality(_ string) int64 {
+	return 0
+}
+
 func (r *relation) Nodes() engine.Nodes {
 	return r.nodes
+}
+
+func (r *relation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	return nil, false
 }
 
 func (r *relation) TableDefs() []engine.TableDef {
@@ -244,7 +257,8 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) NewReader(num int) []engine.Reader {
+func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
+	fcs := getFilterContext(e)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++
@@ -276,7 +290,7 @@ func (r *relation) NewReader(num int) []engine.Reader {
 	readStore.SetBlocks(blocks)
 	for i := 0; i < num; i++ {
 		workerid := i / int(r.cfg.QueueMaxReaderCount)
-		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid), filter: make([]filterContext, 0)}
+		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid), filter: fcs}
 	}
 	for i := 0; i < readStore.iodepth; i++ {
 		readStore.rhs[i] = make(chan *batData,
@@ -285,4 +299,538 @@ func (r *relation) NewReader(num int) []engine.Reader {
 			int(r.cfg.QueueMaxReaderCount)*int(r.cfg.ReaderBufferCount))
 	}
 	return readStore.readers
+}
+
+// only filter conditions similar to the following are supported:
+//  	. a > 1
+// 		. a > 1 and b < 2
+func getFilterContext(e extend.Extend) []filterContext {
+	var fcs []filterContext
+
+	es := extend.AndExtends(e, nil)
+	if len(es) == 0 {
+		return nil
+	}
+	for i := range es {
+		fc := new(filterContext)
+		fc.extent = make([]filterExtent, 0)
+		fc = getFilterContextFromExtend(fc, es[i])
+		if fc != nil && len(fc.extent) > 0 {
+			fcs = append(fcs, *fc)
+		}
+	}
+	return fcs
+}
+
+func getFilterContextFromExtend(f *filterContext, e extend.Extend) *filterContext {
+	v, ok := e.(*extend.BinaryExtend)
+	if !ok {
+		return nil
+	}
+	if v.Op == overload.Or {
+		getFilterContextFromExtend(f, v.Left)
+		getFilterContextFromExtend(f, v.Right)
+		return f
+	}
+
+	switch v.Op {
+	case overload.EQ:
+		f = newFilterContextEq(v, f)
+	case overload.NE:
+		f = newFilterContextNe(v, f)
+	case overload.LT:
+		f = newFilterContextLt(v, f)
+	case overload.LE:
+		f = newFilterContextLe(v, f)
+	case overload.GT:
+		f = newFilterContextGt(v, f)
+	case overload.GE:
+		f = newFilterContextGe(v, f)
+	}
+	return f
+}
+
+func newFilterContextEq(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterEq,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterEq,
+				attr:       attr.Name,
+			})
+		}
+	}
+
+	return fcs
+}
+
+func newFilterContextNe(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterNe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterNe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func newFilterContextLt(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterLt,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterLt,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func newFilterContextLe(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterLe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterLe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func newFilterContextGt(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterGt,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterGt,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func newFilterContextGe(e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterGe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     cast(val.V, attr.Type),
+				param2:     nil,
+				filterType: FileterGe,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func cast(vec *vector.Vector, typ types.T) interface{} {
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		switch typ {
+		case types.T_int8:
+			return vec.Col.([]int8)[0]
+		case types.T_int16:
+			return int16(vec.Col.([]int8)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]int8)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]int8)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]int8)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]int8)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]int8)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]int8)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]int8)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]int8)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]int8)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]int8)[0])
+		}
+	case types.T_int16:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]int16)[0])
+		case types.T_int16:
+			return vec.Col.([]int16)[0]
+		case types.T_int32:
+			return int32(vec.Col.([]int16)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]int16)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]int16)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]int16)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]int16)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]int16)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]int16)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]int16)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]int16)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]int16)[0])
+		}
+	case types.T_int32:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]int32)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]int32)[0])
+		case types.T_int32:
+			return vec.Col.([]int32)[0]
+		case types.T_int64:
+			return int64(vec.Col.([]int32)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]int32)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]int32)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]int32)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]int32)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]int32)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]int32)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]int32)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]int32)[0])
+		}
+	case types.T_int64:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]int64)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]int64)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]int64)[0])
+		case types.T_int64:
+			return vec.Col.([]int64)[0]
+		case types.T_uint8:
+			return uint8(vec.Col.([]int64)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]int64)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]int64)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]int64)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]int64)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]int64)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]int64)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]int64)[0])
+		}
+	case types.T_uint8:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]uint8)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]uint8)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]uint8)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]uint8)[0])
+		case types.T_uint8:
+			return vec.Col.([]uint8)[0]
+		case types.T_uint16:
+			return uint16(vec.Col.([]uint8)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]uint8)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]uint8)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]uint8)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]uint8)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]uint8)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]uint8)[0])
+		}
+	case types.T_uint16:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]uint16)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]uint16)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]uint16)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]uint16)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]uint16)[0])
+		case types.T_uint16:
+			return vec.Col.([]uint16)[0]
+		case types.T_uint32:
+			return uint32(vec.Col.([]uint16)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]uint16)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]uint16)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]uint16)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]uint16)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]uint16)[0])
+		}
+	case types.T_uint32:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]uint32)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]uint32)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]uint32)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]uint32)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]uint32)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]uint32)[0])
+		case types.T_uint32:
+			return vec.Col.([]uint32)[0]
+		case types.T_uint64:
+			return uint64(vec.Col.([]uint32)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]uint32)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]uint32)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]uint32)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]uint32)[0])
+		}
+	case types.T_uint64:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]uint64)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]uint64)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]uint64)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]uint64)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]uint64)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]uint64)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]uint64)[0])
+		case types.T_uint64:
+			return vec.Col.([]uint64)[0]
+		case types.T_float32:
+			return float32(vec.Col.([]uint64)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]uint64)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]uint64)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]uint64)[0])
+		}
+	case types.T_float32:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]float32)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]float32)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]float32)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]float32)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]float32)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]float32)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]float32)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]float32)[0])
+		case types.T_float32:
+			return vec.Col.([]float32)[0]
+		case types.T_float64:
+			return float64(vec.Col.([]float32)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]float32)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]float32)[0])
+		}
+	case types.T_float64:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]float64)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]float64)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]float64)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]float64)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]float64)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]float64)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]float64)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]float64)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]float64)[0])
+		case types.T_float64:
+			return vec.Col.([]float64)[0]
+		case types.T_date:
+			return types.Date(vec.Col.([]float64)[0])
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]float64)[0])
+		}
+	case types.T_date:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]types.Date)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]types.Date)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]types.Date)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]types.Date)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]types.Date)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]types.Date)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]types.Date)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]types.Date)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]types.Date)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]types.Date)[0])
+		case types.T_date:
+			return vec.Col.([]types.Date)[0]
+		case types.T_datetime:
+			return types.Datetime(vec.Col.([]types.Date)[0])
+		}
+	case types.T_datetime:
+		switch typ {
+		case types.T_int8:
+			return int8(vec.Col.([]types.Datetime)[0])
+		case types.T_int16:
+			return int16(vec.Col.([]types.Datetime)[0])
+		case types.T_int32:
+			return int32(vec.Col.([]types.Datetime)[0])
+		case types.T_int64:
+			return int64(vec.Col.([]types.Datetime)[0])
+		case types.T_uint8:
+			return uint8(vec.Col.([]types.Datetime)[0])
+		case types.T_uint16:
+			return uint16(vec.Col.([]types.Datetime)[0])
+		case types.T_uint32:
+			return uint32(vec.Col.([]types.Datetime)[0])
+		case types.T_uint64:
+			return uint64(vec.Col.([]types.Datetime)[0])
+		case types.T_float32:
+			return float32(vec.Col.([]types.Datetime)[0])
+		case types.T_float64:
+			return float64(vec.Col.([]types.Datetime)[0])
+		case types.T_date:
+			return types.Date(vec.Col.([]types.Datetime)[0])
+		case types.T_datetime:
+			return vec.Col.([]types.Datetime)[0]
+		}
+	case types.T_char, types.T_varchar:
+		switch typ {
+		case types.T_date:
+			v, _ := types.ParseDate(string(vec.Data))
+			return v
+		case types.T_datetime:
+			v, _ := types.ParseDatetime(string(vec.Data))
+			return v
+		}
+		return vec.Col.(*types.Bytes).Data
+	}
+	return nil
 }

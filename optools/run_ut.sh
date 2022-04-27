@@ -37,7 +37,7 @@ go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
-UT_TIMEOUT=5
+UT_TIMEOUT=30
 LOG="$G_TS-$TEST_TYPE.log"
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -125,14 +125,14 @@ $(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test")
 $(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$')
 
 # BUILD FAILED in UT:
-$(echo "${IS_BUILD_FAIL[@]}")
+echo "${IS_BUILD_FAIL[@]}"
 
 # Code Coverage Summary:
 $(go tool cover -func=$RAW_COVERAGE | egrep "^total:\s*\(statements\)" | awk '{print $1, $3}')
 
 EOF
     horiz_rule
-    cat $UT_COUNT
+    cat "$UT_COUNT"
     horiz_rule
     if (( $fail > 0 )) || (( $unknown > 0 )) || [[ -n "$IS_BUILD_FAIL" ]]; then
       logger "INF" "UNIT TESTING FAILED !!!"

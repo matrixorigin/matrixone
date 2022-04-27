@@ -144,7 +144,7 @@ type proxy struct {
 	safeId     uint64
 	lastSafeId uint64
 	indice     map[uint64]*commitEntry
-	idAlloctor *common.IdAlloctor
+	idAlloctor *common.IDAlloctor
 }
 
 func newProxy(id uint64, mgr *manager) *proxy {
@@ -157,7 +157,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		indice:   make(map[uint64]*commitEntry),
 	}
 	if mgr != nil && mgr.GetRole() == wal.HolderRole {
-		p.idAlloctor = new(common.IdAlloctor)
+		p.idAlloctor = new(common.IDAlloctor)
 	}
 	return p
 }
@@ -316,7 +316,10 @@ func (p *proxy) Checkpoint() {
 		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
 			panic(err)
 		}
-		logEntry.WaitDone()
+		err := logEntry.WaitDone()
+		if err != nil {
+			panic(err)
+		}
 		logEntry.Free()
 		p.lastSafeId = id
 	} else {

@@ -15,6 +15,7 @@
 package engine
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -28,6 +29,11 @@ type Nodes []Node
 type Node struct {
 	Id   string `json:"id"`
 	Addr string `json:"address"`
+	Data []byte `json:"payload"`
+}
+
+func (n Node) String() string {
+	return fmt.Sprintf("Id %v \n Addr %v \n Data len %d\n",n.Id,n.Addr,len(n.Data))
 }
 
 type Attribute struct {
@@ -35,7 +41,7 @@ type Attribute struct {
 	Alg     compress.T  // compression algorithm
 	Type    types.Type  // type of attribute
 	Default DefaultExpr // default value of this attribute.
-	Primary bool		// if true, it is primary key
+	Primary bool        // if true, it is primary key
 }
 
 type DefaultExpr struct {
@@ -138,23 +144,21 @@ type Relation interface {
 	ID() string
 
 	Nodes() Nodes
-	CreateIndex(epoch uint64, defs []TableDef) error
-	DropIndex(epoch uint64, name string) error
+
 	TableDefs() []TableDef
+	// true: primary key, false: hide key
+	GetPriKeyOrHideKey() ([]Attribute, bool)
 
 	Write(uint64, *batch.Batch) error
 
 	AddTableDef(uint64, TableDef) error
 	DelTableDef(uint64, TableDef) error
 
-	NewReader(int) []Reader // first argument is the number of reader
+	// first argument is the number of reader, second argument is the filter extend,  third parameter is the payload required by the engine
+	NewReader(int, extend.Extend, []byte) []Reader
 }
 
 type Reader interface {
-	NewFilter() Filter
-	NewSummarizer() Summarizer
-	NewSparseFilter() SparseFilter
-
 	Read([]uint64, []string) (*batch.Batch, error)
 }
 

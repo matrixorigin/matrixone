@@ -37,8 +37,6 @@ type Session struct {
 	GuestMmu *guest.Mmu
 	Mempool  *mempool.Mempool
 
-	sessionVars config.SystemVariables
-
 	Pu *config.ParameterUnit
 
 	ep *tree.ExportParam

@@ -313,7 +313,7 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy,
 		for _, attr := range qry.Result {
 			attrsMap[attr] = 1
 		}
-		qry.Scope.prune(attrsMap, nil)
+		qry.Scope.Prune(attrsMap, nil)
 		if isCAQ(false, qry.Scope) {
 			pushDownUntransform(qry.Scope, nil)
 			qry.Scope.pruneProjection(qry.Scope.getAggregations())

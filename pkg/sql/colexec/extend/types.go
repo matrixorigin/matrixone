@@ -28,6 +28,7 @@ type Extend interface {
 	IsConstant() bool
 	ReturnType() types.T
 	Attributes() []string
+	ExtendAttributes() []*Attribute
 	Eval(*batch.Batch, *process.Process) (*vector.Vector, types.T, error)
 }
 
@@ -39,6 +40,12 @@ type UnaryExtend struct {
 type BinaryExtend struct {
 	Op          int
 	Left, Right Extend
+}
+
+type UpdateExtend struct {
+	// CanNull	   bool
+	Attr  	     Attribute
+	UpdateExtend Extend
 }
 
 type MultiExtend struct {
@@ -59,7 +66,8 @@ type StarExtend struct {
 }
 
 type ValueExtend struct {
-	V *vector.Vector
+	V       *vector.Vector
+	OrigStr string
 }
 
 type Attribute struct {

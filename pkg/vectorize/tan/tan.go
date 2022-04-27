@@ -19,135 +19,95 @@ import (
 )
 
 var (
-	tanUint8   func([]uint8, []float64) []float64
-	tanUint16  func([]uint16, []float64) []float64
-	tanUint32  func([]uint32, []float64) []float64
-	tanUint64  func([]uint64, []float64) []float64
-	tanInt8    func([]int8, []float64) []float64
-	tanInt16   func([]int16, []float64) []float64
-	tanInt32   func([]int32, []float64) []float64
-	tanInt64   func([]int64, []float64) []float64
-	tanFloat32 func([]float32, []float64) []float64
-	tanFloat64 func([]float64, []float64) []float64
+	TanUint8   func([]uint8, []float64) []float64
+	TanUint16  func([]uint16, []float64) []float64
+	TanUint32  func([]uint32, []float64) []float64
+	TanUint64  func([]uint64, []float64) []float64
+	TanInt8    func([]int8, []float64) []float64
+	TanInt16   func([]int16, []float64) []float64
+	TanInt32   func([]int32, []float64) []float64
+	TanInt64   func([]int64, []float64) []float64
+	TanFloat32 func([]float32, []float64) []float64
+	TanFloat64 func([]float64, []float64) []float64
 )
 
 func init() {
-	tanUint8 = tanUint8Pure
-	tanUint16 = tanUint16Pure
-	tanUint32 = tanUint32Pure
-	tanUint64 = tanUint64Pure
-	tanInt8 = tanInt8Pure
-	tanInt16 = tanInt16Pure
-	tanInt32 = tanInt32Pure
-	tanInt64 = tanInt64Pure
-	tanFloat32 = tanFloat32Pure
-	tanFloat64 = tanFloat64Pure
+	TanUint8 = tanUint8
+	TanUint16 = tanUint16
+	TanUint32 = tanUint32
+	TanUint64 = tanUint64
+	TanInt8 = tanInt8
+	TanInt16 = tanInt16
+	TanInt32 = tanInt32
+	TanInt64 = tanInt64
+	TanFloat32 = tanFloat32
+	TanFloat64 = tanFloat64
 }
 
-func TanUint8(xs []uint8, rs []float64) []float64 {
-	return tanUint8(xs, rs)
-}
-
-func tanUint8Pure(xs []uint8, rs []float64) []float64 {
+func tanUint8(xs []uint8, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanUint16(xs []uint16, rs []float64) []float64 {
-	return tanUint16(xs, rs)
-}
-
-func tanUint16Pure(xs []uint16, rs []float64) []float64 {
+func tanUint16(xs []uint16, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanUint32(xs []uint32, rs []float64) []float64 {
-	return tanUint32(xs, rs)
-}
-
-func tanUint32Pure(xs []uint32, rs []float64) []float64 {
+func tanUint32(xs []uint32, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanUint64(xs []uint64, rs []float64) []float64 {
-	return tanUint64(xs, rs)
-}
-
-func tanUint64Pure(xs []uint64, rs []float64) []float64 {
+func tanUint64(xs []uint64, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanInt8(xs []int8, rs []float64) []float64 {
-	return tanInt8(xs, rs)
-}
-
-func tanInt8Pure(xs []int8, rs []float64) []float64 {
+func tanInt8(xs []int8, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanInt16(xs []int16, rs []float64) []float64 {
-	return tanInt16(xs, rs)
-}
-
-func tanInt16Pure(xs []int16, rs []float64) []float64 {
+func tanInt16(xs []int16, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanInt32(xs []int32, rs []float64) []float64 {
-	return tanInt32(xs, rs)
-}
-
-func tanInt32Pure(xs []int32, rs []float64) []float64 {
+func tanInt32(xs []int32, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanInt64(xs []int64, rs []float64) []float64 {
-	return tanInt64(xs, rs)
-}
-
-func tanInt64Pure(xs []int64, rs []float64) []float64 {
+func tanInt64(xs []int64, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanFloat32(xs []float32, rs []float64) []float64 {
-	return tanFloat32(xs, rs)
-}
-
-func tanFloat32Pure(xs []float32, rs []float64) []float64 {
+func tanFloat32(xs []float32, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(float64(n))
 	}
 	return rs
 }
 
-func TanFloat64(xs []float64, rs []float64) []float64 {
-	return tanFloat64(xs, rs)
-}
-
-func tanFloat64Pure(xs []float64, rs []float64) []float64 {
+func tanFloat64(xs []float64, rs []float64) []float64 {
 	for i, n := range xs {
 		rs[i] = math.Tan(n)
 	}

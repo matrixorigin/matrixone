@@ -63,7 +63,7 @@ func TestBase1(t *testing.T) {
 
 	idx := 0
 	ids := make([]uint64, 0)
-	for segId, _ := range tableMeta.IdIndex {
+	for segId := range tableMeta.IdIndex {
 		delta := 0
 		if idx > 0 {
 			delta = 1
@@ -84,7 +84,7 @@ func TestBase1(t *testing.T) {
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())
 
 		id := 0
-		for blkId, _ := range segMeta.IdIndex {
+		for blkId := range segMeta.IdIndex {
 			idelta := 0
 			if id > 0 {
 				idelta = 1
@@ -109,7 +109,8 @@ func TestBase1(t *testing.T) {
 	for _, segMeta := range tableMeta.SegmentSet {
 		for _, blkMeta := range segMeta.BlockSet {
 			blkMeta.Count = blkMeta.Segment.Table.Schema.BlockMaxRows
-			blkMeta.SimpleUpgrade(nil)
+			err := blkMeta.SimpleUpgrade(nil)
+			assert.Nil(t, err)
 		}
 	}
 
@@ -122,7 +123,7 @@ func TestBase1(t *testing.T) {
 		assert.NotNil(t, segMeta)
 		refSeg := tblData.WeakRefSegment(segId)
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())
-		for blkId, _ := range segMeta.IdIndex {
+		for blkId := range segMeta.IdIndex {
 			blkMeta := segMeta.SimpleGetBlock(blkId)
 			assert.NotNil(t, blkMeta)
 			upgraded, err := tblData.UpgradeBlock(blkMeta)
@@ -147,10 +148,10 @@ func TestBase1(t *testing.T) {
 		assert.Equal(t, int64(1+delta), upgraded.RefCount())
 	}
 
-	for segId, _ := range tableMeta.IdIndex {
+	for segId := range tableMeta.IdIndex {
 		segMeta := tableMeta.SimpleGetSegment(segId)
 		assert.NotNil(t, segMeta)
-		for blkId, _ := range segMeta.IdIndex {
+		for blkId := range segMeta.IdIndex {
 			refBlk := tblData.WeakRefBlock(segId, blkId)
 			assert.NotNil(t, refBlk)
 			srefBlk := tblData.StrongRefBlock(segId, blkId)

@@ -94,7 +94,8 @@ func TestTBlock(t *testing.T) {
 		assert.True(t, blk1.node.IsLoaded())
 		return nil
 	}
-	blk1.ProcessData(fn)
+	err = blk1.ProcessData(fn)
+	assert.Nil(t, err)
 
 	rows := uint64(10)
 	factor := uint64(4)
@@ -116,7 +117,8 @@ func TestTBlock(t *testing.T) {
 			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
 			_, err = n.Meta.AddCountLocked(num)
 			assert.Nil(t, err)
-			n.Meta.SetIndexLocked(idx.AsSlice())
+			err = n.Meta.SetIndexLocked(idx.AsSlice())
+			assert.Nil(t, err)
 			return nil
 		}
 	}
@@ -130,7 +132,8 @@ func TestTBlock(t *testing.T) {
 
 	idx1 := gen.Next(shardId)
 	idx1.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
-	indexWal.SyncLog(idx1)
+	err = indexWal.SyncLog(idx1)
+	assert.Nil(t, err)
 	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
 
@@ -141,7 +144,8 @@ func TestTBlock(t *testing.T) {
 
 	idx2 := gen.Next(shardId)
 	idx2.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
-	indexWal.SyncLog(idx2)
+	err = indexWal.SyncLog(idx2)
+	assert.Nil(t, err)
 	err = blk1.WithPinedContext(appendFn(idx2))
 	assert.Nil(t, err)
 	assert.Equal(t, rows*factor*2, mgr.Total())
@@ -153,13 +157,15 @@ func TestTBlock(t *testing.T) {
 
 	idx3 := gen.Next(shardId)
 	idx3.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
-	indexWal.SyncLog(idx3)
+	err = indexWal.SyncLog(idx3)
+	assert.Nil(t, err)
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
 
 	idx4 := gen.Next(shardId)
 	idx4.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
-	indexWal.SyncLog(idx4)
+	err = indexWal.SyncLog(idx4)
+	assert.Nil(t, err)
 	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
 
@@ -177,7 +183,8 @@ func TestTBlock(t *testing.T) {
 
 	idx5 := gen.Next(shardId)
 	idx5.Capacity = uint64(vector.Length(insertBat.Vecs[0]))
-	indexWal.SyncLog(idx5)
+	err = indexWal.SyncLog(idx5)
+	assert.Nil(t, err)
 	err = blk1.WithPinedContext(appendFn(idx5))
 	assert.Nil(t, err)
 
@@ -191,16 +198,17 @@ func TestTBlock(t *testing.T) {
 
 	t.Log(common.GPool.String())
 
-	testutils.WaitExpect(100, func() bool {
+	testutils.WaitExpect(1000, func() bool {
 		return idx5.Id.Id == blk1.GetMeta().Segment.Table.Database.GetCheckpointId()
 	})
 	assert.Equal(t, idx5.Id.Id, blk1.GetMeta().Segment.Table.Database.GetCheckpointId())
 
-	blk1.WithPinedContext(func(node mb.IMutableBlock) error {
+	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
-		n.Meta.SimpleUpgrade(nil)
+		err := n.Meta.SimpleUpgrade(nil)
+		assert.Nil(t, err)
 		var vecs []*vector.Vector
-		for attri, _ := range n.Data.GetAttrs() {
+		for attri := range n.Data.GetAttrs() {
 			v, err := n.Data.GetVectorByAttr(attri)
 			if err != nil {
 				return err
@@ -221,6 +229,7 @@ func TestTBlock(t *testing.T) {
 		})
 		return bw.Execute()
 	})
+	assert.Nil(t, err)
 
 	t.Logf(mtBufMgr.String())
 	nblk1, err := blk1.CloneWithUpgrade(blk1.host, blk1.meta)

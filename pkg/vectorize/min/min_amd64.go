@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package min
 
 import (
@@ -56,41 +53,12 @@ func init() {
 		Int8Min = int8MinAvx2
 		Int16Min = int16MinAvx2
 		Int32Min = int32MinAvx2
-		Int64Min = int64Min
 		Uint8Min = uint8MinAvx2
 		Uint16Min = uint16MinAvx2
 		Uint32Min = uint32MinAvx2
-		Uint64Min = uint64Min
 		Float32Min = float32MinAvx2
 		Float64Min = float64MinAvx2
-	} else {
-		Int8Min = int8Min
-		Int16Min = int16Min
-		Int32Min = int32Min
-		Int64Min = int64Min
-		Uint8Min = uint8Min
-		Uint16Min = uint16Min
-		Uint32Min = uint32Min
-		Uint64Min = uint64Min
-		Float32Min = float32Min
-		Float64Min = float64Min
 	}
-
-	BoolMin = boolMin
-	StrMin = strMin
-
-	BoolMinSels = boolMinSels
-	Int8MinSels = int8MinSels
-	Int16MinSels = int16MinSels
-	Int32MinSels = int32MinSels
-	Int64MinSels = int64MinSels
-	Uint8MinSels = uint8MinSels
-	Uint16MinSels = uint16MinSels
-	Uint32MinSels = uint32MinSels
-	Uint64MinSels = uint64MinSels
-	Float32MinSels = float32MinSels
-	Float64MinSels = float64MinSels
-	StrMinSels = strMinSels
 }
 
 func int8MinAvx2(xs []int8) int8 {

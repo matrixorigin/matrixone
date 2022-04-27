@@ -24,6 +24,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+
 	"github.com/lni/goutils/random"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -45,10 +47,10 @@ func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 			Name: name,
 			Alg:  0,
 			Type: types.Type{
-				Oid:       t,
-				Size:      0,
-				Width:     0,
-				Precision: 0,
+				Oid:   t,
+				Size:  0,
+				Width: 0,
+				Scale: 0,
 			},
 			Default: engine.DefaultExpr{},
 		}}
@@ -76,8 +78,10 @@ func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 			name = "T_float32"
 		case types.T_float64:
 			name = "T_float64"
-		case types.T_char, types.T_varchar:
-			name = "T_char_varchar"
+		case types.T_char:
+			name = "T_char"
+		case types.T_varchar:
+			name = "T_varchar"
 		case types.T_date:
 			name = "T_date"
 		case types.T_datetime:
@@ -103,27 +107,39 @@ func MakeBatch(batchSize int, attrName []string, cols []*engine.AttributeDef) *b
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
 		vec := vector.New(cols[i].Attr.Type)
+		vec.Or = true
+		vec.Data = nil
 		switch vec.Typ.Oid {
 		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_int8).Size))
+			vec.Col = encoding.DecodeInt8Slice(vec.Data)
 		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_int16).Size))
+			vec.Col = encoding.DecodeInt16Slice(vec.Data)
 		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_int32).Size))
+			vec.Col = encoding.DecodeInt32Slice(vec.Data)
 		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_int64).Size))
+			vec.Col = encoding.DecodeInt64Slice(vec.Data)
 		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_uint8).Size))
+			vec.Col = encoding.DecodeUint8Slice(vec.Data)
 		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_uint16).Size))
+			vec.Col = encoding.DecodeUint16Slice(vec.Data)
 		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_uint32).Size))
+			vec.Col = encoding.DecodeUint32Slice(vec.Data)
 		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_uint64).Size))
+			vec.Col = encoding.DecodeUint64Slice(vec.Data)
 		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_float32).Size))
+			vec.Col = encoding.DecodeFloat32Slice(vec.Data)
 		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_float64).Size))
+			vec.Col = encoding.DecodeFloat64Slice(vec.Data)
 		case types.T_char, types.T_varchar:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
@@ -131,10 +147,13 @@ func MakeBatch(batchSize int, attrName []string, cols []*engine.AttributeDef) *b
 				Data:    nil,
 			}
 			vec.Col = vBytes
+			vec.Data = vBytes.Data
 		case types.T_date:
-			vec.Col = make([]types.Date, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_date).Size))
+			vec.Col = encoding.DecodeDateSlice(vec.Data)
 		case types.T_datetime:
-			vec.Col = make([]types.Datetime, batchSize)
+			vec.Data = make([]byte, batchSize*int(toTypesType(types.T_datetime).Size))
+			vec.Col = encoding.DecodeDatetimeSlice(vec.Data)
 		default:
 			panic("unsupported vector type")
 		}
@@ -370,8 +389,11 @@ func FillBatch(lines [][]string, batchData *batch.Batch) {
 }
 
 func TruncateBatch(bat *batch.Batch, batchSize, needLen int) {
-	if needLen >= batchSize {
+	if needLen == batchSize {
 		return
+	}
+	if needLen > batchSize {
+		panic("needLen > batchSize is impossible")
 	}
 	for _, vec := range bat.Vecs {
 		//remove nulls.NUlls
@@ -381,49 +403,77 @@ func TruncateBatch(bat *batch.Batch, batchSize, needLen int) {
 		//remove row
 		switch vec.Typ.Oid {
 		case types.T_int8:
-			cols := vec.Col.([]int8)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_int8).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeInt8Slice(vec.Data)
 		case types.T_int16:
-			cols := vec.Col.([]int16)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_int16).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeInt16Slice(vec.Data)
 		case types.T_int32:
-			cols := vec.Col.([]int32)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_int32).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeInt32Slice(vec.Data)
 		case types.T_int64:
-			cols := vec.Col.([]int64)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_int64).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeInt64Slice(vec.Data)
 		case types.T_uint8:
-			cols := vec.Col.([]uint8)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_uint8).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeUint8Slice(vec.Data)
 		case types.T_uint16:
-			cols := vec.Col.([]uint16)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_uint16).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeUint16Slice(vec.Data)
 		case types.T_uint32:
-			cols := vec.Col.([]uint32)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_uint32).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeUint32Slice(vec.Data)
 		case types.T_uint64:
-			cols := vec.Col.([]uint64)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_uint64).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeUint64Slice(vec.Data)
 		case types.T_float32:
-			cols := vec.Col.([]float32)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_float32).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeFloat32Slice(vec.Data)
 		case types.T_float64:
-			cols := vec.Col.([]float64)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_float64).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeFloat64Slice(vec.Data)
 		case types.T_char, types.T_varchar: //bytes is different
 			vBytes := vec.Col.(*types.Bytes)
 			if len(vBytes.Offsets) > needLen {
+				nextStart := vBytes.Offsets[needLen]
 				vec.Col = vBytes.Window(0, needLen)
+				vBytes.Data = vBytes.Data[:nextStart]
 			}
+			vec.Data = vBytes.Data
 		case types.T_date:
-			cols := vec.Col.([]types.Date)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_date).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeDateSlice(vec.Data)
 		case types.T_datetime:
-			cols := vec.Col.([]types.Datetime)
-			vec.Col = cols[:needLen]
+			needBytes := needLen * int(toTypesType(types.T_datetime).Size)
+			vec.Data = vec.Data[:needBytes]
+			vec.Col = encoding.DecodeDatetimeSlice(vec.Data)
 		}
 	}
 	bat.Zs = bat.Zs[:needLen]
+}
+
+func SerializeVectorForBatch(bat *batch.Batch) error {
+	//for test
+	//for i := range bat.Vecs {
+	//	bat.Vecs[i].Or = true
+	//	show, err := bat.Vecs[i].Show()
+	//	if err != nil {
+	//		return err
+	//	}
+	//	bat.Vecs[i].Data = show
+	//}
+	return nil
 }
 
 func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc) ([]string, []*engine.AttributeDef) {
@@ -435,7 +485,7 @@ func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc) ([]str
 		defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
 			Name:    attr.Name,
 			Alg:     0,
-			Type:    TpeTypeToEngineType(attr.Ttype),
+			Type:    attr.TypesType,
 			Default: engine.DefaultExpr{},
 		}})
 	}
@@ -606,3 +656,9 @@ func (es *errorStorage) getKey(k TupleKey) TupleValue {
 }
 
 var ES errorStorage
+
+func Uint64ToString(v uint64) string {
+	s := fmt.Sprintf("%d", v)
+	logutil.Infof("all_nodes id %d string %v", v, s)
+	return s
+}

@@ -144,10 +144,10 @@ func (meta *EntryMeta) ReadFrom(r io.Reader) (int64, error) {
 }
 
 type BaseEntry struct {
-	Meta     *EntryMeta
-	Payload  []byte
+	Meta      *EntryMeta
+	Payload   []byte
 	Auxiliary interface{}
-	p        *sync.Pool
+	p         *sync.Pool
 }
 
 func newBaseEntry() *BaseEntry {

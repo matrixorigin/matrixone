@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build matrixone_test
+// +build matrixone_test
+
 package test
 
 import (
@@ -52,7 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.etcd.io/etcd/raft/v3"
+	"go.etcd.io/etcd/raft"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -315,6 +318,7 @@ func TestSnapshot(t *testing.T) {
 
 	var logdb logdb.LogDB
 	logdb = c.RaftCluster.GetStore(insertNode).(raftstore.LogDBGetter).GetLogDB()
+
 	hasLog := func(index uint64) bool {
 		_, _, err := logdb.IterateEntries(nil, 0, shard.ShardID, replicaID, index, index+1, math.MaxUint64)
 		if err == nil {
@@ -484,7 +488,7 @@ func TestSplit(t *testing.T) {
 }
 
 func checkSplit(s *aoe3.Storage, old uint64) bool {
-	dbName := aoedb.IdToNameFactory.Encode(old)
+	dbName := aoedb.IDToNameFactory.Encode(old)
 	logutil.Infof("before checkSplit")
 	db, err := s.DB.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	logutil.Infof("checkSplit, db is %v, err is %v", db, err)

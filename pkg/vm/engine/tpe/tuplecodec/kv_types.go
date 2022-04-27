@@ -14,7 +14,10 @@
 
 package tuplecodec
 
-import "github.com/matrixorigin/matrixcube/pb/metapb"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
+)
 
 type KVType int
 
@@ -85,6 +88,22 @@ type KVHandler interface {
 	GetShardsWithPrefix(prefix TupleKey) (interface{}, error)
 }
 
+type CubeShards struct {
+	Shards []metapb.Shard `json:"shards"`
+}
+
+func (cs CubeShards) String() string {
+	s := fmt.Sprintf("shardCont %d \n",len(cs.Shards))
+	for i, shard := range cs.Shards {
+		s += fmt.Sprintf("[shardIndex %d shardId %d startKey %v endKey %v] ;\n",
+			i,
+			shard.GetID(),
+			shard.GetStart(),
+			shard.GetEnd())
+	}
+	return s
+}
+
 type ShardNode struct {
 	//the address of the store of the leader replica of the shard
 	Addr string
@@ -92,6 +111,8 @@ type ShardNode struct {
 	StoreID uint64
 	//the bytes of the id
 	StoreIDbytes string
+	//shards the node will read
+	Shards CubeShards
 }
 
 type ShardInfo struct {
@@ -122,10 +143,25 @@ func (si ShardInfo) GetShardNode() ShardNode {
 }
 
 type Shards struct {
-	nodes      []ShardNode
+	//all nodes that hold the table
+	nodes []ShardNode
+
+	//all shards that hold the table
 	shardInfos []ShardInfo
 }
 
-func (s Shards) ShardInfos() []ShardInfo {
+func (s Shards) GetShardInfos() []ShardInfo {
 	return s.shardInfos
+}
+
+func (s Shards) GetShardNodes() []ShardNode {
+	return s.nodes
+}
+
+func (s *Shards) SetShardInfos(infos []ShardInfo) {
+	s.shardInfos = infos
+}
+
+func (s *Shards) SetShardNodes(nodes []ShardNode) {
+	s.nodes = nodes
 }

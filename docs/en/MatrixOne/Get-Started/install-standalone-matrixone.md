@@ -19,7 +19,9 @@ You can found `system_vars_config.toml` in
 
 #### 1. Install Go as necessary
 
-Go version 1.17+ is required.
+
+Go version 1.18 is required.
+  
 
 #### 2. Get the MatrixOne code
 

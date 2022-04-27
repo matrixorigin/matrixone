@@ -17,6 +17,7 @@ package shard
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -168,13 +169,19 @@ func (mgr *manager) Checkpoint(v interface{}) {
 	switch vv := v.(type) {
 	case *Index:
 		bat := NewSimpleBatchIndice(vv)
-		mgr.EnqueueCheckpoint(bat)
+		_, err := mgr.EnqueueCheckpoint(bat)
+		if err != nil && !strings.Contains(err.Error(), "closed") {
+			panic(err)
+		}
 		return
 	case *SliceIndice:
 		if vv == nil {
 			return
 		}
-		mgr.EnqueueCheckpoint(vv)
+		_, err := mgr.EnqueueCheckpoint(vv)
+		if err != nil && !strings.Contains(err.Error(), "closed") {
+			panic(err)
+		}
 		return
 	}
 	panic("not supported")
@@ -312,7 +319,7 @@ func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {
 	defer mgr.mu.RUnlock()
 	for _, s := range mgr.shards {
 		stat := &shard.ItemsToCheckpointStat{
-			ShardId: s.id,
+			ShardID: s.id,
 			Count:   int(s.GetPendingEntries()),
 		}
 		stats = append(stats, stat)

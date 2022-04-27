@@ -133,7 +133,6 @@ const (
 	blockCntPerSegment = 2
 	colCnt             = 4
 	segmentCnt         = 5
-	blockCnt           = blockCntPerSegment * segmentCnt
 )
 
 /*
@@ -289,16 +288,16 @@ func testPCI(id int, f *CloseFlag, pci *PDCallbackImpl) {
 }
 
 func Test_Multi_Server(t *testing.T) {
-	var svs []*MOServer = nil
+	var svs []*MOServer = make([]*MOServer, len(testPorts))
 	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false, 10000)
-	for _, port := range testPorts {
+	for i, port := range testPorts {
 		sv, err := getMOserver(testConfigFile, port, NewPDCallbackImpl(ppu), nil)
 		if err != nil {
 			t.Error(err)
 			return
 		}
 
-		svs = append(svs, sv)
+		svs[i] = sv
 
 		err = sv.Start()
 		require.NoError(t, err)
@@ -306,9 +305,9 @@ func Test_Multi_Server(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	var dbs []*sql.DB = nil
+	var dbs []*sql.DB = make([]*sql.DB, len(testPorts))
 	for i, port := range testPorts {
-		dbs = append(dbs, open_db(t, port))
+		dbs[i] = open_db(t, port)
 		require.True(t, dbs[i] != nil)
 	}
 

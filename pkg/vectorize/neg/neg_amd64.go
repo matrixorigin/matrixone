@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package neg
 
 import (
@@ -49,13 +46,6 @@ func init() {
 		Int64Neg = int64NegAvx2
 		Float32Neg = float32NegAvx2
 		Float64Neg = float64NegAvx2
-	} else {
-		Int8Neg = int8Neg
-		Int16Neg = int16Neg
-		Int32Neg = int32Neg
-		Int64Neg = int64Neg
-		Float32Neg = float32Neg
-		Float64Neg = float64Neg
 	}
 }
 

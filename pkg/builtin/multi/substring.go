@@ -243,7 +243,7 @@ func init() {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
+								substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
@@ -258,13 +258,13 @@ func init() {
 							}
 							// set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, results, startValue-1))
+							vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
 							return resultVec, nil
 						} else if startValue < 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
+								substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
@@ -279,13 +279,13 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, results, -startValue))
+							vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
 							return resultVec, nil
 						} else {
 							//startValue == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, columnSrcCol)
+								substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
@@ -300,7 +300,7 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, results))
+							vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
@@ -311,7 +311,7 @@ func init() {
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
+							substring.SubstringDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
@@ -326,7 +326,7 @@ func init() {
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
+						vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 						return resultVec, nil
 					}
 				} else {
@@ -340,7 +340,7 @@ func init() {
 						if startValue > 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
+								substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
@@ -355,13 +355,13 @@ func init() {
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+								vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 								return resultVec, nil
 							}
 						} else if startValue < 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
+								substring.SubstringFromRightConstOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
@@ -376,14 +376,14 @@ func init() {
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+								vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 								return resultVec, nil
 							}
 						} else {
 							//startValue == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, columnSrcCol)
+								substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
@@ -398,7 +398,7 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, results))
+							vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
@@ -410,7 +410,7 @@ func init() {
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
+							substring.SubstringDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
@@ -425,7 +425,7 @@ func init() {
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+						vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 						return resultVec, nil
 					}
 				}
@@ -452,7 +452,7 @@ func init() {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
+								substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, columnSrcCol, startValue-1)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
@@ -467,13 +467,13 @@ func init() {
 							}
 							//set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetUnbounded(columnSrcCol, results, startValue-1))
+							vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
 							return resultVec, nil
 						} else if startValue < 0 {
 							// If the number of references of the first column is 1, reuse the column memory space
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
+								substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, columnSrcCol, -startValue)
 								return inputVecs[0], nil
 							}
 							// request new memory space for result column
@@ -488,13 +488,13 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetUnbounded(columnSrcCol, results, -startValue))
+							vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
 							return resultVec, nil
 						} else {
 							//start_value == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, columnSrcCol)
+								substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
@@ -509,7 +509,7 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetUnbounded(columnSrcCol, results))
+							vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
@@ -520,7 +520,7 @@ func init() {
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
+							substring.SubstringDynamicOffsetUnbounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
@@ -535,7 +535,7 @@ func init() {
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
+						vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
 						return resultVec, nil
 					}
 				} else {
@@ -549,7 +549,7 @@ func init() {
 						if startValue > 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
+								substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, columnSrcCol, startValue-1, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
@@ -564,13 +564,13 @@ func init() {
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromLeftConstantOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+								vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
 								return resultVec, nil
 							}
 						} else if startValue < 0 {
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromRightConstantOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
+								substring.SubstringFromRightConstOffsetBounded(columnSrcCol, columnSrcCol, -startValue, lengthValue)
 								return inputVecs[0], nil
 							} else {
 								// request new memory space for result column
@@ -585,14 +585,14 @@ func init() {
 								}
 								//Set null row
 								nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-								vector.SetCol(resultVec, substring.SliceFromRightConstantOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+								vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
 								return resultVec, nil
 							}
 						} else {
 							//start_value == 0
 							if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 								inputVecs[0].Ref = 0
-								substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, columnSrcCol)
+								substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, columnSrcCol)
 								return inputVecs[0], nil
 							}
 
@@ -607,7 +607,7 @@ func init() {
 							}
 							//Set null row
 							nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-							vector.SetCol(resultVec, substring.SliceFromZeroConstantOffsetBounded(columnSrcCol, results))
+							vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
 							return resultVec, nil
 						}
 					} else {
@@ -619,7 +619,7 @@ func init() {
 						// If the number of references of the first column is 1, reuse the column memory space
 						if inputVecs[0].Ref == 1 || inputVecs[0].Ref == 0 {
 							inputVecs[0].Ref = 0
-							substring.SliceDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
+							substring.SubstringDynamicOffsetBounded(columnSrcCol, columnSrcCol, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs)
 							return inputVecs[0], nil
 						}
 						// request new memory space for result column
@@ -634,7 +634,7 @@ func init() {
 						}
 						//set null row
 						nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
-						vector.SetCol(resultVec, substring.SliceDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
+						vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
 						return resultVec, nil
 					}
 				}

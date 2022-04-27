@@ -15,8 +15,12 @@
 package types
 
 import (
-	"github.com/stretchr/testify/require"
+	"math"
 	"testing"
+
+	"golang.org/x/exp/constraints"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestType_String(t *testing.T) {
@@ -31,26 +35,91 @@ func TestType_Eq(t *testing.T) {
 }
 
 func TestT_ToType(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, int32(1), myT.ToType().Size)
-	myT = T(2)
-	require.Equal(t, int32(2), myT.ToType().Size)
-	myT = T(3)
-	require.Equal(t, int32(4), myT.ToType().Size)
+	require.Equal(t, int32(1), T_int8.ToType().Size)
+	require.Equal(t, int32(2), T_int16.ToType().Size)
+	require.Equal(t, int32(4), T_int32.ToType().Size)
+	require.Equal(t, int32(8), T_int64.ToType().Size)
+	require.Equal(t, int32(1), T_uint8.ToType().Size)
+	require.Equal(t, int32(2), T_uint16.ToType().Size)
+	require.Equal(t, int32(4), T_uint32.ToType().Size)
+	require.Equal(t, int32(8), T_uint64.ToType().Size)
 }
 
 func TestT_String(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, "TINYINT", myT.String())
-	myT = T(2)
-	require.Equal(t, "SMALLINT", myT.String())
-	myT = T(3)
-	require.Equal(t, "INT", myT.String())
+	require.Equal(t, "TINYINT", T_int8.String())
+	require.Equal(t, "SMALLINT", T_int16.String())
+	require.Equal(t, "INT", T_int32.String())
 }
 
 func TestT_OidString(t *testing.T) {
-	myT := T(1)
-	require.Equal(t, "T_int8", myT.OidString())
-	myT = T(2)
-	require.Equal(t, "T_int16", myT.OidString())
+	require.Equal(t, "T_int8", T_int8.OidString())
+	require.Equal(t, "T_int16", T_int16.OidString())
+	require.Equal(t, "T_int32", T_int32.OidString())
+	require.Equal(t, "T_int64", T_int64.OidString())
+}
+
+func sliceCopy(a, b []float64) {
+	for i := range a {
+		b[i] = a[i] + a[i]
+	}
+}
+
+func BenchmarkCopy(b *testing.B) {
+	x := make([]float64, 512)
+	y := make([]float64, 512)
+	for i := 0; i < 512; i++ {
+		x[i] = float64(i)
+	}
+
+	for n := 0; n < b.N; n++ {
+		sliceCopy(x, y)
+	}
+}
+
+func sliceCopyG[T constraints.Ordered](a, b []T) {
+	for i := range a {
+		b[i] = a[i] + a[i]
+	}
+}
+
+func BenchmarkCopyG(b *testing.B) {
+	x := make([]float64, 512)
+	y := make([]float64, 512)
+	for i := 0; i < 512; i++ {
+		x[i] = float64(i)
+	}
+
+	for n := 0; n < b.N; n++ {
+		sliceCopyG(x, y)
+	}
+}
+
+func BenchmarkCastA(b *testing.B) {
+	x := make([]int16, 8192)
+	y := make([]float64, 8192)
+	for i := 0; i < 8192; i++ {
+		x[i] = int16(i)
+	}
+	for n := 0; n < b.N; n++ {
+		for i := 0; i < 8192; i++ {
+			y[i] = math.Log(float64(x[i]))
+		}
+	}
+}
+
+func BenchmarkCastB(b *testing.B) {
+	x := make([]int16, 8192)
+	y := make([]float64, 8192)
+	z := make([]float64, 8192)
+	for i := 0; i < 8192; i++ {
+		x[i] = int16(i)
+	}
+	for n := 0; n < b.N; n++ {
+		for i := 0; i < 8192; i++ {
+			y[i] = float64(x[i])
+		}
+		for i := 0; i < 8192; i++ {
+			z[i] = math.Log(y[i])
+		}
+	}
 }

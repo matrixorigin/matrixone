@@ -30,7 +30,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 		dataWithIdx[i] = sortElem{data: data.Get(int64(i)), idx: uint32(i)}
 	}
 
-	sortUnstable(dataWithIdx)
+	SortUnstable(dataWithIdx)
 
 	newData := make([]byte, len(data.Data))
 	newOffsets := make([]uint32, n)
@@ -126,20 +126,20 @@ func Merge(col []*vector.Vector, src *[]uint16) {
 	for i := 0; i < nBlk; i++ {
 		heap[i] = heapElem{data: data[i].Get(0), src: uint16(i), next: 1}
 	}
-	heapInit(heap)
+	HeapInit(heap)
 
 	k := 0
 	var offset uint32
 	for i := 0; i < nBlk; i++ {
 		offset = 0
 		for j := 0; j < nElem; j++ {
-			top := heapPop(&heap)
+			top := HeapPop(&heap)
 			offset += uint32(len(top.data))
 			strings[j] = top.data
 			(*src)[k] = top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, heapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
+				HeapPush(&heap, heapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
 			}
 		}
 
@@ -169,7 +169,7 @@ func Merge(col []*vector.Vector, src *[]uint16) {
 }
 
 func Multiplex(col []*vector.Vector, src []uint16) {
-	for i, _ := range col{
+	for i := range col {
 		if nulls.Any(col[i].Nsp) {
 			multiplexNullableBlocks(col, src)
 			return

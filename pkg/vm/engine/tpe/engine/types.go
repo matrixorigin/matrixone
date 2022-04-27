@@ -45,9 +45,12 @@ type TpeConfig struct {
 	KVLimit uint64
 
 	ParallelReader bool
+	MultiNode      bool
 
 	TpeDedupSetBatchTimeout  time.Duration
 	TpeDedupSetBatchTrycount int
+	TpeScanTimeout time.Duration
+	TpeScanTryCount int
 	PBKV                     *pebble.Storage
 }
 
@@ -61,6 +64,7 @@ type TpeDatabase struct {
 	id             uint64
 	desc           *descriptor.DatabaseDesc
 	computeHandler computation.ComputationHandler
+	storeID        uint64
 }
 
 type TpeRelation struct {
@@ -68,8 +72,13 @@ type TpeRelation struct {
 	dbDesc         *descriptor.DatabaseDesc
 	desc           *descriptor.RelationDesc
 	computeHandler computation.ComputationHandler
-	nodes          engine.Nodes
-	shards         *tuplecodec.Shards
+	//global nodes
+	nodes engine.Nodes
+	//global shards
+	shards *tuplecodec.Shards
+	//storeid or nodeid ?
+	storeID      uint64
+	useOneThread bool
 }
 
 type ShardNode struct {
@@ -114,28 +123,31 @@ type TpeReader struct {
 	readCtx        *tuplecodec.ReadContext
 	shardInfos     []ShardInfo
 	parallelReader bool
+	multiNode      bool
+	printBatch     bool
 	//for test
 	isDumpReader bool
 	id           int
-	dumpData	 bool
-	opt 		 *batch.DumpOption
+	storeID      uint64
+	dumpData     bool
+	opt          *batch.DumpOption
 }
 
 func GetTpeReaderInfo(r *TpeRelation, eng *TpeEngine, opt *batch.DumpOption) *TpeReader {
 	return &TpeReader{
-		dbDesc:	r.dbDesc,
-		tableDesc: r.desc,
+		dbDesc:         r.dbDesc,
+		tableDesc:      r.desc,
 		computeHandler: eng.computeHandler,
-		opt: opt,
-		dumpData: true,
+		opt:            opt,
+		dumpData:       true,
 	}
 }
 
 func MakeReadParam(r *TpeRelation) (refCnts []uint64, attrs []string) {
-    refCnts = make([]uint64, len(r.desc.Attributes))
+	refCnts = make([]uint64, len(r.desc.Attributes))
 	attrs = make([]string, len(refCnts))
 	for i, attr := range r.desc.Attributes {
 		attrs[i] = attr.Name
 	}
 	return refCnts, attrs
-} 
+}

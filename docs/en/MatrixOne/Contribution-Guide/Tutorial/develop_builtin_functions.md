@@ -55,8 +55,6 @@ This `abs.go` file has the following functionalities:
  	3. the stringification method for this function.
  	4. preparation for function calling and function calling.
 
-
-
 ```go
 package unary
 
@@ -83,8 +81,6 @@ In MatrixOne, all letters in a function name will be lowercased during the parsi
 The function abs accepts all numeric types as its parameter(uint8, int8, float32...), we can return a 64bit value covering all different parameter types, or, to optimize the performance of our function, we can return different types with respect to the parameter type.
 
 Outside the init function, declare these variables for each pair of parameter type and return type.
-
-
 
 ```go
 var argAndRets = []argsAndRet{
@@ -310,34 +306,39 @@ For certain cpu architectures, we could utilize the cpu's intrinsic SIMD instruc
 package abs
 
 var (
-	absFloat32 func([]float32, []float32) []float32
-	absFloat64 func([]float64, []float64) []float64
+	AbsFloat32 func([]float32, []float32) []float32
+	AbsFloat64 func([]float64, []float64) []float64
 )
 
 func init() {
-	absFloat32 = absFloat32Pure
-	absFloat64 = absFloat64Pure
+	AbsFloat32 = absFloat32
+	AbsFloat64 = absFloat64
 }
 
-func AbsFloat32(xs, rs []float32) []float32 {
-	return absFloat32(xs, rs)
+func absFloat32(xs, rs []float32) []float32 {
+	// See below
 }
 
-func absFloat32Pure(xs, rs []float32) []float32 {
-}
-
-func AbsFloat64(xs, rs []float64) []float64 {
-	return absFloat64(xs, rs)
-}
-
-func absFloat64Pure(xs, rs []float64) []float64 {
+func absFloat64(xs, rs []float64) []float64 {
+	// See below
 }
 ```
 
-Inside the absFloat32Pure and absFloat64Pure, we implement our golang version of abs function for float32 and float64 type. The other data types (int8, int16, int32, int64) are more or less the same. 
+Inside the absFloat32 and absFloat64, we implement our golang version of abs function for float32 and float64 type. The other data types (int8, int16, int32, int64) are more or less the same. 
 
 ```go
-func absFloat32Pure(xs, rs []float32) []float32 {
+func absFloat32(xs, rs []float32) []float32 {
+   for i := range xs {
+      if xs[i] < 0 {
+         rs[i] = -xs[i]
+      } else {
+         rs[i] = xs[i]
+      }
+   }
+   return rs
+}
+
+func absFloat64(xs, rs []float64) []float64 {
    for i := range xs {
       if xs[i] < 0 {
          rs[i] = -xs[i]
@@ -348,20 +349,6 @@ func absFloat32Pure(xs, rs []float32) []float32 {
    return rs
 }
 ```
-
-```go
-func absFloat64Pure(xs, rs []float64) []float64 {
-   for i := range xs {
-      if xs[i] < 0 {
-         rs[i] = -xs[i]
-      } else {
-         rs[i] = xs[i]
-      }
-   }
-   return rs
-}
-```
-
 
 Here we go. Now we can fire up MatrixOne and take our abs function for a little spin.
 
@@ -389,7 +376,6 @@ Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the Matrix
 	cubeLogLevel = "error"
 	
 	level = "error"
-
 
 !!! info 
 	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
@@ -430,7 +416,6 @@ mysql> select a, b, abs(a), abs(b) from abs_test_table;
 ```
 
 Bingo!
-
 
 !!! info 
     Except for `abs()`, MatrixOne has already some neat examples for built-in functions, such as `floor()`, `round()`, `year()`. With some minor corresponding changes, the procedure is quite the same as other functions.
@@ -474,9 +459,9 @@ func TestAbsFloat32(t *testing.T) {
     //Init a new variable
     newNums := make([]float32, len(nums))
     //Run abs function
-    newNums = absFloat32(nums, newNums)
+    newNums = AbsFloat32(nums, newNums)
 
-    for i, _ := range newNums {
+    for i := range newNums {
         require.Equal(t, absNums[i], newNums[i])
     }
 }
@@ -490,9 +475,9 @@ func TestAbsFloat64(t *testing.T) {
     //Init a new variable
     newNums := make([]float64, len(nums))
     //Run abs function
-    newNums = absFloat64(nums, newNums)
+    newNums = AbsFloat64(nums, newNums)
 
-    for i, _ := range newNums {
+    for i := range newNums {
         require.Equal(t, absNums[i], newNums[i])
     }
 }
@@ -506,13 +491,3 @@ This picks up any files matching packagename_test.go.
 If you are getting a `PASS`, you are passing the unit test. 
 
 In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your code is merged in the code base, the test will automatically run. 
-
-
-
-
-
-
-
-
-
-

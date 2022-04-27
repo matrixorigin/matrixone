@@ -45,6 +45,7 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
+		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
@@ -96,6 +97,7 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
+		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {
@@ -173,6 +175,7 @@ func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
 		lines := randomLines(cnt, names, attrs)
 
 		FillBatch(lines,bat)
+		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)
 		for i, attrDesc := range InternalDescriptorTableDesc.Attributes {

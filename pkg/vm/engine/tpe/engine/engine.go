@@ -16,8 +16,11 @@ package engine
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixcube/pb/metapb"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec"
+	"strings"
 )
 
 var (
@@ -38,7 +41,9 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	if tc.KvType == tuplecodec.KV_MEMORY {
 		kv = tuplecodec.NewMemoryKV()
 	} else if tc.KvType == tuplecodec.KV_CUBE {
-		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit), tc.TpeDedupSetBatchTimeout, tc.TpeDedupSetBatchTrycount)
+		kv, err = tuplecodec.NewCubeKV(tc.Cube, uint64(kvLimit),
+			tc.TpeDedupSetBatchTimeout, tc.TpeDedupSetBatchTrycount,
+			tc.TpeScanTimeout, tc.TpeScanTryCount)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +81,7 @@ func NewTpeEngine(tc *TpeConfig) (*TpeEngine, error) {
 	ihi := tuplecodec.NewIndexHandlerImpl(tch, nil, kv, uint64(kvLimit), serial, valueLayout, rcc)
 	ihi.PBKV = tc.PBKV
 	epoch := tuplecodec.NewEpochHandler(tch, dh, kv)
-	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch, tc.ParallelReader)
+	ch := tuplecodec.NewComputationHandlerImpl(dh, kv, tch, serial, ihi, epoch, tc.ParallelReader, tc.MultiNode)
 	te.computeHandler = ch
 	te.dh = dh
 	return te, nil
@@ -113,16 +118,40 @@ func (te *TpeEngine) Database(name string) (engine.Database, error) {
 	if err != nil {
 		return nil, err
 	}
+	storeID := uint64(0)
+	if te.tpeConfig.Cube != nil {
+		storeID = te.tpeConfig.Cube.RaftStore().Meta().ID
+	}
 	return &TpeDatabase{
 			id:             uint64(dbDesc.ID),
 			desc:           dbDesc,
 			computeHandler: te.computeHandler,
+			storeID:        storeID,
 		},
 		nil
 }
 
-func (te *TpeEngine) Node(s string) *engine.NodeInfo {
-	return &engine.NodeInfo{Mcpu: 1}
+func (te *TpeEngine) Node(ip string) *engine.NodeInfo {
+	var ni *engine.NodeInfo
+	if te.tpeConfig.Cube != nil {
+		te.tpeConfig.Cube.RaftStore().GetRouter().Every(uint64(pb.KVGroup), true, func(shard metapb.Shard, store metapb.Store) bool {
+			if ni != nil {
+				return false
+			}
+			if strings.HasPrefix(store.ClientAddress, ip) {
+				stats := te.tpeConfig.Cube.RaftStore().GetRouter().GetStoreStats(store.ID)
+				ni = &engine.NodeInfo{
+					Mcpu: len(stats.GetCpuUsages()),
+				}
+			}
+			return true
+		})
+	} else {
+		return &engine.NodeInfo{
+			Mcpu: 1,
+		}
+	}
+	return ni
 }
 
 func (te *TpeEngine) RemoveDeletedTable(epoch uint64) error {

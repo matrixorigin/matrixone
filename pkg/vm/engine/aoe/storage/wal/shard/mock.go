@@ -50,12 +50,12 @@ func (alloc *MockShardIndexGenerator) Curr() *Index {
 
 type MockIndexAllocator struct {
 	sync.RWMutex
-	Shards map[uint64]*common.IdAlloctor
+	Shards map[uint64]*common.IDAlloctor
 }
 
 func NewMockIndexAllocator() *MockIndexAllocator {
 	return &MockIndexAllocator{
-		Shards: make(map[uint64]*common.IdAlloctor),
+		Shards: make(map[uint64]*common.IDAlloctor),
 	}
 }
 
@@ -64,7 +64,7 @@ func (alloc *MockIndexAllocator) Reset(shardId, start uint64) {
 	defer alloc.Unlock()
 	shardAlloc := alloc.Shards[shardId]
 	if shardAlloc == nil {
-		shardAlloc = new(common.IdAlloctor)
+		shardAlloc = new(common.IDAlloctor)
 		alloc.Shards[shardId] = shardAlloc
 	}
 	shardAlloc.SetStart(start)
@@ -84,7 +84,7 @@ func (alloc *MockIndexAllocator) Alloc(shardId uint64) uint64 {
 	alloc.Lock()
 	shardAlloc := alloc.Shards[shardId]
 	if shardAlloc == nil {
-		shardAlloc = new(common.IdAlloctor)
+		shardAlloc = new(common.IDAlloctor)
 		alloc.Shards[shardId] = shardAlloc
 	}
 	alloc.Unlock()
