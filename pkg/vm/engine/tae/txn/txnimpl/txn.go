@@ -2,6 +2,7 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -40,4 +41,12 @@ func (txn *txnImpl) GetDatabase(name string) (db handle.Database, err error) {
 
 func (txn *txnImpl) UseDatabase(name string) (err error) {
 	return txn.Store.UseDatabase(name)
+}
+
+func (txn *txnImpl) CurrentDatabase() (db handle.Database) {
+	return txn.Store.CurrentDatabase()
+}
+
+func (txn *txnImpl) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return txn.Store.LogTxnEntry(tableId, entry, readed)
 }

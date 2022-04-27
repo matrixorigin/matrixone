@@ -7,4 +7,6 @@ var (
 	ErrDuplicate = errors.New("tae catalog: duplicate")
 
 	ErrValidation = errors.New("tae catalog: validataion")
+
+	ErrStopCurrRecur = errors.New("tae catalog: stop current recursion")
 )

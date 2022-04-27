@@ -67,7 +67,7 @@ func NewColumnNode(txn txnif.AsyncTxn, id *common.ID, rwlocker *sync.RWMutex) *C
 	return n
 }
 
-func (n *ColumnNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry txnbase.NodeEntry, err error) {
+func (n *ColumnNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewUpdateCmd(id, n)
 	return
 }
@@ -287,3 +287,6 @@ func (n *ColumnNode) ApplyCommit() (err error) {
 	n.chain.controller.IncChangeNodeCnt()
 	return
 }
+
+func (n *ColumnNode) PrepareRollback() (err error) { return }
+func (n *ColumnNode) ApplyRollback() (err error)   { return }

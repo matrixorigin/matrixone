@@ -11,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type NodeType int8
@@ -191,7 +190,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (err error) {
 	return
 }
 
-func (node *DeleteNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry txnbase.NodeEntry, err error) {
+func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
 	return
 }
@@ -202,3 +201,6 @@ func (node *DeleteNode) ApplyDeletes(vec *gvec.Vector) *gvec.Vector {
 	}
 	return compute.ApplyDeleteToVector(vec, node.mask)
 }
+
+func (node *DeleteNode) PrepareRollback() (err error) { return }
+func (node *DeleteNode) ApplyRollback() (err error)   { return }

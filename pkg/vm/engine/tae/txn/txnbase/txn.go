@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/sirupsen/logrus"
@@ -182,5 +183,13 @@ func (txn *Txn) GetDatabase(name string) (db handle.Database, err error) {
 }
 
 func (txn *Txn) UseDatabase(name string) (err error) {
+	return
+}
+
+func (txn *Txn) CurrentDatabase() (db handle.Database) {
+	return
+}
+
+func (txn *Txn) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }

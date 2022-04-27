@@ -8,7 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/stretchr/testify/assert"
 )
@@ -78,7 +78,7 @@ func TestSchedule1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-		factory := tables.CompactBlockTaskFactory(blkMeta)
+		factory := jobs.CompactBlockTaskFactory(blkMeta)
 		ctx := tasks.Context{Waitable: true}
 		task, err := db.TaskScheduler.ScheduleTxnTask(&ctx, factory)
 		assert.Nil(t, err)

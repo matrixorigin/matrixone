@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/sirupsen/logrus"
@@ -29,35 +30,45 @@ func (checker *warChecker) readSymbol(symbol string) {
 	}
 }
 
-func (checker *warChecker) readDBVar(db *catalog.DBEntry) {
-	buf := txnbase.KeyEncoder.EncodeDB(db.GetID())
+func (checker *warChecker) Read(id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeBlock(checker.db.ID, id.TableID, id.SegmentID, id.BlockID)
+}
+
+func (checker *warChecker) ReadDB(id uint64) {
+	buf := txnbase.KeyEncoder.EncodeDB(id)
 	checker.readSymbol(string(buf))
 }
 
-func (checker *warChecker) readTableVar(tb *catalog.TableEntry) {
-	buf := txnbase.KeyEncoder.EncodeDB(tb.GetDB().GetID())
+func (checker *warChecker) ReadTable(id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(tb.GetDB().GetID(), tb.GetID())
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) readSegmentVar(seg *catalog.SegmentEntry) {
-	buf := txnbase.KeyEncoder.EncodeDB(seg.GetTable().GetDB().GetID())
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(seg.GetTable().GetDB().GetID(), seg.GetTable().GetID())
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(seg.GetTable().GetDB().GetID(), seg.GetTable().GetID(), seg.GetID())
+	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
 	checker.readSymbol(string(buf))
 }
 
-func (checker *warChecker) readBlockVar(blk *catalog.BlockEntry) {
-	buf := txnbase.KeyEncoder.EncodeDB(blk.GetSegment().GetTable().GetDB().GetID())
+func (checker *warChecker) ReadSegment(id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(blk.GetSegment().GetTable().GetDB().GetID(), blk.GetSegment().GetTable().GetID())
+	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(blk.GetSegment().GetTable().GetDB().GetID(), blk.GetSegment().GetTable().GetID(), blk.GetSegment().GetID())
+	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeBlock(blk.GetSegment().GetTable().GetDB().GetID(), blk.GetSegment().GetTable().GetID(), blk.GetSegment().GetID(), blk.GetID())
+}
+
+func (checker *warChecker) ReadBlock(id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeBlock(checker.db.ID, id.TableID, id.SegmentID, id.BlockID)
 	checker.readSymbol(string(buf))
 }
 

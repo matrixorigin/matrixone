@@ -27,7 +27,6 @@ func (store *NoopTxnStore) ApplyRollback() error                                
 func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
-func (store *NoopTxnStore) PrepareCompactBlock(from, to *common.ID) error          { return nil }
 
 func (store *NoopTxnStore) CreateRelation(def interface{}) (rel handle.Relation, err error) { return }
 func (store *NoopTxnStore) DropRelationByName(name string) (rel handle.Relation, err error) { return }
@@ -36,6 +35,7 @@ func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err 
 func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)        { return }
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)         { return }
 func (store *NoopTxnStore) UseDatabase(name string) (err error)                             { return }
+func (store *NoopTxnStore) CurrentDatabase() (db handle.Database)                           { return }
 func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)        { return }
 
 func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)     { return }
@@ -59,3 +59,6 @@ func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v interface{}, 
 
 func (store *NoopTxnStore) LogSegmentID(tid, sid uint64) {}
 func (store *NoopTxnStore) LogBlockID(tid, bid uint64)   {}
+func (store *NoopTxnStore) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return
+}

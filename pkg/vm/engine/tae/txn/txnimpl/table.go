@@ -71,7 +71,7 @@ type Table interface {
 	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
 
-	PrepareCompactBlock(from, to *common.ID) (err error)
+	LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error)
 }
 
 type txnTable struct {
@@ -101,7 +101,7 @@ type txnTable struct {
 	maxSegId    uint64
 	maxBlkId    uint64
 
-	blocksCompactionCtx *blocksCompactionCtx
+	txnEntries []txnif.TxnEntry
 }
 
 func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.NodeDriver, mgr base.INodeManager, checker *warChecker, dataFactory *tables.DataFactory) *txnTable {
@@ -122,6 +122,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
 		logs:        make([]txnbase.NodeEntry, 0),
+		txnEntries:  make([]txnif.TxnEntry, 0),
 	}
 	return tbl
 }
@@ -184,7 +185,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 	}
 	for _, node := range tbl.updateNodes {
 		csn := cmdMgr.GetCSN()
-		updateCmd, _, err := node.MakeCommand(uint32(csn), false)
+		updateCmd, err := node.MakeCommand(uint32(csn))
 		if err != nil {
 			panic(err)
 		}
@@ -194,7 +195,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 	}
 	for _, node := range tbl.deleteNodes {
 		csn := cmdMgr.GetCSN()
-		deleteCmd, _, err := node.MakeCommand(uint32(csn), false)
+		deleteCmd, err := node.MakeCommand(uint32(csn))
 		if err != nil {
 			panic(err)
 		}
@@ -228,7 +229,7 @@ func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	}
 	seg = newSegment(tbl.txn, meta)
 	tbl.csegs = append(tbl.csegs, meta)
-	tbl.warChecker.readTableVar(meta.GetTable())
+	tbl.warChecker.ReadTable(meta.GetTable().AsCommonID())
 	return
 }
 
@@ -242,36 +243,15 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.cblks = append(tbl.cblks, meta)
-	tbl.warChecker.readSegmentVar(seg)
+	tbl.warChecker.ReadSegment(seg.AsCommonID())
 	return
 }
 
-func (tbl *txnTable) PrepareCompactBlock(from, to *common.ID) (err error) {
-	if tbl.blocksCompactionCtx == nil {
-		tbl.blocksCompactionCtx = newBlocksCompactionCtx()
+func (tbl *txnTable) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	tbl.txnEntries = append(tbl.txnEntries, entry)
+	for _, id := range readed {
+		tbl.warChecker.Read(id)
 	}
-	if tbl.blocksCompactionCtx.GetCtx(from) != nil {
-		return txnif.TxnWWConflictErr
-	}
-	srcSeg, err := tbl.entry.GetSegmentByID(from.SegmentID)
-	if err != nil {
-		return
-	}
-	srcBlk, err := srcSeg.GetBlockEntryByID(from.BlockID)
-	if err != nil {
-		return
-	}
-	destSeg, err := tbl.entry.GetSegmentByID(to.SegmentID)
-	if err != nil {
-		return
-	}
-	destBlk, err := destSeg.GetBlockEntryByID(to.BlockID)
-	if err != nil {
-		return
-	}
-	tbl.blocksCompactionCtx.AddCtx(tbl.txn, newBlock(tbl.txn, srcBlk), newBlock(tbl.txn, destBlk))
-	tbl.warChecker.readBlockVar(srcBlk)
-	tbl.warChecker.readSegmentVar(destSeg)
 	return
 }
 
@@ -311,7 +291,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	tbl.cblks = append(tbl.cblks, meta)
-	tbl.warChecker.readSegmentVar(seg)
+	tbl.warChecker.ReadSegment(seg.AsCommonID())
 	return newBlock(tbl.txn, meta), err
 }
 
@@ -320,7 +300,7 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 		panic("logic error")
 	}
 	tbl.createEntry = e
-	tbl.warChecker.readDBVar(tbl.entry.GetDB())
+	tbl.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
 
 func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) {
@@ -328,7 +308,7 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) {
 		panic("logic error")
 	}
 	tbl.dropEntry = e
-	tbl.warChecker.readDBVar(tbl.entry.GetDB())
+	tbl.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
 
 func (tbl *txnTable) IsDeleted() bool {
@@ -367,7 +347,6 @@ func (tbl *txnTable) Close() error {
 	tbl.deleteNodes = nil
 	tbl.appendNodes = nil
 	tbl.tableHandle = nil
-	tbl.blocksCompactionCtx = nil
 	tbl.csegs = nil
 	tbl.dsegs = nil
 	tbl.cblks = nil
@@ -546,7 +525,7 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(segmentId)
 			blk, _ := seg.GetBlockEntryByID(blockId)
-			tbl.warChecker.readBlockVar(blk)
+			tbl.warChecker.ReadBlock(blk.AsCommonID())
 		}
 		return
 	}
@@ -561,8 +540,9 @@ func (tbl *txnTable) RangeDelete(inode uint32, segmentId, blockId uint64, start,
 	blkData := blk.GetBlockData()
 	node2, err := blkData.RangeDelete(tbl.txn, start, end)
 	if err == nil {
-		tbl.AddDeleteNode(blk.AsCommonID(), node2.(*updates.DeleteNode))
-		tbl.warChecker.readBlockVar(blk)
+		id := blk.AsCommonID()
+		tbl.AddDeleteNode(id, node2.(*updates.DeleteNode))
+		tbl.warChecker.ReadBlock(id)
 	}
 	return
 }
@@ -634,7 +614,7 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 		if err != nil {
 			seg, _ := tbl.entry.GetSegmentByID(segmentId)
 			blk, _ := seg.GetBlockEntryByID(blockId)
-			tbl.warChecker.readBlockVar(blk)
+			tbl.warChecker.ReadBlock(blk.AsCommonID())
 		}
 		return
 	}
@@ -650,7 +630,7 @@ func (tbl *txnTable) Update(inode uint32, segmentId, blockId uint64, row uint32,
 	node2, err := blkData.Update(tbl.txn, row, col, v)
 	if err == nil {
 		tbl.AddUpdateNode(node2)
-		tbl.warChecker.readBlockVar(blk)
+		tbl.warChecker.ReadBlock(blk.AsCommonID())
 	}
 	return
 }
@@ -866,12 +846,9 @@ func (tbl *txnTable) prepareAppend(node InsertNode) (err error) {
 			start:  appended,
 			count:  toAppendWithDeletes,
 		}
-		{
-			meta := appender.GetMeta().(*catalog.BlockEntry)
-			tbl.warChecker.readBlockVar(meta)
-		}
-		tbl.appends = append(tbl.appends, ctx)
 		id := appender.GetID()
+		tbl.warChecker.ReadBlock(id)
+		tbl.appends = append(tbl.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(tbl.appends))
 		appended += toAppend
 		if appended == node.Rows() {
@@ -908,11 +885,9 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 			return
 		}
 	}
-	if tbl.blocksCompactionCtx != nil {
-		for _, ctx := range tbl.blocksCompactionCtx.contexts {
-			if ctx.PrepareCommit(); err != nil {
-				return
-			}
+	for _, node := range tbl.txnEntries {
+		if err = node.PrepareCommit(); err != nil {
+			return
 		}
 	}
 
@@ -983,7 +958,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 			return
 		}
 	}
-	// TODO
+	for _, node := range tbl.txnEntries {
+		if err = node.ApplyCommit(); err != nil {
+			return
+		}
+	}
 	return
 }
 
@@ -1024,7 +1003,7 @@ func (tbl *txnTable) buildCommitCmd(cmdSeq *uint32) (cmd txnif.TxnCmd, entries [
 		h.Close()
 	}
 	for _, node := range tbl.updateNodes {
-		updateCmd, _, err := node.MakeCommand(*cmdSeq, false)
+		updateCmd, err := node.MakeCommand(*cmdSeq)
 		if err != nil {
 			return cmd, entries, err
 		}

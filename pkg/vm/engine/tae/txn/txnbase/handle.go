@@ -62,7 +62,9 @@ func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v interface{}, err
 func (rel *TxnRelation) Update(*common.ID, uint32, uint16, interface{}) (err error)           { return }
 func (rel *TxnRelation) RangeDelete(*common.ID, uint32, uint32) (err error)                   { return }
 func (rel *TxnRelation) GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error) { return }
-func (rel *TxnRelation) PrepareCompactBlock(from, to *common.ID) (err error)                  { return }
+func (rel *TxnRelation) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return
+}
 
 func (seg *TxnSegment) GetMeta() interface{}               { return nil }
 func (seg *TxnSegment) String() string                     { return "" }

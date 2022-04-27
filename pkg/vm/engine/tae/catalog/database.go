@@ -206,12 +206,19 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 	for tableIt.Valid() {
 		table := tableIt.Get().GetPayload().(*TableEntry)
 		if err = processor.OnTable(table); err != nil {
-			return
+			if err == ErrStopCurrRecur {
+				err = nil
+				continue
+			}
+			break
 		}
 		if err = table.RecurLoop(processor); err != nil {
 			return
 		}
 		tableIt.Next()
+	}
+	if err == ErrStopCurrRecur {
+		err = nil
 	}
 	return err
 }

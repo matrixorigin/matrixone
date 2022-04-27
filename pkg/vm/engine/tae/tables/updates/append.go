@@ -53,3 +53,9 @@ func (n *AppendNode) ApplyCommit() error {
 	}
 	return nil
 }
+
+func (n *AppendNode) PrepareRollback() (err error) { return }
+func (n *AppendNode) ApplyRollback() (err error)   { return }
+func (n *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
+	return
+}

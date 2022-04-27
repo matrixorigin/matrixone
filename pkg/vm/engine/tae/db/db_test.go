@@ -16,7 +16,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -230,7 +231,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		t.Log(blkMeta.String())
-		task, err := tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
 		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
@@ -262,7 +263,7 @@ func TestCompactBlock1(t *testing.T) {
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
-		task, err := tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
 		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
@@ -281,7 +282,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
-		task, err = tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
 		assert.Nil(t, err)
 		data, err = task.PrepareData()
 		assert.Nil(t, err)
@@ -294,7 +295,7 @@ func TestCompactBlock1(t *testing.T) {
 			seg, _ := rel.GetSegment(id.SegmentID)
 			blk, _ := seg.GetBlock(id.BlockID)
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-			task, err = tables.NewCompactBlockTask(&ctx, txn, blkMeta)
+			task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
 			assert.Nil(t, err)
 			data, err := task.PrepareData()
 			assert.Nil(t, err)
@@ -309,7 +310,9 @@ func TestCompactBlock1(t *testing.T) {
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
-		err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
+		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock)
+		txn.LogTxnEntry(destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
+		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
 		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		assert.Nil(t, err)
 		err = txn.Commit()
@@ -353,7 +356,7 @@ func TestCompactBlock2(t *testing.T) {
 			block = it.GetBlock()
 			break
 		}
-		task, err := tables.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry))
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -383,7 +386,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(rel.SimplePPString(common.PPL1))
 		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
 		blk, _ := seg.GetBlock(newBlockFp.BlockID)
-		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -416,7 +419,7 @@ func TestCompactBlock2(t *testing.T) {
 		}
 		assert.Equal(t, 1, cnt)
 
-		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -460,7 +463,7 @@ func TestCompactBlock2(t *testing.T) {
 		err = blk2.RangeDelete(7, 7)
 		assert.Nil(t, err)
 
-		task, err := tables.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()

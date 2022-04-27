@@ -228,12 +228,19 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	for dbIt.Valid() {
 		dbEntry := dbIt.Get().GetPayload().(*DBEntry)
 		if err = processor.OnDatabase(dbEntry); err != nil {
-			return
+			if err == ErrStopCurrRecur {
+				err = nil
+				continue
+			}
+			break
 		}
 		if err = dbEntry.RecurLoop(processor); err != nil {
 			return
 		}
 		dbIt.Next()
+	}
+	if err == ErrStopCurrRecur {
+		err = nil
 	}
 	return err
 }

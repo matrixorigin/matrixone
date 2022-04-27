@@ -52,21 +52,12 @@ func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr bas
 	}
 }
 
-func (store *txnStore) PrepareCompactBlock(from, to *common.ID) (err error) {
-	var srcTable Table
-	var destTable Table
-	if srcTable, err = store.getOrSetTable(from.TableID); err != nil {
+func (store *txnStore) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	table, err := store.getOrSetTable(tableId)
+	if err != nil {
 		return
 	}
-	if destTable, err = store.getOrSetTable(to.TableID); err != nil {
-		return
-	}
-	if srcTable == destTable {
-		err = srcTable.PrepareCompactBlock(from, to)
-	} else {
-		panic("TODO: compact block from a table to another table")
-	}
-	return
+	return table.LogTxnEntry(entry, readed)
 }
 
 func (store *txnStore) LogSegmentID(tid, sid uint64) {
@@ -184,6 +175,10 @@ func (store *txnStore) UpdateLocalValue(id uint64, row uint32, col uint16, value
 func (store *txnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error {
 	table := store.tables[id]
 	return table.AddUpdateNode(node)
+}
+
+func (store *txnStore) CurrentDatabase() (db handle.Database) {
+	return store.database
 }
 
 func (store *txnStore) UseDatabase(name string) (err error) {

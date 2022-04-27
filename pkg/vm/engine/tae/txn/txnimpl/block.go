@@ -142,8 +142,9 @@ func (blk *txnBlock) GetVectorCopyById(colIdx int, compressed, decompressed *byt
 func (blk *txnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return blk.entry.GetBlockData().GetVectorCopy(blk.Txn, attr, compressed, decompressed)
 }
-func (blk *txnBlock) PrepareCompactBlock(from, to *common.ID) (err error) {
-	return blk.Txn.GetStore().PrepareCompactBlock(from, to)
+
+func (blk *txnBlock) LogTxnEntry(entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return blk.Txn.GetStore().LogTxnEntry(blk.entry.GetSegment().GetTable().GetID(), entry, readed)
 }
 
 func (blk *txnBlock) GetSegment() (seg handle.Segment) {

@@ -209,7 +209,7 @@ func TestColumnChain3(t *testing.T) {
 	assert.Equal(t, ncnt, chain.DepthLocked())
 
 	node := chain.GetHead().GetPayload().(*ColumnNode)
-	cmd, _, err := node.MakeCommand(1, false)
+	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
 
 	var w bytes.Buffer
@@ -401,7 +401,7 @@ func TestDeleteChain1(t *testing.T) {
 	t.Log(chain.StringLocked())
 	assert.Equal(t, 4, chain.DepthLocked())
 
-	cmd, _, err := merged.MakeCommand(1, false)
+	cmd, err := merged.MakeCommand(1)
 	assert.Nil(t, err)
 	assert.NotNil(t, cmd)
 

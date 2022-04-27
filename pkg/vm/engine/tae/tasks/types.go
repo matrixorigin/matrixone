@@ -17,6 +17,7 @@ const (
 	CustomizedTask
 
 	CompactBlockTask
+	MergeBlocksTask
 )
 
 func init() {

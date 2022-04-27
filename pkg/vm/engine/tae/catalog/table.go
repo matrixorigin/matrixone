@@ -171,7 +171,11 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	for segIt.Valid() {
 		segment := segIt.Get().GetPayload().(*SegmentEntry)
 		if err = processor.OnSegment(segment); err != nil {
-			return
+			if err == ErrStopCurrRecur {
+				err = nil
+				continue
+			}
+			break
 		}
 		blkIt := segment.MakeBlockIt(true)
 		for blkIt.Valid() {
@@ -182,6 +186,9 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			blkIt.Next()
 		}
 		segIt.Next()
+	}
+	if err == ErrStopCurrRecur {
+		err = nil
 	}
 	return err
 }
