@@ -14,6 +14,7 @@ require (
 	github.com/golang/mock v1.6.0
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
+	github.com/google/gofuzz v1.2.0
 	github.com/lni/goutils v1.3.0
 	github.com/matrixorigin/matrixcube v0.3.1-0.20220406054210-215b778d2f95
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
