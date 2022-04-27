@@ -14,7 +14,6 @@ $ cd matrixone
 $ makepkg -rsi
 ```
 
-You can found `system_vars_config.toml` in
 ## **Building from source**
 
 #### 1. Install Go as necessary
