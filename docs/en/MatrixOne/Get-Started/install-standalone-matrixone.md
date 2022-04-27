@@ -2,14 +2,27 @@
 
 MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version either by [building from source](#building-from-source) or [using docker](#using-docker).
 
-Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS. 
- 
+Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
+
+## **Install From AUR**
+
+ArchLinux User can install MatrixOne from [AUR](https://aur.archlinux.org/packages/matrixone).
+
+```
+$ git clone https://aur.archlinux.org/matrixone.git
+$ cd matrixone
+$ makepkg -rsi
+```
+
+You can found `system_vars_config.toml` in
 ## **Building from source**
 
 #### 1. Install Go as necessary
 
+
 Go version 1.18 is required.
   
+
 #### 2. Get the MatrixOne code
 
 ```
@@ -59,7 +72,7 @@ $ docker --version
 ```
 #### 2. Create and run the container for the latest release of MatrixOne
 It will pull the image from Docker Hub if not exists.
-   
+
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```

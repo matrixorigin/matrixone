@@ -1,6 +1,17 @@
 # **安装单机版MatrixOne**
 
 作为一款开源数据库，MatrixOne目前支持主流的Linux和MacOS系统。你可以直接从[源代码](#使用源代码搭建)搭建单机版本的MatrixOne，也可以使用[docker](#使用docker)安装部署。
+
+## **从 AUR 安装**
+
+ArchLinux 用户可以从 [AUR](https://aur.archlinux.org/packages/matrixone) 安装 MatrixOne。
+
+```
+$ git clone https://aur.archlinux.org/matrixone.git
+$ cd matrixone
+$ makepkg -rsi
+```
+
 ## **使用源代码搭建**
 
 #### 1. 安装部署Go语言环境
@@ -28,7 +39,7 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 ## **下载二进制包**
-从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境中运行MatrixOne。  
+从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境中运行MatrixOne。
 #### 1. 下载二进制包并解压
 ```
 $ wget https://github.com/matrixorigin/matrixone/releases/download/v0.3.0/mo-server-v0.3.0-linux-amd64.zip
