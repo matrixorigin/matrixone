@@ -16,21 +16,55 @@ package lengthutf8
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"unicode/utf8"
 )
 
 var (
 	StrLengthUTF8 func(*types.Bytes, []uint64) []uint64
+	table         [256]uint8
 )
 
 func init() {
 	StrLengthUTF8 = strLengthUTF8
+	table = [256]uint8{
+		// start byte of 1-byte utf8 char: 0b0000'0000 ~ 0b0111'1111
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1,
+		// continuation byte: 0b1000'0000 ~ 0b1011'1111
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		// start byte of 2-byte utf8 char: 0b1100'0000 ~ 0b1101'1111
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		2, 2, 2, 2, 2, 2, 2,
+		// start byte of 3-byte utf8 char: 0b1110'0000 ~ 0b1110'1111
+		3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+		// start byte of 4-byte utf8 char: 0b1111'0000 ~ 0b1111'0111
+		// invalid utf8 byte: 0b1111'1000~ 0b1111'1111
+		4, 4, 4, 4, 4, 4, 4, 4, 1, 1, 1, 1, 1, 1, 1, 1}
+}
+
+// this countUTF8CodePoints implementation bases on https://github.com/satanson/cpp_etudes/blob/master/include/string_functions.hh
+func countUTF8CodePoints(s []byte) uint64 {
+	var charSize uint8 = 0
+	var count uint64 = 0
+	length := len(s)
+
+	for i := 0; i < length; {
+		charSize = table[s[i]]
+		count++
+		i = i + int(charSize)
+	}
+	return count
 }
 
 func strLengthUTF8(xs *types.Bytes, rs []uint64) []uint64 {
 	for i := range xs.Lengths {
 		x := xs.Get(int64(i))
-		rs[i] = uint64(utf8.RuneCount(x))
+		rs[i] = countUTF8CodePoints(x)
 	}
 	return rs
 }
