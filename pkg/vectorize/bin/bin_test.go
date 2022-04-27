@@ -140,3 +140,24 @@ func TestFloatToBinary(t *testing.T) {
 
 	require.Equal(t, buf.Bytes(), ret.Data)
 }
+
+func TestFormatUintToBinary(t *testing.T) {
+	tt := []struct {
+		num  uint64
+		want string
+	}{
+		{0, "0"},
+		{1, "1"},
+		{2, "10"},
+		{3, "11"},
+		{127, "1111111"},
+		{1e7, "100110001001011010000000"},
+		{1e9, "111011100110101100101000000000"},
+	}
+
+	for _, tc := range tt {
+		if got := uintToBinary(tc.num); got != tc.want {
+			t.Fatalf("uintToBinary(%d) = %s, want %s", tc.num, got, tc.want)
+		}
+	}
+}
