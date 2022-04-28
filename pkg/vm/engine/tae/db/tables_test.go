@@ -18,6 +18,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -553,6 +555,67 @@ func TestTxn6(t *testing.T) {
 			}
 
 			t.Log(rel.SimplePPString(common.PPL1))
+		}
+	}
+}
+
+func TestMergeBlocks1(t *testing.T) {
+	db := initDB(t, nil)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*2), int(schema.PrimaryKey), nil)
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bat)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		blks := make([]*catalog.BlockEntry, 0)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
+			blks = append(blks, blk)
+			it.Next()
+		}
+		{
+			txn := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			it := rel.MakeBlockIt()
+			blk := it.GetBlock()
+			err := blk.Update(2, 3, int64(22))
+			assert.Nil(t, err)
+			assert.Nil(t, txn.Commit())
+		}
+		factory := jobs.MergeBlocksTaskFactory(blks)
+		ctx := &tasks.Context{Waitable: false}
+		task, err := factory(ctx, txn)
+		assert.Nil(t, err)
+		err = task.OnExec()
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	}
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			t.Log(blk.String())
+			vec, _, _ := blk.GetVectorCopyById(int(schema.PrimaryKey), nil, nil)
+			t.Log(vec.String())
+			it.Next()
 		}
 	}
 }

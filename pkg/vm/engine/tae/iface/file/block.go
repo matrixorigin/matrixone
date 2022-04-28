@@ -6,6 +6,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 )
@@ -31,6 +32,7 @@ type Block interface {
 	WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) error
 	WriteBatch(bat *gbat.Batch, ts uint64) error
 	LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat.Batch, err error)
+	WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) error
 }
 
 type ColumnBlock interface {

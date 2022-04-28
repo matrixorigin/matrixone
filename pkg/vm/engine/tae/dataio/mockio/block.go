@@ -155,6 +155,21 @@ func (bf *blockFile) LoadBatch(attrs []string, colTypes []types.Type) (bat *gbat
 	return
 }
 
+func (bf *blockFile) WriteColumnVec(ts uint64, colIdx int, vec *gvec.Vector) (err error) {
+	cb, err := bf.OpenColumn(colIdx)
+	if err != nil {
+		return err
+	}
+	defer cb.Close()
+	cb.WriteTS(ts)
+	buf, err := vec.Show()
+	if err != nil {
+		return err
+	}
+	err = cb.WriteData(buf)
+	return
+}
+
 func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 	if err = bf.WriteTS(ts); err != nil {
 		return
@@ -163,19 +178,8 @@ func (bf *blockFile) WriteBatch(bat *gbat.Batch, ts uint64) (err error) {
 		return
 	}
 	for colIdx := range bat.Attrs {
-		cb, err := bf.OpenColumn(colIdx)
-		if err != nil {
-			return err
-		}
-		defer cb.Close()
-		cb.WriteTS(ts)
-		col := bat.Vecs[colIdx]
-		buf, err := col.Show()
-		if err != nil {
-			return err
-		}
-		if err = cb.WriteData(buf); err != nil {
-			return err
+		if err = bf.WriteColumnVec(ts, colIdx, bat.Vecs[colIdx]); err != nil {
+			return
 		}
 	}
 	return
