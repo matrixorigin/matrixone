@@ -17,15 +17,14 @@
 // in many database management systems, the DECIMAL type may also referred as NUMERIC.
 //
 // Usage: Decimal(precision, scale), Decimal(precision), Decimal
-// creat table t1 (a decimal);       the default precision 10, default scale 0 is applied, this is the same as "create table t1 (a decimal(10, 0));
-// create table t1(a decimal(20);	 the default scale 0 is applied, that means, this is the same as create table t1(a decimal(20, 0);
+// creat table t1 (a decimal);       the default precision 10, default scale 0 is applied, this is the same as "create table t1 (a decimal(10, 0))";
+// create table t1(a decimal(20);	 the default scale 0 is applied, this is the same as create table t1 (a decimal(20, 0);
 // create table t1(a decimal(20, 5);
 //
 // MatrixOne supports decimal data type with precision range (0, 38], scale range (0, 38], and scale <= precision.
-// internally, precision in range 0~18 is represented as Decimal64, precision in range 19~38 is represented as Decimal128
+// internally, precision in range (0, 18] is represented as Decimal64, precision in range [19, 38] is represented as Decimal128
 //
-// we support addition, subtraction, multiplication, division for decimal data type
-
+// we support addition, subtraction, multiplication, division between decimal data types, and between decimal and integers
 // for decimal64, addition and subtraction operation
 // have result of type decimal64, the result's scale is the maximum of its two operands, overflow may happen in these two operations and no precaution is implemented,
 // nor does any indication. for multiplication and division on decimal64, the result is of type Decimal128 and therefore these two operations are safe on Decimal64, that is,
@@ -33,11 +32,11 @@
 //
 // For Decimal128, operations on this data type may overflow and no precautions nor indications are implemented, but these will only happen in extreme use cases, that is, when the result can not fit into a 128 bit representation
 //
-// Comparison operations <, >, =, !=, <=, >= is also supported in decimal type
+// Comparison operations <, >, =, !=, <=, >= are also supported between decimal types, and between decimals and integers.
 //
-// in the case where a literal string needs to be interpreted as decimal, for example, "select * from decimal_table where a = 1.23",
-// it will be interpreted as decimal128
-// for operations between decimals and integers, the result is of type decimal128
+// in cases where a literal string needs to be interpreted as decimal, for example, "select * from decimal_table where a = 1.23",
+// the string literal "1.23" will be interpreted as a decimal128
+// for operations between decimals and integers, the integer type will be cast to a decimal128 before operation, and the result is of type decimal128
 // operations between decimals and floats are not defined.
 
 package types

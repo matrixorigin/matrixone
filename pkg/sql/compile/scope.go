@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deleteTag"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
@@ -651,7 +652,7 @@ func (s *Scope) RunQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -817,7 +818,7 @@ func (s *Scope) RunAQ(e engine.Engine) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	arg := s.Instructions[0].Arg.(*transform.Argument)
@@ -1018,7 +1019,7 @@ func (s *Scope) RunCQ(e engine.Engine, op *join.Argument) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -1381,7 +1382,7 @@ func (s *Scope) RunCAQ(e engine.Engine, op *times.Argument) error {
 			return err
 		}
 		defer rel.Close()
-		rds = rel.NewReader(mcpu, nil, s.NodeInfo.Data)
+		rds = rel.NewReader(mcpu, getConditionFromInstructions(s.Instructions), s.NodeInfo.Data)
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
@@ -1884,4 +1885,16 @@ func newMergeDedupScope(ss []*Scope, proc *process.Process) []*Scope {
 		}
 	}
 	return rs
+}
+
+func getConditionFromInstructions(ins vm.Instructions) extend.Extend {
+	for _, in := range ins {
+		if in.Op == vm.Transform {
+			arg := in.Arg.(*transform.Argument)
+			if arg.Restrict != nil {
+				return arg.Restrict.E
+			}
+		}
+	}
+	return nil
 }

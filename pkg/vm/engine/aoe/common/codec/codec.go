@@ -77,7 +77,7 @@ func Encode(ks ...interface{}) []byte {
 		case uint64:
 			buf.WriteByte(byte(Uint64))
 			data := pool.Get().([]byte)
-			binary.BigEndian.PutUint64(data, uint64(v))
+			binary.BigEndian.PutUint64(data, v)
 			buf.Write(data)
 			pool.Put(data)
 		case []byte:
@@ -104,7 +104,7 @@ func Decode(data []byte) []interface{} {
 			ks = append(ks, int(binary.BigEndian.Uint64(data[:8])))
 			data = data[8:]
 		case Uint8:
-			ks = append(ks, uint8(data[0]))
+			ks = append(ks, data[0])
 			data = data[1:]
 		case Uint64:
 			ks = append(ks, int(binary.BigEndian.Uint64(data[:8])))

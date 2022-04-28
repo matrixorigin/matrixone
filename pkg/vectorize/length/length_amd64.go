@@ -28,8 +28,6 @@ func init() {
 		StrLength = strLengthAvx512
 	} else if cpu.X86.HasAVX2 {
 		StrLength = strLengthAvx2
-	} else {
-		StrLength = strLength
 	}
 }
 

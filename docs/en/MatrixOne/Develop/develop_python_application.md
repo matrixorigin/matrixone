@@ -24,15 +24,16 @@ Besides the data source account, you need to at least have these two basic softw
 
 You may refer to [Python 3 installation tutorial](https://realpython.com/installing-python/) and [MatrixOne installation](../Get-Started/install-standalone-matrixone.md) for more details.
 
-Moreover, we need to install `Tushare` and `pymysql` python libraries to use Tushare and access MatrixOne. 
+Moreover, we need to install dependant `Tushare` and `pymysql` python libraries to use Tushare and access MatrixOne. 
 
 ```bash
-pip3 install pymysql
-pip3 install tushare
+pip3 install -r requirements.txt
 ```
 
 !!! info 
     `Pymysql` is the only ORM tool supported by MatrixOne. The other python MySQL ORM tools as `SQLAlchemy`, `mysql-connector`, `MySQLdb` are not supported yet.
+
+
 
 ## **Step1: prepare and load historical dataset**
 
@@ -113,8 +114,7 @@ db = pymysql.connect(host='127.0.0.1',
 cursor = db.cursor()
 
 # Create PE table
-cursor.execute('DROP TABLE IF EXISTS pe')
-cursor.execute('CREATE TABLE pe(ts_code VARCHAR(255), trade_date VARCHAR(255), pe FLOAT, pb FLOAT)') 
+cursor.execute('CREATE TABLE IF NOT EXISTS pe(ts_code VARCHAR(255), trade_date VARCHAR(255), pe FLOAT, pb FLOAT)') 
 
 ```
 
@@ -130,12 +130,6 @@ if df.empty == False:
         
 ```
 
-Close the database and cursor connection:
-
-```python
-cursor.close()
-db.close()
-```
 
 ## **Step2: find the historical lowest P/E or P/B stock**
 
@@ -154,12 +148,18 @@ mysql> select count(*) from pe;
 Now we run a sql to calculate the lowest P/E and P/B of each stock. 
 
 ```python
-cursor.execute('select ts_code,min(pe),min(pb) from pe where pe>0 and pb>0 group by ts_code order by ts_code')
+# Find stocks that the current P/E is even lower than the historical lowest
+cursor.execute('select ts_code,min(pe) from pe where pe>0 group by ts_code order by ts_code')
+# Fetch the result as python object
+value = cursor.fetchall() 
+
+# Find stocks that the current P/B is even lower than the historical lowest
+cursor.execute('select ts_code,min(pb) from pe where pb>0 group by ts_code order by ts_code')
 # Fetch the result as python object
 value = cursor.fetchall() 
 ```
 
-Then we call Tushare `daily_basic` interface again to get the current P/E and P/B level and make a search to locate the stock whose current P/E or P/B is even lower than the historical lowest. You could of course switch any trade date you want for comparison.
+Then we call Tushare `daily_basic` interface again to get the current P/E and P/B level and make a search to locate the stock whose current P/E or P/B is even lower than the historical lowest. You could of course switch any trade date you want for comparison. We take P/E as an example.
 
 ```python
 df = pro.daily_basic(**{
@@ -171,26 +171,18 @@ df = pro.daily_basic(**{
     "offset": ""
     }, fields=[
     "ts_code",
-    "trade_date",
-    "pe",
-    "pb"
+    "pe"
     ])
 df = df.fillna(0.0)
 
 for i in range(0,len(value)):
-    ts_code = value[i][0]
-    min_pe = value[i][1]
-    min_pb = value[i][2]
+    ts_code, min_pe = value[i]
 
     for j in range(0, len(df.ts_code)):
-        if ts_code == df.ts_code[j] and df.pe[j] < min_pe and df.pe[j]>0:
-            print("ts_code: "+ts_code)
-            print("history lowest PE : "+ str(min_pe))
-            print("current PE found: "+ str(df.pe[j]))
-        if ts_code == df.ts_code[j] and df.pb[j] < min_pb and df.pb[j]>0:
-            print("ts_code: "+ts_code)
-            print("history lowest PB : "+ str(min_pe))
-            print("current PB found: "+ str(df.pe[j]))
+        if ts_code == df.ts_code[j] and min_pe > df.pe[j] > 0:
+            logging.getLogger().info("ts_code: %s", ts_code)
+            logging.getLogger().info("history lowest PE : %f", min_pe)
+            logging.getLogger().info("current PE found: %f", df.pe[j])
 ```
 
 This will print every stock with the lowest ever P/E or P/B. They are usually good choices to buy if they are not experiencing big trouble. 
@@ -206,8 +198,8 @@ We don't need to insert all data again, we just insert the data with the lastest
 df = pro.daily_basic(**{
             "ts_code": i,
             "trade_date": "",
-            "start_date": sys.argv[1],
-            "end_date": sys.argv[2],
+            "start_date": self.startDate,,
+            "end_date": self.endDate,
             "limit": "",
             "offset": ""
 }, fields=[
@@ -225,3 +217,7 @@ if df.empty == False:
             cursor.executemany(" insert into pe (ts_code, trade_date,pe,pb) values (%s, %s,%s,%s)", val_to_insert)
             
 ``` 
+
+## Source Code
+
+You can find the source code of this demo at [matrix_one_app](https://github.com/matrixorigin/matrixone_python_app).

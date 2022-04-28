@@ -31,11 +31,11 @@ func splitAndBuildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, aliasC
 
 	conds := splitExprToAND(stmt)
 	for _, cond := range conds {
-		result_expr, err := buildExpr(*cond, ctx, query, aliasCtx)
+		expr, err := buildExpr(*cond, ctx, query, aliasCtx)
 		if err != nil {
 			return nil, err
 		}
-		exprs = append(exprs, result_expr)
+		exprs = append(exprs, expr)
 	}
 
 	return exprs, nil
@@ -53,7 +53,7 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, aliasCtx *Alia
 	case *tree.NotExpr:
 		return getFunctionExprByNameAndExprs("NOT", []tree.Expr{astExpr.Expr}, ctx, query, aliasCtx)
 	case *tree.AndExpr:
-		return getFunctionExprByNameAndExprs("AND", []tree.Expr{astExpr.Expr}, ctx, query, aliasCtx)
+		return getFunctionExprByNameAndExprs("AND", []tree.Expr{astExpr.Left, astExpr.Right}, ctx, query, aliasCtx)
 	case *tree.UnaryExpr:
 		return buildUnaryExpr(astExpr, ctx, query, aliasCtx)
 	case *tree.BinaryExpr:
@@ -69,15 +69,31 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, aliasCtx *Alia
 	case *tree.CastExpr:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 	case *tree.IsNullExpr:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
+		return getFunctionExprByNameAndExprs("IFNULL", []tree.Expr{astExpr.Expr}, ctx, query, aliasCtx)
 	case *tree.IsNotNullExpr:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
+		expr, err := getFunctionExprByNameAndExprs("IFNULL", []tree.Expr{astExpr.Expr}, ctx, query, aliasCtx)
+		if err != nil {
+			return nil, err
+		}
+		funObjRef := getFunctionObjRef("NOT")
+		return &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: funObjRef,
+					Args: []*plan.Expr{expr},
+				},
+			},
+		}, nil
 	case *tree.Tuple:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 	case *tree.CaseExpr:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 	case *tree.IntervalExpr:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
+	case *tree.XorExpr:
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
+	case *tree.Subquery:
+		return buildSubQuery(astExpr, ctx, query, aliasCtx)
 	case *tree.DefaultVal:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 	case *tree.MaxValue:
@@ -88,30 +104,64 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, aliasCtx *Alia
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 	case *tree.ExprList:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
+	case tree.UnqualifiedStar:
+		//select * from table
+		list := &plan.ExprList{}
+		unfoldStar(query, list, "")
+		return &plan.Expr{
+			Expr: &plan.Expr_List{
+				List: list,
+			},
+		}, nil
+	default:
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%+v' is not support now", stmt))
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", stmt))
 }
 
 func buildUnresolvedName(expr *tree.UnresolvedName, ctx CompilerContext, query *Query, aliasCtx *AliasContext) (*plan.Expr, error) {
 	switch expr.NumParts {
 	case 1:
+		// a.*
+		if expr.Star {
+			table := ""
+			if aliasCtx != nil {
+				if val, ok := aliasCtx.tableAlias[expr.Parts[0]]; ok {
+					table = val
+				}
+			}
+			if table == "" {
+				table = expr.Parts[0]
+			}
+
+			list := &plan.ExprList{}
+			unfoldStar(query, list, table)
+			return &plan.Expr{
+				Expr: &plan.Expr_List{
+					List: list,
+				},
+			}, nil
+		}
+		name := expr.Parts[0]
 		if aliasCtx != nil {
-			if expr, ok := aliasCtx.columnAlias[expr.Parts[0]]; ok {
-				return expr, nil
+			if val, ok := aliasCtx.columnAlias[name]; ok {
+				return val, nil
 			}
 		}
-		return getColExprByFieldName(expr.Parts[0], getDefaultTableDef(query))
+
+		return getExprFromUnresolvedName(query, strings.ToUpper(name), "")
 	case 2:
-		var tableDef *plan.TableDef
+		table := ""
 		if aliasCtx != nil {
 			if val, ok := aliasCtx.tableAlias[expr.Parts[1]]; ok {
-				tableDef = val
+				table = val
+			} else {
+				return nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table alias '%v' is not exist", expr.Parts[1]))
 			}
 		}
-		if tableDef == nil {
-			_, tableDef = ctx.Resolve(expr.Parts[1])
+		if table == "" {
+			table = strings.ToUpper(expr.Parts[1])
 		}
-		return getColExprByFieldName(expr.Parts[0], tableDef)
+		return getExprFromUnresolvedName(query, strings.ToUpper(expr.Parts[0]), table)
 	case 3:
 		//todo
 	case 4:
@@ -130,7 +180,7 @@ func buildRangeCond(expr *tree.RangeCond, ctx CompilerContext, query *Query, ali
 		if err != nil {
 			return nil, err
 		}
-		funObjRef, _ := getFunctionObjRef("OR")
+		funObjRef := getFunctionObjRef("OR")
 		return &plan.Expr{
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -148,7 +198,7 @@ func buildRangeCond(expr *tree.RangeCond, ctx CompilerContext, query *Query, ali
 		if err != nil {
 			return nil, err
 		}
-		funObjRef, _ := getFunctionObjRef("AND")
+		funObjRef := getFunctionObjRef("AND")
 		return &plan.Expr{
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
@@ -161,12 +211,39 @@ func buildRangeCond(expr *tree.RangeCond, ctx CompilerContext, query *Query, ali
 }
 
 func buildFunctionExpr(expr *tree.FuncExpr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) (*plan.Expr, error) {
-	name, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+	funcReference, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", expr))
 	}
-	funcName := strings.ToUpper(name.Parts[0])
-	//todo  check if need map funcName to plan2's function name
+	funcName := strings.ToUpper(funcReference.Parts[0])
+
+	//todo confirm: change count(*) to count(1)  but count(*) funcReference.Star is false why?
+	if funcName == "COUNT" && funcReference.Star {
+		funObjRef := getFunctionObjRef(funcName)
+		return &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: funObjRef,
+					Args: []*plan.Expr{
+						{
+							Expr: &plan.Expr_C{
+								C: &plan.Const{
+									Isnull: false,
+									Value: &plan.Const_Ival{
+										Ival: 1,
+									},
+								},
+							},
+						}},
+				},
+			},
+		}, nil
+	}
+
+	_, ok = BuiltinFunctionsMap[funcName]
+	if !ok {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function name '%v' is not exist", funcName))
+	}
 	return getFunctionExprByNameAndExprs(funcName, expr.Exprs, ctx, query, aliasCtx)
 }
 

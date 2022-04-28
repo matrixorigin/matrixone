@@ -122,23 +122,11 @@ func NewMockCompilerContext() *MockCompilerContext {
 	defaultDbName := "tpch"
 
 	//build tpch context data(schema)
+	tableIdx := 0
 	for tableName, cols := range tpchSchema {
 		var colDefs []*plan.ColDef
 
-		for idx, col := range cols {
-			objName := tableName + "." + col.Name
-
-			objects[objName] = &plan.ObjectRef{
-				Server:     0,
-				Db:         0,
-				Schema:     0,
-				Obj:        int64(idx),
-				ServerName: "",
-				DbName:     defaultDbName,
-				SchemaName: "",
-				ObjName:    col.Name,
-			}
-
+		for _, col := range cols {
 			colDefs = append(colDefs, &plan.ColDef{
 				Typ: &plan.Type{
 					Id:        col.Id,
@@ -151,10 +139,22 @@ func NewMockCompilerContext() *MockCompilerContext {
 			})
 		}
 
+		objects[tableName] = &plan.ObjectRef{
+			Server:     0,
+			Db:         0,
+			Schema:     0,
+			Obj:        int64(tableIdx),
+			ServerName: "",
+			DbName:     defaultDbName,
+			SchemaName: "",
+			ObjName:    tableName,
+		}
+
 		tables[tableName] = &plan.TableDef{
 			Name: tableName,
 			Cols: colDefs,
 		}
+		tableIdx++
 	}
 
 	return &MockCompilerContext{
@@ -167,7 +167,7 @@ func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.Table
 	return m.objects[name], m.tables[name]
 }
 
-func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) Cost {
+func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	var c Cost
 	div := 1.0
 	if e != nil {
@@ -179,7 +179,7 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) Cost {
 	c.Ndv = 900000 / div
 	c.Start = 0
 	c.Total = 1000
-	return c
+	return &c
 }
 
 type MockOptimizer struct {

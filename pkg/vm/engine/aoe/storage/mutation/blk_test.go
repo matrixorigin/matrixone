@@ -79,6 +79,7 @@ func TestMutableBlockNode(t *testing.T) {
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
 	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tabledata, err := tables.RegisterTable(tablemeta)
+	assert.Nil(t, err)
 
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()

@@ -185,7 +185,7 @@ type CubeDriver interface {
 	AsyncExec(interface{}, func(CustomRequest, []byte, error), interface{})
 	// ExecWithGroup exec command with group
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
-	TpeExecWithGroup(interface{}, pb.Group,int,time.Duration) ([]byte, error)
+	TpeExecWithGroup(interface{}, pb.Group, int, time.Duration) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
 	AsyncExecWithGroup(interface{}, pb.Group, func(CustomRequest, []byte, error), interface{})
 	TpeAsyncExecWithGroup(interface{}, pb.Group, time.Duration, func(CustomRequest, []byte, error), interface{})
@@ -331,7 +331,10 @@ func (h *driver) initShardPool() error {
 
 //Close stop h.app
 func (h *driver) Close() {
-	h.app.Stop()
+	err := h.app.Stop()
+	if err != nil {
+		panic(err)
+	}
 }
 
 //AOEStore returns h.aoeDB
@@ -575,7 +578,7 @@ func (h *driver) TpeScan(startKey, endKey, prefix []byte, limit uint64, needKey 
 	var data []byte
 	var keys [][]byte = nil
 
-	data, err = h.TpeExecWithGroup(req, pb.KVGroup,tryCount,timeout)
+	data, err = h.TpeExecWithGroup(req, pb.KVGroup, tryCount, timeout)
 	if err != nil {
 		return nil, nil, false, nil, err
 	}
@@ -670,7 +673,7 @@ func (h *driver) TpePrefixScan(startKeyOrPrefix []byte, prefixLength int, prefix
 	var err error
 	var data []byte
 
-	data, err = h.TpeExecWithGroup(req, pb.KVGroup,tryCount,timeout)
+	data, err = h.TpeExecWithGroup(req, pb.KVGroup, tryCount, timeout)
 	if err != nil {
 		return nil, nil, false, nil, err
 	}
@@ -782,6 +785,9 @@ func (h *driver) Append(name string, shardId uint64, data []byte) error {
 
 func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	ctxStr, err := json.Marshal(ctx)
+	if err != nil {
+		return nil, err
+	}
 	req := pb.Request{
 		Type:  pb.GetSnapshot,
 		Group: pb.AOEGroup,
@@ -965,7 +971,10 @@ func (h *driver) doExec(ctx context.Context, cr CustomRequest) *client.Future {
 func (h *driver) Exec(cmd interface{}) (res []byte, err error) {
 	t0 := time.Now()
 	cr := CustomRequest{}
-	h.BuildRequest(&cr, cmd)
+	err = h.BuildRequest(&cr, cmd)
+	if err != nil {
+		return nil, err
+	}
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
@@ -987,7 +996,10 @@ func (h *driver) AsyncExec(cmd interface{}, cb func(CustomRequest, []byte, error
 func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(CustomRequest, []byte, error), arg interface{}) {
 	cr := CustomRequest{}
 	cr.Group = uint64(group)
-	h.BuildRequest(&cr, cmd)
+	err := h.BuildRequest(&cr, cmd)
+	if err != nil {
+		panic(err)
+	}
 
 	h.doAsyncExecWithGroup(cr, cb, arg)
 }
@@ -995,7 +1007,10 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(Cus
 func (h *driver) TpeAsyncExecWithGroup(cmd interface{}, group pb.Group, timeout time.Duration, cb func(CustomRequest, []byte, error), arg interface{}) {
 	cr := CustomRequest{}
 	cr.Group = uint64(group)
-	h.BuildRequest(&cr, cmd)
+	err := h.BuildRequest(&cr, cmd)
+	if err != nil {
+		panic(err)
+	}
 	h.doAsyncExecWithGroup(cr, cb, arg)
 }
 
@@ -1006,7 +1021,10 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err
 	}()
 	cr := CustomRequest{}
 	cr.Group = uint64(group)
-	h.BuildRequest(&cr, cmd)
+	err = h.BuildRequest(&cr, cmd)
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < defaultRetryTimes; i++ {
 		res, err = h.doExecWithRequest(cr)
 		if err == nil {
@@ -1017,14 +1035,17 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) (res []byte, err
 	return
 }
 
-func (h *driver) TpeExecWithGroup(cmd interface{}, group pb.Group,tryCount int,timeout time.Duration) (res []byte, err error) {
+func (h *driver) TpeExecWithGroup(cmd interface{}, group pb.Group, tryCount int, timeout time.Duration) (res []byte, err error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	cr := CustomRequest{}
 	cr.Group = uint64(group)
-	h.BuildRequest(&cr, cmd)
+	err = h.BuildRequest(&cr, cmd)
+	if err != nil {
+		return nil, err
+	}
 	for i := 0; i < tryCount; i++ {
 		res, err = h.doExecWithRequest(cr)
 		if err == nil {
@@ -1057,12 +1078,15 @@ func (h *driver) AddSchedulingRule(ruleName string, groupByLabel string) error {
 func (h *driver) doAsyncExecWithGroup(cr CustomRequest, cb func(CustomRequest, []byte, error), arg interface{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
 	f := h.doExec(ctx, cr)
-	h.stopper.RunTask(ctx, func(ctx context.Context) {
+	err := h.stopper.RunTask(ctx, func(ctx context.Context) {
 		defer cancel()
 		defer f.Close()
 		resp, err := f.Get()
 		cb(cr, resp, err)
 	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (h *driver) doExecWithRequest(cr CustomRequest) ([]byte, error) {

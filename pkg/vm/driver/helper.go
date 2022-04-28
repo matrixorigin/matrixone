@@ -17,14 +17,15 @@ package driver
 import (
 	"bytes"
 	"encoding/binary"
-	"sync"
-	"reflect"
-	"unsafe"
 	"fmt"
+	"reflect"
+	"sync"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 )
+
 func EncodeTable(tbl aoe.TableInfo) ([]byte, error) {
 	return encoding.Encode(tbl)
 }

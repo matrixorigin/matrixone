@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2021 - 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build arm64
-// +build arm64
+package plan2
 
-package neg
+import (
+	"fmt"
 
-func init() {
-	Int8Neg = int8Neg
-	Int16Neg = int16Neg
-	Int32Neg = int32Neg
-	Int64Neg = int64Neg
-	Float32Neg = float32Neg
-	Float64Neg = float64Neg
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+)
+
+func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, aliasCtx *AliasContext) (*plan.Expr, error) {
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", subquery))
 }
