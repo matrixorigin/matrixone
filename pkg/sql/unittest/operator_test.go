@@ -1034,12 +1034,14 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "create table ccs (c1 char(10), c2 varchar(20));"},
 		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
 		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
+		{sql: "create table dds (d1 date, d2 datetime);"},
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into ffs values (22.2, 222.222), (null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into ccs values ('kpi', 'b'), ('c', 'e'), (null, null);"},
 		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
 		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into dds values ('2015-06-30', '2007-01-01 12:13:04');"},
 		// Test =, >, <, >=, <=, !=
 		{sql: "select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;", res: executeResult{
 			data: [][]string{
@@ -1361,8 +1363,7 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "select * from ffs where 3.5 < f1;", res: executeResult{
 			data: [][]string{
 				{"22.200001", "222.222000"},
-			},
-		}},
+			},}},
 		{sql: "select * from ffs where 1 < f2 and f2 < 30;", res: executeResult{
 			null: true,
 		}},
@@ -1539,6 +1540,76 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "select * from ccs where c1 != c1 and c2 != c2;", res: executeResult{
 			null: true,
 		}},
+		{sql: "select d1 from dds where d1 = '2012-02-03';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d1 from dds where d1 != '2012-02-03';", res: executeResult{
+			data: [][]string{
+				{"2015-06-30"},
+			},
+		}},
+		{sql: "select d1 from dds where d1 = '2015-06-30';", res: executeResult{
+			data: [][]string{
+				{"2015-06-30"},
+			},
+		}},
+		{sql: "select d1 from dds where '2015-06-30' = d1;", res: executeResult{
+			data: [][]string{
+				{"2015-06-30"},
+			},
+		}},
+		{sql: "select d1 from dds where d1 < '2012-02-03';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d1 from dds where d1 <= '2012-02-03';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d1 from dds where d1 > '2012-02-03';", res: executeResult{
+			data: [][]string{
+				{"2015-06-30"},
+			},
+		}},
+		{sql: "select d1 from dds where d1 >= '2012-02-03';", res: executeResult{
+			data: [][]string{
+				{"2015-06-30"},
+			},
+		}},
+		{sql: "select d2 from dds where d2 >= '2012-02-03 10:10:10';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d2 from dds where d2 <= '2012-02-03 10:10:10';", res: executeResult{
+			data: [][]string{
+				{"2007-01-01 12:13:04"},
+			},
+		}},
+		{sql: "select d2 from dds where d2 < '2007-01-01 12:13:04';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d2 from dds where d2 > '2007-01-01 12:13:04';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d2 from dds where d2 != '2007-01-01 12:13:04';", res: executeResult{
+			null: true,
+		}},
+		{sql: "select d2 from dds where d2 = '2007-01-01 12:13:04';", res: executeResult{
+			data: [][]string{
+				{"2007-01-01 12:13:04"},
+			},
+		}},
+		{sql: "select d2 from dds where '2007-01-01 12:13:04' = d2;", res: executeResult{
+			data: [][]string{
+				{"2007-01-01 12:13:04"},
+			},
+		}},
+		{sql: "select d2 from dds where '2012-02-03 10:10:10' >= d2;", res: executeResult{
+			data: [][]string{
+				{"2007-01-01 12:13:04"},
+			},
+		}},
+		{sql: "select d1 from dds where d1 >= '2012=02=3';", err: "[22000]Incorrect date value"},
+		{sql: "select d1 from dds where '2012=02=3' >= d1;", err: "[22000]Incorrect date value"},
+		{sql: "select d2 from dds where d2 >= '2012=02=3';", err: "[22000]Incorrect datetime value"},
+		{sql: "select d2 from dds where '2012=02=3' >= d2;", err: "[22000]Incorrect datetime value"},
 		// test IN and NOT IN operator
 		{sql: "select * from iis where i4 in (1);", res: executeResult{
 			null: false,
