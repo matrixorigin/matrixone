@@ -16,7 +16,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type appendableNode struct {
@@ -46,6 +48,8 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
+		readLock := node.block.controller.GetSharedLock()
+		defer readLock.Unlock()
 		return node.rows
 	}
 	// TODO: fine row count
@@ -113,12 +117,21 @@ func (node *appendableNode) OnUnload() {
 	if dnode != nil {
 		deletes = dnode.GetDeleteMaskLocked()
 	}
-	if err := node.file.WriteIBatch(node.data, ts, masks, vals, deletes); err != nil {
-		panic(err)
+	ctx := tasks.Context{
+		Waitable: true,
 	}
-	if err := node.file.Sync(); err != nil {
-		panic(err)
+	task := jobs.NewFlushABlkTask(&ctx, node.file, node.block.meta.AsCommonID(), node.data, ts, masks, vals, deletes)
+	if node.block.ioScheduler != nil {
+		node.block.ioScheduler.Schedule(task)
+		if err := task.WaitDone(); err != nil {
+			panic(err)
+		}
+	} else {
+		if err := task.OnExec(); err != nil {
+			panic(err)
+		}
 	}
+
 	node.data.Close()
 	node.data = nil
 }

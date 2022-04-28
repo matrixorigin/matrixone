@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
 )
@@ -106,6 +107,9 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 			l = QUEUE_SIZE
 		}
 	}
+	if name == "" {
+		name = fmt.Sprintf("[worker-%d]", common.NextGlobalSeqNum())
+	}
 	worker := &OpWorker{
 		Name:     name,
 		OpC:      make(chan iops.IOp, l),
@@ -118,7 +122,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 }
 
 func (w *OpWorker) Start() {
-	// log.Infof("Start OpWorker")
+	logutil.Debugf("%s Started", w.Name)
 	if w.State != CREATED {
 		panic(fmt.Sprintf("logic error: %v", w.State))
 	}
@@ -142,6 +146,7 @@ func (w *OpWorker) Start() {
 func (w *OpWorker) Stop() {
 	w.StopReceiver()
 	w.WaitStop()
+	logutil.Debugf("%s Stopped", w.Name)
 }
 
 func (w *OpWorker) StopReceiver() {
@@ -190,7 +195,6 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {
-	// log.Info("OpWorker: onOp")
 	err := op.OnExec()
 	w.Stats.AddProcessed()
 	if err != nil {

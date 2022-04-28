@@ -49,7 +49,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil)
 
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr)
+	db.IOScheduler = newIOScheduler(db)
+	db.TaskScheduler = newTaskScheduler(db)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.IOScheduler)
 	db.TxnLogDriver = txnbase.NewNodeDriver(dirname, WALDir, nil)
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.TxnLogDriver, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
@@ -57,8 +59,6 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.DBLocker, dbLocker = dbLocker, nil
 	db.TxnMgr.Start()
-	db.IOScheduler = newIOScheduler(db)
-	db.TaskScheduler = newTaskScheduler(db)
 	db.CKPDriver = checkpoint.NewDriver(db.TaskScheduler)
 	handle := newTimedLooper(db, newCalibrationProcessor(db))
 	db.CalibrationTimer = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.CalibrationInterval)*time.Millisecond, handle)

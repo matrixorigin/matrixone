@@ -13,6 +13,7 @@ var taskIdAlloctor *common.IdAlloctor
 const (
 	NoopTask TaskType = iota
 	TxnTask
+	IOTask
 	MockTask
 	CustomizedTask
 
@@ -35,4 +36,20 @@ type Task interface {
 	ID() uint64
 	Type() TaskType
 	Cancel() error
+}
+
+type ScopedTask interface {
+	Task
+	Scope() *common.ID
+}
+
+var DefaultScopeSharder = func(scope *common.ID) int {
+	if scope == nil {
+		return 0
+	}
+	return int(scope.TableID + scope.SegmentID)
+}
+
+func IsSameScope(left, right *common.ID) bool {
+	return left.TableID == right.TableID && left.SegmentID == right.SegmentID
 }

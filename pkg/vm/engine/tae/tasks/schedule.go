@@ -70,3 +70,25 @@ func (s *BaseScheduler) Stop() {
 		d.Close()
 	}
 }
+
+// type BaseScopedScheduler struct {
+// 	*BaseScheduler
+// }
+
+// func NewBaseScopedScheduler(name string) *BaseScopedScheduler {
+// 	s := &BaseScopedScheduler{
+// 		BaseScheduler: NewBaseScheduler(name),
+// 	}
+// 	s.ExecFunc = s.doDispatch
+// 	return s
+// }
+
+// func (scheduler *BaseScopedScheduler) doDispatch(op iops.IOp) {
+// 	task := op.(ScopedTask)
+// 	dispatcher := scheduler.dispatchers[task.Type()]
+// 	if dispatcher == nil {
+// 		logutil.Error(strconv.Itoa(int(task.Type())))
+// 		panic(ErrDispatcherNotFound)
+// 	}
+// 	dispatcher.Dispatch(task)
+// }

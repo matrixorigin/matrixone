@@ -678,6 +678,16 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 		if seg.GetID() < tbl.maxSegId {
 			return
 		}
+		{
+			seg.RLock()
+			uncreated := seg.IsCreatedUncommitted()
+			dropped := seg.IsDroppedCommitted()
+			seg.RUnlock()
+			if uncreated || dropped {
+				segIt.Next()
+				continue
+			}
+		}
 		segData := seg.GetSegmentData()
 		// TODO: Add a new batch dedup method later
 		if err = segData.BatchDedup(tbl.txn, pks); err == data.ErrDuplicate {
@@ -693,6 +703,16 @@ func (tbl *txnTable) PreCommitDededup() (err error) {
 			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
 			if blk.GetID() < tbl.maxBlkId {
 				return
+			}
+			{
+				blk.RLock()
+				uncreated := blk.IsCreatedUncommitted()
+				dropped := blk.IsDroppedCommitted()
+				blk.RUnlock()
+				if uncreated || dropped {
+					blkIt.Next()
+					continue
+				}
 			}
 			// logutil.Infof("%s: %d-%d, %d-%d: %s", tbl.txn.String(), tbl.maxSegId, tbl.maxBlkId, seg.GetID(), blk.GetID(), pks.String())
 			blkData := blk.GetBlockData()

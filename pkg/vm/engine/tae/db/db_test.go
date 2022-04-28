@@ -2,12 +2,13 @@ package db
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"math"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
+	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -79,6 +80,49 @@ func TestAppend(t *testing.T) {
 	}
 }
 
+func TestAppend2(t *testing.T) {
+	opts := new(options.Options)
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.CalibrationInterval = 1
+	db := initDB(t, opts)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 50
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 3
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		database.CreateRelation(schema)
+		assert.Nil(t, txn.Commit())
+	}
+
+	bat := compute.MockBatch(schema.Types(), 8000, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 800)
+
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(40)
+
+	doAppend := func(data *gbat.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(schema.Name)
+			err := rel.Append(data)
+			assert.Nil(t, err)
+			assert.Nil(t, txn.Commit())
+		}
+	}
+
+	for _, data := range bats {
+		wg.Add(1)
+		pool.Submit(doAppend(data))
+	}
+	wg.Wait()
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+}
+
 func TestTableHandle(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
@@ -122,7 +166,6 @@ func TestCreateBlock(t *testing.T) {
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	assert.True(t, blk2Meta.IsCommitted())
 }
 
 func TestNonAppendableBlock(t *testing.T) {

@@ -20,6 +20,16 @@ func newCalibrationProcessor(db *DB) *calibrationProcessor {
 }
 
 func (processor *calibrationProcessor) onBlock(blockEntry *catalog.BlockEntry) (err error) {
+	blockEntry.RLock()
+	if !blockEntry.IsCommitted() {
+		blockEntry.RUnlock()
+		return nil
+	}
+	if blockEntry.IsDroppedCommitted() {
+		blockEntry.RUnlock()
+		return nil
+	}
+	blockEntry.RUnlock()
 	data := blockEntry.GetBlockData()
 	data.RunCalibration()
 	score := data.EstimateScore()

@@ -17,7 +17,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -507,20 +506,17 @@ func TestApp1(t *testing.T) {
 }
 
 func TestWarehouse(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
-	c, mgr, driver, _, _ := initTestContext(t, dir, common.M*1, common.G)
-	defer driver.Close()
-	defer c.Close()
-	defer mgr.Stop()
+	db := initDB(t, nil)
+	defer db.Close()
 
-	txn := mgr.StartTxn(nil)
+	txn := db.StartTxn(nil)
 	err := MockWarehouses("test", 20, txn)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	t.Log(c.SimplePPString(common.PPL1))
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 
 	{
-		txn = mgr.StartTxn(nil)
+		txn = db.StartTxn(nil)
 		rel, err := GetWarehouseRelation("test", txn)
 		assert.Nil(t, err)
 		it := rel.MakeBlockIt()

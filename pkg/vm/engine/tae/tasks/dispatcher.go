@@ -3,6 +3,9 @@ package tasks
 import (
 	"errors"
 	"io"
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
@@ -45,6 +48,50 @@ func (d *BaseDispatcher) RegisterHandler(t TaskType, h TaskHandler) {
 }
 
 func (d *BaseDispatcher) Close() error {
+	for _, h := range d.handlers {
+		h.Close()
+	}
+	return nil
+}
+
+type ScopedTaskSharder = func(scope *common.ID) int
+type BaseScopedDispatcher struct {
+	handlers []TaskHandler
+	sharder  ScopedTaskSharder
+	curr     uint64
+}
+
+func NewBaseScopedDispatcher(sharder ScopedTaskSharder) *BaseScopedDispatcher {
+	d := &BaseScopedDispatcher{
+		handlers: make([]TaskHandler, 0),
+		curr:     0,
+	}
+	if sharder == nil {
+		d.sharder = d.roundRobinSharder
+	} else {
+		d.sharder = sharder
+	}
+	return d
+}
+
+func (d *BaseScopedDispatcher) AddHandle(h TaskHandler) {
+	d.handlers = append(d.handlers, h)
+}
+
+func (d *BaseScopedDispatcher) roundRobinSharder(scope *common.ID) int {
+	curr := atomic.AddUint64(&d.curr, uint64(1))
+	return int(curr)
+}
+
+func (d *BaseScopedDispatcher) Dispatch(task Task) {
+	scoped := task.(ScopedTask)
+	val := d.sharder(scoped.Scope())
+
+	shardIdx := val % len(d.handlers)
+	d.handlers[shardIdx].Enqueue(task)
+}
+
+func (d *BaseScopedDispatcher) Close() error {
 	for _, h := range d.handlers {
 		h.Close()
 	}

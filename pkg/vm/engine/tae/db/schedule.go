@@ -1,6 +1,8 @@
 package db
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -14,12 +16,14 @@ func newIOScheduler(db *DB) *ioScheduler {
 		BaseScheduler: tasks.NewBaseScheduler("ioScheduler"),
 		db:            db,
 	}
-	dispatcher := tasks.NewBaseDispatcher()
-	handler := tasks.NewPoolHandler(8)
-	handler.Start()
+	dispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
+	for i := 0; i < 8; i++ {
+		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ioworker-%d]", i))
+		dispatcher.AddHandle(handler)
+		handler.Start()
+	}
 
-	dispatcher.RegisterHandler(tasks.TxnTask, handler)
-	s.RegisterDispatcher(tasks.TxnTask, dispatcher)
+	s.RegisterDispatcher(tasks.IOTask, dispatcher)
 	s.Start()
 	return s
 }

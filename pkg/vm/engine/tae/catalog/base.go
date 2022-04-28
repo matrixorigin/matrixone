@@ -49,11 +49,12 @@ func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
 }
 
 func (be *BaseEntry) IsCommitted() bool {
-	if be.Txn == nil {
-		return true
-	}
-	state := be.Txn.GetTxnState(true)
-	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
+	return be.Txn == nil
+	// if be.Txn == nil {
+	// 	return true
+	// }
+	// state := be.Txn.GetTxnState(true)
+	// return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
 }
 
 func (be *BaseEntry) GetID() uint64 { return be.ID }
@@ -179,6 +180,13 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 func (be *BaseEntry) SameTxn(o *BaseEntry) bool {
 	if be.Txn != nil && o.Txn != nil {
 		return be.Txn.GetID() == o.Txn.GetID()
+	}
+	return false
+}
+
+func (be *BaseEntry) IsCreatedUncommitted() bool {
+	if be.Txn != nil {
+		return be.CurrOp == OpCreate
 	}
 	return false
 }

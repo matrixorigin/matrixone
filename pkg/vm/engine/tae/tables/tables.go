@@ -5,17 +5,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type DataFactory struct {
 	fileFactory  file.SegmentFileFactory
 	appendBufMgr base.INodeManager
+	ioScheduler  tasks.Scheduler
 }
 
-func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager) *DataFactory {
+func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, ioScheduler tasks.Scheduler) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
+		ioScheduler:  ioScheduler,
 	}
 }
 
@@ -33,6 +36,6 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 
 func (factory *DataFactory) MakeBlockFactory(segFile file.Segment) catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
-		return newBlock(meta, segFile, factory.appendBufMgr)
+		return newBlock(meta, segFile, factory.appendBufMgr, factory.ioScheduler)
 	}
 }

@@ -77,11 +77,13 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
 		block := it.Get().GetPayload().(*BlockEntry)
+		block.RLock()
 		if len(body) == 0 {
 			body = block.PPString(level, depth+1, prefix)
 		} else {
 			body = fmt.Sprintf("%s\n%s", body, block.PPString(level, depth+1, prefix))
 		}
+		block.RUnlock()
 		it.Next()
 	}
 	if len(body) == 0 {
