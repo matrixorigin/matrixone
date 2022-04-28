@@ -6,7 +6,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
@@ -14,20 +14,19 @@ import (
 
 type blockZoneMapIndexNode struct {
 	*buffer.Node
-	mgr   base.INodeManager
-	host  dataio.IndexFile
-	meta  *common.IndexMeta
+	mgr  base.INodeManager
+	host gCommon.IVFile
 	inner *basic.ZoneMap
 }
 
-func newBlockZoneMapIndexNode(mgr base.INodeManager, host dataio.IndexFile, meta *common.IndexMeta) *blockZoneMapIndexNode {
+func newBlockZoneMapIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) *blockZoneMapIndexNode {
 	impl := new(blockZoneMapIndexNode)
-	impl.Node = buffer.NewNode(impl, mgr, host.AllocIndexNodeId(), uint64(meta.Size))
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
 	impl.host = host
-	impl.meta = meta
+	//impl.meta = meta
 	impl.mgr = mgr
 	mgr.RegisterNode(impl)
 	return impl
@@ -39,13 +38,16 @@ func (n *blockZoneMapIndexNode) OnLoad() {
 		return
 	}
 	var err error
-	startOffset := n.meta.StartOffset
-	size := n.meta.Size
-	compressTyp := n.meta.CompType
-	data := n.host.Read(startOffset, size)
-	rawSize := n.meta.RawSize
+	stat := n.host.Stat()
+	size := stat.Size()
+	compressTyp := stat.CompressAlgo()
+	data := make([]byte, size)
+	if _, err := n.host.Read(data); err != nil {
+		panic(err)
+	}
+	rawSize := stat.OriginSize()
 	buf := make([]byte, rawSize)
-	if err = common.Decompress(data, buf, compressTyp); err != nil {
+	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
 	n.inner, err = basic.NewZoneMapFromSource(buf)
@@ -80,8 +82,8 @@ func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
 	return &BlockZoneMapIndexReader{}
 }
 
-func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host dataio.IndexFile, meta *common.IndexMeta) error {
-	reader.inode = newBlockZoneMapIndexNode(mgr, host, meta)
+func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
+	reader.inode = newBlockZoneMapIndexNode(mgr, host, id)
 	return nil
 }
 
@@ -98,20 +100,22 @@ func (reader *BlockZoneMapIndexReader) MayContainsKey(key interface{}) (bool, er
 }
 
 type BlockZoneMapIndexWriter struct {
-	cType  common.CompressType
-	host   dataio.IndexFile
-	inner  *basic.ZoneMap
-	colIdx uint16
+	cType       common.CompressType
+	host        gCommon.IRWFile
+	inner       *basic.ZoneMap
+	colIdx      uint16
+	internalIdx uint16
 }
 
 func NewBlockZoneMapIndexWriter() *BlockZoneMapIndexWriter {
 	return &BlockZoneMapIndexWriter{}
 }
 
-func (writer *BlockZoneMapIndexWriter) Init(host dataio.IndexFile, cType common.CompressType, colIdx uint16) error {
+func (writer *BlockZoneMapIndexWriter) Init(host gCommon.IRWFile, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.host = host
 	writer.cType = cType
 	writer.colIdx = colIdx
+	writer.internalIdx = internalIdx
 	return nil
 }
 
@@ -124,21 +128,22 @@ func (writer *BlockZoneMapIndexWriter) Finalize() (*common.IndexMeta, error) {
 	meta.SetIndexType(common.BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
+	meta.SetInternalIndex(writer.internalIdx)
 
-	var startOffset uint32
+	//var startOffset uint32
 	iBuf, err := writer.inner.Marshal()
 	if err != nil {
 		return nil, err
 	}
 	rawSize := uint32(len(iBuf))
-	cBuf := common.Compress(iBuf, writer.cType)
-	exactSize := uint32(len(cBuf))
+	compressed := common.Compress(iBuf, writer.cType)
+	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
-	startOffset, err = appender.Append(cBuf)
+	_, err = appender.Write(compressed)
 	if err != nil {
 		return nil, err
 	}
-	meta.SetStartOffset(startOffset)
+	//meta.SetStartOffset(startOffset)
 	return meta, nil
 }
 

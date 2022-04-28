@@ -5,7 +5,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
+	gCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
@@ -13,20 +13,21 @@ import (
 
 type staticFilterIndexNode struct {
 	*buffer.Node
-	mgr   base.INodeManager
-	host  dataio.IndexFile
-	meta  *common.IndexMeta
+	mgr base.INodeManager
+	//host  dataio.IndexFile
+	//meta  *common.IndexMeta
+	host  gCommon.IVFile
 	inner basic.StaticFilter
 }
 
-func newStaticFilterIndexNode(mgr base.INodeManager, host dataio.IndexFile, meta *common.IndexMeta) *staticFilterIndexNode {
+func newStaticFilterIndexNode(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) *staticFilterIndexNode {
 	impl := new(staticFilterIndexNode)
-	impl.Node = buffer.NewNode(impl, mgr, host.AllocIndexNodeId(), uint64(meta.Size))
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(host.Stat().Size()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
 	impl.host = host
-	impl.meta = meta
+	//impl.meta = meta
 	impl.mgr = mgr
 	mgr.RegisterNode(impl)
 	return impl
@@ -38,14 +39,17 @@ func (n *staticFilterIndexNode) OnLoad() {
 		return
 	}
 	var err error
-	startOffset := n.meta.StartOffset
-	size := n.meta.Size
-	compressTyp := n.meta.CompType
-	data := n.host.Read(startOffset, size)
-	rawSize := n.meta.RawSize
-	buf := make([]byte, rawSize)
-	if err = common.Decompress(data, buf, compressTyp); err != nil {
+	//startOffset := n.meta.StartOffset
+	stat := n.host.Stat()
+	size := stat.Size()
+	compressTyp := stat.CompressAlgo()
+	data := make([]byte, size)
+	if _, err := n.host.Read(data); err != nil {
 		panic(err)
+	}
+	rawSize := stat.OriginSize()
+	buf := make([]byte, rawSize)
+	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
 	}
 	n.inner, err = basic.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
@@ -79,8 +83,8 @@ func NewStaticFilterIndexReader() *StaticFilterIndexReader {
 	return &StaticFilterIndexReader{}
 }
 
-func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host dataio.IndexFile, meta *common.IndexMeta) error {
-	reader.inode = newStaticFilterIndexNode(mgr, host, meta)
+func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
+	reader.inode = newStaticFilterIndexNode(mgr, host, id)
 	return nil
 }
 
@@ -97,21 +101,23 @@ func (reader *StaticFilterIndexReader) MayContainsAnyKeys(keys *vector.Vector, v
 }
 
 type StaticFilterIndexWriter struct {
-	cType  common.CompressType
-	host   dataio.IndexFile
-	inner  basic.StaticFilter
-	data   *vector.Vector
-	colIdx uint16
+	cType       common.CompressType
+	host        gCommon.IRWFile
+	inner       basic.StaticFilter
+	data        *vector.Vector
+	colIdx      uint16
+	internalIdx uint16
 }
 
 func NewStaticFilterIndexWriter() *StaticFilterIndexWriter {
 	return &StaticFilterIndexWriter{}
 }
 
-func (writer *StaticFilterIndexWriter) Init(host dataio.IndexFile, cType common.CompressType, colIdx uint16) error {
+func (writer *StaticFilterIndexWriter) Init(host gCommon.IRWFile, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.host = host
 	writer.cType = cType
 	writer.colIdx = colIdx
+	writer.internalIdx = internalIdx
 	return nil
 }
 
@@ -131,8 +137,9 @@ func (writer *StaticFilterIndexWriter) Finalize() (*common.IndexMeta, error) {
 	meta.SetIndexType(common.StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
 	meta.SetIndexedColumn(writer.colIdx)
+	meta.SetInternalIndex(writer.internalIdx)
 
-	var startOffset uint32
+	//var startOffset uint32
 	iBuf, err := writer.inner.Marshal()
 	if err != nil {
 		return nil, err
@@ -141,11 +148,11 @@ func (writer *StaticFilterIndexWriter) Finalize() (*common.IndexMeta, error) {
 	compressed := common.Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
-	startOffset, err = appender.Append(compressed)
+	_, err = appender.Write(compressed)
 	if err != nil {
 		return nil, err
 	}
-	meta.SetStartOffset(startOffset)
+	//meta.SetStartOffset(startOffset)
 	writer.inner = nil
 	return meta, nil
 }

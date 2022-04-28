@@ -2,10 +2,9 @@ package impl
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/access/acif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/basic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
@@ -14,11 +13,14 @@ type appendableBlockIndexHolder struct {
 	host         data.Block
 	treeIndex    basic.ARTMap
 	zoneMapIndex *basic.ZoneMap
+	schema       *catalog.Schema
 }
 
-func NewAppendableBlockIndexHolder(pkType types.Type, host data.Block) *appendableBlockIndexHolder {
+func NewAppendableBlockIndexHolder(host data.Block, schema *catalog.Schema) *appendableBlockIndexHolder {
 	holder := new(appendableBlockIndexHolder)
 	holder.host = host
+	holder.schema = schema
+	pkType := schema.GetPKType()
 	holder.treeIndex = basic.NewSimpleARTMap(pkType, nil)
 	holder.zoneMapIndex = basic.NewZoneMap(pkType, nil)
 	return holder
@@ -54,6 +56,7 @@ func (holder *appendableBlockIndexHolder) Search(key interface{}) (rowOffset uin
 }
 
 func (holder *appendableBlockIndexHolder) BatchDedup(keys *vector.Vector) error {
+	//logutil.Infof("%v", keys.String())
 	var filter *roaring.Bitmap
 	var exist bool
 	var err error
@@ -74,10 +77,10 @@ func (holder *appendableBlockIndexHolder) BatchDedup(keys *vector.Vector) error 
 	return nil
 }
 
-func (holder *appendableBlockIndexHolder) Upgrade() (acif.INonAppendableBlockIndexHolder, error) {
-	// TODO: implement
-	return nil, nil
-}
+//func (holder *appendableBlockIndexHolder) Upgrade() (acif.INonAppendableBlockIndexHolder, error) {
+//	// TODO: implement
+//	return nil, nil
+//}
 
 func (holder *appendableBlockIndexHolder) GetHostBlockId() uint64 {
 	return holder.host.GetID()

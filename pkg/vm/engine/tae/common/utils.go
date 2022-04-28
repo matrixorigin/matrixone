@@ -62,7 +62,7 @@ func DecodeKey(key []byte, typ types.Type) interface{} {
 	case types.T_char, types.T_varchar:
 		return key
 	default:
-		panic(errors.ErrTypeNotSupported)
+		panic("unsupported type")
 	}
 }
 
@@ -72,79 +72,79 @@ func EncodeKey(key interface{}, typ types.Type) ([]byte, error) {
 		if v, ok := key.(int8); ok {
 			return encoding.EncodeInt8(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_int16:
 		if v, ok := key.(int16); ok {
 			return encoding.EncodeInt16(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_int32:
 		if v, ok := key.(int32); ok {
 			return encoding.EncodeInt32(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_int64:
 		if v, ok := key.(int64); ok {
 			return encoding.EncodeInt64(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_uint8:
 		if v, ok := key.(uint8); ok {
 			return encoding.EncodeUint8(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_uint16:
 		if v, ok := key.(uint16); ok {
 			return encoding.EncodeUint16(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_uint32:
 		if v, ok := key.(uint32); ok {
 			return encoding.EncodeUint32(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_uint64:
 		if v, ok := key.(uint64); ok {
 			return encoding.EncodeUint64(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_float32:
 		if v, ok := key.(float32); ok {
 			return encoding.EncodeFloat32(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_float64:
 		if v, ok := key.(float64); ok {
 			return encoding.EncodeFloat64(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_date:
 		if v, ok := key.(types.Date); ok {
 			return encoding.EncodeDate(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_datetime:
 		if v, ok := key.(types.Datetime); ok {
 			return encoding.EncodeDatetime(v), nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	case types.T_char, types.T_varchar:
 		if v, ok := key.([]byte); ok {
 			return v, nil
 		} else {
-			return nil, errors.ErrTypeMismatch
+			panic("unsupported type")
 		}
 	default:
 		return nil, errors.ErrTypeNotSupported
@@ -369,7 +369,7 @@ func ProcessVector(vec *vector.Vector, offset uint32, length int, task func(v in
 			}
 		}
 	default:
-		panic(errors.ErrTypeNotSupported)
+		panic("unsupported type")
 	}
 	return nil
 }

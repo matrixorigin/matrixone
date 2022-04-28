@@ -2,6 +2,8 @@ package db
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
+	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"math"
 	"sync"
 	"testing"
@@ -33,6 +35,7 @@ const (
 func initDB(t *testing.T, opts *options.Options) *DB {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
+	idxCommon.MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
 	return db
 }
 

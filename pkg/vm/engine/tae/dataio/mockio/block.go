@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 )
 
 type blockFile struct {
@@ -22,6 +23,7 @@ type blockFile struct {
 	ts      uint64
 	columns []*columnBlock
 	deletes *deletesFile
+	indexMeta *dataFile
 }
 
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
@@ -31,6 +33,7 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.deletes = newDeletes(bf)
+	bf.indexMeta = newData(nil)
 	bf.OnZeroCB = bf.close
 	for i, _ := range bf.columns {
 		cnt := 0
@@ -81,6 +84,25 @@ func (bf *blockFile) WriteDeletes(buf []byte) (err error) {
 func (bf *blockFile) ReadDeletes(buf []byte) (err error) {
 	_, err = bf.deletes.Read(buf)
 	return
+}
+
+func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
+	_, err = bf.indexMeta.Write(buf)
+	return
+}
+
+func (bf *blockFile) LoadIndexMeta() (*idxCommon.IndicesMeta, error) {
+	size := bf.indexMeta.Stat().Size()
+	buf := make([]byte, size)
+	_, err := bf.indexMeta.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	indices := idxCommon.NewEmptyIndicesMeta()
+	if err = indices.Unmarshal(buf); err != nil {
+		return nil, err
+	}
+	return indices, nil
 }
 
 func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error) {

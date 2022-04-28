@@ -1,6 +1,8 @@
 package compute
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
@@ -88,4 +90,20 @@ func TestShuffleByDeletes(t *testing.T) {
 	assert.True(t, destMask.Contains(8))
 	assert.True(t, destMask.Contains(18))
 	assert.True(t, destMask.Contains(27))
+}
+
+func TestCheckRowExists(t *testing.T) {
+	typ := types.Type{
+		Oid:   types.T_int32,
+		Size:  4,
+		Width: 32,
+	}
+	vec := common.MockVec(typ, 100, 0)
+	require.True(t, CheckRowExists(vec, int32(55)))
+	require.True(t, CheckRowExists(vec, int32(0)))
+	require.True(t, CheckRowExists(vec, int32(99)))
+
+	require.False(t, CheckRowExists(vec, int32(-1)))
+	require.False(t, CheckRowExists(vec, int32(100)))
+	require.False(t, CheckRowExists(vec, int32(114514)))
 }

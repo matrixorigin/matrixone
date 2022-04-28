@@ -4,36 +4,36 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
 	bufManager := buffer.NewNodeManager(1024*1024, nil)
-	file := dataio.MockIndexFile()
-	cType := common.Plain
+	file := common.MockRWFile()
+	cType := idxCommon.Plain
 	typ := types.Type{Oid: types.T_int32}
 	pkColIdx := uint16(0)
+	interIdx := uint16(0)
 	var err error
-	var meta *common.IndexMeta
 	var res bool
 	var ans *roaring.Bitmap
 
 	writer := NewBlockZoneMapIndexWriter()
-	err = writer.Init(file, cType, pkColIdx)
+	err = writer.Init(file, cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
-	keys := common.MockVec(typ, 1000, 0)
+	keys := idxCommon.MockVec(typ, 1000, 0)
 	err = writer.AddValues(keys)
 	require.NoError(t, err)
 
-	meta, err = writer.Finalize()
+	_, err = writer.Finalize()
 	require.NoError(t, err)
 
 	reader := NewBlockZoneMapIndexReader()
-	err = reader.Init(bufManager, file, meta)
+	err = reader.Init(bufManager, file, &common.ID{})
 	require.NoError(t, err)
 
 	//t.Log(bufManager.String())
@@ -46,13 +46,13 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	keys = common.MockVec(typ, 100, 1000)
+	keys = idxCommon.MockVec(typ, 100, 1000)
 	res, ans, err = reader.MayContainsAnyKeys(keys)
 	require.NoError(t, err)
 	require.False(t, res)
 	require.Equal(t, uint64(0), ans.GetCardinality())
 
-	keys = common.MockVec(typ, 100, 0)
+	keys = idxCommon.MockVec(typ, 100, 0)
 	res, ans, err = reader.MayContainsAnyKeys(keys)
 	require.NoError(t, err)
 	require.True(t, res)

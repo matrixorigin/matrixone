@@ -50,4 +50,5 @@ type Block interface {
 	PPString(level common.PPLevel, depth int, prefix string) string
 	GetBlockFile() file.Block
 	GetTotalChanges() int
+	RefreshIndex() error
 }

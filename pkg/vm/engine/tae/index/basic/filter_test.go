@@ -4,7 +4,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	"github.com/stretchr/testify/require"
 	"strconv"
 	"testing"
@@ -31,8 +30,9 @@ func TestStaticFilterNumeric(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, res)
 
-	res, err = sf.MayContainsKey(int16(0))
-	require.ErrorIs(t, err, errors.ErrTypeMismatch)
+	require.Panics(t, func() {
+		res, err = sf.MayContainsKey(int16(0))
+	})
 
 	query := common.MockVec(typ, 2000, 1000)
 	exist, positive, err = sf.MayContainsAnyKeys(query, nil)

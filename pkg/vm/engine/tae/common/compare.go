@@ -17,7 +17,6 @@ package common
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 )
 
 func CompareGeneric(a, b interface{}, t types.Type) int {
@@ -128,7 +127,7 @@ func CompareGeneric(a, b interface{}, t types.Type) int {
 			return 0
 		}
 	default:
-		panic(errors.ErrTypeNotSupported)
+		panic("unsupported type")
 	}
 }
 
