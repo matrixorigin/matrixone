@@ -48,7 +48,6 @@ type filterExtent struct {
 	filterType int32
 	attr       string
 	param1     interface{}
-	param2     interface{}
 }
 
 type filterContext struct {
