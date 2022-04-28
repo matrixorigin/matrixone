@@ -355,8 +355,12 @@ func getFilterContextFromExtend(f *filterContext, e extend.Extend) *filterContex
 func newFilterContext(ft int32, e *extend.BinaryExtend, fcs *filterContext) *filterContext {
 	if attr, ok := e.Left.(*extend.Attribute); ok {
 		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			param := cast(val.V, attr.Type)
+			if param == nil {
+				return fcs
+			}
 			fcs.extent = append(fcs.extent, filterExtent{
-				param1:     cast(val.V, attr.Type),
+				param1:     param,
 				filterType: ft,
 				attr:       attr.Name,
 			})
@@ -364,8 +368,12 @@ func newFilterContext(ft int32, e *extend.BinaryExtend, fcs *filterContext) *fil
 	}
 	if attr, ok := e.Right.(*extend.Attribute); ok {
 		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			param := cast(val.V, attr.Type)
+			if param == nil {
+				return fcs
+			}
 			fcs.extent = append(fcs.extent, filterExtent{
-				param1:     cast(val.V, attr.Type),
+				param1:     param,
 				filterType: ft,
 				attr:       attr.Name,
 			})
@@ -383,6 +391,9 @@ func cast(vec *vector.Vector, typ types.T) interface{} {
 	for _, op := range ops {
 		if op.LeftType == vec.Typ.Oid && op.RightType == typ {
 			retVec, _ = op.Fn(vec, vector.New(types.Type{Oid: typ}), proc, true, true)
+			if retVec == nil {
+				return nil
+			}
 		}
 	}
 	return getVectorValue(retVec)
