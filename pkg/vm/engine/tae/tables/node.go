@@ -12,7 +12,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -28,7 +27,6 @@ type appendableNode struct {
 	data  batch.IBatch
 	rows  uint32
 	mgr   base.INodeManager
-	cond  *flusher.FlushCond
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
@@ -41,7 +39,6 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
-	impl.cond = flusher.NewFlushCond()
 	mgr.RegisterNode(impl)
 	return impl
 }
