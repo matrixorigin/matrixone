@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package max
 
 import (
@@ -56,41 +53,12 @@ func init() {
 		Int8Max = int8MaxAvx2
 		Int16Max = int16MaxAvx2
 		Int32Max = int32MaxAvx2
-		Int64Max = int64Max
 		Uint8Max = uint8MaxAvx2
 		Uint16Max = uint16MaxAvx2
 		Uint32Max = uint32MaxAvx2
-		Uint64Max = uint64Max
 		Float32Max = float32MaxAvx2
 		Float64Max = float64MaxAvx2
-	} else {
-		Int8Max = int8Max
-		Int16Max = int16Max
-		Int32Max = int32Max
-		Int64Max = int64Max
-		Uint8Max = uint8Max
-		Uint16Max = uint16Max
-		Uint32Max = uint32Max
-		Uint64Max = uint64Max
-		Float32Max = float32Max
-		Float64Max = float64Max
 	}
-
-	BoolMax = boolMax
-	StrMax = strMax
-
-	BoolMaxSels = boolMaxSels
-	Int8MaxSels = int8MaxSels
-	Int16MaxSels = int16MaxSels
-	Int32MaxSels = int32MaxSels
-	Int64MaxSels = int64MaxSels
-	Uint8MaxSels = uint8MaxSels
-	Uint16MaxSels = uint16MaxSels
-	Uint32MaxSels = uint32MaxSels
-	Uint64MaxSels = uint64MaxSels
-	Float32MaxSels = float32MaxSels
-	Float64MaxSels = float64MaxSels
-	StrMaxSels = strMaxSels
 }
 
 func int8MaxAvx2(xs []int8) int8 {

@@ -53,16 +53,39 @@ jobs:
           cd $GITHUB_WORKSPACE && make clean && make config
 
       - name: Static Code Analysis
+        continue-on-error: true
         run: |
-          make sca 
+          cd $GITHUB_WORKSPACE
+          make install-static-check-tools
+          make static-check &>lint.out
+
+      - name: count sca failed files
+        run: |
+          cd $GITHUB_WORKSPACE
+          echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
 
       - name: Unit Testing
         run: |
           if [[ 'schedule' == ${{ github.event_name }} ]]; then
-            make ut 
+            make ut
           else
             make ut SKIP_TEST="race"
           fi
+
+      - name: calc pkg code coverage
+        run: |
+          cd $GITHUB_WORKSPACE
+          echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' profile.raw)" >> $GITHUB_ENV
+
+      - name: WeChat Work notification
+        if : ${{ (github.event_name == 'pull_request') && (github.event.action == 'opened') }}
+        continue-on-error: true
+        uses: x-actions/wechat-work@v1
+        env:
+          WECHAT_WEBHOOK_KEY: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
+          MSGTYPE: markdown
+          CONTENT: |
+            "New Pull Request Opened: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ join(github.event.pull_request.requested_reviewers.*.login, ', ') }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>"
 
       - name: Build Binary
         run: |
@@ -74,8 +97,9 @@ jobs:
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
+        continue-on-error: true
         with:
           name: test_reports
           path: |
-            ${{ github.workspace }}/coverage.html
+            ${{ github.workspace }}
           retention-days: 7 

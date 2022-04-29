@@ -1,4 +1,4 @@
-# **Data Types**
+# **数据类型**
 
 MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
@@ -38,9 +38,17 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD |
 | DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
 
+
+## **定点类型Decimal(Beta)**
+
+|  数据类型   | 存储空间  |  精度   | 语法表示 |
+|  ----  | ----  |  ----  | ----  |
+| Decimal64  | 8 byte | 	19位  | Decimal(N,S), N范围(1,18), S范围(0,N) |
+| Decimal128  | 16 byte | 	38位  | Decimal(N,S), N范围(19,38), S范围(0,N) |
+
 ## **示例**
 
-``` 
+```sql
 //Create a table named "numtable" with 3 attributes of an "int", a "float" and a "double"
 > create table numtable(id int,fl float, dl double);
 
@@ -78,4 +86,14 @@ MatrixOne 的数据类型与MySQL数据类型的定义一致，可参考：
 > insert into calendar(a, b) values('20220202', '2022-02-02 00:10:30');
 > insert into calendar(a, b) values('2022-02-02', '2022-02-02 00:10:30');
 
+
+//Create a table named "decimalTest" with 2 attribute of a "decimal" and b "decimal"
+> create table decimalTest(a decimal(6,3), b decimal(24,18));
+> insert into decimalTest values(123.4567, 123456.1234567891411241355);
+> select * from decimalTest;
++---------+---------------------------+
+| a       | b                         |
++---------+---------------------------+
+| 123.456 | 123456.123456789141124135 |
++---------+---------------------------+
 ```

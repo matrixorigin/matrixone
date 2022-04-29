@@ -16,12 +16,14 @@ package manager
 
 import (
 	"fmt"
+	"strings"
+	"sync/atomic"
+
 	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -172,7 +174,10 @@ func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 		} else {
 			mgr.Lock()
 			delete(mgr.Nodes, node_id)
-			h.Clean()
+			err := h.Clean()
+			if err != nil && !strings.Contains(err.Error(), "no such file or directory") {
+				panic(err)
+			}
 			mgr.Unlock()
 			return
 		}

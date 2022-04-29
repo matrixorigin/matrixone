@@ -9,7 +9,6 @@ const ( // extend type
 	Binary
 )
 
-
 const ( // partition type
 	List = iota
 	Range

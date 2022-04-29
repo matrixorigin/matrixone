@@ -26,6 +26,8 @@ const (
 	StartsWith
 	Lpad
 	Rpad
+ 	Empty
+	LengthUTF8 
 	Round
 	Floor
 	Abs
@@ -49,5 +51,4 @@ const (
 	Weekday
 	EndsWith
 	Date
-	Empty
 )

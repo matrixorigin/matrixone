@@ -37,9 +37,18 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 | Date  | 4 byte | day | 1000-01-01  | 9999-12-31 | YYYY-MM-DD/YYYYMMDD |
 | DateTime  | 4 byte | second | 1970-01-01 00:00:00  | 2105-12-31 23:59:59 | YYYY-MM-DD hh:mm:ss |
 
+
+## **Decimal Types(Beta)**
+
+|  Data Type   | Size  |  Precision   | Syntax |
+|  ----  | ----  |  ----  | ----  |
+| Decimal64  | 8 byte | 	19 digits  | Decimal(N,S), N range(1,18), S range(0,N) |
+| Decimal128  | 16 byte | 	38 digits  | Decimal(N,S), N range(19,38), S range(0,N) |
+
+
 ## **Examples**
 
-```
+```sql
 //Create a table named "numtable" with 3 attributes of an "int", a "float" and a "double"
 > create table numtable(id int,fl float, dl double);
 
@@ -76,4 +85,15 @@ Reference: <https://dev.mysql.com/doc/refman/8.0/en/data-types.html>
 //Insert a data of "date" and "datetime" into table "calendar" 
 > insert into calendar(a, b) values('20220202, '2022-02-02 00:10:30');
 > insert into calendar(a, b) values('2022-02-02, '2022-02-02 00:10:30');
+
+//Create a table named "decimalTest" with 2 attribute of a "decimal" and b "decimal"
+> create table decimalTest(a decimal(6,3), b decimal(24,18));
+> insert into decimalTest values(123.4567, 123456.1234567891411241355);
+> select * from decimalTest;
++---------+---------------------------+
+| a       | b                         |
++---------+---------------------------+
+| 123.456 | 123456.123456789141124135 |
++---------+---------------------------+
+
 ```

@@ -627,7 +627,7 @@ func createMetadataTableInfo(shardId uint64) *aoe.TableInfo {
 	colInfo := aoe.ColumnInfo{
 		Name: sMetadata,
 	}
-	colInfo.Type = types.Type{Oid: types.T(types.T_varchar)}
+	colInfo.Type = types.Type{Oid: types.T_varchar}
 	metaTblInfo.Columns = append(metaTblInfo.Columns, colInfo)
 	return &metaTblInfo
 }

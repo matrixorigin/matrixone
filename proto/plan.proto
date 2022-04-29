@@ -1,5 +1,5 @@
 syntax = "proto3";
-package plan;
+option go_package = "/plan";
 
 message Type {
 	enum TypeId {
@@ -100,6 +100,11 @@ message ColRef {
 	int32 col_pos = 3;
 }
 
+// ExprList is a type of Expr
+message ExprList {
+	repeated Expr list = 1;
+}
+
 // Object ref, reference a object in database, 4 part name.
 message ObjectRef {
 	int64 server	= 1;
@@ -143,12 +148,14 @@ message Function {
 
 message Expr {
 	Type typ	= 1;
+	string alias = 2;
 	oneof expr {
-		Const		c	= 2;
-		ParamRef	p	= 3;
-		VarRef		v	= 4;
-		ColRef		col = 5;
-		Function	f	= 6;
+		Const		c	  = 3;
+		ParamRef	p	  = 4;
+		VarRef		v	  = 5;
+		ColRef		col   = 6;
+		Function	f	  = 7;
+		ExprList    list  = 8;
 	}
 }
 
@@ -197,14 +204,14 @@ message OrderBySpec {
 		INTERNAL    = 16;
 	}
 
-	repeated Expr order_by = 1;
-	repeated int32 order_by_collations = 2;
-	repeated OrderByFlag order_by_flags = 3;
+	Expr order_by = 1;
+	string order_by_collations = 2;
+	OrderByFlag order_by_flags = 3;
 }
 
 message WindowSpec {
 	repeated Expr partition_by = 1;
-	OrderBySpec odery_by = 2;
+	repeated OrderBySpec odery_by = 2;
 	int32 lead = 3;
 	int32 lag  = 4;
 }
@@ -277,7 +284,7 @@ message Node {
 	repeated Expr where_list	= 8;
 	repeated Expr group_by		= 9;
 	repeated Expr grouping_set	= 10;
-	OrderBySpec order_by        = 11;
+	repeated OrderBySpec order_by        = 11;
 	WindowSpec win_spec = 12;
 	Expr limit			= 13;
 	Expr offset			= 14;

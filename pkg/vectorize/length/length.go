@@ -22,6 +22,10 @@ var (
 	StrLength func(*types.Bytes, []int64) []int64
 )
 
+func init() {
+	StrLength = strLength
+}
+
 func strLength(xs *types.Bytes, rs []int64) []int64 {
 	for i, n := range xs.Lengths {
 		rs[i] = int64(n)
