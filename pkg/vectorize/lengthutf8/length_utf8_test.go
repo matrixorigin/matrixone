@@ -28,12 +28,14 @@ func TestLengthUTF8(t *testing.T) {
 		"   ":   3,
 		"中国123": 5,
 		"abc😄":  4,
+		"中国中国中国中国中国中国中国中国中国中国1234":      24,
+		"中国中国中国中国中国中国中国中国中国中国1234😄ggg!": 29,
 	}
 
 	for input, expected := range cases {
 		xs := MakeBytes([]string{input})
 		re := make([]uint64, 1)
-		actual := strLengthUTF8(xs, re)[0]
+		actual := StrLengthUTF8(xs, re)[0]
 		require.Equal(t, expected, actual)
 	}
 }
@@ -42,7 +44,7 @@ func TestLengthUTF8WithMultiString(t *testing.T) {
 	xs := MakeBytes([]string{"你好", "中国", "abc", " ", "", "abc😄哈"})
 	re := make([]uint64, 6)
 	expected := []uint64{2, 2, 3, 1, 0, 5}
-	actual := strLengthUTF8(xs, re)
+	actual := StrLengthUTF8(xs, re)
 	require.Equal(t, expected, actual)
 }
 
