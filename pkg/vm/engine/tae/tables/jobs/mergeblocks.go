@@ -7,12 +7,13 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -63,17 +64,13 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog
 	return
 }
 
-func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint16, isPrimary bool) error {
+func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32) (column []*vector.Vector, mapping []uint32) {
 	if isPrimary {
-		if err := mergesort.MergeSortedColumn(vecs, sortedIdx); err != nil {
-			return err
-		}
+		column, mapping = mergesort.MergeSortedColumn(vecs, sortedIdx, fromLayout, toLayout)
 	} else {
-		if err := mergesort.ShuffleColumn(vecs, *sortedIdx); err != nil {
-			return err
-		}
+		column = mergesort.ShuffleColumn(vecs, *sortedIdx, fromLayout, toLayout)
 	}
-	return nil
+	return
 }
 
 func (task *mergeBlocksTask) Execute() (err error) {
@@ -106,12 +103,25 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		task.created = append(task.created, created)
 	}
+	to := make([]uint32, 0)
+	maxrow := task.compacted[0].GetMeta().(*catalog.BlockEntry).GetSchema().BlockMaxRows
+	totalRows:=length
+	for totalRows > 0 {
+		if totalRows > int(maxrow) {
+			to = append(to, maxrow)
+			totalRows -= int(maxrow)
+		} else {
+			to = append(to, uint32(totalRows))
+			break
+		}
+	}
 
-	node := common.GPool.Alloc(uint64(length * 2))
+	node := common.GPool.Alloc(uint64(length * 4))
 	buf := node.Buf[:length]
 	defer common.GPool.Free(node)
-	sortedIdx := *(*[]uint16)(unsafe.Pointer(&buf))
-	task.mergeColumn(vecs, &sortedIdx, true)
+	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
+	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
+	logutil.Infof("mapping is %v", mapping)
 	for i, vec := range vecs {
 		created := task.created[i]
 		bf := created.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
@@ -134,7 +144,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			vec = compute.ApplyDeleteToVector(vec, deletes)
 			vecs = append(vecs, vec)
 		}
-		task.mergeColumn(vecs, &sortedIdx, false)
+		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
 			created := task.created[pos]
 			bf := created.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
