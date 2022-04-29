@@ -24,20 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, SelectCtx *SelectContext) error {
+func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	//with
 
 	//clause
 	var projections []*plan.Expr
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		tmp, err := buildSelectClause(selectClause, ctx, query, SelectCtx)
+		tmp, err := buildSelectClause(selectClause, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
 		projections = tmp
 	case *tree.ParenSelect:
-		return buildSelect(selectClause.Select, ctx, query, SelectCtx)
+		return buildSelect(selectClause.Select, ctx, query, selectCtx)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
@@ -60,7 +60,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, SelectCtx
 		var orderBys []*plan.OrderBySpec
 		for _, order := range stmt.OrderBy {
 			orderBy := &plan.OrderBySpec{}
-			expr, err := buildExpr(order.Expr, ctx, query, SelectCtx)
+			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return err
 			}
@@ -83,7 +83,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, SelectCtx
 	if stmt.Limit != nil {
 		//offset
 		if stmt.Limit.Offset != nil {
-			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, SelectCtx)
+			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, selectCtx)
 			if err != nil {
 				return err
 			}
@@ -92,7 +92,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, SelectCtx
 
 		//limit
 		if stmt.Limit.Count != nil {
-			expr, err := buildExpr(stmt.Limit.Count, ctx, query, SelectCtx)
+			expr, err := buildExpr(stmt.Limit.Count, ctx, query, selectCtx)
 			if err != nil {
 				return err
 			}
@@ -108,9 +108,9 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, SelectCtx
 	return nil
 }
 
-func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, SelectCtx *SelectContext) ([]*plan.Expr, error) {
+func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, selectCtx *SelectContext) ([]*plan.Expr, error) {
 	//from
-	err := buildFrom(stmt.From.Tables, ctx, query, SelectCtx)
+	err := buildFrom(stmt.From.Tables, ctx, query, selectCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	//filter
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, SelectCtx)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -130,7 +130,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 	//todo get windowspec
 	var projections []*plan.Expr
 	for _, selectExpr := range stmt.Exprs {
-		expr, err := buildExpr(selectExpr.Expr, ctx, query, SelectCtx)
+		expr, err := buildExpr(selectExpr.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +146,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 				expr.Alias = tree.String(&selectExpr, dialect.MYSQL)
 			} else {
 				expr.Alias = alias
-				SelectCtx.columnAlias[alias] = expr
+				selectCtx.columnAlias[alias] = expr
 			}
 			projections = append(projections, expr)
 		}
@@ -166,7 +166,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		if stmt.GroupBy != nil {
 			var exprs []*plan.Expr
 			for _, groupByExpr := range stmt.GroupBy {
-				expr, err := buildExpr(groupByExpr, ctx, query, SelectCtx)
+				expr, err := buildExpr(groupByExpr, ctx, query, selectCtx)
 				if err != nil {
 					return nil, err
 				}
@@ -179,7 +179,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 			if stmt.GroupBy == nil {
 				//todo select a from tbl having max(a) > 10   will rewrite to  select a from tbl group by null having max(a) > 10
 			}
-			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, SelectCtx)
+			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return nil, err
 			}

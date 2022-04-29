@@ -149,7 +149,7 @@ func fillJoinProjectList(node *plan.Node, leftNode *plan.Node, rightNode *plan.N
 	node.ProjectList = exprs
 }
 
-func getExprFromUnresolvedName(query *Query, name string, table string, SelectCtx *SelectContext) (*plan.Expr, error) {
+func getExprFromUnresolvedName(query *Query, name string, table string, selectCtx *SelectContext) (*plan.Expr, error) {
 	preNode := query.Nodes[len(query.Nodes)-1]
 	aliasName := table + "." + name
 
@@ -196,12 +196,12 @@ func getExprFromUnresolvedName(query *Query, name string, table string, SelectCt
 				Corr: colRef,
 			},
 		}
-		for idx, col := range query.Nodes[SelectCtx.subQueryParentId].ProjectList {
+		for idx, col := range query.Nodes[selectCtx.subQueryParentId].ProjectList {
 			if matchName(col.Alias) {
 				if colRef.Name != "" {
 					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
 				}
-				SelectCtx.subQueryIsCorrelated = true
+				selectCtx.subQueryIsCorrelated = true
 
 				colExpr = &plan.Expr{
 					Expr: &plan.Expr_Corr{
@@ -212,7 +212,7 @@ func getExprFromUnresolvedName(query *Query, name string, table string, SelectCt
 				colRef.Name = col.Alias
 				colRef.RelPos = 0
 				colRef.ColPos = int32(idx)
-				colRef.NodeId = SelectCtx.subQueryParentId
+				colRef.NodeId = selectCtx.subQueryParentId
 				colExpr.Alias = col.Alias
 				colExpr.Typ = col.Typ
 			}
@@ -246,7 +246,7 @@ func unfoldStar(query *Query, list *plan.ExprList, table string) error {
 	return nil
 }
 
-func setDerivedTableAlias(query *Query, ctx CompilerContext, SelectCtx *SelectContext, alias string) {
+func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectContext, alias string) {
 	preNode := query.Nodes[len(query.Nodes)-1]
 	newName := func(name string) string {
 		arr := strings.SplitN(name, ".", 2)
@@ -258,7 +258,7 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, SelectCtx *SelectCo
 	for _, expr := range preNode.ProjectList {
 		expr.Alias = newName(expr.Alias)
 	}
-	SelectCtx.tableAlias[alias] = alias
+	selectCtx.tableAlias[alias] = alias
 
 	//create new project node by default。
 	//if next node is join, you need remove this node

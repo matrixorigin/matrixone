@@ -193,7 +193,7 @@ func getFunctionReturnType(fun *FunctionSig, args []*plan.Expr) *plan.Type {
 	}
 }
 
-func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, SelectCtx *SelectContext) (*plan.Expr, error) {
+func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
 	//Get function
 	functionSig, ok := BuiltinFunctionsMap[name]
 	if !ok {
@@ -208,7 +208,7 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 	//Get original input expr
 	var args []*plan.Expr
 	for _, astExpr := range exprs {
-		expr, err := buildExpr(astExpr, ctx, query, SelectCtx)
+		expr, err := buildExpr(astExpr, ctx, query, selectCtx)
 		if err != nil {
 			return nil, err
 		}

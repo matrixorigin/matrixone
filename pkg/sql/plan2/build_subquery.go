@@ -39,7 +39,7 @@ func getSubqueryParentScanNodeId(query *Query, node *plan.Node) (int32, bool) {
 	return 0, false
 }
 
-func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, SelectCtx *SelectContext) (*plan.Expr, error) {
+func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
 	nowLength := len(query.Nodes)
 	nodeId, _ := getSubqueryParentScanNodeId(query, query.Nodes[nowLength-1])
 

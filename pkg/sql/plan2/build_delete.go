@@ -34,9 +34,9 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	SelectCtx := &SelectContext{
+	selectCtx := &SelectContext{
 		tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
 	}
-	return buildSelect(selectStmt, ctx, query, SelectCtx)
+	return buildSelect(selectStmt, ctx, query, selectCtx)
 }

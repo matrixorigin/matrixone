@@ -36,17 +36,17 @@ func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
 }
 
 func buildStatement(stmt tree.Statement, ctx CompilerContext, query *Query) error {
-	SelectCtx := &SelectContext{
+	selectCtx := &SelectContext{
 		tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt, ctx, query, SelectCtx)
+		return buildSelect(stmt, ctx, query, selectCtx)
 	case *tree.ParenSelect:
 		query.StmtType = plan.Query_SELECT
-		return buildSelect(stmt.Select, ctx, query, SelectCtx)
+		return buildSelect(stmt.Select, ctx, query, selectCtx)
 	case *tree.Insert:
 		query.StmtType = plan.Query_INSERT
 		return buildInsert(stmt, ctx, query)

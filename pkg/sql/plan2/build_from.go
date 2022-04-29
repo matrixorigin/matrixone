@@ -25,9 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, SelectCtx *SelectContext) error {
+func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	if len(stmt) == 1 {
-		_, err := buildTable(stmt[0], ctx, query, SelectCtx)
+		_, err := buildTable(stmt[0], ctx, query, selectCtx)
 		return err
 	}
 
@@ -37,7 +37,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, SelectCt
 		Left:     stmt[0],
 		Right:    stmt[1],
 	}
-	err := buildJoinTable(joinTbl, ctx, query, SelectCtx)
+	err := buildJoinTable(joinTbl, ctx, query, selectCtx)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, SelectCt
 	for i < len(stmt) {
 		leftNode := query.Nodes[len(query.Nodes)-1]
 
-		isDerivedTable, err := buildTable(stmt[i], ctx, query, SelectCtx)
+		isDerivedTable, err := buildTable(stmt[i], ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
@@ -68,7 +68,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, SelectCt
 	return nil
 }
 
-func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, SelectCtx *SelectContext) (bool, error) {
+func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (bool, error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
 		tmpCtx := &SelectContext{
@@ -95,33 +95,33 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, SelectCt
 			TableDef: tableDef,
 		}
 		fillTableScanProjectList(node)
-		SelectCtx.tableAlias[tableDef.Name] = tableDef.Name
+		selectCtx.tableAlias[tableDef.Name] = tableDef.Name
 		appendQueryNode(query, node, false)
 		return false, nil
 	case *tree.JoinTableExpr:
 		//todo confirm how to deal with alias
-		err := buildJoinTable(tbl, ctx, query, SelectCtx)
+		err := buildJoinTable(tbl, ctx, query, selectCtx)
 		if err != nil {
 			return true, err
 		}
 		return false, nil
 	case *tree.ParenTableExpr:
-		return buildTable(tbl.Expr, ctx, query, SelectCtx)
+		return buildTable(tbl.Expr, ctx, query, selectCtx)
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		alias := string(tbl.As.Alias)
 		if alias == "" {
-			return buildTable(tbl.Expr, ctx, query, SelectCtx)
+			return buildTable(tbl.Expr, ctx, query, selectCtx)
 		}
 
-		isDerivedTable, err := buildTable(tbl.Expr, ctx, query, SelectCtx)
+		isDerivedTable, err := buildTable(tbl.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return isDerivedTable, err
 		}
 		if isDerivedTable {
-			setDerivedTableAlias(query, ctx, SelectCtx, alias)
+			setDerivedTableAlias(query, ctx, selectCtx, alias)
 		} else {
-			delete(SelectCtx.tableAlias, query.Nodes[len(query.Nodes)-1].TableDef.Name)
-			SelectCtx.tableAlias[alias] = query.Nodes[len(query.Nodes)-1].TableDef.Name
+			delete(selectCtx.tableAlias, query.Nodes[len(query.Nodes)-1].TableDef.Name)
+			selectCtx.tableAlias[alias] = query.Nodes[len(query.Nodes)-1].TableDef.Name
 		}
 		//todo add tableAlias(colAlias1, colAlias2) support (ast not support now)
 		return isDerivedTable, nil
@@ -133,7 +133,7 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, SelectCt
 	return false, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 }
 
-func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, SelectCtx *SelectContext) error {
+func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	var leftJoinType plan.Node_JoinFlag
 	var rightJoinType plan.Node_JoinFlag
 
@@ -164,7 +164,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 		// }
 	}
 
-	isDerivedTable, err := buildTable(tbl.Left, ctx, query, SelectCtx)
+	isDerivedTable, err := buildTable(tbl.Left, ctx, query, selectCtx)
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 	lefNode := query.Nodes[len(query.Nodes)-1]
 	lefNode.JoinType = rightJoinType
 
-	isDerivedTable, err = buildTable(tbl.Right, ctx, query, SelectCtx)
+	isDerivedTable, err = buildTable(tbl.Right, ctx, query, selectCtx)
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:
-		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, SelectCtx)
+		exprs, err := splitAndBuildExpr(cond.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}

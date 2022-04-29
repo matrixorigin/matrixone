@@ -51,11 +51,11 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		OrderBy: stmt.OrderBy,
 		Limit:   stmt.Limit,
 	}
-	SelectCtx := &SelectContext{
+	selectCtx := &SelectContext{
 		tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
 	}
-	err := buildSelect(selectStmt, ctx, query, SelectCtx)
+	err := buildSelect(selectStmt, ctx, query, selectCtx)
 	if err != nil {
 		return err
 	}
