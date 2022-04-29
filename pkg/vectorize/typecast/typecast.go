@@ -146,10 +146,16 @@ var (
 
 	Decimal64ToDecimal128 = decimal64ToDecimal128Pure
 
-	Int8ToDecimal128  = intToDecimal128[int8]
-	Int16ToDecimal128 = intToDecimal128[int16]
-	Int32ToDecimal128 = intToDecimal128[int32]
-	Int64ToDecimal128 = intToDecimal128[int64]
+	Int8ToDecimal128   = intToDecimal128[int8]
+	Int16ToDecimal128  = intToDecimal128[int16]
+	Int32ToDecimal128  = intToDecimal128[int32]
+	Int64ToDecimal128  = intToDecimal128[int64]
+	Uint8ToDecimal128  = uintToDecimal128[uint8]
+	Uint16ToDecimal128 = uintToDecimal128[uint16]
+	Uint32ToDecimal128 = uintToDecimal128[uint32]
+	Uint64ToDecimal128 = uintToDecimal128[uint64]
+
+	TimestampToDatetime = timestampToDatetime
 )
 
 func numericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -225,4 +231,15 @@ func intToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]ty
 		rs[i] = types.InitDecimal128(int64(x))
 	}
 	return rs, nil
+}
+
+func uintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
+	for i, x := range xs {
+		rs[i] = types.InitDecimal128UsingUint(uint64(x))
+	}
+	return rs, nil
+}
+
+func timestampToDatetime(xs []types.Timestamp, rs []types.Datetime) ([]types.Datetime, error) {
+	return types.TimestampToDatetime(xs, rs)
 }

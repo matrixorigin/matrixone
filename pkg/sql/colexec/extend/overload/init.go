@@ -679,6 +679,7 @@ func initCastRulesForBinaryOps() {
 	// EQ / NE / GE / GT / LE / LT
 	{
 		ops := []int{EQ, NE, GT, GE, LT, LE}
+		// comparison operation involving decimal
 		for _, op := range ops {
 			{
 				targetType := []types.Type{
@@ -812,6 +813,7 @@ func initCastRulesForBinaryOps() {
 				/*
 					cast to datetime op datetime :
 					1. op between datetime and char / varchar
+					2. operation between datetime and timestamp
 				*/
 				targetType := []types.Type{
 					{Oid: types.T_datetime, Size: 8},
@@ -823,19 +825,23 @@ func initCastRulesForBinaryOps() {
 						{NumArgs: 2, sourceTypes: []types.T{types.T_datetime, l}, targetTypes: targetType},
 					}...)
 				}
+				OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
+					{NumArgs: 2, sourceTypes: []types.T{types.T_timestamp, types.T_datetime}, targetTypes: targetType},
+					{NumArgs: 2, sourceTypes: []types.T{types.T_datetime, types.T_timestamp}, targetTypes: targetType},
+				}...)
 			}
-			/*
-				{
-					targetType := []types.Type{
-						{Oid: types.T_decimal128, Size: 16},
-						{Oid: types.T_decimal128, Size: 16},
-					}
+			{
+				targetType := []types.Type{
+					{Oid: types.T_timestamp, Size: 8},
+					{Oid: types.T_timestamp, Size: 8},
+				}
+				for _, l := range chars {
 					OperatorCastRules[op] = append(OperatorCastRules[op], []castRule{
-						//		{NumArgs: 2, sourceTypes: []types.T{types.T_decimal128, types.T_decimal64}, targetTypes: targetType},
-						{NumArgs: 2, sourceTypes: []types.T{types.T_decimal64, types.T_decimal128}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{l, types.T_timestamp}, targetTypes: targetType},
+						{NumArgs: 2, sourceTypes: []types.T{types.T_timestamp, l}, targetTypes: targetType},
 					}...)
 				}
-			*/
+			}
 		}
 	}
 }

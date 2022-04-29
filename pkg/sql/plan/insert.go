@@ -398,6 +398,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			if err := vector.Append(vec, vs); err != nil {
 				return err
 			}
+		case types.T_timestamp:
+			vs := make([]types.Timestamp, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(types.Timestamp), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(types.Timestamp)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_decimal64:
 			vs := make([]types.Decimal64, len(rows.Rows))
 			{

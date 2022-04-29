@@ -293,6 +293,34 @@ func initCast() {
         },
 
         {
+            LeftType:   types.T_varchar,
+            RightType:  types.T_timestamp,
+            ReturnType: types.T_timestamp,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                defer func() {
+                    if lv.Ref == 0 {
+                        process.Put(proc, lv)
+                    }
+                }()
+                vs := lv.Col.(*types.Bytes)
+                col := make([]types.Timestamp, 0, len(vs.Lengths))
+                for i := range vs.Lengths {
+                    varcharValue := vs.Get(int64(i))
+                    data, err := types.ParseTimestamp(string(varcharValue), 6) // default timestamp precision is 6
+                    if err != nil {
+                        return nil, err
+                    }
+                    col = append(col, data)
+                }
+                vec := vector.New(rv.Typ)
+                vec.Col = col
+                nulls.Set(vec.Nsp, lv.Nsp)
+                vector.SetCol(vec, col)
+                return vec, nil
+            },
+        },
+
+        {
              LeftType:   types.T_decimal64,
              RightType:  types.T_decimal128,
              ReturnType: types.T_decimal128,
@@ -370,7 +398,32 @@ func initCast() {
              },
          },
 
-
+        {
+            LeftType:   types.T_timestamp,
+            RightType:  types.T_datetime,
+            ReturnType: types.T_datetime,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                defer func() {
+                    if lv.Ref == 0 {
+                        process.Put(proc, lv)
+                    }
+                }()
+                rtl := 8
+                lvs := lv.Col.([]types.Timestamp)
+                vec, err := process.Get(proc, int64(rtl)*int64(len(lvs)), rv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.DecodeDatetimeSlice(vec.Data)
+                rs = rs[:len(lvs)]
+                if _, err := typecast.TimestampToDatetime(lvs, rs); err != nil {
+                    process.Put(proc, vec)
+                    return nil, err
+                }
+                nulls.Set(vec.Nsp, lv.Nsp)
+                vector.SetCol(vec, rs)
+                return vec, nil
+            },
+        },
     }
-
 }

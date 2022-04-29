@@ -1034,12 +1034,14 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "create table ccs (c1 char(10), c2 varchar(20));"},
 		{sql: "create table int_decimal (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(10, 5));"},
 		{sql: "create table int_decimal1 (i1 tinyint, i2 smallint, i3 int, i4 bigint, d1 decimal(20, 5));"},
+		{sql: "create table ts_table (ts1 timestamp);"},
 		{sql: "insert into iis values (1, 11, 111, 1111), (1, null, null, 1);"},
 		{sql: "insert into ffs values (22.2, 222.222), (null, null);"},
 		{sql: "insert into uus values (3, 33, 333, 3333), (null, null, null, null);"},
 		{sql: "insert into ccs values ('kpi', 'b'), ('c', 'e'), (null, null);"},
 		{sql: "insert into int_decimal values (1, 1, 22, 22, 333.333);"},
 		{sql: "insert into int_decimal1 values (1, 1, 22, 22, 333.333);"},
+		{sql: "insert into ts_table values ('2020-01-01 11:12:13'), ('2021-01-01 11:12:13'), ('2022-01-01 11:12:13');"},
 		// Test =, >, <, >=, <=, !=
 		{sql: "select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;", res: executeResult{
 			data: [][]string{
@@ -1588,6 +1590,36 @@ func TestComparisonOperator(t *testing.T) {
 			data: [][]string{{"1", "1", "22", "22", "{33333300 0}"}},
 		}},
 		{sql: "select * from int_decimal1 where i1 > d1;", res: executeResult{}},
+		{sql: "select * from ts_table where ts1 <= '2022-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2020-01-01 11:12:13.000000"}, {"2021-01-01 11:12:13.000000"}, {"2022-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 <= '2021-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2020-01-01 11:12:13.000000"}, {"2021-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 < '2022-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2020-01-01 11:12:13.000000"}, {"2021-01-01 11:12:13.000000"}, {"2022-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 < '2021-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2020-01-01 11:12:13.000000"}, {"2021-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 = '2019-01-02 11:12:13';", res: executeResult{
+			data: [][]string(nil),
+		}},
+		{sql: "select * from ts_table where ts1 = '2021-01-01 11:12:13';", res: executeResult{
+			data: [][]string{{"2021-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 >= '2022-01-02 11:12:13';", res: executeResult{
+			data: [][]string(nil),
+		}},
+		{sql: "select * from ts_table where ts1 >= '2021-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2022-01-01 11:12:13.000000"}},
+		}},
+		{sql: "select * from ts_table where ts1 > '2022-01-02 11:12:13';", res: executeResult{
+			data: [][]string(nil),
+		}},
+		{sql: "select * from ts_table where ts1 > '2021-01-02 11:12:13';", res: executeResult{
+			data: [][]string{{"2022-01-01 11:12:13.000000"}},
+		}},
 	}
 	test(t, testCases)
 }

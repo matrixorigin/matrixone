@@ -799,6 +799,8 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				return types.ParseDate(constant.StringVal(val))
 			case types.T_datetime:
 				return types.ParseDatetime(constant.StringVal(val))
+			case types.T_timestamp:
+				return types.ParseTimestamp(constant.StringVal(val), typ.Precision)
 			}
 		}
 	}

@@ -25,6 +25,8 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "create table ccs(c1 char(10), c2 varchar(15));"},
 		{sql: "create table dates(d1 date);"},
 		{sql: "create table datetimes(dt1 datetime);"},
+		{sql: "create table timestamps(ts1 timestamp);"},
+		{sql: "create table timestamps1(ts1 timestamp(3));"},
 		{sql: "create table def1 (i1 int default 888, i2 int default 888, i3 int default 888);"},
 		{sql: "create table def2 (id int default 1, name varchar(255) unique, age int);"},
 		{sql: "create table def3 (i int default -1, v varchar(10) default 'abc', c char(10) default '', price double default 0.00);"},
@@ -39,6 +41,8 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "insert into ccs values ('123', '34567');"},
 		{sql: "insert into dates values ('1999-04-05'), ('2004-04-03');"},
 		{sql: "insert into datetimes values ('1999-04-05 11:01:02'), ('2004-04-03 13:11:10');"},
+		{sql: "insert into timestamps values ('1999-04-05 11:01:02'), ('2004-04-03 13:11:10'), ('1999-04-05 11:01:02.123456'), ('2004-04-03 13:11:10.123456');"},
+		{sql: "insert into timestamps1 values ('1999-04-05 11:01:02'), ('2004-04-03 13:11:10'), ('1999-04-05 11:01:02.123456'), ('2004-04-03 13:11:10.123456');"},
 		{sql: "insert into def1 values (default, default, default), (1, default, default), (default, -1, default), (default, default, 0);"},
 		{sql: "insert into def2 (name, age) values ('Abby', 24);"},
 		{sql: "insert into def3 () values (), ();"},
@@ -118,6 +122,14 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "select * from datetimes", res: executeResult{
 			attr: []string{"dt1"},
 			data: [][]string{{"1999-04-05 11:01:02"}, {"2004-04-03 13:11:10"}},
+		}},
+		{sql: "select * from timestamps", res: executeResult{
+			attr: []string{"ts1"},
+			data: [][]string{{"1999-04-05 11:01:02.000000"}, {"2004-04-03 13:11:10.000000"}, {"1999-04-05 11:01:02.123456"}, {"2004-04-03 13:11:10.123456"}},
+		}},
+		{sql: "select * from timestamps1", res: executeResult{
+			attr: []string{"ts1"},
+			data: [][]string{{"1999-04-05 11:01:02.000000"}, {"2004-04-03 13:11:10.000000"}, {"1999-04-05 11:01:02.123000"}, {"2004-04-03 13:11:10.123000"}},
 		}},
 		{sql: "select * from def1;", res: executeResult{
 			attr: []string{"i1", "i2", "i3"},
@@ -406,7 +418,6 @@ func TestAQ(t *testing.T) {
 	}
 	test(t, testCases)
 }
-
 
 //Do not support this unit test now, because it tests for tpe engine which has supported deletion and other engine do not support.
 //TestDeleteFunction is only used to check if the whole process about deletion can be run through

@@ -426,7 +426,7 @@ import (
 %type <intervalType> interval_type
 %type <numVal> int_num_val
 
-%type <lengthOpt> length_opt length_option_opt length
+%type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt
 %type <zeroFillOpt> zero_fill_opt
@@ -5273,19 +5273,24 @@ time_type:
 	        },
         }
     }
-|   TIMESTAMP length_opt
+|   TIMESTAMP timestamp_option_opt
     {
         locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
+        if $2 < 0 || $2 > 6 {
+        		yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+        		return 1
+                } else {
+                $$ = &tree.T{
+            		InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
-                FamilyString: $1,
-                DisplayWith: $2,
-		        TimePrecisionIsSet: false,
+		        Precision:          $2,
+                	FamilyString: $1,
+                	DisplayWith: $2,
+		        TimePrecisionIsSet: true,
 		        Locale:             &locale,
 		        Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
 	        },
+	    }
         }
     }
 |   DATETIME length_opt
@@ -5546,6 +5551,16 @@ length_opt:
         $$ = 0
     }
 |	length
+
+timestamp_option_opt:
+    /* EMPTY */
+    	{
+    	    $$ = 6
+    	}
+|	'(' INTEGRAL ')'
+    {
+        $$ = int32($2.(int64))
+    }
 
 length_option_opt:
 	{
