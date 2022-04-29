@@ -58,7 +58,10 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, S
 
 	switch sub := subquery.Select.(type) {
 	case *tree.ParenSelect:
-		buildSelect(sub.Select, ctx, query, newCtx)
+		err := buildSelect(sub.Select, ctx, query, newCtx)
+		if err != nil {
+			return nil, err
+		}
 	case *tree.SelectClause:
 		// buildSelect(selectClause.Select, ctx, query)
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("support select statement: %T", subquery))

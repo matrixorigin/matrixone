@@ -293,11 +293,8 @@ func TestNodeTree(t *testing.T) {
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `
-	SELECT * FROM NATION where N_REGIONKEY > 
-	(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME) 
-order by N_NATIONKEY
-	`
+	sql := `SELECT * FROM NATION`
+	// sql := "select max(R_REGIONKEY) from REGION222"
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
