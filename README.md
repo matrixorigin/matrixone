@@ -579,6 +579,13 @@ Contributions to MatrixOne are welcome from everyone.
         </a>
     </td>
     <td align="center">
+        <a href="https://github.com/e11jah">
+            <img src="https://avatars.githubusercontent.com/u/30852919?v=4" width="30;" alt="e11jah"/>
+            <br />
+            <sub><b>e11jah</b></sub>
+        </a>
+    </td>
+    <td align="center">
         <a href="https://github.com/florashi181">
             <img src="https://avatars.githubusercontent.com/u/87641339?v=4" width="30;" alt="florashi181"/>
             <br />
@@ -605,15 +612,15 @@ Contributions to MatrixOne are welcome from everyone.
             <br />
             <sub><b>Sundyli</b></sub>
         </a>
-    </td>
+    </td></tr>
+<tr>
     <td align="center">
         <a href="https://github.com/supermario1990">
             <img src="https://avatars.githubusercontent.com/u/8428531?v=4" width="30;" alt="supermario1990"/>
             <br />
             <sub><b>Supermario1990</b></sub>
         </a>
-    </td></tr>
-<tr>
+    </td>
     <td align="center">
         <a href="https://github.com/xiw5">
             <img src="https://avatars.githubusercontent.com/u/33027107?v=4" width="30;" alt="xiw5"/>
