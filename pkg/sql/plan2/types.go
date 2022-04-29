@@ -24,10 +24,14 @@ type Optimizer interface {
 	CurrentContext() CompilerContext
 }
 
-//use for set and get alias in build context
-//when build_from we may set tableAlias and then use in build_where
-//when build_projection we may set columnAlias and then use in build_orderby
-type AliasContext struct {
+//use for build select
+type SelectContext struct {
+	//when build_from we may set tableAlias and then use in build_where
+	//when build_projection we may set columnAlias and then use in build_orderby
 	tableAlias  map[string]string
 	columnAlias map[string]*plan.Expr
+
+	//use for build subquery
+	subQueryIsCorrelated bool
+	subQueryParentId     int32
 }

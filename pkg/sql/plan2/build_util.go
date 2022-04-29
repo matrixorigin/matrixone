@@ -41,32 +41,6 @@ func splitExprToAND(expr tree.Expr) []*tree.Expr {
 	return exprs
 }
 
-func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, aliasCtx *AliasContext) (*plan.Expr, error) {
-	funObjRef := getFunctionObjRef(name)
-	var args []*plan.Expr
-	for _, astExpr := range exprs {
-		expr, err := buildExpr(astExpr, ctx, query, aliasCtx)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, expr)
-	}
-	return &plan.Expr{
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: funObjRef,
-				Args: args,
-			},
-		},
-	}, nil
-}
-
-func getFunctionObjRef(name string) *plan.ObjectRef {
-	return &plan.ObjectRef{
-		ObjName: name,
-	}
-}
-
 func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
 	for idx, col := range tableDef.Cols {
 		if col.Name == name {
@@ -125,7 +99,7 @@ func appendQueryNode(query *Query, node *plan.Node, isRoot bool) {
 	}
 }
 
-func fillProjectList(node *plan.Node) {
+func fillTableScanProjectList(node *plan.Node) {
 	var exprs []*plan.Expr
 	for idx, col := range node.TableDef.Cols {
 		exprs = append(exprs,
@@ -137,6 +111,7 @@ func fillProjectList(node *plan.Node) {
 						ColPos: int32(idx),
 					},
 				},
+				Typ: col.Typ,
 			})
 	}
 	node.ProjectList = exprs
@@ -154,6 +129,7 @@ func fillJoinProjectList(node *plan.Node, leftNode *plan.Node, rightNode *plan.N
 				},
 			},
 			Alias: expr.Alias,
+			Typ:   expr.Typ,
 		})
 	}
 	for idx, expr := range rightNode.ProjectList {
@@ -166,14 +142,17 @@ func fillJoinProjectList(node *plan.Node, leftNode *plan.Node, rightNode *plan.N
 				},
 			},
 			Alias: expr.Alias,
+			Typ:   expr.Typ,
 		})
 	}
 
 	node.ProjectList = exprs
 }
 
-func getExprFromUnresolvedName(query *Query, name string, table string) (*plan.Expr, error) {
+func getExprFromUnresolvedName(query *Query, name string, table string, SelectCtx *SelectContext) (*plan.Expr, error) {
 	preNode := query.Nodes[len(query.Nodes)-1]
+	aliasName := table + "." + name
+
 	colRef := &plan.ColRef{
 		Name: "",
 	}
@@ -182,7 +161,6 @@ func getExprFromUnresolvedName(query *Query, name string, table string) (*plan.E
 			Col: colRef,
 		},
 	}
-	aliasName := table + "." + name
 
 	matchName := func(alias string) bool {
 		if table == "" {
@@ -197,24 +175,54 @@ func getExprFromUnresolvedName(query *Query, name string, table string) (*plan.E
 			if colRef.Name != "" {
 				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
 			}
-			// expr := col.Expr.(*plan.Expr_Col)
-			// colRef.Name = expr.Col.Name
-			// colRef.RelPos = expr.Col.RelPos
-			// colRef.ColPos = expr.Col.ColPos
-			// colExpr.Alias = col.Alias
-
 			colRef.Name = col.Alias
 			colRef.RelPos = 0
 			colRef.ColPos = int32(idx)
 			colExpr.Alias = col.Alias
+			colExpr.Typ = col.Typ
+		}
+	}
+	if colRef.Name != "" {
+		return colExpr, nil
+	}
+
+	//get from parent if i'am subquery
+	{
+		colRef := &plan.CorrColRef{
+			Name: "",
+		}
+		colExpr := &plan.Expr{
+			Expr: &plan.Expr_Corr{
+				Corr: colRef,
+			},
+		}
+		for idx, col := range query.Nodes[SelectCtx.subQueryParentId].ProjectList {
+			if matchName(col.Alias) {
+				if colRef.Name != "" {
+					return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' in the field list is ambiguous", name))
+				}
+				SelectCtx.subQueryIsCorrelated = true
+
+				colExpr = &plan.Expr{
+					Expr: &plan.Expr_Corr{
+						Corr: colRef,
+					},
+				}
+
+				colRef.Name = col.Alias
+				colRef.RelPos = 0
+				colRef.ColPos = int32(idx)
+				colRef.NodeId = SelectCtx.subQueryParentId
+				colExpr.Alias = col.Alias
+				colExpr.Typ = col.Typ
+			}
+		}
+		if colRef.Name != "" {
+			return colExpr, nil
 		}
 	}
 
-	if colRef.Name == "" {
-		return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%v' is not exist", aliasName))
-	} else {
-		return colExpr, nil
-	}
+	return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column '%v' not found", name))
 }
 
 //if table == ""  => select * from tbl
@@ -238,7 +246,7 @@ func unfoldStar(query *Query, list *plan.ExprList, table string) error {
 	return nil
 }
 
-func setDerivedTableAlias(query *Query, ctx CompilerContext, aliasCtx *AliasContext, alias string) {
+func setDerivedTableAlias(query *Query, ctx CompilerContext, SelectCtx *SelectContext, alias string) {
 	preNode := query.Nodes[len(query.Nodes)-1]
 	newName := func(name string) string {
 		arr := strings.SplitN(name, ".", 2)
@@ -250,9 +258,10 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, aliasCtx *AliasCont
 	for _, expr := range preNode.ProjectList {
 		expr.Alias = newName(expr.Alias)
 	}
-	aliasCtx.tableAlias[alias] = alias
+	SelectCtx.tableAlias[alias] = alias
 
-	// new project node// 如果后面没有join的话，那么就有一个新的node
+	//create new project node by default。
+	//if next node is join, you need remove this node
 	node := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
 		ProjectList: preNode.ProjectList,

@@ -203,6 +203,63 @@ func TestNodeTree(t *testing.T) {
 				4: {3},
 			},
 		},
+		//insert
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')": {
+			root: 0,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_INSERT,
+			},
+			children: map[int][]int32{},
+		},
+		//update
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
+			root: 2,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_SORT,
+				2: plan.Node_UPDATE,
+			},
+			children: map[int][]int32{
+				1: {0},
+				2: {1},
+			},
+		},
+		//delete
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
+			root: 1,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_SORT,
+			},
+			children: map[int][]int32{
+				1: {0},
+			},
+		},
+		// unrelated subquery
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)": {
+			root: 0,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN, //nodeid = 1  here is the subquery
+				1: plan.Node_TABLE_SCAN, //nodeid = 0, here is SELECT * FROM NATION where N_REGIONKEY > [subquery]
+			},
+			children: map[int][]int32{},
+		},
+		// related subquery
+		`SELECT * FROM NATION where N_REGIONKEY > 
+			(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME) 
+		order by N_NATIONKEY`: {
+			root: 3,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN, //nodeid = 1  subquery node，so,wo pop it to top
+				1: plan.Node_AGG,        //nodeid = 2  subquery node，so,wo pop it to top
+				2: plan.Node_TABLE_SCAN, //nodeid = 0
+				3: plan.Node_SORT,       //nodeid = 3
+			},
+			children: map[int][]int32{
+				1: {1}, //nodeid = 2
+				3: {0}, //nodeid = 3
+			},
+		},
 	}
 
 	//run test and check node tree
@@ -236,13 +293,15 @@ func TestNodeTree(t *testing.T) {
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	mock := newMockOptimizer()
-	sql := "SELECT count(N_NAME) FROM NATION"
-	// sql := "select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10  order By b.N_REGIONKEY"
-	// sql := "SELECT N_NAME, abs(N_REGIONKEY) a FROM NATION WHERE abs(N_REGIONKEY) > 0 ORDER BY a DESC"
+	sql := `
+	SELECT * FROM NATION where N_REGIONKEY > 
+	(select avg(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY group by R_NAME) 
+order by N_NATIONKEY
+	`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
+	mock := newMockOptimizer()
 	query, err := runOneStmt(mock, t, sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -333,6 +392,104 @@ func TestDerivedTableSqlBuilder(t *testing.T) {
 		"select c_custkey2222 from (select c_custkey from CUSTOMER group by c_custkey ) a", //column not exist
 	}
 	runTestShouldError(mock, t, sqls)
+}
+
+func TestInsert(t *testing.T) {
+	mock := newMockOptimizer()
+	//should pass
+	sqls := []string{
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), ('NAME2', 22, 'COMMENT2')",                                // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 'NAME1'), (2, 22, 'NAME2')",                     // doesn't match value count
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",             // column not exist
+		"INSERT NATION333 (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, abs(2), 'NAME1'), (2, 22, 'NAME2')",      // table not exist
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 'should int32', 'NAME1'), (2, 22, 'NAME2')", // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, 2.22, 'NAME1'), (2, 22, 'NAME2')",           // column type not match
+		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME2222) VALUES (1, abs(2), 'NAME1'), (2, 22, 'NAME2')",         // function expr not support now
+	}
+	runTestShouldError(mock, t, sqls)
+}
+
+func TestUpdate(t *testing.T) {
+	mock := newMockOptimizer()
+	//should pass
+	sqls := []string{
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
+		"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		// "UPDATE NATION SET N_NAME = 2, N_REGIONKEY=2",       // column type not match
+		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
+	}
+	runTestShouldError(mock, t, sqls)
+
+}
+
+func TestDelete(t *testing.T) {
+	mock := newMockOptimizer()
+	//should pass
+	sqls := []string{
+		"DELETE FROM NATION",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"DELETE FROM NATION2222",                     // table not exist
+		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column type not match
+	}
+	runTestShouldError(mock, t, sqls)
+
+}
+
+func TestSubQuery(t *testing.T) {
+	mock := newMockOptimizer()
+	//should pass
+	sqls := []string{
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		`select
+		sum(l_extendedprice) / 7.0 as avg_yearly
+	from
+		lineitem,
+		part
+	where
+		p_partkey = l_partkey
+		and p_brand = 'Brand#54'
+		and p_container = 'LG BAG'
+		and l_quantity < (
+			select
+				0.2 * avg(l_quantity)
+			from
+				lineitem
+			where
+				l_partkey = p_partkey
+		);`, //tpch q17
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
+		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
+	}
+	runTestShouldError(mock, t, sqls)
+
 }
 
 func getJson(v any, t *testing.T) []byte {
