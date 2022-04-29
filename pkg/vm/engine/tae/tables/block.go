@@ -155,7 +155,14 @@ func (blk *dataBlock) EstimateScore() int {
 }
 
 func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory, err error) {
-	factory = jobs.CompactBlockTaskFactory(blk.meta)
+	blk.meta.RLock()
+	dropped := blk.meta.IsDroppedCommitted()
+	inTxn := blk.meta.HasActiveTxn()
+	blk.meta.RUnlock()
+	if dropped || inTxn {
+		return
+	}
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.ioScheduler)
 	return
 	// if !blk.meta.IsAppendable() {
 	// }

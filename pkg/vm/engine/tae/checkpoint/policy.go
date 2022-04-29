@@ -5,7 +5,12 @@ import "time"
 var DefaultLeveledPolicy LeveledPolicy
 
 func init() {
-	DefaultLeveledPolicy = newSimpleLeveledPolicy(30)
+	DefaultLeveledPolicy = newSimpleLeveledPolicy(nil)
+}
+
+type PolicyCfg struct {
+	Interval int64 // ms
+	Levels   int
 }
 
 type LeveledPolicy interface {
@@ -15,23 +20,30 @@ type LeveledPolicy interface {
 }
 
 type simpleLeveledPolicy struct {
-	levels int
-	step   float64
+	levels   int
+	step     float64
+	interval int64
 }
 
-func newSimpleLeveledPolicy(levels int) *simpleLeveledPolicy {
-	if levels <= 1 {
+func newSimpleLeveledPolicy(cfg *PolicyCfg) *simpleLeveledPolicy {
+	if cfg == nil {
+		cfg = new(PolicyCfg)
+		cfg.Levels = 30
+		cfg.Interval = 1000
+	}
+	if cfg.Levels <= 1 {
 		panic("too small levels")
 	}
-	step := float64(70) / (float64(levels) - 1)
+	step := float64(70) / (float64(cfg.Levels) - 1)
 	return &simpleLeveledPolicy{
-		levels: levels,
-		step:   step,
+		levels:   cfg.Levels,
+		step:     step,
+		interval: cfg.Interval,
 	}
 }
 
 func (policy *simpleLeveledPolicy) ScanInterval(level int) time.Duration {
-	return time.Second * time.Duration(2)
+	return time.Duration(policy.levels-level) * time.Millisecond * time.Duration(policy.interval)
 }
 
 func (policy *simpleLeveledPolicy) TotalLevels() int { return policy.levels }

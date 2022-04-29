@@ -74,6 +74,8 @@ func TestCheckpoint1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
 	opts.CheckpointCfg.CalibrationInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 1
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchema(13)
@@ -135,7 +137,7 @@ func TestSchedule1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-		factory := jobs.CompactBlockTaskFactory(blkMeta)
+		factory := jobs.CompactBlockTaskFactory(blkMeta, nil)
 		ctx := tasks.Context{Waitable: true}
 		task, err := db.TaskScheduler.ScheduleTxnTask(&ctx, factory)
 		assert.Nil(t, err)

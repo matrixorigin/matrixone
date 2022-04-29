@@ -31,8 +31,8 @@ type ckpDriver struct {
 	units     *LeveledUnits
 }
 
-func NewDriver(scheduler tasks.TaskScheduler) *ckpDriver {
-	policy := DefaultLeveledPolicy
+func NewDriver(scheduler tasks.TaskScheduler, cfg *PolicyCfg) *ckpDriver {
+	policy := newSimpleLeveledPolicy(cfg)
 	units := NewLeveledUnits(scheduler, policy)
 	f := &ckpDriver{
 		scheduler: scheduler,

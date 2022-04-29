@@ -11,13 +11,16 @@ type ioScheduler struct {
 	db *DB
 }
 
-func newIOScheduler(db *DB) *ioScheduler {
+func newIOScheduler(db *DB, workers int) *ioScheduler {
+	if workers < 0 || workers > 100 {
+		panic(fmt.Sprintf("bad param: %d workers", workers))
+	}
 	s := &ioScheduler{
 		BaseScheduler: tasks.NewBaseScheduler("ioScheduler"),
 		db:            db,
 	}
 	dispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
-	for i := 0; i < 8; i++ {
+	for i := 0; i < workers; i++ {
 		handler := tasks.NewSingleWorkerHandler(fmt.Sprintf("[ioworker-%d]", i))
 		dispatcher.AddHandle(handler)
 		handler.Start()
@@ -33,16 +36,17 @@ type taskScheduler struct {
 	db *DB
 }
 
-func newTaskScheduler(db *DB) *taskScheduler {
+func newTaskScheduler(db *DB, txnWorkers int) *taskScheduler {
+	if txnWorkers < 0 || txnWorkers > 100 {
+		panic(fmt.Sprintf("bad param: %d txn workers", txnWorkers))
+	}
 	s := &taskScheduler{
 		BaseScheduler: tasks.NewBaseScheduler("taskScheduler"),
 		db:            db,
 	}
 	dispatcher := tasks.NewBaseDispatcher()
-	txnHandler := tasks.NewPoolHandler(1)
+	txnHandler := tasks.NewPoolHandler(txnWorkers)
 	txnHandler.Start()
-	// ioHandlers := tasks.NewPoolHandler(1)
-	// ioHandlers.Start()
 
 	dispatcher.RegisterHandler(tasks.TxnTask, txnHandler)
 	dispatcher.RegisterHandler(tasks.CompactBlockTask, txnHandler)

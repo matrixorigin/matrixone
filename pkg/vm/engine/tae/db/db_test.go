@@ -83,11 +83,13 @@ func TestAppend(t *testing.T) {
 func TestAppend2(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.CalibrationInterval = 1
+	opts.CheckpointCfg.CalibrationInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 10
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13)
-	schema.BlockMaxRows = 50
+	schema.BlockMaxRows = 100
 	schema.SegmentMaxBlocks = 2
 	schema.PrimaryKey = 3
 	{
@@ -97,8 +99,8 @@ func TestAppend2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 
-	bat := compute.MockBatch(schema.Types(), 8000, int(schema.PrimaryKey), nil)
-	bats := compute.SplitBatch(bat, 800)
+	bat := compute.MockBatch(schema.Types(), 2000, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 400)
 
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(40)
@@ -121,6 +123,20 @@ func TestAppend2(t *testing.T) {
 	}
 	wg.Wait()
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	cnt := 0
+	processor := new(catalog.LoopProcessor)
+	processor.BlockFn = func(block *catalog.BlockEntry) error {
+		cnt++
+		return nil
+	}
+	now := time.Now()
+	testutils.WaitExpect(3000, func() bool {
+		cnt = 0
+		db.Opts.Catalog.RecurLoop(processor)
+		return cnt == 40
+	})
+	t.Log(time.Since(now))
+	assert.Equal(t, 40, cnt)
 }
 
 func TestTableHandle(t *testing.T) {
@@ -241,6 +257,8 @@ func TestCompactBlock1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
 	opts.CheckpointCfg.CalibrationInterval = 10000
+	opts.CheckpointCfg.ExecutionLevels = 20
+	opts.CheckpointCfg.ExecutionInterval = 20000
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13)
@@ -277,7 +295,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		t.Log(blkMeta.String())
-		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
@@ -309,7 +327,7 @@ func TestCompactBlock1(t *testing.T) {
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
-		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
@@ -328,7 +346,7 @@ func TestCompactBlock1(t *testing.T) {
 			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
-		task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
+		task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 		assert.Nil(t, err)
 		data, err = task.PrepareData()
 		assert.Nil(t, err)
@@ -341,7 +359,7 @@ func TestCompactBlock1(t *testing.T) {
 			seg, _ := rel.GetSegment(id.SegmentID)
 			blk, _ := seg.GetBlock(id.BlockID)
 			blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-			task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta)
+			task, err = jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
 			assert.Nil(t, err)
 			data, err := task.PrepareData()
 			assert.Nil(t, err)
@@ -402,7 +420,7 @@ func TestCompactBlock2(t *testing.T) {
 			block = it.GetBlock()
 			break
 		}
-		task, err := jobs.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry), nil)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -432,7 +450,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(rel.SimplePPString(common.PPL1))
 		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
 		blk, _ := seg.GetBlock(newBlockFp.BlockID)
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -465,7 +483,7 @@ func TestCompactBlock2(t *testing.T) {
 		}
 		assert.Equal(t, 1, cnt)
 
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -509,7 +527,7 @@ func TestCompactBlock2(t *testing.T) {
 		err = blk2.RangeDelete(7, 7)
 		assert.Nil(t, err)
 
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry))
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()

@@ -24,6 +24,14 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg = &CheckpointCfg{
 			CalibrationInterval: DefaultCalibrationInterval,
 			ExecutionInterval:   DefaultExecutionInterval,
+			ExecutionLevels:     DefaultExecutionLevels,
+		}
+	}
+
+	if o.SchedulerCfg == nil {
+		o.SchedulerCfg = &SchedulerCfg{
+			IOWorkers:      DefaultIOWorkers,
+			TxnTaskWorkers: DefaultTxnTaskWorkers,
 		}
 	}
 

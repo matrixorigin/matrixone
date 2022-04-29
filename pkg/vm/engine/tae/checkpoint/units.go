@@ -110,12 +110,12 @@ func (lunits *LeveledUnits) Scan() {
 				lunits.AddUnit(unit)
 				continue
 			}
-			logutil.Infof("%s", unit.MutationInfo())
 			taskFactory, err := unit.BuildCheckpointTaskFactory()
 			if err != nil || taskFactory == nil {
 				logutil.Warnf("%s: %v", unit.MutationInfo(), err)
 				continue
 			}
+			logutil.Infof("%s", unit.MutationInfo())
 			lunits.scheduler.ScheduleTxnTask(nil, taskFactory)
 		}
 	}

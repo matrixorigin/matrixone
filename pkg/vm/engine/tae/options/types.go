@@ -14,12 +14,17 @@ const (
 	DefaultBlocksPerSegment = uint16(40)
 
 	DefaultCalibrationInterval = int64(5000) // millisecond
-	DefaultExecutionInterval   = int64(1000) // millisecond
+	DefaultExecutionInterval   = int64(2000) // millisecond
+	DefaultExecutionLevels     = int16(30)
+
+	DefaultIOWorkers      = int(8)
+	DefaultTxnTaskWorkers = int(16)
 )
 
 type Options struct {
 	CacheCfg      *CacheCfg      `toml:"cache-cfg"`
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
+	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
 	Catalog       *catalog.Catalog
 }
