@@ -277,8 +277,8 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	case types.T_uint64:
 		data = encoding.EncodeUint64Slice(vals.([]uint64)[offset : offset+n])
 
-	case types.T_decimal:
-		data = encoding.EncodeDecimalSlice(vals.([]types.Decimal)[offset : offset+n])
+	case types.T_decimal64:
+		data = encoding.EncodeDecimal64Slice(vals.([]types.Decimal64)[offset : offset+n])
 	case types.T_float32:
 		data = encoding.EncodeFloat32Slice(vals.([]float32)[offset : offset+n])
 	case types.T_float64:
@@ -565,9 +565,9 @@ func (v *StdVector) CopyToVector() (*gvec.Vector, error) {
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})
 
-	case types.T_decimal:
-		col := make([]types.Decimal, length)
-		curCol := encoding.DecodeDecimalSlice(v.Data)
+	case types.T_decimal64:
+		col := make([]types.Decimal64, length)
+		curCol := encoding.DecodeDecimal64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
 		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(length), &nulls.Nulls{})

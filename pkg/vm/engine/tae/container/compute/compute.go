@@ -42,9 +42,9 @@ func AppendValue(vec *gvec.Vector, v interface{}) {
 	case types.T_uint64:
 		vvals := vec.Col.([]uint64)
 		vec.Col = append(vvals, v.(uint64))
-	case types.T_decimal:
-		vvals := vec.Col.([]types.Decimal)
-		vec.Col = append(vvals, v.(types.Decimal))
+	case types.T_decimal64:
+		vvals := vec.Col.([]types.Decimal64)
+		vec.Col = append(vvals, v.(types.Decimal64))
 	case types.T_float32:
 		vvals := vec.Col.([]float32)
 		vec.Col = append(vvals, v.(float32))
@@ -96,8 +96,8 @@ func GetValue(col *gvec.Vector, row uint32) interface{} {
 	case types.T_uint64:
 		data := vals.([]uint64)
 		return data[row]
-	case types.T_decimal:
-		data := vals.([]types.Decimal)
+	case types.T_decimal64:
+		data := vals.([]types.Decimal64)
 		return data[row]
 	case types.T_float32:
 		data := vals.([]float32)
@@ -156,9 +156,9 @@ func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val interface{}) error {
 		data := vals.([]uint64)
 		data[row] = val.(uint64)
 		col.Col = data
-	case types.T_decimal:
-		data := vals.([]types.Decimal)
-		data[row] = val.(types.Decimal)
+	case types.T_decimal64:
+		data := vals.([]types.Decimal64)
+		data[row] = val.(types.Decimal64)
 		col.Col = data
 	case types.T_float32:
 		data := vals.([]float32)
@@ -222,8 +222,8 @@ func DeleteFixSizeTypeValue(col *gvec.Vector, row uint32) error {
 		data := vals.([]uint64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
-	case types.T_decimal:
-		data := vals.([]types.Decimal)
+	case types.T_decimal64:
+		data := vals.([]types.Decimal64)
 		data = append(data[:row], data[row+1:]...)
 		col.Col = data
 	case types.T_float32:
@@ -351,7 +351,7 @@ func ApplyDeleteToVector(vec *gvec.Vector, deletes *roaring.Bitmap) *gvec.Vector
 	deleted := 0
 	switch vec.Typ.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
 		vec.Col = common.InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
 		for deletesIterator.HasNext() {
@@ -445,7 +445,7 @@ func ApplyUpdateToVector(vec *gvec.Vector, mask *roaring.Bitmap, vals map[uint32
 	col := vec.Col
 	switch vec.Typ.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_date, types.T_datetime:
 		for iterator.HasNext() {
 			row := iterator.Next()
 			SetFixSizeTypeValue(vec, row, vals[row])

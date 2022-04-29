@@ -256,10 +256,10 @@ func (idx *simpleTableIndex) BatchInsert(col *gvec.Vector, start, count int, row
 			idx.tree[v] = row
 			row++
 		}
-	case types.T_decimal:
-		data := vals.([]types.Decimal)
+	case types.T_decimal64:
+		data := vals.([]types.Decimal64)
 		if dedupCol {
-			set := make(map[types.Decimal]bool)
+			set := make(map[types.Decimal64]bool)
 			for _, v := range data[start : start+count] {
 				if _, ok := set[v]; ok {
 					return txnbase.ErrDuplicated
@@ -442,8 +442,8 @@ func (idx *simpleTableIndex) BatchDedup(col *gvec.Vector) error {
 				return txnbase.ErrDuplicated
 			}
 		}
-	case types.T_decimal:
-		data := vals.([]types.Decimal)
+	case types.T_decimal64:
+		data := vals.([]types.Decimal64)
 		for _, v := range data {
 			if _, ok := idx.tree[v]; ok {
 				return txnbase.ErrDuplicated

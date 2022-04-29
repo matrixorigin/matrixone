@@ -68,6 +68,14 @@ func (_ *txnRelation) Index() []*engine.IndexTableDef {
 	panic("implement me")
 }
 
+func (rel *txnRelation) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
+	schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	attrs := make([]engine.Attribute, 1)
+	attrs[0].Name = schema.ColDefs[schema.PrimaryKey].Name
+	attrs[0].Type = schema.ColDefs[schema.PrimaryKey].Type
+	return attrs, true
+}
+
 func (rel *txnRelation) Attribute() []engine.Attribute {
 	meta := rel.handle.GetMeta().(*catalog.TableEntry)
 	attrs := make([]engine.Attribute, len(meta.GetSchema().ColDefs))
