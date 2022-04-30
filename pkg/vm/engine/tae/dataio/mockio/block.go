@@ -17,12 +17,12 @@ import (
 
 type blockFile struct {
 	common.RefHelper
-	seg     file.Segment
-	rows    uint32
-	id      uint64
-	ts      uint64
-	columns []*columnBlock
-	deletes *deletesFile
+	seg       file.Segment
+	rows      uint32
+	id        uint64
+	ts        uint64
+	columns   []*columnBlock
+	deletes   *deletesFile
 	indexMeta *dataFile
 }
 

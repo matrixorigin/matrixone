@@ -29,6 +29,13 @@ type Filter struct {
 	Val interface{}
 }
 
+func NewEQFilter(v interface{}) *Filter {
+	return &Filter{
+		Op:  FilterEq,
+		Val: v,
+	}
+}
+
 type BlockReader interface {
 	io.Closer
 	ID() uint64

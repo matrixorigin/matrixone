@@ -8,7 +8,7 @@ import (
 )
 
 func TestMutationControllerAppend(t *testing.T) {
-	mc := NewMutationNode(nil)
+	mc := NewMVCCHandle(nil)
 
 	nodeCnt := 10000
 	rowsPerNode := uint32(5)

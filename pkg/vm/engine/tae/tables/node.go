@@ -45,7 +45,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 
 func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	if coarse {
-		readLock := node.block.controller.GetSharedLock()
+		readLock := node.block.mvcc.GetSharedLock()
 		defer readLock.Unlock()
 		return node.rows
 	}
@@ -92,11 +92,11 @@ func (node *appendableNode) OnUnload() {
 	logutil.Infof("Unloading block %s", node.block.meta.AsCommonID().String())
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]interface{})
-	controller := node.block.controller
-	readLock := controller.GetSharedLock()
-	ts := controller.LoadMaxVisible()
+	mvcc := node.block.mvcc
+	readLock := mvcc.GetSharedLock()
+	ts := mvcc.LoadMaxVisible()
 	for i := range node.block.meta.GetSchema().ColDefs {
-		chain := controller.GetColumnChain(uint16(i))
+		chain := mvcc.GetColumnChain(uint16(i))
 
 		chain.RLock()
 		updateMask, updateVals := chain.CollectUpdatesLocked(ts)
@@ -106,7 +106,7 @@ func (node *appendableNode) OnUnload() {
 			vals[uint16(i)] = updateVals
 		}
 	}
-	deleteChain := controller.GetDeleteChain()
+	deleteChain := mvcc.GetDeleteChain()
 	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
 	readLock.Unlock()
 	var deletes *roaring.Bitmap

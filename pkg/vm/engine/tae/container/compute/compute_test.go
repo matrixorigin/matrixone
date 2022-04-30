@@ -1,9 +1,10 @@
 package compute
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/stretchr/testify/require"
-	"testing"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -99,15 +100,22 @@ func TestCheckRowExists(t *testing.T) {
 		Width: 32,
 	}
 	vec := common.MockVec(typ, 100, 0)
-	require.True(t, CheckRowExists(vec, int32(55), nil))
-	require.True(t, CheckRowExists(vec, int32(0), nil))
-	require.True(t, CheckRowExists(vec, int32(99), nil))
+	_, exist := CheckRowExists(vec, int32(55), nil)
+	require.True(t, exist)
+	_, exist = CheckRowExists(vec, int32(0), nil)
+	require.True(t, exist)
+	_, exist = CheckRowExists(vec, int32(99), nil)
+	require.True(t, exist)
 
-	require.False(t, CheckRowExists(vec, int32(-1), nil))
-	require.False(t, CheckRowExists(vec, int32(100), nil))
-	require.False(t, CheckRowExists(vec, int32(114514), nil))
+	_, exist = CheckRowExists(vec, int32(-1), nil)
+	require.False(t, exist)
+	_, exist = CheckRowExists(vec, int32(100), nil)
+	require.False(t, exist)
+	_, exist = CheckRowExists(vec, int32(114514), nil)
+	require.False(t, exist)
 
 	dels := roaring.NewBitmap()
 	dels.Add(uint32(55))
-	require.False(t, CheckRowExists(vec, int32(55), dels))
+	_, exist = CheckRowExists(vec, int32(55), dels)
+	require.False(t, exist)
 }

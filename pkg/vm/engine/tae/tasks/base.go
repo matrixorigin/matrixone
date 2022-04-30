@@ -6,10 +6,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
 )
 
+var WaitableCtx = &Context{Waitable: true}
+
 type Context struct {
 	DoneCB   ops.OpDoneCB
 	Waitable bool
 }
+
+// func NewWaitableCtx() *Context {
+// 	return &Context{Waitable: true}
+// }
 
 type BaseTask struct {
 	ops.Op

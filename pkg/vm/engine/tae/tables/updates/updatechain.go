@@ -15,7 +15,7 @@ type ColumnChain struct {
 	*sync.RWMutex
 	id         *common.ID
 	view       *ColumnView
-	controller *MutationController
+	controller *MVCCHandle
 	cnt        uint32
 }
 
@@ -29,7 +29,7 @@ func MockColumnUpdateChain() *ColumnChain {
 	return chain
 }
 
-func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, controller *MutationController) *ColumnChain {
+func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, controller *MVCCHandle) *ColumnChain {
 	if rwlocker == nil {
 		rwlocker = new(sync.RWMutex)
 	}
@@ -53,11 +53,11 @@ func (chain *ColumnChain) SetUpdateCnt(cnt uint32) {
 	atomic.StoreUint32(&chain.cnt, cnt)
 }
 
-func (chain *ColumnChain) GetMeta() *catalog.BlockEntry       { return chain.controller.meta }
-func (chain *ColumnChain) GetBlockID() *common.ID             { id := chain.id.AsBlockID(); return &id }
-func (chain *ColumnChain) GetID() *common.ID                  { return chain.id }
-func (chain *ColumnChain) GetColumnIdx() uint16               { return chain.id.Idx }
-func (chain *ColumnChain) GetController() *MutationController { return chain.controller }
+func (chain *ColumnChain) GetMeta() *catalog.BlockEntry { return chain.controller.meta }
+func (chain *ColumnChain) GetBlockID() *common.ID       { id := chain.id.AsBlockID(); return &id }
+func (chain *ColumnChain) GetID() *common.ID            { return chain.id }
+func (chain *ColumnChain) GetColumnIdx() uint16         { return chain.id.Idx }
+func (chain *ColumnChain) GetController() *MVCCHandle   { return chain.controller }
 
 func (chain *ColumnChain) GetColumnName() string {
 	return chain.controller.meta.GetSchema().ColDefs[chain.id.Idx].Name

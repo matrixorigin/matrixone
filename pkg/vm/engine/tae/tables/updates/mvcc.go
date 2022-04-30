@@ -28,7 +28,7 @@ func newSharedLock(locker *sync.RWMutex) *sharedLock {
 	}
 }
 
-type MutationController struct {
+type MVCCHandle struct {
 	*sync.RWMutex
 	columns    map[uint16]*ColumnChain
 	deletes    *DeleteChain
@@ -38,8 +38,8 @@ type MutationController struct {
 	changes    uint32
 }
 
-func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
-	node := &MutationController{
+func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
+	node := &MVCCHandle{
 		RWMutex: new(sync.RWMutex),
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
@@ -56,37 +56,37 @@ func NewMutationNode(meta *catalog.BlockEntry) *MutationController {
 	return node
 }
 
-func (n *MutationController) IncChangeNodeCnt() {
+func (n *MVCCHandle) IncChangeNodeCnt() {
 	atomic.AddUint32(&n.changes, uint32(1))
 }
 
-func (n *MutationController) ResetChangeNodeCnt() {
+func (n *MVCCHandle) ResetChangeNodeCnt() {
 	atomic.StoreUint32(&n.changes, uint32(0))
 }
 
-func (n *MutationController) GetChangeNodeCnt() uint32 {
+func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
 	return atomic.LoadUint32(&n.changes)
 }
 
-func (n *MutationController) GetColumnUpdateCnt(colIdx uint16) uint32 {
+func (n *MVCCHandle) GetColumnUpdateCnt(colIdx uint16) uint32 {
 	return n.columns[colIdx].LoadUpdateCnt()
 }
 
-func (n *MutationController) GetDeleteCnt() uint32 {
+func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
 }
 
-func (n *MutationController) SetMaxVisible(ts uint64) {
+func (n *MVCCHandle) SetMaxVisible(ts uint64) {
 	atomic.StoreUint64(&n.maxVisible, ts)
 }
 
-func (n *MutationController) LoadMaxVisible() uint64 {
+func (n *MVCCHandle) LoadMaxVisible() uint64 {
 	return atomic.LoadUint64(&n.maxVisible)
 }
 
-func (n *MutationController) GetID() *common.ID { return n.meta.AsCommonID() }
+func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
 
-func (n *MutationController) StringLocked() string {
+func (n *MVCCHandle) StringLocked() string {
 	s := ""
 	if n.deletes.DepthLocked() > 0 {
 		s = fmt.Sprintf("%s%s", s, n.deletes.StringLocked())
@@ -101,55 +101,55 @@ func (n *MutationController) StringLocked() string {
 	return s
 }
 
-func (n *MutationController) GetSharedLock() sync.Locker {
+func (n *MVCCHandle) GetSharedLock() sync.Locker {
 	locker := newSharedLock(n.RWMutex)
 	locker.Lock()
 	return locker
 }
 
-func (n *MutationController) GetExclusiveLock() sync.Locker {
+func (n *MVCCHandle) GetExclusiveLock() sync.Locker {
 	n.Lock()
 	return n.RWMutex
 }
 
-func (n *MutationController) GetColumnSharedLock(idx uint16) sync.Locker {
+func (n *MVCCHandle) GetColumnSharedLock(idx uint16) sync.Locker {
 	col := n.columns[idx]
 	locker := newSharedLock(col.RWMutex)
 	locker.Lock()
 	return locker
 }
 
-func (n *MutationController) GetColumnExclusiveLock(idx uint16) sync.Locker {
+func (n *MVCCHandle) GetColumnExclusiveLock(idx uint16) sync.Locker {
 	col := n.columns[idx]
 	col.Lock()
 	return col.RWMutex
 }
 
-func (n *MutationController) CheckNotDeleted(start, end uint32, ts uint64) error {
+func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts uint64) error {
 	return n.deletes.PrepareRangeDelete(start, end, ts)
 }
 
-func (n *MutationController) CreateDeleteNode(txn txnif.AsyncTxn) txnif.DeleteNode {
+func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn) txnif.DeleteNode {
 	return n.deletes.AddNodeLocked(txn)
 }
 
-func (n *MutationController) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
+func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
 	chain := n.columns[colIdx]
 	return chain.AddNodeLocked(txn)
 }
 
-func (n *MutationController) DropUpdateNode(colIdx uint16, node txnif.UpdateNode) {
+func (n *MVCCHandle) DropUpdateNode(colIdx uint16, node txnif.UpdateNode) {
 	chain := n.columns[colIdx]
 	chain.DeleteNodeLocked(node.GetDLNode())
 }
 
-func (n *MutationController) PrepareUpdate(row uint32, colIdx uint16, update txnif.UpdateNode) error {
+func (n *MVCCHandle) PrepareUpdate(row uint32, colIdx uint16, update txnif.UpdateNode) error {
 
 	chain := n.columns[colIdx]
 	return chain.PrepareUpdate(row, update)
 }
 
-func (n *MutationController) CheckNotUpdated(start, end uint32, ts uint64) (err error) {
+func (n *MVCCHandle) CheckNotUpdated(start, end uint32, ts uint64) (err error) {
 	for _, chain := range n.columns {
 		for i := start; i <= end; i++ {
 			if err = chain.view.PrepapreInsert(i, ts); err != nil {
@@ -160,21 +160,21 @@ func (n *MutationController) CheckNotUpdated(start, end uint32, ts uint64) (err 
 	return
 }
 
-func (n *MutationController) GetColumnChain(colIdx uint16) *ColumnChain {
+func (n *MVCCHandle) GetColumnChain(colIdx uint16) *ColumnChain {
 	return n.columns[colIdx]
 }
 
-func (n *MutationController) GetDeleteChain() *DeleteChain {
+func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 	return n.deletes
 }
 
-func (n *MutationController) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
+func (n *MVCCHandle) AddAppendNodeLocked(txn txnif.AsyncTxn, maxRow uint32) *AppendNode {
 	an := NewAppendNode(txn, maxRow, n)
 	n.appends = append(n.appends, an)
 	return an
 }
 
-func (n *MutationController) IsVisibleLocked(row uint32, ts uint64) bool {
+func (n *MVCCHandle) IsVisibleLocked(row uint32, ts uint64) bool {
 	maxRow, ok := n.GetMaxVisibleRowLocked(ts)
 	if !ok {
 		return ok
@@ -182,7 +182,11 @@ func (n *MutationController) IsVisibleLocked(row uint32, ts uint64) bool {
 	return maxRow >= row
 }
 
-func (n *MutationController) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
+func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) bool {
+	return n.deletes.IsDeleted(row, ts)
+}
+
+func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
 	if len(n.appends) == 0 {
 		return 0, false
 	}

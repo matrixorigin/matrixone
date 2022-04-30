@@ -38,7 +38,7 @@ func TestColumnChain1(t *testing.T) {
 	table, _ := db.CreateTableEntry(schema, nil, nil)
 	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
-	controller := NewMutationNode(blk)
+	controller := NewMVCCHandle(blk)
 
 	// uncommitted := new(common.Link)
 	chain := NewColumnChain(nil, 0, controller)
@@ -72,7 +72,7 @@ func TestColumnChain2(t *testing.T) {
 	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
 
-	controller := NewMutationNode(blk)
+	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
@@ -187,7 +187,7 @@ func TestColumnChain3(t *testing.T) {
 	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
 
-	controller := NewMutationNode(blk)
+	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
 
 	start := time.Now()
@@ -241,7 +241,7 @@ func TestColumnChain4(t *testing.T) {
 	seg, _ := table.CreateSegment(nil, catalog.ES_Appendable, nil)
 	blk, _ := seg.CreateBlock(nil, catalog.ES_Appendable, nil)
 
-	controller := NewMutationNode(blk)
+	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
 	var ts1 uint64
 	var ts2 uint64
@@ -327,7 +327,7 @@ func TestColumnChain4(t *testing.T) {
 }
 
 func TestDeleteChain1(t *testing.T) {
-	controller := NewMutationNode(nil)
+	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
 	txn1.TxnCtx = txnbase.NewTxnCtx(nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
@@ -420,7 +420,7 @@ func TestDeleteChain1(t *testing.T) {
 }
 
 func TestDeleteChain2(t *testing.T) {
-	controller := NewMutationNode(nil)
+	controller := NewMVCCHandle(nil)
 	chain := NewDeleteChain(nil, controller)
 
 	txn1 := mockTxn()

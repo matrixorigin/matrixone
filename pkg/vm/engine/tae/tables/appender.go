@@ -62,7 +62,7 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 		panic("not expected")
 	}
 	defer h.Close()
-	writeLock := appender.node.block.controller.GetExclusiveLock()
+	writeLock := appender.node.block.mvcc.GetExclusiveLock()
 	defer writeLock.Unlock()
 	err = appender.node.Expand(0, func() error {
 		var err error
@@ -76,8 +76,8 @@ func (appender *blockAppender) ApplyAppend(bat *gbat.Batch, offset, length uint3
 	if err != nil {
 		panic(err)
 	}
-	node = appender.node.block.controller.AddAppendNodeLocked(txn, appender.node.rows)
-	// appender.node.block.controller.SetMaxVisible(txn.GetCommitTS())
+	node = appender.node.block.mvcc.AddAppendNodeLocked(txn, appender.node.rows)
+	// appender.node.block.mvcc.SetMaxVisible(txn.GetCommitTS())
 
 	return
 }

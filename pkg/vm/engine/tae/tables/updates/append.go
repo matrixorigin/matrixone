@@ -12,10 +12,10 @@ type AppendNode struct {
 	commitTs   uint64
 	txn        txnif.AsyncTxn
 	maxRow     uint32
-	controller *MutationController
+	controller *MVCCHandle
 }
 
-func MockAppendNode(ts uint64, maxRow uint32, controller *MutationController) *AppendNode {
+func MockAppendNode(ts uint64, maxRow uint32, controller *MVCCHandle) *AppendNode {
 	return &AppendNode{
 		commitTs:   ts,
 		maxRow:     maxRow,
@@ -23,7 +23,7 @@ func MockAppendNode(ts uint64, maxRow uint32, controller *MutationController) *A
 	}
 }
 
-func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MutationController) *AppendNode {
+func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *AppendNode {
 	n := &AppendNode{
 		txn:        txn,
 		maxRow:     maxRow,

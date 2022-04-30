@@ -14,11 +14,11 @@ import (
 type DeleteChain struct {
 	*sync.RWMutex
 	*common.Link
-	controller *MutationController
+	controller *MVCCHandle
 	cnt        uint32
 }
 
-func NewDeleteChain(rwlocker *sync.RWMutex, controller *MutationController) *DeleteChain {
+func NewDeleteChain(rwlocker *sync.RWMutex, controller *MVCCHandle) *DeleteChain {
 	if rwlocker == nil {
 		rwlocker = new(sync.RWMutex)
 	}
@@ -51,7 +51,7 @@ func (chain *DeleteChain) StringLocked() string {
 	return msg
 }
 
-func (chain *DeleteChain) GetController() *MutationController { return chain.controller }
+func (chain *DeleteChain) GetController() *MVCCHandle { return chain.controller }
 
 func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, reverse bool) {
 	wrapped := func(n *common.DLNode) bool {

@@ -300,5 +300,7 @@ func MockSchemaAll(colCnt int) *Schema {
 		}
 		schema.AppendCol(name, typ)
 	}
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 10
 	return schema
 }

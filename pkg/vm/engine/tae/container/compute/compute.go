@@ -649,7 +649,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{},
 	return destMask, destVals, destDelets
 }
 
-func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) bool {
+func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) (offset uint32, exist bool) {
 	switch data.Typ.Oid {
 	case types.T_int8:
 		column := data.Col.([]int8)
@@ -664,12 +664,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_int16:
 		column := data.Col.([]int16)
 		val := v.(int16)
@@ -683,12 +685,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_int32:
 		column := data.Col.([]int32)
 		val := v.(int32)
@@ -702,12 +706,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_int64:
 		column := data.Col.([]int64)
 		val := v.(int64)
@@ -721,12 +727,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_uint8:
 		column := data.Col.([]uint8)
 		val := v.(uint8)
@@ -740,12 +748,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_uint16:
 		column := data.Col.([]uint16)
 		val := v.(uint16)
@@ -759,12 +769,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_uint32:
 		column := data.Col.([]uint32)
 		val := v.(uint32)
@@ -778,12 +790,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_uint64:
 		column := data.Col.([]uint64)
 		val := v.(uint64)
@@ -797,12 +811,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_float32:
 		column := data.Col.([]float32)
 		val := v.(float32)
@@ -816,12 +832,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_float64:
 		column := data.Col.([]float64)
 		val := v.(float64)
@@ -835,12 +853,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_date:
 		column := data.Col.([]types.Date)
 		val := v.(types.Date)
@@ -854,12 +874,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_datetime:
 		column := data.Col.([]types.Datetime)
 		val := v.(types.Datetime)
@@ -873,12 +895,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	case types.T_char, types.T_varchar:
 		column := data.Col.(*types.Bytes)
 		val := v.([]byte)
@@ -893,12 +917,14 @@ func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) b
 				start = mid + 1
 			} else {
 				if deletes != nil && deletes.Contains(uint32(mid)) {
-					return false
+					return
 				}
-				return true
+				offset = uint32(mid)
+				exist = true
+				return
 			}
 		}
-		return false
+		return
 	default:
 		panic("unsupported type")
 	}

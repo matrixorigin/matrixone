@@ -248,13 +248,13 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 
 	stat := vec.File.Stat()
-	// log.Infof("%d, %d, %d", stat.CompressAlgo(), stat.Size(), stat.OriginSize())
+	// logutil.Infof("%d, %d, %d", stat.CompressAlgo(), stat.Size(), stat.OriginSize())
 	switch stat.CompressAlgo() {
 	case compress.None:
 		allocSize := uint64(stat.Size())
 		vec.MNode = common.GPool.Alloc(allocSize)
-		data := vec.MNode.Buf
-		nr, err := r.Read(data[:allocSize])
+		data := vec.MNode.Buf[:allocSize]
+		nr, err := r.Read(data)
 		if err != nil {
 			common.GPool.Free(vec.MNode)
 			return n, err
