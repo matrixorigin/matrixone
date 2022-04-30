@@ -65,6 +65,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 	//get rows
 	columnCount := len(columns)
 	switch rows := stmt.Rows.Select.(type) {
+	case *tree.Select:
+		selectCtx := &SelectContext{
+			tableAlias:  make(map[string]string),
+			columnAlias: make(map[string]*plan.Expr),
+		}
+		err := buildSelect(rows, ctx, query, selectCtx)
+		if err != nil {
+			return err
+		}
+		//fixme need check preNode's projectionList match rowset.Schema
 	case *tree.ValuesClause:
 		rowCount := len(rows.Rows)
 		for idx := range rowset.Cols {
@@ -76,15 +86,20 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 		if err != nil {
 			return err
 		}
+		node := &plan.Node{
+			NodeType:   plan.Node_VALUE_SCAN,
+			RowsetData: rowset,
+		}
+		appendQueryNode(query, node, true)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
 	}
 
 	node := &plan.Node{
-		NodeType:   plan.Node_INSERT,
-		ObjRef:     objRef,
-		TableDef:   tableDef,
-		RowsetData: rowset,
+		NodeType: plan.Node_INSERT,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+		Children: []int32{int32(len(query.Nodes) - 1)},
 	}
 	appendQueryNode(query, node, true)
 
@@ -96,30 +111,14 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 		switch val.Kind() {
 		case constant.Int:
 			switch typ.Id {
-			case plan.Type_INT8:
-				fallthrough
-			case plan.Type_INT16:
-				fallthrough
-			case plan.Type_INT32:
-				fallthrough
-			case plan.Type_UINT8:
-				fallthrough
-			case plan.Type_UINT16:
+			case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_UINT8, plan.Type_UINT16:
 				colVal, ok := constant.Int64Val(val)
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as i64", val))
 				}
 				col.I32 = append(col.I32, int32(colVal))
 				return nil
-			case plan.Type_INT64:
-				fallthrough
-			case plan.Type_INT128:
-				fallthrough
-			case plan.Type_UINT32:
-				fallthrough
-			case plan.Type_UINT64:
-				fallthrough
-			case plan.Type_UINT128:
+			case plan.Type_INT64, plan.Type_INT128, plan.Type_UINT32, plan.Type_UINT64, plan.Type_UINT128:
 				colVal, ok := constant.Int64Val(val)
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  i64", val))
@@ -138,13 +137,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 				}
 				col.F32 = append(col.F32, float32(colVal))
 				return nil
-			case plan.Type_FLOAT64:
-				fallthrough
-			case plan.Type_DECIMAL:
-				fallthrough
-			case plan.Type_DECIMAL64:
-				fallthrough
-			case plan.Type_DECIMAL128:
+			case plan.Type_FLOAT64, plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
 				colVal, ok := constant.Float64Val(val)
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f64", val))

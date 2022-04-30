@@ -36,25 +36,8 @@ func checkFloatType(typ plan.Type_TypeId, alias string) error {
 
 func checkIntType(typ plan.Type_TypeId, alias string) error {
 	switch typ {
-	case plan.Type_INT8:
-		fallthrough
-	case plan.Type_INT16:
-		fallthrough
-	case plan.Type_INT32:
-		fallthrough
-	case plan.Type_INT64:
-		fallthrough
-	case plan.Type_INT128:
-		fallthrough
-	case plan.Type_UINT8:
-		fallthrough
-	case plan.Type_UINT16:
-		fallthrough
-	case plan.Type_UINT32:
-		fallthrough
-	case plan.Type_UINT64:
-		fallthrough
-	case plan.Type_UINT128:
+	case plan.Type_INT8, plan.Type_INT16, plan.Type_INT32, plan.Type_INT64, plan.Type_INT128,
+		plan.Type_UINT8, plan.Type_UINT16, plan.Type_UINT32, plan.Type_UINT64, plan.Type_UINT128:
 		return nil
 	default:
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not int", alias))
@@ -63,11 +46,7 @@ func checkIntType(typ plan.Type_TypeId, alias string) error {
 
 func checkDecimalType(typ plan.Type_TypeId, alias string) error {
 	switch typ {
-	case plan.Type_DECIMAL:
-		fallthrough
-	case plan.Type_DECIMAL64:
-		fallthrough
-	case plan.Type_DECIMAL128:
+	case plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
 		return nil
 	default:
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not decimal", alias))
@@ -92,15 +71,7 @@ func checkNumberType(typ plan.Type_TypeId, alias string) error {
 
 func checkTimeType(typ plan.Type_TypeId, alias string) error {
 	switch typ {
-	case plan.Type_DATE:
-		fallthrough
-	case plan.Type_TIME:
-		fallthrough
-	case plan.Type_DATETIME:
-		fallthrough
-	case plan.Type_TIMESTAMP:
-		fallthrough
-	case plan.Type_INTERVAL:
+	case plan.Type_DATE, plan.Type_TIME, plan.Type_DATETIME, plan.Type_TIMESTAMP, plan.Type_INTERVAL:
 		return nil
 	default:
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not time", alias))
@@ -174,15 +145,7 @@ func coverArgToHigh(args []*plan.Expr) error {
 
 func covertFunctionArgsType(fun *FunctionSig, args []*plan.Expr) error {
 	switch fun.Name {
-	case "+":
-		fallthrough
-	case "-":
-		fallthrough
-	case "*":
-		fallthrough
-	case "/":
-		fallthrough
-	case "%":
+	case "+", "-", "*", "/", "%":
 		return coverArgToHigh(args)
 	default:
 		return nil
@@ -193,11 +156,7 @@ func getFunctionReturnType(fun *FunctionSig, args []*plan.Expr) *plan.Type {
 	returnType := fun.ArgTypeClass[0]
 
 	switch returnType {
-	case plan.Type_ANYINT:
-		fallthrough
-	case plan.Type_ANYFLOAT:
-		fallthrough
-	case plan.Type_ANYNUMBER:
+	case plan.Type_ANYINT, plan.Type_ANYFLOAT, plan.Type_ANYNUMBER:
 		return args[0].Typ
 	default:
 		//todo confirm nullable/with/precision
@@ -236,7 +195,7 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 	}
 
 	//Convert input parameter types if necessary
-	//todo somethings we will get constant return here
+	//todo sometimes we will get constant return here. eg : number_col / str_col
 	err = covertFunctionArgsType(functionSig, args)
 	if err != nil {
 		return nil, err

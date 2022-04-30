@@ -203,13 +203,27 @@ func TestNodeTree(t *testing.T) {
 				4: {3},
 			},
 		},
-		//insert
+		//insert from values
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')": {
-			root: 0,
+			root: 1,
 			nodeType: map[int]plan.Node_NodeType{
-				0: plan.Node_INSERT,
+				0: plan.Node_VALUE_SCAN,
+				1: plan.Node_INSERT,
 			},
-			children: map[int][]int32{},
+			children: map[int][]int32{
+				1: {0},
+			},
+		},
+		//insert from select
+		"INSERT NATION SELECT * FROM NATION2": {
+			root: 1,
+			nodeType: map[int]plan.Node_NodeType{
+				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_INSERT,
+			},
+			children: map[int][]int32{
+				1: {0},
+			},
 		},
 		//update
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
@@ -293,7 +307,8 @@ func TestNodeTree(t *testing.T) {
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `SELECT * FROM NATION`
+	// sql := `INSERT INTO NATION SELECT * FROM NATION2`
+	sql := `INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')`
 	// sql := "select max(R_REGIONKEY) from REGION222"
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
@@ -397,6 +412,7 @@ func TestInsert(t *testing.T) {
 	sqls := []string{
 		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+		"INSERT INTO NATION SELECT * FROM NATION2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
