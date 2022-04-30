@@ -99,11 +99,15 @@ func TestCheckRowExists(t *testing.T) {
 		Width: 32,
 	}
 	vec := common.MockVec(typ, 100, 0)
-	require.True(t, CheckRowExists(vec, int32(55)))
-	require.True(t, CheckRowExists(vec, int32(0)))
-	require.True(t, CheckRowExists(vec, int32(99)))
+	require.True(t, CheckRowExists(vec, int32(55), nil))
+	require.True(t, CheckRowExists(vec, int32(0), nil))
+	require.True(t, CheckRowExists(vec, int32(99), nil))
 
-	require.False(t, CheckRowExists(vec, int32(-1)))
-	require.False(t, CheckRowExists(vec, int32(100)))
-	require.False(t, CheckRowExists(vec, int32(114514)))
+	require.False(t, CheckRowExists(vec, int32(-1), nil))
+	require.False(t, CheckRowExists(vec, int32(100), nil))
+	require.False(t, CheckRowExists(vec, int32(114514), nil))
+
+	dels := roaring.NewBitmap()
+	dels.Add(uint32(55))
+	require.False(t, CheckRowExists(vec, int32(55), dels))
 }

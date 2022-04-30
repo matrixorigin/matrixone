@@ -649,7 +649,7 @@ func ShuffleByDeletes(origMask *roaring.Bitmap, origVals map[uint32]interface{},
 	return destMask, destVals, destDelets
 }
 
-func CheckRowExists(data *gvec.Vector, v interface{}) bool {
+func CheckRowExists(data *gvec.Vector, v interface{}, deletes *roaring.Bitmap) bool {
 	switch data.Typ.Oid {
 	case types.T_int8:
 		column := data.Col.([]int8)
@@ -663,6 +663,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -679,6 +682,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -695,6 +701,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -711,6 +720,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -727,6 +739,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -743,6 +758,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -759,6 +777,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -775,6 +796,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -791,6 +815,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -807,6 +834,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -823,6 +853,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -839,6 +872,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if column[mid] < val {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}
@@ -856,6 +892,9 @@ func CheckRowExists(data *gvec.Vector, v interface{}) bool {
 			} else if res < 0 {
 				start = mid + 1
 			} else {
+				if deletes != nil && deletes.Contains(uint32(mid)) {
+					return false
+				}
 				return true
 			}
 		}

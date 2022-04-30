@@ -521,12 +521,8 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	if err != nil {
 		return err
 	}
-	leftData := compute.ApplyDeleteToVector(pkColumnData, deletes)
-	if gvec.Length(leftData) == 0 {
-		return nil
-	}
 	deduplicate := func(v interface{}) error {
-		if compute.CheckRowExists(leftData, v) {
+		if compute.CheckRowExists(pkColumnData, v, deletes) {
 			return txnbase.ErrDuplicated
 		}
 		return nil
