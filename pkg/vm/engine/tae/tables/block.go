@@ -235,9 +235,9 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView, err error) {
 	if blk.node != nil {
 		attrs := make([]int, len(blk.meta.GetSchema().ColDefs))
 		vecs := make([]vector.IVector, len(blk.meta.GetSchema().ColDefs))
-		for i, colDef := range blk.meta.GetSchema().ColDefs {
+		for i := range blk.meta.GetSchema().ColDefs {
 			attrs[i] = i
-			vecs[i], _ = blk.node.GetVectorView(maxRow, colDef.Name)
+			vecs[i], _ = blk.node.GetVectorView(maxRow, i)
 		}
 		view.Raw, err = batch.NewBatch(attrs, vecs)
 	}
@@ -257,12 +257,16 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	return
 }
 
-func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *dataBlock) GetColumnDataByName(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
+	colIdx := blk.meta.GetSchema().GetColIdx(attr)
+	return blk.GetColumnDataById(txn, colIdx, compressed, decompressed)
+}
+
+func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
 	if blk.meta.IsAppendable() {
-		return blk.getVectorCopy(txn.GetStartTS(), attr, compressed, decompressed, false)
+		return blk.getVectorCopy(txn.GetStartTS(), colIdx, compressed, decompressed, false)
 	}
 
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	if compressed == nil {
 		compressed = &bytes.Buffer{}
 		decompressed = &bytes.Buffer{}
@@ -283,7 +287,7 @@ func (blk *dataBlock) GetVectorCopy(txn txnif.AsyncTxn, attr string, compressed,
 	return
 }
 
-func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompressed *bytes.Buffer, raw bool) (vec *gvec.Vector, deletes *roaring.Bitmap, err error) {
 	h := blk.node.mgr.Pin(blk.node)
 	if h == nil {
 		panic("not expected")
@@ -300,11 +304,11 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 	}
 
 	if raw {
-		vec, err = blk.node.GetVectorCopy(maxRow, attr, compressed, decompressed)
+		vec, err = blk.node.GetVectorCopy(maxRow, colIdx, compressed, decompressed)
 		return
 	}
 
-	ivec, err := blk.node.GetVectorView(maxRow, attr)
+	ivec, err := blk.node.GetVectorView(maxRow, colIdx)
 	if err != nil {
 		return
 	}
@@ -322,7 +326,6 @@ func (blk *dataBlock) getVectorCopy(ts uint64, attr string, compressed, decompre
 		vec = srcvec
 	}
 
-	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	view := updates.NewBlockView(ts)
 
 	sharedLock := blk.controller.GetSharedLock()
@@ -426,8 +429,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 	if blk.meta.IsAppendable() {
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		attr := blk.meta.GetSegment().GetTable().GetSchema().ColDefs[col].Name
-		raw, _, _ = blk.getVectorCopy(txn.GetStartTS(), attr, &comp, &decomp, true)
+		raw, _, _ = blk.getVectorCopy(txn.GetStartTS(), int(col), &comp, &decomp, true)
 	} else {
 		wrapper, _ := blk.getVectorWrapper(int(col))
 		defer common.GPool.Free(wrapper.MNode)
@@ -515,8 +517,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	if visibilityMap == nil {
 		panic("unexpected error")
 	}
-	pkIdx := blk.meta.GetSchema().PrimaryKey
-	pkColumnData, deletes, err := blk.GetVectorCopy(txn, blk.meta.GetSchema().Attrs()[pkIdx], nil, nil)
+	pkColumnData, deletes, err := blk.GetColumnDataById(txn, int(blk.meta.GetSchema().PrimaryKey), nil, nil)
 	if err != nil {
 		return err
 	}

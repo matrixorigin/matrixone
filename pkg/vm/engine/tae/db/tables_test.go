@@ -234,7 +234,7 @@ func TestTxn3(t *testing.T) {
 
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, dels, err := blk.GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		vec, dels, err := blk.GetColumnDataById(0, &comp, &decomp)
 		assert.Nil(t, err)
 		assert.Equal(t, int(rows), vector.Length(vec))
 		assert.Equal(t, 3, int(dels.GetCardinality()))
@@ -293,7 +293,7 @@ func TestTxn3(t *testing.T) {
 		// t.Log(chain.StringLocked())
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, dels, err := it2.GetBlock().GetVectorCopy(schema.ColDefs[0].Name, &comp, &decomp)
+		vec, dels, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.String())
 		assert.Equal(t, int(rows), vector.Length(vec))
@@ -304,7 +304,7 @@ func TestTxn3(t *testing.T) {
 		// assert.Equal(t, int32(50), compute.GetValue(vec, 17))
 
 		assert.Nil(t, txn.Commit())
-		vec, _, err = it2.GetBlock().GetVectorCopy(schema.ColDefs[colIdx].Name, &comp, &decomp)
+		vec, _, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.Typ.String())
 		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
@@ -505,7 +505,7 @@ func TestTxn6(t *testing.T) {
 				comp.Reset()
 				decomp.Reset()
 				blk := it.GetBlock()
-				vec, dels, err := blk.GetVectorCopy(schema.ColDefs[3].Name, &comp, &decomp)
+				vec, dels, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
 				assert.Nil(t, err)
 				assert.Equal(t, gvec.Length(bats[0].Vecs[0]), gvec.Length(vec))
 				assert.True(t, dels.Contains(row+1))
@@ -572,7 +572,7 @@ func TestMergeBlocks1(t *testing.T) {
 		for it.Valid() {
 			blk := it.GetBlock()
 			t.Log(blk.String())
-			vec, _, _ := blk.GetVectorCopyById(int(schema.PrimaryKey), nil, nil)
+			vec, _, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 			t.Log(vec.String())
 			it.Next()
 		}

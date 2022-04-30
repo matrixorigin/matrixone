@@ -101,10 +101,10 @@ func (blk *TxnBlock) Close() error                                         { ret
 func (blk *TxnBlock) GetMeta() interface{}                                 { return nil }
 func (blk *TxnBlock) GetByFilter(handle.Filter) (offset uint32, err error) { return }
 
-func (blk *TxnBlock) GetVectorCopyById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *TxnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return
 }
-func (blk *TxnBlock) GetVectorCopy(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *TxnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
 	return
 }
 

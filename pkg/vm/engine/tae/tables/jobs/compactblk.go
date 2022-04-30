@@ -61,10 +61,8 @@ func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 	attrs := task.meta.GetSchema().Attrs()
 	bat = batch.New(true, attrs)
 
-	for i, colDef := range task.meta.GetSchema().ColDefs {
-		// var comp bytes.Buffer
-		// var decomp bytes.Buffer
-		vec, mask, err := task.compacted.GetVectorCopy(colDef.Name, nil, nil)
+	for i := range task.meta.GetSchema().ColDefs {
+		vec, mask, err := task.compacted.GetColumnDataById(i, nil, nil)
 		if err != nil {
 			return bat, err
 		}

@@ -34,8 +34,8 @@ type BlockReader interface {
 	ID() uint64
 	String() string
 	GetByFilter(filter Filter) (uint32, error)
-	GetVectorCopy(string, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
-	GetVectorCopyById(int, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
+	GetColumnDataByName(string, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
+	GetColumnDataById(int, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
 	GetMeta() interface{}
 	Fingerprint() *common.ID
 	Rows() int

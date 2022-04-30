@@ -80,7 +80,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// 4. Record all mappings: []int
 	// 5. PrepareMergeBlock(mappings)
 	schema := task.metas[0].GetSchema()
-	attr := schema.ColDefs[schema.PrimaryKey].Name
 	var deletes *roaring.Bitmap
 	var compressed bytes.Buffer
 	var decompressed bytes.Buffer
@@ -89,7 +88,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	rows := make([]uint32, len(task.compacted))
 	length := 0
 	for i, block := range task.compacted {
-		if vec, deletes, err = block.GetVectorCopy(attr, &compressed, &decompressed); err != nil {
+		if vec, deletes, err = block.GetColumnDataById(int(schema.PrimaryKey), &compressed, &decompressed); err != nil {
 			return
 		}
 		vec = compute.ApplyDeleteToVector(vec, deletes)
@@ -105,7 +104,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	to := make([]uint32, 0)
 	maxrow := task.compacted[0].GetMeta().(*catalog.BlockEntry).GetSchema().BlockMaxRows
-	totalRows:=length
+	totalRows := length
 	for totalRows > 0 {
 		if totalRows > int(maxrow) {
 			to = append(to, maxrow)
@@ -138,7 +137,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		compressed.Reset()
 		decompressed.Reset()
 		for _, block := range task.compacted {
-			if vec, deletes, err = block.GetVectorCopy(attr, &compressed, &decompressed); err != nil {
+			if vec, deletes, err = block.GetColumnDataById(i, &compressed, &decompressed); err != nil {
 				return
 			}
 			vec = compute.ApplyDeleteToVector(vec, deletes)

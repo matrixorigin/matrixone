@@ -18,7 +18,7 @@ func (blk *txnBlock) Read(cs []uint64, attrs []string, compressed []*bytes.Buffe
 	bat := batch.New(true, attrs)
 	bat.Vecs = make([]*vector.Vector, len(attrs))
 	for i, attr := range attrs {
-		vec, _, err := blk.handle.GetVectorCopy(attr, compressed[i], deCompressed[i])
+		vec, _, err := blk.handle.GetColumnDataByName(attr, compressed[i], deCompressed[i])
 		if err != nil {
 			return nil, err
 		}
