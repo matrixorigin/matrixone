@@ -80,7 +80,7 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, s
 			Sub: expr,
 		},
 		Typ: &plan.Type{
-			Id:       plan.Type_ARRAY,
+			Id:       plan.Type_TUPLE,
 			Nullable: false,
 		},
 	}, nil

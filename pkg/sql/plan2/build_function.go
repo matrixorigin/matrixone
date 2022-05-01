@@ -25,9 +25,7 @@ import (
 
 func checkFloatType(typ plan.Type_TypeId, alias string) error {
 	switch typ {
-	case plan.Type_FLOAT32:
-		fallthrough
-	case plan.Type_FLOAT64:
+	case plan.Type_FLOAT32, plan.Type_FLOAT64:
 		return nil
 	default:
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not float", alias))
