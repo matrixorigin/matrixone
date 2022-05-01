@@ -55,12 +55,18 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start uint64, i
 	return txn
 }
 
+func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
+
 func (txn *Txn) SetError(err error) { txn.Err = err }
 func (txn *Txn) GetError() error    { return txn.Err }
 
 func (txn *Txn) SetPrepareCommitFn(fn func(interface{}) error) { txn.PrepareCommitFn = fn }
 
 func (txn *Txn) Commit() error {
+	if txn.Store.IsReadonly() {
+		txn.Mgr.DeleteTxn(txn.GetID())
+		return nil
+	}
 	txn.Add(1)
 	txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,
@@ -76,6 +82,10 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 }
 
 func (txn *Txn) Rollback() error {
+	if txn.Store.IsReadonly() {
+		txn.Mgr.DeleteTxn(txn.GetID())
+		return nil
+	}
 	txn.Add(1)
 	txn.Mgr.OnOpTxn(&OpTxn{
 		Txn: txn,

@@ -513,6 +513,7 @@ func TestTxnManager1(t *testing.T) {
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(nil, nil, nil, nil), TxnFactory(nil))
 	mgr.Start()
 	txn := mgr.StartTxn(nil)
+	txn.MockIncWriteCnt()
 
 	lock := sync.Mutex{}
 	seqs := make([]int, 0)
@@ -529,6 +530,7 @@ func TestTxnManager1(t *testing.T) {
 	short := func() {
 		defer wg.Done()
 		txn2 := mgr.StartTxn(nil)
+		txn2.MockIncWriteCnt()
 		txn2.SetPrepareCommitFn(func(i interface{}) error {
 			lock.Lock()
 			seqs = append(seqs, 4)

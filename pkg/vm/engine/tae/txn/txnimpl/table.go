@@ -65,6 +65,7 @@ type Table interface {
 	GetByFilter(*handle.Filter) (id *common.ID, offset uint32, err error)
 	GetSegment(id uint64) (handle.Segment, error)
 	CreateSegment() (handle.Segment, error)
+	CreateNonAppendableSegment() (handle.Segment, error)
 	CreateBlock(sid uint64) (handle.Block, error)
 	GetBlock(id *common.ID) (handle.Block, error)
 	SoftDeleteBlock(id *common.ID) error
@@ -218,6 +219,21 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	return
 }
 
+func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
+	var meta *catalog.SegmentEntry
+	var factory catalog.SegmentDataFactory
+	if tbl.dataFactory != nil {
+		factory = tbl.dataFactory.MakeSegmentFactory()
+	}
+	if meta, err = tbl.entry.CreateSegment(tbl.txn, catalog.ES_NotAppendable, factory); err != nil {
+		return
+	}
+	seg = newSegment(tbl.txn, meta)
+	tbl.csegs = append(tbl.csegs, meta)
+	tbl.warChecker.ReadTable(meta.GetTable().AsCommonID())
+	return
+}
+
 func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
@@ -279,6 +295,10 @@ func (tbl *txnTable) CreateBlock(sid uint64) (blk handle.Block, err error) {
 func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
+		return
+	}
+	if !seg.IsAppendable() && state == catalog.ES_Appendable {
+		err = data.ErrNotAppendable
 		return
 	}
 	var factory catalog.BlockDataFactory

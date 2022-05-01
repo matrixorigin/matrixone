@@ -118,6 +118,10 @@ func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
 	return h.Txn.GetStore().CreateSegment(h.entry.GetID())
 }
 
+func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {
+	return h.Txn.GetStore().CreateNonAppendableSegment(h.entry.GetID())
+}
+
 func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
 	return newSegmentIt(h.Txn, h.entry)
 }

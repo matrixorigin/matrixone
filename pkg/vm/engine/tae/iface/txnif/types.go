@@ -70,6 +70,7 @@ type TxnAsyncer interface {
 
 type TxnTest interface {
 	MockSetCommitTSLocked(ts uint64)
+	MockIncWriteCnt() int
 }
 
 type AsyncTxn interface {
@@ -154,9 +155,9 @@ type TxnStore interface {
 	LogBlockID(tid, bid uint64)
 
 	Append(id uint64, data *batch.Batch) error
-	RangeDeleteLocalRows(id uint64, start, end uint32) error
-	UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
-	AddUpdateNode(id uint64, node UpdateNode) error
+	// RangeDeleteLocalRows(id uint64, start, end uint32) error
+	// UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
+	// AddUpdateNode(id uint64, node UpdateNode) error
 
 	RangeDelete(id *common.ID, start, end uint32) error
 	Update(id *common.ID, row uint32, col uint16, v interface{}) error
@@ -175,6 +176,7 @@ type TxnStore interface {
 
 	GetSegment(id *common.ID) (handle.Segment, error)
 	CreateSegment(tid uint64) (handle.Segment, error)
+	CreateNonAppendableSegment(tid uint64) (handle.Segment, error)
 	CreateBlock(tid, sid uint64) (handle.Block, error)
 	GetBlock(id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(id *common.ID) (handle.Block, error)
@@ -183,6 +185,9 @@ type TxnStore interface {
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
 	LogTxnEntry(tableId uint64, entry TxnEntry, readed []*common.ID) error
+
+	IsReadonly() bool
+	IncreateWriteCnt() int
 }
 
 type TxnEntryType int16

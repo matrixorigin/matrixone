@@ -35,6 +35,7 @@ type Relation interface {
 
 	GetMeta() interface{}
 	CreateSegment() (Segment, error)
+	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
 }
 

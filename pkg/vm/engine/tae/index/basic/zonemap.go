@@ -2,14 +2,15 @@ package basic
 
 import (
 	"bytes"
+	"strconv"
+	"sync"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
-	"strconv"
-	"sync"
 )
 
 type ZoneMap struct {
@@ -322,9 +323,9 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		zm.max = encoding.DecodeUint32(buf[:4])
 		return nil
 	case types.T_uint64:
-		zm.min = encoding.DecodeUint32(buf[:8])
+		zm.min = encoding.DecodeUint64(buf[:8])
 		buf = buf[8:]
-		zm.max = encoding.DecodeUint32(buf[:8])
+		zm.max = encoding.DecodeUint64(buf[:8])
 		return nil
 	case types.T_float32:
 		zm.min = encoding.DecodeFloat32(buf[:4])

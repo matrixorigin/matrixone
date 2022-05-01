@@ -38,9 +38,10 @@ func (store *NoopTxnStore) UseDatabase(name string) (err error)                 
 func (store *NoopTxnStore) CurrentDatabase() (db handle.Database)                           { return }
 func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)        { return }
 
-func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)     { return }
-func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error)     { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error) { return }
+func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)              { return }
+func (store *NoopTxnStore) CreateNonAppendableSegment(uint64) (seg handle.Segment, err error) { return }
+func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error)              { return }
+func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error)          { return }
 func (store *NoopTxnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
 	return
 }
@@ -62,3 +63,6 @@ func (store *NoopTxnStore) LogBlockID(tid, bid uint64)   {}
 func (store *NoopTxnStore) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
+
+func (store *NoopTxnStore) IsReadonly() bool      { return false }
+func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }

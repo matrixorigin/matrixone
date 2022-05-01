@@ -1,6 +1,7 @@
 package txnimpl
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -32,6 +33,7 @@ type txnStore struct {
 	logs        []entry.Entry
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
+	writeOps    uint32
 }
 
 var TxnStoreFactory = func(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
@@ -50,6 +52,14 @@ func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr bas
 		dataFactory: dataFactory,
 		nodesMgr:    txnBufMgr,
 	}
+}
+
+func (store *txnStore) IsReadonly() bool {
+	return atomic.LoadUint32(&store.writeOps) == 0
+}
+
+func (store *txnStore) IncreateWriteCnt() int {
+	return int(atomic.AddUint32(&store.writeOps, uint32(1)))
 }
 
 func (store *txnStore) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
@@ -106,6 +116,7 @@ func (store *txnStore) BatchDedup(id uint64, pks *vector.Vector) (err error) {
 }
 
 func (store *txnStore) Append(id uint64, data *batch.Batch) error {
+	store.IncreateWriteCnt()
 	table, err := store.getOrSetTable(id)
 	if err != nil {
 		return err
@@ -117,6 +128,7 @@ func (store *txnStore) Append(id uint64, data *batch.Batch) error {
 }
 
 func (store *txnStore) RangeDelete(id *common.ID, start, end uint32) (err error) {
+	store.IncreateWriteCnt()
 	table, err := store.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -152,6 +164,7 @@ func (store *txnStore) GetValue(id *common.ID, row uint32, colIdx uint16) (v int
 }
 
 func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interface{}) (err error) {
+	store.IncreateWriteCnt()
 	table, err := store.getOrSetTable(id.TableID)
 	if err != nil {
 		return err
@@ -162,20 +175,20 @@ func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interf
 	return table.Update(id.PartID, id.SegmentID, id.BlockID, row, colIdx, v)
 }
 
-func (store *txnStore) RangeDeleteLocalRows(id uint64, start, end uint32) error {
-	table := store.tables[id]
-	return table.RangeDeleteLocalRows(start, end)
-}
+// func (store *txnStore) RangeDeleteLocalRows(id uint64, start, end uint32) error {
+// 	table := store.tables[id]
+// 	return table.RangeDeleteLocalRows(start, end)
+// }
 
-func (store *txnStore) UpdateLocalValue(id uint64, row uint32, col uint16, value interface{}) error {
-	table := store.tables[id]
-	return table.UpdateLocalValue(row, col, value)
-}
+// func (store *txnStore) UpdateLocalValue(id uint64, row uint32, col uint16, value interface{}) error {
+// 	table := store.tables[id]
+// 	return table.UpdateLocalValue(row, col, value)
+// }
 
-func (store *txnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error {
-	table := store.tables[id]
-	return table.AddUpdateNode(node)
-}
+// func (store *txnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error {
+// 	table := store.tables[id]
+// 	return table.AddUpdateNode(node)
+// }
 
 func (store *txnStore) CurrentDatabase() (db handle.Database) {
 	return store.database
@@ -212,6 +225,7 @@ func (store *txnStore) GetDatabase(name string) (db handle.Database, err error) 
 }
 
 func (store *txnStore) CreateDatabase(name string) (handle.Database, error) {
+	store.IncreateWriteCnt()
 	if store.database != nil {
 		return nil, txnbase.ErrTxnDifferentDatabase
 	}
@@ -225,6 +239,7 @@ func (store *txnStore) CreateDatabase(name string) (handle.Database, error) {
 }
 
 func (store *txnStore) DropDatabase(name string) (db handle.Database, err error) {
+	store.IncreateWriteCnt()
 	if err = store.checkDatabase(name); err != nil {
 		return
 	}
@@ -238,6 +253,7 @@ func (store *txnStore) DropDatabase(name string) (db handle.Database, err error)
 }
 
 func (store *txnStore) CreateRelation(def interface{}) (relation handle.Relation, err error) {
+	store.IncreateWriteCnt()
 	schema := def.(*catalog.Schema)
 	db := store.database.GetMeta().(*catalog.DBEntry)
 	var factory catalog.TableDataFactory
@@ -258,6 +274,7 @@ func (store *txnStore) CreateRelation(def interface{}) (relation handle.Relation
 }
 
 func (store *txnStore) DropRelationByName(name string) (relation handle.Relation, err error) {
+	store.IncreateWriteCnt()
 	db := store.database.GetMeta().(*catalog.DBEntry)
 	meta, err := db.DropTableEntry(name, store.txn)
 	if err != nil {
@@ -291,11 +308,21 @@ func (store *txnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)
 }
 
 func (store *txnStore) CreateSegment(tid uint64) (seg handle.Segment, err error) {
+	store.IncreateWriteCnt()
 	var table Table
 	if table, err = store.getOrSetTable(tid); err != nil {
 		return
 	}
 	return table.CreateSegment()
+}
+
+func (store *txnStore) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
+	store.IncreateWriteCnt()
+	var table Table
+	if table, err = store.getOrSetTable(tid); err != nil {
+		return
+	}
+	return table.CreateNonAppendableSegment()
 }
 
 func (store *txnStore) getOrSetTable(id uint64) (table Table, err error) {
@@ -316,6 +343,7 @@ func (store *txnStore) getOrSetTable(id uint64) (table Table, err error) {
 }
 
 func (store *txnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
+	store.IncreateWriteCnt()
 	var table Table
 	if table, err = store.getOrSetTable(id.TableID); err != nil {
 		return
@@ -332,6 +360,7 @@ func (store *txnStore) GetBlock(id *common.ID) (blk handle.Block, err error) {
 }
 
 func (store *txnStore) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
+	store.IncreateWriteCnt()
 	var table Table
 	if table, err = store.getOrSetTable(tid); err != nil {
 		return
@@ -340,6 +369,7 @@ func (store *txnStore) CreateBlock(tid, sid uint64) (blk handle.Block, err error
 }
 
 func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
+	store.IncreateWriteCnt()
 	var table Table
 	if table, err = store.getOrSetTable(id.TableID); err != nil {
 		return

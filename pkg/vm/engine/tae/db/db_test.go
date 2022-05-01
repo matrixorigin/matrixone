@@ -254,6 +254,36 @@ func TestNonAppendableBlock(t *testing.T) {
 	}
 }
 
+func TestCreateSegment(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1)
+	txn := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	_, err := rel.CreateNonAppendableSegment()
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	bat := compute.MockBatch(schema.Types(), 5, int(schema.PrimaryKey), nil)
+	txn = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	err = rel.Append(bat)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	segCnt := 0
+	processor := new(catalog.LoopProcessor)
+	processor.SegmentFn = func(segment *catalog.SegmentEntry) error {
+		segCnt++
+		return nil
+	}
+	tae.Opts.Catalog.RecurLoop(processor)
+	assert.Equal(t, 2, segCnt)
+	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
+}
+
 func TestCompactBlock1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
