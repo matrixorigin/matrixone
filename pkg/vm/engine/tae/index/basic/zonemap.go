@@ -334,7 +334,7 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		return nil
 	case types.T_float64:
 		zm.min = encoding.DecodeFloat64(buf[:8])
-		buf = buf[4:]
+		buf = buf[8:]
 		zm.max = encoding.DecodeFloat64(buf[:8])
 		return nil
 	case types.T_date:
