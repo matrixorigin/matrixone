@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
@@ -21,6 +22,7 @@ type TxnManager struct {
 	IdAlloc, TsAlloc *common.IdAlloctor
 	TxnStoreFactory  TxnStoreFactory
 	TxnFactory       TxnFactory
+	ActiveMask       *roaring64.Bitmap
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnManager {
@@ -33,9 +35,10 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory) *TxnM
 		TsAlloc:         common.NewIdAlloctor(1),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
+		ActiveMask:      roaring64.New(),
 	}
-	pqueue := sm.NewSafeQueue(10000, 200, mgr.onPreparing)
-	cqueue := sm.NewSafeQueue(10000, 200, mgr.onCommit)
+	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
+	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
 	mgr.StateMachine = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, cqueue)
 	return mgr
 }
@@ -44,6 +47,23 @@ func (mgr *TxnManager) Init(prevTxnId uint64, prevTs uint64) error {
 	mgr.IdAlloc.SetStart(prevTxnId)
 	mgr.TsAlloc.SetStart(prevTs)
 	return nil
+}
+
+func (mgr *TxnManager) StatActiveTxnCnt() int {
+	mgr.RLock()
+	defer mgr.RUnlock()
+	return int(mgr.ActiveMask.GetCardinality())
+}
+
+func (mgr *TxnManager) StatSafeTS() (ts uint64) {
+	mgr.RLock()
+	if len(mgr.Active) > 0 {
+		ts = mgr.ActiveMask.Minimum() - 1
+	} else {
+		ts = mgr.TsAlloc.Get()
+	}
+	mgr.RUnlock()
+	return
 }
 
 func (mgr *TxnManager) StartTxn(info []byte) txnif.AsyncTxn {
@@ -56,13 +76,16 @@ func (mgr *TxnManager) StartTxn(info []byte) txnif.AsyncTxn {
 	txn := mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
 	mgr.Active[txnId] = txn
+	mgr.ActiveMask.Add(startTs)
 	return txn
 }
 
 func (mgr *TxnManager) DeleteTxn(id uint64) {
 	mgr.Lock()
 	defer mgr.Unlock()
+	txn := mgr.Active[id]
 	delete(mgr.Active, id)
+	mgr.ActiveMask.Remove(txn.GetStartTS())
 }
 
 func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {

@@ -1007,3 +1007,39 @@ func TestDelete1(t *testing.T) {
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }
+
+func TestGCBlock1(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 100
+	schema.SegmentMaxBlocks = 2
+
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	txn := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	err := rel.Append(bat)
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	meta := blk.GetMeta().(*catalog.BlockEntry)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, nil)
+	assert.Nil(t, err)
+	err = task.OnExec()
+	assert.Nil(t, err)
+	assert.Nil(t, txn.Commit())
+	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
+
+	err = meta.GetSegment().RemoveEntry(meta)
+	assert.Nil(t, err)
+	blkData := meta.GetBlockData()
+	assert.Equal(t, 1, tae.MTBufMgr.Count())
+	blkData.Destroy()
+	assert.Equal(t, 0, tae.MTBufMgr.Count())
+}

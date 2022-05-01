@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 var (
@@ -86,7 +87,7 @@ type txnTable struct {
 	appendNodes map[common.ID]txnif.AppendNode
 	appends     []*appendCtx
 	tableHandle data.TableHandle
-	driver      txnbase.NodeDriver
+	driver      wal.Driver
 	entry       *catalog.TableEntry
 	handle      handle.Relation
 	nodesMgr    base.INodeManager
@@ -98,14 +99,14 @@ type txnTable struct {
 	dblks       []*catalog.BlockEntry
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
-	logs        []txnbase.NodeEntry
+	logs        []wal.LogEntry
 	maxSegId    uint64
 	maxBlkId    uint64
 
 	txnEntries []txnif.TxnEntry
 }
 
-func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.NodeDriver, mgr base.INodeManager, checker *warChecker, dataFactory *tables.DataFactory) *txnTable {
+func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver wal.Driver, mgr base.INodeManager, checker *warChecker, dataFactory *tables.DataFactory) *txnTable {
 	tbl := &txnTable{
 		warChecker:  checker,
 		txn:         txn,
@@ -122,7 +123,7 @@ func newTxnTable(txn txnif.AsyncTxn, handle handle.Relation, driver txnbase.Node
 		csegs:       make([]*catalog.SegmentEntry, 0),
 		dsegs:       make([]*catalog.SegmentEntry, 0),
 		dataFactory: dataFactory,
-		logs:        make([]txnbase.NodeEntry, 0),
+		logs:        make([]wal.LogEntry, 0),
 		txnEntries:  make([]txnif.TxnEntry, 0),
 	}
 	return tbl
@@ -1016,7 +1017,7 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 	return
 }
 
-func (tbl *txnTable) buildCommitCmd(cmdSeq *uint32) (cmd txnif.TxnCmd, entries []txnbase.NodeEntry, err error) {
+func (tbl *txnTable) buildCommitCmd(cmdSeq *uint32) (cmd txnif.TxnCmd, entries []wal.LogEntry, err error) {
 	composedCmd := txnbase.NewComposedCmd()
 
 	for i, inode := range tbl.inodes {

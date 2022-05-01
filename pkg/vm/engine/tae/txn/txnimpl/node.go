@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 const (
@@ -43,7 +44,7 @@ type InsertNode interface {
 	GetSpace() uint32
 	Rows() uint32
 	GetValue(col int, row uint32) (interface{}, error)
-	MakeCommand(uint32, bool) (txnif.TxnCmd, txnbase.NodeEntry, error)
+	MakeCommand(uint32, bool) (txnif.TxnCmd, wal.LogEntry, error)
 	ToTransient()
 	AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest *common.ID) *appendInfo
 	RowsWithoutDeletes() uint32
@@ -65,7 +66,7 @@ func (info *appendInfo) String() string {
 
 type insertNode struct {
 	*buffer.Node
-	driver  txnbase.NodeDriver
+	driver  wal.Driver
 	data    batch.IBatch
 	lsn     uint64
 	typ     txnbase.NodeState
@@ -75,7 +76,7 @@ type insertNode struct {
 	appends []*appendInfo
 }
 
-func NewInsertNode(tbl Table, mgr base.INodeManager, id common.ID, driver txnbase.NodeDriver) *insertNode {
+func NewInsertNode(tbl Table, mgr base.INodeManager, id common.ID, driver wal.Driver) *insertNode {
 	impl := new(insertNode)
 	impl.Node = buffer.NewNode(impl, mgr, id, 0)
 	impl.driver = driver
@@ -103,7 +104,7 @@ func (n *insertNode) AddApplyInfo(srcOff, srcLen, destOff, destLen uint32, dest 
 	return info
 }
 
-func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry txnbase.NodeEntry, err error) {
+func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, entry wal.LogEntry, err error) {
 	if n.data == nil {
 		return
 	}
@@ -117,7 +118,7 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 	} else {
 		ptrCmd := new(txnbase.PointerCmd)
 		ptrCmd.Lsn = n.lsn
-		ptrCmd.Group = txnbase.GroupUC
+		ptrCmd.Group = wal.GroupUC
 		composedCmd.AddCmd(ptrCmd)
 	}
 	if n.deletes != nil {
@@ -129,7 +130,7 @@ func (n *insertNode) MakeCommand(id uint32, forceFlush bool) (cmd txnif.TxnCmd, 
 
 func (n *insertNode) Type() txnbase.NodeType { return NTInsert }
 
-func (n *insertNode) makeLogEntry() txnbase.NodeEntry {
+func (n *insertNode) makeLogEntry() wal.LogEntry {
 	cmd := txnbase.NewBatchCmd(n.data, n.table.GetSchema().Types())
 	buf, err := cmd.Marshal()
 	e := entry.GetBase()
@@ -164,7 +165,7 @@ func (n *insertNode) OnLoad() {
 	if lsn == 0 {
 		return
 	}
-	e, err := n.driver.LoadEntry(txnbase.GroupUC, lsn)
+	e, err := n.driver.LoadEntry(wal.GroupUC, lsn)
 	if err != nil {
 		panic(err)
 	}
@@ -192,7 +193,7 @@ func (n *insertNode) OnUnload() {
 	}
 }
 
-func (n *insertNode) execUnload() (entry txnbase.NodeEntry) {
+func (n *insertNode) execUnload() (entry wal.LogEntry) {
 	if n.IsTransient() {
 		return
 	}
@@ -203,7 +204,7 @@ func (n *insertNode) execUnload() (entry txnbase.NodeEntry) {
 		return
 	}
 	entry = n.makeLogEntry()
-	if seq, err := n.driver.AppendEntry(txnbase.GroupUC, entry); err != nil {
+	if seq, err := n.driver.AppendEntry(wal.GroupUC, entry); err != nil {
 		panic(err)
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)

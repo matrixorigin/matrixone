@@ -70,6 +70,16 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
+func (blk *dataBlock) Destroy() (err error) {
+	if blk.node != nil {
+		blk.node.Close()
+	}
+	if blk.file != nil {
+		blk.file.Close()
+	}
+	return
+}
+
 func (blk *dataBlock) GetBlockFile() file.Block {
 	return blk.file
 }

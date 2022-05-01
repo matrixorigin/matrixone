@@ -14,13 +14,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/sirupsen/logrus"
 )
 
 type txnStore struct {
 	txnbase.NoopTxnStore
 	tables      map[uint64]Table
-	driver      txnbase.NodeDriver
+	driver      wal.Driver
 	nodesMgr    base.INodeManager
 	dbIndex     map[string]uint64
 	tableIndex  map[string]uint64
@@ -36,13 +37,13 @@ type txnStore struct {
 	writeOps    uint32
 }
 
-var TxnStoreFactory = func(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
+var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
 	return func() txnif.TxnStore {
 		return newStore(catalog, driver, txnBufMgr, dataFactory)
 	}
 }
 
-func newStore(catalog *catalog.Catalog, driver txnbase.NodeDriver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) *txnStore {
+func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) *txnStore {
 	return &txnStore{
 		tables:      make(map[uint64]Table),
 		catalog:     catalog,

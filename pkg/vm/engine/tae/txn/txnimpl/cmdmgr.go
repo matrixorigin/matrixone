@@ -4,16 +4,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/sirupsen/logrus"
 )
 
 type commandManager struct {
 	cmd    *txnbase.ComposedCmd
 	csn    int
-	driver txnbase.NodeDriver
+	driver wal.Driver
 }
 
-func newCommandManager(driver txnbase.NodeDriver) *commandManager {
+func newCommandManager(driver wal.Driver) *commandManager {
 	return &commandManager{
 		cmd:    txnbase.NewComposedCmd(),
 		driver: driver,
@@ -46,7 +47,7 @@ func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
 	logEntry.SetType(ETTxnRecord)
 	logEntry.Unmarshal(buf)
 
-	lsn, err := mgr.driver.AppendEntry(txnbase.GroupC, logEntry)
+	lsn, err := mgr.driver.AppendEntry(wal.GroupC, logEntry)
 	logrus.Debugf("ApplyTxnRecord LSN=%d, Size=%d", lsn, len(buf))
 	return
 }

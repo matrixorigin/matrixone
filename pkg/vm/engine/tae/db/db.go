@@ -6,11 +6,13 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
 )
 
@@ -22,12 +24,14 @@ type DB struct {
 	Dir  string
 	Opts *options.Options
 
+	Catalog *catalog.Catalog
+
 	IndexBufMgr base.INodeManager
 	MTBufMgr    base.INodeManager
 	TxnBufMgr   base.INodeManager
 
-	TxnMgr       *txnbase.TxnManager
-	TxnLogDriver txnbase.NodeDriver
+	TxnMgr *txnbase.TxnManager
+	Wal    wal.Driver
 
 	CKPDriver checkpoint.Driver
 
@@ -76,7 +80,7 @@ func (db *DB) Close() error {
 	db.TaskScheduler.Stop()
 	db.IOScheduler.Stop()
 	db.TxnMgr.Stop()
-	db.TxnLogDriver.Close()
+	db.Wal.Close()
 	db.Opts.Catalog.Close()
 	return db.DBLocker.Close()
 }

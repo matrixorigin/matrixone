@@ -52,4 +52,5 @@ type Block interface {
 	GetBlockFile() file.Block
 	GetTotalChanges() int
 	RefreshIndex() error
+	Destroy() error
 }
