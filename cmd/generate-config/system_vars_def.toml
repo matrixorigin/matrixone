@@ -636,4 +636,4 @@ shard-split-check-duration = "1m"
 # the size of the data managed by each Shard, beyond which the Shard needs to be split
 shard-capacity-bytes = "4GB"
 # disable shard split
-disable-shard-split = false
+disable-shard-split = true 
