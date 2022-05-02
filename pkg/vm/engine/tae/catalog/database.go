@@ -222,3 +222,16 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 	}
 	return err
 }
+
+func (e *DBEntry) PrepareRollback() (err error) {
+	e.RLock()
+	currOp := e.CurrOp
+	e.RUnlock()
+	if err = e.BaseEntry.PrepareRollback(); err != nil {
+		return
+	}
+	if currOp == OpCreate {
+		err = e.catalog.RemoveEntry(e)
+	}
+	return
+}

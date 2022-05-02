@@ -91,11 +91,11 @@ func (be *BaseEntry) PrepareCommit() error {
 
 func (be *BaseEntry) PrepareRollback() error {
 	be.Lock()
-	defer be.Unlock()
 	if be.PrevCommit != nil {
 		be.CurrOp = be.PrevCommit.CurrOp
 	}
 	be.Txn = nil
+	be.Unlock()
 	return nil
 }
 

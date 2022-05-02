@@ -198,3 +198,16 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	defer entry.Unlock()
 	return entry.deleteEntryLocked(segment)
 }
+
+func (entry *TableEntry) PrepareRollback() (err error) {
+	entry.RLock()
+	currOp := entry.CurrOp
+	entry.RUnlock()
+	if err = entry.BaseEntry.PrepareRollback(); err != nil {
+		return
+	}
+	if currOp == OpCreate {
+		err = entry.GetDB().RemoveEntry(entry)
+	}
+	return
+}

@@ -202,5 +202,11 @@ func (node *DeleteNode) ApplyDeletes(vec *gvec.Vector) *gvec.Vector {
 	return compute.ApplyDeleteToVector(vec, node.mask)
 }
 
-func (node *DeleteNode) PrepareRollback() (err error) { return }
-func (node *DeleteNode) ApplyRollback() (err error)   { return }
+func (node *DeleteNode) PrepareRollback() (err error) {
+	node.chain.Lock()
+	defer node.chain.Unlock()
+	node.chain.RemoveNodeLocked(node)
+	return
+}
+
+func (node *DeleteNode) ApplyRollback() (err error) { return }

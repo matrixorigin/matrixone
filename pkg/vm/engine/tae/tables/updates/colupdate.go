@@ -288,5 +288,9 @@ func (n *ColumnNode) ApplyCommit() (err error) {
 	return
 }
 
-func (n *ColumnNode) PrepareRollback() (err error) { return }
-func (n *ColumnNode) ApplyRollback() (err error)   { return }
+func (n *ColumnNode) PrepareRollback() (err error) {
+	n.chain.DeleteNode(n.DLNode)
+	return
+}
+
+func (n *ColumnNode) ApplyRollback() (err error) { return }

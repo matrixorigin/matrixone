@@ -57,5 +57,6 @@ func (n *AppendNode) ApplyCommit() error {
 func (n *AppendNode) PrepareRollback() (err error) { return }
 func (n *AppendNode) ApplyRollback() (err error)   { return }
 func (n *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
+	cmd = NewAppendCmd(id, n)
 	return
 }

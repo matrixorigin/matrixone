@@ -12,4 +12,6 @@ var (
 
 	ErrNotFound   = errors.New("tae: not found")
 	ErrDuplicated = errors.New("tae: duplicated ")
+
+	ErrDDLDropCreated = errors.New("tae: DDL cannot drop created in a txn")
 )

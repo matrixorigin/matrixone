@@ -64,13 +64,15 @@ func makeTable(t *testing.T, dir string, colCnt int, bufSize uint64) *txnTable {
 	schema := catalog.MockSchemaAll(colCnt)
 	rel := mockTestRelation(id, schema)
 	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), common.NextGlobalSeqNum(), nil)
-	return newTxnTable(txn, rel, driver, mgr, nil, nil)
+	store := newStore(nil, driver, mgr, nil)
+	store.BindTxn(txn)
+	return newTxnTable(store, rel)
 }
 
 func TestInsertNode(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
 	tbl := makeTable(t, dir, 2, common.K*6)
-	defer tbl.driver.Close()
+	defer tbl.store.driver.Close()
 	tbl.GetSchema().PrimaryKey = 1
 	bat := compute.MockBatch(tbl.GetSchema().Types(), common.K, int(tbl.GetSchema().PrimaryKey), nil)
 	p, _ := ants.NewPool(5)
@@ -87,9 +89,9 @@ func TestInsertNode(t *testing.T) {
 				var cid common.ID
 				cid.BlockID = id
 				cid.Idx = uint16(i)
-				n := NewInsertNode(tbl, tbl.nodesMgr, cid, tbl.driver)
+				n := NewInsertNode(tbl, tbl.store.nodesMgr, cid, tbl.store.driver)
 				nodes[i] = n
-				h := tbl.nodesMgr.Pin(n)
+				h := tbl.store.nodesMgr.Pin(n)
 				var err error
 				if err = n.Expand(common.K*1, func() error {
 					n.Append(bat, 0)
@@ -123,7 +125,7 @@ func TestInsertNode(t *testing.T) {
 	}
 	wg.Wait()
 	t.Log(all)
-	t.Log(tbl.nodesMgr.String())
+	t.Log(tbl.store.nodesMgr.String())
 	t.Log(common.GPool.String())
 }
 
@@ -313,10 +315,10 @@ func TestLoad(t *testing.T) {
 	err := tbl.Append(bats[0])
 	assert.Nil(t, err)
 
-	t.Log(tbl.nodesMgr.String())
+	t.Log(tbl.store.nodesMgr.String())
 	v, err := tbl.GetLocalValue(100, 0)
 	assert.Nil(t, err)
-	t.Log(tbl.nodesMgr.String())
+	t.Log(tbl.store.nodesMgr.String())
 	t.Logf("Row %d, Col %d, Val %v", 100, 0, v)
 }
 
@@ -387,18 +389,18 @@ func TestBuildCommand(t *testing.T) {
 	err = tbl.RangeDeleteLocalRows(100, 200)
 	assert.Nil(t, err)
 
-	t.Log(tbl.nodesMgr.String())
+	t.Log(tbl.store.nodesMgr.String())
 	cmdSeq := uint32(1)
 	cmd, entries, err := tbl.buildCommitCmd(&cmdSeq)
 	assert.Nil(t, err)
 	tbl.Close()
-	assert.Equal(t, 0, tbl.nodesMgr.Count())
+	assert.Equal(t, 0, tbl.store.nodesMgr.Count())
 	t.Log(cmd.String())
 	for _, e := range entries {
 		e.WaitDone()
 		e.Free()
 	}
-	t.Log(tbl.nodesMgr.String())
+	t.Log(tbl.store.nodesMgr.String())
 }
 
 func TestApplyToColumn1(t *testing.T) {

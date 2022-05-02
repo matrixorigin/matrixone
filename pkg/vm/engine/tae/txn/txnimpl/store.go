@@ -176,21 +176,6 @@ func (store *txnStore) Update(id *common.ID, row uint32, colIdx uint16, v interf
 	return table.Update(id.PartID, id.SegmentID, id.BlockID, row, colIdx, v)
 }
 
-// func (store *txnStore) RangeDeleteLocalRows(id uint64, start, end uint32) error {
-// 	table := store.tables[id]
-// 	return table.RangeDeleteLocalRows(start, end)
-// }
-
-// func (store *txnStore) UpdateLocalValue(id uint64, row uint32, col uint16, value interface{}) error {
-// 	table := store.tables[id]
-// 	return table.UpdateLocalValue(row, col, value)
-// }
-
-// func (store *txnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error {
-// 	table := store.tables[id]
-// 	return table.AddUpdateNode(node)
-// }
-
 func (store *txnStore) CurrentDatabase() (db handle.Database) {
 	return store.database
 }
@@ -240,6 +225,10 @@ func (store *txnStore) CreateDatabase(name string) (handle.Database, error) {
 }
 
 func (store *txnStore) DropDatabase(name string) (db handle.Database, err error) {
+	if store.createEntry != nil {
+		err = txnbase.ErrDDLDropCreated
+		return
+	}
 	store.IncreateWriteCnt()
 	if err = store.checkDatabase(name); err != nil {
 		return
@@ -286,7 +275,7 @@ func (store *txnStore) DropRelationByName(name string) (relation handle.Relation
 		return nil, err
 	}
 	relation = newRelation(store.txn, meta)
-	table.SetDropEntry(meta)
+	err = table.SetDropEntry(meta)
 	return
 }
 
@@ -337,7 +326,7 @@ func (store *txnStore) getOrSetTable(id uint64) (table Table, err error) {
 		if store.warChecker == nil {
 			store.warChecker = newWarChecker(store.txn, entry.GetDB())
 		}
-		table = newTxnTable(store.txn, relation, store.driver, store.nodesMgr, store.warChecker, store.dataFactory)
+		table = newTxnTable(store, relation)
 		store.tables[id] = table
 	}
 	return
@@ -379,18 +368,19 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
-	entry := store.createEntry
-	if entry == nil {
-		entry = store.dropEntry
-	}
-	if entry != nil {
-		if err = entry.ApplyRollback(); err != nil {
+	if store.createEntry != nil {
+		if err = store.createEntry.ApplyRollback(); err != nil {
 			return
 		}
 	}
 	for _, table := range store.tables {
 		if err = table.ApplyRollback(); err != nil {
 			break
+		}
+	}
+	if store.dropEntry != nil {
+		if err = store.dropEntry.ApplyRollback(); err != nil {
+			return
 		}
 	}
 	return
@@ -413,6 +403,11 @@ func (store *txnStore) ApplyCommit() (err error) {
 	for _, table := range store.tables {
 		if err = table.ApplyCommit(); err != nil {
 			break
+		}
+	}
+	if store.dropEntry != nil {
+		if err = store.dropEntry.ApplyCommit(); err != nil {
+			return
 		}
 	}
 	logrus.Debugf("Txn-%d ApplyCommit Takes %s", store.txn.GetID(), time.Since(now))
@@ -455,21 +450,13 @@ func (store *txnStore) PrepareCommit() (err error) {
 	}
 	if store.dropEntry != nil {
 		if err = store.dropEntry.PrepareCommit(); err != nil {
-			panic(err)
+			return
 		}
 	}
-	// TODO: prepare commit inserts and updates
 
 	if store.createEntry != nil {
 		csn := store.cmdMgr.GetCSN()
 		cmd, err := store.createEntry.MakeCommand(uint32(csn))
-		if err != nil {
-			panic(err)
-		}
-		store.cmdMgr.AddCmd(cmd)
-	} else if store.dropEntry != nil {
-		csn := store.cmdMgr.GetCSN()
-		cmd, err := store.dropEntry.MakeCommand(uint32(csn))
 		if err != nil {
 			panic(err)
 		}
@@ -479,6 +466,14 @@ func (store *txnStore) PrepareCommit() (err error) {
 		if err = table.CollectCmd(store.cmdMgr); err != nil {
 			panic(err)
 		}
+	}
+	if store.dropEntry != nil {
+		csn := store.cmdMgr.GetCSN()
+		cmd, err := store.dropEntry.MakeCommand(uint32(csn))
+		if err != nil {
+			panic(err)
+		}
+		store.cmdMgr.AddCmd(cmd)
 	}
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
@@ -494,31 +489,26 @@ func (store *txnStore) PrepareCommit() (err error) {
 }
 
 func (store *txnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {
-	// switch t {
-	// case TxnEntryCreateDatabase:
-	// 	store.createEntry = entry
-	// case TxnEntryCretaeTable:
-	// 	create := entry.(*catalog.TableEntry)
-
-	// }
+	// TODO
 }
 
 func (store *txnStore) PrepareRollback() error {
 	var err error
 	if store.createEntry != nil {
-		if err := store.catalog.RemoveEntry(store.createEntry.(*catalog.DBEntry)); err != nil {
-			return err
-		}
-	} else if store.dropEntry != nil {
-		if err := store.createEntry.(*catalog.DBEntry).PrepareRollback(); err != nil {
+		if err := store.createEntry.PrepareRollback(); err != nil {
 			return err
 		}
 	}
-
 	for _, table := range store.tables {
 		if err = table.PrepareRollback(); err != nil {
 			break
 		}
 	}
+	if store.dropEntry != nil {
+		if err := store.dropEntry.PrepareRollback(); err != nil {
+			return err
+		}
+	}
+
 	return err
 }

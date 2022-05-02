@@ -33,7 +33,7 @@ func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
 func (entry *compactBlockEntry) ApplyCommit() (err error)   { return }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	// TODO:
-	// 1. make command
+	cmd = new(compactBlockCmd)
 	return
 }
 

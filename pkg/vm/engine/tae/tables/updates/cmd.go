@@ -16,12 +16,16 @@ func init() {
 	txnif.RegisterCmdFactory(txnbase.CmdUpdate, func(int16) txnif.TxnCmd {
 		return NewEmptyCmd(txnbase.CmdUpdate)
 	})
+	txnif.RegisterCmdFactory(txnbase.CmdAppend, func(int16) txnif.TxnCmd {
+		return NewEmptyCmd(txnbase.CmdAppend)
+	})
 }
 
 type UpdateCmd struct {
 	*txnbase.BaseCustomizedCmd
 	update  *ColumnNode
 	delete  *DeleteNode
+	append  *AppendNode
 	cmdType int16
 }
 
@@ -32,10 +36,19 @@ func NewEmptyCmd(cmdType int16) *UpdateCmd {
 		cmd.update = NewColumnNode(nil, nil, nil)
 	} else if cmdType == txnbase.CmdDelete {
 		cmd.delete = NewDeleteNode(nil)
-	} else {
-		panic("logic error")
+	} else if cmdType == txnbase.CmdAppend {
+		cmd.append = NewAppendNode(nil, 0, nil)
 	}
 	return cmd
+}
+
+func NewAppendCmd(id uint32, app *AppendNode) *UpdateCmd {
+	impl := &UpdateCmd{
+		append:  app,
+		cmdType: txnbase.CmdAppend,
+	}
+	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
+	return impl
 }
 
 func NewDeleteCmd(id uint32, del *DeleteNode) *UpdateCmd {
@@ -75,7 +88,7 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (err error) {
 	} else if c.GetType() == txnbase.CmdDelete {
 		err = c.delete.WriteTo(w)
 	} else {
-		panic("logic error")
+		// TODO
 	}
 	return
 }
@@ -89,7 +102,7 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (err error) {
 	} else if c.cmdType == txnbase.CmdDelete {
 		err = c.delete.ReadFrom(r)
 	} else {
-		panic("logic error")
+		// TODO
 	}
 	return
 }
