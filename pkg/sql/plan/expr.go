@@ -791,6 +791,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		}
 	case constant.String:
+		switch typ.Oid {
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		}
 		if !num.Negative() {
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:
