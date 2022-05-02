@@ -10,7 +10,8 @@ import (
 
 type commandManager struct {
 	cmd    *txnbase.ComposedCmd
-	csn    int
+	lsn    uint64
+	csn    uint32
 	driver wal.Driver
 }
 
@@ -21,7 +22,7 @@ func newCommandManager(driver wal.Driver) *commandManager {
 	}
 }
 
-func (mgr *commandManager) GetCSN() int {
+func (mgr *commandManager) GetCSN() uint32 {
 	return mgr.csn
 }
 
@@ -30,12 +31,11 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.csn++
 }
 
+func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {
+	return &wal.Index{LSN: mgr.lsn, CSN: csn}
+}
+
 func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
-	// schema := catalog.MockSchema(13)
-	// bat := mock.MockBatch(schema.Types(), 100)
-	// data, _ := txnbase.CopyToIBatch(bat)
-	// batCmd := txnbase.NewBatchCmd(data, schema.Types())
-	// mgr.cmd.AddCmd(batCmd)
 	if mgr.driver == nil {
 		return
 	}
@@ -47,7 +47,7 @@ func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
 	logEntry.SetType(ETTxnRecord)
 	logEntry.Unmarshal(buf)
 
-	lsn, err := mgr.driver.AppendEntry(wal.GroupC, logEntry)
-	logrus.Debugf("ApplyTxnRecord LSN=%d, Size=%d", lsn, len(buf))
+	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
+	logrus.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return
 }

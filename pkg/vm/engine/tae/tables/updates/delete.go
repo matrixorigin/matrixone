@@ -11,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type NodeType int8
@@ -25,6 +26,7 @@ type DeleteNode struct {
 	*common.DLNode
 	chain    *DeleteChain
 	txn      txnif.AsyncTxn
+	LogIndex *wal.Index
 	mask     *roaring.Bitmap
 	startTs  uint64
 	commitTs uint64
@@ -131,13 +133,14 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 	return
 }
 
-func (node *DeleteNode) ApplyCommit() (err error) {
+func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
 	defer node.Unlock()
 	if node.txn == nil {
 		panic("not expected")
 	}
 	node.txn = nil
+	node.LogIndex = index
 	if node.chain.controller != nil {
 		node.chain.controller.SetMaxVisible(node.commitTs)
 	}

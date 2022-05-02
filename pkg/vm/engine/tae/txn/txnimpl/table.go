@@ -140,7 +140,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 		}
 		forceFlush := i < len(tbl.inodes)-1
 		csn := cmdMgr.GetCSN()
-		cmd, entry, err := node.MakeCommand(uint32(csn), forceFlush)
+		cmd, entry, err := node.MakeCommand(csn, forceFlush)
 		if err != nil {
 			panic(err)
 		}
@@ -156,7 +156,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
-		cmd, err := txnEntry.MakeCommand(uint32(csn))
+		cmd, err := txnEntry.MakeCommand(csn)
 		if err != nil {
 			return err
 		}
@@ -861,10 +861,12 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 }
 
 func (tbl *txnTable) ApplyCommit() (err error) {
+	csn := tbl.csnStart
 	for _, node := range tbl.txnEntries {
-		if err = node.ApplyCommit(); err != nil {
+		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
 			break
 		}
+		csn++
 	}
 	return
 }

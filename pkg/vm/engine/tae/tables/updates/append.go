@@ -5,12 +5,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type AppendNode struct {
 	sync.RWMutex
 	commitTs   uint64
 	txn        txnif.AsyncTxn
+	LogIndex   *wal.Index
 	maxRow     uint32
 	controller *MVCCHandle
 }
@@ -40,13 +42,14 @@ func (n *AppendNode) PrepareCommit() error {
 	return nil
 }
 
-func (n *AppendNode) ApplyCommit() error {
+func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 	n.Lock()
 	defer n.Unlock()
 	if n.txn == nil {
 		panic("not expected")
 	}
 	n.txn = nil
+	n.LogIndex = index
 	if n.controller != nil {
 		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", n.commitTs, n.maxRow)
 		n.controller.SetMaxVisible(n.commitTs)

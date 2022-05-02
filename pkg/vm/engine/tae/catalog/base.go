@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 func CompareUint64(left, right uint64) int {
@@ -29,9 +30,9 @@ func (w *waitable) Wait() error {
 }
 
 type CommitInfo struct {
-	// Ops    []OpT
-	CurrOp OpT
-	Txn    txnif.TxnReader
+	CurrOp   OpT
+	Txn      txnif.TxnReader
+	LogIndex *wal.Index
 }
 
 type BaseEntry struct {
@@ -103,7 +104,7 @@ func (be *BaseEntry) ApplyRollback() error {
 	return nil
 }
 
-func (be *BaseEntry) ApplyCommit() error {
+func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
 	// if be.Txn == nil {
@@ -113,6 +114,7 @@ func (be *BaseEntry) ApplyCommit() error {
 		be.PrevCommit = nil
 	}
 	be.Txn = nil
+	be.LogIndex = index
 	return nil
 }
 

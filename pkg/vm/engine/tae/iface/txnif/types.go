@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TxnClient interface {
@@ -198,7 +199,7 @@ type TxnEntry interface {
 	RUnlock()
 	PrepareCommit() error
 	PrepareRollback() error
-	ApplyCommit() error
+	ApplyCommit(index *wal.Index) error
 	ApplyRollback() error
 	MakeCommand(uint32) (TxnCmd, error)
 }

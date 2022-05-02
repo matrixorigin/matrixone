@@ -1,6 +1,10 @@
 package wal
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+)
 
 const (
 	GroupC uint32 = iota + 10
@@ -19,4 +23,11 @@ type Driver interface {
 	AppendEntry(uint32, LogEntry) (uint64, error)
 	LoadEntry(groupId uint32, lsn uint64) (LogEntry, error)
 	Close() error
+}
+
+func (index *Index) String() string {
+	if index == nil {
+		return "<nil index>"
+	}
+	return fmt.Sprintf("<Index[%d:%d]>", index.LSN, index.CSN)
 }

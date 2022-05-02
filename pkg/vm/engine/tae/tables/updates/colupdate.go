@@ -14,6 +14,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type ColumnNode struct {
@@ -25,6 +26,7 @@ type ColumnNode struct {
 	startTs  uint64
 	commitTs uint64
 	txn      txnif.AsyncTxn
+	LogIndex *wal.Index
 	id       *common.ID
 }
 
@@ -276,13 +278,14 @@ func (n *ColumnNode) PrepareCommit() (err error) {
 	return
 }
 
-func (n *ColumnNode) ApplyCommit() (err error) {
+func (n *ColumnNode) ApplyCommit(index *wal.Index) (err error) {
 	n.Lock()
 	defer n.Unlock()
 	if n.txn == nil {
 		panic("not expected")
 	}
 	n.txn = nil
+	n.LogIndex = index
 	n.chain.controller.SetMaxVisible(n.commitTs)
 	n.chain.controller.IncChangeNodeCnt()
 	return

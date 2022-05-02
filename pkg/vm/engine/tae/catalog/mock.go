@@ -54,7 +54,7 @@ func (store *mockTxnStore) PrepareCommit() error {
 
 func (store *mockTxnStore) ApplyCommit() error {
 	for e, _ := range store.entries {
-		err := e.ApplyCommit()
+		err := e.ApplyCommit(nil)
 		if err != nil {
 			return err
 		}

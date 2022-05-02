@@ -53,7 +53,7 @@ func TestColumnChain1(t *testing.T) {
 		if (i >= cnt1 && i < cnt1+cnt2) || (i >= cnt1+cnt2+cnt3) {
 			txn.CommitTS = common.NextGlobalSeqNum()
 			n.PrepareCommit()
-			n.ApplyCommit()
+			n.ApplyCommit(nil)
 		}
 	}
 	t.Log(chain.StringLocked())
@@ -99,7 +99,7 @@ func TestColumnChain2(t *testing.T) {
 
 	txn1.CommitTS = common.NextGlobalSeqNum()
 	n1.PrepareCommit()
-	n1.ApplyCommit()
+	n1.ApplyCommit(nil)
 
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
 	assert.Equal(t, txnbase.ErrDuplicated, err)
@@ -200,7 +200,7 @@ func TestColumnChain3(t *testing.T) {
 		}
 		commitTxn(txn)
 		node.PrepareCommit()
-		node.ApplyCommit()
+		node.ApplyCommit(nil)
 	}
 	t.Log(time.Since(start))
 	start = time.Now()
@@ -257,7 +257,7 @@ func TestColumnChain4(t *testing.T) {
 		chain.TryUpdateNodeLocked(uint32(10), int32(10), node)
 		commitTxn(txn)
 		node.PrepareCommit()
-		node.ApplyCommit()
+		node.ApplyCommit(nil)
 		ts1 = txn.GetCommitTS()
 	}
 	{
@@ -266,7 +266,7 @@ func TestColumnChain4(t *testing.T) {
 		chain.TryUpdateNodeLocked(uint32(20), int32(20), node)
 		commitTxn(txn)
 		node.PrepareCommit()
-		node.ApplyCommit()
+		node.ApplyCommit(nil)
 		ts2 = txn.GetCommitTS()
 	}
 	{
@@ -280,7 +280,7 @@ func TestColumnChain4(t *testing.T) {
 		chain.TryUpdateNodeLocked(uint32(40), int32(40), node)
 		commitTxn(txn)
 		node.PrepareCommit()
-		node.ApplyCommit()
+		node.ApplyCommit(nil)
 		ts3 = txn.GetCommitTS()
 	}
 	mask, vals := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
@@ -374,7 +374,7 @@ func TestDeleteChain1(t *testing.T) {
 
 	commitTxn(txn1)
 	assert.Nil(t, n1.PrepareCommit())
-	assert.Nil(t, n1.ApplyCommit())
+	assert.Nil(t, n1.ApplyCommit(nil))
 	t.Log(chain.StringLocked())
 
 	collected = chain.CollectDeletesLocked(0)
@@ -429,7 +429,7 @@ func TestDeleteChain2(t *testing.T) {
 	n1.RangeDeleteLocked(1, 4)
 	commitTxn(txn1)
 	n1.PrepareCommit()
-	n1.ApplyCommit()
+	n1.ApplyCommit(nil)
 	t.Log(chain.StringLocked())
 
 	txn2 := mockTxn()
@@ -444,7 +444,7 @@ func TestDeleteChain2(t *testing.T) {
 	n3.RangeDeleteLocked(9, 12)
 	commitTxn(txn3)
 	n3.PrepareCommit()
-	n3.ApplyCommit()
+	n3.ApplyCommit(nil)
 	t.Log(chain.StringLocked())
 
 	m := chain.CollectDeletesLocked(common.NextGlobalSeqNum())

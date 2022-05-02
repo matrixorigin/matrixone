@@ -35,6 +35,7 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    uint32
+	ddlCSN      uint32
 }
 
 var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
@@ -396,7 +397,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 		table.WaitSynced()
 	}
 	if store.createEntry != nil {
-		if err = store.createEntry.ApplyCommit(); err != nil {
+		if err = store.createEntry.ApplyCommit(store.cmdMgr.MakeLogIndex(store.ddlCSN)); err != nil {
 			return
 		}
 	}
@@ -406,7 +407,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 		}
 	}
 	if store.dropEntry != nil {
-		if err = store.dropEntry.ApplyCommit(); err != nil {
+		if err = store.dropEntry.ApplyCommit(store.cmdMgr.MakeLogIndex(store.ddlCSN)); err != nil {
 			return
 		}
 	}
@@ -454,27 +455,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 		}
 	}
 
-	if store.createEntry != nil {
-		csn := store.cmdMgr.GetCSN()
-		cmd, err := store.createEntry.MakeCommand(uint32(csn))
-		if err != nil {
-			panic(err)
-		}
-		store.cmdMgr.AddCmd(cmd)
-	}
-	for _, table := range store.tables {
-		if err = table.CollectCmd(store.cmdMgr); err != nil {
-			panic(err)
-		}
-	}
-	if store.dropEntry != nil {
-		csn := store.cmdMgr.GetCSN()
-		cmd, err := store.dropEntry.MakeCommand(uint32(csn))
-		if err != nil {
-			panic(err)
-		}
-		store.cmdMgr.AddCmd(cmd)
-	}
+	store.CollectCmd()
 
 	logEntry, err := store.cmdMgr.ApplyTxnRecord()
 	if err != nil {
@@ -485,6 +466,33 @@ func (store *txnStore) PrepareCommit() (err error) {
 	}
 	logrus.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 
+	return
+}
+
+func (store *txnStore) CollectCmd() (err error) {
+	if store.createEntry != nil {
+		csn := store.cmdMgr.GetCSN()
+		cmd, err := store.createEntry.MakeCommand(csn)
+		if err != nil {
+			panic(err)
+		}
+		store.cmdMgr.AddCmd(cmd)
+		store.ddlCSN = csn
+	}
+	for _, table := range store.tables {
+		if err = table.CollectCmd(store.cmdMgr); err != nil {
+			panic(err)
+		}
+	}
+	if store.dropEntry != nil {
+		csn := store.cmdMgr.GetCSN()
+		cmd, err := store.dropEntry.MakeCommand(csn)
+		if err != nil {
+			panic(err)
+		}
+		store.cmdMgr.AddCmd(cmd)
+		store.ddlCSN = csn
+	}
 	return
 }
 
