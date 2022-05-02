@@ -77,6 +77,7 @@ func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 		flushQueue:  make(chan entry.Entry, DefaultMaxBatchSize*100),
 		syncQueue:   make(chan []*batch, DefaultMaxSyncSize*100),
 		commitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
+		mu:          &sync.RWMutex{},
 	}
 	if cfg == nil {
 		cfg = &StoreCfg{}
@@ -444,6 +445,7 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 		bs.flushWg.Done()
 		return 0, common.ClosedErr
 	}
+	bs.mu.Lock()
 	lsn := bs.AllocateLsn(groupId)
 	v1 := e.GetInfo()
 	var info *entry.Info
@@ -459,6 +461,7 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 	}
 	e.SetInfo(info)
 	bs.flushQueue <- e
+	bs.mu.Unlock()
 	// globalTime = time.Now()
 	atomic.AddInt32(&bs.enqueueEntries, 1)
 	return lsn, nil

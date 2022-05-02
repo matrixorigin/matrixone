@@ -21,6 +21,7 @@ func TestCheckpoint1(t *testing.T) {
 		RotateChecker: store.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
 	driver := NewDriver(dir, "store", cfg)
+	defer driver.Close()
 
 	var bs bytes.Buffer
 	for i := 0; i < 300; i++ {
@@ -105,6 +106,7 @@ func TestCheckpoint2(t *testing.T) {
 		RotateChecker: store.NewMaxSizeRotateChecker(int(common.K) * 2),
 	}
 	driver := NewDriver(dir, "store", cfg)
+	defer driver.Close()
 
 	var bs bytes.Buffer
 	for i := 0; i < 300; i++ {
@@ -149,7 +151,6 @@ func TestCheckpoint2(t *testing.T) {
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
 
-
 	flush := entry.GetBase()
 	flush.SetType(entry.ETCustomizedStart)
 	buf3 := make([]byte, common.K*3/2)
@@ -159,7 +160,7 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), l)
 	assert.Nil(t, err)
-	
+
 	index := []*Index{{
 		LSN:  lsn,
 		CSN:  0,
