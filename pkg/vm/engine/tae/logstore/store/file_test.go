@@ -112,7 +112,7 @@ func TestAppender(t *testing.T) {
 		} else {
 			commitInfo := &entry.Info{
 				Group:    entry.GTCustomizedStart,
-				CommitId: common.NextGlobalSeqNum(),
+				GroupLSN: common.NextGlobalSeqNum(),
 			}
 			err = appender.Prepare(len(toWrite), commitInfo)
 			assert.Nil(t, err)
@@ -151,12 +151,12 @@ func TestVInfo(t *testing.T) {
 	vinfo := *newVInfo(nil)
 	end := 10
 	for i := 0; i <= end; i++ {
-		commitInfo := &entry.Info{Group: entry.GTCustomizedStart, CommitId: uint64(i)}
+		commitInfo := &entry.Info{Group: entry.GTCustomizedStart, GroupLSN: uint64(i)}
 		err := vinfo.LogCommit(commitInfo)
 		assert.Nil(t, err)
 	}
 	assert.Equal(t, uint64(end), vinfo.groups[entry.GTCustomizedStart].(*commitGroup).Commits.End)
-	commitInfo := &entry.Info{Group: entry.GTCustomizedStart, CommitId: uint64(end + 2)}
+	commitInfo := &entry.Info{Group: entry.GTCustomizedStart, GroupLSN: uint64(end + 2)}
 	err := vinfo.LogCommit(commitInfo)
 	assert.NotNil(t, err)
 	checkpointInfo := &entry.Info{
@@ -214,7 +214,7 @@ func TestReadVInfo(t *testing.T) {
 		} else {
 			commitInfo := &entry.Info{
 				Group:    entry.GTCustomizedStart,
-				CommitId: common.NextGlobalSeqNum(),
+				GroupLSN: common.NextGlobalSeqNum(),
 			}
 			appender.Prepare(len(toWrite), commitInfo)
 		}

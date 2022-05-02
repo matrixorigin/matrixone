@@ -11,7 +11,7 @@ import (
 
 type syncBase struct {
 	*sync.RWMutex
-	groupLSN               map[uint32]uint64
+	groupLSN               map[uint32]uint64 // for alloc
 	lsnmu                  sync.Mutex
 	checkpointing, syncing map[uint32]uint64
 	checkpointed, synced   *syncMap
@@ -47,7 +47,7 @@ func newSyncBase() *syncBase {
 func (base *syncBase) OnReplay(r *replayer) {
 	base.addrs = r.addrs
 	base.groupLSN = r.groupLSN
-	base.synced.ids = r.synced
+	base.synced.ids = r.groupLSN
 	for groupId, ckps := range r.checkpointrange {
 		base.checkpointed.ids[groupId] = ckps.Intervals[0].End
 	}
@@ -108,7 +108,7 @@ func (base *syncBase) OnEntryReceived(e entry.Entry) error {
 			}
 			// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
 		default:
-			base.syncing[v.Group] = v.CommitId
+			base.syncing[v.Group] = v.GroupLSN
 		}
 		base.addrmu.Lock()
 		defer base.addrmu.Unlock()

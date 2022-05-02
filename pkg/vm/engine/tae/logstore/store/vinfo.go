@@ -1,16 +1,11 @@
 package store
 
 import (
-	// "encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
 
-	// "errors"
-	// "fmt"
-
-	// "github.com/jiangxinmeng1/logstore/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring/roaring64"

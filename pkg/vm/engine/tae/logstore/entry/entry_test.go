@@ -31,7 +31,6 @@ func TestBase(t *testing.T) {
 func TestInfoMarshal1(t *testing.T) {
 	info := &Info{
 		Group:    GTCKp,
-		CommitId: 20,
 		TxnId:    35,
 		Checkpoints: []CkpRanges{
 			{
@@ -42,8 +41,7 @@ func TestInfoMarshal1(t *testing.T) {
 				Group: GTUncommit,
 				Ranges: &common.ClosedIntervals{
 					Intervals: []*common.ClosedInterval{{Start: 3, End: 5}, {Start: 6, End: 7}}},
-				Command: []CommandInfo{{
-					Tid:        3,
+				Command: map[uint64]CommandInfo{3:{
 					CommandIds: []uint32{2, 4, 1},
 					Size:       5,
 				}},
@@ -71,7 +69,6 @@ func TestInfoMarshal2(t *testing.T) {
 func TestInfoMarshal3(t *testing.T) {
 	info := &Info{
 		Group:    GTCKp,
-		CommitId: 20,
 		TxnId:    35,
 		Checkpoints: []CkpRanges{
 			{
@@ -97,7 +94,6 @@ func TestInfoMarshal3(t *testing.T) {
 
 func checkInfoEqual(t *testing.T, info, info2 *Info) {
 	assert.Equal(t, info.Group, info2.Group)
-	assert.Equal(t, info.CommitId, info2.CommitId)
 	assert.Equal(t, info.TxnId, info2.TxnId)
 	assert.Equal(t, len(info.Checkpoints), len(info2.Checkpoints))
 	for i, ckps1 := range info.Checkpoints {
@@ -114,9 +110,8 @@ func checkInfoEqual(t *testing.T, info, info2 *Info) {
 			}
 		}
 		assert.Equal(t, len(ckps1.Command), len(ckps2.Command))
-		for j, cmdInfo := range ckps1.Command {
-			cmdInfo2 := ckps2.Command[j]
-			assert.Equal(t, cmdInfo.Tid, cmdInfo2.Tid)
+		for lsn, cmdInfo := range ckps1.Command {
+			cmdInfo2 := ckps2.Command[lsn]
 			assert.Equal(t, len(cmdInfo.CommandIds), len(cmdInfo2.CommandIds))
 			for k, cmdid := range cmdInfo.CommandIds {
 				assert.Equal(t, cmdid, cmdInfo2.CommandIds[k])

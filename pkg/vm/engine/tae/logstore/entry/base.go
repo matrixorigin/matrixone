@@ -31,24 +31,9 @@ type Base struct {
 	err     error
 }
 
-// type CheckpointInfo struct {
-// 	CheckpointRanges map[uint32]*common.ClosedInterval
-// 	Addr interface{}
-// 	// Group      string
-// 	// Checkpoint *common.ClosedInterval
-// }
-
-// func (info *CheckpointInfo) ToString() string {
-// 	s := "checkpoint entry "
-// 	for group, checkpoint := range info.CheckpointRanges {
-// 		s = fmt.Sprintf("%s <%d>-%s", s, group, checkpoint)
-// 	}
-// 	return fmt.Sprintf("%s\n", s)
-// }
-
 type Info struct {
-	Group       uint32
-	CommitId    uint64 //0 for RollBack
+	Group uint32
+	// CommitId    uint64 //0 for RollBack
 	TxnId       uint64 //0 for entrys not in txn
 	Checkpoints []CkpRanges
 	Uncommits   []Tid
@@ -63,8 +48,6 @@ func (info *Info) Marshal() []byte {
 	pos := 0
 	binary.BigEndian.PutUint32(buf[pos:pos+4], info.Group)
 	pos += 4
-	binary.BigEndian.PutUint64(buf[pos:pos+8], info.CommitId)
-	pos += 8
 	binary.BigEndian.PutUint64(buf[pos:pos+8], info.TxnId)
 	pos += 8
 
@@ -101,16 +84,16 @@ func (info *Info) Marshal() []byte {
 		length = uint64(len(ckps.Command))
 		binary.BigEndian.PutUint64(buf[pos:pos+8], length)
 		pos += 8
-		for _, cmd := range ckps.Command {
+		for lsn, cmd := range ckps.Command {
 			if len(buf) < pos+16 {
 				buf = append(buf, make([]byte, 128)...)
 			}
-			binary.BigEndian.PutUint64(buf[pos:pos+8], cmd.Tid)
+			binary.BigEndian.PutUint64(buf[pos:pos+8], lsn)
 			pos += 8
 			length = uint64(len(cmd.CommandIds))
 			binary.BigEndian.PutUint64(buf[pos:pos+8], length)
 			pos += 8
-			for _,commandId:=range cmd.CommandIds{
+			for _, commandId := range cmd.CommandIds {
 				if len(buf) < pos+4 {
 					buf = append(buf, make([]byte, 128)...)
 				}
@@ -155,8 +138,6 @@ func Unmarshal(buf []byte) *Info {
 	pos := 0
 	info.Group = binary.BigEndian.Uint32(buf[pos : pos+4])
 	pos += 4
-	info.CommitId = binary.BigEndian.Uint64(buf[pos : pos+8])
-	pos += 8
 	info.TxnId = binary.BigEndian.Uint64(buf[pos : pos+8])
 	pos += 8
 
@@ -180,23 +161,23 @@ func Unmarshal(buf []byte) *Info {
 			pos += 8
 			ckps.Ranges.Intervals = append(ckps.Ranges.Intervals, interval)
 		}
-		cmdInfoLength:=binary.BigEndian.Uint64(buf[pos : pos+8])
+		cmdInfoLength := binary.BigEndian.Uint64(buf[pos : pos+8])
 		pos += 8
-		ckps.Command=make([]CommandInfo, cmdInfoLength)
-		for j:=0;j<int(cmdInfoLength);j++{
-			cmd:=CommandInfo{}
-			cmd.Tid=binary.BigEndian.Uint64(buf[pos : pos+8])
+		ckps.Command = make(map[uint64]CommandInfo)
+		for j := 0; j < int(cmdInfoLength); j++ {
+			cmd := CommandInfo{}
+			lsn := binary.BigEndian.Uint64(buf[pos : pos+8])
 			pos += 8
-			cmdIdsLength:=binary.BigEndian.Uint64(buf[pos : pos+8])
+			cmdIdsLength := binary.BigEndian.Uint64(buf[pos : pos+8])
 			pos += 8
-			cmd.CommandIds=make([]uint32, cmdIdsLength)
-			for k:=0;k<int(cmdIdsLength);k++{
-				cmd.CommandIds[k]=binary.BigEndian.Uint32(buf[pos : pos+4])
+			cmd.CommandIds = make([]uint32, cmdIdsLength)
+			for k := 0; k < int(cmdIdsLength); k++ {
+				cmd.CommandIds[k] = binary.BigEndian.Uint32(buf[pos : pos+4])
 				pos += 4
 			}
-			cmd.Size=binary.BigEndian.Uint32(buf[pos : pos+4])
+			cmd.Size = binary.BigEndian.Uint32(buf[pos : pos+4])
 			pos += 4
-			ckps.Command[j]=cmd
+			ckps.Command[lsn] = cmd
 		}
 		info.Checkpoints = append(info.Checkpoints, ckps)
 	}
@@ -222,7 +203,7 @@ func (info *Info) ToString() string {
 	case GTCKp:
 		s := "checkpoint entry"
 		for _, ranges := range info.Checkpoints {
-			s = fmt.Sprintf("%s G%d-%v", s, ranges.Group, ranges.Ranges)
+			s = fmt.Sprintf("%s%s", s, ranges)
 		}
 		s = fmt.Sprintf("%s\n", s)
 		return s
@@ -234,7 +215,7 @@ func (info *Info) ToString() string {
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%d,C%d}", info.Group, info.GroupLSN, info.TxnId, info.CommitId)
+		s := fmt.Sprintf("customized entry G%d<%d>{T%d}", info.Group, info.GroupLSN, info.TxnId)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	}
@@ -248,11 +229,18 @@ type Tid struct {
 type CkpRanges struct {
 	Group   uint32
 	Ranges  *common.ClosedIntervals
-	Command []CommandInfo //todo marshal
+	Command map[uint64]CommandInfo
+}
+
+func (r CkpRanges) String() string {
+	s := fmt.Sprintf("G%d-%v", r.Group, r.Ranges)
+	for lsn, cmd := range r.Command {
+		s = fmt.Sprintf("%s[%d-%v/%d]", s, lsn, cmd.CommandIds, cmd.Size)
+	}
+	return s
 }
 
 type CommandInfo struct {
-	Tid        uint64
 	CommandIds []uint32
 	Size       uint32
 }

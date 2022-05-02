@@ -32,7 +32,6 @@ type replayer struct {
 	//syncbase
 	addrs    map[uint32]map[int]common.ClosedInterval
 	groupLSN map[uint32]uint64
-	synced   map[uint32]uint64
 
 	//vinfo
 	// Commits     map[uint32]*common.ClosedInterval
@@ -69,13 +68,7 @@ func (r *replayer) updateGroupLSN(groupId uint32, lsn uint64) {
 		r.groupLSN[groupId] = lsn
 	}
 }
-func (r *replayer) updatesynced(groupId uint32, commitId uint64) {
-	curr := r.synced[groupId]
-	if commitId > curr {
-		r.synced[groupId] = commitId
-	}
 
-}
 func newReplayer(h ApplyHandle) *replayer {
 	return &replayer{
 		uncommit:        make(map[uint32]map[uint64][]*replayEntry),
@@ -86,7 +79,6 @@ func newReplayer(h ApplyHandle) *replayer {
 		applyEntry:      h,
 		addrs:           make(map[uint32]map[int]common.ClosedInterval),
 		groupLSN:        make(map[uint32]uint64),
-		synced:          make(map[uint32]uint64),
 		vinfoAddrs:      make(map[uint32]map[uint64]int),
 	}
 }
@@ -170,7 +162,6 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
-		r.updatesynced(info.Group, info.CommitId)
 		info.Info = &VFileAddress{
 			Group:   info.Group,
 			LSN:     info.GroupLSN,
@@ -203,7 +194,6 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
-		r.updatesynced(info.Group, info.CommitId)
 		for _, tinfo := range info.Uncommits {
 			tidMap, ok := r.uncommit[tinfo.Group]
 			if !ok {
@@ -229,7 +219,6 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
-		r.updatesynced(info.Group, info.CommitId)
 		info.Info = &VFileAddress{
 			Group:   info.Group,
 			LSN:     info.GroupLSN,
@@ -239,7 +228,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		replayEty := &replayEntry{
 			entryType: e.GetType(),
 			group:     info.Group,
-			commitId:  info.CommitId,
+			commitId:  info.GroupLSN,
 			tid:       info.TxnId,
 			payload:   make([]byte, e.GetPayloadSize()),
 		}
@@ -253,7 +242,6 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
-		r.updatesynced(info.Group, info.CommitId)
 		info.Info = &VFileAddress{
 			Group:   info.Group,
 			LSN:     info.GroupLSN,
@@ -263,7 +251,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		replayEty := &replayEntry{
 			entryType: e.GetType(),
 			group:     info.Group,
-			commitId:  info.CommitId,
+			commitId:  info.GroupLSN,
 			payload:   make([]byte, e.GetPayloadSize()),
 		}
 		copy(replayEty.payload, e.GetPayload())

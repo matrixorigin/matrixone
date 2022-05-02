@@ -12,16 +12,18 @@ const (
 )
 
 type Index struct {
-	LSN uint64
-	CSN uint32
+	LSN  uint64
+	CSN  uint32
+	Size uint32
 }
 
 type LogEntry entry.Entry
 
 type Driver interface {
-	Checkpoint(indexes []*Index) error
+	Checkpoint(indexes []*Index) (LogEntry, error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 	LoadEntry(groupId uint32, lsn uint64) (LogEntry, error)
+	Compact() error
 	Close() error
 }
 
