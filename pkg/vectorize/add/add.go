@@ -14,29 +14,97 @@
 
 package add
 
+/*
+#include <stdint.h>
+
+// The test checks
+// 	 	if z[i] and tmpx have different sign, and z[i] and tmpy have different sign
+//		therefore tmpx and tmpy has same sign but the result has different sign.
+// 		therefore it is an overflow.
+// Then we set the sign bit of flag.
+//
+// Do not use if (flag < 0) return in the loop, which gcc cannot vectorize.
+// Do not use __builtin_add_overflow, which gcc cannot vectorize.
+
+#define ADDINT_T(ZT)                     			\
+	ZT flag = 0; 									\
+	for (int32_t i = 0; i < len; i++) {             \
+		ZT tmpx = x[i]; 							\
+		ZT tmpy = y[i]; 							\
+		z[i] = tmpx + tmpy; 						\
+		flag |= (z[i] ^ tmpx) & (z[i] ^ tmpy); 		\
+	}                                              	\
+	return flag < 0 ? -1 : len
+
+static int32_t cInt8Add(int8_t *x, int8_t *y, int8_t *z, int32_t len) {
+	ADDINT_T(int8_t);
+}
+
+static int32_t cInt16Add(int16_t *x, int16_t *y, int16_t *z, int32_t len) {
+	ADDINT_T(int16_t);
+}
+
+static int32_t cInt32Add(int32_t *x, int32_t *y, int32_t *z, int32_t len) {
+	ADDINT_T(int32_t);
+}
+
+static int32_t cInt64Add(int64_t *x, int64_t *y, int64_t *z, int32_t len) {
+	ADDINT_T(int64_t);
+}
+
+#define ADDUINT_T(ZT)                     			\
+	ZT flag = 0; 									\
+	for (int32_t i = 0; i < len; i++) {             \
+		ZT tmpx = x[i]; 							\
+		ZT tmpy = y[i]; 							\
+		z[i] = tmpx + tmpy; 						\
+		if (z[i] < tmpx) { 							\
+			flag = 1; 								\
+		}                                           \
+	}                                              	\
+	return flag == 0 ? len : -1
+
+static int32_t cUint8Add(uint8_t *x, uint8_t *y, uint8_t *z, int32_t len) {
+	ADDUINT_T(uint8_t);
+}
+static int32_t cUint16Add(uint16_t *x, uint16_t *y, uint16_t *z, int32_t len) {
+	ADDUINT_T(uint16_t);
+}
+static int32_t cUint32Add(uint32_t *x, uint32_t *y, uint32_t *z, int32_t len) {
+	ADDUINT_T(uint32_t);
+}
+static int32_t cUint64Add(uint64_t *x, uint64_t *y, uint64_t *z, int32_t len) {
+	ADDUINT_T(uint64_t);
+}
+*/
+import "C"
+
 import (
 	"math"
+	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
+// Exported functions.
 var (
-	Int8Add              = numericAdd[int8]
+	Int8Add              = cInt8Add
 	Int8AddScalar        = numericAddScalar[int8]
-	Int16Add             = numericAdd[int16]
+	Int16Add             = cInt16Add
 	Int16AddScalar       = numericAddScalar[int16]
-	Int32Add             = numericAdd[int32]
+	Int32Add             = cInt32Add
 	Int32AddScalar       = numericAddScalar[int32]
-	Int64Add             = numericAdd[int64]
+	Int64Add             = cInt64Add
 	Int64AddScalar       = numericAddScalar[int64]
-	Uint8Add             = numericAdd[uint8]
+	Uint8Add             = cUint8Add
 	Uint8AddScalar       = numericAddScalar[uint8]
-	Uint16Add            = numericAdd[uint16]
+	Uint16Add            = cUint16Add
 	Uint16AddScalar      = numericAddScalar[uint16]
-	Uint32Add            = numericAdd[uint32]
+	Uint32Add            = cUint32Add
 	Uint32AddScalar      = numericAddScalar[uint32]
-	Uint64Add            = numericAdd[uint64]
+	Uint64Add            = cUint64Add
 	Uint64AddScalar      = numericAddScalar[uint64]
 	Float32Add           = numericAdd[float32]
 	Float32AddScalar     = numericAddScalar[float32]
@@ -125,6 +193,70 @@ var (
 	Decimal128AddScalar     = decimal128AddScalar
 	Decimal128AddScalarSels = decimal128AddScalarSels
 )
+
+func cInt8Add(x, y, z []int8) []int8 {
+	ret := C.cInt8Add((*C.int8_t)(unsafe.Pointer(&x[0])), (*C.int8_t)(unsafe.Pointer(&y[0])), (*C.int8_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+	}
+	return z
+}
+
+func cInt16Add(x, y, z []int16) []int16 {
+	ret := C.cInt16Add((*C.int16_t)(unsafe.Pointer(&x[0])), (*C.int16_t)(unsafe.Pointer(&y[0])), (*C.int16_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+	}
+	return z
+}
+
+func cInt32Add(x, y, z []int32) []int32 {
+	ret := C.cInt32Add((*C.int32_t)(unsafe.Pointer(&x[0])), (*C.int32_t)(unsafe.Pointer(&y[0])), (*C.int32_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+	}
+	return z
+}
+
+func cInt64Add(x, y, z []int64) []int64 {
+	ret := C.cInt64Add((*C.int64_t)(unsafe.Pointer(&x[0])), (*C.int64_t)(unsafe.Pointer(&y[0])), (*C.int64_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "int add overflow"))
+	}
+	return z
+}
+
+func cUint8Add(x, y, z []uint8) []uint8 {
+	ret := C.cUint8Add((*C.uint8_t)(unsafe.Pointer(&x[0])), (*C.uint8_t)(unsafe.Pointer(&y[0])), (*C.uint8_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow"))
+	}
+	return z
+}
+
+func cUint16Add(x, y, z []uint16) []uint16 {
+	ret := C.cUint16Add((*C.uint16_t)(unsafe.Pointer(&x[0])), (*C.uint16_t)(unsafe.Pointer(&y[0])), (*C.uint16_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow"))
+	}
+	return z
+}
+
+func cUint32Add(x, y, z []uint32) []uint32 {
+	ret := C.cUint32Add((*C.uint32_t)(unsafe.Pointer(&x[0])), (*C.uint32_t)(unsafe.Pointer(&y[0])), (*C.uint32_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow"))
+	}
+	return z
+}
+
+func cUint64Add(x, y, z []uint64) []uint64 {
+	ret := C.cUint64Add((*C.uint64_t)(unsafe.Pointer(&x[0])), (*C.uint64_t)(unsafe.Pointer(&y[0])), (*C.uint64_t)(unsafe.Pointer(&z[0])), C.int32_t(len(x)))
+	if ret < 0 {
+		panic(moerr.NewError(moerr.OUT_OF_RANGE, "uint add overflow"))
+	}
+	return z
+}
 
 func numericAdd[T constraints.Integer | constraints.Float](xs, ys, rs []T) []T {
 	for i, x := range xs {

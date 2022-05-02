@@ -93,7 +93,7 @@ func TestAbsInt8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absInt8(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
@@ -109,7 +109,7 @@ func TestAbsInt16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int16, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absInt16(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
@@ -125,7 +125,7 @@ func TestAbsInt32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int32, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absInt32(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
@@ -141,7 +141,7 @@ func TestAbsInt64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int64, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absInt64(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
@@ -157,7 +157,7 @@ func TestAbsFloat32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float32, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absFloat32(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
@@ -173,9 +173,57 @@ func TestAbsFloat64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run abs function
-	newNums = absSigned(nums, newNums)
+	newNums = absFloat64(nums, newNums)
 
 	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
+	}
+}
+
+func BenchmarkAbsI64(b *testing.B) {
+	nums := make([]int64, 4096)
+	res := make([]int64, 4096)
+	for i := 0; i < 4096; i++ {
+		if i%2 == 0 {
+			nums[i] = int64(i)
+		} else {
+			nums[i] = int64(-i)
+		}
+	}
+
+	for n := 0; n < b.N; n++ {
+		absInt64(nums, res)
+	}
+}
+
+func BenchmarkAbsI8(b *testing.B) {
+	nums := make([]int8, 4096)
+	res := make([]int8, 4096)
+	for i := 0; i < 4096; i++ {
+		if i%2 == 0 {
+			nums[i] = 1
+		} else {
+			nums[i] = -1
+		}
+	}
+
+	for n := 0; n < b.N; n++ {
+		absInt8(nums, res)
+	}
+}
+
+func BenchmarkAbsFloat64(b *testing.B) {
+	nums := make([]float64, 4096)
+	res := make([]float64, 4096)
+	for i := 0; i < 4096; i++ {
+		if i%2 == 0 {
+			nums[i] = 1
+		} else {
+			nums[i] = -1
+		}
+	}
+
+	for n := 0; n < b.N; n++ {
+		absFloat64(nums, res)
 	}
 }

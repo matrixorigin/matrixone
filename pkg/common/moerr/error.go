@@ -31,7 +31,7 @@ const (
 	NYI
 
 	// Group 2: numeric
-	DIVIVISION_BY_ZERO = 2000 + iota
+	DIVISION_BY_ZERO = 2000 + iota
 	OUT_OF_RANGE
 )
 
