@@ -32,7 +32,7 @@ func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 }
 
 func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {
-	return &wal.Index{LSN: mgr.lsn, CSN: csn}
+	return &wal.Index{LSN: mgr.lsn, CSN: csn, Size: mgr.csn}
 }
 
 func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {

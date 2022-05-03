@@ -10,24 +10,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type BlockView struct {
-	Ts           uint64
-	Raw          batch.IBatch
-	RawBatch     *gbat.Batch
-	UpdateMasks  map[uint16]*roaring.Bitmap
-	UpdateVals   map[uint16]map[uint32]interface{}
-	DeleteMask   *roaring.Bitmap
-	Applied      batch.IBatch
-	AppliedBatch *gbat.Batch
+	Ts               uint64
+	Raw              batch.IBatch
+	RawBatch         *gbat.Batch
+	UpdateMasks      map[uint16]*roaring.Bitmap
+	UpdateVals       map[uint16]map[uint32]interface{}
+	DeleteMask       *roaring.Bitmap
+	Applied          batch.IBatch
+	AppliedBatch     *gbat.Batch
+	ColLogIndexes    map[uint16][]*wal.Index
+	DeleteLogIndexes []*wal.Index
 }
 
 func NewBlockView(ts uint64) *BlockView {
 	return &BlockView{
-		Ts:          ts,
-		UpdateMasks: make(map[uint16]*roaring.Bitmap),
-		UpdateVals:  make(map[uint16]map[uint32]interface{}),
+		Ts:            ts,
+		UpdateMasks:   make(map[uint16]*roaring.Bitmap),
+		UpdateVals:    make(map[uint16]map[uint32]interface{}),
+		ColLogIndexes: make(map[uint16][]*wal.Index),
+		// DeleteLogIndexes: make([]*wal.Index, 0),
 	}
 }
 

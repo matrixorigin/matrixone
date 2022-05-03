@@ -9,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type DeleteChain struct {
@@ -137,7 +138,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if n.IsMerged() && merged == nil {
 			return false
 		} else if n.IsMerged() && merged != nil {
-			merged.MergeLocked(n)
+			merged.MergeLocked(n, true)
 			return false
 		}
 		n.RLock()
@@ -149,7 +150,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 		if merged == nil {
 			merged = NewMergedNode(n.commitTs)
 		}
-		merged.MergeLocked(n)
+		merged.MergeLocked(n, true)
 		return true
 	}, false)
 	if merged != nil {
@@ -160,23 +161,25 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 }
 
 // [startTs, endTs)
-func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap) {
-	startNode := chain.CollectDeletesLocked(startTs).(*DeleteNode)
-	endNode := chain.CollectDeletesLocked(endTs - 1).(*DeleteNode)
+func (chain *DeleteChain) CollectDeletesInRange(startTs, endTs uint64) (mask *roaring.Bitmap, indexes []*wal.Index) {
+	startNode := chain.CollectDeletesLocked(startTs, true).(*DeleteNode)
+	endNode := chain.CollectDeletesLocked(endTs-1, true).(*DeleteNode)
 	if endNode == nil {
 		return
 	}
 	if startNode == nil {
-		return endNode.GetDeleteMaskLocked()
-		// return endNode.(*DeleteNode).GetDeleteMaskLocked()
+		mask = endNode.GetDeleteMaskLocked()
+		indexes = endNode.logIndexes
+		return
 	}
 	mask = endNode.GetDeleteMaskLocked()
 	mask2 := startNode.GetDeleteMaskLocked()
 	mask.AndNot(mask2)
+	indexes = endNode.logIndexes[len(startNode.logIndexes):]
 	return
 }
 
-func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
+func (chain *DeleteChain) CollectDeletesLocked(ts uint64, collectIndex bool) txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.LoopChainLocked(func(n *DeleteNode) bool {
 		// Merged node is a loop breaker
@@ -187,7 +190,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n)
+			merged.MergeLocked(n, collectIndex)
 			return false
 		}
 		n.RLock()
@@ -197,7 +200,7 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n)
+			merged.MergeLocked(n, collectIndex)
 		} else if txn != nil && n.GetCommitTSLocked() > ts {
 			// Skip txn deletes committed after ts
 			n.RUnlock()
@@ -214,12 +217,12 @@ func (chain *DeleteChain) CollectDeletesLocked(ts uint64) txnif.DeleteNode {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n)
+			merged.MergeLocked(n, collectIndex)
 		} else if n.GetCommitTSLocked() <= ts {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
-			merged.MergeLocked(n)
+			merged.MergeLocked(n, collectIndex)
 		}
 		n.RUnlock()
 		return true

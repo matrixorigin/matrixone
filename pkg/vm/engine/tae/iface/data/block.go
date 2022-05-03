@@ -12,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type CheckpointUnit interface {
@@ -43,6 +44,8 @@ type Block interface {
 	Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v interface{}) (txnif.UpdateNode, error)
 
 	CollectChangesInRange(startTs, endTs uint64) interface{}
+	CollectAppendLogIndexes(startTs, endTs uint64) []*wal.Index
+	// CollectColumnUpdateLogIndexes(colIdx int, startTs, endTs uint64) []*wal.Index
 
 	// GetUpdateChain() txnif.UpdateChain
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error
@@ -53,4 +56,7 @@ type Block interface {
 	GetTotalChanges() int
 	RefreshIndex() error
 	Destroy() error
+
+	SetMaxCheckpointTS(ts uint64)
+	GetMaxCheckpointTS() uint64
 }

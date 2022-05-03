@@ -19,6 +19,7 @@ const (
 
 	CompactBlockTask
 	MergeBlocksTask
+	ConsumeLogIndexesTask
 )
 
 func init() {

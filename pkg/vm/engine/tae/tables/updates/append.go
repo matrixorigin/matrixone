@@ -12,7 +12,7 @@ type AppendNode struct {
 	sync.RWMutex
 	commitTs   uint64
 	txn        txnif.AsyncTxn
-	LogIndex   *wal.Index
+	logIndex   *wal.Index
 	maxRow     uint32
 	controller *MVCCHandle
 }
@@ -49,7 +49,7 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 		panic("not expected")
 	}
 	n.txn = nil
-	n.LogIndex = index
+	n.logIndex = index
 	if n.controller != nil {
 		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", n.commitTs, n.maxRow)
 		n.controller.SetMaxVisible(n.commitTs)

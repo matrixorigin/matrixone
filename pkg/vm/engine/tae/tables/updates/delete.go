@@ -24,22 +24,24 @@ const (
 type DeleteNode struct {
 	*sync.RWMutex
 	*common.DLNode
-	chain    *DeleteChain
-	txn      txnif.AsyncTxn
-	LogIndex *wal.Index
-	mask     *roaring.Bitmap
-	startTs  uint64
-	commitTs uint64
-	nt       NodeType
+	chain      *DeleteChain
+	txn        txnif.AsyncTxn
+	logIndex   *wal.Index
+	logIndexes []*wal.Index
+	mask       *roaring.Bitmap
+	startTs    uint64
+	commitTs   uint64
+	nt         NodeType
 }
 
 func NewMergedNode(commitTs uint64) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:  new(sync.RWMutex),
-		commitTs: commitTs,
-		startTs:  commitTs,
-		mask:     roaring.New(),
-		nt:       NT_Merge,
+		RWMutex:    new(sync.RWMutex),
+		commitTs:   commitTs,
+		startTs:    commitTs,
+		mask:       roaring.New(),
+		nt:         NT_Merge,
+		logIndexes: make([]*wal.Index, 0),
 	}
 	return n
 }
@@ -56,6 +58,14 @@ func NewDeleteNode(txn txnif.AsyncTxn) *DeleteNode {
 		n.commitTs = txn.GetCommitTS()
 	}
 	return n
+}
+
+func (node *DeleteNode) AddLogIndexesLocked(indexes []*wal.Index) {
+	node.logIndexes = append(node.logIndexes, indexes...)
+}
+
+func (node *DeleteNode) AddLogIndexLocked(index *wal.Index) {
+	node.logIndexes = append(node.logIndexes, index)
 }
 
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
@@ -104,11 +114,19 @@ func (node *DeleteNode) HasOverlapLocked(start, end uint32) bool {
 	return yes
 }
 
-func (node *DeleteNode) MergeLocked(o *DeleteNode) error {
+func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) error {
 	if node.mask == nil {
 		node.mask = roaring.New()
 	}
 	node.mask.Or(o.mask)
+	if collectIndex {
+		if o.logIndex != nil {
+			node.AddLogIndexLocked(o.logIndex)
+		}
+		if o.logIndexes != nil {
+			node.AddLogIndexesLocked(o.logIndexes)
+		}
+	}
 	return nil
 }
 func (node *DeleteNode) GetCommitTSLocked() uint64 { return node.commitTs }
@@ -140,7 +158,7 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 		panic("not expected")
 	}
 	node.txn = nil
-	node.LogIndex = index
+	node.logIndex = index
 	if node.chain.controller != nil {
 		node.chain.controller.SetMaxVisible(node.commitTs)
 	}
@@ -158,7 +176,7 @@ func (node *DeleteNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]", ntype, commitState, node.startTs, node.commitTs, node.mask.GetCardinality(), node.mask.String())
+	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.commitTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
 	return s
 }
 

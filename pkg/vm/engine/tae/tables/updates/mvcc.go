@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type sharedLock struct {
@@ -54,6 +55,19 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		node.columns[i] = col
 	}
 	return node
+}
+
+func (n *MVCCHandle) HasActiveAppendNode() bool {
+	n.RLock()
+	defer n.RUnlock()
+	if len(n.appends) == 0 {
+		return false
+	}
+	node := n.appends[len(n.appends)-1]
+	node.RLock()
+	txn := node.txn
+	node.RUnlock()
+	return txn != nil
 }
 
 func (n *MVCCHandle) IncChangeNodeCnt() {
@@ -186,18 +200,43 @@ func (n *MVCCHandle) IsDeletedLocked(row uint32, ts uint64) bool {
 	return n.deletes.IsDeleted(row, ts)
 }
 
-func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
+func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (indexes []*wal.Index) {
 	if len(n.appends) == 0 {
-		return 0, false
+		return
 	}
-	readLock := n.GetSharedLock()
+	startOffset, _, startOk := n.getMaxVisibleRowLocked(startTs)
+	endOffset, _, endOk := n.getMaxVisibleRowLocked(endTs)
+	if !endOk {
+		return
+	}
+	if !startOk {
+		startOffset = 0
+	} else {
+		startOffset += 1
+	}
+	for i := endOffset; i >= startOffset; i-- {
+		indexes = append(indexes, n.appends[i].logIndex)
+	}
+	return
+}
+
+func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
+	_, row, ok := n.getMaxVisibleRowLocked(ts)
+	return row, ok
+}
+
+func (n *MVCCHandle) getMaxVisibleRowLocked(ts uint64) (int, uint32, bool) {
+	if len(n.appends) == 0 {
+		return 0, 0, false
+	}
+	// readLock := n.GetSharedLock()
 	maxVisible := n.LoadMaxVisible()
 	lastAppend := n.appends[len(n.appends)-1]
 
 	// 1. Last append node is in the window and it was already committed
 	if ts > lastAppend.GetCommitTS() && maxVisible >= lastAppend.GetCommitTS() {
-		readLock.Unlock()
-		return lastAppend.GetMaxRow(), true
+		// readLock.Unlock()
+		return len(n.appends) - 1, lastAppend.GetMaxRow(), true
 	}
 	start, end := 0, len(n.appends)-1
 	var mid int
@@ -213,14 +252,14 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
 	}
 	if mid == 0 && n.appends[mid].GetCommitTS() > ts {
 		// 2. The first node is found and it was committed after ts
-		readLock.Unlock()
-		return 0, false
+		// readLock.Unlock()
+		return 0, 0, false
 	} else if mid != 0 && n.appends[mid].GetCommitTS() > ts {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
 	}
 	node := n.appends[mid]
-	readLock.Unlock()
+	// readLock.Unlock()
 	if node.GetCommitTS() < n.LoadMaxVisible() {
 		node.RLock()
 		txn := node.txn
@@ -229,5 +268,5 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts uint64) (uint32, bool) {
 			txn.GetTxnState(true)
 		}
 	}
-	return node.GetMaxRow(), true
+	return mid, node.GetMaxRow(), true
 }

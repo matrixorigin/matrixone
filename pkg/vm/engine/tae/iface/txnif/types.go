@@ -121,7 +121,7 @@ type DeleteChain interface {
 
 	PrepareRangeDelete(start, end uint32, ts uint64) error
 	DepthLocked() int
-	CollectDeletesLocked(ts uint64) DeleteNode
+	CollectDeletesLocked(ts uint64, collectIndex bool) DeleteNode
 }
 
 type AppendNode interface {

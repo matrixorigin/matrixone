@@ -20,6 +20,7 @@ type Index struct {
 type LogEntry entry.Entry
 
 type Driver interface {
+	GetCheckpointed() uint64
 	Checkpoint(indexes []*Index) (LogEntry, error)
 	AppendEntry(uint32, LogEntry) (uint64, error)
 	LoadEntry(groupId uint32, lsn uint64) (LogEntry, error)
@@ -31,5 +32,5 @@ func (index *Index) String() string {
 	if index == nil {
 		return "<nil index>"
 	}
-	return fmt.Sprintf("<Index[%d:%d]>", index.LSN, index.CSN)
+	return fmt.Sprintf("<Index[%d:%d/%d]>", index.LSN, index.CSN, index.Size)
 }

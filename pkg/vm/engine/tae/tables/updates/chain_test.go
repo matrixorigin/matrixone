@@ -283,7 +283,7 @@ func TestColumnChain4(t *testing.T) {
 		node.ApplyCommit(nil)
 		ts3 = txn.GetCommitTS()
 	}
-	mask, vals := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
+	mask, vals, _ := chain.CollectCommittedInRangeLocked(0, common.NextGlobalSeqNum())
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
@@ -292,7 +292,7 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals = chain.CollectCommittedInRangeLocked(ts1, common.NextGlobalSeqNum())
+	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts1, common.NextGlobalSeqNum())
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
@@ -301,22 +301,22 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals = chain.CollectCommittedInRangeLocked(ts2, common.NextGlobalSeqNum())
+	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts2, common.NextGlobalSeqNum())
 	assert.True(t, mask.Contains(20))
 	assert.True(t, mask.Contains(40))
 	assert.Equal(t, uint64(2), mask.GetCardinality())
 	assert.Equal(t, int32(20), vals[20])
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals = chain.CollectCommittedInRangeLocked(ts3, common.NextGlobalSeqNum())
+	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts3, common.NextGlobalSeqNum())
 	assert.True(t, mask.Contains(40))
 	assert.Equal(t, uint64(1), mask.GetCardinality())
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
+	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
 	assert.Nil(t, mask)
 
-	mask, vals = chain.CollectCommittedInRangeLocked(ts1, ts3)
+	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts1, ts3)
 	assert.True(t, mask.Contains(10))
 	assert.True(t, mask.Contains(20))
 	assert.Equal(t, uint64(2), mask.GetCardinality())
@@ -362,14 +362,14 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, merged)
 	assert.Equal(t, 2, chain.Depth())
 
-	collected := chain.CollectDeletesLocked(txn1.GetStartTS())
+	collected := chain.CollectDeletesLocked(txn1.GetStartTS(), false)
 	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
-	collected = chain.CollectDeletesLocked(txn2.GetStartTS())
+	collected = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
-	collected = chain.CollectDeletesLocked(0)
+	collected = chain.CollectDeletesLocked(0, false)
 	assert.Nil(t, collected)
-	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum())
+	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
 	assert.Nil(t, collected)
 
 	commitTxn(txn1)
@@ -377,11 +377,11 @@ func TestDeleteChain1(t *testing.T) {
 	assert.Nil(t, n1.ApplyCommit(nil))
 	t.Log(chain.StringLocked())
 
-	collected = chain.CollectDeletesLocked(0)
+	collected = chain.CollectDeletesLocked(0, false)
 	assert.Nil(t, collected)
-	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum())
+	collected = chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
 	assert.Equal(t, uint32(10), collected.GetCardinalityLocked())
-	collected = chain.CollectDeletesLocked(txn2.GetStartTS())
+	collected = chain.CollectDeletesLocked(txn2.GetStartTS(), false)
 	assert.Equal(t, uint32(11), collected.GetCardinalityLocked())
 
 	txn3 := mockTxn()
@@ -392,7 +392,7 @@ func TestDeleteChain1(t *testing.T) {
 	n3 := chain.AddNodeLocked(txn3)
 	n3.RangeDeleteLocked(31, 33)
 
-	collected = chain.CollectDeletesLocked(txn3.GetStartTS())
+	collected = chain.CollectDeletesLocked(txn3.GetStartTS(), false)
 	assert.Equal(t, uint32(13), collected.GetCardinalityLocked())
 	t.Log(chain.StringLocked())
 
@@ -447,27 +447,27 @@ func TestDeleteChain2(t *testing.T) {
 	n3.ApplyCommit(nil)
 	t.Log(chain.StringLocked())
 
-	m := chain.CollectDeletesLocked(common.NextGlobalSeqNum())
+	m := chain.CollectDeletesLocked(common.NextGlobalSeqNum(), false)
 	mask := m.(*DeleteNode).mask
 	assert.Equal(t, uint64(8), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn3.GetCommitTS())
+	m = chain.CollectDeletesLocked(txn3.GetCommitTS(), false)
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(8), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn1.GetCommitTS())
+	m = chain.CollectDeletesLocked(txn1.GetCommitTS(), false)
 	mask = m.(*DeleteNode).mask
 	assert.Equal(t, uint64(4), mask.GetCardinality())
-	m = chain.CollectDeletesLocked(txn1.GetCommitTS() - 1)
+	m = chain.CollectDeletesLocked(txn1.GetCommitTS()-1, false)
 	assert.Nil(t, m)
 
-	mask = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
+	mask, _ = chain.CollectDeletesInRange(0, txn3.GetCommitTS())
 	t.Log(mask.String())
 	assert.Equal(t, uint64(4), mask.GetCardinality())
 
-	mask = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
+	mask, _ = chain.CollectDeletesInRange(0, txn3.GetCommitTS()+1)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(8), mask.GetCardinality())
 
-	mask = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS()+1)
+	mask, _ = chain.CollectDeletesInRange(txn1.GetCommitTS(), txn3.GetCommitTS()+1)
 	t.Log(mask.String())
 	assert.Equal(t, uint64(4), mask.GetCardinality())
 }

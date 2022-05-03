@@ -11,14 +11,14 @@ import (
 type DataFactory struct {
 	fileFactory  file.SegmentFileFactory
 	appendBufMgr base.INodeManager
-	ioScheduler  tasks.Scheduler
+	scheduler    tasks.Scheduler
 }
 
-func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, ioScheduler tasks.Scheduler) *DataFactory {
+func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, scheduler tasks.Scheduler) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
-		ioScheduler:  ioScheduler,
+		scheduler:    scheduler,
 	}
 }
 
@@ -36,6 +36,6 @@ func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 
 func (factory *DataFactory) MakeBlockFactory(segFile file.Segment) catalog.BlockDataFactory {
 	return func(meta *catalog.BlockEntry) data.Block {
-		return newBlock(meta, segFile, factory.appendBufMgr, factory.ioScheduler)
+		return newBlock(meta, segFile, factory.appendBufMgr, factory.scheduler)
 	}
 }

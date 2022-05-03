@@ -44,7 +44,7 @@ func TestIOSchedule1(t *testing.T) {
 		ctx := tasks.Context{Waitable: true}
 		scope := &common.ID{TableID: 1}
 		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		db.IOScheduler.Schedule(task)
+		db.Scheduler.Schedule(task)
 		pendings = append(pendings, task)
 	}
 	for _, task := range pendings {
@@ -59,7 +59,7 @@ func TestIOSchedule1(t *testing.T) {
 		ctx := tasks.Context{Waitable: true}
 		scope := &common.ID{TableID: uint64(i)}
 		task := newMockIOTask(&ctx, scope, time.Millisecond*5)
-		db.IOScheduler.Schedule(task)
+		db.Scheduler.Schedule(task)
 		pendings = append(pendings, task)
 	}
 	for _, task := range pendings {
@@ -139,7 +139,7 @@ func TestSchedule1(t *testing.T) {
 		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 		factory := jobs.CompactBlockTaskFactory(blkMeta, nil)
 		ctx := tasks.Context{Waitable: true}
-		task, err := db.TaskScheduler.ScheduleTxnTask(&ctx, factory)
+		task, err := db.Scheduler.ScheduleTxnTask(&ctx, factory)
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)

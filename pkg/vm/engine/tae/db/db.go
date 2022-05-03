@@ -35,8 +35,7 @@ type DB struct {
 
 	CKPDriver checkpoint.Driver
 
-	TaskScheduler tasks.TaskScheduler
-	IOScheduler   tasks.Scheduler
+	Scheduler tasks.TaskScheduler
 
 	CalibrationTimer wb.IHeartbeater
 
@@ -77,8 +76,7 @@ func (db *DB) Close() error {
 	db.stopWorkers()
 	db.Closed.Store(ErrClosed)
 	close(db.ClosedC)
-	db.TaskScheduler.Stop()
-	db.IOScheduler.Stop()
+	db.Scheduler.Stop()
 	db.TxnMgr.Stop()
 	db.Wal.Close()
 	db.Opts.Catalog.Close()

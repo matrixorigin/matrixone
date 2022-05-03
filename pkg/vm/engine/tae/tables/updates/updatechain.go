@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type ColumnChain struct {
@@ -151,7 +152,7 @@ func (chain *ColumnChain) CollectUpdatesLocked(ts uint64) (*roaring.Bitmap, map[
 	return chain.view.CollectUpdates(ts)
 }
 
-func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}) {
+func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}, indexes []*wal.Index) {
 	var merged *ColumnNode
 	chain.LoopChainLocked(func(n *ColumnNode) bool {
 		n.RLock()
@@ -181,6 +182,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs uint64) (
 		if merged == nil {
 			merged = NewSimpleColumnNode()
 		}
+		indexes = append(indexes, n.logIndex)
 		merged.MergeLocked(n)
 		n.RUnlock()
 		return true

@@ -51,9 +51,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil)
 	db.Catalog = db.Opts.Catalog
 
-	db.IOScheduler = newIOScheduler(db, db.Opts.SchedulerCfg.IOWorkers)
-	db.TaskScheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.TxnTaskWorkers)
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.IOScheduler)
+	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.TxnTaskWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
@@ -64,7 +63,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	policyCfg := new(checkpoint.PolicyCfg)
 	policyCfg.Levels = int(opts.CheckpointCfg.ExecutionLevels)
 	policyCfg.Interval = opts.CheckpointCfg.ExecutionInterval
-	db.CKPDriver = checkpoint.NewDriver(db.TaskScheduler, policyCfg)
+	db.CKPDriver = checkpoint.NewDriver(db.Scheduler, policyCfg)
 	handle := newTimedLooper(db, newCalibrationProcessor(db))
 	db.CalibrationTimer = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.CalibrationInterval)*time.Millisecond, handle)
 	db.startWorkers()

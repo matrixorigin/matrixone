@@ -26,7 +26,7 @@ type ColumnNode struct {
 	startTs  uint64
 	commitTs uint64
 	txn      txnif.AsyncTxn
-	LogIndex *wal.Index
+	logIndex *wal.Index
 	id       *common.ID
 }
 
@@ -259,7 +259,7 @@ func (n *ColumnNode) StringLocked() string {
 	for k, v := range n.txnVals {
 		s = fmt.Sprintf("%s%d:%v,", s, k, v)
 	}
-	s = fmt.Sprintf("%s]", s)
+	s = fmt.Sprintf("%s]%s", s, n.logIndex.String())
 	return s
 }
 
@@ -285,7 +285,7 @@ func (n *ColumnNode) ApplyCommit(index *wal.Index) (err error) {
 		panic("not expected")
 	}
 	n.txn = nil
-	n.LogIndex = index
+	n.logIndex = index
 	n.chain.controller.SetMaxVisible(n.commitTs)
 	n.chain.controller.IncChangeNodeCnt()
 	return

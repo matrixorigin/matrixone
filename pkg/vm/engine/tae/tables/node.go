@@ -2,6 +2,7 @@ package tables
 
 import (
 	"bytes"
+	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -22,23 +23,31 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file  file.Block
-	block *dataBlock
-	data  batch.IBatch
-	rows  uint32
-	mgr   base.INodeManager
+	file    file.Block
+	block   *dataBlock
+	data    batch.IBatch
+	rows    uint32
+	mgr     base.INodeManager
+	flushTs uint64
+	ckpTs   uint64
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
+	flushTs, err := file.ReadTS()
+	if err != nil {
+		panic(err)
+	}
 	impl := new(appendableNode)
 	id := block.meta.AsCommonID()
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
 	impl.UnloadFunc = impl.OnUnload
 	impl.LoadFunc = impl.OnLoad
+	impl.UnloadableFunc = impl.CheckUnloadable
 	impl.DestroyFunc = impl.OnDestory
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
+	impl.flushTs = flushTs
 	mgr.RegisterNode(impl)
 	return impl
 }
@@ -53,6 +62,10 @@ func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 	// 1. Load txn ts zonemap
 	// 2. Calculate fine row count
 	return 0
+}
+
+func (node *appendableNode) CheckUnloadable() bool {
+	return !node.block.mvcc.HasActiveAppendNode()
 }
 
 func (node *appendableNode) OnDestory() {
@@ -80,6 +93,14 @@ func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed,
 	return ro.CopyToVectorWithBuffer(compressed, decompressed)
 }
 
+func (node *appendableNode) SetBlockMaxFlushTS(ts uint64) {
+	atomic.StoreUint64(&node.flushTs, ts)
+}
+
+func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
+	return atomic.LoadUint64(&node.flushTs)
+}
+
 func (node *appendableNode) OnLoad() {
 	var err error
 	schema := node.block.meta.GetSchema()
@@ -89,12 +110,16 @@ func (node *appendableNode) OnLoad() {
 }
 
 func (node *appendableNode) OnUnload() {
-	logutil.Infof("Unloading block %s", node.block.meta.AsCommonID().String())
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]interface{})
 	mvcc := node.block.mvcc
 	readLock := mvcc.GetSharedLock()
 	ts := mvcc.LoadMaxVisible()
+	if node.GetBlockMaxFlushTS() == ts {
+		readLock.Unlock()
+		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
+		return
+	}
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))
 
@@ -107,8 +132,9 @@ func (node *appendableNode) OnUnload() {
 		}
 	}
 	deleteChain := mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	dnode := deleteChain.CollectDeletesLocked(ts, false).(*updates.DeleteNode)
 	readLock.Unlock()
+	logutil.Infof("[TS=%d] Unloading block %s", ts, node.block.meta.AsCommonID().String())
 	var deletes *roaring.Bitmap
 	if dnode != nil {
 		deletes = dnode.GetDeleteMaskLocked()
@@ -117,8 +143,8 @@ func (node *appendableNode) OnUnload() {
 		Waitable: true,
 	}
 	task := jobs.NewFlushABlkTask(&ctx, node.file, node.block.meta.AsCommonID(), node.data, ts, masks, vals, deletes)
-	if node.block.ioScheduler != nil {
-		node.block.ioScheduler.Schedule(task)
+	if node.block.scheduler != nil {
+		node.block.scheduler.Schedule(task)
 		if err := task.WaitDone(); err != nil {
 			panic(err)
 		}
@@ -130,6 +156,18 @@ func (node *appendableNode) OnUnload() {
 
 	node.data.Close()
 	node.data = nil
+	node.SetBlockMaxFlushTS(ts)
+	ckpTask := jobs.NewCheckpointABlkTask(tasks.WaitableCtx, nil, node.block.meta.AsCommonID(), node.block, ts)
+	if node.block.scheduler != nil {
+		node.block.scheduler.Schedule(ckpTask)
+		if err := ckpTask.WaitDone(); err != nil {
+			panic(err)
+		}
+	} else {
+		if err := ckpTask.OnExec(); err != nil {
+			panic(err)
+		}
+	}
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {

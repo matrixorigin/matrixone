@@ -8,6 +8,7 @@ import (
 
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,14 +37,14 @@ type dataBlock struct {
 	node        *appendableNode
 	file        file.Block
 	bufMgr      base.INodeManager
-	ioScheduler tasks.Scheduler
+	scheduler   tasks.Scheduler
 	indexHolder acif.IBlockIndexHolder
 	mvcc        *updates.MVCCHandle
-	maxCkp      uint64
 	nice        uint32
+	ckpTs       uint64
 }
 
-func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, ioScheduler tasks.Scheduler) *dataBlock {
+func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.Scheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
 	indexCnt[int(meta.GetSchema().PrimaryKey)] = 2
@@ -53,11 +54,11 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	var node *appendableNode
 	block := &dataBlock{
-		RWMutex:     new(sync.RWMutex),
-		meta:        meta,
-		file:        file,
-		mvcc:        updates.NewMVCCHandle(meta),
-		ioScheduler: ioScheduler,
+		RWMutex:   new(sync.RWMutex),
+		meta:      meta,
+		file:      file,
+		mvcc:      updates.NewMVCCHandle(meta),
+		scheduler: scheduler,
 	}
 	if meta.IsAppendable() {
 		node = newNode(bufMgr, block, file)
@@ -68,6 +69,14 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// Non-appendable index holder would be initialized during compaction
 	}
 	return block
+}
+
+func (blk *dataBlock) SetMaxCheckpointTS(ts uint64) {
+	atomic.StoreUint64(&blk.ckpTs, ts)
+}
+
+func (blk *dataBlock) GetMaxCheckpointTS() uint64 {
+	return atomic.LoadUint64(&blk.ckpTs)
 }
 
 func (blk *dataBlock) Destroy() (err error) {
@@ -172,7 +181,7 @@ func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory
 	if dropped || inTxn {
 		return
 	}
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.ioScheduler)
+	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	return
 	// if !blk.meta.IsAppendable() {
 	// }
@@ -237,7 +246,7 @@ func (blk *dataBlock) MakeBlockView() (view *updates.BlockView, err error) {
 		blk.makeColumnView(uint16(i), view)
 	}
 	deleteChain := mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	dnode := deleteChain.CollectDeletesLocked(ts, true).(*updates.DeleteNode)
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
 	}
@@ -287,7 +296,7 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 	sharedLock := blk.mvcc.GetSharedLock()
 	err = blk.makeColumnView(uint16(colIdx), view)
 	deleteChain := blk.mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(txn.GetStartTS()).(*updates.DeleteNode)
+	dnode := deleteChain.CollectDeletesLocked(txn.GetStartTS(), false).(*updates.DeleteNode)
 	sharedLock.Unlock()
 	if dnode != nil {
 		view.DeleteMask = dnode.GetDeleteMaskLocked()
@@ -342,7 +351,7 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	err = blk.makeColumnView(uint16(colIdx), view)
 	deleteChain := blk.mvcc.GetDeleteChain()
 	deleteChain.RLock()
-	dnode := deleteChain.CollectDeletesLocked(ts).(*updates.DeleteNode)
+	dnode := deleteChain.CollectDeletesLocked(ts, false).(*updates.DeleteNode)
 	deleteChain.RUnlock()
 	sharedLock.Unlock()
 	if dnode != nil {
@@ -569,6 +578,12 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	return
 }
 
+func (blk *dataBlock) CollectAppendLogIndexes(startTs, endTs uint64) (indexes []*wal.Index) {
+	readLock := blk.mvcc.GetSharedLock()
+	defer readLock.Unlock()
+	return blk.mvcc.CollectAppendLogIndexesLocked(startTs, endTs)
+}
+
 func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (v interface{}) {
 	view := updates.NewBlockView(endTs)
 	readLock := blk.mvcc.GetSharedLock()
@@ -576,15 +591,16 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs uint64) (v interface{
 	for i := range blk.meta.GetSchema().ColDefs {
 		chain := blk.mvcc.GetColumnChain(uint16(i))
 		chain.RLock()
-		updateMask, updateVals := chain.CollectCommittedInRangeLocked(startTs, endTs)
+		updateMask, updateVals, indexes := chain.CollectCommittedInRangeLocked(startTs, endTs)
 		chain.RUnlock()
 		if updateMask != nil {
 			view.UpdateMasks[uint16(i)] = updateMask
 			view.UpdateVals[uint16(i)] = updateVals
 		}
+		view.ColLogIndexes[uint16(i)] = indexes
 	}
 	deleteChain := blk.mvcc.GetDeleteChain()
-	view.DeleteMask = deleteChain.CollectDeletesInRange(startTs, endTs)
+	view.DeleteMask, view.DeleteLogIndexes = deleteChain.CollectDeletesInRange(startTs, endTs)
 	readLock.Unlock()
 	v = view
 	return

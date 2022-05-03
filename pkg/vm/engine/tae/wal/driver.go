@@ -29,7 +29,11 @@ func NewDriverWithStore(impl store.Store, own bool) Driver {
 	return driver
 }
 
-func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry,err error) {
+func (driver *walDriver) GetCheckpointed() uint64 {
+	return driver.impl.GetCheckpointed(GroupC)
+}
+
+func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
 	commands := make(map[uint64]entry.CommandInfo)
 	for _, idx := range indexes {
 		cmdInfo, ok := commands[idx.LSN]
@@ -70,7 +74,7 @@ func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry,err error) {
 	return
 }
 
-func (driver *walDriver) Compact() error{
+func (driver *walDriver) Compact() error {
 	return driver.impl.TryCompact()
 }
 
