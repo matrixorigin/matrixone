@@ -40,7 +40,7 @@ type CTE struct {
 
 func (node *CTE) Format(ctx *FmtCtx) {
 	node.Name.Format(ctx)
-	ctx.WriteString(" AS (")
+	ctx.WriteString(" as (")
 	node.Stmt.Format(ctx)
 	ctx.WriteString(")")
 }

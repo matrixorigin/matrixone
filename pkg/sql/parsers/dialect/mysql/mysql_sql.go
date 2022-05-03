@@ -11805,7 +11805,7 @@ yydefault:
 					Family:       tree.StringFamily,
 					FamilyString: yyDollar[1].str,
 					Locale:       &locale,
-					Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+					Oid:          uint32(defines.MYSQL_TYPE_STRING),
 					DisplayWith:  yyDollar[2].lengthOptUnion(),
 				},
 			}
@@ -12086,7 +12086,7 @@ yydefault:
 		var yyLOCAL int32
 //line mysql_sql.y:5730
 		{
-			yyLOCAL = -1
+			yyLOCAL = int32(-1)
 		}
 		yyVAL.union = yyLOCAL
 	case 967:

@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "with t1 as (select * from t2) select a from t where c_acctbal > 0.00 and substring(c_phone from 1 for 2) in ('10')",
-		output: "with t1 AS (select * from t2) select a from t where c_acctbal > 0.00 and substring(c_phone, 1, 2) in (10)",
+		input:  "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
 	}
 )
 
@@ -56,7 +55,14 @@ var (
 		input  string
 		output string
 	}{{
-		input:  "select a as promo_revenue from (select * from r) as c_orders (c_custkey, c_count)",
+		input:  "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
+	}, {
+		input:  "with tw as (select * from t2) select * from tw where a > 1",
+	}, {
+		input:  "create table t (a double(13))  // comment",
+		output:  "create table t (a double(13))",
+	}, {
+		input:  "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 	}, {
 		input:  "select extract(year from l_shipdate) as l_year from t",
 		output: "select extract(year, l_shipdate) as l_year from t",
