@@ -69,9 +69,30 @@ type partialCkpInfo struct {
 	ckps *roaring.Bitmap
 }
 
-func newPartialCkpInfo() *partialCkpInfo {
+func newPartialCkpInfo(size uint32) *partialCkpInfo {
 	return &partialCkpInfo{
 		ckps: &roaring.Bitmap{},
+		size: size,
+	}
+}
+
+func (info *partialCkpInfo) IsAllCheckpointed() bool {
+	return info.size == uint32(info.ckps.GetCardinality())
+}
+
+func (info *partialCkpInfo) MergePartialCkpInfo(o *partialCkpInfo){
+	if info.size!=o.size{
+		panic("logic error")
+	}
+	info.ckps.Or(o.ckps)
+}
+
+func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo){
+	if info.size!=cmds.Size{
+		panic("logic error")
+	}
+	for _,csn:=range cmds.CommandIds{
+		info.ckps.Add(csn)
 	}
 }
 
@@ -142,10 +163,9 @@ func (g *commitGroup) MergeCheckpointInfo(c *compactor) {
 	for lsn, commandsInfo := range g.partialCkp {
 		partial, ok := partialMap[lsn]
 		if !ok {
-			partial = newPartialCkpInfo()
-			partial.size = commandsInfo.size
+			partial = newPartialCkpInfo(commandsInfo.size)
 		}
-		if partial.size != commandsInfo.size{
+		if partial.size != commandsInfo.size {
 			panic("logic error")
 		}
 		partial.ckps.Or(commandsInfo.ckps)
@@ -189,12 +209,11 @@ func (g *commitGroup) OnCheckpoint(info interface{}) {
 	for lsn, command := range ranges.Command {
 		commandinfo, ok := g.partialCkp[lsn]
 		if !ok {
-			commandinfo = newPartialCkpInfo()
+			commandinfo = newPartialCkpInfo(command.Size)
 		}
 		for _, cmd := range command.CommandIds {
 			commandinfo.ckps.Add(cmd)
 		}
-		commandinfo.size = command.Size
 		g.partialCkp[lsn] = commandinfo
 	}
 }

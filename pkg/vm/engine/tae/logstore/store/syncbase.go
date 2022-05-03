@@ -11,13 +11,69 @@ import (
 
 type syncBase struct {
 	*sync.RWMutex
-	groupLSN               map[uint32]uint64 // for alloc
-	lsnmu                  sync.Mutex
-	checkpointing, syncing map[uint32]uint64
-	checkpointed, synced   *syncMap
-	uncommits              map[uint32][]uint64
-	addrs                  map[uint32]map[int]common.ClosedInterval //group-version-glsn range
-	addrmu                 sync.RWMutex
+	groupLSN             map[uint32]uint64 // for alloc
+	lsnmu                sync.Mutex
+	checkpointing        map[uint32]*checkpointInfo
+	syncing              map[uint32]uint64
+	checkpointed, synced *syncMap
+	uncommits            map[uint32][]uint64
+	addrs                map[uint32]map[int]common.ClosedInterval //group-version-glsn range
+	addrmu               sync.RWMutex
+}
+
+type checkpointInfo struct {
+	ranges  *common.ClosedIntervals
+	partial map[uint64]*partialCkpInfo
+}
+
+func newCheckpointInfo() *checkpointInfo {
+	return &checkpointInfo{
+		ranges:  common.NewClosedIntervals(),
+		partial: make(map[uint64]*partialCkpInfo),
+	}
+}
+
+func (info *checkpointInfo) UpdateWtihRanges(intervals *common.ClosedIntervals) {
+	info.ranges.TryMerge(*intervals)
+}
+
+func (info *checkpointInfo) UpdateWtihPartialCheckpoint(lsn uint64, ckps *partialCkpInfo) {
+	if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
+		return
+	}
+	partialInfo, ok := info.partial[lsn]
+	if !ok {
+		partialInfo = newPartialCkpInfo(ckps.size)
+		info.partial[lsn] = partialInfo
+	}
+	partialInfo.MergePartialCkpInfo(ckps)
+	if partialInfo.IsAllCheckpointed() {
+		info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+		delete(info.partial, lsn)
+	}
+}
+
+func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.CommandInfo) {
+	if info.ranges.Contains(*common.NewClosedIntervalsByInt(lsn)) {
+		return
+	}
+	partialInfo, ok := info.partial[lsn]
+	if !ok {
+		partialInfo = newPartialCkpInfo(cmds.Size)
+		info.partial[lsn] = partialInfo
+	}
+	partialInfo.MergeCommandInfos(cmds)
+	if partialInfo.IsAllCheckpointed() {
+		info.ranges.TryMerge(*common.NewClosedIntervalsByInt(lsn))
+		delete(info.partial, lsn)
+	}
+}
+
+func (info *checkpointInfo) GetCheckpointed() uint64 {
+	if info.ranges==nil||len(info.ranges.Intervals)==0{
+		return 0
+	}
+	return info.ranges.Intervals[0].End
 }
 
 type syncMap struct {
@@ -35,7 +91,7 @@ func newSyncBase() *syncBase {
 	return &syncBase{
 		groupLSN:      make(map[uint32]uint64),
 		lsnmu:         sync.Mutex{},
-		checkpointing: make(map[uint32]uint64),
+		checkpointing: make(map[uint32]*checkpointInfo),
 		syncing:       make(map[uint32]uint64),
 		checkpointed:  newSyncMap(),
 		synced:        newSyncMap(),
@@ -83,8 +139,18 @@ func (base *syncBase) OnEntryReceived(e entry.Entry) error {
 		switch v.Group {
 		case entry.GTCKp:
 			for _, intervals := range v.Checkpoints {
+				ckpInfo, ok := base.checkpointing[intervals.Group]
+				if !ok {
+					ckpInfo = newCheckpointInfo()
+					base.checkpointing[intervals.Group] = ckpInfo
+				}
 				if intervals.Ranges != nil && len(intervals.Ranges.Intervals) > 0 {
-					base.checkpointing[intervals.Group] = intervals.Ranges.Intervals[0].End
+					ckpInfo.UpdateWtihRanges(intervals.Ranges)
+				}
+				if intervals.Command != nil {
+					for lsn, cmds := range intervals.Command {
+						ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
+					}
 				}
 			}
 		case entry.GTUncommit:
@@ -178,7 +244,7 @@ func (base *syncBase) OnCommit(commitInfo *prepareCommit) {
 func (base *syncBase) PrepareCommit() *prepareCommit {
 	checkpointing := make(map[uint32]uint64)
 	for group, checkpointingId := range base.checkpointing {
-		checkpointing[group] = checkpointingId
+		checkpointing[group] = checkpointingId.GetCheckpointed()
 	}
 	syncing := make(map[uint32]uint64)
 	for group, syncingId := range base.syncing {

@@ -80,8 +80,10 @@ func TestCheckpoint1(t *testing.T) {
 		CSN:  1,
 		Size: 2,
 	}}
-	_, err = driver.Checkpoint(index)
+	ckp, err := driver.Checkpoint(index)
 	assert.Nil(t, err)
+	ckp.WaitDone()
+	assert.Equal(t, lsn, driver.GetCheckpointed())
 
 	flush3 := entry.GetBase()
 	flush3.SetType(entry.ETCustomizedStart)
@@ -166,8 +168,10 @@ func TestCheckpoint2(t *testing.T) {
 		CSN:  0,
 		Size: 1,
 	}}
-	_, err = driver.Checkpoint(index)
+	ckp, err := driver.Checkpoint(index)
 	assert.Nil(t, err)
+	ckp.WaitDone()
+	assert.Equal(t, lsn, driver.GetCheckpointed())
 
 	flush2 := entry.GetBase()
 	flush2.SetType(entry.ETCustomizedStart)
