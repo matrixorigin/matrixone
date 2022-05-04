@@ -12,6 +12,7 @@ import (
 
 	// "time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
@@ -101,7 +102,7 @@ func TestStore(t *testing.T) {
 									Start: pre,
 									End:   end,
 								}),
-							Command: map[uint64]entry.CommandInfo{(end + 1):{
+							Command: map[uint64]entry.CommandInfo{(end + 1): {
 								CommandIds: []uint32{0},
 								Size:       1,
 							}},
@@ -193,6 +194,10 @@ func TestPartialCkp(t *testing.T) {
 	lsn, err := s.AppendEntry(entry.GTUncommit, uncommit)
 	assert.Nil(t, err)
 	uncommit.WaitDone()
+	testutils.WaitExpect(400, func() bool {
+		_, err = s.Load(entry.GTUncommit, lsn)
+		return err == nil
+	})
 	_, err = s.Load(entry.GTUncommit, lsn)
 	assert.Nil(t, err)
 

@@ -130,9 +130,8 @@ func (vf *vFile) FinishWrite() {
 func (vf *vFile) Commit() {
 	// fmt.Printf("Committing %s\n", vf.Name())
 	vf.wg.Wait()
-	vf.WriteMeta()
+	// vf.WriteMeta()
 	vf.Sync()
-	fmt.Printf("sync-%s\n", vf.String())
 	vf.Lock()
 	vf.buf = nil
 	vf.Unlock()
@@ -140,6 +139,8 @@ func (vf *vFile) Commit() {
 	atomic.StoreInt32(&vf.committed, int32(1))
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
+	vf.vInfo.close()
+	fmt.Printf("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
@@ -298,32 +299,15 @@ func (vf *vFile) OnNewCheckpoint(info *entry.Info) {
 func (vf *vFile) OnNewTxn(info *entry.Info) {
 	vf.Log(info)
 }
-func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {
-// 	for _, addr := range addrs {
-// 		exist := false
-// 		tids, ok := vf.UncommitTxn[addr.Group]
-// 		if !ok {
-// 			tids = make([]uint64, 0)
-// 		}
-// 		for _, tid := range tids {
-// 			if tid == addr.LSN {
-// 				exist = true
-// 			}
-// 		}
-// 		if !exist {
-// 			tids = append(tids, addr.LSN)
-// 			vf.UncommitTxn[addr.Group] = tids
-// 		}
-// 	}
-}
+func (vf *vFile) OnNewUncommit(addrs []*VFileAddress) {}
 
 func (vf *vFile) Load(groupId uint32, lsn uint64) (entry.Entry, error) {
 	// if vf.HasCommitted() {
-		// err := vf.LoadMeta()
-		// defer vf.FreeMeta()
-		// if err != nil {
-		// 	return nil, err
-		// }
+	// err := vf.LoadMeta()
+	// defer vf.FreeMeta()
+	// if err != nil {
+	// 	return nil, err
+	// }
 	// }
 	offset, err := vf.GetOffsetByLSN(groupId, lsn)
 	if err != nil {

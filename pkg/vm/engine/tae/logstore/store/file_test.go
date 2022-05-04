@@ -93,6 +93,7 @@ func TestAppender(t *testing.T) {
 		// wg.Add(1)
 		// pool.Submit(fff(ff))
 		// continue
+		wg.Wait()
 		appender := rf.GetAppender()
 		assert.NotNil(t, appender)
 		if i%4 == 0 && i > 0 {
@@ -196,6 +197,7 @@ func TestReadVInfo(t *testing.T) {
 
 	total := 10
 	for i := 0; i < total; i++ {
+		wg.Wait()
 		appender := rf.GetAppender()
 		assert.NotNil(t, appender)
 		if i%4 == 0 && i > 0 {

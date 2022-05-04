@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
@@ -56,28 +57,30 @@ type baseStore struct {
 	storeInfo
 	syncBase
 	common.ClosedState
-	dir, name   string
-	flushWg     sync.WaitGroup
-	flushCtx    context.Context
-	flushCancel context.CancelFunc
-	flushQueue  chan entry.Entry
-	syncQueue   chan []*batch
-	commitQueue chan []*batch
-	wg          sync.WaitGroup
-	file        File
-	mu          *sync.RWMutex
+	dir, name       string
+	flushWg         sync.WaitGroup
+	flushCtx        context.Context
+	flushCancel     context.CancelFunc
+	flushQueue      chan entry.Entry
+	syncQueue       chan []*batch
+	commitQueue     chan []*batch
+	postCommitQueue chan []*batch
+	wg              sync.WaitGroup
+	file            File
+	mu              *sync.RWMutex
 }
 
 func NewBaseStore(dir, name string, cfg *StoreCfg) (*baseStore, error) {
 	var err error
 	bs := &baseStore{
-		syncBase:    *newSyncBase(),
-		dir:         dir,
-		name:        name,
-		flushQueue:  make(chan entry.Entry, DefaultMaxBatchSize*100),
-		syncQueue:   make(chan []*batch, DefaultMaxSyncSize*100),
-		commitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
-		mu:          &sync.RWMutex{},
+		syncBase:        *newSyncBase(),
+		dir:             dir,
+		name:            name,
+		flushQueue:      make(chan entry.Entry, DefaultMaxBatchSize*100),
+		syncQueue:       make(chan []*batch, DefaultMaxSyncSize*100),
+		commitQueue:     make(chan []*batch, DefaultMaxCommitSize*100),
+		postCommitQueue: make(chan []*batch, DefaultMaxCommitSize*100),
+		mu:              &sync.RWMutex{},
 	}
 	if cfg == nil {
 		cfg = &StoreCfg{}
@@ -96,6 +99,7 @@ func (bs *baseStore) start() {
 	go bs.flushLoop()
 	go bs.syncLoop()
 	go bs.commitLoop()
+	go bs.postCommitLoop()
 }
 
 func (bs *baseStore) flushLoop() {
@@ -144,11 +148,11 @@ func (bs *baseStore) flushLoop() {
 				t0 = time.Now()
 				syncBatch := make([]*batch, len(bats))
 				copy(syncBatch, bats)
-				for _, b := range syncBatch {
-					for _, e := range b.entrys {
-						e.StartTime()
-					}
-				}
+				// for _, b := range syncBatch {
+				// 	for _, e := range b.entrys {
+				// 		e.StartTime()
+				// 	}
+				// }
 				bs.syncQueue <- syncBatch
 				bats = bats[:0]
 			}
@@ -235,55 +239,72 @@ func (bs *baseStore) commitLoop() {
 		}
 	}
 }
+func (bs *baseStore) postCommitLoop() {
+	batches := make([]*batch, 0, DefaultMaxCommitSize)
+	for {
+		select {
+		case <-bs.flushCtx.Done():
+			return
+		case e := <-bs.postCommitQueue:
+			batches = append(batches, e...)
+		Left:
+			for i := 0; i < DefaultMaxCommitSize-1; i++ {
+				select {
+				case e = <-bs.postCommitQueue:
+					batches = append(batches, e...)
+				default:
+					break Left
+				}
+			}
+			bs.onPostCommits(batches)
+			batches = batches[:0]
+		}
+	}
+}
+
+func (bs *baseStore) onPostCommits(batches []*batch) {
+	for _, bat := range batches {
+		for _, info := range bat.infos {
+			bs.syncBase.OnEntryReceived(info)
+		}
+		bs.syncBase.OnCommit()
+	}
+}
 
 func (bs *baseStore) onCommits(batches []*batch) {
-	t0 := time.Now()
-	a := rand.Intn(100)
-	if a == 33 {
-		fmt.Printf("%d bats per commit\n", len(batches))
-	}
 	for _, bat := range batches {
-		bs.syncBase.OnCommit(bat.preparecommit)
+		infos := make([]*entry.Info, 0)
 		for _, e := range bat.entrys {
+			info := e.GetInfo()
+			if info != nil {
+				infos = append(infos, info.(*entry.Info))
+			}
+			if e.IsPrintTime() {
+				logutil.Infof("sync and queues takes %dms", e.Duration().Milliseconds())
+				e.StartTime()
+			}
 			e.DoneWithErr(nil)
 		}
 		cnt := len(bat.entrys)
-		// fmt.Printf("137count is %d\n",cnt)
 		bs.flushWg.Add(-1 * cnt)
+		bat.infos = make([]*entry.Info, len(infos))
+		copy(bat.infos, infos)
 	}
-	if a == 33 {
-		fmt.Printf("onCommits takes %v\n", time.Since(t0))
-	}
+	bats := make([]*batch, len(batches))
+	copy(bats, batches)
+	bs.postCommitQueue <- bats
 }
 
 func (bs *baseStore) onSyncs(batches []*batch) {
 	var err error
-	t0 := time.Now()
-	a := rand.Intn(100)
-	if a == 33 {
-		fmt.Printf("%d batch per sync\n", len(batches))
-	}
-	if err = bs.file.Sync(); err != nil { //TODO not allow to sync by write
+	if err = bs.file.Sync(); err != nil {
 		panic(err)
-	}
-	if a == 33 {
-		fmt.Printf("sync takes %v\n", time.Since(t0))
 	}
 	bats := make([]*batch, len(batches))
 	copy(bats, batches)
 	bs.commitQueue <- bats
-	// for _, bat := range batches {
-	// 	bs.syncBase.OnCommit(bat.preparecommit)
-	// 	for _, e := range bat.entrys {
-	// 		e.DoneWithErr(nil)
-	// 	}
-	// 	cnt := len(bat.entrys)
-	// 	// fmt.Printf("137count is %d\n",cnt)
-	// 	bs.flushWg.Add(-1 * cnt)
-	// }
 }
 
-//set infosize, mashal info
 func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
 	v1 := e.GetInfo()
 	if v1 == nil {
@@ -320,13 +341,11 @@ func (bs *baseStore) PrepareEntry(e entry.Entry) (entry.Entry, error) {
 }
 
 func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
-	// var err error
-	t0 := time.Now()
-	a := rand.Intn(100)
-	if a == 33 {
-		fmt.Printf("%d entries per batch\n", len(entries))
-	}
 	for _, e := range entries {
+		if e.IsPrintTime() {
+			logutil.Infof("flush queue takes %dms", e.Duration().Milliseconds())
+			e.StartTime()
+		}
 		appender := bs.file.GetAppender()
 		e, err := bs.PrepareEntry(e)
 		if err != nil {
@@ -338,52 +357,40 @@ func (bs *baseStore) onEntries(entries []entry.Entry) *batch {
 		if _, err = e.WriteTo(appender); err != nil {
 			panic(err)
 		}
+		if e.IsPrintTime() {
+			logutil.Infof("onentry1 takes %dms", e.Duration().Milliseconds())
+			e.StartTime()
+		}
 		if err = appender.Commit(); err != nil {
 			panic(err)
 		}
-		bs.OnEntryReceived(e)
+		if e.IsPrintTime() {
+			logutil.Infof("onEntries2 takes %dms", e.Duration().Milliseconds())
+			e.StartTime()
+		}
+		// bs.OnEntryReceived(e)
+		// if e.IsPrintTime() {
+		// 	logutil.Infof("onEntries3 takes %dms", e.Duration().Milliseconds())
+		// 	e.StartTime()
+		// }
 	}
 	bat := &batch{
-		preparecommit: bs.PrepareCommit(),
-		entrys:        make([]entry.Entry, len(entries)),
+		// preparecommit: bs.PrepareCommit(),
+		entrys: make([]entry.Entry, len(entries)),
 	}
-	// fmt.Printf("208count is %d\n",len(entries))
 	copy(bat.entrys, entries)
-	if a == 33 {
-		fmt.Printf("on entries takes %v\n", time.Since(t0))
-	}
 	return bat
-	// bs.syncQueue <- bat
-	// t0 := time.Now()
-	// if err = bs.file.Sync(); err != nil { //TODO not allow to sync by write
-	// 	panic(err)
-	// }
-	// if a == 33 {
-	// 	fmt.Printf("sync takes %v\n", time.Since(t0))
-	// }
-	// bs.OnCommit() //TODO prepare commit, commit commit
-
-	// for _, e := range entries {
-	// 	e.DoneWithErr(nil)
-	// }
 }
 
 type batch struct {
 	entrys []entry.Entry
-	//on commit
-	preparecommit *prepareCommit
+	// preparecommit *prepareCommit
+	infos []*entry.Info
 }
 
 type prepareCommit struct {
 	checkpointing, syncing map[uint32]uint64
 }
-
-// func (bs *baseStore) OnCommit() {
-// 	//buffer
-// 	//offset
-// 	//file
-// 	bs.syncBase.OnCommit()
-// }
 
 func (bs *baseStore) Close() error {
 	if !bs.TryClose() {
@@ -436,7 +443,9 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 	// } else {
 	// 	appendgt3ms++
 	// }
-	e.StartTime()
+	if e.IsPrintTime() {
+		e.StartTime()
+	}
 	if bs.IsClosed() {
 		return 0, common.ClosedErr
 	}
@@ -460,6 +469,10 @@ func (bs *baseStore) AppendEntry(groupId uint32, e entry.Entry) (id uint64, err 
 		}
 	}
 	e.SetInfo(info)
+	if e.IsPrintTime() {
+		logutil.Infof("append entry takes %dms", e.Duration().Milliseconds())
+		e.StartTime()
+	}
 	bs.flushQueue <- e
 	bs.mu.Unlock()
 	// globalTime = time.Now()

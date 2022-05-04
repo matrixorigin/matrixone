@@ -80,18 +80,18 @@ func (info *partialCkpInfo) IsAllCheckpointed() bool {
 	return info.size == uint32(info.ckps.GetCardinality())
 }
 
-func (info *partialCkpInfo) MergePartialCkpInfo(o *partialCkpInfo){
-	if info.size!=o.size{
+func (info *partialCkpInfo) MergePartialCkpInfo(o *partialCkpInfo) {
+	if info.size != o.size {
 		panic("logic error")
 	}
 	info.ckps.Or(o.ckps)
 }
 
-func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo){
-	if info.size!=cmds.Size{
+func (info *partialCkpInfo) MergeCommandInfos(cmds *entry.CommandInfo) {
+	if info.size != cmds.Size {
 		panic("logic error")
 	}
-	for _,csn:=range cmds.CommandIds{
+	for _, csn := range cmds.CommandIds {
 		info.ckps.Add(csn)
 	}
 }
@@ -274,7 +274,7 @@ func (g *uncommitGroup) IsUncommitGroup() bool {
 func (g *uncommitGroup) IsCommitGroup() bool {
 	return false
 }
-func (g *uncommitGroup) Log(info interface{}) error { //misuxi uncommit info stored in commitgroup
+func (g *uncommitGroup) Log(info interface{}) error { 
 	uncommitInfo := info.(*entry.Info)
 	for _, uncommit := range uncommitInfo.Uncommits {
 		tids, ok := g.UncommitTxn[uncommit.Group]
@@ -324,7 +324,9 @@ func (g *checkpointGroup) Log(info interface{}) error {
 		group := g.vInfo.getGroupById(interval.Group) //todo new group if not exist
 		if group == nil {
 			group = newcommitGroup(g.vInfo, interval.Group)
+			g.vInfo.groupmu.Lock()
 			g.vInfo.groups[interval.Group] = group
+			g.vInfo.groupmu.Unlock()
 		}
 		group.OnCheckpoint(&interval) //todo range -> ckp info
 	}

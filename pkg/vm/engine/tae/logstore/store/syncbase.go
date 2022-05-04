@@ -70,7 +70,7 @@ func (info *checkpointInfo) UpdateWithCommandInfo(lsn uint64, cmds *entry.Comman
 }
 
 func (info *checkpointInfo) GetCheckpointed() uint64 {
-	if info.ranges==nil||len(info.ranges.Intervals)==0{
+	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
 	}
 	return info.ranges.Intervals[0].End
@@ -133,65 +133,62 @@ func (base *syncBase) GetLastAddr(groupName uint32, tid uint64) *VFileAddress {
 	return nil
 }
 
-func (base *syncBase) OnEntryReceived(e entry.Entry) error {
-	if info := e.GetInfo(); info != nil {
-		v := info.(*entry.Info)
-		switch v.Group {
-		case entry.GTCKp:
-			for _, intervals := range v.Checkpoints {
-				ckpInfo, ok := base.checkpointing[intervals.Group]
-				if !ok {
-					ckpInfo = newCheckpointInfo()
-					base.checkpointing[intervals.Group] = ckpInfo
-				}
-				if intervals.Ranges != nil && len(intervals.Ranges.Intervals) > 0 {
-					ckpInfo.UpdateWtihRanges(intervals.Ranges)
-				}
-				if intervals.Command != nil {
-					for lsn, cmds := range intervals.Command {
-						ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
-					}
+func (base *syncBase) OnEntryReceived(v *entry.Info) error {
+	switch v.Group {
+	case entry.GTCKp:
+		for _, intervals := range v.Checkpoints {
+			ckpInfo, ok := base.checkpointing[intervals.Group]
+			if !ok {
+				ckpInfo = newCheckpointInfo()
+				base.checkpointing[intervals.Group] = ckpInfo
+			}
+			if intervals.Ranges != nil && len(intervals.Ranges.Intervals) > 0 {
+				ckpInfo.UpdateWtihRanges(intervals.Ranges)
+			}
+			if intervals.Command != nil {
+				for lsn, cmds := range intervals.Command {
+					ckpInfo.UpdateWithCommandInfo(lsn, &cmds)
 				}
 			}
-		case entry.GTUncommit:
-			// addr := v.Addr.(*VFileAddress)
-			for _, tid := range v.Uncommits {
-				tids, ok := base.uncommits[tid.Group]
-				if !ok {
-					tids = make([]uint64, 0)
-				}
-				existed := false
-				for _, id := range tids {
-					if id == tid.Tid {
-						existed = true
-						break
-					}
-				}
-				if !existed {
-					tids = append(tids, tid.Tid)
-				}
-				base.uncommits[tid.Group] = tids
+		}
+	case entry.GTUncommit:
+		// addr := v.Addr.(*VFileAddress)
+		for _, tid := range v.Uncommits {
+			tids, ok := base.uncommits[tid.Group]
+			if !ok {
+				tids = make([]uint64, 0)
 			}
-			// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
-		default:
-			base.syncing[v.Group] = v.GroupLSN
+			existed := false
+			for _, id := range tids {
+				if id == tid.Tid {
+					existed = true
+					break
+				}
+			}
+			if !existed {
+				tids = append(tids, tid.Tid)
+			}
+			base.uncommits[tid.Group] = tids
 		}
-		base.addrmu.Lock()
-		defer base.addrmu.Unlock()
-		addr := v.Info.(*VFileAddress)
-		versionRanges, ok := base.addrs[addr.Group]
-		if !ok {
-			versionRanges = make(map[int]common.ClosedInterval)
-		}
-		interval, ok := versionRanges[addr.Version]
-		if !ok {
-			interval = common.ClosedInterval{}
-		}
-		interval.TryMerge(common.ClosedInterval{Start: 0, End: addr.LSN})
-		versionRanges[addr.Version] = interval
-		base.addrs[addr.Group] = versionRanges
-		// fmt.Printf("versionsMap is %v\n", base.addrs)
+		// fmt.Printf("receive uncommit %d-%d\n", v.Group, v.GroupLSN)
+	default:
+		base.syncing[v.Group] = v.GroupLSN
 	}
+	base.addrmu.Lock()
+	defer base.addrmu.Unlock()
+	addr := v.Info.(*VFileAddress)
+	versionRanges, ok := base.addrs[addr.Group]
+	if !ok {
+		versionRanges = make(map[int]common.ClosedInterval)
+	}
+	interval, ok := versionRanges[addr.Version]
+	if !ok {
+		interval = common.ClosedInterval{}
+	}
+	interval.TryMerge(common.ClosedInterval{Start: 0, End: addr.LSN})
+	versionRanges[addr.Version] = interval
+	base.addrs[addr.Group] = versionRanges
+	// fmt.Printf("versionsMap is %v\n", base.addrs)
 	return nil
 }
 
@@ -225,34 +222,20 @@ func (base *syncBase) SetSynced(groupId uint32, id uint64) {
 	base.synced.Unlock()
 }
 
-func (base *syncBase) OnCommit(commitInfo *prepareCommit) {
-	for group, checkpointingId := range commitInfo.checkpointing {
+func (base *syncBase) OnCommit() {
+	for group, checkpointing := range base.checkpointing {
+		checkpointingId:=checkpointing.GetCheckpointed()
 		checkpointedId := base.GetCheckpointed(group)
 		if checkpointingId > checkpointedId {
 			base.SetCheckpointed(group, checkpointingId)
 		}
 	}
 
-	for group, syncingId := range commitInfo.syncing {
+	for group, syncingId := range base.syncing {
 		syncedId := base.GetSynced(group)
 		if syncingId > syncedId {
 			base.SetSynced(group, syncingId)
 		}
-	}
-}
-
-func (base *syncBase) PrepareCommit() *prepareCommit {
-	checkpointing := make(map[uint32]uint64)
-	for group, checkpointingId := range base.checkpointing {
-		checkpointing[group] = checkpointingId.GetCheckpointed()
-	}
-	syncing := make(map[uint32]uint64)
-	for group, syncingId := range base.syncing {
-		syncing[group] = syncingId
-	}
-	return &prepareCommit{
-		checkpointing: checkpointing,
-		syncing:       syncing,
 	}
 }
 

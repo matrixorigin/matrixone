@@ -61,4 +61,6 @@ type Entry interface {
 
 	Duration() time.Duration
 	StartTime()
+	PrintTime()
+	IsPrintTime()bool
 }

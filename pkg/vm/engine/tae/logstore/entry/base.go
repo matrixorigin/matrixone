@@ -22,13 +22,14 @@ var (
 
 type Base struct {
 	*descriptor
-	node    *common.MemNode
-	payload []byte
-	info    interface{}
-	infobuf []byte
-	wg      sync.WaitGroup
-	t0      time.Time
-	err     error
+	node      *common.MemNode
+	payload   []byte
+	info      interface{}
+	infobuf   []byte
+	wg        sync.WaitGroup
+	t0        time.Time
+	printTime bool
+	err       error
 }
 
 type Info struct {
@@ -286,6 +287,12 @@ func (b *Base) StartTime() {
 func (b *Base) Duration() time.Duration {
 	return time.Since(b.t0)
 }
+func (b *Base) PrintTime() {
+	b.printTime = true
+}
+func (b *Base) IsPrintTime()bool{
+	return b.printTime
+}
 func (b *Base) reset() {
 	b.descriptor.reset()
 	if b.node != nil {
@@ -297,7 +304,6 @@ func (b *Base) reset() {
 	b.wg = sync.WaitGroup{}
 	b.err = nil
 }
-
 func (b *Base) GetInfoBuf() []byte {
 	return b.infobuf
 }

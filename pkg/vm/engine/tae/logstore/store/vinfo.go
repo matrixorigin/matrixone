@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ type vInfo struct {
 	vf *vFile
 
 	groups map[uint32]VGroup
+	groupmu sync.RWMutex
 	// Commits     map[uint32]*common.ClosedInterval
 	// Checkpoints map[uint32]*common.ClosedIntervals
 	// UncommitTxn map[uint32][]uint64 // 2% uncommit txn
@@ -24,8 +26,12 @@ type vInfo struct {
 	Addrs  map[uint32]map[uint64]int //group-groupLSN-offset 5%
 	addrmu sync.RWMutex
 
-	unloaded bool
-	loadmu   sync.Mutex
+	unloaded    bool
+	loadmu      sync.Mutex
+	logQueue    chan *entry.Info
+	flushWg     sync.WaitGroup
+	flushCtx    context.Context
+	flushCancel context.CancelFunc
 }
 
 type VFileUncommitInfo struct {
@@ -40,46 +46,30 @@ type VFileAddress struct {
 	Offset  int
 }
 
-//result contains addr, addr size
-// func MarshalAddrs(addrs []*VFileAddress) ([]byte, error) {
-// 	addrsBuf, err := json.Marshal(addrs)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	size := uint32(len(addrsBuf))
-// 	sizebuf := make([]byte, 4)
-// 	binary.BigEndian.PutUint32(sizebuf, size)
-// 	addrsBuf = append(addrsBuf, sizebuf...)
-// 	return addrsBuf, nil
-// }
-
-//marshal addresses, return remained bytes
-// func UnmarshalAddrs(buf []byte) ([]byte, []*VFileAddress, error) {
-// 	addrs := make([]*VFileAddress, 0)
-// 	size := int(binary.BigEndian.Uint32(buf[len(buf)-4:]))
-// 	err := json.Unmarshal(buf[len(buf)-4-size:len(buf)-4], addrs)
-// 	if err != nil {
-// 		return nil, nil, err
-// 	}
-// 	return buf[:len(buf)-4-size], addrs, nil
-// }
-
 func newVInfo(vf *vFile) *vInfo {
-	return &vInfo{
+	info := &vInfo{
 		// Commits:     make(map[uint32]*common.ClosedInterval),
 		// Checkpoints: make(map[uint32]*common.ClosedIntervals),
 		// UncommitTxn: make(map[uint32][]uint64),
 		// TxnCommit:   make(map[string]*roaring64.Bitmap),
 		// TidCidMap: make(map[uint32]map[uint64]uint64),
 		groups: make(map[uint32]VGroup),
+		groupmu: sync.RWMutex{},
 		Addrs:  make(map[uint32]map[uint64]int),
 		addrmu: sync.RWMutex{},
 		vf:     vf,
+
+		logQueue: make(chan *entry.Info, DefaultMaxCommitSize*100),
 	}
+	info.flushCtx, info.flushCancel = context.WithCancel(context.Background())
+	go info.logLoop()
+	return info
 }
 
 func (info *vInfo) OnReplay(r *replayer) {
+	info.addrmu.Lock()
 	info.Addrs = r.vinfoAddrs
+	info.addrmu.Unlock()
 }
 
 func (info *vInfo) LoadMeta() error {
@@ -156,119 +146,80 @@ func (info *vInfo) IsToDelete(c *compactor) (toDelete bool) {
 	return
 }
 
-// func (info *vInfo) GetCommits(groupId uint32) (commits common.ClosedInterval) {
-// 	commits = *info.Commits[groupId]
-// 	return commits
-// }
-
-// func (info *vInfo) GetCheckpoints(groupId uint32) (checkpoint *common.ClosedInterval) {
-// 	checkpoint = make([]common.ClosedInterval, 0)
-// 	for _, interval := range info.Checkpoints[groupId] {
-// 		checkpoint = append(checkpoint, *interval)
-// 	}
-// 	return checkpoint
-// }
-
 func (info *vInfo) String() string {
 	s := ""
+	info.groupmu.RLock()
 	for gid, g := range info.groups {
-		s = fmt.Sprintf("%s%d-%s\n", s, gid, g)
+		s = fmt.Sprintf("%s%d-%s\n", s, gid, g.String())
 	}
+	info.groupmu.RUnlock()
 	return s
-	// s := "("
-	// groups := make(map[uint32]struct{})
-	// for group := range info.Commits {
-	// 	groups[group] = struct{}{}
-	// }
-	// for group := range info.Checkpoints {
-	// 	groups[group] = struct{}{}
-	// }
-	// for group := range info.UncommitTxn {
-	// 	groups[group] = struct{}{}
-	// }
-	// for group := range info.TidCidMap {
-	// 	groups[group] = struct{}{}
-	// }
-	// for group := range groups {
-	// 	s = fmt.Sprintf("%s<%d>-[", s, group)
+}
 
-	// 	commit, ok := info.Commits[group]
-	// 	if ok {
-	// 		s = fmt.Sprintf("%s%s|", s, commit.String())
-	// 	} else {
-	// 		s = fmt.Sprintf("%sNone|", s)
-	// 	}
+func (info *vInfo) logLoop() {
+	infos := make([]*entry.Info, 0, DefaultMaxCommitSize)
+	for {
+		select {
+		case <-info.flushCtx.Done():
+			return
+		case entryInfo := <-info.logQueue:
+			infos = append(infos, entryInfo)
+		Left:
+			for i := 0; i < DefaultMaxCommitSize-1; i++ {
+				select {
+				case entryInfo = <-info.logQueue:
+					infos = append(infos, entryInfo)
+				default:
+					break Left
+				}
+			}
+			info.onLog(infos)
+			infos = infos[:0]
+		}
+	}
+}
 
-	// 	ckps, ok := info.Checkpoints[group]
-	// 	if ok {
-	// 		for _, ckp := range ckps.Intervals {
-	// 			s = fmt.Sprintf("%s%s", s, ckp.String())
-	// 		}
-	// 		s = fmt.Sprintf("%s\n", s)
-	// 	} else {
-	// 		s = fmt.Sprintf("%sNone\n", s)
-	// 	}
+func (info *vInfo) onLog(infos []*entry.Info) {
+	for _, vi := range infos {
+		var err error
+		switch vi.Group {
+		case entry.GTCKp:
+			err = info.LogCheckpoint(vi)
+		case entry.GTUncommit:
+			err = info.LogUncommitInfo(vi)
+		default:
+			err = info.LogCommit(vi)
+		}
+		if err != nil {
+			panic(err)
+		}
+		info.addrmu.Lock()
+		addr := vi.Info.(*VFileAddress)
+		addrsMap, ok := info.Addrs[addr.Group]
+		if !ok {
+			addrsMap = make(map[uint64]int)
+		}
+		addrsMap[addr.LSN] = addr.Offset
+		info.Addrs[addr.Group] = addrsMap
+		info.addrmu.Unlock()
+	}
+	info.flushWg.Add(-1 * len(infos))
+}
 
-	// 	uncommits, ok := info.UncommitTxn[group]
-	// 	if ok {
-	// 		s = fmt.Sprintf("%s %v\n", s, uncommits)
-	// 	} else {
-	// 		s = fmt.Sprintf("%sNone\n", s)
-	// 	}
-
-	// 	tidcid, ok := info.TidCidMap[group]
-	// 	if ok {
-	// 		for tid, cid := range tidcid {
-	// 			s = fmt.Sprintf("%s %v-%v,", s, tid, cid)
-	// 		}
-	// 		s = fmt.Sprintf("%s]\n", s)
-	// 	} else {
-	// 		s = fmt.Sprintf("%sNone]\n", s)
-	// 	}
-	// }
-	// s = fmt.Sprintf("%s)", s)
-	// return s
+func (info *vInfo) close() {
+	info.flushWg.Wait()
+	info.flushCancel()
 }
 
 func (info *vInfo) Log(v interface{}) error {
 	if v == nil {
 		return nil
 	}
-	vi := v.(*entry.Info)
-	var err error
-	switch vi.Group {
-	case entry.GTCKp:
-		err = info.LogCheckpoint(vi)
-	case entry.GTUncommit:
-		err = info.LogUncommitInfo(vi)
-	default:
-		err = info.LogCommit(vi)
-	}
-	if err != nil {
-		return err
-	}
-	info.addrmu.Lock()
-	defer info.addrmu.Unlock()
-	addr := vi.Info.(*VFileAddress)
-	addrsMap, ok := info.Addrs[addr.Group]
-	if !ok {
-		addrsMap = make(map[uint64]int)
-	}
-	addrsMap[addr.LSN] = addr.Offset
-	info.Addrs[addr.Group] = addrsMap
+	info.flushWg.Add(1)
+	info.logQueue <- v.(*entry.Info)
 	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
-
-// func (info *vInfo) LogTxnInfo(entryInfo *entry.Info) error {
-// 	g,ok:=info.groups[entryInfo.Group]
-// 	if !ok{
-// 		g=newcommitGroup(info)
-// 	}
-// 	g.Log(entryInfo)
-// 	info.groups[entryInfo.Group]=g
-// 	return nil
-// }
 
 func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {
 	g, ok := info.groups[entryInfo.Group]
@@ -276,7 +227,9 @@ func (info *vInfo) LogUncommitInfo(entryInfo *entry.Info) error {
 		g = newuncommitGroup(info, entryInfo.Group)
 	}
 	g.Log(entryInfo)
+	info.groupmu.Lock()
 	info.groups[entryInfo.Group] = g
+	info.groupmu.Unlock()
 	return nil
 }
 
@@ -289,7 +242,9 @@ func (info *vInfo) LogCommit(entryInfo *entry.Info) error {
 	if err != nil {
 		return err
 	}
+	info.groupmu.Lock()
 	info.groups[entryInfo.Group] = g
+	info.groupmu.Unlock()
 	return nil
 }
 
@@ -299,7 +254,9 @@ func (info *vInfo) LogCheckpoint(entryInfo *entry.Info) error {
 		g = newcheckpointGroup(info, entryInfo.Group)
 	}
 	g.Log(entryInfo)
+	info.groupmu.Lock()
 	info.groups[entryInfo.Group] = g
+	info.groupmu.Unlock()
 	return nil
 }
 

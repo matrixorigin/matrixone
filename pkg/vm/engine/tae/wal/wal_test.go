@@ -38,6 +38,10 @@ func TestCheckpoint1(t *testing.T) {
 	assert.Nil(t, err)
 	err = e.WaitDone()
 	assert.Nil(t, err)
+	testutils.WaitExpect(400,func()bool{
+		_, err = driver.LoadEntry(GroupC, lsn)
+		return err==nil
+	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
 
@@ -80,9 +84,11 @@ func TestCheckpoint1(t *testing.T) {
 		CSN:  1,
 		Size: 2,
 	}}
-	ckp, err := driver.Checkpoint(index)
+	_, err = driver.Checkpoint(index)
 	assert.Nil(t, err)
-	ckp.WaitDone()
+	testutils.WaitExpect(400,func()bool{
+		return lsn==driver.GetCheckpointed()
+	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
 
 	flush3 := entry.GetBase()
@@ -133,6 +139,10 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	err = uncommit.WaitDone()
 	assert.Nil(t, err)
+	testutils.WaitExpect(400,func()bool{
+		_, err = driver.LoadEntry(entry.GTUncommit, lsn)
+		return err==nil
+	})
 	_, err = driver.LoadEntry(entry.GTUncommit, lsn)
 	assert.Nil(t, err)
 
@@ -150,6 +160,10 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	err = commit.WaitDone()
 	assert.Nil(t, err)
+	testutils.WaitExpect(400,func()bool{
+		_, err = driver.LoadEntry(GroupC, lsn)
+		return err==nil
+	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
 
@@ -168,9 +182,11 @@ func TestCheckpoint2(t *testing.T) {
 		CSN:  0,
 		Size: 1,
 	}}
-	ckp, err := driver.Checkpoint(index)
+	_, err = driver.Checkpoint(index)
 	assert.Nil(t, err)
-	ckp.WaitDone()
+	testutils.WaitExpect(400,func()bool{
+		return lsn==driver.GetCheckpointed()
+	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
 
 	flush2 := entry.GetBase()
