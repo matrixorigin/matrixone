@@ -17,6 +17,7 @@ package mergeorder
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -54,16 +55,6 @@ func Prepare(_ *process.Process, arg interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	argument := arg.(*Argument)
-
-	if len(proc.Reg.MergeReceivers) == 1 {
-		reg := proc.Reg.MergeReceivers[0]
-		bat := <-reg.Ch
-		if bat == nil {
-			proc.Reg.MergeReceivers = nil
-		}
-		proc.Reg.InputBatch = bat
-		return true, nil
-	}
 
 	for {
 		switch argument.ctr.state {
