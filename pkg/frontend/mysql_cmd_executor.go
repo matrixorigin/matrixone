@@ -100,9 +100,14 @@ type outputQueue struct {
 	rowIdx uint64
 	length uint64
 	ep     *tree.ExportParam
+	lineStr []byte
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
+}
+
+func (oq *outputQueue) ResetLineStr() {
+	oq.lineStr = oq.lineStr[:0]
 }
 
 func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam) *outputQueue {
