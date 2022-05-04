@@ -29,6 +29,20 @@ type Driver interface {
 	Close() error
 }
 
+func (index *Index) Compare(o *Index) int {
+	if index.LSN > o.LSN {
+		return 1
+	} else if index.LSN < o.LSN {
+		return -1
+	}
+	if index.CSN > o.CSN {
+		return 1
+	} else if index.CSN < o.CSN {
+		return -1
+	}
+	return 0
+}
+
 func (index *Index) Clone() *Index {
 	if index == nil {
 		return nil

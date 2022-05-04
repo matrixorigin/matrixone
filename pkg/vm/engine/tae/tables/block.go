@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -37,14 +38,14 @@ type dataBlock struct {
 	node        *appendableNode
 	file        file.Block
 	bufMgr      base.INodeManager
-	scheduler   tasks.Scheduler
+	scheduler   tasks.TaskScheduler
 	indexHolder acif.IBlockIndexHolder
 	mvcc        *updates.MVCCHandle
 	nice        uint32
 	ckpTs       uint64
 }
 
-func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.Scheduler) *dataBlock {
+func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
 	indexCnt[int(meta.GetSchema().PrimaryKey)] = 2
@@ -101,6 +102,14 @@ func (blk *dataBlock) RefreshIndex() error {
 		blk.indexHolder = impl.NewEmptyNonAppendableBlockIndexHolder()
 	}
 	return blk.indexHolder.(acif.INonAppendableBlockIndexHolder).InitFromHost(blk, blk.meta.GetSchema(), idxCommon.MockIndexBufferManager /* TODO: use dedicated index buffer manager */)
+}
+
+func (blk *dataBlock) MakeCheckpointWalTask(ctx *tasks.Context, ts uint64) (task tasks.Task) {
+	if blk.meta.IsAppendable() {
+		return jobs.NewCheckpointABlkTask(ctx, blk.scheduler, blk.meta.AsCommonID(), blk, ts)
+	}
+	logutil.Warn("TODO")
+	return nil
 }
 
 func (blk *dataBlock) GetID() uint64 { return blk.meta.ID }
@@ -168,6 +177,15 @@ func (blk *dataBlock) MutationInfo() string {
 }
 
 func (blk *dataBlock) EstimateScore() int {
+	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
+		blk.meta.RLock()
+		if blk.meta.IsDroppedCommitted() || blk.meta.IsDroppedCommitted() {
+			blk.meta.RUnlock()
+			return 0
+		}
+		blk.meta.RUnlock()
+		return 100
+	}
 	score := blk.estimateRawScore()
 	score += int(atomic.LoadUint32(&blk.nice))
 	return score

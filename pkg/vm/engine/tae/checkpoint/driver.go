@@ -16,12 +16,14 @@ package checkpoint
 
 import (
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type ckpDriver struct {
@@ -41,8 +43,8 @@ func NewDriver(scheduler tasks.TaskScheduler, cfg *PolicyCfg) *ckpDriver {
 	wg := new(sync.WaitGroup)
 	rqueue := sm.NewSafeQueue(10000, 100, f.onRequests)
 	f.StateMachine = sm.NewStateMachine(wg, f, rqueue, nil)
-	// wqueue := sm.NewSafeQueue(20000, 1000, f.onCheckpoint)
-	// f.StateMachine = sm.NewStateMachine(wg, f, rqueue, wqueue)
+	wqueue := sm.NewSafeQueue(20000, 1000, f.onCheckpoint)
+	f.StateMachine = sm.NewStateMachine(wg, f, rqueue, wqueue)
 	return f
 }
 
@@ -51,6 +53,13 @@ func (f *ckpDriver) String() string {
 }
 
 func (f *ckpDriver) onCheckpoint(items ...interface{}) {
+	start := time.Now()
+	for _, item := range items {
+		ckpEntry := item.(wal.LogEntry)
+		ckpEntry.WaitDone()
+		ckpEntry.Free()
+	}
+	logutil.Infof("Total [%d] WAL Checkpointed | [%s]", len(items), time.Since(start))
 }
 
 func (f *ckpDriver) onRequests(items ...interface{}) {
@@ -63,6 +72,12 @@ func (f *ckpDriver) onRequests(items ...interface{}) {
 
 func (f *ckpDriver) OnUpdateColumn(unit data.CheckpointUnit) {
 	if _, err := f.EnqueueRecevied(unit); err != nil {
+		logutil.Warnf("%v", err)
+	}
+}
+
+func (f *ckpDriver) EnqueueCheckpointEntry(entry wal.LogEntry) {
+	if _, err := f.EnqueueCheckpoint(entry); err != nil {
 		logutil.Warnf("%v", err)
 	}
 }

@@ -90,6 +90,7 @@ func (ckp *Checkpoint) String() string {
 type CheckpointEntry struct {
 	MinTS, MaxTS uint64
 	LogIndexes   []*wal.Index
+	MaxIndex     wal.Index
 	Entries      []*EntryCommand
 }
 
@@ -113,6 +114,9 @@ func (e *CheckpointEntry) AddCommand(cmd *EntryCommand) {
 }
 
 func (e *CheckpointEntry) AddIndex(index *wal.Index) {
+	if e.MaxIndex.Compare(index) < 0 {
+		e.MaxIndex = *index
+	}
 	e.LogIndexes = append(e.LogIndexes, index)
 }
 
@@ -137,6 +141,10 @@ func (e *CheckpointEntry) Unmarshal(buf []byte) (err error) {
 	}
 
 	return
+}
+
+func (e *CheckpointEntry) GetMaxIndex() *wal.Index {
+	return &e.MaxIndex
 }
 
 func (e *CheckpointEntry) Marshal() (buf []byte, err error) {

@@ -1,6 +1,8 @@
 package jobs
 
 import (
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort"
@@ -14,26 +16,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-var CompactBlockTaskFactory = func(meta *catalog.BlockEntry, ioScheduler tasks.Scheduler) tasks.TxnTaskFactory {
+var CompactBlockTaskFactory = func(meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewCompactBlockTask(ctx, txn, meta, ioScheduler)
+		return NewCompactBlockTask(ctx, txn, meta, scheduler)
 	}
 }
 
 type compactBlockTask struct {
 	*tasks.BaseTask
-	txn         txnif.AsyncTxn
-	compacted   handle.Block
-	created     handle.Block
-	meta        *catalog.BlockEntry
-	ioScheduler tasks.Scheduler
+	txn       txnif.AsyncTxn
+	compacted handle.Block
+	created   handle.Block
+	meta      *catalog.BlockEntry
+	scheduler tasks.TaskScheduler
 }
 
-func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, ioScheduler tasks.Scheduler) (task *compactBlockTask, err error) {
+func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
 	task = &compactBlockTask{
-		txn:         txn,
-		meta:        meta,
-		ioScheduler: ioScheduler,
+		txn:       txn,
+		meta:      meta,
+		scheduler: scheduler,
 	}
 	dbName := meta.GetSegment().GetTable().GetDB().GetName()
 	database, err := txn.GetDatabase(dbName)
@@ -78,6 +80,7 @@ func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 func (task *compactBlockTask) GetNewBlock() handle.Block { return task.created }
 
 func (task *compactBlockTask) Execute() (err error) {
+	now := time.Now()
 	data, err := task.PrepareData()
 	if err != nil {
 		return
@@ -97,8 +100,8 @@ func (task *compactBlockTask) Execute() (err error) {
 
 	ctx := tasks.Context{Waitable: true}
 	ioTask := NewFlushBlkTask(&ctx, blockFile, task.txn.GetStartTS(), newMeta, data)
-	if task.ioScheduler != nil {
-		if err = task.ioScheduler.Schedule(ioTask); err != nil {
+	if task.scheduler != nil {
+		if err = task.scheduler.Schedule(ioTask); err != nil {
 			return
 		}
 		if err = ioTask.WaitDone(); err != nil {
@@ -114,10 +117,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	task.created = newBlk
-	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created)
+	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler)
 	if err = task.txn.LogTxnEntry(task.meta.GetSegment().GetTable().GetID(), txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}
+	logutil.Infof("(%s) [Compacted] | (%s) [Created] | %s", task.compacted.Fingerprint().BlockString(), task.created.Fingerprint().BlockString(), time.Since(now))
 	logutil.Debug(idxCommon.MockIndexBufferManager.String())
 	return
 }

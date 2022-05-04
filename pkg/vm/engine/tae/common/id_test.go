@@ -43,7 +43,7 @@ func TestId(t *testing.T) {
 		TableID:   0,
 		SegmentID: 0,
 	}
-	assert.Equal(t, "RelationName<0:0-0-0-0-0>", sid0.String())
+	assert.Equal(t, "<0:0-0-0-0-0>", sid0.String())
 	assert.Equal(t, false, sid0.IsSameSegment(sid1))
 	assert.Equal(t, true, sid0.IsSameSegment(sid00))
 	sid00.NextSegment()
@@ -59,9 +59,9 @@ func TestId(t *testing.T) {
 		BlockID:   1,
 	}
 	assert.Equal(t, false, bid0.IsSameBlock(bid1))
-	assert.Equal(t, "RelationName<0>", bid0.TableString())
-	assert.Equal(t, "RelationName<0:0-0>", bid0.SegmentString())
-	assert.Equal(t, "RelationName<0:0-0-0>", bid0.BlockString())
+	assert.Equal(t, "TBL<0>", bid0.TableString())
+	assert.Equal(t, "SEG<0:0-0>", bid0.SegmentString())
+	assert.Equal(t, "BLK<0:0-0-0>", bid0.BlockString())
 	assert.Equal(t, uint64(0), bid0.AsSegmentID().SegmentID)
 	assert.Equal(t, uint64(0), bid0.AsBlockID().BlockID)
 	assert.Equal(t, uint64(0), bid0.NextBlock().BlockID)

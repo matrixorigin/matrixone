@@ -327,7 +327,7 @@ func TestCompactBlock1(t *testing.T) {
 		}
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
 		t.Log(blkMeta.String())
-		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, nil)
+		task, err := jobs.NewCompactBlockTask(&ctx, txn, blkMeta, db.Scheduler)
 		assert.Nil(t, err)
 		data, err := task.PrepareData()
 		assert.Nil(t, err)
@@ -406,7 +406,7 @@ func TestCompactBlock1(t *testing.T) {
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
-		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock)
+		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler)
 		txn.LogTxnEntry(destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
 		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
 		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
@@ -452,7 +452,7 @@ func TestCompactBlock2(t *testing.T) {
 			block = it.GetBlock()
 			break
 		}
-		task, err := jobs.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry), nil)
+		task, err := jobs.NewCompactBlockTask(ctx, txn, block.GetMeta().(*catalog.BlockEntry), db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -482,7 +482,7 @@ func TestCompactBlock2(t *testing.T) {
 		t.Log(rel.SimplePPString(common.PPL1))
 		seg, _ := rel.GetSegment(newBlockFp.SegmentID)
 		blk, _ := seg.GetBlock(newBlockFp.BlockID)
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -513,7 +513,7 @@ func TestCompactBlock2(t *testing.T) {
 		}
 		assert.Equal(t, 1, cnt)
 
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -557,7 +557,7 @@ func TestCompactBlock2(t *testing.T) {
 		err = blk2.RangeDelete(7, 7)
 		assert.Nil(t, err)
 
-		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), nil)
+		task, err := jobs.NewCompactBlockTask(ctx, txn, blk.GetMeta().(*catalog.BlockEntry), db.Scheduler)
 		assert.Nil(t, err)
 		worker.SendOp(task)
 		err = task.WaitDone()
@@ -1048,7 +1048,7 @@ func TestGCBlock1(t *testing.T) {
 	it := rel.MakeBlockIt()
 	blk := it.GetBlock()
 	meta := blk.GetMeta().(*catalog.BlockEntry)
-	task, err := jobs.NewCompactBlockTask(nil, txn, meta, nil)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
 	assert.Nil(t, err)
 	err = task.OnExec()
 	assert.Nil(t, err)
@@ -1139,7 +1139,7 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, mask.Contains(offset))
 		t.Log(vec.String())
-		task, err := jobs.NewCompactBlockTask(nil, txn, meta, nil)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.Scheduler)
 		assert.Nil(t, err)
 		err = task.OnExec()
 		assert.Nil(t, err)

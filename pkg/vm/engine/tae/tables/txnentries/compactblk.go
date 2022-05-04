@@ -8,22 +8,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type compactBlockEntry struct {
 	sync.RWMutex
-	txn      txnif.AsyncTxn
-	logIndex *wal.Index
-	from     handle.Block
-	to       handle.Block
+	txn       txnif.AsyncTxn
+	logIndex  *wal.Index
+	from      handle.Block
+	to        handle.Block
+	scheduler tasks.TaskScheduler
 }
 
-func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block) *compactBlockEntry {
+func NewCompactBlockEntry(txn txnif.AsyncTxn, from, to handle.Block, scheduler tasks.TaskScheduler) *compactBlockEntry {
 	return &compactBlockEntry{
-		txn:  txn,
-		from: from,
-		to:   to,
+		txn:       txn,
+		from:      from,
+		to:        to,
+		scheduler: scheduler,
 	}
 }
 
@@ -33,9 +36,16 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 }
 func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
-	entry.logIndex = index
-	// entry.txn = nil
+	entry.scheduler.Checkpoint([]*wal.Index{index})
+	entry.PostCommit()
 	return
+}
+func (entry *compactBlockEntry) PostCommit() {
+	meta := entry.from.GetMeta().(*catalog.BlockEntry)
+	task := meta.GetBlockData().MakeCheckpointWalTask(nil, entry.txn.GetCommitTS())
+	if task != nil {
+		entry.scheduler.Schedule(task)
+	}
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	// TODO:

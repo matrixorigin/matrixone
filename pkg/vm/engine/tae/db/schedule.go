@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type taskScheduler struct {
@@ -25,9 +26,12 @@ func newTaskScheduler(db *DB, txnWorkers int, ioWorkers int) *taskScheduler {
 	dispatcher := tasks.NewBaseDispatcher()
 	txnHandler := tasks.NewPoolHandler(txnWorkers)
 	txnHandler.Start()
+	genericHandler := tasks.NewPoolHandler(4)
+	genericHandler.Start()
 
 	dispatcher.RegisterHandler(tasks.TxnTask, txnHandler)
 	dispatcher.RegisterHandler(tasks.CompactBlockTask, txnHandler)
+	dispatcher.RegisterHandler(tasks.CheckpointWalTask, genericHandler)
 
 	dispatcher2 := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
 	for i := 0; i < 4; i++ {
@@ -45,6 +49,7 @@ func newTaskScheduler(db *DB, txnWorkers int, ioWorkers int) *taskScheduler {
 
 	s.RegisterDispatcher(tasks.TxnTask, dispatcher)
 	s.RegisterDispatcher(tasks.CompactBlockTask, dispatcher)
+	s.RegisterDispatcher(tasks.CheckpointWalTask, dispatcher)
 	s.RegisterDispatcher(tasks.IOTask, ioDispatcher)
 	s.RegisterDispatcher(tasks.ConsumeLogIndexesTask, dispatcher2)
 	s.Start()
@@ -55,4 +60,14 @@ func (s *taskScheduler) ScheduleTxnTask(ctx *tasks.Context, factory tasks.TxnTas
 	task = NewScheduledTxnTask(ctx, s.db, factory)
 	err = s.Schedule(task)
 	return
+}
+
+func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
+	task := NewCheckpointWalTask(nil, s.db, indexes)
+	err = s.Schedule(task)
+	return
+}
+
+func (s *taskScheduler) GetCheckpointed() uint64 {
+	return s.db.Wal.GetCheckpointed()
 }

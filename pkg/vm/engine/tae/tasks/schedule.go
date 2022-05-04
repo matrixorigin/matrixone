@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
 )
 
@@ -24,6 +25,8 @@ type Scheduler interface {
 type TaskScheduler interface {
 	Scheduler
 	ScheduleTxnTask(ctx *Context, factory TxnTaskFactory) (Task, error)
+	Checkpoint(indexes []*wal.Index) error
+	GetCheckpointed() uint64
 }
 
 type BaseScheduler struct {

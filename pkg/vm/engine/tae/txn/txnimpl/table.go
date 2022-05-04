@@ -139,7 +139,8 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 			panic("not expected")
 		}
 		forceFlush := i < len(tbl.inodes)-1
-		csn := cmdMgr.GetCSN()
+		// csn := cmdMgr.GetCSN()
+		csn := uint32(0xffff) // Special cmd
 		cmd, entry, err := node.MakeCommand(csn, forceFlush)
 		if err != nil {
 			panic(err)
@@ -150,7 +151,7 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) error {
 		node.ToTransient()
 		h.Close()
 		if cmd != nil {
-			cmdMgr.AddCmd(cmd)
+			cmdMgr.AddInternalCmd(cmd)
 		}
 	}
 	tbl.csnStart = uint32(cmdMgr.GetCSN())

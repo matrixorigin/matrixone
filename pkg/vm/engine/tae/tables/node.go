@@ -157,7 +157,11 @@ func (node *appendableNode) OnUnload() {
 	node.data.Close()
 	node.data = nil
 	node.SetBlockMaxFlushTS(ts)
-	ckpTask := jobs.NewCheckpointABlkTask(tasks.WaitableCtx, nil, node.block.meta.AsCommonID(), node.block, ts)
+	// ckpTask := jobs.NewCheckpointABlkTask(tasks.WaitableCtx, nil, node.block.meta.AsCommonID(), node.block, ts)
+	ckpTask := node.block.MakeCheckpointWalTask(tasks.WaitableCtx, ts)
+	if ckpTask == nil {
+		return
+	}
 	if node.block.scheduler != nil {
 		node.block.scheduler.Schedule(ckpTask)
 		if err := ckpTask.WaitDone(); err != nil {

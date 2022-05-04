@@ -11,10 +11,10 @@ import (
 type DataFactory struct {
 	fileFactory  file.SegmentFileFactory
 	appendBufMgr base.INodeManager
-	scheduler    tasks.Scheduler
+	scheduler    tasks.TaskScheduler
 }
 
-func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, scheduler tasks.Scheduler) *DataFactory {
+func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, scheduler tasks.TaskScheduler) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,

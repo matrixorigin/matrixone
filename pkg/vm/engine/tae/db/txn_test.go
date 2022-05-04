@@ -498,10 +498,10 @@ func TestApp1(t *testing.T) {
 	wg.Wait()
 	t.Log(c.SimplePPString(common.PPL1))
 	{
-		txn := mgr.StartTxn(nil)
-		db, _ := txn.GetDatabase(app1.DBName)
-		rel, _ := db.GetRelationByName(repertory.Name)
-		t.Log(rel.SimplePPString(common.PPL1))
+		// txn := mgr.StartTxn(nil)
+		// db, _ := txn.GetDatabase(app1.DBName)
+		// rel, _ := db.GetRelationByName(repertory.Name)
+		// t.Log(rel.SimplePPString(common.PPL1))
 	}
 }
 

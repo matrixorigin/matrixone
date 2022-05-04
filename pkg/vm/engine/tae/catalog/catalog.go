@@ -9,7 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/sirupsen/logrus"
 )
 
@@ -24,7 +24,7 @@ type Catalog struct {
 	*sync.RWMutex
 	store store.Store
 
-	wal         wal.Driver
+	scheduler   tasks.TaskScheduler
 	ckpmu       sync.RWMutex
 	checkpoints []*Checkpoint
 
@@ -36,7 +36,7 @@ type Catalog struct {
 	commitMu sync.RWMutex
 }
 
-func MockCatalog(dir, name string, cfg *store.StoreCfg, logDriver wal.Driver) *Catalog {
+func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
 	var driver store.Store
 	var err error
 	driver, err = store.NewBaseStore(dir, name, cfg)
@@ -51,7 +51,7 @@ func MockCatalog(dir, name string, cfg *store.StoreCfg, logDriver wal.Driver) *C
 		nameNodes:   make(map[string]*nodeList),
 		link:        new(common.Link),
 		checkpoints: make([]*Checkpoint, 0),
-		wal:         logDriver,
+		scheduler:   scheduler,
 	}
 	// catalog.StateMachine.Start()
 	return catalog
@@ -307,18 +307,18 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 		panic(err)
 	}
 	logutil.Infof("SaveCheckpointed: %s", time.Since(now))
+	// for i, index := range entry.LogIndexes {
+	// 	logutil.Infof("%d: %s", i, index.String())
+	// }
 	now = time.Now()
-	ckpEntry, err := catalog.wal.Checkpoint(entry.LogIndexes)
+	err = catalog.scheduler.Checkpoint(entry.LogIndexes)
 	if err != nil {
-		panic(err)
-	}
-	defer ckpEntry.Free()
-	if err = ckpEntry.WaitDone(); err != nil {
 		panic(err)
 	}
 	logutil.Infof("CheckpointWal: %s", time.Since(now))
 	catalog.ckpmu.Lock()
 	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
 	catalog.ckpmu.Unlock()
+	logutil.Infof("Max LogIndex: %s", entry.MaxIndex.String())
 	return
 }

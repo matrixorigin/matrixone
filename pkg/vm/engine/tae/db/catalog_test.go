@@ -7,6 +7,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -197,7 +198,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 	db.CreateRelation(schema)
 	txn.Commit()
 
-	pool, _ := ants.NewPool(100)
+	pool, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
 	mockRes := func() {
 		defer wg.Done()
@@ -225,13 +226,20 @@ func TestCheckpointCatalog2(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
 		pool.Submit(mockRes)
 	}
 	wg.Wait()
-	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	ts := tae.TxnMgr.StatSafeTS()
+	entry := tae.Catalog.PrepareCheckpoint(0, ts)
+	maxIndex := entry.GetMaxIndex()
+	tae.Catalog.Checkpoint(ts)
+	testutils.WaitExpect(1000, func() bool {
+		ckp := tae.Scheduler.GetCheckpointed()
+		return ckp == maxIndex.LSN
+	})
+	assert.Equal(t, maxIndex.LSN, tae.Scheduler.GetCheckpointed())
 }
 
 func TestCheckpointCatalog(t *testing.T) {

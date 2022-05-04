@@ -26,6 +26,10 @@ func (mgr *commandManager) GetCSN() uint32 {
 	return mgr.csn
 }
 
+func (mgr *commandManager) AddInternalCmd(cmd txnif.TxnCmd) {
+	mgr.cmd.AddCmd(cmd)
+}
+
 func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
 	mgr.cmd.AddCmd(cmd)
 	mgr.csn++

@@ -137,7 +137,7 @@ func TestSchedule1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
-		factory := jobs.CompactBlockTaskFactory(blkMeta, nil)
+		factory := jobs.CompactBlockTaskFactory(blkMeta, db.Scheduler)
 		ctx := tasks.Context{Waitable: true}
 		task, err := db.Scheduler.ScheduleTxnTask(&ctx, factory)
 		assert.Nil(t, err)
