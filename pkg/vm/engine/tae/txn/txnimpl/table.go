@@ -653,7 +653,7 @@ func (tbl *txnTable) Rows() uint32 {
 }
 
 func (tbl *txnTable) PreCommitDededup() (err error) {
-	if tbl.index == nil {
+	if tbl.index == nil || tbl.index.Count() == 0 {
 		return
 	}
 	schema := tbl.entry.GetSchema()

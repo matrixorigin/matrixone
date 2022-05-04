@@ -9,6 +9,7 @@ import (
 const (
 	GroupC uint32 = iota + 10
 	GroupUC
+	GroupCatalog
 )
 
 type Index struct {
@@ -28,6 +29,16 @@ type Driver interface {
 	Close() error
 }
 
+func (index *Index) Clone() *Index {
+	if index == nil {
+		return nil
+	}
+	return &Index{
+		LSN:  index.LSN,
+		CSN:  index.CSN,
+		Size: index.Size,
+	}
+}
 func (index *Index) String() string {
 	if index == nil {
 		return "<nil index>"

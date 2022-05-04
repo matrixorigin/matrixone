@@ -48,12 +48,12 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		Closed:      new(atomic.Value),
 	}
 
-	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil)
+	db.Wal = wal.NewDriver(dirname, WALDir, nil)
+	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil, db.Wal)
 	db.Catalog = db.Opts.Catalog
 
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.TxnTaskWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
-	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory)

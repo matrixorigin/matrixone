@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -50,6 +52,12 @@ func (e *DBEntry) Compare(o common.NodePayload) int {
 func (e *DBEntry) GetName() string { return e.name }
 
 func (e *DBEntry) String() string {
+	e.RLock()
+	defer e.RUnlock()
+	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
+}
+
+func (e *DBEntry) StringLocked() string {
 	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.String(), e.name)
 }
 
@@ -234,4 +242,51 @@ func (e *DBEntry) PrepareRollback() (err error) {
 		err = e.catalog.RemoveEntry(e)
 	}
 	return
+}
+
+func (entry *DBEntry) WriteTo(w io.Writer) (err error) {
+	if err = entry.BaseEntry.WriteTo(w); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, uint16(len(entry.name))); err != nil {
+		return
+	}
+	_, err = w.Write([]byte(entry.name))
+	return
+}
+
+func (entry *DBEntry) ReadFrom(r io.Reader) (err error) {
+	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+		return
+	}
+	size := uint16(0)
+	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
+		return
+	}
+	buf := make([]byte, size)
+	if _, err = r.Read(buf); err != nil {
+		return
+	}
+	entry.name = string(buf)
+	return
+}
+
+func (entry *DBEntry) MakeLogEntry() *EntryCommand {
+	return newDBCmd(0, CmdLogDatabase, entry)
+}
+
+func (entry *DBEntry) Clone() CheckpointItem {
+	cloned := &DBEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		name:      entry.name,
+	}
+	return cloned
+}
+
+func (entry *DBEntry) CloneCreate() CheckpointItem {
+	cloned := &DBEntry{
+		BaseEntry: entry.BaseEntry.CloneCreate(),
+		name:      entry.name,
+	}
+	return cloned
 }

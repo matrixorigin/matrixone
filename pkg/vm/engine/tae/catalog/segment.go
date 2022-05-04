@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -210,4 +212,43 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 		err = entry.GetTable().RemoveEntry(entry)
 	}
 	return
+}
+
+func (entry *SegmentEntry) WriteTo(w io.Writer) (err error) {
+	if err = entry.BaseEntry.WriteTo(w); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
+		return
+	}
+	return
+}
+
+func (entry *SegmentEntry) ReadFrom(r io.Reader) (err error) {
+	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+		return
+	}
+	return binary.Read(r, binary.BigEndian, &entry.state)
+}
+
+func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {
+	return newSegmentCmd(0, CmdLogSegment, entry)
+}
+
+func (entry *SegmentEntry) Clone() CheckpointItem {
+	cloned := &SegmentEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		state:     entry.state,
+		table:     entry.table,
+	}
+	return cloned
+}
+
+func (entry *SegmentEntry) CloneCreate() CheckpointItem {
+	cloned := &SegmentEntry{
+		BaseEntry: entry.BaseEntry.CloneCreate(),
+		state:     entry.state,
+		table:     entry.table,
+	}
+	return cloned
 }

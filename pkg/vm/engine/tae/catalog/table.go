@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -140,6 +141,10 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 func (entry *TableEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
+	return entry.StringLocked()
+}
+
+func (entry *TableEntry) StringLocked() string {
 	return fmt.Sprintf("TABLE%s[name=%s]", entry.BaseEntry.String(), entry.schema.Name)
 }
 
@@ -210,4 +215,48 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 		err = entry.GetDB().RemoveEntry(entry)
 	}
 	return
+}
+
+func (entry *TableEntry) WriteTo(w io.Writer) (err error) {
+	if err = entry.BaseEntry.WriteTo(w); err != nil {
+		return
+	}
+	buf, err := entry.schema.Marshal()
+	if err != nil {
+		return
+	}
+	_, err = w.Write(buf)
+	return
+}
+
+func (entry *TableEntry) ReadFrom(r io.Reader) (err error) {
+	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+		return
+	}
+	if entry.schema == nil {
+		entry.schema = NewEmptySchema("")
+	}
+	return entry.schema.ReadFrom(r)
+}
+
+func (entry *TableEntry) MakeLogEntry() *EntryCommand {
+	return newTableCmd(0, CmdLogTable, entry)
+}
+
+func (entry *TableEntry) Clone() CheckpointItem {
+	cloned := &TableEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		schema:    entry.schema,
+		db:        entry.db,
+	}
+	return cloned
+}
+
+func (entry *TableEntry) CloneCreate() CheckpointItem {
+	cloned := &TableEntry{
+		BaseEntry: entry.BaseEntry.CloneCreate(),
+		schema:    entry.schema,
+		db:        entry.db,
+	}
+	return cloned
 }

@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -16,6 +18,12 @@ type BlockEntry struct {
 	segment *SegmentEntry
 	state   EntryState
 	blkData data.Block
+}
+
+func NewEmptyBlockEntry() *BlockEntry {
+	return &BlockEntry{
+		BaseEntry: new(BaseEntry),
+	}
 }
 
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
@@ -100,4 +108,43 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 		err = entry.GetSegment().RemoveEntry(entry)
 	}
 	return
+}
+
+func (entry *BlockEntry) WriteTo(w io.Writer) (err error) {
+	if err = entry.BaseEntry.WriteTo(w); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
+		return
+	}
+	return
+}
+
+func (entry *BlockEntry) ReadFrom(r io.Reader) (err error) {
+	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+		return
+	}
+	return binary.Read(r, binary.BigEndian, &entry.state)
+}
+
+func (entry *BlockEntry) MakeLogEntry() *EntryCommand {
+	return newBlockCmd(0, CmdLogBlock, entry)
+}
+
+func (entry *BlockEntry) Clone() CheckpointItem {
+	cloned := &BlockEntry{
+		BaseEntry: entry.BaseEntry.Clone(),
+		state:     entry.state,
+		segment:   entry.segment,
+	}
+	return cloned
+}
+
+func (entry *BlockEntry) CloneCreate() CheckpointItem {
+	cloned := &BlockEntry{
+		BaseEntry: entry.BaseEntry.CloneCreate(),
+		state:     entry.state,
+		segment:   entry.segment,
+	}
+	return cloned
 }

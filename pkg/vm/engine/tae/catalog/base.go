@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -35,12 +37,83 @@ type CommitInfo struct {
 	LogIndex *wal.Index
 }
 
+func (info *CommitInfo) WriteTo(w io.Writer) (err error) {
+	if err = binary.Write(w, binary.BigEndian, info.CurrOp); err != nil {
+		return
+	}
+	return
+}
+
+func (info *CommitInfo) ReadFrom(r io.Reader) (err error) {
+	if err = binary.Read(r, binary.BigEndian, &info.CurrOp); err != nil {
+		return
+	}
+	return
+}
+
+func (info *CommitInfo) Clone() *CommitInfo {
+	return &CommitInfo{
+		CurrOp:   info.CurrOp,
+		LogIndex: info.LogIndex.Clone(),
+	}
+}
+
 type BaseEntry struct {
 	*sync.RWMutex
 	CommitInfo
 	PrevCommit         *CommitInfo
 	ID                 uint64
 	CreateAt, DeleteAt uint64
+}
+
+func (be *BaseEntry) CloneCreate() *BaseEntry {
+	info := be.PrevCommit.Clone()
+	cloned := &BaseEntry{
+		CommitInfo: *info,
+		ID:         be.ID,
+		CreateAt:   be.CreateAt,
+	}
+	return cloned
+}
+
+func (be *BaseEntry) Clone() *BaseEntry {
+	info := be.CommitInfo.Clone()
+	cloned := &BaseEntry{
+		CommitInfo: *info,
+		ID:         be.ID,
+		CreateAt:   be.CreateAt,
+		DeleteAt:   be.DeleteAt,
+	}
+	return cloned
+}
+
+func (be *BaseEntry) WriteTo(w io.Writer) (err error) {
+	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, be.CreateAt); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, be.DeleteAt); err != nil {
+		return
+	}
+	if err = be.CommitInfo.WriteTo(w); err != nil {
+		return
+	}
+	return
+}
+
+func (be *BaseEntry) ReadFrom(r io.Reader) (err error) {
+	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &be.CreateAt); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &be.DeleteAt); err != nil {
+		return
+	}
+	return be.CommitInfo.ReadFrom(r)
 }
 
 func (be *BaseEntry) GetTxn() txnif.TxnReader { return be.Txn }
@@ -110,9 +183,9 @@ func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
 	// if be.Txn == nil {
 	// 	panic("logic error")
 	// }
-	if be.PrevCommit != nil {
-		be.PrevCommit = nil
-	}
+	// if be.PrevCommit != nil {
+	// 	be.PrevCommit = nil
+	// }
 	be.Txn = nil
 	be.LogIndex = index
 	return nil
@@ -163,7 +236,8 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 			panic("unexpected")
 		}
 		be.PrevCommit = &CommitInfo{
-			CurrOp: be.CurrOp,
+			CurrOp:   be.CurrOp,
+			LogIndex: be.LogIndex,
 		}
 		be.Txn = txnCtx
 		be.CurrOp = OpSoftDelete
@@ -303,7 +377,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 }
 
 func (be *BaseEntry) String() string {
-	s := fmt.Sprintf("[Op=%s][ID=%d][%d,%d]", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt)
+	s := fmt.Sprintf("[Op=%s][ID=%d][%d,%d]%s", OpNames[be.CurrOp], be.ID, be.CreateAt, be.DeleteAt, be.LogIndex.String())
 	if be.Txn != nil {
 		s = fmt.Sprintf("%s%s", s, be.Txn.Repr())
 	}

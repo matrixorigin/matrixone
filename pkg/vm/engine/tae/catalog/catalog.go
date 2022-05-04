@@ -3,10 +3,13 @@ package catalog
 import (
 	"fmt"
 	"sync"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/sirupsen/logrus"
 )
 
@@ -18,10 +21,12 @@ import (
 
 type Catalog struct {
 	*IDAlloctor
-	// sm.ClosedState
-	// sm.StateMachine
 	*sync.RWMutex
 	store store.Store
+
+	wal         wal.Driver
+	ckpmu       sync.RWMutex
+	checkpoints []*Checkpoint
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
@@ -31,7 +36,7 @@ type Catalog struct {
 	commitMu sync.RWMutex
 }
 
-func MockCatalog(dir, name string, cfg *store.StoreCfg) *Catalog {
+func MockCatalog(dir, name string, cfg *store.StoreCfg, logDriver wal.Driver) *Catalog {
 	var driver store.Store
 	var err error
 	driver, err = store.NewBaseStore(dir, name, cfg)
@@ -39,12 +44,14 @@ func MockCatalog(dir, name string, cfg *store.StoreCfg) *Catalog {
 		panic(err)
 	}
 	catalog := &Catalog{
-		RWMutex:    new(sync.RWMutex),
-		IDAlloctor: NewIDAllocator(),
-		store:      driver,
-		entries:    make(map[uint64]*common.DLNode),
-		nameNodes:  make(map[string]*nodeList),
-		link:       new(common.Link),
+		RWMutex:     new(sync.RWMutex),
+		IDAlloctor:  NewIDAllocator(),
+		store:       driver,
+		entries:     make(map[uint64]*common.DLNode),
+		nameNodes:   make(map[string]*nodeList),
+		link:        new(common.Link),
+		checkpoints: make([]*Checkpoint, 0),
+		wal:         logDriver,
 	}
 	// catalog.StateMachine.Start()
 	return catalog
@@ -132,7 +139,14 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 		it.Next()
 	}
 
-	head := fmt.Sprintf("CATALOG[CNT=%d]", cnt)
+	var ckp *Checkpoint
+	catalog.ckpmu.RLock()
+	if len(catalog.checkpoints) > 0 {
+		ckp = catalog.checkpoints[len(catalog.checkpoints)-1]
+	}
+	catalog.ckpmu.RUnlock()
+
+	head := fmt.Sprintf("CATALOG[CNT=%d][%s]", cnt, ckp.String())
 
 	if len(body) == 0 {
 		return head
@@ -193,29 +207,6 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 func (catalog *Catalog) CreateDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
 	var err error
 	catalog.Lock()
-	// node := catalog.txnGetNodeByNameLocked(name, txnCtx)
-	// if node != nil {
-	// 	record := node.payload.(*DBEntry)
-	// 	record.RLock()
-	// 	defer record.RUnlock()
-	// 	if record.Txn != nil {
-	// 		if record.Txn.GetID() == txnCtx.GetID() {
-	// 			if !record.IsDroppedUncommitted() {
-	// 				err = ErrDuplicate
-	// 			}
-	// 		} else {
-	// 			err = txnif.TxnWWConflictErr
-	// 		}
-	// 	} else {
-	// 		if !record.HasDropped() {
-	// 			err = ErrDuplicate
-	// 		}
-	// 	}
-	// 	if err != nil {
-	// 		catalog.Unlock()
-	// 		return nil, err
-	// 	}
-	// }
 	entry := NewDBEntry(catalog, name, txnCtx)
 	err = catalog.addEntryLocked(entry)
 	catalog.Unlock()
@@ -243,4 +234,91 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		err = nil
 	}
 	return err
+}
+
+func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntry {
+	ckpEntry := NewCheckpointEntry(startTs, endTs)
+	processor := new(LoopProcessor)
+	processor.BlockFn = func(block *BlockEntry) (err error) {
+		entry := block.BaseEntry
+		CheckpointOp(ckpEntry, entry, block, startTs, endTs)
+		return
+	}
+	processor.SegmentFn = func(segment *SegmentEntry) (err error) {
+		entry := segment.BaseEntry
+		CheckpointOp(ckpEntry, entry, segment, startTs, endTs)
+		return
+	}
+	processor.TableFn = func(table *TableEntry) (err error) {
+		entry := table.BaseEntry
+		CheckpointOp(ckpEntry, entry, table, startTs, endTs)
+		return
+	}
+	processor.DatabaseFn = func(database *DBEntry) (err error) {
+		entry := database.BaseEntry
+		CheckpointOp(ckpEntry, entry, database, startTs, endTs)
+		return
+	}
+	catalog.RecurLoop(processor)
+	return ckpEntry
+}
+
+func (catalog *Catalog) GetCheckpointed() uint64 {
+	catalog.ckpmu.RLock()
+	defer catalog.ckpmu.RUnlock()
+	if len(catalog.checkpoints) == 0 {
+		return 0
+	}
+	return catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
+}
+
+func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
+	var minTs uint64
+	catalog.ckpmu.RLock()
+	if len(catalog.checkpoints) != 0 {
+		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
+		if maxTs < lastMax {
+			err = ErrCheckpoint
+		}
+		if maxTs == lastMax {
+			return
+		}
+		minTs = lastMax + 1
+	}
+	catalog.ckpmu.RUnlock()
+	now := time.Now()
+	entry := catalog.PrepareCheckpoint(minTs, maxTs)
+	logutil.Infof("PrepareCheckpoint: %s", time.Since(now))
+	now = time.Now()
+	logEntry, err := entry.MakeLogEntry()
+	if err != nil {
+		return
+	}
+	logutil.Infof("MakeLogEntry: %s", time.Since(now))
+	now = time.Now()
+	defer logEntry.Free()
+	checkpoint := new(Checkpoint)
+	checkpoint.MaxTS = maxTs
+	checkpoint.LSN, err = catalog.store.AppendEntry(0, logEntry)
+	if err != nil {
+		panic(err)
+	}
+	if err = logEntry.WaitDone(); err != nil {
+		panic(err)
+	}
+	logutil.Infof("SaveCheckpointed: %s", time.Since(now))
+	now = time.Now()
+	ckpEntry, err := catalog.wal.Checkpoint(entry.LogIndexes)
+	if err != nil {
+		panic(err)
+	}
+	defer ckpEntry.Free()
+	if err = ckpEntry.WaitDone(); err != nil {
+		panic(err)
+	}
+	logutil.Infof("CheckpointWal: %s", time.Since(now))
+	catalog.ckpmu.Lock()
+	catalog.checkpoints = append(catalog.checkpoints, checkpoint)
+	catalog.ckpmu.Unlock()
+	return
 }
