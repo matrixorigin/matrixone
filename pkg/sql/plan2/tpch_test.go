@@ -16,12 +16,12 @@ package plan2
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 func Test_TPCH_Plan2(t *testing.T) {
@@ -35,7 +35,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Cannot open ddl file, error %v", err)
 	}
 
-	ddls, err := mysql.Parse(string(ddlf))
+	ddls, err := parsers.Parse(dialect.MYSQL, string(ddlf))
 	if ddls == nil || err != nil {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
@@ -55,7 +55,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		t.Errorf("Cannot open queries file, error %v", err)
 	}
 
-	qs, err := mysql.Parse(string(qf))
+	qs, err := parsers.Parse(dialect.MYSQL, string(qf))
 	if qs == nil || err != nil {
 		t.Errorf("DDL Parser failed, error %v", err)
 	}
@@ -76,7 +76,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 		if err != nil {
 			t.Errorf("Cannot open file of query %d, error %v", qn, err)
 		}
-		qns, err := mysql.Parse(string(qnf))
+		qns, err := parsers.Parse(dialect.MYSQL, string(qnf))
 		if qns == nil || err != nil {
 			t.Logf("Query %d Parser failed, error %v", qn, err)
 		}
