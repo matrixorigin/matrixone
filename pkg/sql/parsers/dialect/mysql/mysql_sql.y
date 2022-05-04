@@ -5915,7 +5915,6 @@ reserved_keyword:
 |   MOD
 |   MICROSECOND
 |   MINUTE
-|   MONTH
 |   NATURAL
 |   NOT
 |   NONE
@@ -6065,6 +6064,7 @@ non_reserved_keyword:
 |   MAX_USER_CONNECTIONS
 |   MAX_ROWS
 |   MIN_ROWS
+|   MONTH
 |   NAMES
 |   NCHAR
 |   NUMERIC
