@@ -37,7 +37,7 @@ type DB struct {
 
 	Scheduler tasks.TaskScheduler
 
-	CalibrationTimer wb.IHeartbeater
+	TimedScanner wb.IHeartbeater
 
 	DBLocker io.Closer
 
@@ -59,12 +59,12 @@ func (db *DB) RollbackTxn(txn txnif.AsyncTxn) error {
 
 func (db *DB) startWorkers() (err error) {
 	db.CKPDriver.Start()
-	db.CalibrationTimer.Start()
+	db.TimedScanner.Start()
 	return
 }
 
 func (db *DB) stopWorkers() (err error) {
-	db.CalibrationTimer.Stop()
+	db.TimedScanner.Stop()
 	db.CKPDriver.Stop()
 	return
 }

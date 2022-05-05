@@ -170,7 +170,7 @@ func (blk *dataBlock) MutationInfo() string {
 func (blk *dataBlock) EstimateScore() int {
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
 		blk.meta.RLock()
-		if blk.meta.IsDroppedCommitted() || blk.meta.IsDroppedCommitted() {
+		if blk.meta.IsDroppedCommitted() || blk.meta.IsDroppedUncommitted() {
 			blk.meta.RUnlock()
 			return 0
 		}

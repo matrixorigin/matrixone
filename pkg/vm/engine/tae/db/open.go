@@ -54,18 +54,29 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil, db.Scheduler)
 	db.Catalog = db.Opts.Catalog
 
+	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory)
+	db.TxnMgr.Start()
 
 	db.DBLocker, dbLocker = dbLocker, nil
-	db.TxnMgr.Start()
+
+	// Init checkpoint driver
 	policyCfg := new(checkpoint.PolicyCfg)
 	policyCfg.Levels = int(opts.CheckpointCfg.ExecutionLevels)
 	policyCfg.Interval = opts.CheckpointCfg.ExecutionInterval
 	db.CKPDriver = checkpoint.NewDriver(db.Scheduler, policyCfg)
-	handle := newTimedLooper(db, newCalibrationProcessor(db))
-	db.CalibrationTimer = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.CalibrationInterval)*time.Millisecond, handle)
+
+	// Init timed scanner
+	scanner := NewDBScanner(db, nil)
+	calibrationOp := newCalibrationOp(db)
+	catalogMonotor := newCatalogStatsMonitor(db, opts.CheckpointCfg.CatalogUnCkpLimit, time.Duration(opts.CheckpointCfg.CatalogCkpInterval))
+	scanner.RegisterOp(calibrationOp)
+	scanner.RegisterOp(catalogMonotor)
+	db.TimedScanner = w.NewHeartBeater(time.Duration(opts.CheckpointCfg.ScannerInterval)*time.Millisecond, scanner)
+
+	// Start workers
 	db.startWorkers()
 
 	return

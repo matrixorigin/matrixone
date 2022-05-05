@@ -85,7 +85,7 @@ func TestAppend(t *testing.T) {
 func TestAppend2(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.CalibrationInterval = 10
+	opts.CheckpointCfg.ScannerInterval = 10
 	opts.CheckpointCfg.ExecutionLevels = 2
 	opts.CheckpointCfg.ExecutionInterval = 10
 	db := initDB(t, opts)
@@ -288,7 +288,7 @@ func TestCreateSegment(t *testing.T) {
 func TestCompactBlock1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.CalibrationInterval = 10000
+	opts.CheckpointCfg.ScannerInterval = 10000
 	opts.CheckpointCfg.ExecutionLevels = 20
 	opts.CheckpointCfg.ExecutionInterval = 20000
 	db := initDB(t, opts)

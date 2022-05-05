@@ -114,6 +114,7 @@ func (node *appendableNode) OnUnload() {
 	mvcc := node.block.mvcc
 	readLock := mvcc.GetSharedLock()
 	ts := mvcc.LoadMaxVisible()
+	// if node.GetBlockMaxFlushTS() == ts || ts <= node.block.GetMaxCheckpointTS() {
 	if node.GetBlockMaxFlushTS() == ts {
 		readLock.Unlock()
 		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
@@ -144,12 +145,15 @@ func (node *appendableNode) OnUnload() {
 		panic(err)
 	}
 	if err = task.WaitDone(); err != nil {
+		if err == data.ErrStaleRequest {
+			err = nil
+			return
+		}
 		panic(err)
 	}
 
 	node.data.Close()
 	node.data = nil
-	node.SetBlockMaxFlushTS(ts)
 	node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, scope, node.block.CheckpointWALClosure(ts))
 }
 

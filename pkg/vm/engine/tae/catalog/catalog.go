@@ -270,6 +270,12 @@ func (catalog *Catalog) GetCheckpointed() uint64 {
 	return catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
 }
 
+func (catalog *Catalog) CheckpointClosure(maxTs uint64) tasks.FuncT {
+	return func() error {
+		return catalog.Checkpoint(maxTs)
+	}
+}
+
 func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	var minTs uint64
 	catalog.ckpmu.RLock()
@@ -279,6 +285,7 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 			err = ErrCheckpoint
 		}
 		if maxTs == lastMax {
+			catalog.ckpmu.RUnlock()
 			return
 		}
 		minTs = lastMax + 1

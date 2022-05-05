@@ -13,9 +13,11 @@ const (
 	DefaultBlockMaxRows     = uint32(40000)
 	DefaultBlocksPerSegment = uint16(40)
 
-	DefaultCalibrationInterval = int64(5000) // millisecond
-	DefaultExecutionInterval   = int64(2000) // millisecond
-	DefaultExecutionLevels     = int16(30)
+	DefaultScannerInterval    = int64(5000) // millisecond
+	DefaultExecutionInterval  = int64(2000) // millisecond
+	DefaultExecutionLevels    = int16(30)
+	DefaultCatalogCkpInterval = int64(60000) // millisecond
+	DefaultCatalogUnCkpLimit  = int64(10)
 
 	DefaultIOWorkers      = int(8)
 	DefaultTxnTaskWorkers = int(16)
