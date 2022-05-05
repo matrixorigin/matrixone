@@ -39,11 +39,19 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 ## **下载二进制包**
-从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境中运行MatrixOne。
+从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境或者X86_64及ARM架构的MacOS环境中运行MatrixOne。
 #### 1. 下载二进制包并解压
+
+Linux环境
+```bash
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-linux-amd64.zip
+$ unzip mo-server-v0.4.0-linux-amd64.zip
 ```
-$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.3.0/mo-server-v0.3.0-linux-amd64.zip
-$ unzip mo-server-v0.3.0-linux-amd64.zip
+
+MacOS环境
+```bash
+$ https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-darwin-x86_64.zip
+$ unzip mo-server-v0.4.0-darwin-x86_64.zip
 ```
 
 #### 2. 启动MatrixOne服务
