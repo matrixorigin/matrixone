@@ -1,20 +1,20 @@
-# **LPAD()**
+# **RPAD()**
 
 ## **Description**
 
-This function LPAD(str,len,padstr) returns the string *str*, left-padded with the string *padstr* to a length of *len* characters. If *str* is longer than *len*, the return value is shortened to *len* characters.
+This function RPAD(str,len,padstr) returns the string *str*, right-padded with the string *padstr* to a length of *len* characters. If *str* is longer than *len*, the return value is shortened to *len* characters.
 
 ## **Syntax**
 
 ```
-> LPAD(str,len,padstr)
+> RPAD(str,len,padstr)
 ```
 ## **Arguments**
 |  Arguments   | Description  |
 |  ----  | ----  |
 | str | Required.  The string to be padded. CHAR and VARCHAR both are supported.|
 | len | Required.  |
-| padstr | Required. The string used to pad on the left. CHAR and VARCHAR both are supported.|
+| padstr | Required. The string used to pad on the right. CHAR and VARCHAR both are supported.|
 
 
 
@@ -31,18 +31,18 @@ VALUES
 (4,'Anik Das', 'X'),
 (5,'Riya Jain', 'IX'),
 (6,'Tapan Samanta', 'X');
-> SELECT Student_id, Student_name,LPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
+> SELECT Student_id, Student_name,RPAD(Student_Class, 10, ' _') AS LeftPaddedString FROM t1;
 +------------+-----------------+------------------+
 | Student_id | Student_name    | LeftPaddedString |
 +------------+-----------------+------------------+
-|          1 | Ananya Majumdar |  _ _ _ _IX       |
-|          2 | Anushka Samanta |  _ _ _ _ X       |
-|          3 | Aniket Sharma   |  _ _ _ _XI       |
-|          4 | Anik Das        |  _ _ _ _ X       |
-|          5 | Riya Jain       |  _ _ _ _IX       |
-|          6 | Tapan Samanta   |  _ _ _ _ X       |
+|          1 | Ananya Majumdar | IX _ _ _ _       |
+|          2 | Anushka Samanta | X _ _ _ _        |
+|          3 | Aniket Sharma   | XI _ _ _ _       |
+|          4 | Anik Das        | X _ _ _ _        |
+|          5 | Riya Jain       | IX _ _ _ _       |
+|          6 | Tapan Samanta   | X _ _ _ _        |
 +------------+-----------------+------------------+
-> SELECT Student_id, lpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
+> SELECT Student_id, rpad(Student_name,4,'new') AS LeftPaddedString FROM t1;
 +------------+------------------+
 | Student_id | LeftPaddedString |
 +------------+------------------+
@@ -53,7 +53,7 @@ VALUES
 |          5 | Riya             |
 |          6 | Tapa             |
 +------------+------------------+
-> SELECT Student_id, lpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
+> SELECT Student_id, rpad(Student_name,-4,'new') AS LeftPaddedString FROM t1;
 +------------+------------------+
 | Student_id | LeftPaddedString |
 +------------+------------------+
@@ -64,7 +64,7 @@ VALUES
 |          5 | NULL             |
 |          6 | NULL             |
 +------------+------------------+
-> SELECT Student_id, lpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
+> SELECT Student_id, rpad(Student_name,0,'new') AS LeftPaddedString FROM t1;
 +------------+------------------+
 | Student_id | LeftPaddedString |
 +------------+------------------+
