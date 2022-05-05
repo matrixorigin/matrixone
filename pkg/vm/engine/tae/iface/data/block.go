@@ -60,5 +60,5 @@ type Block interface {
 	SetMaxCheckpointTS(ts uint64)
 	GetMaxCheckpointTS() uint64
 
-	MakeCheckpointWalTask(ctx *tasks.Context, ts uint64) tasks.Task
+	CheckpointWALClosure(endTs uint64) tasks.FuncT
 }

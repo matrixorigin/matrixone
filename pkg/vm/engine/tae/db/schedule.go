@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -51,7 +52,8 @@ func newTaskScheduler(db *DB, txnWorkers int, ioWorkers int) *taskScheduler {
 	s.RegisterDispatcher(tasks.CompactBlockTask, dispatcher)
 	s.RegisterDispatcher(tasks.CheckpointWalTask, dispatcher)
 	s.RegisterDispatcher(tasks.IOTask, ioDispatcher)
-	s.RegisterDispatcher(tasks.ConsumeLogIndexesTask, dispatcher2)
+	s.RegisterDispatcher(tasks.CheckpointDataTask, dispatcher2)
+	s.RegisterDispatcher(tasks.CheckpointCatalogTask, dispatcher2)
 	s.Start()
 	return s
 }
@@ -70,4 +72,16 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 
 func (s *taskScheduler) GetCheckpointed() uint64 {
 	return s.db.Wal.GetCheckpointed()
+}
+
+func (s *taskScheduler) ScheduleFn(ctx *tasks.Context, taskType tasks.TaskType, fn func() error) (task tasks.Task, err error) {
+	task = tasks.NewFnTask(ctx, taskType, fn)
+	err = s.db.Scheduler.Schedule(task)
+	return
+}
+
+func (s *taskScheduler) ScheduleScopedFn(ctx *tasks.Context, taskType tasks.TaskType, scope *common.ID, fn func() error) (task tasks.Task, err error) {
+	task = tasks.NewScopedFnTask(ctx, taskType, scope, fn)
+	err = s.db.Scheduler.Schedule(task)
+	return
 }

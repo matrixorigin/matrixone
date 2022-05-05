@@ -1,11 +1,11 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"github.com/sirupsen/logrus"
 )
 
 type commandManager struct {
@@ -52,6 +52,6 @@ func (mgr *commandManager) ApplyTxnRecord() (logEntry entry.Entry, err error) {
 	logEntry.Unmarshal(buf)
 
 	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
-	logrus.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
+	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return
 }

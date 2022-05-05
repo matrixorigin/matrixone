@@ -8,6 +8,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -16,7 +17,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/panjf2000/ants/v2"
-	"github.com/sirupsen/logrus"
 )
 
 var sampleDir = "/tmp/sample3"
@@ -73,7 +73,7 @@ func main() {
 	}
 	batchCnt := uint64(100)
 	batchRows := uint64(10000) * 1 / 2 * batchCnt
-	logrus.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 	bat := compute.MockBatch(schema.Types(), batchRows, int(schema.PrimaryKey), nil)
 	bats := compute.SplitBatch(bat, int(batchCnt))
 	var wg sync.WaitGroup
@@ -111,7 +111,7 @@ func main() {
 	}
 	wg.Wait()
 	stopProfile()
-	logrus.Infof("Append takes: %s", time.Since(now))
+	logutil.Infof("Append takes: %s", time.Since(now))
 	{
 		txn := tae.StartTxn(nil)
 		eng := moengine.NewEngine(txn)
@@ -133,7 +133,7 @@ func main() {
 				if bat == nil {
 					break
 				}
-				logrus.Infof("bat rows: %d", vector.Length(bat.Vecs[0]))
+				logutil.Infof("bat rows: %d", vector.Length(bat.Vecs[0]))
 			}
 		}
 
@@ -148,5 +148,5 @@ func main() {
 			panic(err)
 		}
 	}
-	logrus.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }

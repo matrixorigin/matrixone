@@ -197,7 +197,6 @@ func (rf *rotateFile) Close() error {
 	rf.commitWg.Wait()
 	rf.commitCancel()
 	rf.wg.Wait()
-	// logrus.Info(rf.GetHistory().String())
 	for _, vf := range rf.uncommitted {
 		vf.Close()
 	}
@@ -207,7 +206,7 @@ func (rf *rotateFile) Close() error {
 func (rf *rotateFile) scheduleNew() error {
 	fname := MakeVersionFile(rf.dir, rf.name, rf.nextVer)
 	rf.nextVer++
-	vf, err := newVFile(nil, fname, int(rf.nextVer), rf.history,rf.bsInfo)
+	vf, err := newVFile(nil, fname, int(rf.nextVer), rf.history, rf.bsInfo)
 	if err != nil {
 		return err
 	}
@@ -301,7 +300,7 @@ func (rf *rotateFile) Load(ver int, groupId uint32, lsn uint64) (entry.Entry, er
 }
 
 func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
-	var vf VFile	
+	var vf VFile
 	rf.RLock()
 	defer rf.RUnlock()
 	for _, vf := range rf.uncommitted {

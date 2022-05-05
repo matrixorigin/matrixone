@@ -11,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -98,19 +97,12 @@ func (task *compactBlockTask) Execute() (err error) {
 	newBlkData := newMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
 
-	ctx := tasks.Context{Waitable: true}
-	ioTask := NewFlushBlkTask(&ctx, blockFile, task.txn.GetStartTS(), newMeta, data)
-	if task.scheduler != nil {
-		if err = task.scheduler.Schedule(ioTask); err != nil {
-			return
-		}
-		if err = ioTask.WaitDone(); err != nil {
-			return
-		}
-	} else {
-		if err = ioTask.OnExec(); err != nil {
-			return
-		}
+	ioTask := NewFlushBlkTask(tasks.WaitableCtx, blockFile, task.txn.GetStartTS(), newMeta, data)
+	if err = task.scheduler.Schedule(ioTask); err != nil {
+		return
+	}
+	if err = ioTask.WaitDone(); err != nil {
+		return
 	}
 
 	if err = newBlkData.RefreshIndex(); err != nil {
@@ -122,6 +114,5 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 	logutil.Infof("(%s) [Compacted] | (%s) [Created] | %s", task.compacted.Fingerprint().BlockString(), task.created.Fingerprint().BlockString(), time.Since(now))
-	logutil.Debug(idxCommon.MockIndexBufferManager.String())
 	return
 }

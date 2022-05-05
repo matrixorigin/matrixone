@@ -15,7 +15,6 @@ import (
 type compactBlockEntry struct {
 	sync.RWMutex
 	txn       txnif.AsyncTxn
-	logIndex  *wal.Index
 	from      handle.Block
 	to        handle.Block
 	scheduler tasks.TaskScheduler
@@ -42,10 +41,7 @@ func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 }
 func (entry *compactBlockEntry) PostCommit() {
 	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	task := meta.GetBlockData().MakeCheckpointWalTask(nil, entry.txn.GetCommitTS())
-	if task != nil {
-		entry.scheduler.Schedule(task)
-	}
+	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	// TODO: from, to, txn

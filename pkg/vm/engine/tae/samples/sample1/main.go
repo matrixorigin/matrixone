@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
-	"github.com/sirupsen/logrus"
 )
 
 var sampleDir = "/tmp/sample1"
@@ -103,8 +103,8 @@ func main() {
 	// }
 
 	stopProfile()
-	logrus.Infof("Append takes: %s", time.Since(now))
+	logutil.Infof("Append takes: %s", time.Since(now))
 	// time.Sleep(time.Second * 100)
-	logrus.Info(tae.TxnBufMgr.String())
-	logrus.Info(tae.MTBufMgr.String())
+	logutil.Info(tae.TxnBufMgr.String())
+	logutil.Info(tae.MTBufMgr.String())
 }

@@ -75,7 +75,6 @@ func (info *insertInfo) GetVisibleOffsetLocked(ts uint64) int {
 		m := (l + h) / 2
 		v, _ := info.ts.GetValue(m)
 		vv := v.(uint64)
-		// logrus.Infof("vv=%d,ts=%d,pos=%d", vv, ts, pos)
 		if vv < ts {
 			l = m + 1
 			pos = m

@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/sirupsen/logrus"
 )
 
 type OpType int8
@@ -133,12 +133,11 @@ func (txn *Txn) GetTxnState(waitIfcommitting bool) int32 {
 	}
 	txn.DoneCond.Wait()
 	txn.DoneCond.L.Unlock()
-	// logrus.Infof("%s-Waited", txn.String())
 	return state
 }
 
 func (txn *Txn) PrepareCommit() error {
-	logrus.Debugf("Prepare Committing %d", txn.ID)
+	logutil.Debugf("Prepare Committing %d", txn.ID)
 	var err error
 	if txn.PrepareCommitFn != nil {
 		err = txn.PrepareCommitFn(txn)
@@ -170,12 +169,12 @@ func (txn *Txn) PreCommit() error {
 }
 
 func (txn *Txn) PrepareRollback() error {
-	logrus.Debugf("Prepare Rollbacking %d", txn.ID)
+	logutil.Debugf("Prepare Rollbacking %d", txn.ID)
 	return txn.Store.PrepareRollback()
 }
 
 func (txn *Txn) WaitDone() error {
-	// logrus.Infof("Wait %s Done", txn.String())
+	// logutil.Infof("Wait %s Done", txn.String())
 	txn.Done()
 	return txn.Err
 }

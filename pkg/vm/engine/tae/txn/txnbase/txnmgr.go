@@ -5,10 +5,10 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
-	"github.com/sirupsen/logrus"
 )
 
 type TxnStoreFactory = func() txnif.TxnStore
@@ -101,7 +101,7 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) {
 func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
 	now := time.Now()
 	txn.SetError(txn.PreCommit())
-	logrus.Debugf("%s PreCommit Takes: %s", txn.String(), time.Since(now))
+	logutil.Debugf("%s PreCommit Takes: %s", txn.String(), time.Since(now))
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -148,7 +148,7 @@ func (mgr *TxnManager) onPreparing(items ...interface{}) {
 		}
 		mgr.EnqueueCheckpoint(op)
 	}
-	logrus.Infof("PrepareCommit %d Txns Takes: %s", len(items), time.Since(now))
+	logutil.Infof("PrepareCommit %d Txns Takes: %s", len(items), time.Since(now))
 }
 
 // TODO
@@ -167,7 +167,7 @@ func (mgr *TxnManager) onCommit(items ...interface{}) {
 			}
 		}
 		op.Txn.WaitDone()
-		logrus.Debugf("%s Done", op.Repr())
+		logutil.Debugf("%s Done", op.Repr())
 	}
-	logrus.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
+	logutil.Infof("Commit %d Txns Takes: %s", len(items), time.Since(now))
 }

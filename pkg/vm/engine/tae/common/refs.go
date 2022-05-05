@@ -16,7 +16,6 @@ package common
 
 import (
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 // IRef is the general representation of the resources

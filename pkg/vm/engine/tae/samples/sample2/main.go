@@ -9,12 +9,12 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/panjf2000/ants/v2"
-	"github.com/sirupsen/logrus"
 )
 
 var sampleDir = "/tmp/sample2"
@@ -90,7 +90,7 @@ func main() {
 	}
 	wg.Wait()
 	stopProfile()
-	logrus.Infof("Append takes: %s", time.Since(now))
+	logutil.Infof("Append takes: %s", time.Since(now))
 
 	{
 		txn := tae.StartTxn(nil)
@@ -107,15 +107,15 @@ func main() {
 		segIt := rel.MakeSegmentIt()
 		for segIt.Valid() {
 			seg := segIt.GetSegment()
-			logrus.Info(seg.String())
+			logutil.Info(seg.String())
 			blkIt := seg.MakeBlockIt()
 			for blkIt.Valid() {
 				blk := blkIt.GetBlock()
-				logrus.Info(blk.String())
+				logutil.Info(blk.String())
 				compressed.Reset()
 				decompressed.Reset()
 				vec, _, err := blk.GetColumnDataById(0, &compressed, &decompressed)
-				logrus.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(vec))
+				logutil.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(vec))
 				if err != nil {
 					panic(err)
 				}
@@ -127,5 +127,5 @@ func main() {
 			panic(err)
 		}
 	}
-	logrus.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
+	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 }

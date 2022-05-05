@@ -16,7 +16,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -139,39 +138,19 @@ func (node *appendableNode) OnUnload() {
 	if dnode != nil {
 		deletes = dnode.GetDeleteMaskLocked()
 	}
-	ctx := tasks.Context{
-		Waitable: true,
+	scope := node.block.meta.AsCommonID()
+	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, node.data, masks, vals, deletes))
+	if err != nil {
+		panic(err)
 	}
-	task := jobs.NewFlushABlkTask(&ctx, node.file, node.block.meta.AsCommonID(), node.data, ts, masks, vals, deletes)
-	if node.block.scheduler != nil {
-		node.block.scheduler.Schedule(task)
-		if err := task.WaitDone(); err != nil {
-			panic(err)
-		}
-	} else {
-		if err := task.OnExec(); err != nil {
-			panic(err)
-		}
+	if err = task.WaitDone(); err != nil {
+		panic(err)
 	}
 
 	node.data.Close()
 	node.data = nil
 	node.SetBlockMaxFlushTS(ts)
-	// ckpTask := jobs.NewCheckpointABlkTask(tasks.WaitableCtx, nil, node.block.meta.AsCommonID(), node.block, ts)
-	ckpTask := node.block.MakeCheckpointWalTask(tasks.WaitableCtx, ts)
-	if ckpTask == nil {
-		return
-	}
-	if node.block.scheduler != nil {
-		node.block.scheduler.Schedule(ckpTask)
-		if err := ckpTask.WaitDone(); err != nil {
-			panic(err)
-		}
-	} else {
-		if err := ckpTask.OnExec(); err != nil {
-			panic(err)
-		}
-	}
+	node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, scope, node.block.CheckpointWALClosure(ts))
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
@@ -186,12 +165,6 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 		n = rows
 	}
 	return
-	// key = txnbase.KeyEncoder.EncodeBlock(
-	// 	node.meta.GetSegment().GetTable().GetDB().GetID(),
-	// 	node.meta.GetSegment().GetTable().GetID(),
-	// 	node.meta.GetSegment().GetID(),
-	// 	node.meta.GetID(),
-	// )
 }
 
 func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {

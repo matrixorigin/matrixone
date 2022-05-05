@@ -205,11 +205,11 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 	entry.RLock()
 	currOp := entry.CurrOp
 	entry.RUnlock()
-	if err = entry.BaseEntry.PrepareRollback(); err != nil {
-		return
-	}
 	if currOp == OpCreate {
 		err = entry.GetTable().RemoveEntry(entry)
+	}
+	if err = entry.BaseEntry.PrepareRollback(); err != nil {
+		return
 	}
 	return
 }

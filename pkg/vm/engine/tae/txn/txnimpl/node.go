@@ -6,10 +6,10 @@ import (
 	"sync/atomic"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/sirupsen/logrus"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
@@ -169,7 +169,7 @@ func (n *insertNode) OnLoad() {
 	if err != nil {
 		panic(err)
 	}
-	logrus.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
+	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
 	buf := e.GetPayload()
 	r := bytes.NewBuffer(buf)
 	cmd, err := txnbase.BuildCommandFrom(r)
@@ -209,7 +209,7 @@ func (n *insertNode) execUnload() (entry wal.LogEntry) {
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)
 		id := n.GetID()
-		logrus.Debugf("Unloading lsn=%d id=%s", seq, id.SegmentString())
+		logutil.Debugf("Unloading lsn=%d id=%s", seq, id.SegmentString())
 	}
 	// e.WaitDone()
 	// e.Free()

@@ -3,11 +3,11 @@ package txnimpl
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/sirupsen/logrus"
 )
 
 type warChecker struct {
@@ -127,7 +127,7 @@ func (checker *warChecker) check() (err error) {
 				entry.RUnlock()
 				state := eTxn.GetTxnState(true)
 				if state != txnif.TxnStateRollbacked {
-					logrus.Infof("TxnRWConflictErr Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
+					logutil.Infof("TxnRWConflictErr Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
 					return txnif.TxnRWConflictErr
 				}
 				entry.RLock()

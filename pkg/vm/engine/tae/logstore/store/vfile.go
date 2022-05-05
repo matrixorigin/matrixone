@@ -12,10 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var Metasize = 2
@@ -270,7 +269,7 @@ func (vf *vFile) Destroy() error {
 		return err
 	}
 	name := vf.Name()
-	log.Infof("Removing version file: %s", name)
+	logutil.Infof("Removing version file: %s", name)
 	err := os.Remove(name)
 	return err
 }

@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -102,14 +101,6 @@ func (blk *dataBlock) RefreshIndex() error {
 		blk.indexHolder = impl.NewEmptyNonAppendableBlockIndexHolder()
 	}
 	return blk.indexHolder.(acif.INonAppendableBlockIndexHolder).InitFromHost(blk, blk.meta.GetSchema(), idxCommon.MockIndexBufferManager /* TODO: use dedicated index buffer manager */)
-}
-
-func (blk *dataBlock) MakeCheckpointWalTask(ctx *tasks.Context, ts uint64) (task tasks.Task) {
-	if blk.meta.IsAppendable() {
-		return jobs.NewCheckpointABlkTask(ctx, blk.scheduler, blk.meta.AsCommonID(), blk, ts)
-	}
-	logutil.Warn("TODO")
-	return nil
 }
 
 func (blk *dataBlock) GetID() uint64 { return blk.meta.ID }

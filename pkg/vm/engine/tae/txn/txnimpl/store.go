@@ -6,6 +6,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -15,7 +16,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"github.com/sirupsen/logrus"
 )
 
 type txnStore struct {
@@ -411,7 +411,7 @@ func (store *txnStore) ApplyCommit() (err error) {
 			return
 		}
 	}
-	logrus.Debugf("Txn-%d ApplyCommit Takes %s", store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%d ApplyCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -464,7 +464,7 @@ func (store *txnStore) PrepareCommit() (err error) {
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
 	}
-	logrus.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 
 	return
 }

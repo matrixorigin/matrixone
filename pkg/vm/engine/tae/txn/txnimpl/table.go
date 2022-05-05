@@ -405,7 +405,6 @@ func (tbl *txnTable) Append(data *batch.Batch) error {
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
 		start := tbl.rows
-		// logrus.Infof("s,offset=%d,appended=%d,start=%d", data.Vecs[tbl.GetSchema().PrimaryKey], offset, appended, start)
 		if err = tbl.index.BatchInsert(data.Vecs[tbl.GetSchema().PrimaryKey], int(offset), int(appended), start, false); err != nil {
 			break
 		}

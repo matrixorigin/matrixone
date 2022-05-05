@@ -66,6 +66,19 @@ type BaseEntry struct {
 	CreateAt, DeleteAt uint64
 }
 
+func (be *BaseEntry) MaxCommittedTS() uint64 {
+	if be.Txn == nil {
+		if be.DeleteAt != 0 {
+			return be.DeleteAt
+		}
+		return be.CreateAt
+	}
+	if be.CreateAt != be.Txn.GetCommitTS() {
+		return be.CreateAt
+	}
+	return 0
+}
+
 func (be *BaseEntry) CloneCreate() *BaseEntry {
 	info := be.PrevCommit.Clone()
 	cloned := &BaseEntry{

@@ -6,9 +6,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/sirupsen/logrus"
 )
 
 type DBEntry struct {
@@ -148,7 +148,7 @@ func (e *DBEntry) CreateTableEntry(schema *Schema, txnCtx txnif.AsyncTxn, dataFa
 }
 
 func (e *DBEntry) RemoveEntry(table *TableEntry) error {
-	logrus.Infof("Removing: %s", table.String())
+	logutil.Infof("Removing: %s", table.String())
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.GetID()]; !ok {
@@ -235,11 +235,11 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	e.RLock()
 	currOp := e.CurrOp
 	e.RUnlock()
-	if err = e.BaseEntry.PrepareRollback(); err != nil {
-		return
-	}
 	if currOp == OpCreate {
 		err = e.catalog.RemoveEntry(e)
+	}
+	if err = e.BaseEntry.PrepareRollback(); err != nil {
+		return
 	}
 	return
 }
