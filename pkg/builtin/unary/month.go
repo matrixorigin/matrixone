@@ -29,6 +29,11 @@ import (
 )
 
 func init() {
+	overload.AppendCastRules(builtin.Month, 1, []types.T{types.T_char}, []types.Type{{Oid: types.T_datetime, Size: 8}})
+	overload.AppendCastRules(builtin.Month, 1, []types.T{types.T_varchar}, []types.Type{{Oid: types.T_datetime, Size: 8}})
+}
+
+func init() {
 	extend.FunctionRegistry["month"] = builtin.Month
 	extend.UnaryReturnTypes[builtin.Month] = func(_ extend.Extend) types.T {
 		return types.T_uint8

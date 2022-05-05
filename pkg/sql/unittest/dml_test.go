@@ -33,6 +33,8 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "create table deci_table2 (d1 decimal(20, 3));"},
 		{sql: "create table deci_table3 (d1 decimal);"},
 		{sql: "create table deci_table4 (d1 decimal(20));"},
+		{sql: "create table deci_table5 (d1 decimal(10, 5));"},
+		{sql: "create table deci_table6 (d1 decimal(20, 5));"},
 		{sql: "insert into iis values (1, 2, 3, 4), (1+1, 2-2, 3*3, 4/4), (1 div 1, 2+2/3, 3 mod 3, 4 + 0.5), (0, 0, 0, 0);"},
 		{sql: "insert into uus values (0, 0, 1, 1), (0.5, 3+4, 4-1, 2*7), (3/4, 4 div 5, 5 mod 6, 0);"},
 		{sql: "insert into ffs values (1.1, 2.2), (1, 2), (1+0.5, 2.5*3.5);"},
@@ -49,6 +51,8 @@ func TestInsertAndSelectFunction(t *testing.T) {
 		{sql: "insert into cha1 values ('');"},
 		{sql: "insert into deci_table1 values (12.345);"},
 		{sql: "insert into deci_table2 values (12.345), (-12.345);"},
+		{sql: "insert into deci_table5 values ('12.345');"},
+		{sql: "insert into deci_table6 values ('12.345'), ('-12.345');"},
 		{sql: "select * from iis;", res: executeResult{
 			attr: []string{"i1", "i2", "i3", "i4"},
 			data: [][]string{
@@ -232,6 +236,14 @@ func TestInsertAndSelectFunction(t *testing.T) {
 				{"{12345 0}"}, {"{-12345 -1}"},
 			},
 		}},
+		{sql: "select * from deci_table5;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"1234500"}},
+		}},
+		{sql: "select * from deci_table6;", res: executeResult{
+			attr: []string{"d1"},
+			data: [][]string{{"{1234500 0}"}, {"{-1234500 -1}"}},
+		}},
 		{sql: "create table issue1660 (a int, b int);"},
 		{sql: "insert into issue1660 values (0, 0), (1, 2);"},
 
@@ -406,7 +418,6 @@ func TestAQ(t *testing.T) {
 	}
 	test(t, testCases)
 }
-
 
 //Do not support this unit test now, because it tests for tpe engine which has supported deletion and other engine do not support.
 //TestDeleteFunction is only used to check if the whole process about deletion can be run through

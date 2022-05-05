@@ -12,43 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package builtin
+package tree
 
-import "github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+type With struct {
+	statementImpl
+	IsRecursive bool
+	CTEs		[]*CTE
+}
 
-const (
-	Length = iota + overload.NE + 1
-	Space
-	Reverse
-	Substring
-	Ltrim
-	Rtrim
-	StartsWith
-	Lpad
-	Rpad
- 	Empty
-	LengthUTF8 
-	Round
-	Floor
-	Abs
-	Log
-	Ln
-	Ceil
-	Exp
-	Power
-	Pi
-	Sin
-	Sinh
-	Cos
-	Acos
-	Tan
-	Atan
-	Cot
-	UTCTimestamp
-	DayOfYear
-	Month
-	Year
-	Weekday
-	EndsWith
-	Date
-)
+func (node *With) Format(ctx *FmtCtx) {
+	ctx.WriteString("with ")
+	if node.IsRecursive {
+		ctx.WriteString("recursive ")
+	}
+	prefix := ""
+	for _, cte := range node.CTEs {
+		ctx.WriteString(prefix)
+		cte.Format(ctx)
+		prefix = ", "
+	}
+}
+
+type CTE struct {
+	Name	*AliasClause
+	Stmt    Statement
+}
+
+func (node *CTE) Format(ctx *FmtCtx) {
+	node.Name.Format(ctx)
+	ctx.WriteString(" as (")
+	node.Stmt.Format(ctx)
+	ctx.WriteString(")")
+}

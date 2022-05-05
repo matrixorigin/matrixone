@@ -247,19 +247,25 @@ func initCast() {
 					}
 				}()
 				vs := lv.Col.(*types.Bytes)
-				col := make([]types.Date, 0, len(vs.Lengths))
-				for i := range vs.Lengths {
-					varcharValue := vs.Get(int64(i))
-					data, err := types.ParseDate(string(varcharValue))
-					if err != nil {
-						return nil, err
-					}
-					col = append(col, data)
+				vec, err := process.Get(proc, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)), rv.Typ)
+				if err != nil {
+					return nil, err
 				}
-				vec := vector.New(rv.Typ)
-				vec.Col = col
+				rs := encoding.DecodeDateSlice(vec.Data)
+				rs = rs[:len(vs.Lengths)]
+				for i := range vs.Lengths {
+					if nulls.Contains(lv.Nsp, uint64(i)) {
+						continue
+					}
+					varcharValue := vs.Get(int64(i))
+					data, err2 := types.ParseDate(string(varcharValue))
+					if err2 != nil {
+						return nil, err2
+					}
+					rs[i] = data
+				}
 				nulls.Set(vec.Nsp, lv.Nsp)
-				vector.SetCol(vec, col)
+				vector.SetCol(vec, rs)
 				return vec, nil
 			},
 		},
@@ -269,26 +275,32 @@ func initCast() {
             RightType:  types.T_datetime,
             ReturnType: types.T_datetime,
             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
-                defer func() {
-                    if lv.Ref == 0 {
-                        process.Put(proc, lv)
-                    }
-                }()
-                vs := lv.Col.(*types.Bytes)
-                col := make([]types.Datetime, 0, len(vs.Lengths))
-                for i := range vs.Lengths {
-                    varcharValue := vs.Get(int64(i))
-                    data, err := types.ParseDatetime(string(varcharValue))
-                    if err != nil {
-                        return nil, err
-                    }
-                    col = append(col, data)
-                }
-                vec := vector.New(rv.Typ)
-                vec.Col = col
-                nulls.Set(vec.Nsp, lv.Nsp)
-                vector.SetCol(vec, col)
-                return vec, nil
+				defer func() {
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.(*types.Bytes)
+				vec, err := process.Get(proc, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)), rv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDatetimeSlice(vec.Data)
+				rs = rs[:len(vs.Lengths)]
+				for i := range vs.Lengths {
+					if nulls.Contains(lv.Nsp, uint64(i)) {
+						continue
+					}
+					varcharValue := vs.Get(int64(i))
+					data, err2 := types.ParseDatetime(string(varcharValue))
+					if err2 != nil {
+						return nil, err2
+					}
+					rs[i] = data
+				}
+				nulls.Set(vec.Nsp, lv.Nsp)
+				vector.SetCol(vec, rs)
+				return vec, nil
             },
         },
 
@@ -369,7 +381,6 @@ func initCast() {
                  return vec, nil
              },
          },
-
 
     }
 
