@@ -23,6 +23,7 @@ const (
 	Substring
 	Ltrim
 	Rtrim
+	Oct
 	StartsWith
 	Lpad
 	Rpad
