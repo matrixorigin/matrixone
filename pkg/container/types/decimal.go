@@ -273,9 +273,9 @@ func NegDecimal128(a Decimal128) (result Decimal128) {
 	return result
 }
 
-func decimalStringPreprocess(s string, precision, scale int32) (result []byte, neg bool, err error) {
+func decimalStringPreprocess(s string, precision, scale int32) (result []byte, carry bool, neg bool, err error) {
 	if s == "" {
-		return result, neg, errors.New("invalid decimal string")
+		return result, carry, neg, errors.New("invalid decimal string")
 	}
 	parts := strings.Split(s, ".")
 	partsNumber := len(parts)
@@ -292,9 +292,17 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, n
 			}
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123.45" is invalid for Decimal(5, 3)
-			return result, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
 		}
 		if len(part1Bytes) > int(scale) {
+			for i := int(scale); i < len(part1Bytes); i++ {
+				if part1Bytes[i] < '0' || part1Bytes[i] > '9' {
+					return result, carry, neg, errors.New("invalid decimal string")
+				}
+			}
+			if part1Bytes[scale] >= '5' {
+				carry = true
+			}
 			part1Bytes = part1Bytes[:scale]
 		} else {
 			scaleDiff := int(scale) - len(part1Bytes)
@@ -303,7 +311,7 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, n
 			}
 		}
 		result = append(part0Bytes, part1Bytes...)
-		return result, neg, nil
+		return result, carry, neg, nil
 	} else if partsNumber == 1 { // this means the input string is of the form "123",
 		part0Bytes := []byte(parts[0])
 		if part0Bytes[0] == '+' {
@@ -314,21 +322,21 @@ func decimalStringPreprocess(s string, precision, scale int32) (result []byte, n
 			part0Bytes = part0Bytes[1:]
 		}
 		if len(part0Bytes) > int(precision-scale) { // for example, input "123" is invalid for Decimal(5, 3)
-			return result, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
+			return result, carry, neg, errors.New(fmt.Sprintf("input decimal value out of range for Decimal(%d, %d)", precision, scale))
 		}
 		for i := 0; i < int(scale); i++ {
 			part0Bytes = append(part0Bytes, '0')
 		}
 		result = part0Bytes
-		return result, neg, nil
+		return result, carry, neg, nil
 	} else {
-		return result, neg, errors.New("invalid decimal string")
+		return result, carry, neg, errors.New("invalid decimal string")
 	}
 }
 
 //todo: use strconv to simplify this code
 func ParseStringToDecimal64(s string, precision, scale int32) (result Decimal64, err error) {
-	sInBytes, neg, err := decimalStringPreprocess(s, precision, scale)
+	sInBytes, carry, neg, err := decimalStringPreprocess(s, precision, scale)
 	if err != nil {
 		return result, err
 	}
@@ -341,6 +349,9 @@ func ParseStringToDecimal64(s string, precision, scale int32) (result Decimal64,
 		digit := int64(ch)
 		resultInInt64 = resultInInt64 * 10
 		resultInInt64 = resultInInt64 + digit
+	}
+	if carry {
+		resultInInt64 += 1
 	}
 	if neg {
 		resultInInt64 = -resultInInt64
@@ -363,7 +374,7 @@ func ParseStringToDecimal128WithoutTable(s string) (result Decimal128, scale int
 }
 
 func ParseStringToDecimal128(s string, precision, scale int32) (result Decimal128, err error) {
-	sInBytes, neg, err := decimalStringPreprocess(s, precision, scale)
+	sInBytes, carry, neg, err := decimalStringPreprocess(s, precision, scale)
 	if err != nil {
 		return result, err
 	}
@@ -376,6 +387,9 @@ func ParseStringToDecimal128(s string, precision, scale int32) (result Decimal12
 		digit := int64(ch)
 		result = ScaleDecimal128By10(result)
 		result = AddDecimal128ByInt64(result, digit)
+	}
+	if carry {
+		result = AddDecimal128ByInt64(result, int64(1))
 	}
 	if neg {
 		result = NegDecimal128(result)
