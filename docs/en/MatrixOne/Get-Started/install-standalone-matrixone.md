@@ -46,7 +46,7 @@ $ ./mo-server system_vars_config.toml
 
 ## **Downloading binary packages**
 
-Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64/ARM environment.
+Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
 #### 1. Download binary packages and decompress
 
