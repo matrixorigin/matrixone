@@ -39,7 +39,7 @@ $ make build
 $ ./mo-server system_vars_config.toml
 ```
 ## **下载二进制包**
-从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境或者X86_64及ARM架构的MacOS环境中运行MatrixOne。
+从0.3.0版本开始，您可以直接下载二进制包，然后在X86_64 Linux环境或者X86_64的MacOS环境中运行MatrixOne。
 #### 1. 下载二进制包并解压
 
 Linux环境
