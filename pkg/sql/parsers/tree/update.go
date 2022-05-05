@@ -312,7 +312,7 @@ type ExportParam struct {
 	Header bool
 	ForceQuote []string
 	ColumnFlag []bool
-	Symbol []string
+	Symbol [][]byte
 
 	// default flush size
 	DefaultBufSize int64
