@@ -48,7 +48,7 @@ func (entry *compactBlockEntry) PostCommit() {
 	}
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	// TODO:
+	// TODO: from, to, txn
 	cmd = new(compactBlockCmd)
 	return
 }

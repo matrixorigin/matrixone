@@ -78,6 +78,14 @@ func (driver *walDriver) Compact() error {
 	return driver.impl.TryCompact()
 }
 
+func (driver *walDriver) GetPenddingCnt() uint64 {
+	return driver.impl.GetPenddingCnt(GroupC)
+}
+
+func (driver *walDriver) GetCurrSeqNum() uint64 {
+	return driver.impl.GetCurrSeqNum(GroupC)
+}
+
 func (driver *walDriver) LoadEntry(groupId uint32, lsn uint64) (LogEntry, error) {
 	return driver.impl.Load(groupId, lsn)
 }

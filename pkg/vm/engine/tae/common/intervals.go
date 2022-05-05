@@ -103,6 +103,14 @@ func (intervals *ClosedIntervals) ContainsInterval(oIntervals ClosedInterval) bo
 	return contains
 }
 
+func (intervals *ClosedIntervals) GetCardinality() int {
+	cardinality := 0
+	for _, interval := range intervals.Intervals {
+		cardinality += (int(interval.End) - int(interval.Start) + 1)
+	}
+	return cardinality
+}
+
 //for test
 func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	if len(intervals.Intervals) != len(o.Intervals) {
@@ -118,7 +126,7 @@ func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	return true
 }
 
-func NewClosedIntervals()*ClosedIntervals {
+func NewClosedIntervals() *ClosedIntervals {
 	return &ClosedIntervals{
 		Intervals: make([]*ClosedInterval, 0),
 	}

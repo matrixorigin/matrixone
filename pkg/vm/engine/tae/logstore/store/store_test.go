@@ -51,7 +51,7 @@ func TestStore(t *testing.T) {
 					t.Logf("group-%d", info.Group)
 					t.Logf("synced %d", s.GetSynced(info.Group))
 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-					t.Logf("penddings %d", s.GetPenddings(info.Group))
+					t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 				}
 				fwg.Done()
 			}
@@ -295,7 +295,7 @@ func TestReplay(t *testing.T) {
 					t.Logf("group %d", groupNo)
 					t.Logf("synced %d", s.GetSynced(groupNo))
 					t.Logf("checkpointed %d", s.GetCheckpointed(groupNo))
-					t.Logf("penddings %d", s.GetPenddings(groupNo))
+					t.Logf("penddings %d", s.GetPenddingCnt(groupNo))
 				}
 				fwg.Done()
 			}
@@ -474,7 +474,7 @@ func TestLoad(t *testing.T) {
 					assert.Nil(t, err)
 					t.Logf("synced %d", s.GetSynced(info.Group))
 					t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-					t.Logf("penddings %d", s.GetPenddings(info.Group))
+					t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 				}
 				fwg.Done()
 				ch2 = append(ch2, e)
@@ -651,7 +651,7 @@ func TestLoad(t *testing.T) {
 			assert.Nil(t, err)
 			t.Logf("synced %d", s.GetSynced(info.Group))
 			t.Logf("checkpointed %d", s.GetCheckpointed(info.Group))
-			t.Logf("penddings %d", s.GetPenddings(info.Group))
+			t.Logf("penddings %d", s.GetPenddingCnt(info.Group))
 		}
 	}
 

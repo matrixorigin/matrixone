@@ -11,14 +11,14 @@ import (
 
 type syncBase struct {
 	*sync.RWMutex
-	groupLSN             map[uint32]uint64 // for alloc
-	lsnmu                sync.Mutex
-	checkpointing        map[uint32]*checkpointInfo
-	syncing              map[uint32]uint64
-	checkpointed, synced *syncMap
-	uncommits            map[uint32][]uint64
-	addrs                map[uint32]map[int]common.ClosedInterval //group-version-glsn range
-	addrmu               sync.RWMutex
+	groupLSN                     map[uint32]uint64 // for alloc
+	lsnmu                        sync.RWMutex
+	checkpointing                map[uint32]*checkpointInfo
+	syncing                      map[uint32]uint64
+	checkpointed, synced, ckpCnt *syncMap
+	uncommits                    map[uint32][]uint64
+	addrs                        map[uint32]map[int]common.ClosedInterval //group-version-glsn range
+	addrmu                       sync.RWMutex
 }
 
 type checkpointInfo struct {
@@ -73,7 +73,17 @@ func (info *checkpointInfo) GetCheckpointed() uint64 {
 	if info.ranges == nil || len(info.ranges.Intervals) == 0 {
 		return 0
 	}
+	if info.ranges.Intervals[0].Start != 1 {
+		return 0
+	}
 	return info.ranges.Intervals[0].End
+}
+
+func (info *checkpointInfo) GetCkpCnt() uint64 {
+	cnt := uint64(0)
+	cnt += uint64(info.ranges.GetCardinality())
+	// cnt += uint64(len(info.partial))
+	return cnt
 }
 
 type syncMap struct {
@@ -90,11 +100,12 @@ func newSyncMap() *syncMap {
 func newSyncBase() *syncBase {
 	return &syncBase{
 		groupLSN:      make(map[uint32]uint64),
-		lsnmu:         sync.Mutex{},
+		lsnmu:         sync.RWMutex{},
 		checkpointing: make(map[uint32]*checkpointInfo),
 		syncing:       make(map[uint32]uint64),
 		checkpointed:  newSyncMap(),
 		synced:        newSyncMap(),
+		ckpCnt:        newSyncMap(),
 		uncommits:     make(map[uint32][]uint64),
 		addrs:         make(map[uint32]map[int]common.ClosedInterval),
 		addrmu:        sync.RWMutex{},
@@ -192,8 +203,8 @@ func (base *syncBase) OnEntryReceived(v *entry.Info) error {
 	return nil
 }
 
-func (base *syncBase) GetPenddings(groupId uint32) uint64 {
-	ckp := base.GetCheckpointed(groupId)
+func (base *syncBase) GetPenddingCnt(groupId uint32) uint64 {
+	ckp := base.GetCKpCnt(groupId)
 	commit := base.GetSynced(groupId)
 	return commit - ckp
 }
@@ -222,12 +233,29 @@ func (base *syncBase) SetSynced(groupId uint32, id uint64) {
 	base.synced.Unlock()
 }
 
+func (base *syncBase) GetCKpCnt(groupId uint32) uint64 {
+	base.ckpCnt.RLock()
+	defer base.ckpCnt.RUnlock()
+	return base.ckpCnt.ids[groupId]
+}
+
+func (base *syncBase) SetCKpCnt(groupId uint32, id uint64) {
+	base.ckpCnt.Lock()
+	base.ckpCnt.ids[groupId] = id
+	base.ckpCnt.Unlock()
+}
+
 func (base *syncBase) OnCommit() {
 	for group, checkpointing := range base.checkpointing {
-		checkpointingId:=checkpointing.GetCheckpointed()
+		checkpointingId := checkpointing.GetCheckpointed()
+		ckpcnt := checkpointing.GetCkpCnt()
 		checkpointedId := base.GetCheckpointed(group)
 		if checkpointingId > checkpointedId {
 			base.SetCheckpointed(group, checkpointingId)
+		}
+		preCnt := base.GetCKpCnt(group)
+		if ckpcnt > preCnt {
+			base.SetCKpCnt(group, ckpcnt)
 		}
 	}
 
@@ -249,5 +277,15 @@ func (base *syncBase) AllocateLsn(groupID uint32) uint64 {
 	}
 	lsn++
 	base.groupLSN[groupID] = lsn
+	return lsn
+}
+
+func (base *syncBase) GetCurrSeqNum(groupID uint32) uint64 {
+	base.lsnmu.RLock()
+	defer base.lsnmu.RUnlock()
+	lsn, ok := base.groupLSN[groupID]
+	if !ok {
+		return 0
+	}
 	return lsn
 }

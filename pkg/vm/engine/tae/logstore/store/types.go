@@ -102,6 +102,8 @@ type Store interface {
 	Replay(ApplyHandle) error
 	GetCheckpointed(uint32) uint64
 	GetSynced(uint32) uint64
+	GetPenddingCnt(uint32) uint64
+	GetCurrSeqNum(uint32) uint64
 	AppendEntry(groupId uint32,e entry.Entry) (uint64, error)
 	TryCompact() error
 	TryTruncate(int64) error

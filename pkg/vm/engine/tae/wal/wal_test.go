@@ -38,12 +38,14 @@ func TestCheckpoint1(t *testing.T) {
 	assert.Nil(t, err)
 	err = e.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400,func()bool{
+	testutils.WaitExpect(400, func() bool {
 		_, err = driver.LoadEntry(GroupC, lsn)
-		return err==nil
+		return err == nil
 	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
+	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
 
 	flush := entry.GetBase()
 	flush.SetType(entry.ETCustomizedStart)
@@ -86,10 +88,12 @@ func TestCheckpoint1(t *testing.T) {
 	}}
 	_, err = driver.Checkpoint(index)
 	assert.Nil(t, err)
-	testutils.WaitExpect(400,func()bool{
-		return lsn==driver.GetCheckpointed()
+	testutils.WaitExpect(400, func() bool {
+		return lsn == driver.GetCheckpointed()
 	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
+	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
 
 	flush3 := entry.GetBase()
 	flush3.SetType(entry.ETCustomizedStart)
@@ -139,9 +143,9 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	err = uncommit.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400,func()bool{
+	testutils.WaitExpect(400, func() bool {
 		_, err = driver.LoadEntry(entry.GTUncommit, lsn)
-		return err==nil
+		return err == nil
 	})
 	_, err = driver.LoadEntry(entry.GTUncommit, lsn)
 	assert.Nil(t, err)
@@ -160,12 +164,14 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Nil(t, err)
 	err = commit.WaitDone()
 	assert.Nil(t, err)
-	testutils.WaitExpect(400,func()bool{
+	testutils.WaitExpect(400, func() bool {
 		_, err = driver.LoadEntry(GroupC, lsn)
-		return err==nil
+		return err == nil
 	})
 	_, err = driver.LoadEntry(GroupC, lsn)
 	assert.Nil(t, err)
+	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	assert.Equal(t, uint64(1), driver.GetPenddingCnt())
 
 	flush := entry.GetBase()
 	flush.SetType(entry.ETCustomizedStart)
@@ -184,10 +190,12 @@ func TestCheckpoint2(t *testing.T) {
 	}}
 	_, err = driver.Checkpoint(index)
 	assert.Nil(t, err)
-	testutils.WaitExpect(400,func()bool{
-		return lsn==driver.GetCheckpointed()
+	testutils.WaitExpect(400, func() bool {
+		return lsn == driver.GetCheckpointed()
 	})
 	assert.Equal(t, lsn, driver.GetCheckpointed())
+	assert.Equal(t, lsn, driver.GetCurrSeqNum())
+	assert.Equal(t, uint64(0), driver.GetPenddingCnt())
 
 	flush2 := entry.GetBase()
 	flush2.SetType(entry.ETCustomizedStart)
