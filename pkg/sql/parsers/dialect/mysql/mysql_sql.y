@@ -5961,7 +5961,6 @@ reserved_keyword:
 |   WHERE
 |   WEEK
 |   WITH
-|   QUARTER
 |   PASSWORD
 |   TERMINATED
 |   OPTIONALLY
@@ -6139,6 +6138,7 @@ non_reserved_keyword:
 |   HEADER
 |   MAX_FILE_SIZE
 |   FORCE_QUOTE
+|   QUARTER
 
 not_keyword:
     ADDDATE
