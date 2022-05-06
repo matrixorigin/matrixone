@@ -42,11 +42,13 @@ const (
 
 var startupTime time.Time
 var localTZ int64
+var unixEpoch int64 // second unit, 1970-1-1 00:00:00 since 1-1-1 00:00:00
 
 func init() {
 	startupTime = time.Now()
 	_, offset := startupTime.Zone()
 	localTZ = int64(offset)
+	unixEpoch = FromClock(1970, 1, 1, 0, 0, 0, 0).sec() + localTZ
 }
 
 var (

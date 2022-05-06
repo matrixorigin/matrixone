@@ -154,3 +154,25 @@ func TestUTC(t *testing.T) {
 		t.Errorf("UTC() args %v got %v and time zone UTC+%v", args, utc, offset/secsPerHour)
 	}
 }
+
+func TestUnix(t *testing.T) {
+	cases := []struct {
+		time      string
+		timestamp int64
+	}{
+		{"1955-08-25 17:21:34", -452961506},
+		{"2012-01-25 17:21:34", 1327483294},
+	}
+
+	for _, c := range cases {
+		time, _ := ParseDatetime(c.time)
+		unix_time := time.UnixTimestamp()
+		if unix_time != c.timestamp {
+			t.Errorf("UnixTimestamp want %d but got %d ", c.timestamp, unix_time)
+		}
+		parse_time := FromUnix(unix_time)
+		if time != parse_time {
+			t.Errorf("FromUnix want %s but got %s ", time, parse_time)
+		}
+	}
+}
