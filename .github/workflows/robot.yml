@@ -5,7 +5,7 @@ name: WeWork Robot
 # Controls when the workflow will run
 on:
   issues:
-    types: [opened, reopened]
+    types: [opened, reopened, assigned]
 
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel.
@@ -23,5 +23,5 @@ jobs:
         with:
           msgtype: markdown
           mentioned_list: '["@all"]'
-          content: "New Issue Opened: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
+          content: "New Issue Opened or Assigned: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
 
