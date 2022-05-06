@@ -34,6 +34,9 @@ func (driver *walDriver) GetCheckpointed() uint64 {
 }
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
+	// for _, index := range indexes {
+	// 	logutil.Infof("Checkpoint Index: %s", index.String())
+	// }
 	commands := make(map[uint64]entry.CommandInfo)
 	for _, idx := range indexes {
 		cmdInfo, ok := commands[idx.LSN]

@@ -26,6 +26,9 @@ type CheckpointItem interface {
 func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
 	entry.RLock()
 	defer entry.RUnlock()
+	if entry.HasActiveTxn() {
+		return false
+	}
 	// 1. entry was created after maxTs. Skip it
 	if entry.CreateAfter(maxTs) {
 		return false
@@ -50,6 +53,10 @@ func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
 
 func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointItem, minTs, maxTs uint64) {
 	entry.RLock()
+	if entry.HasActiveTxn() {
+		entry.RUnlock()
+		return
+	}
 	// 1. entry was created in (maxTs, +inf). Skip it
 	if entry.CreateAfter(maxTs) {
 		entry.RUnlock()

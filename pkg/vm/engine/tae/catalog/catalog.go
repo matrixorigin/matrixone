@@ -319,9 +319,9 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 	// 	logutil.Infof("%d: %s", i, index.String())
 	// }
 	now = time.Now()
-	err = catalog.scheduler.Checkpoint(entry.LogIndexes)
-	if err != nil {
-		panic(err)
+	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {
+		logutil.Warnf("Schedule checkpoint log indexes: %v", err)
+		return
 	}
 	logutil.Infof("CheckpointWal: %s", time.Since(now))
 	catalog.ckpmu.Lock()

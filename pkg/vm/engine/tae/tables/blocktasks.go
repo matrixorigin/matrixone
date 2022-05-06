@@ -5,6 +5,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -34,6 +35,10 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 		return
 	}
 	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
+	view := blk.CollectChangesInRange(ckpTs+1, endTs).(*updates.BlockView)
+	for _, idxes := range view.ColLogIndexes {
+		blk.scheduler.Checkpoint(idxes)
+	}
 	blk.scheduler.Checkpoint(indexes)
 	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed ", ckpTs+1, endTs, len(indexes))
 	// for i, index := range indexes {

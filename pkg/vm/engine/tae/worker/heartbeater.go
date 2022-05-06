@@ -49,7 +49,6 @@ func (c *heartbeater) Start() {
 			select {
 			case <-c.ctx.Done():
 				ticker.Stop()
-				c.handle.OnStopped()
 				return
 			case <-ticker.C:
 				c.handle.OnExec()
@@ -61,4 +60,5 @@ func (c *heartbeater) Start() {
 func (c *heartbeater) Stop() {
 	c.cancel()
 	c.wg.Wait()
+	c.handle.OnStopped()
 }

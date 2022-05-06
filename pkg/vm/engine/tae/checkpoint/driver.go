@@ -87,3 +87,8 @@ func (f *ckpDriver) EnqueueCheckpointUnit(unit data.CheckpointUnit) {
 		logutil.Warnf("%v", err)
 	}
 }
+
+func (f *ckpDriver) Stop() {
+	f.StateMachine.Stop()
+	logutil.Infof("Checkpoint Driver Stopped")
+}

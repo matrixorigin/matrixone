@@ -44,8 +44,7 @@ func (entry *compactBlockEntry) PostCommit() {
 	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	// TODO: from, to, txn
-	cmd = new(compactBlockCmd)
+	cmd = NewTxnBlockCmd(csn, CmdCompactBlock)
 	return
 }
 

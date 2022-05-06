@@ -15,9 +15,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -519,13 +519,35 @@ func TestTxn6(t *testing.T) {
 }
 
 func TestMergeBlocks1(t *testing.T) {
-	db := initDB(t, nil)
+	opts := new(options.Options)
+	// opts.CheckpointCfg = new(options.CheckpointCfg)
+	// opts.CheckpointCfg.ScannerInterval = 5
+	// opts.CheckpointCfg.ExecutionLevels = 2
+	// opts.CheckpointCfg.ExecutionInterval = 1
+	// opts.CheckpointCfg.CatalogCkpInterval = 5
+	// opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13)
-	schema.BlockMaxRows = 10
-	schema.SegmentMaxBlocks = 2
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 8
 	schema.PrimaryKey = 2
-	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*2), int(schema.PrimaryKey), nil)
+	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
+	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
+	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
+	pk := gvec.New(schema.GetPKType())
+	col3 := gvec.New(schema.ColDefs[3].Type)
+	mapping := make(map[int32]int64)
+	for i, v := range pkData {
+		compute.AppendValue(pk, v)
+		compute.AppendValue(col3, col3Data[i])
+		mapping[v] = col3Data[i]
+	}
+
+	provider := compute.NewMockDataProvider()
+	provider.AddColumnProvider(int(schema.PrimaryKey), pk)
+	provider.AddColumnProvider(3, col3)
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*3), int(schema.PrimaryKey), provider)
 	{
 		txn := db.StartTxn(nil)
 		database, _ := txn.CreateDatabase("db")
@@ -534,6 +556,7 @@ func TestMergeBlocks1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
+
 	{
 		txn := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
@@ -541,8 +564,10 @@ func TestMergeBlocks1(t *testing.T) {
 		blks := make([]*catalog.BlockEntry, 0)
 		it := rel.MakeBlockIt()
 		for it.Valid() {
-			blk := it.GetBlock().GetMeta().(*catalog.BlockEntry)
-			blks = append(blks, blk)
+			blk := it.GetBlock()
+			meta := blk.GetMeta().(*catalog.BlockEntry)
+			blks = append(blks, meta)
+			// vec, _, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 			it.Next()
 		}
 		{
@@ -553,15 +578,26 @@ func TestMergeBlocks1(t *testing.T) {
 			blk := it.GetBlock()
 			err := blk.Update(2, 3, int64(22))
 			assert.Nil(t, err)
+			pkv, err := rel.GetValue(blk.Fingerprint(), 2, uint16(schema.PrimaryKey))
+			mapping[pkv.(int32)] = int64(22)
+			assert.Nil(t, err)
+			err = blk.RangeDelete(4, 4)
+			assert.Nil(t, err)
 			assert.Nil(t, txn.Commit())
 		}
-		factory := jobs.MergeBlocksTaskFactory(blks)
-		ctx := &tasks.Context{Waitable: false}
-		task, err := factory(ctx, txn)
-		assert.Nil(t, err)
-		err = task.OnExec()
-		assert.Nil(t, err)
+		start := time.Now()
+		factory := jobs.MergeBlocksTaskFactory(blks, blks[0].GetSegment(), db.Scheduler)
+		// task, err := db.Scheduler.ScheduleTxnTask(tasks.WaitableCtx, factory)
+		// err = task.WaitDone()
+		// assert.Nil(t, err)
+		{
+			task, err := factory(nil, txn)
+			assert.Nil(t, err)
+			err = task.OnExec()
+			assert.Nil(t, err)
+		}
 		assert.Nil(t, txn.Commit())
+		t.Logf("MergeSort takes: %s", time.Since(start))
 		t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
 	}
 	{
@@ -571,10 +607,25 @@ func TestMergeBlocks1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			t.Log(blk.String())
-			vec, _, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
-			t.Log(vec.String())
+			vec, mask, _ := blk.GetColumnDataById(3, nil, nil)
+			assert.NotNil(t, vec)
+			if mask != nil {
+				t.Log(mask.String())
+			}
+			var pkVec *gvec.Vector
+			pkVec, _, _ = blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+			for i := 0; i < gvec.Length(pkVec); i++ {
+				pkv := compute.GetValue(pkVec, uint32(i))
+				colv := compute.GetValue(vec, uint32(i))
+				assert.Equal(t, mapping[pkv.(int32)], colv)
+			}
 			it.Next()
 		}
 	}
+	// testutils.WaitExpect(1000, func() bool {
+	// 	return db.Wal.GetPenddingCnt() == 0
+	// })
+	// assert.Equal(t, uint64(0), db.Wal.GetPenddingCnt())
+	t.Logf("Checkpointed: %d", db.Wal.GetCheckpointed())
+	t.Logf("PendingCnt: %d", db.Wal.GetPenddingCnt())
 }

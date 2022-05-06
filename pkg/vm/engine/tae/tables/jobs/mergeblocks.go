@@ -1,43 +1,47 @@
 package jobs
 
 import (
-	"bytes"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-var MergeBlocksTaskFactory = func(metas []*catalog.BlockEntry) tasks.TxnTaskFactory {
+var MergeBlocksTaskFactory = func(metas []*catalog.BlockEntry, segMeta *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, metas)
+		return NewMergeBlocksTask(ctx, txn, metas, segMeta, scheduler)
 	}
 }
 
 type mergeBlocksTask struct {
 	*tasks.BaseTask
 	txn       txnif.AsyncTxn
+	segMeta   *catalog.SegmentEntry
 	metas     []*catalog.BlockEntry
 	compacted []handle.Block
 	created   []handle.Block
+	rel       handle.Relation
 	newSeg    handle.Segment
+	scheduler tasks.TaskScheduler
 }
 
-func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog.BlockEntry) (task *mergeBlocksTask, err error) {
+func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog.BlockEntry, segMeta *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
 		txn:       txn,
 		metas:     metas,
 		created:   make([]handle.Block, 0),
 		compacted: make([]handle.Block, 0),
+		scheduler: scheduler,
+		segMeta:   segMeta,
 	}
 	dbName := metas[0].GetSegment().GetTable().GetDB().GetName()
 	database, err := txn.GetDatabase(dbName)
@@ -45,12 +49,12 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog
 		return
 	}
 	relName := metas[0].GetSchema().Name
-	rel, err := database.GetRelationByName(relName)
+	task.rel, err = database.GetRelationByName(relName)
 	if err != nil {
 		return
 	}
 	for _, meta := range metas {
-		seg, err := rel.GetSegment(meta.GetSegment().GetID())
+		seg, err := task.rel.GetSegment(meta.GetSegment().GetID())
 		if err != nil {
 			return nil, err
 		}
@@ -74,36 +78,40 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 }
 
 func (task *mergeBlocksTask) Execute() (err error) {
-	// 1. Get total rows of all blocks to be compacted: 10000
-	// 2. Decide created blocks layout: []int{3000,3000,3000,1000}
-	// 3. Merge sort blocks and split it into created blocks
-	// 4. Record all mappings: []int
-	// 5. PrepareMergeBlock(mappings)
+	var targetSeg handle.Segment
+	if task.segMeta == nil {
+		if targetSeg, err = task.rel.CreateNonAppendableSegment(); err != nil {
+			return err
+		}
+		task.segMeta = targetSeg.GetMeta().(*catalog.SegmentEntry)
+	} else {
+		if targetSeg, err = task.rel.GetSegment(task.segMeta.GetID()); err != nil {
+			return
+		}
+	}
+
 	schema := task.metas[0].GetSchema()
 	var deletes *roaring.Bitmap
-	var compressed bytes.Buffer
-	var decompressed bytes.Buffer
 	var vec *vector.Vector
 	vecs := make([]*vector.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
+	var fromAddr []uint32
+	var toAddr []uint32
+	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if vec, deletes, err = block.GetColumnDataById(int(schema.PrimaryKey), &compressed, &decompressed); err != nil {
+		if vec, deletes, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
 			return
 		}
 		vec = compute.ApplyDeleteToVector(vec, deletes)
 		vecs = append(vecs, vec)
 		rows[i] = uint32(gvec.Length(vec))
+		fromAddr = append(fromAddr, uint32(length))
 		length += vector.Length(vec)
-		seg := block.GetSegment()
-		created, err := seg.CreateNonAppendableBlock()
-		if err != nil {
-			return err
-		}
-		task.created = append(task.created, created)
+		ids = append(ids, block.Fingerprint())
 	}
 	to := make([]uint32, 0)
-	maxrow := task.compacted[0].GetMeta().(*catalog.BlockEntry).GetSchema().BlockMaxRows
+	maxrow := schema.BlockMaxRows
 	totalRows := length
 	for totalRows > 0 {
 		if totalRows > int(maxrow) {
@@ -120,10 +128,19 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	defer common.GPool.Free(node)
 	sortedIdx := *(*[]uint32)(unsafe.Pointer(&buf))
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
-	logutil.Infof("mapping is %v", mapping)
-	for i, vec := range vecs {
-		created := task.created[i]
-		bf := created.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
+	// logutil.Infof("mapping is %v", mapping)
+	// logutil.Infof("sortedIdx is %v", sortedIdx)
+	length = 0
+	var blk handle.Block
+	for _, vec := range vecs {
+		toAddr = append(toAddr, uint32(length))
+		length += gvec.Length(vec)
+		blk, err = targetSeg.CreateNonAppendableBlock()
+		if err != nil {
+			return err
+		}
+		task.created = append(task.created, blk)
+		bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
 		if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
 			return
 		}
@@ -134,10 +151,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			continue
 		}
 		vecs = vecs[:0]
-		compressed.Reset()
-		decompressed.Reset()
 		for _, block := range task.compacted {
-			if vec, deletes, err = block.GetColumnDataById(i, &compressed, &decompressed); err != nil {
+			if vec, deletes, err = block.GetColumnDataById(i, nil, nil); err != nil {
 				return
 			}
 			vec = compute.ApplyDeleteToVector(vec, deletes)
@@ -162,6 +177,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = seg.SoftDeleteBlock(compacted.Fingerprint().BlockID); err != nil {
 			return
 		}
+	}
+
+	txnEntry := txnentries.NewMergeBlocksEntry(task.txn, task.compacted, task.created, mapping, fromAddr, toAddr, task.scheduler)
+	if err = task.txn.LogTxnEntry(task.segMeta.GetTable().GetID(), txnEntry, ids); err != nil {
+		return
 	}
 
 	return

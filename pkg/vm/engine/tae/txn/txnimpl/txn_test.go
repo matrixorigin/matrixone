@@ -278,6 +278,8 @@ func TestIndex(t *testing.T) {
 	err = idx.BatchDedup(window)
 	assert.NotNil(t, err)
 
+	schema.PrimaryKey = 12
+	bat = compute.MockBatch(schema.Types(), 500, int(schema.PrimaryKey), nil)
 	idx = NewSimpleTableIndex()
 	err = idx.BatchDedup(bat.Vecs[12])
 	assert.Nil(t, err)

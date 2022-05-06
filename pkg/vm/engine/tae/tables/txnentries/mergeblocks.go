@@ -8,16 +8,31 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type mergeBlocksEntry struct {
 	sync.RWMutex
-	txn      txnif.AsyncTxn
-	merged   []handle.Block
-	created  []handle.Block
-	mapping  []uint32
-	fromAddr []uint32
-	toAddr   []uint32
+	txn       txnif.AsyncTxn
+	merged    []handle.Block
+	created   []handle.Block
+	mapping   []uint32
+	fromAddr  []uint32
+	toAddr    []uint32
+	scheduler tasks.TaskScheduler
+}
+
+func NewMergeBlocksEntry(txn txnif.AsyncTxn, merged []handle.Block, created []handle.Block, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler) *mergeBlocksEntry {
+	return &mergeBlocksEntry{
+		txn:       txn,
+		created:   created,
+		merged:    merged,
+		mapping:   mapping,
+		fromAddr:  fromAddr,
+		toAddr:    toAddr,
+		scheduler: scheduler,
+	}
 }
 
 func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
@@ -25,10 +40,21 @@ func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
 	return
 }
 func (entry *mergeBlocksEntry) ApplyRollback() (err error) { return }
-func (entry *mergeBlocksEntry) ApplyCommit() (err error)   { return }
+func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
+	entry.scheduler.Checkpoint([]*wal.Index{index})
+	entry.PostCommit()
+	return
+}
+
+func (entry *mergeBlocksEntry) PostCommit() {
+	for _, blk := range entry.merged {
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	}
+}
+
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	// TODO:
-	// 1. make command
+	cmd = NewTxnBlockCmd(csn, CmdMergeBlocks)
 	return
 }
 
@@ -46,10 +72,17 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 			break
 		}
 	}
-	if toPos == 0 && entry.toAddr[toPos] < totalToOffset {
-		toPos = toPos + 1
+
+	// if toPos == 0 && entry.toAddr[toPos] < totalToOffset {
+	if entry.toAddr[toPos] > totalToOffset {
+		toPos = toPos - 1
 	}
-	toOffset = entry.toAddr[toPos]
+	toOffset = totalToOffset - entry.toAddr[toPos]
+	// logutil.Infof("mapping=%v", entry.mapping)
+	// logutil.Infof("fromPos=%d, fromOff=%d", fromPos, fromOffset)
+	// logutil.Infof("fromAddr=%v", entry.fromAddr)
+	// logutil.Infof("toAddr=%v", entry.toAddr)
+	// logutil.Infof("toPos=%d, toOffset=%d", toPos, toOffset)
 	return
 }
 

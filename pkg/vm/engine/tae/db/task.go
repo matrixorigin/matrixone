@@ -30,9 +30,10 @@ func (task *ScheduledTxnTask) Execute() (err error) {
 	}
 	err = txnTask.OnExec()
 	if err != nil {
-		err = txn.Rollback()
+		txn.Rollback()
 	} else {
-		err = txn.Commit()
+		txn.Commit()
+		err = txn.GetError()
 	}
 	return
 }
