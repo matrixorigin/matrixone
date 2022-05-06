@@ -3,185 +3,44 @@ package explain
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"strings"
 )
 
+//type TableDef plan.TableDef
+//type ObjectRef plan.ObjectRef
+type Cost plan.Cost
+type Const plan.Const
+
+//type Expr plan.Expr
+
+//type Node plan.Node
+type RowsetData plan.RowsetData
+
+//type Query plan.Query
+
 type ExplainQuery interface {
-	explainPlan(buffer *ExplainDataBuffer, options ExplainOptions)
-	explainAnalyze(buffer *ExplainDataBuffer, options ExplainOptions)
-	explainPipeline(buffer *ExplainDataBuffer, options ExplainOptions)
-}
-
-type ExplainQueryImpl struct {
-	QueryPlan *plan2.Query
-}
-
-func NewExplainQueryImpl(query *plan2.Query) *ExplainQueryImpl {
-	return &ExplainQueryImpl{
-		QueryPlan: query,
-	}
-}
-
-var _ ExplainQuery = &ExplainQueryImpl{}
-
-func (e *ExplainQueryImpl) explainPlan(buffer *ExplainDataBuffer, options ExplainOptions) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (e *ExplainQueryImpl) explainAnalyze(buffer *ExplainDataBuffer, options ExplainOptions) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (e *ExplainQueryImpl) explainPipeline(buffer *ExplainDataBuffer, options ExplainOptions) {
-	//TODO implement me
-	panic("implement me")
+	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions)
+	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions)
 }
 
 //-------------------------------------------------------------------------------------------------------
 
 type NodeDescribe interface {
-	GetNodeBasicInfo() string
-	GetVerboseInfo() string
-	GetExtraInfo() string
-	GetProjectListInfo() string
-	GetJoinConditionInfo() string
-	GetWhereConditionInfo() string
-	GetGroupByInfo() string
+	GetNodeBasicInfo(options *ExplainOptions) string
+	GetExtraInfo(options *ExplainOptions) []string
+	GetProjectListInfo(options *ExplainOptions) string
+	GetJoinConditionInfo(options *ExplainOptions) string
+	GetWhereConditionInfo(options *ExplainOptions) string
+	GetOrderByInfo(options *ExplainOptions) string
+	GetGroupByInfo(options *ExplainOptions) string
 }
-
-var _ NodeDescribe = &NodeDescribeImpl{}
-
-type NodeDescribeImpl struct {
-	PlanNode *plan2.Node
-}
-
-func NewNodeDescriptionImpl(node *plan2.Node) *NodeDescribeImpl {
-	return &NodeDescribeImpl{
-		PlanNode: node,
-	}
-}
-
-func (ndesc NodeDescribeImpl) GetNodeBasicInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetVerboseInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetExtraInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetProjectListInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetJoinConditionInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetWhereConditionInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (ndesc NodeDescribeImpl) GetGroupByInfo() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-//---------------------------------------------------------------------------------------------
-
-type NodeElemDescribe interface {
-	GetDescription() string
-}
-
-var _ NodeElemDescribe = &CostDescribeImpl{}
-var _ NodeElemDescribe = &ExprListDescribeImpl{}
-var _ NodeElemDescribe = &OrderByDescribeImpl{}
-var _ NodeElemDescribe = &WinSpecDescribeImpl{}
-var _ NodeElemDescribe = &TableDefDescribeImpl{}
-var _ NodeElemDescribe = &ObjRefDescribeImpl{}
-var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
-
-type CostDescribeImpl struct {
-	Cost *plan2.Cost
-}
-
-func (c CostDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type ExprListDescribeImpl struct {
-	ExprList []*plan2.Expr // ProjectList,OnList,WhereList,GroupBy,GroupingSet and so on
-}
-
-func (e ExprListDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type OrderByDescribeImpl struct {
-	OrderBy *plan.OrderBySpec
-}
-
-func (o OrderByDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type WinSpecDescribeImpl struct {
-	WinSpec *plan.WindowSpec
-}
-
-func (w WinSpecDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type TableDefDescribeImpl struct {
-	TableDef *plan2.TableDef
-}
-
-func (t TableDefDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type ObjRefDescribeImpl struct {
-	ObjRef *plan2.ObjectRef
-}
-
-func (o ObjRefDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-type RowsetDataDescribeImpl struct {
-	RowsetData *plan2.RowsetData
-}
-
-func (r RowsetDataDescribeImpl) GetDescription() string {
-	//TODO implement me
-	panic("implement me")
-}
-
-//-------------------------------------------------------------------------------------
 
 type FormatSettings struct {
 	buffer      *ExplainDataBuffer
-	offset      int32
-	indent      int32
+	offset      int
+	indent      int
 	indent_char byte
+	level       int
 }
 
 func NewFormatSettings() *FormatSettings {
@@ -194,17 +53,25 @@ func NewFormatSettings() *FormatSettings {
 }
 
 type ExplainDataBuffer struct {
-	Start          int32
-	End            int32
-	CurrentLine    int32
-	RowSize        int32
-	LineWidthLimit int32
+	Start          int
+	End            int
+	CurrentLine    int
+	RowSize        int
+	LineWidthLimit int
 	Lines          []string
-	NodeSize       int32
+	NodeSize       int
 }
 
 func NewExplainDataBuffer(size int32) *ExplainDataBuffer {
-	return &ExplainDataBuffer{}
+	return &ExplainDataBuffer{
+		Start:          -1,
+		End:            -1,
+		CurrentLine:    -1,
+		RowSize:        0,
+		LineWidthLimit: 65535,
+		Lines:          make([]string, size),
+		NodeSize:       0,
+	}
 }
 
 // Generates a string describing a ExplainDataBuffer.
@@ -213,11 +80,39 @@ func (buf *ExplainDataBuffer) ToString() string {
 }
 
 func (buf *ExplainDataBuffer) AppendCurrentLine(temp string) {
-	//TODO
+	if buf.CurrentLine != -1 && buf.CurrentLine < len(buf.Lines) {
+		buf.Lines[buf.CurrentLine] += temp
+	} else {
+		panic("implement me")
+	}
 }
 
-func (buf *ExplainDataBuffer) PushLine(line string) {
-	//TODO
+//func (buf *ExplainDataBuffer) PushLine(line string) {
+//	if buf.Start == -1 {
+//		buf.Start++
+//	}
+//	buf.CurrentLine++
+//	buf.Lines[buf.CurrentLine] = line
+//	buf.End++
+//	//TODO
+//}
+
+func (buf *ExplainDataBuffer) PushLine(offset int, line string, planRoot bool, nodeHeader bool) {
+	var prefix string = strings.Repeat(" ", offset)
+	if planRoot {
+		prefix += ""
+	} else if nodeHeader {
+		prefix += "->  "
+	} else {
+		prefix += "    "
+	}
+	if buf.Start == -1 {
+		buf.Start++
+	}
+	buf.CurrentLine++
+	buf.Lines[buf.CurrentLine] = (prefix + line)
+	fmt.Println(buf.Lines[buf.CurrentLine])
+	buf.End++
 }
 
 func (buf *ExplainDataBuffer) IsFull() bool {
@@ -241,6 +136,7 @@ const (
 
 type ExplainOptions struct {
 	Verbose bool
+	Anzlyze bool
 	Format  ExplainFormat
 }
 
@@ -254,4 +150,10 @@ type QueryPlanSetting struct {
 	JSON             bool
 	DOT              bool
 	QueryPlanOptions ExplainOptions
+}
+
+type ExplainState struct {
+	Verbose bool
+	Anzlyze bool
+	Format  ExplainFormat
 }

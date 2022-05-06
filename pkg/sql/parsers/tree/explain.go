@@ -14,7 +14,10 @@
 
 package tree
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 type Explain interface {
 	Statement
@@ -24,6 +27,7 @@ type explainImpl struct {
 	Explain
 	Statement Statement
 	Format    string
+	Options   []OptionElem
 }
 
 //EXPLAIN stmt statement
@@ -33,11 +37,19 @@ type ExplainStmt struct {
 
 func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	ctx.WriteString("explain")
-	format := node.explainImpl.Format
-	if format != "" && format != "row" {
-		ctx.WriteString(" format = ")
-		ctx.WriteString(node.explainImpl.Format)
+	if node.Options != nil && len(node.Options) > 0 {
+		ctx.WriteString(" (")
+		var temp string
+		for _, v := range node.Options {
+			temp += v.Name
+			if v.Value != "NULL" {
+				temp += " " + v.Value
+			}
+			temp += ","
+		}
+		ctx.WriteString(temp[:len(temp)-1] + ")")
 	}
+
 	stmt := node.explainImpl.Statement
 	switch stmt.(type) {
 	case *ShowColumns:
@@ -57,6 +69,33 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 		}
 	}
 }
+
+//func (node *ExplainStmt) Format(ctx *FmtCtx) {
+//	ctx.WriteString("explain")
+//	format := node.explainImpl.Format
+//	if format != "" && format != "text" {
+//		ctx.WriteString(" format = ")
+//		ctx.WriteString(node.explainImpl.Format)
+//	}
+//	stmt := node.explainImpl.Statement
+//	switch stmt.(type) {
+//	case *ShowColumns:
+//		st := stmt.(*ShowColumns)
+//		if st.Table != nil {
+//			ctx.WriteByte(' ')
+//			st.Table.ToTableName().Format(ctx)
+//		}
+//		if st.ColName != nil {
+//			ctx.WriteByte(' ')
+//			st.ColName.Format(ctx)
+//		}
+//	default:
+//		if stmt != nil {
+//			ctx.WriteByte(' ')
+//			stmt.Format(ctx)
+//		}
+//	}
+//}
 
 func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
@@ -94,4 +133,23 @@ func NewExplainFor(f string, id uint64) *ExplainFor {
 		explainImpl: explainImpl{Statement: nil, Format: f},
 		ID:          id,
 	}
+}
+
+type OptionElem struct {
+	Name  string
+	Value string
+}
+
+func MakeOptionElem(name string, value string) OptionElem {
+	fmt.Printf("Call MakeOptionElem() name:%v, value: %v\n", name, value)
+	return OptionElem{
+		Name:  name,
+		Value: value,
+	}
+}
+
+func MakeOptions(elem OptionElem) []OptionElem {
+	var options []OptionElem = make([]OptionElem, 1)
+	options[0] = elem
+	return options
 }

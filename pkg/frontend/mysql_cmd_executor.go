@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"os"
 	"runtime/pprof"
 	"strconv"
@@ -876,6 +878,61 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
+func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
+	es := &explain.ExplainOptions{
+		Verbose: false,
+		Anzlyze: false,
+		Format:  explain.EXPLAIN_FORMAT_TEXT,
+	}
+
+	for _, v := range stmt.Options {
+		if strings.EqualFold(v.Name, "VERBOSE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Verbose = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Verbose = false
+			} else {
+				return errors.New("111111", fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "ANALYZE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Anzlyze = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Anzlyze = false
+			} else {
+				return errors.New("111111", fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "FORMAT") {
+			if v.Name == "NULL" {
+				return errors.New("111111", fmt.Sprintf("%s requires a parameter", v.Name))
+			} else if strings.EqualFold(v.Value, "TEXT") {
+				es.Format = explain.EXPLAIN_FORMAT_TEXT
+			} else if strings.EqualFold(v.Value, "JSON") {
+				es.Format = explain.EXPLAIN_FORMAT_JSON
+			} else {
+				return errors.New("111111", fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+			}
+		} else {
+			return errors.New("111111", fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+		}
+	}
+
+	//get CompilerContext
+	/*
+		ctx := plan2.NewMockCompilerContext()
+		query, err := plan2.buildPlan(ctx, stmt.Statement)
+		if err != nil {
+			fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+			return errors.New("111111", fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
+		}
+
+		buffer := explain.NewExplainDataBuffer(250)
+		explainQuery := explain.NewExplainQueryImpl(query)
+		explainQuery.ExplainPlan(buffer, es)
+	*/
+	return errors.New("111111", "not support explain statment now")
+}
+
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
 }
@@ -1093,7 +1150,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if err = mce.handleAnalyzeStmt(st); err != nil {
 				return err
 			}
-
+		case *tree.ExplainStmt:
+			fmt.Println("Wuxiliang----statement is explain---------------->")
+			selfHandle = true
+			if err = mce.handleExplainStmt(st); err != nil {
+				return err
+			}
+		case *tree.ExplainAnalyze:
+			fmt.Println("Wuxiliang----statement is explain analyze---------------->")
+			selfHandle = true
+			return errors.New("111111", "not support explain analyze statment now")
 		}
 
 		if selfHandle {

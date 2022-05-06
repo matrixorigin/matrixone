@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		VERBOSE = MYSQL_VERBOSE
 		TYPE = MYSQL_TYPE
 		ZONEMAP = MYSQL_ZONEMAP
 		BSI = MYSQL_BSI
@@ -443,7 +444,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"auto_random":              AUTO_RANDOM,
 		"avg_row_length":           AVG_ROW_LENGTH,
 		"avg":                      AVG,
-		"bsi":					    BSI,
+		"bsi":                      BSI,
 		"before":                   UNUSED,
 		"begin":                    BEGIN,
 		"between":                  BETWEEN,
@@ -689,9 +690,9 @@ func initTokens(dialectType dialect.DialectType) {
 		"out":                      UNUSED,
 		"outer":                    OUTER,
 		"outfile":                  OUTFILE,
-		"header":					HEADER,
-		"max_file_size":			MAX_FILE_SIZE,
-		"force_quote":				FORCE_QUOTE,
+		"header":                   HEADER,
+		"max_file_size":            MAX_FILE_SIZE,
+		"force_quote":              FORCE_QUOTE,
 		"parser":                   PARSER,
 		"partition":                PARTITION,
 		"partitions":               PARTITIONS,
@@ -705,7 +706,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"processlist":              PROCESSLIST,
 		"procedure":                PROCEDURE,
 		"proxy":                    PROXY,
-		"properties":				PROPERTIES,
+		"properties":               PROPERTIES,
 		"privileges":               PRIVILEGES,
 		"query":                    QUERY,
 		"quarter":                  QUARTER,
@@ -737,7 +738,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"rollback":                 ROLLBACK,
 		"role":                     ROLE,
 		"routine":                  ROUTINE,
-		"row":						ROW,
+		"row":                      ROW,
 		"row_format":               ROW_FORMAT,
 		"row_count":                ROW_COUNT,
 		"rtree":                    RTREE,
@@ -836,8 +837,8 @@ func initTokens(dialectType dialect.DialectType) {
 		"x509":                     X509,
 		"year":                     YEAR,
 		"year_month":               UNUSED,
-		"zerofill":                  ZEROFILL,
-		"zonemap":					ZONEMAP,
+		"zerofill":                 ZEROFILL,
+		"zonemap":                  ZONEMAP,
 		"adddate":                  ADDDATE,
 		"count":                    COUNT,
 		"approx_count_distinct":    APPROX_COUNT_DISTINCT,
@@ -863,17 +864,18 @@ func initTokens(dialectType dialect.DialectType) {
 		"variance":                 VARIANCE,
 		"var_pop":                  VAR_POP,
 		"var_samp":                 VAR_SAMP,
-		"type":						TYPE,
+		"type":                     TYPE,
+		"verbose":                  VERBOSE,
 	}
 }
 
 // mysql
 var (
-	TYPE					 int
-	ZONEMAP   				 int
-	BSI						 int
-	ROW						 int
-	PROPERTIES				 int
+	TYPE                     int
+	ZONEMAP                  int
+	BSI                      int
+	ROW                      int
+	PROPERTIES               int
 	TERMINATED               int
 	ENCLOSED                 int
 	OPTIONALLY               int
@@ -1250,10 +1252,10 @@ var (
 	AVG                      int
 	LOAD                     int
 	INFILE                   int
-	OUTFILE					 int
-	HEADER					 int
-	MAX_FILE_SIZE			 int
-	FORCE_QUOTE				 int
+	OUTFILE                  int
+	HEADER                   int
+	MAX_FILE_SIZE            int
+	FORCE_QUOTE              int
 	STARTING                 int
 	LINES                    int
 	UNUSED                   int
@@ -1262,4 +1264,5 @@ var (
 	INT3                     int
 	INT4                     int
 	INT8                     int
+	VERBOSE                  int
 )

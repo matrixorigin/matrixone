@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from R inner join S on R.uid = S.uid",
+		input: "explain (analyze true,verbose false) select * from emp;",
+		//output: "select * from R inner join S on R.uid = S.uid",
 	}
 )
 
