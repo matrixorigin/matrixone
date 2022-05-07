@@ -20,6 +20,6 @@ type CheckpointCfg struct {
 }
 
 type SchedulerCfg struct {
-	IOWorkers      int `toml:"io-workers"`
-	TxnTaskWorkers int `toml:"txntask-workers"`
+	IOWorkers    int `toml:"io-workers"`
+	AsyncWorkers int `toml:"async-workers"`
 }

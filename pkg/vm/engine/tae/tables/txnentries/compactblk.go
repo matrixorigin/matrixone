@@ -41,7 +41,7 @@ func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 }
 func (entry *compactBlockEntry) PostCommit() {
 	meta := entry.from.GetMeta().(*catalog.BlockEntry)
-	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewTxnBlockCmd(csn, CmdCompactBlock)

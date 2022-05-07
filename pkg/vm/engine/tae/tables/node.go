@@ -154,7 +154,7 @@ func (node *appendableNode) OnUnload() {
 
 	node.data.Close()
 	node.data = nil
-	node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, scope, node.block.CheckpointWALClosure(ts))
+	node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, scope, node.block.CheckpointWALClosure(ts))
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {

@@ -49,7 +49,7 @@ func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
 func (entry *mergeBlocksEntry) PostCommit() {
 	for _, blk := range entry.merged {
 		meta := blk.GetMeta().(*catalog.BlockEntry)
-		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointDataTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 	}
 }
 

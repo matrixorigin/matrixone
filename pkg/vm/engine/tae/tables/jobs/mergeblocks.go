@@ -32,6 +32,7 @@ type mergeBlocksTask struct {
 	rel       handle.Relation
 	newSeg    handle.Segment
 	scheduler tasks.TaskScheduler
+	scopes    []common.ID
 }
 
 func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog.BlockEntry, segMeta *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
@@ -63,10 +64,13 @@ func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog
 			return nil, err
 		}
 		task.compacted = append(task.compacted, blk)
+		task.scopes = append(task.scopes, *meta.AsCommonID())
 	}
-	task.BaseTask = tasks.NewBaseTask(task, tasks.MergeBlocksTask, ctx)
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
 }
+
+func (task *mergeBlocksTask) Scopes() []common.ID { return task.scopes }
 
 func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uint32, isPrimary bool, fromLayout, toLayout []uint32) (column []*vector.Vector, mapping []uint32) {
 	if isPrimary {

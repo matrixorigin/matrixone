@@ -19,8 +19,8 @@ const (
 	DefaultCatalogCkpInterval = int64(60000) // millisecond
 	DefaultCatalogUnCkpLimit  = int64(10)
 
-	DefaultIOWorkers      = int(8)
-	DefaultTxnTaskWorkers = int(16)
+	DefaultIOWorkers    = int(8)
+	DefaultAsyncWorkers = int(16)
 )
 
 type Options struct {

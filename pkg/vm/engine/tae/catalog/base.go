@@ -136,7 +136,7 @@ func (be *BaseEntry) IsTerminated(waitIfcommitting bool) bool {
 }
 
 func (be *BaseEntry) IsCommitted() bool {
-	return be.Txn == nil
+	return be.Txn == nil && be.CreateAt > 0
 	// if be.Txn == nil {
 	// 	return true
 	// }
@@ -180,6 +180,7 @@ func (be *BaseEntry) PrepareRollback() error {
 	be.Lock()
 	if be.PrevCommit != nil {
 		be.CurrOp = be.PrevCommit.CurrOp
+		be.LogIndex = be.PrevCommit.LogIndex
 	}
 	be.Txn = nil
 	be.Unlock()
@@ -289,6 +290,10 @@ func (be *BaseEntry) IsDroppedUncommitted() bool {
 
 func (be *BaseEntry) IsDroppedCommitted() bool {
 	return be.Txn == nil && be.CurrOp == OpSoftDelete
+}
+
+func (be *BaseEntry) ToBeRollbacked() bool {
+	return be.CreateAt == 0 && be.DeleteAt == 0
 }
 
 func (be *BaseEntry) HasActiveTxn() bool {

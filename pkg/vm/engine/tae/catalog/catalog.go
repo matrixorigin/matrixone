@@ -63,6 +63,7 @@ func (catalog *Catalog) Close() error {
 	return nil
 }
 
+func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
 	defer catalog.RUnlock()

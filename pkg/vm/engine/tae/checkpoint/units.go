@@ -110,31 +110,13 @@ func (lunits *LeveledUnits) Scan() {
 				lunits.AddUnit(unit)
 				continue
 			}
-			taskFactory, err := unit.BuildCheckpointTaskFactory()
+			taskFactory, taskType, scopes, err := unit.BuildCompactionTaskFactory()
 			if err != nil || taskFactory == nil {
 				logutil.Warnf("%s: %v", unit.MutationInfo(), err)
 				continue
 			}
 			logutil.Infof("%s", unit.MutationInfo())
-			lunits.scheduler.ScheduleTxnTask(nil, taskFactory)
+			lunits.scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
 		}
-	}
-}
-
-func (lunits *LeveledUnits) ProcessUnit(currLevel int, unit data.CheckpointUnit) {
-	score := unit.EstimateScore()
-	if score == 0 {
-		return
-	}
-	level := lunits.policy.DecideLevel(score)
-	if level < currLevel {
-		lunits.AddUnit(unit)
-	}
-	taskFactory, err := unit.BuildCheckpointTaskFactory()
-	if err != nil {
-		logutil.Warnf("Build checkpoint task failed:  %v", err)
-	}
-	if taskFactory != nil {
-		// lunits.scheduler.Scheduler()
 	}
 }

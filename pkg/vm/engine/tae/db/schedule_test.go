@@ -201,7 +201,7 @@ func TestCheckpoint2(t *testing.T) {
 	// })
 	t.Log(tae.Wal.GetPenddingCnt())
 	meta.GetBlockData().Destroy()
-	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointCatalogTask, nil, tae.Catalog.CheckpointClosure(tae.TxnMgr.StatSafeTS()))
+	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.TxnMgr.StatSafeTS()))
 	assert.Nil(t, err)
 	err = task.WaitDone()
 	assert.Nil(t, err)
@@ -235,7 +235,7 @@ func TestSchedule1(t *testing.T) {
 		blkMeta := blk.GetMeta().(*catalog.BlockEntry)
 		factory := jobs.CompactBlockTaskFactory(blkMeta, db.Scheduler)
 		ctx := tasks.Context{Waitable: true}
-		task, err := db.Scheduler.ScheduleTxnTask(&ctx, factory)
+		task, err := db.Scheduler.ScheduleTxnTask(&ctx, tasks.DataCompactionTask, factory)
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)

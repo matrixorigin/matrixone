@@ -190,6 +190,9 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 			}
 			blkIt.Next()
 		}
+		if err = processor.OnPostSegment(segment); err != nil {
+			break
+		}
 		segIt.Next()
 	}
 	if err == ErrStopCurrRecur {

@@ -28,6 +28,7 @@ type compactBlockTask struct {
 	created   handle.Block
 	meta      *catalog.BlockEntry
 	scheduler tasks.TaskScheduler
+	scopes    []common.ID
 }
 
 func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.BlockEntry, scheduler tasks.TaskScheduler) (task *compactBlockTask, err error) {
@@ -54,9 +55,12 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 	if err != nil {
 		return
 	}
-	task.BaseTask = tasks.NewBaseTask(task, tasks.CompactBlockTask, ctx)
+	task.scopes = append(task.scopes, *task.compacted.Fingerprint())
+	task.BaseTask = tasks.NewBaseTask(task, tasks.DataCompactionTask, ctx)
 	return
 }
+
+func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
 func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 	attrs := task.meta.GetSchema().Attrs()

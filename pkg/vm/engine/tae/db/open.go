@@ -49,7 +49,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	}
 
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
-	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.TxnTaskWorkers, db.Opts.SchedulerCfg.IOWorkers)
+	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil, db.Scheduler)
 	db.Catalog = db.Opts.Catalog

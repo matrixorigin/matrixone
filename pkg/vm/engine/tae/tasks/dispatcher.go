@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	ErrDispatchWrongEvent = errors.New("aoe: wrong event type")
+	ErrDispatchWrongTask = errors.New("tae: wrong task type")
 )
 
 type Dispatcher interface {
@@ -38,7 +38,7 @@ func NewBaseDispatcher() *BaseDispatcher {
 func (d *BaseDispatcher) Dispatch(task Task) {
 	handler, ok := d.handlers[task.Type()]
 	if !ok {
-		panic(ErrDispatchWrongEvent)
+		panic(ErrDispatchWrongTask)
 	}
 	handler.Enqueue(task)
 }

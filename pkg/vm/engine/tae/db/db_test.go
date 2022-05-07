@@ -91,8 +91,8 @@ func TestAppend2(t *testing.T) {
 	db := initDB(t, opts)
 	defer db.Close()
 	schema := catalog.MockSchemaAll(13)
-	schema.BlockMaxRows = 100
-	schema.SegmentMaxBlocks = 2
+	schema.BlockMaxRows = 400
+	schema.SegmentMaxBlocks = 10
 	schema.PrimaryKey = 3
 	{
 		txn := db.StartTxn(nil)
@@ -101,11 +101,12 @@ func TestAppend2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 
-	bat := compute.MockBatch(schema.Types(), 2000, int(schema.PrimaryKey), nil)
-	bats := compute.SplitBatch(bat, 400)
+	totalRows := uint64(schema.BlockMaxRows * 30)
+	bat := compute.MockBatch(schema.Types(), totalRows, int(schema.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, 100)
 
 	var wg sync.WaitGroup
-	pool, _ := ants.NewPool(40)
+	pool, _ := ants.NewPool(80)
 
 	doAppend := func(data *gbat.Batch) func() {
 		return func() {
@@ -119,26 +120,38 @@ func TestAppend2(t *testing.T) {
 		}
 	}
 
+	start := time.Now()
 	for _, data := range bats {
 		wg.Add(1)
 		pool.Submit(doAppend(data))
 	}
 	wg.Wait()
-	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	cnt := 0
-	processor := new(catalog.LoopProcessor)
-	processor.BlockFn = func(block *catalog.BlockEntry) error {
-		cnt++
-		return nil
+	t.Logf("Append %d rows takes: %s", totalRows, time.Since(start))
+	rows := 0
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			rows += blk.Rows()
+			it.Next()
+		}
+		assert.Nil(t, txn.Commit())
 	}
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+	t.Logf("Rows: %d", rows)
+	assert.Equal(t, int(totalRows), rows)
+
 	now := time.Now()
-	testutils.WaitExpect(3000, func() bool {
-		cnt = 0
-		db.Opts.Catalog.RecurLoop(processor)
-		return cnt == 40
+	testutils.WaitExpect(8000, func() bool {
+		return db.Scheduler.GetPenddingCnt() == 0
 	})
 	t.Log(time.Since(now))
-	assert.Equal(t, 40, cnt)
+	t.Logf("Checkpointed: %d", db.Scheduler.GetCheckpointed())
+	t.Logf("GetPenddingCnt: %d", db.Scheduler.GetPenddingCnt())
+	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingCnt())
 }
 
 func TestTableHandle(t *testing.T) {
@@ -979,9 +992,9 @@ func TestDelete1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		blk := it.GetBlock()
 		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		factory, err := blkData.BuildCheckpointTaskFactory()
+		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
 		assert.Nil(t, err)
-		task, err := tae.Scheduler.ScheduleTxnTask(tasks.WaitableCtx, factory)
+		task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
 		assert.Nil(t, err)
 		err = task.WaitDone()
 		assert.Nil(t, err)

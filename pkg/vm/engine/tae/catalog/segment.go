@@ -9,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
@@ -95,7 +96,7 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 }
 
 func (entry *SegmentEntry) StringLocked() string {
-	return fmt.Sprintf("SEGMENT%s", entry.BaseEntry.String())
+	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.BaseEntry.String())
 }
 
 func (entry *SegmentEntry) String() string {
@@ -251,4 +252,33 @@ func (entry *SegmentEntry) CloneCreate() CheckpointItem {
 		table:     entry.table,
 	}
 	return cloned
+}
+
+func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
+	return entry.GetTable().GetCatalog().GetScheduler()
+}
+
+func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
+	blks := make([]*BlockEntry, 0)
+	blkIt := entry.MakeBlockIt(true)
+	for blkIt.Valid() {
+		blk := blkIt.Get().GetPayload().(*BlockEntry)
+		blk.RLock()
+		if commitFilter != nil && blockFilter != nil {
+			if commitFilter(blk.BaseEntry) && blockFilter(blk) {
+				blks = append(blks, blk)
+			}
+		} else if blockFilter != nil {
+			if blockFilter(blk) {
+				blks = append(blks, blk)
+			}
+		} else if commitFilter != nil {
+			if commitFilter(blk.BaseEntry) {
+				blks = append(blks, blk)
+			}
+		}
+		blk.RUnlock()
+		blkIt.Next()
+	}
+	return blks
 }

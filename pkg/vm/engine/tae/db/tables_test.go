@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
@@ -628,4 +629,61 @@ func TestMergeBlocks1(t *testing.T) {
 	// assert.Equal(t, uint64(0), db.Wal.GetPenddingCnt())
 	t.Logf("Checkpointed: %d", db.Wal.GetCheckpointed())
 	t.Logf("PendingCnt: %d", db.Wal.GetPenddingCnt())
+}
+
+func TestMergeBlocks2(t *testing.T) {
+	opts := new(options.Options)
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 3
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 1
+	opts.CheckpointCfg.CatalogCkpInterval = 2
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	schema.PrimaryKey = 2
+	col3Data := []int64{10, 8, 1, 6, 15, 7, 3, 12, 11, 4, 9, 5, 14, 13, 2}
+	// col3Data := []int64{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
+	pkData := []int32{2, 9, 11, 13, 15, 1, 4, 7, 10, 14, 3, 5, 6, 8, 12}
+	pk := gvec.New(schema.GetPKType())
+	col3 := gvec.New(schema.ColDefs[3].Type)
+	mapping := make(map[int32]int64)
+	for i, v := range pkData {
+		compute.AppendValue(pk, v)
+		compute.AppendValue(col3, col3Data[i])
+		mapping[v] = col3Data[i]
+	}
+
+	provider := compute.NewMockDataProvider()
+	provider.AddColumnProvider(int(schema.PrimaryKey), pk)
+	provider.AddColumnProvider(3, col3)
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows*3), int(schema.PrimaryKey), provider)
+	{
+		txn := tae.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bat)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+
+	// {
+	// 	txn := db.StartTxn(nil)
+	// 	database, _ := txn.GetDatabase("db")
+	// 	rel, _ := database.GetRelationByName(schema.Name)
+	// 	blks := make([]*catalog.BlockEntry, 0)
+	// 	it := rel.MakeBlockIt()
+	// }
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	start := time.Now()
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Wal.GetPenddingCnt() == 0
+	})
+	t.Logf("Wait %s", time.Since(start))
+	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	t.Logf("Checkpointed: %d", tae.Wal.GetCheckpointed())
+	t.Logf("PendingCnt: %d", tae.Wal.GetPenddingCnt())
 }

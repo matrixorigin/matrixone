@@ -7,6 +7,7 @@ import (
 )
 
 type Segment interface {
+	CheckpointUnit
 	GetID() uint64
 	GetSegmentFile() file.Segment
 	BatchDedup(txn txnif.AsyncTxn, pks *vector.Vector) error

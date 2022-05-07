@@ -151,6 +151,7 @@ func (blk *txnBlock) GetSegment() (seg handle.Segment) {
 	return
 }
 
+// TODO: segmentit or tableit
 func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 	segmentIt := rel.MakeSegmentIt()
 	if !segmentIt.Valid() {
@@ -158,6 +159,14 @@ func newRelationBlockIt(rel handle.Relation) *relBlockIt {
 	}
 	seg := segmentIt.GetSegment()
 	blockIt := seg.MakeBlockIt()
+	for !blockIt.Valid() {
+		segmentIt.Next()
+		if !segmentIt.Valid() {
+			return new(relBlockIt)
+		}
+		seg = segmentIt.GetSegment()
+		blockIt = seg.MakeBlockIt()
+	}
 	return &relBlockIt{
 		blockIt:   blockIt,
 		segmentIt: segmentIt,

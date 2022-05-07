@@ -182,7 +182,7 @@ func (blk *dataBlock) EstimateScore() int {
 	return score
 }
 
-func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory, err error) {
+func (blk *dataBlock) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.HasActiveTxn()
@@ -191,6 +191,8 @@ func (blk *dataBlock) BuildCheckpointTaskFactory() (factory tasks.TxnTaskFactory
 		return
 	}
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+	taskType = tasks.DataCompactionTask
+	scopes = append(scopes, *blk.meta.AsCommonID())
 	return
 	// if !blk.meta.IsAppendable() {
 	// }

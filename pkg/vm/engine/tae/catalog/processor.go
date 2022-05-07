@@ -3,15 +3,17 @@ package catalog
 type Processor interface {
 	OnDatabase(database *DBEntry) error
 	OnTable(table *TableEntry) error
+	OnPostSegment(segment *SegmentEntry) error
 	OnSegment(segment *SegmentEntry) error
 	OnBlock(block *BlockEntry) error
 }
 
 type LoopProcessor struct {
-	DatabaseFn func(*DBEntry) error
-	TableFn    func(*TableEntry) error
-	SegmentFn  func(*SegmentEntry) error
-	BlockFn    func(*BlockEntry) error
+	DatabaseFn    func(*DBEntry) error
+	TableFn       func(*TableEntry) error
+	SegmentFn     func(*SegmentEntry) error
+	BlockFn       func(*BlockEntry) error
+	PostSegmentFn func(*SegmentEntry) error
 }
 
 func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
@@ -24,6 +26,13 @@ func (p *LoopProcessor) OnDatabase(database *DBEntry) error {
 func (p *LoopProcessor) OnTable(table *TableEntry) error {
 	if p.TableFn != nil {
 		return p.TableFn(table)
+	}
+	return nil
+}
+
+func (p *LoopProcessor) OnPostSegment(segment *SegmentEntry) error {
+	if p.PostSegmentFn != nil {
+		return p.PostSegmentFn(segment)
 	}
 	return nil
 }
