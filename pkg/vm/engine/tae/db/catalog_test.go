@@ -61,6 +61,68 @@ func TestCatalog1(t *testing.T) {
 	}
 }
 
+func TestShowDatabaseNames(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	{
+		txn := tae.StartTxn(nil)
+		txn.CreateDatabase("db1")
+		names := txn.DatabaseNames()
+		assert.Equal(t, 1, len(names))
+		assert.Equal(t, "db1", names[0])
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := tae.StartTxn(nil)
+		names := txn.DatabaseNames()
+		assert.Equal(t, 1, len(names))
+		assert.Equal(t, "db1", names[0])
+		txn.CreateDatabase("db2")
+		names = txn.DatabaseNames()
+		t.Log(tae.Catalog.SimplePPString(common.PPL1))
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[0])
+		assert.Equal(t, "db2", names[1])
+		{
+			txn := tae.StartTxn(nil)
+			names := txn.DatabaseNames()
+			assert.Equal(t, 1, len(names))
+			assert.Equal(t, "db1", names[0])
+			_, err := txn.CreateDatabase("db2")
+			assert.NotNil(t, err)
+			txn.Rollback()
+		}
+		{
+			txn := tae.StartTxn(nil)
+			txn.CreateDatabase("db3")
+			names := txn.DatabaseNames()
+			assert.Equal(t, "db1", names[0])
+			assert.Equal(t, "db3", names[1])
+			assert.Nil(t, txn.Commit())
+		}
+		{
+			txn := tae.StartTxn(nil)
+			names := txn.DatabaseNames()
+			assert.Equal(t, 2, len(names))
+			assert.Equal(t, "db1", names[0])
+			assert.Equal(t, "db3", names[1])
+			_, err := txn.DropDatabase("db1")
+			assert.Nil(t, err)
+			names = txn.DatabaseNames()
+			t.Log(tae.Catalog.SimplePPString(common.PPL1))
+			assert.Equal(t, 1, len(names))
+			assert.Equal(t, "db3", names[0])
+			assert.Nil(t, txn.Commit())
+		}
+		names = txn.DatabaseNames()
+		assert.Equal(t, 2, len(names))
+		assert.Equal(t, "db1", names[0])
+		assert.Equal(t, "db2", names[1])
+		assert.Nil(t, txn.Commit())
+	}
+}
+
 func TestLogBlock(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()

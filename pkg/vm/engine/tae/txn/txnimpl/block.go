@@ -50,9 +50,6 @@ func newBlockIt(txn txnif.AsyncTxn, meta *catalog.SegmentEntry) *blockIt {
 		curr.RUnlock()
 		it.linkIt.Next()
 	}
-	// if it.linkIt.Valid() {
-	// 	it.curr = it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
-	// }
 	return it
 }
 

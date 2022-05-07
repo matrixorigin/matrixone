@@ -28,8 +28,7 @@ func (e *txnEngine) Create(_ uint64, name string, _ int) (err error) {
 }
 
 func (e *txnEngine) Databases() (dbs []string) {
-	// TODO
-	return
+	return e.txn.DatabaseNames()
 }
 
 func (e *txnEngine) Database(name string) (db engine.Database, err error) {

@@ -26,8 +26,16 @@ func newRelationIt(txn txnif.AsyncTxn, meta *catalog.DBEntry) *txnRelationIt {
 		txn:     txn,
 		linkIt:  meta.MakeTableIt(true),
 	}
-	if it.linkIt.Valid() {
-		it.curr = it.linkIt.Get().GetPayload().(*catalog.TableEntry)
+	for it.linkIt.Valid() {
+		curr := it.linkIt.Get().GetPayload().(*catalog.TableEntry)
+		curr.RLock()
+		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+			curr.RUnlock()
+			it.curr = curr
+			break
+		}
+		curr.RUnlock()
+		it.linkIt.Next()
 	}
 	return it
 }

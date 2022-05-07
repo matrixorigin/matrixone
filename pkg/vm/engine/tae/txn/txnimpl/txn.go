@@ -47,6 +47,10 @@ func (txn *txnImpl) CurrentDatabase() (db handle.Database) {
 	return txn.Store.CurrentDatabase()
 }
 
+func (txn *txnImpl) DatabaseNames() (names []string) {
+	return txn.Store.DatabaseNames()
+}
+
 func (txn *txnImpl) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return txn.Store.LogTxnEntry(tableId, entry, readed)
 }

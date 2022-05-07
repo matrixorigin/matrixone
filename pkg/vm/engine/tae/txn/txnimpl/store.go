@@ -181,6 +181,15 @@ func (store *txnStore) CurrentDatabase() (db handle.Database) {
 	return store.database
 }
 
+func (store *txnStore) DatabaseNames() (names []string) {
+	it := newDBIt(store.txn, store.catalog)
+	for it.Valid() {
+		names = append(names, it.GetCurr().GetName())
+		it.Next()
+	}
+	return
+}
+
 func (store *txnStore) UseDatabase(name string) (err error) {
 	if err = store.checkDatabase(name); err != nil {
 		return

@@ -45,6 +45,7 @@ type TxnHandle interface {
 	GetDatabase(name string) (handle.Database, error)
 	UseDatabase(name string) error
 	CurrentDatabase() handle.Database
+	DatabaseNames() []string
 }
 
 type TxnChanger interface {
@@ -174,6 +175,7 @@ type TxnStore interface {
 	DropDatabase(name string) (handle.Database, error)
 	UseDatabase(name string) error
 	CurrentDatabase() handle.Database
+	DatabaseNames() []string
 
 	GetSegment(id *common.ID) (handle.Segment, error)
 	CreateSegment(tid uint64) (handle.Segment, error)

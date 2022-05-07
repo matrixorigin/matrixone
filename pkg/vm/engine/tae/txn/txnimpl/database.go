@@ -1,11 +1,66 @@
 package txnimpl
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
+
+type txnDBIt struct {
+	*sync.RWMutex
+	txn    txnif.AsyncTxn
+	linkIt *common.LinkIt
+	curr   *catalog.DBEntry
+}
+
+func newDBIt(txn txnif.AsyncTxn, c *catalog.Catalog) *txnDBIt {
+	it := &txnDBIt{
+		RWMutex: c.RWMutex,
+		txn:     txn,
+		linkIt:  c.MakeDBIt(true),
+	}
+	for it.linkIt.Valid() {
+		curr := it.linkIt.Get().GetPayload().(*catalog.DBEntry)
+		curr.RLock()
+		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+			curr.RUnlock()
+			it.curr = curr
+			break
+		}
+		curr.RUnlock()
+		it.linkIt.Next()
+	}
+	return it
+}
+
+func (it *txnDBIt) Close() error { return nil }
+func (it *txnDBIt) Valid() bool  { return it.linkIt.Valid() }
+
+func (it *txnDBIt) Next() {
+	valid := true
+	for {
+		it.linkIt.Next()
+		node := it.linkIt.Get()
+		if node == nil {
+			it.curr = nil
+			break
+		}
+		entry := node.GetPayload().(*catalog.DBEntry)
+		entry.RLock()
+		valid = entry.TxnCanRead(it.txn, entry.RWMutex)
+		entry.RUnlock()
+		if valid {
+			it.curr = entry
+			break
+		}
+	}
+}
+
+func (it *txnDBIt) GetCurr() *catalog.DBEntry { return it.curr }
 
 type txnDatabase struct {
 	*txnbase.TxnDatabase

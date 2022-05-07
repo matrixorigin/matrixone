@@ -1,7 +1,7 @@
 package catalog
 
 func ActiveWithNoTxnFilter(be *BaseEntry) bool {
-	return !be.IsDroppedCommitted() && !be.ToBeRollbacked()
+	return !be.IsDroppedCommitted() && !be.InTxnOrRollbacked()
 }
 
 func AppendableBlkFilter(be *BlockEntry) bool {

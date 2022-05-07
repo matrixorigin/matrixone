@@ -26,7 +26,7 @@ type CheckpointItem interface {
 func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.ToBeRollbacked() {
+	if entry.InTxnOrRollbacked() {
 		return false
 	}
 	// 1. entry was created after maxTs. Skip it
@@ -53,7 +53,7 @@ func CheckpointSelectOp(entry *BaseEntry, minTs, maxTs uint64) bool {
 
 func CheckpointOp(ckpEntry *CheckpointEntry, entry *BaseEntry, item CheckpointItem, minTs, maxTs uint64) {
 	entry.RLock()
-	if entry.ToBeRollbacked() {
+	if entry.InTxnOrRollbacked() {
 		entry.RUnlock()
 		return
 	}

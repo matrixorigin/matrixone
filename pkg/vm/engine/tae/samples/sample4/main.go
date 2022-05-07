@@ -43,7 +43,7 @@ var querys = []string{
 	"CREATE TABLE IF NOT EXISTS table1(a int);",
 	// "CREATE INDEX idx on table1(a);",
 	// "DROP INDEX idx on table1;",
-	// "SHOW DATABASES;",
+	"SHOW DATABASES;",
 	"SHOW TABLES;",
 	// "SHOW COLUMNS FROM table1;",
 	// "SHOW CREATE TABLE table1;",

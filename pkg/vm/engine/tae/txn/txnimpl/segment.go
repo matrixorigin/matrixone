@@ -29,8 +29,16 @@ func newSegmentIt(txn txnif.AsyncTxn, meta *catalog.TableEntry) *segmentIt {
 		txn:    txn,
 		linkIt: meta.MakeSegmentIt(true),
 	}
-	if it.linkIt.Valid() {
-		it.curr = it.linkIt.Get().GetPayload().(*catalog.SegmentEntry)
+	for it.linkIt.Valid() {
+		curr := it.linkIt.Get().GetPayload().(*catalog.SegmentEntry)
+		curr.RLock()
+		if curr.TxnCanRead(it.txn, curr.RWMutex) {
+			curr.RUnlock()
+			it.curr = curr
+			break
+		}
+		curr.RUnlock()
+		it.linkIt.Next()
 	}
 	return it
 }

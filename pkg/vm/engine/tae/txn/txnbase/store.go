@@ -36,6 +36,7 @@ func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err er
 func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)         { return }
 func (store *NoopTxnStore) UseDatabase(name string) (err error)                             { return }
 func (store *NoopTxnStore) CurrentDatabase() (db handle.Database)                           { return }
+func (store *NoopTxnStore) DatabaseNames() (names []string)                                 { return }
 func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)        { return }
 
 func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)              { return }

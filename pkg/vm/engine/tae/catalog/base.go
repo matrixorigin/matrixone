@@ -292,7 +292,7 @@ func (be *BaseEntry) IsDroppedCommitted() bool {
 	return be.Txn == nil && be.CurrOp == OpSoftDelete
 }
 
-func (be *BaseEntry) ToBeRollbacked() bool {
+func (be *BaseEntry) InTxnOrRollbacked() bool {
 	return be.CreateAt == 0 && be.DeleteAt == 0
 }
 
