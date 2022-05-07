@@ -64,15 +64,13 @@ type Function struct {
 	AggregateInfo interface{}
 
 	// SQLFn returns the sql string of the function. Maybe useful.
-	// TODO(cms): if useless, just delete it.
+	// TODO(cms): if useless, just remove it.
 	SQLFn func(vs []*vector.Vector) (string, error)
 }
 
 // ArgList is a structure to record argument info of a function overload.
 type ArgList struct {
 	Limit bool // if true, argument number of function is constant
-
-	AllowNullArgs bool // if true, argument can be a NULL whose type is NullValueType
 
 	// if Limit is true, ArgTypes1 records all argument types
 	ArgTypes1 []Arg
@@ -99,7 +97,7 @@ var functionRegister = map[string][]Function{
 		{
 			Name: "=(uint8, uint8)",
 			Flag: plan.Function_STRICT,
-			Args: MakeLimitArgList(false, []Arg{
+			Args: MakeLimitArgList([]Arg{
 				{Name: "left", Typ: types.T_uint8},
 				{Name: "right", Typ: types.T_uint8},
 			}),
@@ -130,15 +128,14 @@ var functionRegister = map[string][]Function{
 	// SubQuery
 }
 
-func MakeLimitArgList(nullable bool, args []Arg) ArgList {
+func MakeLimitArgList(args []Arg) ArgList {
 	return ArgList{
-		Limit:         true,
-		AllowNullArgs: nullable,
-		ArgTypes1:     args,
+		Limit:     true,
+		ArgTypes1: args,
 	}
 }
 
-func MakeUnLimitArgList(nullable bool, args []Arg, nums []int, maxNum int) ArgList {
+func MakeUnLimitArgList(args []Arg, nums []int, maxNum int) ArgList {
 	var min = 0
 	var numberVArgs = 0 // number of variable-length argument
 
@@ -164,8 +161,7 @@ func MakeUnLimitArgList(nullable bool, args []Arg, nums []int, maxNum int) ArgLi
 	}
 
 	return ArgList{
-		Limit:         false,
-		AllowNullArgs: nullable,
+		Limit: false,
 		ArgTypes2: struct {
 			Min  int
 			Max  int
@@ -247,17 +243,9 @@ func argumentCheck(args []types.T, fArgs ArgList) bool {
 			return false
 		}
 
-		if fArgs.AllowNullArgs {
-			for i := range args {
-				if args[i] != fArgs.ArgTypes1[i].Typ && args[i] != NullValueType {
-					return false
-				}
-			}
-		} else {
-			for i := range args {
-				if args[i] != fArgs.ArgTypes1[i].Typ {
-					return false
-				}
+		for i := range args {
+			if args[i] != fArgs.ArgTypes1[i].Typ && args[i] != NullValueType {
+				return false
 			}
 		}
 	} else {
@@ -267,85 +255,48 @@ func argumentCheck(args []types.T, fArgs ArgList) bool {
 		}
 
 		// three cases need consider
-		//		case1: const variadic 			<==> Nums like [1, 1, ..., 1, -1]
-		//		case2: const variadic const		<==> Nums like [1, ..., 1, -1, 1, ..., 1]
-		//		case3: variadic const			<==> Nums like [-1, 1, ..., 1]
+		//		case1: const, variadic 			<==> Nums like [1, 1, ..., 1, -1]
+		//		case2: const, variadic, const	<==> Nums like [1, ..., 1, -1, 1, ..., 1]
+		//		case3: variadic, const			<==> Nums like [-1, 1, ..., 1]
 		fNums := fArgs.ArgTypes2.Nums
 		fTyps := fArgs.ArgTypes2.Typs
 
 		l1, r1 := 0, len(args)-1
 		l2, r2 := 0, len(fTyps)-1
 
-		if fArgs.AllowNullArgs {
+		for l1 <= r1 {
+			if fNums[l2] == NoLimit {
+				break
+			}
+			if fTyps[l2].Typ != args[l1] && args[l1] != NullValueType {
+				return false
+			}
+			l1++
+			l2++
+		}
+		for r1 >= l1 {
+			if fNums[r2] == NoLimit {
+				break
+			}
+			if fTyps[r2].Typ != args[r1] && args[r1] != NullValueType {
+				return false
+			}
+			r1--
+			r2--
+		}
+
+		if l2 == r2 && fNums[l2] == NoLimit {
+			// all the constant arguments have matched.
+			// and rest part of args should match the variadic argument type.
+			variadicArgumentType := fTyps[l2].Typ
 			for l1 <= r1 {
-				if fNums[l2] == NoLimit {
-					break
-				}
-				if fTyps[l2].Typ != args[l1] && args[l1] != NullValueType {
+				if args[l1] != variadicArgumentType && args[l1] != NullValueType {
 					return false
 				}
 				l1++
-				l2++
-			}
-			for r1 >= l1 {
-				if fNums[r2] == NoLimit {
-					break
-				}
-				if fTyps[r2].Typ != args[r1] && args[l2] != NullValueType {
-					return false
-				}
-				r1--
-				r2--
-			}
-
-			if l2 == r2 && fNums[l2] == NoLimit {
-				// all the constant arguments have matched.
-				// and rest part of args should match the variadic argument type.
-				variadicArgumentType := fTyps[l2].Typ
-				for l1 <= r1 {
-					if args[l1] != variadicArgumentType && args[l1] != NullValueType {
-						return false
-					}
-					l1++
-				}
-			} else {
-				return false
 			}
 		} else {
-			for l1 <= r1 {
-				if fNums[l2] == NoLimit {
-					break
-				}
-				if fTyps[l2].Typ != args[l1] {
-					return false
-				}
-				l1++
-				l2++
-			}
-			for r1 >= l1 {
-				if fNums[r2] == NoLimit {
-					break
-				}
-				if fTyps[r2].Typ != args[r1] {
-					return false
-				}
-				r1--
-				r2--
-			}
-
-			if l2 == r2 && fNums[l2] == NoLimit {
-				// all the constant arguments have matched.
-				// and rest part of args should match the variadic argument type.
-				variadicArgumentType := fTyps[l2].Typ
-				for l1 <= r1 {
-					if args[l1] != variadicArgumentType {
-						return false
-					}
-					l1++
-				}
-			} else {
-				return false
-			}
+			return false
 		}
 	}
 	return true
