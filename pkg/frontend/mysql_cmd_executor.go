@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"os"
@@ -97,11 +98,11 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto  MysqlProtocol
-	mrs    *MysqlResultSet
-	rowIdx uint64
-	length uint64
-	ep     *tree.ExportParam
+	proto   MysqlProtocol
+	mrs     *MysqlResultSet
+	rowIdx  uint64
+	length  uint64
+	ep      *tree.ExportParam
 	lineStr []byte
 
 	getEmptyRowTime time.Duration
@@ -897,7 +898,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 			} else if strings.EqualFold(v.Value, "FALSE") {
 				es.Verbose = false
 			} else {
-				return errors.New("111111", fmt.Sprintf("%s requires a Boolean value", v.Name))
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
 			}
 		} else if strings.EqualFold(v.Name, "ANALYZE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -905,20 +906,20 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 			} else if strings.EqualFold(v.Value, "FALSE") {
 				es.Anzlyze = false
 			} else {
-				return errors.New("111111", fmt.Sprintf("%s requires a Boolean value", v.Name))
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
 			}
 		} else if strings.EqualFold(v.Name, "FORMAT") {
 			if v.Name == "NULL" {
-				return errors.New("111111", fmt.Sprintf("%s requires a parameter", v.Name))
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
 			} else if strings.EqualFold(v.Value, "TEXT") {
 				es.Format = explain.EXPLAIN_FORMAT_TEXT
 			} else if strings.EqualFold(v.Value, "JSON") {
 				es.Format = explain.EXPLAIN_FORMAT_JSON
 			} else {
-				return errors.New("111111", fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
 			}
 		} else {
-			return errors.New("111111", fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+			return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
 		}
 	}
 
@@ -935,7 +936,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		explainQuery := explain.NewExplainQueryImpl(query)
 		explainQuery.ExplainPlan(buffer, es)
 	*/
-	return errors.New("111111", "not support explain statment now")
+	return errors.New(errno.FeatureNotSupported, "not support explain statment now")
 }
 
 type ComputationWrapperImpl struct {
@@ -1156,15 +1157,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 		case *tree.ExplainStmt:
-			fmt.Println("Wuxiliang----statement is explain---------------->")
 			selfHandle = true
 			if err = mce.handleExplainStmt(st); err != nil {
 				return err
 			}
 		case *tree.ExplainAnalyze:
-			fmt.Println("Wuxiliang----statement is explain analyze---------------->")
-			selfHandle = true
-			return errors.New("111111", "not support explain analyze statment now")
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
 		}
 
 		if selfHandle {

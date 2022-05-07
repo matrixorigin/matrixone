@@ -19,9 +19,9 @@ import (
 )
 
 type Frame struct {
-	node                 *plan.Node
-	next_child           int
-	is_description_print bool
+	node               *plan.Node
+	nextChild          int
+	isDescriptionPrint bool
 }
 
 //  Stack is the stack used to store plan.Node

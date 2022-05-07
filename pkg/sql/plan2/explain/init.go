@@ -38,8 +38,9 @@ const (
 	CASE_WHEN_EXPRESSION       FunctionKind = 7
 	BETWEEN_AND_EXPRESSION     FunctionKind = 8
 	IN_EXISTS_EXPRESSION       FunctionKind = 9
-	NOPARAMETER_FUNCTION       FunctionKind = 10
-	UNKNOW_KIND_FUNCTION       FunctionKind = 11
+	IS_NULL_EXPRESSION         FunctionKind = 10
+	NOPARAMETER_FUNCTION       FunctionKind = 11
+	UNKNOW_KIND_FUNCTION       FunctionKind = 12
 )
 
 type FunctionProtoType struct {
@@ -139,7 +140,7 @@ var BuiltinFunctions = []FunctionProtoType{
 	{"HEX_ENCODE", UNKNOW_KIND_FUNCTION},
 
 	{"IFF", UNKNOW_KIND_FUNCTION},
-	{"IFNULL", UNKNOW_KIND_FUNCTION},
+	{"IFNULL", IS_NULL_EXPRESSION},
 	{"ILIKE", UNKNOW_KIND_FUNCTION},
 	{"ILIKE_ALL", UNKNOW_KIND_FUNCTION},
 	{"ILIKE_ANY", UNKNOW_KIND_FUNCTION},

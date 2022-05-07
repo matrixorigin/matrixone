@@ -28,7 +28,7 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	}
 }
 
-func (ndesc NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string {
 	var result string
 	var pname string /* node type name for text output */
 	//var sname string /* node type name for non-text output */
@@ -155,13 +155,12 @@ func (ndesc NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string {
 		//	ndesc.Node.Cost.Card)
 	} else {
 		//TODO implement me
+		panic("implement me")
 	}
 	return result
-	//TODO implement me
-	//panic("implement me")
 }
 
-func (ndesc NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
+func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
 	lines := make([]string, 0)
 	if ndesc.Node.OrderBy != nil {
 		orderByInfo := ndesc.GetOrderByInfo(options)
@@ -197,19 +196,21 @@ func (ndesc NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
 	return lines
 }
 
-func (ndesc NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) string {
 	var result string = "Output: "
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
 	result += exprs.GetDescription(options)
 	return result
 }
 
-func (ndesc NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) string {
-	//TODO implement me
-	panic("implement me")
+func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) string {
+	var result string = "Join Cond: "
+	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
+	result += exprs.GetDescription(options)
+	return result
 }
 
-func (ndesc NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) string {
 	var result string = "Filter: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -226,7 +227,7 @@ func (ndesc NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) str
 	return result
 }
 
-func (ndesc NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
 	var result string = "Group Key: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -243,7 +244,7 @@ func (ndesc NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
 	return result
 }
 
-func (ndesc NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
+func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
 	var result string = "Sort Key: "
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
@@ -262,9 +263,6 @@ func (ndesc NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
 }
 
 //------------------------------------------------------------------------------------------
-type NodeElemDescribe interface {
-	GetDescription(options *ExplainOptions) string
-}
 
 var _ NodeElemDescribe = &CostDescribeImpl{}
 var _ NodeElemDescribe = &ExprListDescribeImpl{}

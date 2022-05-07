@@ -56,6 +56,7 @@ const (
 	InvalidRecursion                        = "42P19"
 	InvalidForeignKey                       = "42830"
 	InvalidName                             = "42602"
+	InvalidOptionValue                      = "42603"
 	NameTooLong                             = "42622"
 	ReservedName                            = "42939"
 	DatatypeMismatch                        = "42804"

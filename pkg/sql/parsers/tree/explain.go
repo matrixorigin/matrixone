@@ -15,7 +15,6 @@
 package tree
 
 import (
-	"fmt"
 	"strconv"
 )
 
@@ -141,7 +140,6 @@ type OptionElem struct {
 }
 
 func MakeOptionElem(name string, value string) OptionElem {
-	fmt.Printf("Call MakeOptionElem() name:%v, value: %v\n", name, value)
 	return OptionElem{
 		Name:  name,
 		Value: value,

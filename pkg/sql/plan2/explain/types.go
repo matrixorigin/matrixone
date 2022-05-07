@@ -37,8 +37,6 @@ type ExplainQuery interface {
 	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions)
 }
 
-//-------------------------------------------------------------------------------------------------------
-
 type NodeDescribe interface {
 	GetNodeBasicInfo(options *ExplainOptions) string
 	GetExtraInfo(options *ExplainOptions) []string
@@ -49,20 +47,26 @@ type NodeDescribe interface {
 	GetGroupByInfo(options *ExplainOptions) string
 }
 
+type NodeElemDescribe interface {
+	GetDescription(options *ExplainOptions) string
+}
+
+//-------------------------------------------------------------------------------------------------------
+
 type FormatSettings struct {
-	buffer      *ExplainDataBuffer
-	offset      int
-	indent      int
-	indent_char byte
-	level       int
+	buffer     *ExplainDataBuffer
+	offset     int
+	indent     int
+	indentChar byte
+	level      int
 }
 
 func NewFormatSettings() *FormatSettings {
 	return &FormatSettings{
-		buffer:      &ExplainDataBuffer{},
-		offset:      0,
-		indent:      2,
-		indent_char: ' ',
+		buffer:     &ExplainDataBuffer{},
+		offset:     0,
+		indent:     2,
+		indentChar: ' ',
 	}
 }
 
@@ -164,10 +168,4 @@ type QueryPlanSetting struct {
 	JSON             bool
 	DOT              bool
 	QueryPlanOptions ExplainOptions
-}
-
-type ExplainState struct {
-	Verbose bool
-	Anzlyze bool
-	Format  ExplainFormat
 }

@@ -36,38 +36,39 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
 	for index, rootNodeId := range e.QueryPlan.Steps {
-		fmt.Printf("-----------------------------Printing the %v-th plan tree -----------------------\n", index)
+		//logutil.Infof("--------------------------------------------Query Plan %v ------------------------------------------", index)
+		fmt.Printf("--------------------------------------------Query Plan %v ------------------------------------------\n", index)
 		settings := FormatSettings{
-			buffer:      buffer,
-			offset:      0,
-			indent:      4,
-			indent_char: ' ',
-			level:       0,
+			buffer:     buffer,
+			offset:     0,
+			indent:     4,
+			indentChar: ' ',
+			level:      0,
 		}
 
 		stack := NewStack()
 		stack.Push(&Frame{
-			node:                 Nodes[rootNodeId],
-			is_description_print: false,
-			next_child:           0,
+			node:               Nodes[rootNodeId],
+			isDescriptionPrint: false,
+			nextChild:          0,
 		})
 
 		for !stack.Empty() {
 			frame := stack.Top()
-			if !frame.is_description_print {
+			if !frame.isDescriptionPrint {
 				settings.offset = (stack.Size()) * settings.indent
 				explainStep(frame.node, &settings, options)
-				frame.is_description_print = true
+				frame.isDescriptionPrint = true
 			}
 
-			if frame.next_child < len(frame.node.Children) {
-				childId := frame.node.Children[frame.next_child]
+			if frame.nextChild < len(frame.node.Children) {
+				childId := frame.node.Children[frame.nextChild]
 				stack.Push(&Frame{
-					node:                 Nodes[childId],
-					is_description_print: false,
-					next_child:           0,
+					node:               Nodes[childId],
+					isDescriptionPrint: false,
+					nextChild:          0,
 				})
-				frame.next_child++
+				frame.nextChild++
 			} else {
 				stack.Pop()
 			}

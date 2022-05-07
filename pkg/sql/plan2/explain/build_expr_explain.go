@@ -76,11 +76,17 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 		}
 		result += ")"
 	case UNARY_ARITHMETIC_OPERATOR:
-		result += funcExpr.F.Func.GetObjName() + DescribeExpr(funcExpr.F.Args[0])
+		var opertator string
+		if funcExpr.F.Func.GetObjName() == "UNARY_PLUS" {
+			opertator = "+"
+		} else {
+			opertator = "-"
+		}
+		result += opertator + DescribeExpr(funcExpr.F.Args[0])
 	case BINARY_ARITHMETIC_OPERATOR:
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
 	case UNARY_LOGICAL_OPERATOR:
-		result += funcExpr.F.Func.GetObjName() + DescribeExpr(funcExpr.F.Args[0])
+		result += funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[0])
 	case BINARY_LOGICAL_OPERATOR:
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
 	case COMPARISON_OPERATOR:
@@ -97,6 +103,8 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 	case IN_EXISTS_EXPRESSION:
 		fmt.Printf("CASE_WHEN_EXPRESSION is not support now")
 		panic("implement me")
+	case IS_NULL_EXPRESSION:
+		result += DescribeExpr(funcExpr.F.Args[0]) + " IS NULL"
 	case NOPARAMETER_FUNCTION:
 		result += funcExpr.F.Func.GetObjName()
 	case UNKNOW_KIND_FUNCTION:
