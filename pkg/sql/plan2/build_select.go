@@ -24,23 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
-	aliasCtx := &AliasContext{
-		tableAlias:  make(map[string]string),
-		columnAlias: make(map[string]*plan.Expr),
-	}
-
+func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	//with
 
 	//clause
 	var projections []*plan.Expr
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		tmp, err := buildSelectClause(selectClause, ctx, query, aliasCtx)
+		tmp, err := buildSelectClause(selectClause, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
 		projections = tmp
+	case *tree.ParenSelect:
+		return buildSelect(selectClause.Select, ctx, query, selectCtx)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
@@ -58,14 +55,12 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 		NodeType:    plan.Node_SORT,
 		ProjectList: projections,
 		Children:    []int32{preNode.NodeId},
-	}
-
-	//orderby
+	} //orderby
 	if stmt.OrderBy != nil {
 		var orderBys []*plan.OrderBySpec
 		for _, order := range stmt.OrderBy {
 			orderBy := &plan.OrderBySpec{}
-			expr, err := buildExpr(order.Expr, ctx, query, aliasCtx)
+			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return err
 			}
@@ -87,18 +82,22 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 	//limit
 	if stmt.Limit != nil {
 		//offset
-		expr, err := buildExpr(stmt.Limit.Offset, ctx, query, aliasCtx)
-		if err != nil {
-			return err
+		if stmt.Limit.Offset != nil {
+			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			node.Offset = expr
 		}
-		node.Offset = expr
 
 		//limit
-		expr, err = buildExpr(stmt.Limit.Count, ctx, query, aliasCtx)
-		if err != nil {
-			return err
+		if stmt.Limit.Count != nil {
+			expr, err := buildExpr(stmt.Limit.Count, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			node.Limit = expr
 		}
-		node.Limit = expr
 	}
 	appendQueryNode(query, node, true)
 
@@ -109,9 +108,9 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 	return nil
 }
 
-func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, aliasCtx *AliasContext) ([]*plan.Expr, error) {
+func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, selectCtx *SelectContext) ([]*plan.Expr, error) {
 	//from
-	err := buildFrom(stmt.From.Tables, ctx, query, aliasCtx)
+	err := buildFrom(stmt.From.Tables, ctx, query, selectCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +119,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	//filter
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, aliasCtx)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +130,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 	//todo get windowspec
 	var projections []*plan.Expr
 	for _, selectExpr := range stmt.Exprs {
-		expr, err := buildExpr(selectExpr.Expr, ctx, query, aliasCtx)
+		expr, err := buildExpr(selectExpr.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return nil, err
 		}
@@ -147,7 +146,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 				expr.Alias = tree.String(&selectExpr, dialect.MYSQL)
 			} else {
 				expr.Alias = alias
-				aliasCtx.columnAlias[alias] = expr
+				selectCtx.columnAlias[alias] = expr
 			}
 			projections = append(projections, expr)
 		}
@@ -167,7 +166,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		if stmt.GroupBy != nil {
 			var exprs []*plan.Expr
 			for _, groupByExpr := range stmt.GroupBy {
-				expr, err := buildExpr(groupByExpr, ctx, query, aliasCtx)
+				expr, err := buildExpr(groupByExpr, ctx, query, selectCtx)
 				if err != nil {
 					return nil, err
 				}
@@ -180,7 +179,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 			if stmt.GroupBy == nil {
 				//todo select a from tbl having max(a) > 10   will rewrite to  select a from tbl group by null having max(a) > 10
 			}
-			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, aliasCtx)
+			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return nil, err
 			}

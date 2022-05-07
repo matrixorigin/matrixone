@@ -13,5 +13,5 @@ MatrixOne通过超融合数据引擎实现单一数据库系统支持TP、AP、S
 |  概述   | 快速上手  |  参考指南  
 |  ----  | ----  |  ----  
 | [MatrixOne简介](MatrixOne/Overview/matrixone-introduction.md)  | [MatrixOne安装部署](MatrixOne/Get-Started/install-standalone-matrixone.md) | 	[SQL参考指南](MatrixOne/Reference/SQL-Reference/Data-Definition-Statements/create-database.md)
-| [MatrixOne架构](MatrixOne/Overview/matrixone-architecture.md)  | [连接MatrixOne服务器](MatrixOne/Get-Started/connect-to-matrixone-server.md) | [v0.3.0发布公告](MatrixOne/Release-Notes/v0.3.0.md)
+| [MatrixOne架构](MatrixOne/Overview/matrixone-architecture.md)  | [连接MatrixOne服务](MatrixOne/Get-Started/connect-to-matrixone-server.md) | [v0.4.0发布公告](MatrixOne/Release-Notes/v0.4.0.md)
 | [MatrixCube简介](MatrixOne/Overview/matrixcube/matrixcube-introduction.md)  | [使用MatrixOne完成SSB测试](MatrixOne/Get-Started/Tutorial/SSB-test-with-matrixone.md)

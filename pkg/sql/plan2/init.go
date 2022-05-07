@@ -21,7 +21,7 @@ func init() {
 	//change BuiltinFunctions to map
 	BuiltinFunctionsMap = make(map[string]*FunctionSig)
 	for _, fun := range BuiltinFunctions {
-		BuiltinFunctionsMap[fun.Name] = &fun
+		BuiltinFunctionsMap[fun.Name] = fun
 	}
 
 }

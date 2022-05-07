@@ -635,6 +635,25 @@ type CaseExpr struct {
 	Else  Expr
 }
 
+func (node *CaseExpr) Format(ctx *FmtCtx) {
+	ctx.WriteString("case")
+	if node.Expr != nil {
+		node.Expr.Format(ctx)
+	}
+	ctx.WriteByte(' ')
+	prefix := ""
+	for _, w := range node.Whens {
+		ctx.WriteString(prefix)
+		w.Format(ctx)
+		prefix = " "
+	}
+	if node.Else != nil {
+		ctx.WriteString(" else ")
+		node.Else.Format(ctx)
+	}
+	ctx.WriteString(" end")
+}
+
 func NewCaseExpr(e Expr, w []*When, el Expr) *CaseExpr {
 	return &CaseExpr{
 		Expr:  e,
@@ -647,6 +666,13 @@ func NewCaseExpr(e Expr, w []*When, el Expr) *CaseExpr {
 type When struct {
 	Cond Expr
 	Val  Expr
+}
+
+func (node * When) Format(ctx *FmtCtx) {
+	ctx.WriteString("when ")
+	node.Cond.Format(ctx)
+	ctx.WriteString(" then ")
+	node.Val.Format(ctx)
 }
 
 func NewWhen(c, v Expr) *When {

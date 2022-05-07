@@ -1,3 +1,17 @@
+// Copyright 2021 - 2022 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package plan2
 
 import (
@@ -24,10 +38,14 @@ type Optimizer interface {
 	CurrentContext() CompilerContext
 }
 
-//use for set and get alias in build context
-//when build_from we may set tableAlias and then use in build_where
-//when build_projection we may set columnAlias and then use in build_orderby
-type AliasContext struct {
+//use for build select
+type SelectContext struct {
+	//when build_from we may set tableAlias and then use in build_where
+	//when build_projection we may set columnAlias and then use in build_orderby
 	tableAlias  map[string]string
 	columnAlias map[string]*plan.Expr
+
+	//use for build subquery
+	subQueryIsCorrelated bool
+	subQueryParentId     int32
 }

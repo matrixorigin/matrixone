@@ -65,5 +65,5 @@ estd date NOT NULL DEFAULT '2000-01-01'
 ```
 
 ## Constraints
-Currently, MatrixOne doesn't support select function() without from tables.
-
+* Currently, MatrixOne doesn't support select function() without from tables.
+* Currently, Substring() doesn't support FROM and FOR clauses.

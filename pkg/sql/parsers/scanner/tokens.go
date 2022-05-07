@@ -25,6 +25,25 @@ func initTokens(dialectType dialect.DialectType) {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
 		VERBOSE = MYSQL_VERBOSE
+		SQL_TSI_MINUTE = MYSQL_SQL_TSI_MINUTE
+		SQL_TSI_SECOND = MYSQL_SQL_TSI_SECOND
+		SQL_TSI_YEAR = MYSQL_SQL_TSI_YEAR
+		SQL_TSI_QUARTER = MYSQL_SQL_TSI_QUARTER
+		SQL_TSI_MONTH = MYSQL_SQL_TSI_MONTH
+		SQL_TSI_WEEK = MYSQL_SQL_TSI_WEEK
+		SQL_TSI_DAY = MYSQL_SQL_TSI_DAY
+		SQL_TSI_HOUR = MYSQL_SQL_TSI_HOUR
+		YEAR_MONTH = MYSQL_YEAR_MONTH
+		DAY_HOUR = MYSQL_DAY_HOUR
+		DAY_MINUTE = MYSQL_DAY_MINUTE
+		DAY_SECOND = MYSQL_DAY_SECOND
+		DAY_MICROSECOND = MYSQL_DAY_MICROSECOND
+		HOUR_MINUTE = MYSQL_HOUR_MINUTE
+		HOUR_SECOND = MYSQL_HOUR_SECOND
+		HOUR_MICROSECOND = MYSQL_HOUR_MICROSECOND
+		MINUTE_SECOND = MYSQL_MINUTE_SECOND
+		MINUTE_MICROSECOND = MYSQL_MINUTE_MICROSECOND
+		SECOND_MICROSECOND = MYSQL_SECOND_MICROSECOND
 		TYPE = MYSQL_TYPE
 		ZONEMAP = MYSQL_ZONEMAP
 		BSI = MYSQL_BSI
@@ -509,10 +528,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"database":                 DATABASE,
 		"databases":                DATABASES,
 		"day":                      DAY,
-		"day_hour":                 UNUSED,
-		"day_microsecond":          UNUSED,
-		"day_minute":               UNUSED,
-		"day_second":               UNUSED,
 		"date":                     DATE,
 		"data":                     DATA,
 		"datetime":                 DATETIME,
@@ -583,9 +598,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"hash":                     HASH,
 		"high_priority":            UNUSED,
 		"hour":                     HOUR,
-		"hour_microsecond":         UNUSED,
-		"hour_minute":              UNUSED,
-		"hour_second":              UNUSED,
 		"identified":               IDENTIFIED,
 		"if":                       IF,
 		"ignore":                   IGNORE,
@@ -648,8 +660,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"mediumint":                MEDIUMINT,
 		"mediumtext":               MEDIUMTEXT,
 		"middleint":                UNUSED,
-		"minute_microsecond":       UNUSED,
-		"minute_second":            UNUSED,
 		"minute":                   MINUTE,
 		"microsecond":              MICROSECOND,
 		"mod":                      MOD,
@@ -744,7 +754,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"rtree":                    RTREE,
 		"schema":                   SCHEMA,
 		"schemas":                  UNUSED,
-		"second_microsecond":       UNUSED,
 		"second":                   SECOND,
 		"select":                   SELECT,
 		"sensitive":                UNUSED,
@@ -836,7 +845,6 @@ func initTokens(dialectType dialect.DialectType) {
 		"xor":                      XOR,
 		"x509":                     X509,
 		"year":                     YEAR,
-		"year_month":               UNUSED,
 		"zerofill":                 ZEROFILL,
 		"zonemap":                  ZONEMAP,
 		"adddate":                  ADDDATE,
@@ -866,11 +874,49 @@ func initTokens(dialectType dialect.DialectType) {
 		"var_samp":                 VAR_SAMP,
 		"type":                     TYPE,
 		"verbose":                  VERBOSE,
+		"sql_tsi_minute":           SQL_TSI_MINUTE,
+		"sql_tsi_second":           SQL_TSI_SECOND,
+		"sql_tsi_year":             SQL_TSI_YEAR,
+		"sql_tsi_quarter":          SQL_TSI_QUARTER,
+		"sql_tsi_month":            SQL_TSI_MONTH,
+		"sql_tsi_week":             SQL_TSI_WEEK,
+		"sql_tsi_day":              SQL_TSI_DAY,
+		"sql_tsi_hour":             SQL_TSI_HOUR,
+		"year_month":               YEAR_MONTH,
+		"day_hour":                 DAY_HOUR,
+		"day_minute":               DAY_MINUTE,
+		"day_second":               DAY_SECOND,
+		"day_microsecond":          DAY_MICROSECOND,
+		"hour_minute":              HOUR_MINUTE,
+		"hour_second":              HOUR_SECOND,
+		"hour_microsecond":         HOUR_MICROSECOND,
+		"minute_second":            MINUTE_SECOND,
+		"minute_microsecond":       MINUTE_MICROSECOND,
+		"second_microsecond":       SECOND_MICROSECOND,
 	}
 }
 
 // mysql
 var (
+	SQL_TSI_MINUTE           int
+	SQL_TSI_SECOND           int
+	SQL_TSI_YEAR             int
+	SQL_TSI_QUARTER          int
+	SQL_TSI_MONTH            int
+	SQL_TSI_WEEK             int
+	SQL_TSI_DAY              int
+	SQL_TSI_HOUR             int
+	YEAR_MONTH               int
+	DAY_HOUR                 int
+	DAY_MINUTE               int
+	DAY_SECOND               int
+	DAY_MICROSECOND          int
+	HOUR_MINUTE              int
+	HOUR_SECOND              int
+	HOUR_MICROSECOND         int
+	MINUTE_SECOND            int
+	MINUTE_MICROSECOND       int
+	SECOND_MICROSECOND       int
 	TYPE                     int
 	ZONEMAP                  int
 	BSI                      int

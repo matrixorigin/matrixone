@@ -326,7 +326,7 @@ func constructTransform(op *plan.Relation) *transform.Argument {
 
 func constructTransformFromDerived(op *plan.DerivedRelation) *transform.Argument {
 	arg := new(transform.Argument)
-	if len(arg.FreeVars) == 0 {
+	if len(op.FreeVars) == 0 {
 		arg.Typ = transform.BoundVars
 	} else {
 		arg.Typ = transform.FreeVarsAndBoundVars
@@ -398,7 +398,7 @@ func constructCAQTransform(op *plan.Relation) *transform.Argument {
 func constructCAQTransformFromDerived(op *plan.DerivedRelation) *transform.Argument {
 	arg := new(transform.Argument)
 	arg.IsMerge = true
-	if len(arg.FreeVars) == 0 {
+	if len(op.FreeVars) == 0 {
 		arg.Typ = transform.BoundVars
 	} else {
 		arg.Typ = transform.FreeVarsAndBoundVars
