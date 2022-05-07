@@ -48,7 +48,6 @@ func IsCustomizedCmd(cmd txnif.TxnCmd) bool {
 }
 
 type BaseCmd struct{}
-
 type PointerCmd struct {
 	BaseCmd
 	Group uint32

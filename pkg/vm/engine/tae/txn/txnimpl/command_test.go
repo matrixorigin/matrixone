@@ -124,3 +124,39 @@ func TestComposedCmd(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendCmd(t *testing.T) {
+	infos := make([]*appendInfo, 0)
+	infos = append(infos, mockAppendInfo())
+	node := mockInsertNodeWithAppendInfo(infos)
+	cmd,_,err := node.MakeCommand(0,true)
+	assert.Nil(t, err)
+
+	var w bytes.Buffer
+	err = cmd.WriteTo(&w)
+	assert.Nil(t, err)
+
+	buf := w.Bytes()
+	r := bytes.NewBuffer(buf)
+
+	cmd2, err := txnbase.BuildCommandFrom(r)
+	assert.Nil(t, err)
+	checkAppendCmdIsEqual(t, cmd.(*AppendCmd), cmd2.(*AppendCmd))
+}
+
+func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
+	assert.Equal(t, cmd1.ID, cmd2.ID)
+	assert.Equal(t, len(cmd1.Cmds), len(cmd2.Cmds))
+	for i, subcmd1 := range cmd1.Cmds {
+		assert.Equal(t, subcmd1.GetType(), cmd2.Cmds[i].GetType())
+	}
+	assert.Equal(t, len(cmd1.infos), len(cmd2.infos))
+	for i, info1 := range cmd1.infos {
+		checkAppendInfoIsEqual(t,info1,cmd2.infos[i])
+	}
+}
+
+func checkAppendInfoIsEqual(t *testing.T, info1, info2 *appendInfo) {
+	assert.Equal(t,info1.seq,info2.seq)
+	assert.Equal(t,info1.destLen,info2.destLen)
+}

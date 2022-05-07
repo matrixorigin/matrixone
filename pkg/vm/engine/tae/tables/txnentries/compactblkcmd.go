@@ -1,27 +1,84 @@
 package txnentries
 
 import (
+	"bytes"
+	"encoding/binary"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type compactBlockCmd struct {
-	txnbase.BaseCustomizedCmd
-	cmdType int16
+	from *common.ID
+	to   *common.ID
 }
 
-func NewTxnBlockCmd(id uint32, cmdType int16) *compactBlockCmd {
-	cmd := &compactBlockCmd{
-		cmdType: cmdType,
+func newCompactBlockCmd(from, to *common.ID) *compactBlockCmd {
+	return &compactBlockCmd{
+		from: from,
+		to:   to,
 	}
-	cmd.BaseCustomizedCmd = *txnbase.NewBaseCustomizedCmd(id, cmd)
-	return cmd
 }
+func (cmd *compactBlockCmd) GetType() int16 { return CmdCompactBlock }
+func (cmd *compactBlockCmd) WriteTo(w io.Writer) (err error) {
+	if err = binary.Write(w, binary.BigEndian, CmdCompactBlock); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.from.TableID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.from.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.from.BlockID); err != nil {
+		return
+	}
 
-func (cmd *compactBlockCmd) GetType() int16                   { return cmd.cmdType }
-func (cmd *compactBlockCmd) WriteTo(w io.Writer) (err error)  { return }
-func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (err error) { return }
-func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) { return }
-func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) { return }
-func (cmd *compactBlockCmd) String() string                   { return "" }
+	if err = binary.Write(w, binary.BigEndian, cmd.to.TableID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.to.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, cmd.to.BlockID); err != nil {
+		return
+	}
+	return
+}
+func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (err error) {
+	cmd.from = &common.ID{}
+	if err = binary.Read(r, binary.BigEndian, &cmd.from.TableID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &cmd.from.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &cmd.from.BlockID); err != nil {
+		return
+	}
+	cmd.to = &common.ID{}
+	if err = binary.Read(r, binary.BigEndian, &cmd.to.TableID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &cmd.to.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &cmd.to.BlockID); err != nil {
+		return
+	}
+	return
+}
+func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if err = cmd.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	err = cmd.ReadFrom(bbuf)
+	return
+}
+func (cmd *compactBlockCmd) String() string { return "" }

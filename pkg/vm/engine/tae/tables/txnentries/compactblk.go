@@ -3,6 +3,7 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -44,7 +45,7 @@ func (entry *compactBlockEntry) PostCommit() {
 	entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	cmd = NewTxnBlockCmd(csn, CmdCompactBlock)
+	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()),(*common.ID)(entry.to.Fingerprint()))
 	return
 }
 

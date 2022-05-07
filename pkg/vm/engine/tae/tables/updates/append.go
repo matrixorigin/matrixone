@@ -1,6 +1,8 @@
 package updates
 
 import (
+	"encoding/binary"
+	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,10 +28,14 @@ func MockAppendNode(ts uint64, maxRow uint32, controller *MVCCHandle) *AppendNod
 }
 
 func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *AppendNode {
+	ts:=uint64(0)
+	if txn!=nil{
+		ts=txn.GetCommitTS()
+	}
 	n := &AppendNode{
 		txn:        txn,
 		maxRow:     maxRow,
-		commitTs:   txn.GetCommitTS(),
+		commitTs:   ts,
 		controller: controller,
 	}
 	return n
@@ -55,6 +61,20 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 		n.controller.SetMaxVisible(n.commitTs)
 	}
 	return nil
+}
+
+func (node *AppendNode) WriteTo(w io.Writer) (err error) {
+	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
+		return
+	}
+	return
+}
+
+func (node *AppendNode) ReadFrom(r io.Reader) (err error) {
+	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
+		return
+	}
+	return
 }
 
 func (n *AppendNode) PrepareRollback() (err error) { return }

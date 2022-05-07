@@ -12,6 +12,6 @@ func init() {
 		return new(compactBlockCmd)
 	})
 	txnif.RegisterCmdFactory(CmdMergeBlocks, func(int16) txnif.TxnCmd {
-		return new(compactBlockCmd)
+		return new(mergeBlocksCmd)
 	})
 }

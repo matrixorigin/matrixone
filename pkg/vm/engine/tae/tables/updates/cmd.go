@@ -83,12 +83,13 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
 		return
 	}
-	if c.GetType() == txnbase.CmdUpdate {
+	switch c.GetType() {
+	case txnbase.CmdUpdate:
 		err = c.update.WriteTo(w)
-	} else if c.GetType() == txnbase.CmdDelete {
+	case txnbase.CmdDelete:
 		err = c.delete.WriteTo(w)
-	} else {
-		// TODO
+	case txnbase.CmdAppend:
+		err = c.append.WriteTo(w)
 	}
 	return
 }
@@ -97,12 +98,13 @@ func (c *UpdateCmd) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
 		return
 	}
-	if c.cmdType == txnbase.CmdUpdate {
+	switch c.GetType() {
+	case txnbase.CmdUpdate:
 		err = c.update.ReadFrom(r)
-	} else if c.cmdType == txnbase.CmdDelete {
+	case txnbase.CmdDelete:
 		err = c.delete.ReadFrom(r)
-	} else {
-		// TODO
+	case txnbase.CmdAppend:
+		err = c.append.ReadFrom(r)
 	}
 	return
 }

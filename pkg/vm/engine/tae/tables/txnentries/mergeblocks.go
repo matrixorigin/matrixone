@@ -3,6 +3,7 @@ package txnentries
 import (
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -54,7 +55,15 @@ func (entry *mergeBlocksEntry) PostCommit() {
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	cmd = NewTxnBlockCmd(csn, CmdMergeBlocks)
+	from := make([]*common.ID, 0)
+	for _, blk := range entry.merged {
+		from = append(from, (*common.ID)(blk.Fingerprint()))
+	}
+	to := make([]*common.ID, 0)
+	for _, blk := range entry.created {
+		to = append(to, (*common.ID)(blk.Fingerprint()))
+	}
+	cmd = newMergeBlocksCmd(from, to)
 	return
 }
 
