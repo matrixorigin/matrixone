@@ -77,11 +77,8 @@ type ArgList struct {
 
 	// if Limit is false, ArgTypes2 records all argument types
 	ArgTypes2 struct {
-		Min int
-		Max int // if NoLimit, there is no maximum number of limits
-
-		Typs []Arg
-		Nums []int // if Nums[i] = NoLimit, there is no number limit for argument which type is Typs[i]
+		// TypeCheckFn is function's own argument type check function.
+		TypeCheckFn func(inputTypes []types.T) bool
 	}
 }
 
@@ -124,6 +121,36 @@ var functionRegister = map[string][]Function{
 			},
 		},
 	},
+
+	"case": {
+		{
+			Name: "case_when_int64",
+			Flag: plan.Function_NONE,
+			Args: MakeUnLimitArgList(func(ts []types.T) bool {
+				l := len(ts)
+				if l < 3 {
+					return false
+				}
+
+				for i := 0; i < l-1; i += 2 { //case and then should be int64
+					if ts[i] != types.T_int64 && isNotNull(ts[i]) {
+						return false
+					}
+				}
+				if l%2 == 1 { // has else part
+					if ts[l-1] != types.T_int64 && isNotNull(ts[l-1]) {
+						return false
+					}
+				}
+				return true
+			}),
+			ReturnTyp: types.T_int64,
+			ID:        operatorCaseWhenInt64,
+			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+				return nil, nil
+			},
+		},
+	},
 	// Functions
 	// SubQuery
 }
@@ -135,39 +162,16 @@ func MakeLimitArgList(args []Arg) ArgList {
 	}
 }
 
-func MakeUnLimitArgList(args []Arg, nums []int, maxNum int) ArgList {
-	var min = 0
-	var numberVArgs = 0 // number of variable-length argument
-
-	if len(args) != len(nums) {
-		panic(fmt.Errorf("nums and args must be the same length"))
-	}
-
-	for _, num := range nums {
-		if num != NoLimit {
-			if num != 1 {
-				// {(uint8, 1), (uint8, 1), (int64, -1)} is better than {(uint8, 2), (int64, -1)}
-				panic(fmt.Errorf("nums should be 1 or %d", NoLimit))
-			}
-			min += num
-		} else {
-			numberVArgs++
-		}
-	}
-
-	// only support 1 variable-length argument now
-	if numberVArgs != 1 {
-		panic(fmt.Errorf("unlimit arg list should have only one variable-length argument"))
+func MakeUnLimitArgList(fn func([]types.T) bool) ArgList {
+	if fn == nil {
+		panic("function with variable-length parameters should have its own type-check function")
 	}
 
 	return ArgList{
 		Limit: false,
 		ArgTypes2: struct {
-			Min  int
-			Max  int
-			Typs []Arg
-			Nums []int
-		}{Min: min, Max: maxNum, Typs: args, Nums: nums},
+			TypeCheckFn func(inputTypes []types.T) bool
+		}{TypeCheckFn: fn},
 	}
 }
 
@@ -237,69 +241,28 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 }
 
 func argumentCheck(args []types.T, fArgs ArgList) bool {
-	if fArgs.Limit {
-		// argument number is constant
-		if len(args) != len(fArgs.ArgTypes1) {
-			return false
-		}
+	// if function's argument number is un-limit
+	// should call its own special type-check function
+	if !fArgs.Limit {
+		return fArgs.ArgTypes2.TypeCheckFn(args)
+	}
 
-		for i := range args {
-			if args[i] != fArgs.ArgTypes1[i].Typ && args[i] != NullValueType {
-				return false
-			}
-		}
-	} else {
-		// argument number is variadic
-		if len(args) < fArgs.ArgTypes2.Min || (fArgs.ArgTypes2.Max != NoLimit && len(args) > fArgs.ArgTypes2.Max) {
-			return false
-		}
-
-		// three cases need consider
-		//		case1: const, variadic 			<==> Nums like [1, 1, ..., 1, -1]
-		//		case2: const, variadic, const	<==> Nums like [1, ..., 1, -1, 1, ..., 1]
-		//		case3: variadic, const			<==> Nums like [-1, 1, ..., 1]
-		fNums := fArgs.ArgTypes2.Nums
-		fTyps := fArgs.ArgTypes2.Typs
-
-		l1, r1 := 0, len(args)-1
-		l2, r2 := 0, len(fTyps)-1
-
-		for l1 <= r1 {
-			if fNums[l2] == NoLimit {
-				break
-			}
-			if fTyps[l2].Typ != args[l1] && args[l1] != NullValueType {
-				return false
-			}
-			l1++
-			l2++
-		}
-		for r1 >= l1 {
-			if fNums[r2] == NoLimit {
-				break
-			}
-			if fTyps[r2].Typ != args[r1] && args[r1] != NullValueType {
-				return false
-			}
-			r1--
-			r2--
-		}
-
-		if l2 == r2 && fNums[l2] == NoLimit {
-			// all the constant arguments have matched.
-			// and rest part of args should match the variadic argument type.
-			variadicArgumentType := fTyps[l2].Typ
-			for l1 <= r1 {
-				if args[l1] != variadicArgumentType && args[l1] != NullValueType {
-					return false
-				}
-				l1++
-			}
-		} else {
+	if len(args) != len(fArgs.ArgTypes1) {
+		return false
+	}
+	for i := range args {
+		if args[i] != fArgs.ArgTypes1[i].Typ && isNotNull(args[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+func isNotNull(t types.T) bool {
+	if t != NullValueType {
+		return true
+	}
+	return false
 }
 
 func (f Function) IsAggregate() bool {

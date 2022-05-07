@@ -19,4 +19,6 @@ const (
 	operatorEqualUint8Uint8 = iota
 	operatorEqualUint16Uint16
 	operatorEqualUint32Uint32
+
+	operatorCaseWhenInt64
 )

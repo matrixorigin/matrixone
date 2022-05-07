@@ -39,7 +39,7 @@ func Test_argumentCheck(t *testing.T) {
 		input input
 		want  bool
 	}{
-		// 1. argument number is constant
+		// 1. general type check
 		{
 			name: "test_constant_1",
 			input: input{
@@ -80,81 +80,50 @@ func Test_argumentCheck(t *testing.T) {
 			},
 			want: true,
 		},
-		// 2. argument number is variadic
+		// 2. user define check function
 		{
 			name: "test_variadic_1",
 			input: input{
-				args:  []types.T{types.T_int32, types.T_varchar, types.T_varchar},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_int32, types.T_varchar}), []int{1, NoLimit}, 10),
+				args: []types.T{types.T_int32, types.T_varchar, types.T_varchar},
+				fArgs: MakeUnLimitArgList(func(ts []types.T) bool {
+					if len(ts) > 1 {
+						return true
+					}
+					return false
+				}),
 			},
 			want: true,
 		},
 		{
 			name: "test_variadic_2",
 			input: input{
-				args:  []types.T{types.T_int32, types.T_varchar, types.T_varchar},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_int32, types.T_varchar}), []int{NoLimit, 1}, 10),
+				args: []types.T{types.T_int32, types.T_varchar, types.T_varchar},
+				fArgs: MakeUnLimitArgList(func(_ []types.T) bool {
+					return false
+				}),
 			},
 			want: false,
 		},
 		{
 			name: "test_variadic_3",
 			input: input{
-				args:  []types.T{types.T_varchar, types.T_varchar},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_varchar, types.T_varchar}), []int{1, NoLimit}, 10),
+				args: []types.T{types.T_float64, types.T_float64, NullValueType},
+				fArgs: MakeUnLimitArgList(func(ts []types.T) bool {
+					if len(ts) == 3 && ts[2] == NullValueType {
+						return true
+					}
+					return false
+				}),
 			},
 			want: true,
 		},
 		{
 			name: "test_variadic_4",
 			input: input{
-				args:  nil,
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_varchar, types.T_varchar}), []int{1, NoLimit}, 10),
-			},
-			want: false,
-		},
-		{
-			name: "test_variadic_5",
-			input: input{
-				args: []types.T{types.T_int64, types.T_float64, types.T_float64, types.T_int64},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_int64, types.T_float64, types.T_float64, types.T_int64}),
-					[]int{1, 1, NoLimit, 1}, 20),
-			},
-			want: true,
-		},
-		{
-			name: "test_variadic_6",
-			input: input{
-				args: []types.T{types.T_float64, types.T_float64, types.T_int64},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_float64, types.T_int64}),
-					[]int{NoLimit, 1}, 20),
-			},
-			want: true,
-		},
-		{
-			name: "test_variadic_7",
-			input: input{
-				args: []types.T{types.T_float64, types.T_float64, types.T_float64},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_float64, types.T_float64}),
-					[]int{1, NoLimit}, 2),
-			},
-			want: false,
-		},
-		{
-			name: "test_variadic_8",
-			input: input{
-				args: []types.T{types.T_float64, types.T_float64, NullValueType},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_float64, types.T_int64}),
-					[]int{NoLimit, 1}, 20),
-			},
-			want: true,
-		},
-		{
-			name: "test_variadic_9",
-			input: input{
 				args: []types.T{NullValueType, NullValueType, NullValueType},
-				fArgs: MakeUnLimitArgList(makeSimpleArgs([]types.T{types.T_float64, types.T_int64}),
-					[]int{NoLimit, 1}, 20),
+				fArgs: MakeUnLimitArgList(func(_ []types.T) bool {
+					return true
+				}),
 			},
 			want: true,
 		},
