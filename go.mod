@@ -25,16 +25,13 @@ require (
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.1
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
+	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.19.1
 	golang.org/x/sys v0.0.0-20220209214540-3681064d5158
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require (
-	github.com/coreos/etcd v3.3.13+incompatible // indirect
-	github.com/golang/protobuf v1.5.2 // indirect
-	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
-)
+require github.com/golang/protobuf v1.5.2 // indirect
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
@@ -96,7 +93,6 @@ require (
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
-	go.etcd.io/etcd v3.3.27+incompatible
 	go.etcd.io/etcd/api/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/v2 v2.305.1 // indirect
