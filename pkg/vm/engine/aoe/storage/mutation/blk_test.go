@@ -79,6 +79,7 @@ func TestMutableBlockNode(t *testing.T) {
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
 	tables := table.NewTables(opts, new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr, nil)
 	tabledata, err := tables.RegisterTable(tablemeta)
+	assert.Nil(t, err)
 
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
@@ -157,7 +158,7 @@ func TestMutableBlockNode(t *testing.T) {
 	t.Log(common.GPool.String())
 
 	bufs := make([][]byte, 2)
-	for i, _ := range bufs {
+	for i := range bufs {
 		sz := tblkfile2.PartSize(uint64(i), *meta2.AsCommonID(), false)
 		osz := tblkfile2.PartSize(uint64(i), *meta2.AsCommonID(), true)
 		node := common.GPool.Alloc(uint64(sz))

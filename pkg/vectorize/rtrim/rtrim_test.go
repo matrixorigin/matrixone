@@ -97,7 +97,7 @@ func TestRtrim(t *testing.T) {
 		Offsets: make([]uint32, len(multiStringCase.Offsets)),
 	}
 
-	Rtrim(&multiStringCase, &rs)
+	rtrim(&multiStringCase, &rs)
 	require.Equal(t, 10, len(rs.Lengths))
 	require.Equal(t, 10, len(rs.Offsets))
 	require.Equal(t, int(spacesCount), len(multiStringCase.Data)-len(rs.Data))

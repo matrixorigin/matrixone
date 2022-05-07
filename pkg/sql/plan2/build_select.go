@@ -20,62 +20,86 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
+func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	//with
 
 	//clause
+	var projections []*plan.Expr
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		err := buildSelectClause(selectClause, ctx, query)
+		tmp, err := buildSelectClause(selectClause, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
+		projections = tmp
+	case *tree.ParenSelect:
+		return buildSelect(selectClause.Select, ctx, query, selectCtx)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 
-	//orderby.   push down sort operator is not implement
+	preNode := query.Nodes[len(query.Nodes)-1]
+
+	if stmt.OrderBy == nil && stmt.Limit == nil {
+		if projections != nil {
+			preNode.ProjectList = projections
+		}
+		return nil
+	}
+
+	node := &plan.Node{
+		NodeType:    plan.Node_SORT,
+		ProjectList: projections,
+		Children:    []int32{preNode.NodeId},
+	} //orderby
 	if stmt.OrderBy != nil {
-		orderBy := &plan.OrderBySpec{}
+		var orderBys []*plan.OrderBySpec
 		for _, order := range stmt.OrderBy {
-			expr, err := buildExpr(order.Expr, ctx, query)
+			orderBy := &plan.OrderBySpec{}
+			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return err
 			}
-			orderBy.OrderBy = append(orderBy.OrderBy, expr)
+			orderBy.OrderBy = expr
 
 			switch order.Direction {
 			case tree.DefaultDirection:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_INTERNAL)
+				orderBy.OrderByFlags = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_ASC)
+				orderBy.OrderByFlags = plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.OrderByFlags = append(orderBy.OrderByFlags, plan.OrderBySpec_DESC)
+				orderBy.OrderByFlags = plan.OrderBySpec_DESC
 			}
-			//todo confirm what OrderByCollations mean
+			orderBys = append(orderBys, orderBy)
 		}
-		query.Nodes[len(query.Nodes)-1].OrderBy = orderBy
+		node.OrderBy = orderBys
 	}
 
 	//limit
 	if stmt.Limit != nil {
 		//offset
-		expr, err := buildExpr(stmt.Limit.Offset, ctx, query)
-		if err != nil {
-			return err
+		if stmt.Limit.Offset != nil {
+			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			node.Offset = expr
 		}
-		query.Nodes[len(query.Nodes)-1].Offset = expr
 
 		//limit
-		expr, err = buildExpr(stmt.Limit.Count, ctx, query)
-		if err != nil {
-			return err
+		if stmt.Limit.Count != nil {
+			expr, err := buildExpr(stmt.Limit.Count, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			node.Limit = expr
 		}
-		query.Nodes[len(query.Nodes)-1].Limit = expr
 	}
+	appendQueryNode(query, node, true)
 
 	//fetch
 
@@ -84,73 +108,102 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query) error {
 	return nil
 }
 
-func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query) error {
-	var winspec *plan.WindowSpec
-
+func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Query, selectCtx *SelectContext) ([]*plan.Expr, error) {
 	//from
-	err := buildFrom(stmt.From.Tables, ctx, query)
+	err := buildFrom(stmt.From.Tables, ctx, query, selectCtx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	//projection
-	//todo get windowspec, aggregation
-	var projections []*plan.Expr
-	for _, selectExpr := range stmt.Exprs {
-		expr, err := buildExpr(selectExpr.Expr, ctx, query)
-		if err != nil {
-			return err
-		}
-		projections = append(projections, expr)
-	}
-	query.Nodes[len(query.Nodes)-1].ProjectList = projections
-
-	//distinct
-	if stmt.Distinct {
-		if stmt.GroupBy != nil {
-			//todo confirm: throw error in this case?
-		}
-
-		query.Nodes[len(query.Nodes)-1].GroupBy = projections
-	}
+	node := query.Nodes[len(query.Nodes)-1]
 
 	//filter
 	if stmt.Where != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query)
+		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query, selectCtx)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		query.Nodes[len(query.Nodes)-1].WhereList = exprs
+		node.WhereList = exprs
 	}
 
-	//group_by
-	if stmt.GroupBy != nil {
-		var exprs []*plan.Expr
-
-		for _, groupByExpr := range stmt.GroupBy {
-			expr, err := buildExpr(groupByExpr, ctx, query)
-			if err != nil {
-				return err
+	//projection
+	//todo get windowspec
+	var projections []*plan.Expr
+	for _, selectExpr := range stmt.Exprs {
+		expr, err := buildExpr(selectExpr.Expr, ctx, query, selectCtx)
+		if err != nil {
+			return nil, err
+		}
+		switch listExpr := expr.Expr.(type) {
+		case *plan.Expr_List:
+			//select a.* from tbl a or select * from tbl,   buildExpr() will return ExprList
+			for _, col := range listExpr.List.List {
+				projections = append(projections, col)
 			}
-			exprs = append(exprs, expr)
+		default:
+			alias := string(selectExpr.As)
+			if alias == "" {
+				expr.Alias = tree.String(&selectExpr, dialect.MYSQL)
+			} else {
+				expr.Alias = alias
+				selectCtx.columnAlias[alias] = expr
+			}
+			projections = append(projections, expr)
 		}
-		query.Nodes[len(query.Nodes)-1].GroupBy = exprs
 	}
 
-	//having
-	if stmt.Having != nil {
-		exprs, err := splitAndBuildExpr(stmt.Where.Expr, ctx, query)
-		if err != nil {
-			return err
+	if stmt.GroupBy == nil && stmt.Having == nil && !stmt.Distinct {
+		return projections, nil
+	}
+
+	if stmt.GroupBy != nil || stmt.Having != nil {
+		preNode := query.Nodes[len(query.Nodes)-1]
+		aggNode := &plan.Node{
+			NodeType:    plan.Node_AGG,
+			ProjectList: projections,
 		}
-		//todo confirm
-		query.Nodes[len(query.Nodes)-1].WhereList = append(query.Nodes[len(query.Nodes)-1].WhereList, exprs...)
+		//group_by
+		if stmt.GroupBy != nil {
+			var exprs []*plan.Expr
+			for _, groupByExpr := range stmt.GroupBy {
+				expr, err := buildExpr(groupByExpr, ctx, query, selectCtx)
+				if err != nil {
+					return nil, err
+				}
+				exprs = append(exprs, expr)
+			}
+			aggNode.GroupBy = exprs
+		}
+		//having
+		if stmt.Having != nil {
+			if stmt.GroupBy == nil {
+				//todo select a from tbl having max(a) > 10   will rewrite to  select a from tbl group by null having max(a) > 10
+			}
+			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, selectCtx)
+			if err != nil {
+				return nil, err
+			}
+			//todo confirm
+			aggNode.WhereList = append(aggNode.WhereList, exprs...)
+		}
+		aggNode.Children = []int32{preNode.NodeId}
+		appendQueryNode(query, aggNode, true)
+		if !stmt.Distinct {
+			projections = nil
+		}
 	}
 
-	//window
-	if winspec != nil {
-		query.Nodes[len(query.Nodes)-1].WinSpec = winspec
+	//distinct
+	if stmt.Distinct {
+		preNode := query.Nodes[len(query.Nodes)-1]
+		distinctNode := &plan.Node{
+			NodeType: plan.Node_AGG,
+		}
+		distinctNode.GroupBy = projections
+		distinctNode.Children = []int32{preNode.NodeId}
+		appendQueryNode(query, distinctNode, true)
+		projections = nil
 	}
 
-	return nil
+	return projections, nil
 }

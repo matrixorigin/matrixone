@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from R inner join S on R.uid = S.uid",
+		input:  "select Quarter from ontime limit 1",
 	}
 )
 
@@ -56,6 +55,34 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "select Quarter from ontime limit 1",
+	}, {
+		input:  "select month from ontime limit 1",
+	}, {
+		input:  "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
+	}, {
+		input:  "with tw as (select * from t2) select * from tw where a > 1",
+	}, {
+		input:  "create table t (a double(13))  // comment",
+		output:  "create table t (a double(13))",
+	}, {
+		input:  "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
+	}, {
+		input:  "select extract(year from l_shipdate) as l_year from t",
+		output: "select extract(year, l_shipdate) as l_year from t",
+	}, {
+		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112 day'",
+		output: "select * from R inner join S on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
+	}, {
+		input: "create table deci_table (a decimal(10, 5))",
+	}, {
+		input: "create table deci_table (a decimal(20, 5))",
+	}, {
+		input:  "create table deci_table (a decimal)",
+		output: "create table deci_table (a decimal(10))",
+	}, {
+		input: "create table deci_table (a decimal(20))",
+	}, {
 		input: "select substr(name, 5) from t1",
 	}, {
 		input: "select substring(name, 5) from t1",
@@ -304,6 +331,7 @@ var (
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
 		input: "select u.a, interval 1 second from t",
+		output: "select u.a, interval(1, second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 	}, {

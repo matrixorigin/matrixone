@@ -100,9 +100,14 @@ type outputQueue struct {
 	rowIdx uint64
 	length uint64
 	ep     *tree.ExportParam
+	lineStr []byte
 
 	getEmptyRowTime time.Duration
 	flushTime       time.Duration
+}
+
+func (oq *outputQueue) ResetLineStr() {
+	oq.lineStr = oq.lineStr[:0]
 }
 
 func NewOuputQueue(proto MysqlProtocol, mrs *MysqlResultSet, length uint64, ep *tree.ExportParam) *outputQueue {
@@ -167,13 +172,6 @@ func (o *outputQueue) flush() error {
 	}
 	o.rowIdx = 0
 	return nil
-}
-
-/*
-getData returns the data slice in the resultset
-*/
-func (o *outputQueue) getData() [][]interface{} {
-	return o.mrs.Data[:o.rowIdx]
 }
 
 /*
@@ -427,6 +425,32 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					} else {
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_decimal64:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal64)
+					row[i] = vs[rowIndex].Decimal64ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal64)
+						row[i] = vs[rowIndex].Decimal64ToString(scale)
+					}
+				}
+			case types.T_decimal128:
+				scale := vec.Typ.Scale
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Decimal128)
+					row[i] = vs[rowIndex].Decimal128ToString(scale)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Decimal128)
+						row[i] = vs[rowIndex].Decimal128ToString(scale)
 					}
 				}
 			default:
@@ -877,16 +901,16 @@ func (cw *ComputationWrapperImpl) SetDatabaseName(db string) error {
 
 func (cw *ComputationWrapperImpl) GetColumns() ([]interface{}, error) {
 	columns := cw.exec.Columns()
-	var mysqlCols []interface{} = nil
+	var mysqlCols []interface{} = make([]interface{}, len(columns))
 	var err error = nil
-	for _, c := range columns {
+	for i, c := range columns {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
 		err = convertEngineTypeToMysqlType(c.Typ, col)
 		if err != nil {
 			return nil, err
 		}
-		mysqlCols = append(mysqlCols, col)
+		mysqlCols[i] = col
 	}
 	return mysqlCols, err
 }
@@ -1378,6 +1402,10 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_decimal64:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
+	case types.T_decimal128:
+		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
 	}

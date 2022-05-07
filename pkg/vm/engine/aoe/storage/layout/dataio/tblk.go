@@ -127,8 +127,8 @@ func (getter *tblkFileGetter) Getter(dir string, meta *metadata.Block) (*os.File
 // col01 data | col02 data |  ...
 type TransientBlockFile struct {
 	common.RefHelper
-	host    base.ISegmentFile
-	id      common.ID
+	host base.ISegmentFile
+	id   common.ID
 	// maxver  uint32 // Unused
 	files   []*versionBlockFile
 	currpos uint32
@@ -170,7 +170,7 @@ func (f *TransientBlockFile) init() {
 
 func (f *TransientBlockFile) close() {
 	f.Close()
-	f.Destory()
+	f.Destroy()
 }
 
 func (f *TransientBlockFile) PreSync(pos uint32) bool {
@@ -337,7 +337,7 @@ func (f *TransientBlockFile) DataCompressAlgo(common.ID) int {
 	return compress.Lz4
 }
 
-func (f *TransientBlockFile) Destory() {
+func (f *TransientBlockFile) Destroy() {
 	for _, file := range f.files {
 		file.Unref()
 	}

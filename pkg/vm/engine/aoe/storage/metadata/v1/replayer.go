@@ -32,9 +32,9 @@ type Store = logstore.Store
 func defaultHandler(r io.Reader, entry LogEntry) (LogEntry, int64, error) {
 	n, err := entry.ReadFrom(r)
 	if err != nil {
-		return nil, int64(n), err
+		return nil, n, err
 	}
-	return entry, int64(n), nil
+	return entry, n, nil
 }
 
 type replayEntry struct {
@@ -87,22 +87,46 @@ func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
 	switch logType {
 	case ETCreateDatabase:
 		db := new(Database)
-		db.Unmarshal(entry.GetPayload())
+		err := db.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		cache.replayer.catalog.Sequence.TryUpdateTableId(db.Id)
-		cache.replayer.catalog.onReplayCreateDatabase(db)
+		err = cache.replayer.catalog.onReplayCreateDatabase(db)
+		if err != nil {
+			return err
+		}
 	case ETSoftDeleteDatabase:
 		dbEntry := &databaseLogEntry{}
-		dbEntry.Unmarshal(entry.GetPayload())
-		cache.replayer.catalog.onReplaySoftDeleteDatabase(dbEntry)
+		err := dbEntry.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
+		err = cache.replayer.catalog.onReplaySoftDeleteDatabase(dbEntry)
+		if err != nil {
+			return err
+		}
 	case ETSoftDeleteTable:
 		tblEntry := &tableLogEntry{}
-		tblEntry.Unmarshal(entry.GetPayload())
-		cache.replayer.catalog.onReplayTableOperation(tblEntry)
+		err := tblEntry.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
+		err = cache.replayer.catalog.onReplayTableOperation(tblEntry)
+		if err != nil {
+			return err
+		}
 	case ETCreateTable:
 		tblEntry := &tableLogEntry{}
-		tblEntry.Unmarshal(entry.GetPayload())
+		err := tblEntry.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		cache.replayer.catalog.Sequence.TryUpdateTableId(tblEntry.Table.Id)
-		cache.replayer.catalog.onReplayCreateTable(tblEntry)
+		err = cache.replayer.catalog.onReplayCreateTable(tblEntry)
+		if err != nil {
+			return err
+		}
 	default:
 		panic("not supported")
 	}
@@ -201,7 +225,7 @@ func (cache *replayCache) Apply() error {
 		// if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
 		// 	return err
 		// }
-		for _, entry := range cache.checkpointEntries{
+		for _, entry := range cache.checkpointEntries {
 			if err := cache.applyReplayEntry(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
 				return err
 			}
@@ -246,14 +270,20 @@ func (replayer *catalogReplayer) restoreWal() {
 			continue
 		}
 		if database.IsDeleted() {
-			database.TryInitWal(database.CommitInfo.GetIndex())
+			err := database.TryInitWal(database.CommitInfo.GetIndex())
+			if err != nil {
+				panic(err)
+			}
 		}
 		safeId, ok := replayer.cache.safeIds[database.GetShardId()]
 		if !ok {
 			logutil.Warnf("Cannot get safeid of shardId %d", database.GetShardId())
 			safeId = 0
 		}
-		database.TryInitWal(safeId)
+		err := database.TryInitWal(safeId)
+		if err != nil {
+			panic(err)
+		}
 	}
 	logutil.Info(replayer.catalog.IndexWal.String())
 }
@@ -317,12 +347,12 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logs
 		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {
-			if r.Size == replayer.offset+int64(metaSize)+n {
+			if r.Size == replayer.offset+metaSize+n {
 				// Have read to the end of the file
 				replayer.tryTruncate()
 				return io.EOF
 			} else {
-				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
+				return fmt.Errorf("payload mismatch: %d != %d", n, meta.PayloadSize())
 			}
 		}
 		if err = replayer.onReplayEntry(entry, observer); err != nil {
@@ -386,7 +416,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		replayer.cache.OnShardSafeId(safeId)
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
+		err := blk.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		blk.CommitLocked(commitId)
 		replayer.cache.Append(&replayEntry{
@@ -396,7 +429,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETUpgradeBlock:
 		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
+		err := blk.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      ETUpgradeBlock,
 			blkEntry: blk,
@@ -404,7 +440,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETCreateDatabase:
 		db := &Database{}
-		db.Unmarshal(entry.GetPayload())
+		err := db.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		db.CommitLocked(commitId)
 		replayer.cache.Append(&replayEntry{
@@ -414,7 +453,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETSoftDeleteDatabase:
 		db := &databaseLogEntry{}
-		db.Unmarshal(entry.GetPayload())
+		err := db.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      ETSoftDeleteDatabase,
 			dbEntry:  db,
@@ -422,7 +464,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETHardDeleteDatabase:
 		db := &databaseLogEntry{}
-		db.Unmarshal(entry.GetPayload())
+		err := db.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      ETHardDeleteDatabase,
 			dbEntry:  db,
@@ -430,7 +475,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETSplitDatabase:
 		replace := newDbReplaceLogEntry()
-		replace.Unmarshal(entry.GetPayload())
+		err := replace.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		replace.commitId = commitId
 		replayer.cache.Append(&replayEntry{
@@ -440,7 +488,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETReplaceDatabase:
 		replace := newDbReplaceLogEntry()
-		replace.Unmarshal(entry.GetPayload())
+		err := replace.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		replace.commitId = commitId
 		replayer.cache.Append(&replayEntry{
@@ -450,7 +501,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETCreateTable:
 		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
+		err := tbl.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		tbl.Table.CommitLocked(commitId)
 		replayer.cache.Append(&replayEntry{
@@ -460,7 +514,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETAddIndice, ETDropIndice, ETSoftDeleteTable, ETHardDeleteTable:
 		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
+		err := tbl.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      logType,
 			tblEntry: tbl,
@@ -468,7 +525,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETCreateSegment:
 		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
+		err := seg.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		commitId := GetCommitIdFromLogEntry(entry)
 		seg.CommitLocked(commitId)
 		replayer.cache.Append(&replayEntry{
@@ -478,7 +538,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETUpgradeSegment:
 		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
+		err := seg.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      ETUpgradeSegment,
 			segEntry: seg,
@@ -486,7 +549,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case ETTransaction:
 		txnStore := new(TxnStore)
-		txnStore.Unmarshal(entry.GetPayload())
+		err := txnStore.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		replayer.cache.Append(&replayEntry{
 			typ:      ETTransaction,
 			txnStore: txnStore,
@@ -494,7 +560,10 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		})
 	case logstore.ETCheckpoint:
 		c := &catalogLogEntry{}
-		c.Unmarshal(entry.GetPayload())
+		err := c.Unmarshal(entry.GetPayload())
+		if err != nil {
+			return err
+		}
 		observer.OnReplayCheckpoint(*c.Range)
 		for shardid, id := range c.SafeIds {
 			safeId := shard.SafeId{ShardId: shardid, Id: id}

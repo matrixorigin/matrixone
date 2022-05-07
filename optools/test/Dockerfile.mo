@@ -1,5 +1,6 @@
 FROM golang:1.18 as builder
 
+
 ARG PROXY="https://proxy.golang.org,direct"
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone

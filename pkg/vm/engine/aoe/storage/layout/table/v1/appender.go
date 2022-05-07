@@ -94,7 +94,10 @@ func (c *tableAppender) onNoMut() error {
 
 func (c *tableAppender) onImmut() {
 	c.opts.Scheduler.AsyncFlushBlock(c.blkAppender)
-	c.onNoMut()
+	err := c.onNoMut()
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (c *tableAppender) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *shard.SliceIndex) (n uint64, err error) {
@@ -146,7 +149,10 @@ func (c *tableAppender) Append(bat *batch.Batch, index *shard.SliceIndex) (err e
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.blkAppender == nil {
-		c.onNoMut()
+		err := c.onNoMut()
+		if err != nil {
+			panic(err)
+		}
 	} else if c.blkAppender.GetMeta().HasMaxRowsLocked() {
 		c.onImmut()
 	}

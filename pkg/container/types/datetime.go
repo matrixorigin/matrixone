@@ -28,22 +28,22 @@ const (
 	secsPerMinute = 60
 	secsPerHour   = 60 * secsPerMinute
 	secsPerDay    = 24 * secsPerHour
-	secsPerWeek   = 7 * secsPerDay
+	//secsPerWeek   = 7 * secsPerDay
 )
 
 // The higher 44 bits holds number of seconds since January 1, year 1 in Gregorian
 // calendar, and lower 20 bits holds number of microseconds
 
-func (a Datetime) String() string {
-	y, m, d, _ := a.ToDate().Calendar(true)
-	hour, minute, sec := a.Clock()
+func (dt Datetime) String() string {
+	y, m, d, _ := dt.ToDate().Calendar(true)
+	hour, minute, sec := dt.Clock()
 	return fmt.Sprintf("%04d-%02d-%02d %02d:%02d:%02d", y, m, d, hour, minute, sec)
 }
 
 const (
-	tsMask         = ^uint64(0) >> 1
-	hasMonotonic   = 1 << 63
-	unixToInternal = (1969*365 + 1969/4 - 1969/100 + 1969/400) * secsPerDay
+	//tsMask         = ^uint64(0) >> 1
+	hasMonotonic = 1 << 63
+	//unixToInternal = (1969*365 + 1969/4 - 1969/100 + 1969/400) * secsPerDay
 	wallToInternal = (1884*365 + 1884/4 - 1884/100 + 1884/400) * secsPerDay
 
 	minHourInDay, maxHourInDay           = 0, 23
@@ -170,7 +170,7 @@ func (dt Datetime) ToDate() Date {
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
-	t := (dt.sec() + localTZ) % secsPerDay
+	t := (dt.sec()) % secsPerDay
 	hour = int8(t / secsPerHour)
 	min = int8(t % secsPerHour / secsPerMinute)
 	sec = int8(t % secsPerMinute)
@@ -179,7 +179,7 @@ func (dt Datetime) Clock() (hour, min, sec int8) {
 
 func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Datetime {
 	days := FromCalendar(year, month, day)
-	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec) - localTZ
+	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
 	return Datetime((secs << 20) + int64(msec))
 }
 

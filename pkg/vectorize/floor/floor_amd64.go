@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package floor
 
 import (
@@ -28,8 +25,8 @@ func float64FloorAvx2AsmZero(xs, rs []float64)
 
 func init() {
 	if cpu.X86.HasAVX2 {
-		floorFloat32 = floorFloat32Avx2
-		floorFloat64 = floorFloat64Avx2
+		FloorFloat32 = floorFloat32Avx2
+		FloorFloat64 = floorFloat64Avx2
 	}
 }
 

@@ -61,7 +61,7 @@ func (b *build) buildOrderBy(orders tree.OrderBy, proj0, proj *Projection, qry *
 func (b *build) buildOrderByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, e.String())
 	case *tree.ParenExpr:
 		return b.buildOrderByExpr(e.Expr, qry)
 	case *tree.OrExpr:

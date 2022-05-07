@@ -434,7 +434,7 @@ Calls to Swap Operator(n * log^2(n) - (t^2+t)/2*n) = Operator(n * log^2(n))
 // Sort sorts data.
 // It makes one call to data.Len to determine n and Operator(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func sortUnstable(data sortSlice) {
+func SortUnstable(data sortSlice) {
 	n := len(data)
 	quickSort(data, 0, n, maxDepth(n))
 }
@@ -443,6 +443,6 @@ func sortUnstable(data sortSlice) {
 //
 // It makes one call to data.Len to determine n, Operator(n*log(n)) calls to
 // data.Less and Operator(n*log(n)*log(n)) calls to data.Swap.
-func sortStable(data sortSlice) {
+func SortStable(data sortSlice) {
 	stable(data, len(data))
 }

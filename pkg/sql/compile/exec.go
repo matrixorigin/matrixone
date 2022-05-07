@@ -80,7 +80,13 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 }
 
 // Run is an important function of the compute-layer, it executes a single sql according to its scope
-func (e *Exec) Run(ts uint64) error {
+func (e *Exec) Run(ts uint64) (err error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.NewPanicError(e)
+		}
+	}()
+
 	if e.scope == nil {
 		return nil
 	}
@@ -309,7 +315,7 @@ func (e *Exec) compileDelete(qry *plan.Query) (*Scope, error) {
 
 func (e *Exec) compileUpdate(qry *plan.Update) (*Scope, error) {
 	if e.checkPlanScope(qry.Qry.Scope) != BQ {
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("Only single table update is supported"))
+		return nil, errors.New(errno.FeatureNotSupported, "Only single table update is supported")
 	}
 	rel := e.getRelationFromPlanScope(qry.Qry.Scope)
 	if rel == nil {
@@ -330,11 +336,11 @@ func (e *Exec) compileUpdate(qry *plan.Update) (*Scope, error) {
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op: vm.UpdateTag,
 		Arg: &updateTag.Argument{
-			Relation:        rel,
-			AffectedRows:    0,
-			UpdateList:      qry.UpdateList,
-			UpdateAttrs:     qry.UpdateAttrs,
-			OtherAttrs:      qry.OtherAttrs,
+			Relation:     rel,
+			AffectedRows: 0,
+			UpdateList:   qry.UpdateList,
+			UpdateAttrs:  qry.UpdateAttrs,
+			OtherAttrs:   qry.OtherAttrs,
 		},
 	})
 	e.scope = s

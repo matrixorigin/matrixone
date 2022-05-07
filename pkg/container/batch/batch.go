@@ -17,6 +17,7 @@ package batch
 import (
 	"bytes"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -86,7 +87,7 @@ func Shuffle(bat *Batch, m *mheap.Mheap) error {
 			return err
 		}
 		ws := encoding.DecodeInt64Slice(data)
-		bat.Zs = shuffle.I64Shuffle(bat.Zs, ws, bat.Sels)
+		bat.Zs = shuffle.Int64Shuffle(bat.Zs, ws, bat.Sels)
 		mheap.Free(m, data)
 		mheap.Free(m, bat.SelsData)
 		bat.Sels = nil

@@ -434,7 +434,7 @@ scope = ["global"]
 access = ["file"]
 type = "bool"
 domain-type = "set"
-values = []
+values = ["true"]
 comment = "default is false. true : tpe creates multiple readers reading data from KV. false : only one reader"
 update-mode = "dynamic"
 
@@ -459,6 +459,26 @@ comment = "the count of tries when the set failed in DedupSetBatch"
 update-mode = "dynamic"
 
 [[parameter]]
+name = "tpeScanTimeout"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["30", "30", "180"]
+comment = "timeout in scan"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "tpeScanTryCount"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["3", "1", "5"]
+comment = "the count of tries when it failed in Scan"
+update-mode = "dynamic"
+
+[[parameter]]
 name = "tpeSerializer"
 scope = ["global"]
 access = ["file"]
@@ -474,8 +494,8 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["default","compact"]
-comment = "default is 'default'. default : attributes in value without offset array. compact: attributes in value with offset array"
+values = ["compact","default"]
+comment = "default is 'compact'. default : attributes in value without offset array. compact: attributes in value with offset array"
 update-mode = "dynamic"
 
 # Cluster Configs
@@ -616,4 +636,4 @@ shard-split-check-duration = "1m"
 # the size of the data managed by each Shard, beyond which the Shard needs to be split
 shard-capacity-bytes = "4GB"
 # disable shard split
-disable-shard-split = false
+disable-shard-split = true 

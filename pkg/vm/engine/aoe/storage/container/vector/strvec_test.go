@@ -76,7 +76,7 @@ func TestStrVector(t *testing.T) {
 	assert.False(t, ref.HasNull())
 
 	vvec := v.New(schema.ColDefs[13].Type)
-	assert.Nil(t, v.Append(vvec,  make([][]byte, 10010)))
+	assert.Nil(t, v.Append(vvec, make([][]byte, 10010)))
 	nulls.Add(vvec.Nsp, 2, 3)
 	vec1 := vecs[1]
 	_, err = vec1.AppendVector(vvec, 0)
@@ -91,7 +91,7 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, view.HasNull())
 
 	vvec = v.New(schema.ColDefs[13].Type)
-	assert.Nil(t, v.Append(vvec,  make([][]byte, 9999)))
+	assert.Nil(t, v.Append(vvec, make([][]byte, 9999)))
 	nulls.Add(vvec.Nsp, 0)
 	vecs[1] = NewStrVector(schema.ColDefs[13].Type, capacity)
 	vec2 := vecs[1]
@@ -128,7 +128,7 @@ func TestStrVector(t *testing.T) {
 
 	newCap := uint64(1024 * 1024)
 	vvec = v.New(schema.ColDefs[13].Type)
-	err = v.Append(vvec,  [][]byte{[]byte(strconv.Itoa(0)), []byte(strconv.Itoa(1)), []byte(strconv.Itoa(2)), []byte(strconv.Itoa(3)), []byte(strconv.Itoa(4))})
+	err = v.Append(vvec, [][]byte{[]byte(strconv.Itoa(0)), []byte(strconv.Itoa(1)), []byte(strconv.Itoa(2)), []byte(strconv.Itoa(3)), []byte(strconv.Itoa(4))})
 	assert.Nil(t, err)
 	nulls.Add(vvec.Nsp, 2, 3)
 	var lens []int
@@ -192,6 +192,7 @@ func TestStrVector(t *testing.T) {
 		_, err = vec.IsNull(10000)
 		assert.NotNil(t, err)
 		isn, err := vec.IsNull(0)
+		assert.NotNil(t, err)
 		assert.False(t, isn)
 		rov, err := MockVector(colDef.Type, 1000).CopyToVector()
 		assert.Nil(t, err)
@@ -199,6 +200,7 @@ func TestStrVector(t *testing.T) {
 		_, err = vec.AppendVector(rov, 0)
 		assert.Nil(t, err)
 		isn, err = vec.IsNull(1)
+		assert.Nil(t, err)
 		assert.True(t, isn)
 		_, err = vec.GetValue(999)
 		assert.Nil(t, err)
@@ -226,10 +228,12 @@ func TestStrVector(t *testing.T) {
 		err = vec.SetValue(0, []byte("xxx"))
 		assert.NotNil(t, err)
 		isn, err = vec.IsNull(1)
+		assert.Nil(t, err)
 		assert.True(t, isn)
 		vec.ResetReadonly()
 		assert.False(t, vec.IsReadonly())
 		isn, err = vec.IsNull(1)
+		assert.Nil(t, err)
 		assert.True(t, isn)
 		assert.Equal(t, 10000, vec.Length())
 		assert.Equal(t, 2, vec.NullCnt())
@@ -255,7 +259,7 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, tmpv.Type.Eq(schema.ColDefs[13].Type))
 
 	size := uint64(100)
-	vecm := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	vecm := NewStrVector(types.Type{Oid: types.T_varchar, Size: 24}, size)
 	assert.Equal(t, int(size), vecm.Capacity())
 	assert.Equal(t, 0, vecm.Length())
 
@@ -269,15 +273,17 @@ func TestStrVector(t *testing.T) {
 	buf, err = vecm.Marshal()
 	assert.Nil(t, err)
 
-	vecum := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	vecum := NewStrVector(types.Type{Oid: types.T_varchar, Size: 24}, size)
 	err = vecum.Unmarshal(buf)
 	assert.Nil(t, err)
 
 	f, err := os.Create("/tmp/teststrvec")
+	assert.Nil(t, err)
 	_, err = vecs[1].WriteTo(f)
 	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
 	f, err = os.Open("/tmp/teststrvec")
+	assert.Nil(t, err)
 	tmpv = NewEmptyStrVector()
 	_, err = tmpv.ReadFrom(f)
 	assert.Nil(t, f.Close())

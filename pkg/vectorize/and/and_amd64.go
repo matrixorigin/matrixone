@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package and
 
 func andX86Asm(x []int64, y []int64, r []int64) int64

@@ -32,8 +32,8 @@ func StringBsiIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf.
 
 type StringBsiIndex struct {
 	bsi.StringBSI
-	T         types.Type
-	Col       int16
+	T           types.Type
+	Col         int16
 	File        common.IVFile
 	UseCompress bool
 	FreeFunc    buf.MemoryFreeFunc

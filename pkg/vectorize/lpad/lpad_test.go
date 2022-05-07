@@ -31,21 +31,21 @@ func TestLpadVarchar(t *testing.T) {
 		Lengths: []uint32{2, 2, 9, 13, 13, 9, 3},
 	}
 
-	origins_int64 := []int64{22}
+	originsInt64 := []int64{22}
 
-	// origins_padd := []string{"??", "??", "??saso","?^^%$so","?^^%$so","^%so"}
-	origins_padd := &types.Bytes{
+	// originsPadd := []string{"??", "??", "??saso","?^^%$so","?^^%$so","^%so"}
+	originsPadd := &types.Bytes{
 		Data:    []byte("??so"),
 		Offsets: []uint32{0},
 		Lengths: []uint32{4},
 	}
 	//Predefined Correct Values
 	results := []string{"??so??so??so??so??sohi", "??so??so??so??so??sohi", "??so??so??so?hishjajsa",
-	"??so??so?hish&sa*(#jsa","??so??so?hish&sa*(#jsa", "??so??so??so?hishjajsa","??so??so??so??so??sabc"}
+		"??so??so?hish&sa*(#jsa", "??so??so?hish&sa*(#jsa", "??so??so??so?hishjajsa", "??so??so??so??so??sabc"}
 
-	or := LpadVarchar(origins, origins_int64, origins_padd)
+	or := LpadVarchar(origins, originsInt64, originsPadd)
 
-	for i, _ := range results {
+	for i := range results {
 		require.Equal(t, []byte(results[i]), or.Data[or.Offsets[i]:or.Offsets[i]+or.Lengths[i]])
 	}
 }

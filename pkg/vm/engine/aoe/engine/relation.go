@@ -18,14 +18,22 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"math/rand"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -38,6 +46,15 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/protocol"
 )
+
+var FilterTypeMap = map[int]int32{
+	overload.EQ: FileterEq,
+	overload.NE: FileterNe,
+	overload.LT: FileterLt,
+	overload.LE: FileterLe,
+	overload.GT: FileterGt,
+	overload.GE: FileterGe,
+}
 
 const defaultRetryTimes = 5
 
@@ -151,7 +168,7 @@ func (r *relation) update() error {
 			storeId := r.catalog.Driver.RaftStore().
 				GetRouter().LeaderReplicaStore(tbl.ShardId).ID
 			if lRelation, err := ldb.Relation(
-				aoedbName.IdToNameFactory.Encode(
+				aoedbName.IDToNameFactory.Encode(
 					tbl.ShardId), tbl.Name); err == nil {
 				r.mp[string(codec.Uint642Bytes(tbl.ShardId))] = lRelation
 			}
@@ -253,7 +270,8 @@ func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) NewReader(num int, _ extend.Extend, _ []byte) []engine.Reader {
+func (r *relation) NewReader(num int, e extend.Extend, _ []byte) []engine.Reader {
+	fcs := getFilterContext(e)
 	iodepth := num / int(r.cfg.QueueMaxReaderCount)
 	if num%int(r.cfg.QueueMaxReaderCount) > 0 {
 		iodepth++
@@ -285,7 +303,7 @@ func (r *relation) NewReader(num int, _ extend.Extend, _ []byte) []engine.Reader
 	readStore.SetBlocks(blocks)
 	for i := 0; i < num; i++ {
 		workerid := i / int(r.cfg.QueueMaxReaderCount)
-		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid), filter: make([]filterContext, 0)}
+		readStore.readers[i] = &aoeReader{reader: readStore, id: int32(i), workerid: int32(workerid), filter: fcs}
 	}
 	for i := 0; i < readStore.iodepth; i++ {
 		readStore.rhs[i] = make(chan *batData,
@@ -294,4 +312,121 @@ func (r *relation) NewReader(num int, _ extend.Extend, _ []byte) []engine.Reader
 			int(r.cfg.QueueMaxReaderCount)*int(r.cfg.ReaderBufferCount))
 	}
 	return readStore.readers
+}
+
+// only filter conditions similar to the following are supported:
+//  	. a > 1
+// 		. a > 1 and b < 2
+func getFilterContext(e extend.Extend) []filterContext {
+	var fcs []filterContext
+
+	es := extend.AndExtends(e, nil)
+	if len(es) == 0 {
+		return nil
+	}
+	for i := range es {
+		fc := new(filterContext)
+		fc.extent = make([]filterExtent, 0)
+		fc = getFilterContextFromExtend(fc, es[i])
+		if fc != nil && len(fc.extent) > 0 {
+			fcs = append(fcs, *fc)
+		}
+	}
+	return fcs
+}
+
+func getFilterContextFromExtend(f *filterContext, e extend.Extend) *filterContext {
+	v, ok := e.(*extend.BinaryExtend)
+	if !ok {
+		return nil
+	}
+	if v.Op == overload.Or {
+		getFilterContextFromExtend(f, v.Left)
+		getFilterContextFromExtend(f, v.Right)
+		return f
+	}
+	ft, ok := FilterTypeMap[v.Op]
+	if ok {
+		f = newFilterContext(ft, v, f)
+	}
+	return f
+}
+
+func newFilterContext(ft int32, e *extend.BinaryExtend, fcs *filterContext) *filterContext {
+	if attr, ok := e.Left.(*extend.Attribute); ok {
+		if val, ok := e.Right.(*extend.ValueExtend); ok {
+			param := cast(val.V, attr.Type)
+			if param == nil {
+				return fcs
+			}
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     param,
+				filterType: ft,
+				attr:       attr.Name,
+			})
+		}
+	}
+	if attr, ok := e.Right.(*extend.Attribute); ok {
+		if val, ok := e.Left.(*extend.ValueExtend); ok {
+			param := cast(val.V, attr.Type)
+			if param == nil {
+				return fcs
+			}
+			fcs.extent = append(fcs.extent, filterExtent{
+				param1:     param,
+				filterType: ft,
+				attr:       attr.Name,
+			})
+		}
+	}
+	return fcs
+}
+
+func cast(vec *vector.Vector, typ types.T) interface{} {
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	proc := process.New(mheap.New(gm))
+	ops := overload.BinOps[overload.Typecast]
+	retVec := vec
+	for _, op := range ops {
+		if op.LeftType == vec.Typ.Oid && op.RightType == typ {
+			retVec, _ = op.Fn(vec, vector.New(types.Type{Oid: typ}), proc, true, true)
+			if retVec == nil {
+				return nil
+			}
+		}
+	}
+	return getVectorValue(retVec)
+}
+
+func getVectorValue(vec *vector.Vector) interface{} {
+	switch vec.Typ.Oid {
+	case types.T_int8:
+		return vec.Col.([]int8)[0]
+	case types.T_int16:
+		return vec.Col.([]int16)[0]
+	case types.T_int32:
+		return vec.Col.([]int32)[0]
+	case types.T_int64:
+		return vec.Col.([]int64)[0]
+	case types.T_uint8:
+		return vec.Col.([]uint8)[0]
+	case types.T_uint16:
+		return vec.Col.([]uint16)[0]
+	case types.T_uint32:
+		return vec.Col.([]uint32)[0]
+	case types.T_uint64:
+		return vec.Col.([]uint64)[0]
+	case types.T_float32:
+		return vec.Col.([]float32)[0]
+	case types.T_float64:
+		return vec.Col.([]float64)[0]
+	case types.T_date:
+		return vec.Col.([]types.Date)[0]
+	case types.T_datetime:
+		return vec.Col.([]types.Datetime)[0]
+	case types.T_char, types.T_varchar:
+		return vec.Col.(*types.Bytes).Data
+	}
+	return nil
 }

@@ -1,33 +1,38 @@
 select
-	nation,
 	o_year,
-	sum(amount) as sum_profit
+	(sum(case
+		when nation = 'ARGENTINA' then volume
+		else 0
+	end) / sum(volume)) as mkt_share
 from
 	(
 		select
-			n_name as nation,
 			extract(year from o_orderdate) as o_year,
-			l_extendedprice * (1 - l_discount) - ps_supplycost * l_quantity as amount
+			l_extendedprice * (1 - l_discount) as volume,
+			n2.n_name as nation
 		from
 			part,
 			supplier,
 			lineitem,
-			partsupp,
 			orders,
-			nation
+			customer,
+			nation n1,
+			nation n2,
+			region
 		where
-			s_suppkey = l_suppkey
-			and ps_suppkey = l_suppkey
-			and ps_partkey = l_partkey
-			and p_partkey = l_partkey
-			and o_orderkey = l_orderkey
-			and s_nationkey = n_nationkey
-			and p_name like '%pink%'
-	) as profit
+			p_partkey = l_partkey
+			and s_suppkey = l_suppkey
+			and l_orderkey = o_orderkey
+			and o_custkey = c_custkey
+			and c_nationkey = n1.n_nationkey
+			and n1.n_regionkey = r_regionkey
+			and r_name = 'AMERICA'
+			and s_nationkey = n2.n_nationkey
+			and o_orderdate between date '1995-01-01' and date '1996-12-31'
+			and p_type = 'ECONOMY BURNISHED TIN'
+	) as all_nations
 group by
-	nation,
 	o_year
 order by
-	nation,
-	o_year desc
+	o_year
 ;

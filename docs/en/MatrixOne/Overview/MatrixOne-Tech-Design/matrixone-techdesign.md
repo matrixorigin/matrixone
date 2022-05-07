@@ -61,7 +61,7 @@ In MatrixOne, storage engine is selectable, and thus you can specify an engine t
 In the current version, only one engine is implemented: AOE Engine(which stood for "Analytics Optimized Engine", evolving from "Append Only Engine", which is a column storage engine with "Append Only" mode.
 An evolution of AOE is called **TAE(Transactional Analytical Engine)**, a column-based HTAP Engine that provides complete ACID capability and powerful OLAP capability, and it's currently under development. When completed, MatrixOne will have complete distribution HTAP ability.  
 
-Please refer to [AOE Technical Design](../../../../rfcs/20211210_aoe_overall_design.md) for more details. 
+Please refer to [AOE Technical Design](https://github.com/matrixorigin/matrixone/blob/main/docs/rfcs/20211210_aoe_overall_design.md) for more details. 
 
 Another **TPE(Transaction Processing Engine)** is under development. TPE is designed to support `catalog` usage, for now, it will not provide transactional service for the external users.  
 In the future, it's possible that TPE provides complete SQL capabilities externally. 

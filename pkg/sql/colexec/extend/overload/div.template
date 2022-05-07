@@ -212,6 +212,304 @@ func initDiv() {
                 },
         },
         {{end}}
+
+		{
+			LeftType:   types.T_decimal64,
+			RightType:  types.T_decimal64,
+			ReturnType: types.T_decimal64,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal64), rv.Col.([]types.Decimal64)
+				lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+				resultScale := lv.Typ.Scale
+				resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					if !nulls.Any(rv.Nsp) {
+						for _, v := range rvs {
+							if int64(v) != 0 {
+								return nil, ErrDivByZero
+							}
+						}
+					}
+					sels := process.GetSels(proc)
+					defer process.PutSels(sels, proc)
+					for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+						if nulls.Contains(rv.Nsp, i) {
+							continue
+						}
+						if int64(rvs[i]) == 0 {
+							return nil, ErrDivByZero
+						}
+						sels = append(sels, int64(i))
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, div.Decimal64DivScalarSels(lvs[0], rvs, lvScale, rvScale, rs, sels))
+					vec.Typ = resultTyp
+					return vec, nil
+				case !lc && rc:
+					if int64(rvs[0]) == 0 {
+						return nil, ErrDivByZero
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, div.Decimal64DivByScalar(rvs[0], lvs, rvScale, lvScale, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal128Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				if !nulls.Any(rv.Nsp) {
+					for _, v := range rvs {
+						if int64(v) == 0 {
+							return nil, ErrDivByZero
+						}
+					}
+					vector.SetCol(vec, div.Decimal64Div(lvs, rvs, lvScale, rvScale, rs))
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					vec.Typ = resultTyp
+					return vec, nil
+				}
+				sels := process.GetSels(proc)
+				defer process.PutSels(sels, proc)
+				for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+					if nulls.Contains(rv.Nsp, i) {
+						continue
+					}
+					if int64(rvs[i]) == 0 {
+						return nil, ErrDivByZero
+					}
+					sels = append(sels, int64(i))
+				}
+				vector.SetCol(vec, div.Decimal64DivSels(lvs, rvs, lvScale, rvScale, rs, sels))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				vec.Typ = resultTyp
+				return vec, nil
+			},
+		},
+
+		{
+			LeftType:   types.T_decimal128,
+			RightType:  types.T_decimal128,
+			ReturnType: types.T_decimal128,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+				lvs, rvs := lv.Col.([]types.Decimal128), rv.Col.([]types.Decimal128)
+				lvScale, rvScale := lv.Typ.Scale, rv.Typ.Scale
+				resultScale := lv.Typ.Scale
+				resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+				switch {
+				case lc && !rc:
+					if !nulls.Any(rv.Nsp) {
+						for _, v := range rvs {
+							if types.Decimal128IsZero(v) {
+								return nil, ErrDivByZero
+							}
+						}
+						if rv.Ref == 1 || rv.Ref == 0 {
+							rv.Ref = 0
+							div.Decimal128DivScalar(lvs[0], rvs, lvScale, rvScale, rvs)
+							rv.Typ = resultTyp
+							return rv, nil
+						}
+						vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), lv.Typ)
+						if err != nil {
+							return nil, err
+						}
+						rs := encoding.DecodeDecimal128Slice(vec.Data)
+						rs = rs[:len(rvs)]
+						nulls.Set(vec.Nsp, rv.Nsp)
+						vector.SetCol(vec, div.Decimal128DivScalar(lvs[0], rvs, lvScale, rvScale, rs))
+						vec.Typ = resultTyp
+						return vec, nil
+					}
+					sels := process.GetSels(proc)
+					defer process.PutSels(sels, proc)
+					for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+						if nulls.Contains(rv.Nsp, i) {
+							continue
+						}
+						if types.Decimal128IsZero(rvs[i]) {
+							return nil, ErrDivByZero
+						}
+						sels = append(sels, int64(i))
+					}
+					if rv.Ref == 1 || rv.Ref == 0 {
+						rv.Ref = 0
+						div.Decimal128DivScalarSels(lvs[0], rvs, lvScale, rvScale, rvs, sels)
+						rv.Typ = resultTyp
+						return rv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(rvs)), lv.Typ)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(rvs)]
+					nulls.Set(vec.Nsp, rv.Nsp)
+					vector.SetCol(vec, div.Decimal128DivScalarSels(lvs[0], rvs, lvScale, rvScale, rs, sels))
+					vec.Typ = resultTyp
+					return vec, nil
+				case !lc && rc:
+					if types.Decimal128IsZero(rvs[0]) {
+						return nil, ErrDivByZero
+					}
+					if lv.Ref == 1 || lv.Ref == 0 {
+						lv.Ref = 0
+						div.Decimal128DivByScalar(rvs[0], lvs, rvScale, lvScale, lvs)
+						return lv, nil
+					}
+					vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+					if err != nil {
+						return nil, err
+					}
+					rs := encoding.DecodeDecimal128Slice(vec.Data)
+					rs = rs[:len(lvs)]
+					nulls.Set(vec.Nsp, lv.Nsp)
+					vector.SetCol(vec, div.Decimal128DivByScalar(rvs[0], lvs, rvScale, lvScale, rs))
+					vec.Typ = resultTyp
+					return vec, nil
+				case lv.Ref == 1 || lv.Ref == 0:
+					if !nulls.Any(rv.Nsp) {
+						for _, v := range rvs {
+							if types.Decimal128IsZero(v) {
+								return nil, ErrDivByZero
+							}
+						}
+						lv.Ref = 0
+						div.Decimal128Div(lvs, rvs, lvScale, rvScale, lvs)
+						lv.Nsp = lv.Nsp.Or(rv.Nsp)
+						if rv.Ref == 0 {
+							process.Put(proc, rv)
+						}
+						lv.Typ = resultTyp
+						return lv, nil
+					}
+					sels := process.GetSels(proc)
+					defer process.PutSels(sels, proc)
+					for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+						if nulls.Contains(rv.Nsp, i) {
+							continue
+						}
+						if types.Decimal128IsZero(rvs[i]) {
+							return nil, ErrDivByZero
+						}
+						sels = append(sels, int64(i))
+					}
+					lv.Ref = 0
+					div.Decimal128DivSels(lvs, rvs, lvScale, rvScale, lvs, sels)
+					lv.Nsp = lv.Nsp.Or(rv.Nsp)
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					lv.Typ = resultTyp
+					return lv, nil
+				case rv.Ref == 1 || rv.Ref == 0:
+					if !nulls.Any(rv.Nsp) {
+						for _, v := range rvs {
+							if types.Decimal128IsZero(v) {
+								return nil, ErrDivByZero
+							}
+						}
+						rv.Ref = 0
+						div.Decimal128Div(lvs, rvs, lvScale, rvScale, rvs)
+						rv.Nsp = rv.Nsp.Or(lv.Nsp)
+						if lv.Ref == 0 {
+							process.Put(proc, lv)
+						}
+						rv.Typ = resultTyp
+						return rv, nil
+					}
+					sels := process.GetSels(proc)
+					defer process.PutSels(sels, proc)
+					for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+						if nulls.Contains(rv.Nsp, i) {
+							continue
+						}
+						if types.Decimal128IsZero(rvs[i]) {
+							return nil, ErrDivByZero
+						}
+						sels = append(sels, int64(i))
+					}
+					rv.Ref = 0
+					div.Decimal128DivSels(lvs, rvs, lvScale, rvScale, rvs, sels)
+					rv.Nsp = rv.Nsp.Or(lv.Nsp)
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					rv.Typ = resultTyp
+					return rv, nil
+				}
+				vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDecimal128Slice(vec.Data)
+				rs = rs[:len(rvs)]
+				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				if !nulls.Any(rv.Nsp) {
+					for _, v := range rvs {
+						if types.Decimal128IsZero(v) {
+							return nil, ErrDivByZero
+						}
+					}
+					vector.SetCol(vec, div.Decimal128Div(lvs, rvs, lvScale, rvScale, rs))
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						process.Put(proc, rv)
+					}
+					vec.Typ = resultTyp
+					return vec, nil
+				}
+				sels := process.GetSels(proc)
+				defer process.PutSels(sels, proc)
+				for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+					if nulls.Contains(rv.Nsp, i) {
+						continue
+					}
+					if types.Decimal128IsZero(rvs[i]) {
+						return nil, ErrDivByZero
+					}
+					sels = append(sels, int64(i))
+				}
+				vector.SetCol(vec, div.Decimal128DivSels(lvs, rvs, lvScale, rvScale, rs, sels))
+				if lv.Ref == 0 {
+					process.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					process.Put(proc, rv)
+				}
+				vec.Typ = resultTyp
+				return vec, nil
+			},
+		},
+
     }
 
     BinOps[IntegerDiv] = []*BinOp{

@@ -48,7 +48,7 @@ type FunctionSig struct {
 }
 
 // Functions shipped by system.
-var BuiltinFunctions = [...]FunctionSig{
+var BuiltinFunctions = [...]*FunctionSig{
 	// Operators,
 	{"=", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ANY}, []int8{1, 1}},
 	{"<>", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ANY}, []int8{1, 1}},
@@ -81,11 +81,11 @@ var BuiltinFunctions = [...]FunctionSig{
 	{"AES_ENCRYPT", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"ANY_VALUE", plan.Function_AGG, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
 	{"ARRAY_AGG", plan.Function_AGG, []plan.Type_TypeId{plan.Type_ARRAY, plan.Type_ANY}, []int8{1}},
-	{"ARRAY_APPEND", 0, []plan.Type_TypeId{plan.Type_ARRAY, plan.Type_ANY}, []int8{0, 1}},
-	{"ARRAY_CAT", 0, []plan.Type_TypeId{plan.Type_ARRAY}, []int8{0, 0}},
-	{"ARRAY_CONTAINS", 0, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY, plan.Type_ANY}, []int8{1, 2}},
-	{"ARRAY_POSITION", 0, []plan.Type_TypeId{plan.Type_INT32, plan.Type_ARRAY, plan.Type_ANY}, []int8{1, 2}},
-	{"ARRAY_SIZE", 0, []plan.Type_TypeId{plan.Type_INT32, plan.Type_ARRAY}, []int8{1}},
+	{"ARRAY_APPEND", plan.Function_NONE, []plan.Type_TypeId{plan.Type_ARRAY, plan.Type_ANY}, []int8{0, 1}},
+	{"ARRAY_CAT", plan.Function_NONE, []plan.Type_TypeId{plan.Type_ARRAY}, []int8{0, 0}},
+	{"ARRAY_CONTAINS", plan.Function_NONE, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY, plan.Type_ANY}, []int8{1, 2}},
+	{"ARRAY_POSITION", plan.Function_NONE, []plan.Type_TypeId{plan.Type_INT32, plan.Type_ARRAY, plan.Type_ANY}, []int8{1, 2}},
+	{"ARRAY_SIZE", plan.Function_NONE, []plan.Type_TypeId{plan.Type_INT32, plan.Type_ARRAY}, []int8{1}},
 	{"ASCII", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_INT32, plan.Type_VARCHAR}, []int8{1}},
 	{"ASIN", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 	{"ATAN", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
@@ -103,7 +103,7 @@ var BuiltinFunctions = [...]FunctionSig{
 	{"BOOLAGG_AND", plan.Function_AGG, []plan.Type_TypeId{plan.Type_BOOL}, []int8{1}},
 	{"BOOLAGG_OR", plan.Function_AGG, []plan.Type_TypeId{plan.Type_BOOL}, []int8{1}},
 
-	{"CASE", 0, []plan.Type_TypeId{plan.Type_ANY, plan.Type_ANY, plan.Type_ARRAY, plan.Type_ARRAY}, []int8{1, 2, 3}},
+	{"CASE", plan.Function_NONE, []plan.Type_TypeId{plan.Type_ANY, plan.Type_ANY, plan.Type_ARRAY, plan.Type_ARRAY}, []int8{1, 2, 3}},
 	{"CEIL", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_ANYNUMBER, plan.Type_INT32}, []int8{0, -1}},
 	{"CHR", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_INT32}, []int8{1}},
 	{"COALESCE", plan.Function_VARARG, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
@@ -139,8 +139,8 @@ var BuiltinFunctions = [...]FunctionSig{
 	{"HEX_DECODE", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_VARBINARY, plan.Type_VARCHAR}, []int8{1}},
 	{"HEX_ENCODE", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_VARBINARY}, []int8{1}},
 
-	{"IFF", 0, []plan.Type_TypeId{plan.Type_ANY, plan.Type_BOOL}, []int8{1, 0, 0}},
-	{"IFNULL", 0, []plan.Type_TypeId{plan.Type_ANY}, []int8{0, 0}},
+	{"IFF", plan.Function_NONE, []plan.Type_TypeId{plan.Type_ANY, plan.Type_BOOL}, []int8{1, 0, 0}},
+	{"IFNULL", plan.Function_NONE, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
 	{"ILIKE", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_VARCHAR}, []int8{1, 1}},
 	{"ILIKE_ALL", plan.Function_STRICT | plan.Function_VARARG, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
 	{"ILIKE_ANY", plan.Function_STRICT | plan.Function_VARARG, []plan.Type_TypeId{plan.Type_VARCHAR}, []int8{0, 0}},
@@ -208,4 +208,9 @@ var BuiltinFunctions = [...]FunctionSig{
 
 	{"VAR_POP", plan.Function_AGG, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
 	{"VAR_SAMPLE", plan.Function_AGG, []plan.Type_TypeId{plan.Type_FLOAT64}, []int8{0}},
+
+	//add for subquery
+	{"EXISTS", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+	{"ALL", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+	{"ANY", plan.Function_STRICT, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 }

@@ -14,7 +14,7 @@
    <img src="https://img.shields.io/badge/Release-v0.3.0-green.svg" alt="release"/>
   </a>
   <br>
-  <a href="https://docs.matrixorigin.cn">
+  <a href="https://docs.matrixorigin.io/cn/0.3.0/">
     <b>Docs</b>
   </a>
   <b>||</b>

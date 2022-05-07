@@ -17,7 +17,6 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -108,7 +107,7 @@ func (sf *SortedSegmentFile) GetDir() string {
 
 func (sf *SortedSegmentFile) close() {
 	sf.Close()
-	sf.Destory()
+	sf.Destroy()
 }
 
 func (sf *SortedSegmentFile) RefBlock(id common.ID) {
@@ -119,11 +118,11 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 	sf.Unref()
 }
 
-func (msf *SortedSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+func (sf *SortedSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
 	panic("not supported")
 }
 
-func (msf *SortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+func (sf *SortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
 	panic("not supported")
 }
 
@@ -299,7 +298,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 	return blkMeta.Indices
 }
 
-func (sf *SortedSegmentFile) Destory() {
+func (sf *SortedSegmentFile) Destroy() {
 	name := sf.Name()
 	logutil.Infof(" %s | SegmentFile | Destroying", name)
 	err := os.Remove(name)
@@ -368,7 +367,7 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := sf.Parts[key]
 	if !ok {
-		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
+		return fmt.Errorf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx)
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

@@ -144,7 +144,7 @@ func (f *EmbedIndexFile) RefCount() int64 {
 	return f.SegmentFile.RefCount()
 }
 
-func (cpf *EmbedIndexFile) GetFileType() common.FileType {
+func (f *EmbedIndexFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 

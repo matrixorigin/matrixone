@@ -49,6 +49,8 @@ type TpeConfig struct {
 
 	TpeDedupSetBatchTimeout  time.Duration
 	TpeDedupSetBatchTrycount int
+	TpeScanTimeout time.Duration
+	TpeScanTryCount int
 	PBKV                     *pebble.Storage
 }
 
@@ -74,10 +76,6 @@ type TpeRelation struct {
 	nodes engine.Nodes
 	//global shards
 	shards *tuplecodec.Shards
-	//this node
-	thisNodes engine.Nodes
-	//shards in this node
-	shardsInThisNode *tuplecodec.Shards
 	//storeid or nodeid ?
 	storeID      uint64
 	useOneThread bool

@@ -58,7 +58,7 @@ func (b *build) buildGroupBy(exprs tree.GroupBy, proj0, proj *Projection, qry *Q
 func (b *build) buildGroupByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, e.String())
 	case *tree.ParenExpr:
 		return b.buildGroupByExpr(e.Expr, qry)
 	case *tree.OrExpr:

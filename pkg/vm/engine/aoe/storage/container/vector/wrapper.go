@@ -38,7 +38,7 @@ type VectorWrapper struct {
 	UseCompress bool
 }
 
-func (v *VectorWrapper) Reset() {
+func (vec *VectorWrapper) Reset() {
 	//panic("implement me")
 }
 
@@ -66,143 +66,145 @@ func NewEmptyWrapper(t types.Type) *VectorWrapper {
 	}
 }
 
-func (v *VectorWrapper) PlacementNew(t types.Type) {
+func (vec *VectorWrapper) PlacementNew(t types.Type) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) SliceReference(start, end int) (dbi.IVectorReader, error) {
+func (vec *VectorWrapper) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) GetType() dbi.VectorType {
+func (vec *VectorWrapper) GetType() dbi.VectorType {
 	return dbi.Wrapper
 }
 
-func (v *VectorWrapper) Close() error {
+func (vec *VectorWrapper) Close() error {
 	return nil
 }
 
-func (v *VectorWrapper) Capacity() int {
-	return base.Length(&v.Vector)
+func (vec *VectorWrapper) Capacity() int {
+	return base.Length(&vec.Vector)
 }
 
-func (v *VectorWrapper) Length() int {
-	return base.Length(&v.Vector)
+func (vec *VectorWrapper) Length() int {
+	return base.Length(&vec.Vector)
 }
 
-func (v *VectorWrapper) Free(p *process.Process) {
+func (vec *VectorWrapper) Free(p *process.Process) {
 	panic("readonly")
 }
 
-func (v *VectorWrapper) Clean(p *process.Process) {
+func (vec *VectorWrapper) Clean(p *process.Process) {
 	panic("readonly")
 }
 
-func (v *VectorWrapper) SetCol(col interface{}) {
+func (vec *VectorWrapper) SetCol(col interface{}) {
 	panic("readonly")
 }
 
-func (v *VectorWrapper) FreeMemory() {
-	if v.MNode != nil {
-		common.GPool.Free(v.MNode)
+func (vec *VectorWrapper) FreeMemory() {
+	if vec.MNode != nil {
+		common.GPool.Free(vec.MNode)
 	}
-	if v.FreeFunc != nil {
-		v.FreeFunc(v)
+	if vec.FreeFunc != nil {
+		vec.FreeFunc(vec)
 	}
 }
 
-func (v *VectorWrapper) Append(n int, vals interface{}) error {
+func (vec *VectorWrapper) Append(n int, vals interface{}) error {
 	return ErrVecWriteRo
 }
 
-func (v *VectorWrapper) GetMemorySize() uint64 {
-	return uint64(len(v.Data))
+func (vec *VectorWrapper) GetMemorySize() uint64 {
+	return uint64(len(vec.Data))
 }
 
-func (v *VectorWrapper) GetMemoryCapacity() uint64 {
-	if v.UseCompress {
-		return uint64(v.File.Stat().Size())
+func (vec *VectorWrapper) GetMemoryCapacity() uint64 {
+	if vec.UseCompress {
+		return uint64(vec.File.Stat().Size())
 	} else {
-		return uint64(v.File.Stat().OriginSize())
+		return uint64(vec.File.Stat().OriginSize())
 	}
 }
 
-func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
+func (vec *VectorWrapper) SetValue(idx int, val interface{}) error {
 	return ErrVecWriteRo
 }
 
-func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
-	if idx >= v.Length() || idx < 0 {
+func (vec *VectorWrapper) GetValue(idx int) (interface{}, error) {
+	if idx >= vec.Length() || idx < 0 {
 		return nil, ErrVecInvalidOffset
 	}
-	switch v.Typ.Oid {
+	switch vec.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
-		val := v.Col.(*types.Bytes)
+		val := vec.Col.(*types.Bytes)
 		return val.Data[val.Offsets[idx] : val.Offsets[idx]+val.Lengths[idx]], nil
 	case types.T_int8:
-		return v.Col.([]int8)[idx], nil
+		return vec.Col.([]int8)[idx], nil
 	case types.T_int16:
-		return v.Col.([]int16)[idx], nil
+		return vec.Col.([]int16)[idx], nil
 	case types.T_int32:
-		return v.Col.([]int32)[idx], nil
+		return vec.Col.([]int32)[idx], nil
 	case types.T_int64:
-		return v.Col.([]int64)[idx], nil
+		return vec.Col.([]int64)[idx], nil
 	case types.T_uint8:
-		return v.Col.([]uint8)[idx], nil
+		return vec.Col.([]uint8)[idx], nil
 	case types.T_uint16:
-		return v.Col.([]uint16)[idx], nil
+		return vec.Col.([]uint16)[idx], nil
 	case types.T_uint32:
-		return v.Col.([]uint32)[idx], nil
+		return vec.Col.([]uint32)[idx], nil
 	case types.T_uint64:
-		return v.Col.([]uint64)[idx], nil
-	case types.T_decimal:
-		return v.Col.([]types.Decimal)[idx], nil
+		return vec.Col.([]uint64)[idx], nil
 	case types.T_float32:
-		return v.Col.([]float32)[idx], nil
+		return vec.Col.([]float32)[idx], nil
 	case types.T_float64:
-		return v.Col.([]float64)[idx], nil
+		return vec.Col.([]float64)[idx], nil
 	case types.T_date:
-		return v.Col.([]types.Date)[idx], nil
+		return vec.Col.([]types.Date)[idx], nil
 	case types.T_datetime:
-		return v.Col.([]types.Datetime)[idx], nil
+		return vec.Col.([]types.Datetime)[idx], nil
 	case types.T_sel:
-		return v.Col.([]int64)[idx], nil
+		return vec.Col.([]int64)[idx], nil
 	case types.T_tuple:
-		return v.Col.([][]interface{})[idx], nil
+		return vec.Col.([][]interface{})[idx], nil
+	case types.T_decimal64:
+		return vec.Col.([]types.Decimal64)[idx], nil
+	case types.T_decimal128:
+		return vec.Col.([]types.Decimal128)[idx], nil
 	default:
 		return nil, ErrVecTypeNotSupport
 	}
 }
 
-func (v *VectorWrapper) IsNull(idx int) (bool, error) {
+func (vec *VectorWrapper) IsNull(idx int) (bool, error) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) HasNull() bool {
+func (vec *VectorWrapper) HasNull() bool {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) NullCnt() int {
+func (vec *VectorWrapper) NullCnt() int {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) IsReadonly() bool {
+func (vec *VectorWrapper) IsReadonly() bool {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) GetLatestView() IVector {
+func (vec *VectorWrapper) GetLatestView() IVector {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) CopyToVector() (*base.Vector, error) {
-	return &v.Vector, nil
+func (vec *VectorWrapper) CopyToVector() (*base.Vector, error) {
+	return &vec.Vector, nil
 }
 
-func (v *VectorWrapper) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*base.Vector, error) {
+func (vec *VectorWrapper) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*base.Vector, error) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) AppendVector(vec *base.Vector, offset int) (n int, err error) {
+func (vec *VectorWrapper) AppendVector(v *base.Vector, offset int) (n int, err error) {
 	panic("not supported")
 }
 
@@ -235,7 +237,7 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	if vec.UseCompress {
-		allocSize := uint64(vec.GetMemoryCapacity())
+		allocSize := vec.GetMemoryCapacity()
 		vec.MNode = common.GPool.Alloc(allocSize)
 		data := vec.MNode.Buf[:allocSize]
 		nr, err := r.Read(data)

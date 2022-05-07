@@ -41,20 +41,20 @@ var (
 	errUnaryOutRange    = errors.New(errno.DataException, "unary result out of range")
 )
 
-func buildValue(val constant.Value) (extend.Extend, error) {
+func buildValue(val constant.Value, origString string) (extend.Extend, error) {
 	switch val.Kind() {
 	case constant.Int:
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		v, _ := constant.Int64Val(val)
 		vec.Col = []int64{v}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	case constant.Float:
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		v, _ := constant.Float64Val(val)
 		vec.Col = []float64{v}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	case constant.String:
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
 		vec.Ref = 1
@@ -64,7 +64,7 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 			Offsets: []uint32{0},
 			Lengths: []uint32{uint32(len(v))},
 		}
-		return &extend.ValueExtend{V: vec}, nil
+		return &extend.ValueExtend{V: vec, OrigStr: origString}, nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
 	}
@@ -414,6 +414,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 	case 1:
 		for _, attr := range qry.Scope.Result.Attrs {
 			if attr == e.Parts[0] {
+				if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+					qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+				}
 				return &extend.Attribute{
 					Name: attr,
 					Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -426,6 +429,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 			name := e.Parts[1] + "." + e.Parts[0]
 			for _, attr := range qry.Scope.Result.Attrs {
 				if attr == name {
+					if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+						qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+					}
 					return &extend.Attribute{
 						Name: attr,
 						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -435,6 +441,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 		} else {
 			for _, attr := range qry.Scope.Result.Attrs {
 				if attr == e.Parts[0] {
+					if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+						qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+					}
 					return &extend.Attribute{
 						Name: attr,
 						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -633,6 +642,43 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, e.Op))
 		}
+	case *tree.UnresolvedName:
+		floatResult, err := strconv.ParseFloat(e.Parts[0], 10)
+		if err != nil {
+			return nil, err
+		}
+		switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			if floatResult > 0 {
+				if floatResult+0.5 > math.MaxInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult + 0.5), nil
+			} else if floatResult < 0 {
+				if floatResult-0.5 < math.MinInt64 {
+					return nil, errBinaryOutRange
+				}
+				return int64(floatResult - 0.5), nil
+			}
+			return int64(floatResult), nil
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			if floatResult < 0 || floatResult+0.5 > math.MaxInt64 {
+				return nil, errBinaryOutRange
+			}
+			return uint64(floatResult + 0.5), nil
+		case types.T_float32:
+			if floatResult == 0 {
+				return float32(0), nil
+			}
+			if floatResult > math.MaxFloat32 || floatResult < -math.MaxFloat32 {
+				return nil, errBinaryOutRange
+			}
+			return float32(floatResult), nil
+		case types.T_float64:
+			return floatResult, nil
+		default:
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("unexpected return type '%v' for binary expression '%v'", typ, floatResult))
+		}
 	}
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
@@ -660,6 +706,10 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 				}
 				return int64(v), nil
 			}
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			v, _ := constant.Uint64Val(val)
 			if num.Negative() {
@@ -744,8 +794,18 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return float64(v), nil
 		case types.T_datetime:
 			return types.ParseDatetime(str)
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		}
 	case constant.String:
+		switch typ.Oid {
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		}
 		if !num.Negative() {
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:

@@ -374,8 +374,16 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -398,8 +406,16 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -425,8 +441,16 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -449,8 +473,16 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -587,8 +619,16 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -611,8 +651,16 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -635,8 +683,16 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -659,8 +715,16 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -689,8 +753,16 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -713,8 +785,16 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -737,8 +817,16 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -761,8 +849,16 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -791,8 +887,16 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -815,8 +919,16 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -839,8 +951,16 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -863,8 +983,16 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
@@ -893,8 +1021,16 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -917,16 +1053,45 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			//todo: test this
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
 		case types.T_datetime:
+		case types.T_decimal64:
+		case types.T_decimal128:
 		default:
 			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
@@ -948,8 +1113,16 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -972,12 +1145,38 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1009,8 +1208,16 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -1033,12 +1240,38 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1064,8 +1297,16 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -1088,12 +1329,38 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1125,8 +1392,16 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -1149,12 +1424,38 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1180,8 +1481,16 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -1204,12 +1513,38 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1241,8 +1576,16 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -1265,12 +1608,38 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1296,8 +1665,16 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -1320,12 +1697,38 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1357,8 +1760,16 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -1381,12 +1792,38 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1412,8 +1849,16 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -1436,12 +1881,38 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1473,8 +1944,16 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(re); err != nil {
@@ -1497,12 +1976,38 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(re); err != nil {
-				return nil, err
+			if e.Left.ReturnType() == types.T_decimal128 || e.Left.ReturnType() == types.T_decimal64 {
+				err := toDecimal(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(re)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:
@@ -1528,8 +2033,16 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_int64:
-			if err := toInt64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toInt64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_uint8:
 			if err := toUint8(le); err != nil {
@@ -1552,12 +2065,38 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		case types.T_float64:
-			if err := toFloat64(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toFloat64(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_char:
-			if err := toChar(le); err != nil {
-				return nil, err
+			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
+				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				err := toChar(le)
+				if err != nil {
+					return nil, err
+				}
 			}
 		case types.T_varchar:
 		case types.T_date:

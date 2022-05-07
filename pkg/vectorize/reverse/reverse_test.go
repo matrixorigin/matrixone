@@ -74,7 +74,7 @@ func TestReverse(t *testing.T) {
 				Lengths: make([]uint32, len(c.args.Lengths)),
 				Offsets: make([]uint32, len(c.args.Offsets)),
 			}
-			got := Reverse(c.args, out)
+			got := reverse(c.args, out)
 			require.Equal(t, c.want, got)
 		})
 	}

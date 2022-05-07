@@ -228,12 +228,12 @@ func Test_exportDataToCSVFile(t *testing.T) {
 		data[4] = 1.0
 		data[5] = 1
 		data[6] = 1
-		data[7] = "1"
+		data[7] = []byte{1}
 		data[8] = types.Date(1)
 		data[9] = types.Datetime(1)
 		oq.mrs.AddRow(data)
 
-		oq.ep.Symbol = make([]string, len(col))
+		oq.ep.Symbol = make([][]byte, len(col))
 		oq.ep.ColumnFlag = make([]bool, len(col))
 
 		stubs := gostub.StubFunc(&formatOutputString, nil)

@@ -5,7 +5,7 @@ package message
 
 import (
 	fmt "fmt"
-	proto "github.com/golang/protobuf/proto"
+	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
@@ -20,16 +20,13 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.ProtoPackageIsVersion3 // please upgrade the proto package
+const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 type Message struct {
-	Sid                  uint64   `protobuf:"varint,1,opt,name=sid,proto3" json:"sid,omitempty"`
-	Cmd                  uint64   `protobuf:"varint,2,opt,name=cmd,proto3" json:"cmd,omitempty"`
-	Code                 []byte   `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
-	Data                 []byte   `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	Sid  uint64 `protobuf:"varint,1,opt,name=sid,proto3" json:"sid,omitempty"`
+	Cmd  uint64 `protobuf:"varint,2,opt,name=cmd,proto3" json:"cmd,omitempty"`
+	Code []byte `protobuf:"bytes,3,opt,name=code,proto3" json:"code,omitempty"`
+	Data []byte `protobuf:"bytes,4,opt,name=data,proto3" json:"data,omitempty"`
 }
 
 func (m *Message) Reset()         { *m = Message{} }
@@ -100,16 +97,16 @@ func init() {
 func init() { proto.RegisterFile("message.proto", fileDescriptor_33c57e4bae7b9afd) }
 
 var fileDescriptor_33c57e4bae7b9afd = []byte{
-	// 129 bytes of a gzipped FileDescriptorProto
+	// 138 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xe2, 0xe2, 0xcd, 0x4d, 0x2d, 0x2e,
 	0x4e, 0x4c, 0x4f, 0xd5, 0x2b, 0x28, 0xca, 0x2f, 0xc9, 0x17, 0x62, 0x87, 0x72, 0x95, 0x42, 0xb9,
 	0xd8, 0x7d, 0x21, 0x4c, 0x21, 0x01, 0x2e, 0xe6, 0xe2, 0xcc, 0x14, 0x09, 0x46, 0x05, 0x46, 0x0d,
 	0x96, 0x20, 0x10, 0x13, 0x24, 0x92, 0x9c, 0x9b, 0x22, 0xc1, 0x04, 0x11, 0x49, 0xce, 0x4d, 0x11,
 	0x12, 0xe2, 0x62, 0x49, 0xce, 0x4f, 0x49, 0x95, 0x60, 0x56, 0x60, 0xd4, 0xe0, 0x09, 0x02, 0xb3,
-	0x41, 0x62, 0x29, 0x89, 0x25, 0x89, 0x12, 0x2c, 0x10, 0x31, 0x10, 0xdb, 0x49, 0xe0, 0xc4, 0x23,
-	0x39, 0xc6, 0x0b, 0x8f, 0xe4, 0x18, 0x1f, 0x3c, 0x92, 0x63, 0x9c, 0xf1, 0x58, 0x8e, 0x21, 0x89,
-	0x0d, 0x6c, 0xb1, 0x31, 0x20, 0x00, 0x00, 0xff, 0xff, 0x9a, 0xd3, 0x24, 0x94, 0x89, 0x00, 0x00,
-	0x00,
+	0x41, 0x62, 0x29, 0x89, 0x25, 0x89, 0x12, 0x2c, 0x10, 0x31, 0x10, 0xdb, 0x49, 0xe2, 0xc4, 0x23,
+	0x39, 0xc6, 0x0b, 0x8f, 0xe4, 0x18, 0x1f, 0x3c, 0x92, 0x63, 0x9c, 0xf0, 0x58, 0x8e, 0xe1, 0xc2,
+	0x63, 0x39, 0x86, 0x1b, 0x8f, 0xe5, 0x18, 0x92, 0xd8, 0xc0, 0x0e, 0x30, 0x06, 0x04, 0x00, 0x00,
+	0xff, 0xff, 0xea, 0x31, 0x12, 0x6a, 0x91, 0x00, 0x00, 0x00,
 }
 
 func (m *Message) Marshal() (dAtA []byte, err error) {
@@ -132,10 +129,6 @@ func (m *Message) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
 	if len(m.Data) > 0 {
 		i -= len(m.Data)
 		copy(dAtA[i:], m.Data)
@@ -193,9 +186,6 @@ func (m *Message) Size() (n int) {
 	l = len(m.Data)
 	if l > 0 {
 		n += 1 + l + sovMessage(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
 	}
 	return n
 }
@@ -309,7 +299,7 @@ func (m *Message) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 4:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DataSource", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
 			}
 			var byteLen int
 			for shift := uint(0); ; shift += 7 {
@@ -353,7 +343,6 @@ func (m *Message) Unmarshal(dAtA []byte) error {
 			if (iNdEx + skippy) > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
 			iNdEx += skippy
 		}
 	}

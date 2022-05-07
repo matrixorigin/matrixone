@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build amd64
-// +build amd64
-
 package round
 
 import (
@@ -28,8 +25,8 @@ func float64RoundAvx2AsmZero(xs, rs []float64)
 
 func init() {
 	if cpu.X86.HasAVX2 {
-		roundFloat32 = roundFloat32Avx2
-		roundFloat64 = roundFloat64Avx2
+		RoundFloat32 = roundFloat32Avx2
+		RoundFloat64 = roundFloat64Avx2
 	}
 }
 

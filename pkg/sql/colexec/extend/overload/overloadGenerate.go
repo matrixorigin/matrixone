@@ -525,6 +525,7 @@ func GenerateCast() error {
 		Specials1   []lrt // left type is T_char or T_varchar
 		Specials2   []lrt // right type is T_char or T_varchar
 		Specials3   []lrt // conversion between char and varchar
+		Specials4   []lrt // cast ints to decimal128
 	}
 
 	var pTs = pts{
@@ -539,6 +540,7 @@ func GenerateCast() error {
 			{types.T_char, types.T_varchar, types.T_varchar},
 			{types.T_varchar, types.T_char, types.T_char},
 		},
+		[]lrt{},
 	}
 	// init source data
 	for _, typ1 := range numerics {
@@ -562,6 +564,12 @@ func GenerateCast() error {
 			{numType, types.T_char, types.T_char},
 			{numType, types.T_varchar, types.T_varchar},
 		}...)
+	}
+	ints := []types.T{
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+	}
+	for _, intType := range ints {
+		pTs.Specials4 = append(pTs.Specials4, lrt{intType, types.T_decimal128, types.T_decimal128})
 	}
 
 	file, err := os.OpenFile("cast.go", os.O_CREATE|os.O_WRONLY, 0755)

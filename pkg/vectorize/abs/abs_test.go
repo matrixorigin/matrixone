@@ -15,11 +15,12 @@
 package abs
 
 import (
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestAbsUint8(t *testing.T) {
+func TestAbsUnsigned(t *testing.T) {
 	//Test values
 	nums := []uint8{1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 7, 6, 5, 4, 3, 2, 1, 11, 2, 33, 22, 55, 44, 33, 22}
 	//Predefined Correct Values
@@ -28,9 +29,9 @@ func TestAbsUint8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]uint8, len(nums))
 	//Run abs function
-	newNums = absUint8(nums, newNums)
+	newNums = absUnsigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -44,9 +45,9 @@ func TestAbsUint16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]uint16, len(nums))
 	//Run abs function
-	newNums = absUint16(nums, newNums)
+	newNums = absUnsigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -60,9 +61,9 @@ func TestAbsUint32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]uint32, len(nums))
 	//Run abs function
-	newNums = absUint32(nums, newNums)
+	newNums = absUnsigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -76,9 +77,9 @@ func TestAbsUint64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]uint64, len(nums))
 	//Run abs function
-	newNums = absUint64(nums, newNums)
+	newNums = absUnsigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -92,9 +93,9 @@ func TestAbsInt8(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int8, len(nums))
 	//Run abs function
-	newNums = absInt8(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -108,9 +109,9 @@ func TestAbsInt16(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int16, len(nums))
 	//Run abs function
-	newNums = absInt16(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -124,9 +125,9 @@ func TestAbsInt32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int32, len(nums))
 	//Run abs function
-	newNums = absInt32(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -140,9 +141,9 @@ func TestAbsInt64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]int64, len(nums))
 	//Run abs function
-	newNums = absInt64(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -156,9 +157,9 @@ func TestAbsFloat32(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float32, len(nums))
 	//Run abs function
-	newNums = absFloat32(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }
@@ -172,9 +173,9 @@ func TestAbsFloat64(t *testing.T) {
 	//Init a new variable
 	newNums := make([]float64, len(nums))
 	//Run abs function
-	newNums = absFloat64(nums, newNums)
+	newNums = absSigned(nums, newNums)
 
-	for i, _ := range newNums {
+	for i := range newNums {
 		require.Equal(t, absNums[i], newNums[i])
 	}
 }

@@ -16,7 +16,7 @@ package aoedb
 
 import "strconv"
 
-var IdToNameFactory = new(idToNameFactory)
+var IDToNameFactory = new(idToNameFactory)
 
 type DBNameFactory interface {
 	Encode(interface{}) string
@@ -26,8 +26,8 @@ type DBNameFactory interface {
 type idToNameFactory struct{}
 
 func (f *idToNameFactory) Encode(v interface{}) string {
-	shardId := v.(uint64)
-	return strconv.FormatUint(shardId, 10)
+	shardID := v.(uint64)
+	return strconv.FormatUint(shardID, 10)
 }
 
 func (f *idToNameFactory) Decode(name string) (interface{}, error) {

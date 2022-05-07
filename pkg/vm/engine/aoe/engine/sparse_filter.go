@@ -14,8 +14,6 @@
 
 package engine
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine"
-
 const (
 	FileterNone = iota
 	FileterEq
@@ -31,7 +29,7 @@ func NewAoeSparseFilter(s *store, reader *aoeReader) *AoeSparseFilter {
 	return &AoeSparseFilter{reader: reader, storeReader: s}
 }
 
-func (a AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
+/*func (a AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
 	a.reader.filter = append(a.reader.filter, filterContext{
 		filterType: FileterEq,
 		attr: s,
@@ -99,4 +97,4 @@ func (a AoeSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Re
 		param2: i2,
 	})
 	return a.reader, nil
-}
+}*/

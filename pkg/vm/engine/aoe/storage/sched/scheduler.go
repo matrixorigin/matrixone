@@ -36,7 +36,7 @@ type BaseScheduler struct {
 func NewBaseScheduler(name string) *BaseScheduler {
 	scheduler := &BaseScheduler{
 		OpWorker:    *ops.NewOpWorker(name),
-		idAlloc:     GetNextEventId,
+		idAlloc:     GetNextEventID,
 		dispatchers: make(map[EventType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch

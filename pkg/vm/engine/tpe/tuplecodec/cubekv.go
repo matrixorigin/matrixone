@@ -69,6 +69,9 @@ type CubeKV struct {
 	limit                    uint64
 	tpeDedupSetBatchTimeout  time.Duration
 	tpeDedupSetBatchTryCount int
+
+	tpeScanTimeout time.Duration
+	tpeScanTryCount int
 }
 
 func initIDPool(cd driver.CubeDriver, typ string, pool *IDPool) error {
@@ -103,7 +106,7 @@ func initIDPool(cd driver.CubeDriver, typ string, pool *IDPool) error {
 	return nil
 }
 
-func NewCubeKV(cd driver.CubeDriver, limit uint64, tpeDedupSetBatchTimeout time.Duration, tpeDedupSetBatchTryCount int) (*CubeKV, error) {
+func NewCubeKV(cd driver.CubeDriver, limit uint64, tpeDedupSetBatchTimeout time.Duration, tpeDedupSetBatchTryCount int, tpeScanTimeout time.Duration, tpeScanTryCount int) (*CubeKV, error) {
 	if cd == nil {
 		return nil, errorCubeDriverIsNull
 	}
@@ -111,7 +114,9 @@ func NewCubeKV(cd driver.CubeDriver, limit uint64, tpeDedupSetBatchTimeout time.
 		Cube:                     cd,
 		limit:                    limit,
 		tpeDedupSetBatchTimeout:  tpeDedupSetBatchTimeout,
-		tpeDedupSetBatchTryCount: tpeDedupSetBatchTryCount}
+		tpeDedupSetBatchTryCount: tpeDedupSetBatchTryCount,
+		tpeScanTimeout: tpeScanTimeout,
+		tpeScanTryCount: tpeScanTryCount}
 
 	err := initIDPool(cd, DATABASE_ID, &ck.dbIDPool)
 	if err != nil {
@@ -830,7 +835,7 @@ func (ck *CubeKV) GetRange(startKey TupleKey, endKey TupleKey) ([]TupleValue, er
 	var values []TupleValue
 	lastKey := startKey
 	for {
-		_, retValues, complete, nextScanKey, err := ck.Cube.TpeScan(lastKey, endKey, nil, math.MaxUint64, false)
+		_, retValues, complete, nextScanKey, err := ck.Cube.TpeScan(lastKey, endKey, nil, math.MaxUint64, false, ck.tpeScanTryCount, ck.tpeScanTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -862,7 +867,7 @@ func (ck *CubeKV) GetRangeWithLimit(startKey TupleKey, endKey TupleKey, limit ui
 
 	for readCnt < limit {
 		needCnt := limit - readCnt
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, nil, needCnt, true)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, nil, needCnt, true, ck.tpeScanTryCount, ck.tpeScanTimeout)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}
@@ -897,7 +902,7 @@ func (ck *CubeKV) GetRangeWithPrefixLimit(startKey TupleKey, endKey TupleKey, pr
 
 	for readCnt < limit {
 		needCnt := limit - readCnt
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, prefix, needCnt, true)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpeScan(lastKey, endKey, prefix, needCnt, true, ck.tpeScanTryCount, ck.tpeScanTimeout)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}
@@ -950,7 +955,7 @@ func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefix
 			logutil.Warnf("the lastKey does not has the prefix anymore. quit")
 			break
 		}
-		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey, prefixLen, prefixEnd, needKeyOnly, needCnt)
+		scanKeys, scanValues, complete, nextScanKey, err = ck.Cube.TpePrefixScan(lastKey, prefixLen, prefixEnd, needKeyOnly, needCnt, ck.tpeScanTryCount, ck.tpeScanTimeout)
 		if err != nil {
 			return nil, nil, false, nil, err
 		}
@@ -977,7 +982,11 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 	wantRange := Range{startKey: startKey, endKey: endKey}
 
 	var shardInfos []ShardInfo
-	var stores = make(map[uint64]string)
+	type Store struct {
+		addr   string
+		shards []metapb.Shard
+	}
+	var store2shards = make(map[uint64]Store)
 
 	logutil.Infof("origin startKey %v endKey %v", startKey, endKey)
 
@@ -996,8 +1005,11 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 		}
 
 		if ok {
-			if _, exist := stores[store.ID]; !exist {
-				stores[store.ID] = store.ClientAddress
+			if stuff, exist := store2shards[store.ID]; !exist {
+				store2shards[store.ID] = Store{store.ClientAddress, []metapb.Shard{shard}}
+			} else {
+				stuff.shards = append(stuff.shards, shard)
+				store2shards[store.ID] = Store{stuff.addr, stuff.shards}
 			}
 			shardInfos = append(shardInfos, ShardInfo{
 				startKey: shard.GetStart(),
@@ -1042,12 +1054,13 @@ func (ck *CubeKV) GetShardsWithRange(startKey TupleKey, endKey TupleKey) (interf
 
 	//all nodes that hold the table
 	var nodes []ShardNode
-	for id, addr := range stores {
-		if !duplicateFunc(nodes, addr) {
+	for id, sh := range store2shards {
+		if !duplicateFunc(nodes, sh.addr) {
 			nodes = append(nodes, ShardNode{
-				Addr:         addr,
+				Addr:         sh.addr,
 				StoreIDbytes: Uint64ToString(id),
 				StoreID:      id,
+				Shards:       CubeShards{sh.shards},
 			})
 		}
 	}

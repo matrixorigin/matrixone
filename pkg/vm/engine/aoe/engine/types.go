@@ -44,11 +44,15 @@ type SegmentInfo struct {
 	Node     engine.Node
 }
 
-type filterContext struct {
+type filterExtent struct {
 	filterType int32
 	attr       string
 	param1     interface{}
-	param2     interface{}
+}
+
+type filterContext struct {
+	extent []filterExtent
+	blocks []aoe.Block
 }
 
 type aoeReader struct {
@@ -95,6 +99,34 @@ type worker struct {
 type AoeSparseFilter struct {
 	storeReader *store
 	reader      *aoeReader
+}
+
+func (a AoeSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Ne(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Lt(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Le(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Gt(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Ge(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (a AoeSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Reader, error) {
+	panic("implement me")
 }
 
 type database struct {

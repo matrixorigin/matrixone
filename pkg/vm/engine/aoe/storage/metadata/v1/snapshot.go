@@ -180,8 +180,11 @@ func (ss *dbSnapshoter) ReAllocId(allocator *Sequence, view *Database) error {
 	ss.tranId = allocator.NextUncommitId()
 	processor := newReAllocIdProcessor(allocator, ss.tranId)
 	ss.addresses = processor.trace
-	processor.OnDatabase(view)
-	err := view.RecurLoopLocked(processor)
+	err := processor.OnDatabase(view)
+	if err != nil {
+		return err
+	}
+	err = view.RecurLoopLocked(processor)
 	if err != nil {
 		return err
 	}
@@ -220,8 +223,8 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 	if err = ss.view.Database.rebuild(true, false); err != nil {
 		return err
 	}
-	ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
-	return nil
+	err = ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
+	return err
 }
 
 func (ss *dbSnapshoter) Preprocess(processor Processor) error {

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	storageSched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type Splitter struct {
@@ -54,7 +55,7 @@ func NewSplitter(database *metadata.Database, newDBNames []string, rename Rename
 		flushsegs:   make([]*metadata.Segment, 0),
 	}
 	splitter.dbSpecs = make([]*metadata.DBSpec, len(splitter.keys))
-	for i, _ := range splitter.dbSpecs {
+	for i := range splitter.dbSpecs {
 		dbSpec := new(metadata.DBSpec)
 		dbSpec.Name = newDBNames[i]
 		splitter.dbSpecs[i] = dbSpec
@@ -185,7 +186,10 @@ func (splitter *Splitter) Commit() error {
 		panic(err)
 	}
 	err = splitter.msplitter.Commit()
-	splitter.dbImpl.Opts.EventListener.OnPostSplit(err, splitter.event)
+	if err != nil {
+		return err
+	}
+	err = splitter.dbImpl.Opts.EventListener.OnPostSplit(err, splitter.event)
 	return err
 }
 
@@ -206,7 +210,10 @@ func (splitter *Splitter) ScheduleEvents(d *DB) error {
 		segment := table.StrongRefSegment(meta.Id)
 		flushCtx := &sched.Context{Opts: d.Opts}
 		flushEvent := sched.NewFlushSegEvent(flushCtx, segment)
-		d.Scheduler.Schedule(flushEvent)
+		err := d.Scheduler.Schedule(flushEvent)
+		if err != nil && err != storageSched.ErrSchedule {
+			return err
+		}
 	}
 	return nil
 }

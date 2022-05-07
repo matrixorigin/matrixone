@@ -205,7 +205,37 @@ func initCast() {
             },
         },
     {{end}}
-
+    // cast ints to decimal128
+    {{range .Specials4}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.T_decimal128,
+            ReturnType: types.T_decimal128,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 defer func() {
+                      if lv.Ref == 0 {
+                          process.Put(proc, lv)
+                      }
+                 }()
+                 resultScale := int32(0)
+                 resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+                 lvs := lv.Col.([]L_GO_TYPE)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal128Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 if _, err := typecast.{.LTYP}ToDecimal128(lvs, rs); err != nil {
+                      process.Put(proc, vec)
+                      return nil, err
+                 }
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 return vec, nil
+             },
+        },
+    {{end}}
 		{
 			LeftType:   types.T_varchar,
 			RightType:  types.T_date,
@@ -217,19 +247,25 @@ func initCast() {
 					}
 				}()
 				vs := lv.Col.(*types.Bytes)
-				col := make([]types.Date, 0, len(vs.Lengths))
-				for i := range vs.Lengths {
-					varcharValue := vs.Get(int64(i))
-					data, err := types.ParseDate(string(varcharValue))
-					if err != nil {
-						return nil, err
-					}
-					col = append(col, data)
+				vec, err := process.Get(proc, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)), rv.Typ)
+				if err != nil {
+					return nil, err
 				}
-				vec := vector.New(rv.Typ)
-				vec.Col = col
+				rs := encoding.DecodeDateSlice(vec.Data)
+				rs = rs[:len(vs.Lengths)]
+				for i := range vs.Lengths {
+					if nulls.Contains(lv.Nsp, uint64(i)) {
+						continue
+					}
+					varcharValue := vs.Get(int64(i))
+					data, err2 := types.ParseDate(string(varcharValue))
+					if err2 != nil {
+						return nil, err2
+					}
+					rs[i] = data
+				}
 				nulls.Set(vec.Nsp, lv.Nsp)
-				vector.SetCol(vec, col)
+				vector.SetCol(vec, rs)
 				return vec, nil
 			},
 		},
@@ -239,27 +275,113 @@ func initCast() {
             RightType:  types.T_datetime,
             ReturnType: types.T_datetime,
             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
-                defer func() {
-                    if lv.Ref == 0 {
-                        process.Put(proc, lv)
-                    }
-                }()
-                vs := lv.Col.(*types.Bytes)
-                col := make([]types.Datetime, 0, len(vs.Lengths))
-                for i := range vs.Lengths {
-                    varcharValue := vs.Get(int64(i))
-                    data, err := types.ParseDatetime(string(varcharValue))
-                    if err != nil {
-                        return nil, err
-                    }
-                    col = append(col, data)
-                }
-                vec := vector.New(rv.Typ)
-                vec.Col = col
-                nulls.Set(vec.Nsp, lv.Nsp)
-                vector.SetCol(vec, col)
-                return vec, nil
+				defer func() {
+					if lv.Ref == 0 {
+						process.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.(*types.Bytes)
+				vec, err := process.Get(proc, int64(rv.Typ.Oid.FixedLength()*len(vs.Lengths)), rv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				rs := encoding.DecodeDatetimeSlice(vec.Data)
+				rs = rs[:len(vs.Lengths)]
+				for i := range vs.Lengths {
+					if nulls.Contains(lv.Nsp, uint64(i)) {
+						continue
+					}
+					varcharValue := vs.Get(int64(i))
+					data, err2 := types.ParseDatetime(string(varcharValue))
+					if err2 != nil {
+						return nil, err2
+					}
+					rs[i] = data
+				}
+				nulls.Set(vec.Nsp, lv.Nsp)
+				vector.SetCol(vec, rs)
+				return vec, nil
             },
         },
+
+        {
+             LeftType:   types.T_decimal64,
+             RightType:  types.T_decimal128,
+             ReturnType: types.T_decimal128,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 defer func() {
+                      if lv.Ref == 0 {
+                          process.Put(proc, lv)
+                      }
+                 }()
+                 lvScale := lv.Typ.Scale
+                 resultScale := lvScale
+                 resultTyp := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: resultScale}
+                 lvs := lv.Col.([]types.Decimal64)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal128Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 if _, err := typecast.Decimal64ToDecimal128(lvs, rs); err != nil {
+                      process.Put(proc, vec)
+                      return nil, err
+                 }
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 return vec, nil
+             },
+        },
+
+         {
+             LeftType:   types.T_decimal64,
+             RightType:  types.T_decimal64,
+             ReturnType: types.T_decimal64,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 if lv.Ref == 0 {
+                      return lv, nil
+                 }
+                 resultTyp := lv.Typ
+                 lvs := lv.Col.([]types.Decimal64)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal64Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 copy(rs, lvs)
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 vec.Typ = resultTyp
+                 return vec, nil
+             },
+         },
+
+         {
+             LeftType:   types.T_decimal128,
+             RightType:  types.T_decimal128,
+             ReturnType: types.T_decimal128,
+             Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+                 if lv.Ref == 0 {
+                      return lv, nil
+                 }
+                 resultTyp := lv.Typ
+                 lvs := lv.Col.([]types.Decimal128)
+                 vec, err := process.Get(proc, int64(resultTyp.Size)*int64(len(lvs)), resultTyp)
+                 if err != nil {
+                      return nil, err
+                 }
+                 rs := encoding.DecodeDecimal128Slice(vec.Data)
+                 rs = rs[:len(lvs)]
+                 copy(rs, lvs)
+                 nulls.Set(vec.Nsp, lv.Nsp)
+                 vector.SetCol(vec, rs)
+                 vec.Typ = resultTyp
+                 return vec, nil
+             },
+         },
+
     }
+
 }

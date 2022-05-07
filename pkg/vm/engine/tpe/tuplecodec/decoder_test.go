@@ -18,14 +18,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"math"
+	"reflect"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
 	"github.com/smartystreets/goconvey/convey"
-	"math"
-	"reflect"
-	"testing"
 )
 
 type args struct {

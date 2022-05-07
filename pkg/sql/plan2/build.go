@@ -24,17 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getColumnIndex(tableDef *plan.TableDef, name string) int32 {
-	for idx, col := range tableDef.Cols {
-		if col.Name == name {
-			return int32(idx)
-		}
-	}
-	return -1
-}
-
 func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
-	query := &Query{}
+	query := &Query{
+		Steps: []int32{0},
+	}
 	err := buildStatement(stmt, ctx, query)
 	if err != nil {
 		return nil, err
@@ -43,25 +36,26 @@ func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
 }
 
 func buildStatement(stmt tree.Statement, ctx CompilerContext, query *Query) error {
+	selectCtx := &SelectContext{
+		tableAlias:  make(map[string]string),
+		columnAlias: make(map[string]*plan.Expr),
+	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return buildSelect(stmt, ctx, query)
+		query.StmtType = plan.Query_SELECT
+		return buildSelect(stmt, ctx, query, selectCtx)
 	case *tree.ParenSelect:
-		return buildSelect(stmt.Select, ctx, query)
+		query.StmtType = plan.Query_SELECT
+		return buildSelect(stmt.Select, ctx, query, selectCtx)
 	case *tree.Insert:
+		query.StmtType = plan.Query_INSERT
 		return buildInsert(stmt, ctx, query)
 	case *tree.Update:
+		query.StmtType = plan.Query_UPDATE
 		return buildUpdate(stmt, ctx, query)
 	case *tree.Delete:
+		query.StmtType = plan.Query_DELETE
 		return buildDelete(stmt, ctx, query)
 	}
 	return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
-}
-
-func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
-	return nil
-}
-
-func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
-	return nil
 }

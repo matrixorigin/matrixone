@@ -1,5 +1,5 @@
 syntax = "proto3";
-package plan;
+option go_package = "/plan";
 
 message Type {
 	enum TypeId {
@@ -66,7 +66,7 @@ message Type {
 		TUPLE       = 201;
 	}
 
-	uint32 id           = 1;
+	TypeId id           = 1;
 	bool nullable		= 2;
 	int32 width			= 3;
 	int32 precision		= 4;
@@ -95,9 +95,29 @@ message VarRef {
 
 // Reference a column in the proj list of a node.
 message ColRef {
+	string name   = 1;
+	int32 rel_pos = 2;
+	int32 col_pos = 3;
+}
+
+// Reference a correlated column in the proj list of a node.
+message CorrColRef {
 	string name = 1;
 	int32 rel_pos = 2;
 	int32 col_pos = 3;
+	int32 node_id = 4;
+}
+
+// ExprList is a type of Expr
+message ExprList {
+	repeated Expr list = 1;
+}
+
+// Reference a subquery
+message SubQuery {
+	int32 node_id   = 1;
+	bool is_correlated = 2;
+	bool is_scalar  = 3;
 }
 
 // Object ref, reference a object in database, 4 part name.
@@ -142,13 +162,17 @@ message Function {
 }
 
 message Expr {
-	Type typ	= 1;
+	Type typ	 = 1;
+	string alias = 2;
 	oneof expr {
-		Const		c	= 2;
-		ParamRef	p	= 3;
-		VarRef		v	= 4;
-		ColRef		col = 5;
-		Function	f	= 6;
+		Const		c	  = 3;
+		ParamRef	p	  = 4;
+		VarRef		v	  = 5;
+		ColRef		col   = 6;
+		Function	f	  = 7;
+		ExprList    list  = 8;
+		SubQuery    sub   = 9;
+		CorrColRef  corr  = 10;
 	}
 }
 
@@ -197,16 +221,21 @@ message OrderBySpec {
 		INTERNAL    = 16;
 	}
 
-	repeated Expr order_by = 1;
-	repeated int32 order_by_collations = 2;
-	repeated OrderByFlag order_by_flags = 3;
+	Expr order_by = 1;
+	string order_by_collations = 2;
+	OrderByFlag order_by_flags = 3;
 }
 
 message WindowSpec {
 	repeated Expr partition_by = 1;
-	OrderBySpec odery_by = 2;
+	repeated OrderBySpec odery_by = 2;
 	int32 lead = 3;
 	int32 lag  = 4;
+}
+
+message UpdateList {
+	repeated Expr columns  = 1;
+	repeated Expr values   = 2; 
 }
 
 message Node {
@@ -248,6 +277,10 @@ message Node {
 
 		// Misc
 		ASSERT			= 50; 
+
+		//
+		INSERT          = 51;
+		UPDATE  		= 52;
 	}
 
 	enum JoinFlag {
@@ -270,21 +303,22 @@ message Node {
 	int32 node_id		= 2;
 	Cost cost			= 3;
 
-	repeated Expr project_list	= 4;
-	repeated int32 children		= 5;
-	JoinFlag join_type			= 6;
-	repeated Expr on_list		= 7;
-	repeated Expr where_list	= 8;
-	repeated Expr group_by		= 9;
-	repeated Expr grouping_set	= 10;
-	OrderBySpec order_by        = 11;
-	WindowSpec win_spec = 12;
-	Expr limit			= 13;
-	Expr offset			= 14;
-	TableDef table_def	= 15;
-	ObjectRef obj_ref	= 16;
-	RowsetData rowset_data = 17;
-	string extra_options   = 18;
+	repeated Expr project_list		= 4;
+	repeated int32 children			= 5;
+	JoinFlag join_type				= 6;
+	repeated Expr on_list			= 7;
+	repeated Expr where_list		= 8;
+	repeated Expr group_by			= 9;
+	repeated Expr grouping_set	    = 10;
+	repeated OrderBySpec order_by   = 11;
+	UpdateList update_list = 12;
+	WindowSpec win_spec = 13;
+	Expr limit			= 14;
+	Expr offset			= 15;
+	TableDef table_def	= 16;
+	ObjectRef obj_ref	= 17;
+	RowsetData rowset_data = 18;
+	string extra_options   = 19;
 }
 
 enum StatementType {

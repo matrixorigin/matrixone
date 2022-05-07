@@ -80,7 +80,7 @@ func (b *build) buildProjection(exprs tree.SelectExprs, proj *Projection, qry *Q
 func (b *build) buildProjectionExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, e.String())
 	case *tree.ParenExpr:
 		return b.buildProjectionExpr(e.Expr, qry)
 	case *tree.OrExpr:

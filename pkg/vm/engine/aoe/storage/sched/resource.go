@@ -17,11 +17,11 @@ package sched
 type ResourceType uint16
 
 const (
-	ResT_Invalid ResourceType = iota
-	ResT_IO
-	ResT_CPU
-	ResT_Meta
-	ResT_Data
+	ResTInvalid ResourceType = iota
+	ResTIO
+	ResTCPU
+	ResTMeta
+	ResTData
 )
 
 type BaseResource struct {

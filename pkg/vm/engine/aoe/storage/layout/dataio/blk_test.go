@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -155,7 +156,7 @@ func initTestEnv(t *testing.T) string {
 //	//assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
 //	for bidx := 0; bidx < blkCnt; bidx++ {
 //		blk := segHolder.StrongRefBlock(uint64(bidx))
-//		for i, _ := range blk.Indices {
+//		for i := range blk.Indices {
 //			node := blk.GetIndexNode(i)
 //			mnode := node.GetManagedNode()
 //			zm := mnode.DataNode.(*index.BlockZoneMapIndex)
@@ -205,7 +206,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	vec0 := vector.NewStdVector(vecType, 4)
 	defer vec0.Close()
 	vec1 := vector.NewStrVector(types.Type{
-		Oid:       types.T(types.T_varchar),
+		Oid:       types.T_varchar,
 		Size:      24,
 		Width:     0,
 		Precision: 0}, 4)
@@ -218,6 +219,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	str3 := "str3"
 	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
 	err = vec1.Append(len(strs), strs)
+	assert.Nil(t, err)
 
 	catalog := metadata.MockCatalog(dir, capacity, uint64(10), nil, nil)
 	schema := metadata.MockSchema(2)
@@ -240,7 +242,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	segFile := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
 	f := NewBlockFile(segFile, id, nil)
 	bufs := make([][]byte, 2)
-	for i, _ := range bufs {
+	for i := range bufs {
 		sz := f.PartSize(uint64(i), id, false)
 		osz := f.PartSize(uint64(i), id, true)
 		node := common.GPool.Alloc(uint64(sz))
@@ -286,7 +288,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	segFile1 := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
 	nb := NewBlockFile(segFile1, id, nil)
 	bufs = make([][]byte, 2)
-	for i, _ := range bufs {
+	for i := range bufs {
 		sz := nb.PartSize(uint64(i), id, false)
 		osz := nb.PartSize(uint64(i), id, true)
 		buf := make([]byte, sz)
@@ -295,10 +297,12 @@ func TestIVectorNodeWriter(t *testing.T) {
 		node1 := common.GPool.Alloc(originSize)
 		defer common.GPool.Free(node1)
 		_, err = compress.Decompress(buf, node1.Buf[:originSize], compress.Lz4)
+		assert.Nil(t, err)
 		data := node1.Buf[:originSize]
 		t1 := encoding.DecodeType(data[:encoding.TypeSize])
 		v := gvector.New(t1)
 		err = v.Read(data)
+		assert.Nil(t, err)
 		logutil.Infof("nb.v is %v.\n", v)
 		switch i {
 		case 0:

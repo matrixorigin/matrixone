@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
+// Transfer is used to transfer a Scope to protocol.Scope
 func Transfer(s *Scope) protocol.Scope {
 	var ps protocol.Scope
 
@@ -45,6 +46,7 @@ func Transfer(s *Scope) protocol.Scope {
 	}
 	ps.NodeInfo.Id = s.NodeInfo.Id
 	ps.NodeInfo.Addr = s.NodeInfo.Addr
+	ps.NodeInfo.Data = s.NodeInfo.Data
 	ps.PreScopes = make([]protocol.Scope, len(s.PreScopes))
 	for i := range s.PreScopes {
 		ps.PreScopes[i] = Transfer(s.PreScopes[i])
@@ -52,6 +54,7 @@ func Transfer(s *Scope) protocol.Scope {
 	return ps
 }
 
+// Untransfer is used to transfer a protocol.Scope to Scope
 func Untransfer(s *Scope, ps protocol.Scope) {
 	UntransferIns(s.Instructions, ps.Ins)
 	s.Magic = ps.Magic
@@ -64,12 +67,14 @@ func Untransfer(s *Scope, ps protocol.Scope) {
 	}
 	s.NodeInfo.Id = ps.NodeInfo.Id
 	s.NodeInfo.Addr = ps.NodeInfo.Addr
+	s.NodeInfo.Data = ps.NodeInfo.Data
 
 	for i := 0; i < len(s.PreScopes); i++ {
 		Untransfer(s.PreScopes[i], ps.PreScopes[i])
 	}
 }
 
+// UntransferIns is used to transfer Instructions
 func UntransferIns(ins, pins vm.Instructions) {
 	for i, in := range ins {
 		switch in.Op {

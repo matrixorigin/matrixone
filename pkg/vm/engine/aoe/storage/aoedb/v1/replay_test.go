@@ -61,7 +61,8 @@ func getSnapshotPath(dir string, t *testing.T) string {
 
 func prepareSnapshotPath(dir string, t *testing.T) string {
 	path := getSnapshotPath(dir, t)
-	os.MkdirAll(path, os.FileMode(0755))
+	err := os.MkdirAll(path, os.FileMode(0755))
+	assert.Nil(t, err)
 	return path
 }
 
@@ -98,7 +99,7 @@ func initTestDBWithOptions(t *testing.T, dir, dbName string, blockRows, segBlock
 func CreateDBMutationCtx(database *metadata.Database, gen *shard.MockIndexAllocator) *DBMutationCtx {
 	ctx := &DBMutationCtx{
 		DB:     database.Name,
-		Id:     gen.Alloc(database.GetShardId()),
+		ID:     gen.Alloc(database.GetShardId()),
 		Offset: 0,
 		Size:   1,
 	}
@@ -150,7 +151,7 @@ func TestReplay1(t *testing.T) {
 	createTableCtx.DBMutationCtx = *CreateDBMutationCtx(database, gen)
 	_, err = inst1.CreateTable(createTableCtx)
 	assert.Nil(t, err)
-	ckId := gen.Get(database.GetShardId())
+	ckID := gen.Get(database.GetShardId())
 
 	rows := inst1.Store.Catalog.Cfg.BlockMaxRows / 10
 	ck2 := mock.MockBatch(schema2.Types(), rows)
@@ -163,14 +164,15 @@ func TestReplay1(t *testing.T) {
 
 	dropCtx := CreateTableMutationCtx(database, gen, schema1.Name)
 	_, err = inst1.DropTable(dropCtx)
-	dropIdx := dropCtx.Id
+	assert.Nil(t, err)
+	dropIdx := dropCtx.ID
 
 	testutils.WaitExpect(200, func() bool {
 		return database.UncheckpointedCnt() == 1 && t1.IsHardDeleted()
 	})
 	assert.Equal(t, 1, database.UncheckpointedCnt())
 	assert.True(t, t1.IsHardDeleted())
-	assert.Equal(t, ckId, database.GetCheckpointId())
+	assert.Equal(t, ckID, database.GetCheckpointId())
 	t.Log(inst1.Store.Catalog.PString(metadata.PPL0, 0))
 
 	err = inst1.ForceCompactCatalog()
@@ -184,7 +186,7 @@ func TestReplay1(t *testing.T) {
 
 	db2, err := inst.Store.Catalog.SimpleGetDatabaseByName(database.Name)
 	assert.Nil(t, err)
-	assert.Equal(t, ckId, db2.GetCheckpointId())
+	assert.Equal(t, ckID, db2.GetCheckpointId())
 	t2Replayed := db2.GetTable(t1.Id)
 	assert.True(t, t2Replayed.IsHardDeleted())
 	t.Log(db2.GetIdempotentIndex().String())
@@ -215,7 +217,7 @@ func TestReplay2(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB1(t)
 	schema := metadata.MockSchema(2)
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createTableCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -253,7 +255,7 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 
 	testutils.WaitExpect(200, func() bool {
-		return gen.Get(shardId) == database.GetCheckpointId()
+		return gen.Get(shardID) == database.GetCheckpointId()
 	})
 	time.Sleep(time.Duration(50) * time.Millisecond)
 
@@ -263,8 +265,8 @@ func TestReplay2(t *testing.T) {
 	inst, _, _ = initTestDB2(t)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1, 0))
-	segmentedIdx := inst.GetShardCheckpointId(shardId)
-	assert.Equal(t, gen.Get(shardId), segmentedIdx)
+	segmentedIdx := inst.GetShardCheckpointId(shardID)
+	assert.Equal(t, gen.Get(shardID), segmentedIdx)
 
 	meta, err = inst.Opts.Meta.Catalog.SimpleGetTableByName(database.Name, schema.Name)
 	assert.Nil(t, err)
@@ -296,7 +298,7 @@ func TestReplay3(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB1(t)
 	schema := metadata.MockSchema(2)
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -329,7 +331,7 @@ func TestReplay3(t *testing.T) {
 
 	ibat2 := mock.MockBatch(meta.Schema.Types(), inst.Store.Catalog.Cfg.BlockMaxRows)
 	insertFn2 := func() {
-		appendCtx.Id = gen.Alloc(shardId)
+		appendCtx.ID = gen.Alloc(shardID)
 		appendCtx.Offset = 0
 		appendCtx.Size = 2
 		appendCtx.Data = ibat
@@ -346,9 +348,9 @@ func TestReplay3(t *testing.T) {
 	assert.Equal(t, irows*5, uint64(rel.Rows()))
 	t.Log(rel.Rows())
 	testutils.WaitExpect(200, func() bool {
-		return gen.Get(shardId)-1 == database.GetCheckpointId()
+		return gen.Get(shardID)-1 == database.GetCheckpointId()
 	})
-	assert.Equal(t, gen.Get(shardId)-1, database.GetCheckpointId())
+	assert.Equal(t, gen.Get(shardID)-1, database.GetCheckpointId())
 	time.Sleep(time.Duration(80) * time.Millisecond)
 
 	rel.Close()
@@ -361,8 +363,8 @@ func TestReplay3(t *testing.T) {
 	assert.Equal(t, database.GetSize(), replayDatabase.GetSize())
 	assert.Equal(t, database.GetCount(), replayDatabase.GetCount())
 
-	segmentedIdx := inst.GetShardCheckpointId(shardId)
-	assert.Equal(t, gen.Get(shardId)-1, segmentedIdx)
+	segmentedIdx := inst.GetShardCheckpointId(shardID)
+	assert.Equal(t, gen.Get(shardID)-1, segmentedIdx)
 
 	rel, err = inst.Relation(database.Name, meta.Schema.Name)
 	t.Log(rel.Rows())
@@ -370,13 +372,13 @@ func TestReplay3(t *testing.T) {
 	assert.Equal(t, int64(irows*4), rel.Rows())
 
 	insertFn3 := func() {
-		appendCtx.Id = segmentedIdx + 1
+		appendCtx.ID = segmentedIdx + 1
 		appendCtx.Offset = 0
 		appendCtx.Size = 2
 		appendCtx.Data = ibat
 		err = inst.Append(appendCtx)
 		assert.Equal(t, db.ErrIdempotence, err)
-		appendCtx.Id = segmentedIdx + 1
+		appendCtx.ID = segmentedIdx + 1
 		appendCtx.Offset = 1
 		appendCtx.Size = 2
 		appendCtx.Data = ibat2
@@ -410,7 +412,7 @@ func TestReplay4(t *testing.T) {
 	initTestEnv(t)
 	inst, gen, database := initTestDB1(t)
 	schema := metadata.MockSchema(2)
-	shardId := database.GetShardId()
+	shardID := database.GetShardId()
 	createCtx := &CreateTableCtx{
 		DBMutationCtx: *CreateDBMutationCtx(database, gen),
 		Schema:        schema,
@@ -421,7 +423,7 @@ func TestReplay4(t *testing.T) {
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), uint64(vector.Length(ck.Vecs[0])))
+	assert.Equal(t, rows, uint64(vector.Length(ck.Vecs[0])))
 	insertCnt := 4
 	appendCtx := new(AppendCtx)
 	for i := 0; i < insertCnt; i++ {
@@ -439,10 +441,10 @@ func TestReplay4(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(200, func() bool {
-		return uint64(insertCnt) == inst.GetShardCheckpointId(shardId)
+	testutils.WaitExpect(2000, func() bool {
+		return uint64(insertCnt) == inst.GetShardCheckpointId(shardID)
 	})
-	segmentedIdx := inst.GetShardCheckpointId(shardId)
+	segmentedIdx := inst.GetShardCheckpointId(shardID)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt), segmentedIdx)
 
@@ -460,7 +462,8 @@ func TestReplay4(t *testing.T) {
 
 	inst, _, _ = initTestDB2(t)
 
-	os.Stat(invalidFileName)
+	_, err = os.Stat(invalidFileName)
+	assert.NotNil(t, err)
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
@@ -481,11 +484,11 @@ func TestReplay4(t *testing.T) {
 	assert.False(t, replayIndex.IsApplied())
 
 	for i := int(segmentedIdx) + 1; i < int(segmentedIdx)+1+insertCnt; i++ {
-		appendCtx.Id = uint64(i)
+		appendCtx.ID = uint64(i)
 		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
 	}
-	createCtx.Id = segmentedIdx + 1 + uint64(insertCnt)
+	createCtx.ID = segmentedIdx + 1 + uint64(insertCnt)
 	_, err = inst.CreateTable(createCtx)
 	assert.NotNil(t, err)
 
@@ -498,10 +501,10 @@ func TestReplay4(t *testing.T) {
 	preSegmentedIdx := segmentedIdx
 
 	testutils.WaitExpect(200, func() bool {
-		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(shardId)
+		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(shardID)
 	})
 
-	segmentedIdx = inst.GetShardCheckpointId(shardId)
+	segmentedIdx = inst.GetShardCheckpointId(shardID)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
 
@@ -545,8 +548,9 @@ func TestReplay5(t *testing.T) {
 	defer data.Unref()
 
 	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
 	assert.Equal(t, rows, data.GetRowCount())
-	assert.Equal(t, createCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, createCtx.ID, meta.Database.GetCheckpointId())
 	assert.Equal(t, 1, meta.Database.UncheckpointedCnt())
 
 	err = inst.FlushDatabase(meta.Database.Name)
@@ -555,6 +559,6 @@ func TestReplay5(t *testing.T) {
 	// testutils.WaitExpect(200, func() bool {
 	// 	return meta.Database.UncheckpointedCnt() == 0
 	// })
-	assert.Equal(t, appendCtx.Id, meta.Database.GetCheckpointId())
+	assert.Equal(t, appendCtx.ID, meta.Database.GetCheckpointId())
 	assert.Equal(t, 0, meta.Database.UncheckpointedCnt())
 }

@@ -51,7 +51,8 @@ func TestBasicOps(t *testing.T) {
 
 	eCtx := &Context{Opts: opts, Waitable: true}
 	createBlkE := NewCreateBlkEvent(eCtx, tbl, nil, nil)
-	opts.Scheduler.Schedule(createBlkE)
+	err = opts.Scheduler.Schedule(createBlkE)
+	assert.Nil(t, err)
 	err = createBlkE.WaitDone()
 	assert.Nil(t, err)
 
@@ -59,7 +60,8 @@ func TestBasicOps(t *testing.T) {
 	assert.NotNil(t, blk1)
 	assert.Equal(t, metadata.OpCreate, blk1.CommitInfo.Op)
 
-	blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
+	err = blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
+	assert.Nil(t, err)
 
 	schedCtx := &Context{
 		Opts:     opts,
@@ -68,7 +70,8 @@ func TestBasicOps(t *testing.T) {
 	commitCtx := &Context{Opts: opts, Waitable: true}
 	commitCtx.AddMetaScope()
 	commitE := NewCommitBlkEvent(commitCtx, blk1)
-	opts.Scheduler.Schedule(commitE)
+	err = opts.Scheduler.Schedule(commitE)
+	assert.Nil(t, err)
 	err = commitE.WaitDone()
 	assert.Nil(t, err)
 
@@ -78,7 +81,8 @@ func TestBasicOps(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		createBlkE = NewCreateBlkEvent(schedCtx, blk1.Segment.Table, nil, nil)
-		opts.Scheduler.Schedule(createBlkE)
+		err = opts.Scheduler.Schedule(createBlkE)
+		assert.Nil(t, err)
 		err = createBlkE.WaitDone()
 		assert.Nil(t, err)
 	}

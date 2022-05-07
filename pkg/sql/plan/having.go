@@ -42,7 +42,7 @@ func (b *build) buildHaving(stmt *tree.Where, qry *Query) (extend.Extend, error)
 func (b *build) buildHavingExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildValue(e.Value)
+		return buildValue(e.Value, e.String())
 	case *tree.ParenExpr:
 		return b.buildHavingExpr(e.Expr, qry)
 	case *tree.OrExpr:
