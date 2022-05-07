@@ -4,7 +4,7 @@ name: Build MatrixOne
 # Controls when the workflow will run.
 on:
   # Triggers the workflow on push or pull request events but only for the main branch.
-  pull_request:
+  pull_request_target:
     types: [ opened, synchronize, reopened ]
     branches: main
     paths-ignore:
@@ -48,9 +48,9 @@ jobs:
             exit 1
           fi
 
-      - name: Build Configure
+      - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE && make clean && make config
+          cd $GITHUB_WORKSPACE && make clean && make config && make build
 
       - name: Static Code Analysis
         continue-on-error: true
@@ -77,23 +77,27 @@ jobs:
           cd $GITHUB_WORKSPACE
           echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' profile.raw)" >> $GITHUB_ENV
 
-      - name: WeChat Work notification
-        if : ${{ (github.event_name == 'pull_request') && (github.event.action == 'opened') }}
-        continue-on-error: true
-        uses: x-actions/wechat-work@v1
-        env:
-          WECHAT_WEBHOOK_KEY: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
-          MSGTYPE: markdown
-          CONTENT: |
-            "New Pull Request Opened: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ join(github.event.pull_request.requested_reviewers.*.login, ', ') }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>"
-
-      - name: Build Binary
+      - name: get requested reviewers
         run: |
-          make build
+          echo "ASSIGNEES=${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}" >> $GITHUB_ENV
 
       - name: Build Verification Testing
         run: |
-          make bvt 
+          make bvt
+
+      - name: WeChat Work notification
+        if : ${{ github.event_name == 'pull_request_target' }}
+        continue-on-error: true
+        id: myRequest
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
+          method: 'POST'
+          data: '{"msgtype": "markdown", "markdown": {"content": "PR CI PASSED: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ env.ASSIGNEES }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>\n" }}'
+
+      - name: Show Response
+        continue-on-error: true
+        run: echo ${{ steps.myRequest.outputs.response }}
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
