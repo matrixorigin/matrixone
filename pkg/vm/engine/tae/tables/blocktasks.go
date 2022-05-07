@@ -2,6 +2,7 @@ package tables
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -12,6 +13,18 @@ import (
 func (blk *dataBlock) CheckpointWALClosure(endTs uint64) tasks.FuncT {
 	return func() error {
 		return blk.CheckpointWAL(endTs)
+	}
+}
+
+func (blk *dataBlock) SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT {
+	return func() error {
+		return blk.SyncBlockData(ts, rows)
+	}
+}
+
+func (blk *dataBlock) FlushColumnDataClosure(ts uint64, colIdx int, colData *gvec.Vector, sync bool) tasks.FuncT {
+	return func() error {
+		return blk.FlushColumnData(ts, colIdx, colData, sync)
 	}
 }
 
@@ -46,6 +59,26 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 	// }
 	blk.SetMaxCheckpointTS(endTs)
 	return
+}
+
+func (blk *dataBlock) FlushColumnData(ts uint64, colIdx int, colData *gvec.Vector, sync bool) (err error) {
+	if err = blk.file.WriteColumnVec(ts, colIdx, colData); err != nil {
+		return err
+	}
+	if sync {
+		err = blk.file.Sync()
+	}
+	return
+}
+
+func (blk *dataBlock) SyncBlockData(ts uint64, rows uint32) (err error) {
+	if err = blk.file.WriteRows(rows); err != nil {
+		return
+	}
+	if err = blk.file.WriteTS(ts); err != nil {
+		return
+	}
+	return blk.file.Sync()
 }
 
 func (blk *dataBlock) ABlkFlushData(ts uint64, bat batch.IBatch, masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]interface{}, deletes *roaring.Bitmap) (err error) {

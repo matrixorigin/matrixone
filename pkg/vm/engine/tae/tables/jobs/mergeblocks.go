@@ -134,6 +134,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	vecs, mapping := task.mergeColumn(vecs, &sortedIdx, true, rows, to)
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
+	ts := task.txn.GetStartTS()
+	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
 	for _, vec := range vecs {
@@ -144,10 +146,19 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.created = append(task.created, blk)
-		bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-		if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		closure := meta.GetBlockData().FlushColumnDataClosure(ts, int(schema.PrimaryKey), vec, false)
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
+		if err != nil {
 			return
 		}
+		if err = flushTask.WaitDone(); err != nil {
+			return
+		}
+		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
+		// if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
+		// 	return
+		// }
 	}
 
 	for i := 0; i < len(schema.ColDefs); i++ {
@@ -165,16 +176,25 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
 			created := task.created[pos]
-			bf := created.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-			if bf.WriteColumnVec(task.txn.GetStartTS(), i, vec); err != nil {
+			closure := created.GetMeta().(*catalog.BlockEntry).GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, created.Fingerprint(), closure)
+			if err != nil {
+				return
+			}
+			if err = flushTask.WaitDone(); err != nil {
 				return
 			}
 		}
 	}
 	for i, created := range task.created {
-		bf := created.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
-		bf.WriteTS(task.txn.GetStartTS())
-		bf.WriteRows(rows[i])
+		closure := created.GetMeta().(*catalog.BlockEntry).GetBlockData().SyncBlockDataClosure(ts, rows[i])
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, created.Fingerprint(), closure)
+		if err != nil {
+			return
+		}
+		if err = flushTask.WaitDone(); err != nil {
+			return
+		}
 	}
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
