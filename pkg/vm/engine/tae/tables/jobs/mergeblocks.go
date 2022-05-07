@@ -155,6 +155,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = flushTask.WaitDone(); err != nil {
 			return
 		}
+		if err = BuildAndFlushBlockIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
+			return
+		}
+		if err = meta.GetBlockData().RefreshIndex(); err != nil {
+			return
+		}
 		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
 		// if bf.WriteColumnVec(task.txn.GetStartTS(), int(schema.PrimaryKey), vec); err != nil {
 		// 	return
