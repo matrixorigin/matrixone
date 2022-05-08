@@ -15,9 +15,9 @@
 package explain
 
 import (
-	"fmt"
 	// "container/list"
 	// "fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -36,8 +36,7 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
 	for index, rootNodeId := range e.QueryPlan.Steps {
-		//logutil.Infof("--------------------------------------------Query Plan %v ------------------------------------------", index)
-		fmt.Printf("--------------------------------------------------------Query Plan %v ------------------------------------------------------\n", index)
+		logutil.Infof("--------------------------------Query Plan-%v ------------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
@@ -62,9 +61,9 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 			}
 
 			if frame.nextChild < len(frame.node.Children) {
-				childId := frame.node.Children[frame.nextChild]
+				childIndex := frame.node.Children[frame.nextChild]
 				stack.Push(&Frame{
-					node:               Nodes[childId],
+					node:               Nodes[childIndex],
 					isDescriptionPrint: false,
 					nextChild:          0,
 				})
@@ -73,7 +72,6 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 				stack.Pop()
 			}
 		}
-		//Separate the different plan trees with blank lines
 	}
 }
 
@@ -86,37 +84,21 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		//ExplainIndentText(settings, options)
 		basicNodeInfo := nodedescImpl.GetNodeBasicInfo(options)
 
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
-		/*
-			if settings.level == 0 {
-				settings.buffer.PushLine(settings.offset, basicNodeInfo, true, true)
-			} else {
-				settings.buffer.PushLine(settings.offset, basicNodeInfo, false, true)
-			}
-			settings.buffer.NodeSize++
-			settings.level++
-		*/
 		if options.Verbose {
 			projecrtInfo := nodedescImpl.GetProjectListInfo(options)
 			settings.buffer.PushNewLine(projecrtInfo, false, settings.level)
-			/*
-				settings.buffer.PushLine(settings.offset, projecrtInfo, false, false)
-			*/
 		}
 
 		extraInfo := nodedescImpl.GetExtraInfo(options)
 		for _, line := range extraInfo {
 			settings.buffer.PushNewLine(line, false, settings.level)
-			/*
-				settings.buffer.PushLine(settings.offset, line, false, false)
-			*/
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-
+		panic("implement me")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-
+		panic("implement me")
 	}
 }

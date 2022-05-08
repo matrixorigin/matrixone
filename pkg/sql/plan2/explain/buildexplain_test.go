@@ -142,7 +142,7 @@ func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
-	fmt.Printf("SQL: %v\n", sql)
+	t.Logf("SQL: %v\n", sql)
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -198,7 +198,7 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(query)
 		explainQuery.ExplainPlan(buffer, es)
-		fmt.Println()
+		t.Logf("\n")
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ package explain
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
 )
@@ -51,8 +52,6 @@ type NodeElemDescribe interface {
 	GetDescription(options *ExplainOptions) string
 }
 
-//-------------------------------------------------------------------------------------------------------
-
 type FormatSettings struct {
 	buffer *ExplainDataBuffer
 	offset int
@@ -71,12 +70,11 @@ type ExplainDataBuffer struct {
 
 func NewExplainDataBuffer() *ExplainDataBuffer {
 	return &ExplainDataBuffer{
-		Start:          -1,
-		End:            -1,
-		CurrentLine:    -1,
-		NodeSize:       0,
-		LineWidthLimit: 65535,
-		Lines:          make([]string, 0),
+		Start:       -1,
+		End:         -1,
+		CurrentLine: -1,
+		NodeSize:    0,
+		Lines:       make([]string, 0),
 	}
 }
 
@@ -122,28 +120,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	//buf.Lines[buf.CurrentLine] = (prefix + line)
-	fmt.Println(buf.Lines[buf.CurrentLine])
-	buf.End++
-}
-
-func (buf *ExplainDataBuffer) PushLine(offset int, line string, planRoot bool, nodeHeader bool) {
-	var prefix string = strings.Repeat("#", offset)
-	if planRoot {
-		prefix += ""
-	} else if nodeHeader {
-		prefix += "-> "
-	} else if buf.NodeSize > 1 {
-		prefix += "   "
-	} else {
-		prefix += "  "
-	}
-	if buf.Start == -1 {
-		buf.Start++
-	}
-	buf.CurrentLine++
-	buf.Lines = append(buf.Lines, prefix+line)
-	fmt.Println(buf.Lines[buf.CurrentLine])
+	logutil.Infof(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 

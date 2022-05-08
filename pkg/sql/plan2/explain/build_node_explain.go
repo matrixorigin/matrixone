@@ -31,7 +31,6 @@ func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string {
 	var result string
 	var pname string /* node type name for text output */
-	//var sname string /* node type name for non-text output */
 
 	switch ndesc.Node.NodeType {
 	case plan.Node_UNKNOWN:
@@ -147,11 +146,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
-		//result += fmt.Sprintf("  (cost=%.2f..%.2f rows=%.0f width=%f)",
-		//	ndesc.Node.Cost.Start,
-		//	ndesc.Node.Cost.Total,
-		//	ndesc.Node.Cost.Rowsize,
-		//	ndesc.Node.Cost.Card)
 	} else {
 		//TODO implement me
 		panic("implement me")
@@ -191,7 +185,6 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
 		}
 		lines = append(lines, temp)
 	}
-
 	return lines
 }
 
@@ -260,8 +253,6 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
 	}
 	return result
 }
-
-//------------------------------------------------------------------------------------------
 
 var _ NodeElemDescribe = &CostDescribeImpl{}
 var _ NodeElemDescribe = &ExprListDescribeImpl{}

@@ -92,24 +92,19 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 	case COMPARISON_OPERATOR:
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
 	case CAST_EXPRESSION:
-		fmt.Printf("CAST_EXPRESSION is not support now")
-		panic("implement me")
+		panic("CAST_EXPRESSION is not support now")
 	case CASE_WHEN_EXPRESSION:
-		fmt.Printf("CASE_WHEN_EXPRESSION is not support now")
-		panic("implement me")
+		panic("CASE_WHEN_EXPRESSION is not support now")
 	case BETWEEN_AND_EXPRESSION:
-		fmt.Printf("CASE_WHEN_EXPRESSION is not support now")
-		panic("implement me")
+		panic("CASE_WHEN_EXPRESSION is not support now")
 	case IN_EXISTS_EXPRESSION:
-		fmt.Printf("CASE_WHEN_EXPRESSION is not support now")
-		panic("implement me")
+		panic("CASE_WHEN_EXPRESSION is not support now")
 	case IS_NULL_EXPRESSION:
 		result += DescribeExpr(funcExpr.F.Args[0]) + " IS NULL"
 	case NOPARAMETER_FUNCTION:
 		result += funcExpr.F.Func.GetObjName()
 	case UNKNOW_KIND_FUNCTION:
-		fmt.Printf("UNKNOW_KIND_FUNCTION is not support now")
-		panic("implement me")
+		panic("UNKNOW_KIND_FUNCTION is not support now")
 	}
 	return result
 }

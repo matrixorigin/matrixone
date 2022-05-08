@@ -69,33 +69,6 @@ func (node *ExplainStmt) Format(ctx *FmtCtx) {
 	}
 }
 
-//func (node *ExplainStmt) Format(ctx *FmtCtx) {
-//	ctx.WriteString("explain")
-//	format := node.explainImpl.Format
-//	if format != "" && format != "text" {
-//		ctx.WriteString(" format = ")
-//		ctx.WriteString(node.explainImpl.Format)
-//	}
-//	stmt := node.explainImpl.Statement
-//	switch stmt.(type) {
-//	case *ShowColumns:
-//		st := stmt.(*ShowColumns)
-//		if st.Table != nil {
-//			ctx.WriteByte(' ')
-//			st.Table.ToTableName().Format(ctx)
-//		}
-//		if st.ColName != nil {
-//			ctx.WriteByte(' ')
-//			st.ColName.Format(ctx)
-//		}
-//	default:
-//		if stmt != nil {
-//			ctx.WriteByte(' ')
-//			stmt.Format(ctx)
-//		}
-//	}
-//}
-
 func NewExplainStmt(stmt Statement, f string) *ExplainStmt {
 	return &ExplainStmt{explainImpl{Statement: stmt, Format: f}}
 }
