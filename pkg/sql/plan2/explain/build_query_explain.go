@@ -15,8 +15,6 @@
 package explain
 
 import (
-	// "container/list"
-	// "fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -33,45 +31,31 @@ func NewExplainQueryImpl(query *plan.Query) *ExplainQueryImpl {
 	}
 }
 
+func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings, options *ExplainOptions) {
+	if node == nil {
+		return
+	}
+	explainStep(node, settings, options)
+	settings.level++
+	if len(node.Children) > 0 {
+		for _, childIndex := range node.Children {
+			traversalPlan(Nodes[childIndex], Nodes, settings, options)
+		}
+	}
+	settings.level--
+}
+
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
 	for index, rootNodeId := range e.QueryPlan.Steps {
-		logutil.Infof("--------------------------------Query Plan-%v ------------------------------------------------", index)
+		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
 			indent: 2,
 			level:  0,
 		}
-
-		stack := NewStack()
-		stack.Push(&Frame{
-			node:               Nodes[rootNodeId],
-			isDescriptionPrint: false,
-			nextChild:          0,
-		})
-
-		for !stack.Empty() {
-			frame := stack.Top()
-			if !frame.isDescriptionPrint {
-				settings.offset = (stack.Size() - 1) * settings.indent
-				settings.level = stack.Size() - 1
-				explainStep(frame.node, &settings, options)
-				frame.isDescriptionPrint = true
-			}
-
-			if frame.nextChild < len(frame.node.Children) {
-				childIndex := frame.node.Children[frame.nextChild]
-				stack.Push(&Frame{
-					node:               Nodes[childIndex],
-					isDescriptionPrint: false,
-					nextChild:          0,
-				})
-				frame.nextChild++
-			} else {
-				stack.Pop()
-			}
-		}
+		traversalPlan(Nodes[rootNodeId], Nodes, &settings, options)
 	}
 }
 

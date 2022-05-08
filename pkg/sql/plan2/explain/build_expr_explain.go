@@ -60,7 +60,7 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 	funcName := funcExpr.F.GetFunc().GetObjName()
 	funcProtoType, ok := plan2.BuiltinFunctionsMap[funcName]
 	if !ok {
-		panic("implement me")
+		panic("unkonw expression")
 	}
 	switch funcProtoType.Kind {
 	case plan2.STANDARD_FUNCTION:
