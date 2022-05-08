@@ -112,6 +112,7 @@ endif
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
 	@go install github.com/matrixorigin/linter/cmd/molint@latest
+	@go install github.com/google/go-licenses@latest
 
 # TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
 DIRS=pkg/... \
@@ -124,6 +125,7 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconv
 static-check:
 	@go generate ./pkg/sql/colexec/extend/overload
 	@go vet -vettool=$(shell which molint) ./...
+	@go-licenses check ./...
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
