@@ -27,8 +27,8 @@ import (
 )
 
 func TestSingleSql(t *testing.T) {
-	input := "explain SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0"
-
+	//input := "explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0"
+	input := "explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10"
 	mock := plan2.NewMockOptimizer2()
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -195,9 +195,10 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 			return err
 		}
 
-		buffer := NewExplainDataBuffer(20)
+		buffer := NewExplainDataBuffer()
 		explainQuery := NewExplainQueryImpl(query)
 		explainQuery.ExplainPlan(buffer, es)
+		fmt.Println()
 	}
 	return nil
 }

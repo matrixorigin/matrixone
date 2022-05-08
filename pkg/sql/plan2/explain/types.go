@@ -54,47 +54,35 @@ type NodeElemDescribe interface {
 //-------------------------------------------------------------------------------------------------------
 
 type FormatSettings struct {
-	buffer     *ExplainDataBuffer
-	offset     int
-	indent     int
-	indentChar byte
-	level      int
-}
-
-func NewFormatSettings() *FormatSettings {
-	return &FormatSettings{
-		buffer:     &ExplainDataBuffer{},
-		offset:     0,
-		indent:     2,
-		indentChar: ' ',
-	}
+	buffer *ExplainDataBuffer
+	offset int
+	indent int
+	level  int
 }
 
 type ExplainDataBuffer struct {
 	Start          int
 	End            int
 	CurrentLine    int
-	RowSize        int
+	NodeSize       int
 	LineWidthLimit int
 	Lines          []string
-	NodeSize       int
 }
 
-func NewExplainDataBuffer(size int32) *ExplainDataBuffer {
+func NewExplainDataBuffer() *ExplainDataBuffer {
 	return &ExplainDataBuffer{
 		Start:          -1,
 		End:            -1,
 		CurrentLine:    -1,
-		RowSize:        0,
-		LineWidthLimit: 65535,
-		Lines:          make([]string, size),
 		NodeSize:       0,
+		LineWidthLimit: 65535,
+		Lines:          make([]string, 0),
 	}
 }
 
 // Generates a string describing a ExplainDataBuffer.
 func (buf *ExplainDataBuffer) ToString() string {
-	return fmt.Sprintf("ExplainDataBuffer{start: %d, end: %d, lines: %s, rowSize: %d}", buf.Start, buf.End, buf.Lines, buf.RowSize)
+	return fmt.Sprintf("ExplainDataBuffer{start: %d, end: %d, lines: %s, NodeSize: %d}", buf.Start, buf.End, buf.Lines, buf.NodeSize)
 }
 
 func (buf *ExplainDataBuffer) AppendCurrentLine(temp string) {
@@ -105,30 +93,56 @@ func (buf *ExplainDataBuffer) AppendCurrentLine(temp string) {
 	}
 }
 
-//func (buf *ExplainDataBuffer) PushLine(line string) {
-//	if buf.Start == -1 {
-//		buf.Start++
-//	}
-//	buf.CurrentLine++
-//	buf.Lines[buf.CurrentLine] = line
-//	buf.End++
-//	//TODO
-//}
-
-func (buf *ExplainDataBuffer) PushLine(offset int, line string, planRoot bool, nodeHeader bool) {
-	var prefix string = strings.Repeat(" ", offset)
-	if planRoot {
-		prefix += ""
-	} else if nodeHeader {
-		prefix += "->  "
+func calcSpaceNum(level int) int {
+	if level <= 0 {
+		return 2
 	} else {
-		prefix += "    "
+		return calcSpaceNum(level-1) + 6
+	}
+}
+
+func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int) {
+	var prefix string = ""
+	if level <= 0 {
+		if isNewNode {
+			prefix += ""
+		} else {
+			prefix += "  "
+		}
+	} else {
+		var offset int = calcSpaceNum(level)
+		if isNewNode {
+			prefix += strings.Repeat(" ", offset-6) + "->  "
+		} else {
+			prefix += strings.Repeat(" ", offset)
+		}
 	}
 	if buf.Start == -1 {
 		buf.Start++
 	}
 	buf.CurrentLine++
-	buf.Lines[buf.CurrentLine] = (prefix + line)
+	buf.Lines = append(buf.Lines, prefix+line)
+	//buf.Lines[buf.CurrentLine] = (prefix + line)
+	fmt.Println(buf.Lines[buf.CurrentLine])
+	buf.End++
+}
+
+func (buf *ExplainDataBuffer) PushLine(offset int, line string, planRoot bool, nodeHeader bool) {
+	var prefix string = strings.Repeat("#", offset)
+	if planRoot {
+		prefix += ""
+	} else if nodeHeader {
+		prefix += "-> "
+	} else if buf.NodeSize > 1 {
+		prefix += "   "
+	} else {
+		prefix += "  "
+	}
+	if buf.Start == -1 {
+		buf.Start++
+	}
+	buf.CurrentLine++
+	buf.Lines = append(buf.Lines, prefix+line)
 	fmt.Println(buf.Lines[buf.CurrentLine])
 	buf.End++
 }

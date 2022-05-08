@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"os"
 	"runtime/pprof"
@@ -924,20 +926,119 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get CompilerContext
-	/*
-		ctx := plan2.NewMockCompilerContext()
-		query, err := plan2.buildPlan(ctx, stmt.Statement)
-		if err != nil {
-			fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
-			return errors.New("111111", fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
-		}
+	ctx := plan2.NewMockCompilerContext()
+	query, err := plan2.BuildPlan2(ctx, stmt.Statement)
+	if err != nil {
+		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
+	}
 
-		buffer := explain.NewExplainDataBuffer(250)
-		explainQuery := explain.NewExplainQueryImpl(query)
-		explainQuery.ExplainPlan(buffer, es)
+	// build explain data buffer
+	buffer := explain.NewExplainDataBuffer()
+	// generator query explain
+	explainQuery := explain.NewExplainQueryImpl(query)
+	explainQuery.ExplainPlan(buffer, es)
+
+	session := mce.GetSession()
+	protocol := session.GetMysqlProtocol()
+
+	attrs := plan.BuildExplainResultColumns()
+	columns, err := GetExplainColumns(attrs)
+	if err != nil {
+		logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
+		return err
+	}
+	/*
+		Step 1 : send column count and column definition.
 	*/
-	return errors.New(errno.FeatureNotSupported, "not support explain statment now")
+	//send column count
+	colCnt := uint64(len(columns))
+	err = protocol.SendColumnCountPacket(colCnt)
+	if err != nil {
+		return err
+	}
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := session.Cmd
+	for _, c := range columns {
+		mysqlc := c.(Column)
+		session.Mrs.AddColumn(mysqlc)
+		/*
+			mysql COM_QUERY response: send the column definition per column
+		*/
+		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
+		if err != nil {
+			return err
+		}
+	}
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = protocol.SendEOFPacketIf(0, 0)
+	if err != nil {
+		return err
+	}
+
+	err = buildMoExplainQuery(attrs, buffer, session, getDataFromPipeline)
+	if err != nil {
+		return err
+	}
+
+	err = protocol.sendEOFOrOkPacket(0, 0)
+	if err != nil {
+		return err
+	}
+	return nil
 }
+
+func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
+	//attrs := plan.BuildExplainResultColumns()
+	cols := make([]*compile.Col, len(attrs))
+	for i, attr := range attrs {
+		cols[i] = &compile.Col{
+			Name: attr.Name,
+			Typ:  attr.Type.Oid,
+		}
+	}
+	//e.resultCols = cols
+	var mysqlCols []interface{} = make([]interface{}, len(cols))
+	var err error = nil
+	for i, c := range cols {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(c.Typ, col)
+		if err != nil {
+			return nil, err
+		}
+		mysqlCols[i] = col
+	}
+	return mysqlCols, err
+}
+
+func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
+	bat := batch.New(true, []string{attrs[0].Name})
+	rs := buffer.Lines
+	vs := make([][]byte, len(rs))
+
+	count := 0
+	for _, r := range rs {
+		str := []byte(r)
+		vs[count] = str
+		count++
+	}
+	vs = vs[:count]
+	vec := vector.New(attrs[0].Type)
+	if err := vector.Append(vec, vs); err != nil {
+		return err
+	}
+	bat.Vecs[0] = vec
+	bat.InitZsOne(count)
+
+	return fill(session, bat)
+}
+
+//----------------------------------------------------------------------------------------------------
 
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
@@ -1162,6 +1263,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 		case *tree.ExplainAnalyze:
+			selfHandle = true
 			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
 		}
 

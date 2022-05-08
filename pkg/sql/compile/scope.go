@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"math"
 	"net"
 	"runtime"
@@ -225,6 +226,36 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 		}
 		vs = vs[:count]
 
+		vec := vector.New(attrs[0].Type)
+		if err := vector.Append(vec, vs); err != nil {
+			return err
+		}
+		bat.Vecs[0] = vec
+		bat.InitZsOne(count)
+	}
+	return fill(u, bat)
+}
+
+// ExplainQuery fill batch with all query plan tree
+func (s *Scope) ExplainQuery(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ExplainQuery)
+	attrs := p.ResultColumns()
+	bat := batch.New(true, []string{attrs[0].Name})
+	// Column 1
+	{
+		explainQueryImpl := explain.NewExplainQueryImpl(p.Query)
+		explainQueryImpl.ExplainPlan(p.Buffer, p.Options)
+
+		rs := p.Buffer.Lines
+		vs := make([][]byte, len(rs))
+
+		count := 0
+		for _, r := range rs {
+			str := []byte(r)
+			vs[count] = str
+			count++
+		}
+		vs = vs[:count]
 		vec := vector.New(attrs[0].Type)
 		if err := vector.Append(vec, vs); err != nil {
 			return err

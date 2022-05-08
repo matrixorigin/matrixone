@@ -86,7 +86,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += pname
-
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
 			fallthrough
@@ -98,56 +97,56 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 			result += " on "
 			if ndesc.Node.ObjRef != nil {
 				objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
-				result += " " + objRefImpl.GetDescription(options)
+				result += objRefImpl.GetDescription(options)
 			} else if ndesc.Node.TableDef != nil {
 				tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
-				result += " " + tableDefImpl.GetDescription(options)
+				result += tableDefImpl.GetDescription(options)
 			}
 		case plan.Node_PROJECT:
-			pname = "Project"
+			fallthrough
 		case plan.Node_EXTERNAL_FUNCTION:
-			pname = "External Function"
+			fallthrough
 		case plan.Node_MATERIAL:
-			pname = "Material"
+			fallthrough
 		case plan.Node_RECURSIVE_CTE:
-			pname = "Recursive etc"
+			fallthrough
 		case plan.Node_SINK:
-			pname = "Sink"
+			fallthrough
 		case plan.Node_SINK_SCAN:
-			pname = "Sink Scan"
+			fallthrough
 		case plan.Node_AGG:
-			pname = "Aggregate"
+			fallthrough
 		case plan.Node_JOIN:
-			pname = "Join"
+			fallthrough
 		case plan.Node_SAMPLE:
-			pname = "Sample"
+			fallthrough
 		case plan.Node_SORT:
-			pname = "Sort"
+			fallthrough
 		case plan.Node_UNION:
-			pname = "Union"
+			fallthrough
 		case plan.Node_UNION_ALL:
-			pname = "Union All"
+			fallthrough
 		case plan.Node_UNIQUE:
-			pname = "Unique"
+			fallthrough
 		case plan.Node_WINDOW:
-			pname = "Window"
+			fallthrough
 		case plan.Node_BROADCAST:
-			pname = "Broadcast"
+			fallthrough
 		case plan.Node_SPLIT:
-			pname = "Split"
+			fallthrough
 		case plan.Node_GATHER:
-			pname = "Gather"
+			fallthrough
 		case plan.Node_ASSERT:
-			pname = "Assert"
+			fallthrough
 		case plan.Node_UNKNOWN:
-			pname = "UnKnow Node"
+			fallthrough
 		default:
-			pname = "???"
+
 		}
 	}
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		result += "  (cost=%.2f..%.2f rows=%.0f width=%f)"
+		result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
 		//result += fmt.Sprintf("  (cost=%.2f..%.2f rows=%.0f width=%f)",
 		//	ndesc.Node.Cost.Start,
 		//	ndesc.Node.Cost.Total,
@@ -197,14 +196,14 @@ func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
 }
 
 func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) string {
-	var result string = "Output: "
+	var result string = "Output:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.ProjectList)
 	result += exprs.GetDescription(options)
 	return result
 }
 
 func (ndesc *NodeDescribeImpl) GetJoinConditionInfo(options *ExplainOptions) string {
-	var result string = "Join Cond: "
+	var result string = "Join Cond:"
 	exprs := NewExprListDescribeImpl(ndesc.Node.OnList)
 	result += exprs.GetDescription(options)
 	return result
@@ -228,7 +227,7 @@ func (ndesc *NodeDescribeImpl) GetWhereConditionInfo(options *ExplainOptions) st
 }
 
 func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
-	var result string = "Group Key: "
+	var result string = "Group Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
 		for _, v := range ndesc.Node.GetGroupBy() {
@@ -245,7 +244,7 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) string {
 }
 
 func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) string {
-	var result string = "Sort Key: "
+	var result string = "Sort Key:"
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		var first bool = true
 		for _, v := range ndesc.Node.GetOrderBy() {

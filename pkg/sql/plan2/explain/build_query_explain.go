@@ -37,13 +37,12 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
 	for index, rootNodeId := range e.QueryPlan.Steps {
 		//logutil.Infof("--------------------------------------------Query Plan %v ------------------------------------------", index)
-		fmt.Printf("--------------------------------------------Query Plan %v ------------------------------------------\n", index)
+		fmt.Printf("--------------------------------------------------------Query Plan %v ------------------------------------------------------\n", index)
 		settings := FormatSettings{
-			buffer:     buffer,
-			offset:     0,
-			indent:     4,
-			indentChar: ' ',
-			level:      0,
+			buffer: buffer,
+			offset: 0,
+			indent: 2,
+			level:  0,
 		}
 
 		stack := NewStack()
@@ -56,7 +55,8 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 		for !stack.Empty() {
 			frame := stack.Top()
 			if !frame.isDescriptionPrint {
-				settings.offset = (stack.Size()) * settings.indent
+				settings.offset = (stack.Size() - 1) * settings.indent
+				settings.level = stack.Size() - 1
 				explainStep(frame.node, &settings, options)
 				frame.isDescriptionPrint = true
 			}
@@ -74,7 +74,6 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 			}
 		}
 		//Separate the different plan trees with blank lines
-		settings.buffer.PushLine(0, " ", true, false)
 	}
 }
 
@@ -89,22 +88,31 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		//ExplainIndentText(settings, options)
 		basicNodeInfo := nodedescImpl.GetNodeBasicInfo(options)
-		if settings.level == 0 {
-			settings.buffer.PushLine(settings.offset, basicNodeInfo, true, true)
-			settings.level++
-		} else {
-			settings.buffer.PushLine(settings.offset, basicNodeInfo, false, true)
-			settings.level++
-		}
 
+		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
+		/*
+			if settings.level == 0 {
+				settings.buffer.PushLine(settings.offset, basicNodeInfo, true, true)
+			} else {
+				settings.buffer.PushLine(settings.offset, basicNodeInfo, false, true)
+			}
+			settings.buffer.NodeSize++
+			settings.level++
+		*/
 		if options.Verbose {
 			projecrtInfo := nodedescImpl.GetProjectListInfo(options)
-			settings.buffer.PushLine(settings.offset, projecrtInfo, false, false)
+			settings.buffer.PushNewLine(projecrtInfo, false, settings.level)
+			/*
+				settings.buffer.PushLine(settings.offset, projecrtInfo, false, false)
+			*/
 		}
 
 		extraInfo := nodedescImpl.GetExtraInfo(options)
 		for _, line := range extraInfo {
-			settings.buffer.PushLine(settings.offset, line, false, false)
+			settings.buffer.PushNewLine(line, false, settings.level)
+			/*
+				settings.buffer.PushLine(settings.offset, line, false, false)
+			*/
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 

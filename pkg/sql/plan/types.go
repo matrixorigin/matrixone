@@ -17,10 +17,12 @@ package plan
 import (
 	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -271,6 +273,13 @@ type ShowCreateDatabase struct {
 	IfNotExistFlag bool
 	Id             string
 	E              engine.Engine
+}
+
+type ExplainQuery struct {
+	Context *plan2.CompilerContext
+	Query   *plan.Query
+	Options *explain.ExplainOptions
+	Buffer  *explain.ExplainDataBuffer
 }
 
 type Insert struct {
@@ -534,6 +543,25 @@ func (d ShowCreateDatabase) ResultColumns() []*Attribute {
 		&Attribute{Ref: 1, Name: "Show Database", Type: types.Type{Oid: types.T_varchar, Size: 24}},
 	}
 	return attrs
+}
+
+func (e ExplainQuery) String() string {
+	var buf bytes.Buffer
+	buf.WriteString("explain Query")
+	return buf.String()
+}
+
+func (e ExplainQuery) ResultColumns() []*Attribute {
+	return []*Attribute{
+		&Attribute{
+			Ref:  1,
+			Name: fmt.Sprintf("QUERY PLAN"),
+			Type: types.Type{
+				Oid:  types.T_varchar,
+				Size: 24,
+			},
+		},
+	}
 }
 
 func (i Insert) String() string {
