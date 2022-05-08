@@ -183,6 +183,7 @@ type TxnStore interface {
 	CreateBlock(tid, sid uint64) (handle.Block, error)
 	GetBlock(id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(id *common.ID) (handle.Block, error)
+	SoftDeleteSegment(id *common.ID) error
 	SoftDeleteBlock(id *common.ID) error
 
 	AddTxnEntry(TxnEntryType, TxnEntry)

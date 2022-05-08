@@ -130,6 +130,12 @@ func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err erro
 	return h.Txn.GetStore().CreateNonAppendableSegment(h.entry.GetID())
 }
 
+func (h *txnRelation) SoftDeleteSegment(id uint64) (err error) {
+	fp := h.entry.AsCommonID()
+	fp.SegmentID = id
+	return h.Txn.GetStore().SoftDeleteSegment(fp)
+}
+
 func (h *txnRelation) MakeSegmentIt() handle.SegmentIt {
 	return newSegmentIt(h.Txn, h.entry)
 }

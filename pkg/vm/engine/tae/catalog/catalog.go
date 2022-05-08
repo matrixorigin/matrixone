@@ -316,8 +316,8 @@ func (catalog *Catalog) Checkpoint(maxTs uint64) (err error) {
 		panic(err)
 	}
 	logutil.Infof("SaveCheckpointed: %s", time.Since(now))
-	// for i, index := range entry.LogIndexes {
-	// 	logutil.Infof("%d: %s", i, index.String())
+	// for _, index := range entry.LogIndexes {
+	// 	logutil.Infof("Ckp0Index %s", index.String())
 	// }
 	now = time.Now()
 	if err = catalog.scheduler.Checkpoint(entry.LogIndexes); err != nil {

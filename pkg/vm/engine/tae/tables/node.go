@@ -71,12 +71,26 @@ func (node *appendableNode) OnDestory() {
 	node.file.Unref()
 }
 
+func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, err error) {
+	attrs := node.data.GetAttrs()
+	vecs := make([]vector.IVector, len(attrs))
+	for _, attrId := range attrs {
+		vec, err := node.GetVectorView(maxRow, attrId)
+		if err != nil {
+			return view, err
+		}
+		vecs[attrId] = vec
+	}
+	view, err = batch.NewBatch(attrs, vecs)
+	return
+}
+
 func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector.IVector, err error) {
 	ivec, err := node.data.GetVectorByAttr(colIdx)
 	if err != nil {
 		return
 	}
-	vec = ivec.GetLatestView()
+	vec = ivec.Window(0, maxRow)
 	return
 }
 
@@ -108,18 +122,15 @@ func (node *appendableNode) OnLoad() {
 	}
 }
 
-func (node *appendableNode) OnUnload() {
+func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err error) {
+	mvcc := node.block.mvcc
+	if node.GetBlockMaxFlushTS() == ts {
+		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
+		return data.ErrStaleRequest
+	}
 	masks := make(map[uint16]*roaring.Bitmap)
 	vals := make(map[uint16]map[uint32]interface{})
-	mvcc := node.block.mvcc
 	readLock := mvcc.GetSharedLock()
-	ts := mvcc.LoadMaxVisible()
-	// if node.GetBlockMaxFlushTS() == ts || ts <= node.block.GetMaxCheckpointTS() {
-	if node.GetBlockMaxFlushTS() == ts {
-		readLock.Unlock()
-		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
-		return
-	}
 	for i := range node.block.meta.GetSchema().ColDefs {
 		chain := mvcc.GetColumnChain(uint16(i))
 
@@ -140,21 +151,38 @@ func (node *appendableNode) OnUnload() {
 		deletes = dnode.GetDeleteMaskLocked()
 	}
 	scope := node.block.meta.AsCommonID()
-	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, node.data, masks, vals, deletes))
+	task, err := node.block.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, node.block.ABlkFlushDataClosure(ts, colData, masks, vals, deletes))
 	if err != nil {
-		panic(err)
+		return
 	}
-	if err = task.WaitDone(); err != nil {
-		if err == data.ErrStaleRequest {
-			err = nil
-			return
-		}
-		panic(err)
-	}
+	err = task.WaitDone()
+	return
+}
 
+func (node *appendableNode) OnUnload() {
+	ts := node.block.mvcc.LoadMaxVisible()
+	needCkp := true
+	if err := node.flushData(ts, node.data); err != nil {
+		if err == data.ErrStaleRequest {
+			needCkp = false
+		} else {
+			panic(err)
+		}
+	}
 	node.data.Close()
 	node.data = nil
-	node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, scope, node.block.CheckpointWALClosure(ts))
+	if needCkp {
+		node.block.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, node.block.meta.AsCommonID(), node.block.CheckpointWALClosure(ts))
+	}
+}
+
+func (node *appendableNode) Close() error {
+	node.Node.Close()
+	if node.data != nil {
+		node.data.Close()
+		node.data = nil
+	}
+	return nil
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {

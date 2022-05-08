@@ -491,7 +491,7 @@ func TestApp1(t *testing.T) {
 			t.Log(txn.String())
 		}
 	}
-	for i := 0; i < 10000; i++ {
+	for i := 0; i < 5000; i++ {
 		wg.Add(1)
 		p.Submit(buyTxn)
 	}

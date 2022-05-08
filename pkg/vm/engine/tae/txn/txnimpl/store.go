@@ -377,6 +377,15 @@ func (store *txnStore) SoftDeleteBlock(id *common.ID) (err error) {
 	return table.SoftDeleteBlock(id)
 }
 
+func (store *txnStore) SoftDeleteSegment(id *common.ID) (err error) {
+	store.IncreateWriteCnt()
+	var table Table
+	if table, err = store.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.SoftDeleteSegment(id.SegmentID)
+}
+
 func (store *txnStore) ApplyRollback() (err error) {
 	if store.createEntry != nil {
 		if err = store.createEntry.ApplyRollback(); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
@@ -241,9 +242,7 @@ func (bf *blockFile) WriteIBatch(bat batch.IBatch, ts uint64, masks map[uint16]*
 			for it.HasNext() {
 				row := it.Next()
 				v := updates[row]
-				if err = gvec.Append(col, v); err != nil {
-					return err
-				}
+				compute.AppendValue(col, v)
 			}
 			buf, err := col.Show()
 			if err != nil {

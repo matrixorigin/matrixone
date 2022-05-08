@@ -582,6 +582,175 @@ func TestCompactBlock2(t *testing.T) {
 	}
 }
 
+func TestAutoCompactABlk1(t *testing.T) {
+	opts := new(options.Options)
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 5
+	opts.CheckpointCfg.ExecutionInterval = 1
+	opts.CheckpointCfg.CatalogCkpInterval = 10
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 3
+
+	totalRows := uint64(schema.BlockMaxRows) / 5
+	bat := compute.MockBatch(schema.Types(), totalRows, int(schema.PrimaryKey), nil)
+	{
+		txn := tae.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		rel.Append(bat)
+		assert.Nil(t, txn.Commit())
+	}
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingCnt() == 0
+	})
+	err := tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingCnt())
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	{
+		txn := tae.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
+		assert.Nil(t, err)
+		task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+		assert.Nil(t, err)
+		err = task.WaitDone()
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+}
+
+func TestAutoCompactABlk2(t *testing.T) {
+	opts := new(options.Options)
+	opts.CacheCfg = new(options.CacheCfg)
+	opts.CacheCfg.InsertCapacity = common.K * 5
+	opts.CacheCfg.TxnCapacity = common.M
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 2
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 2
+	opts.CheckpointCfg.CatalogCkpInterval = 1
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	db := initDB(t, opts)
+	defer db.Close()
+
+	schema1 := catalog.MockSchemaAll(13)
+	schema1.BlockMaxRows = 20
+	schema1.SegmentMaxBlocks = 2
+	schema1.PrimaryKey = 2
+
+	schema2 := catalog.MockSchemaAll(13)
+	schema2.BlockMaxRows = 20
+	schema2.SegmentMaxBlocks = 2
+	schema2.PrimaryKey = 2
+	{
+		txn := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		database.CreateRelation(schema1)
+		database.CreateRelation(schema2)
+		assert.Nil(t, txn.Commit())
+	}
+	bat := compute.MockBatch(schema1.Types(), uint64(schema1.BlockMaxRows)*3-1, int(schema1.PrimaryKey), nil)
+	bats := compute.SplitBatch(bat, gvec.Length(bat.Vecs[0]))
+
+	pool, _ := ants.NewPool(20)
+	var wg sync.WaitGroup
+	doFn := func(name string, data *gbat.Batch) func() {
+		return func() {
+			defer wg.Done()
+			txn := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(name)
+			err := rel.Append(data)
+			assert.Nil(t, err)
+			assert.Nil(t, txn.Commit())
+		}
+	}
+	doSearch := func(name string) func() {
+		return func() {
+			defer wg.Done()
+			txn := db.StartTxn(nil)
+			database, _ := txn.GetDatabase("db")
+			rel, _ := database.GetRelationByName(name)
+			it := rel.MakeBlockIt()
+			for it.Valid() {
+				blk := it.GetBlock()
+				blk.GetColumnDataById(int(schema1.PrimaryKey), nil, nil)
+				it.Next()
+			}
+			txn.Commit()
+		}
+	}
+
+	for _, data := range bats {
+		wg.Add(4)
+		pool.Submit(doSearch(schema1.Name))
+		pool.Submit(doSearch(schema2.Name))
+		pool.Submit(doFn(schema1.Name, data))
+		pool.Submit(doFn(schema2.Name, data))
+	}
+	wg.Wait()
+	testutils.WaitExpect(1000, func() bool {
+		return db.Scheduler.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingCnt())
+	t.Log(db.MTBufMgr.String())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+	t.Logf("GetPenddingCnt: %d", db.Scheduler.GetPenddingCnt())
+	t.Logf("GetCheckpointed: %d", db.Scheduler.GetCheckpointed())
+}
+
+func TestCompactABlk(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(13)
+	schema.BlockMaxRows = 1000
+	schema.SegmentMaxBlocks = 10
+	schema.PrimaryKey = 3
+
+	totalRows := uint64(schema.BlockMaxRows) / 5
+	bat := compute.MockBatch(schema.Types(), totalRows, int(schema.PrimaryKey), nil)
+	{
+		txn := tae.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		rel.Append(bat)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn := tae.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		blk := it.GetBlock()
+		blkData := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
+		factory, taskType, scopes, err := blkData.BuildCompactionTaskFactory()
+		assert.Nil(t, err)
+		task, err := tae.Scheduler.ScheduleMultiScopedTxnTask(tasks.WaitableCtx, taskType, scopes, factory)
+		assert.Nil(t, err)
+		err = task.WaitDone()
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	err := tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	assert.Nil(t, err)
+	testutils.WaitExpect(1000, func() bool {
+		return tae.Scheduler.GetPenddingCnt() == 0
+	})
+	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingCnt())
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+}
+
 func TestRollback1(t *testing.T) {
 	db := initDB(t, nil)
 	defer db.Close()
@@ -1131,9 +1300,9 @@ func TestLogIndex1(t *testing.T) {
 		assert.Equal(t, len(txns), len(indexes))
 		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetStartTS(), txns[len(txns)-1].GetCommitTS())
 		assert.Equal(t, len(txns)-1, len(indexes))
-		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
+		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[2].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
 		assert.Equal(t, len(txns)-2, len(indexes))
-		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[1].GetCommitTS(), txns[len(txns)-1].GetStartTS())
+		indexes = meta.GetBlockData().CollectAppendLogIndexes(txns[3].GetCommitTS(), txns[len(txns)-1].GetCommitTS())
 		assert.Equal(t, len(txns)-3, len(indexes))
 	}
 	{

@@ -28,9 +28,9 @@ func MockAppendNode(ts uint64, maxRow uint32, controller *MVCCHandle) *AppendNod
 }
 
 func NewAppendNode(txn txnif.AsyncTxn, maxRow uint32, controller *MVCCHandle) *AppendNode {
-	ts:=uint64(0)
-	if txn!=nil{
-		ts=txn.GetCommitTS()
+	ts := uint64(0)
+	if txn != nil {
+		ts = txn.GetCommitTS()
 	}
 	n := &AppendNode{
 		txn:        txn,
@@ -60,6 +60,7 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", n.commitTs, n.maxRow)
 		n.controller.SetMaxVisible(n.commitTs)
 	}
+	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	return nil
 }
 

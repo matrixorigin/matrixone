@@ -9,6 +9,7 @@ import (
 )
 
 var (
+	ErrBadTaskRequestPara    = errors.New("tae scheduler: bad task request parameters")
 	ErrScheduleScopeConflict = errors.New("tae scheduler: scope conflict")
 )
 

@@ -16,45 +16,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-var MergeBlocksTaskFactory = func(metas []*catalog.BlockEntry, segMeta *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+var CompactSegmentTaskFactory = func(mergedBlks []*catalog.BlockEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
 	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
-		return NewMergeBlocksTask(ctx, txn, metas, segMeta, scheduler)
+		mergedSegs := make([]*catalog.SegmentEntry, 1)
+		mergedSegs[0] = mergedBlks[0].GetSegment()
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, mergedSegs, nil, scheduler)
+	}
+}
+
+var MergeBlocksIntoSegmentTaskFctory = func(mergedBlks []*catalog.BlockEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) tasks.TxnTaskFactory {
+	if toSegEntry == nil {
+		panic(tasks.ErrBadTaskRequestPara)
+	}
+	return func(ctx *tasks.Context, txn txnif.AsyncTxn) (tasks.Task, error) {
+		return NewMergeBlocksTask(ctx, txn, mergedBlks, nil, toSegEntry, scheduler)
 	}
 }
 
 type mergeBlocksTask struct {
 	*tasks.BaseTask
-	txn       txnif.AsyncTxn
-	segMeta   *catalog.SegmentEntry
-	metas     []*catalog.BlockEntry
-	compacted []handle.Block
-	created   []handle.Block
-	rel       handle.Relation
-	newSeg    handle.Segment
-	scheduler tasks.TaskScheduler
-	scopes    []common.ID
+	txn         txnif.AsyncTxn
+	toSegEntry  *catalog.SegmentEntry
+	createdSegs []*catalog.SegmentEntry
+	mergedSegs  []*catalog.SegmentEntry
+	mergedBlks  []*catalog.BlockEntry
+	createdBlks []*catalog.BlockEntry
+	compacted   []handle.Block
+	rel         handle.Relation
+	newSeg      handle.Segment
+	scheduler   tasks.TaskScheduler
+	scopes      []common.ID
 }
 
-func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, metas []*catalog.BlockEntry, segMeta *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
+func NewMergeBlocksTask(ctx *tasks.Context, txn txnif.AsyncTxn, mergedBlks []*catalog.BlockEntry, mergedSegs []*catalog.SegmentEntry, toSegEntry *catalog.SegmentEntry, scheduler tasks.TaskScheduler) (task *mergeBlocksTask, err error) {
 	task = &mergeBlocksTask{
-		txn:       txn,
-		metas:     metas,
-		created:   make([]handle.Block, 0),
-		compacted: make([]handle.Block, 0),
-		scheduler: scheduler,
-		segMeta:   segMeta,
+		txn:         txn,
+		mergedBlks:  mergedBlks,
+		mergedSegs:  mergedSegs,
+		createdBlks: make([]*catalog.BlockEntry, 0),
+		compacted:   make([]handle.Block, 0),
+		scheduler:   scheduler,
+		toSegEntry:  toSegEntry,
 	}
-	dbName := metas[0].GetSegment().GetTable().GetDB().GetName()
+	dbName := mergedBlks[0].GetSegment().GetTable().GetDB().GetName()
 	database, err := txn.GetDatabase(dbName)
 	if err != nil {
 		return
 	}
-	relName := metas[0].GetSchema().Name
+	relName := mergedBlks[0].GetSchema().Name
 	task.rel, err = database.GetRelationByName(relName)
 	if err != nil {
 		return
 	}
-	for _, meta := range metas {
+	for _, meta := range mergedBlks {
 		seg, err := task.rel.GetSegment(meta.GetSegment().GetID())
 		if err != nil {
 			return nil, err
@@ -82,19 +96,20 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 }
 
 func (task *mergeBlocksTask) Execute() (err error) {
-	var targetSeg handle.Segment
-	if task.segMeta == nil {
-		if targetSeg, err = task.rel.CreateNonAppendableSegment(); err != nil {
+	var toSegEntry handle.Segment
+	if task.toSegEntry == nil {
+		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
 			return err
 		}
-		task.segMeta = targetSeg.GetMeta().(*catalog.SegmentEntry)
+		task.toSegEntry = toSegEntry.GetMeta().(*catalog.SegmentEntry)
+		task.createdSegs = append(task.createdSegs, task.toSegEntry)
 	} else {
-		if targetSeg, err = task.rel.GetSegment(task.segMeta.GetID()); err != nil {
+		if toSegEntry, err = task.rel.GetSegment(task.toSegEntry.GetID()); err != nil {
 			return
 		}
 	}
 
-	schema := task.metas[0].GetSchema()
+	schema := task.mergedBlks[0].GetSchema()
 	var deletes *roaring.Bitmap
 	var vec *vector.Vector
 	vecs := make([]*vector.Vector, 0)
@@ -141,11 +156,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += gvec.Length(vec)
-		blk, err = targetSeg.CreateNonAppendableBlock()
+		blk, err = toSegEntry.CreateNonAppendableBlock()
 		if err != nil {
 			return err
 		}
-		task.created = append(task.created, blk)
+		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 		closure := meta.GetBlockData().FlushColumnDataClosure(ts, int(schema.PrimaryKey), vec, false)
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
@@ -181,9 +196,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)
 		for pos, vec := range vecs {
-			created := task.created[pos]
-			closure := created.GetMeta().(*catalog.BlockEntry).GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, created.Fingerprint(), closure)
+			blk := task.createdBlks[pos]
+			closure := blk.GetBlockData().FlushColumnDataClosure(ts, i, vec, false)
+			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 			if err != nil {
 				return
 			}
@@ -192,9 +207,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			}
 		}
 	}
-	for i, created := range task.created {
-		closure := created.GetMeta().(*catalog.BlockEntry).GetBlockData().SyncBlockDataClosure(ts, rows[i])
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, created.Fingerprint(), closure)
+	for i, blk := range task.createdBlks {
+		closure := blk.GetBlockData().SyncBlockDataClosure(ts, rows[i])
+		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
 		if err != nil {
 			return
 		}
@@ -208,9 +223,24 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return
 		}
 	}
+	for _, entry := range task.mergedSegs {
+		if err = task.rel.SoftDeleteSegment(entry.GetID()); err != nil {
+			return
+		}
+	}
 
-	txnEntry := txnentries.NewMergeBlocksEntry(task.txn, task.compacted, task.created, mapping, fromAddr, toAddr, task.scheduler)
-	if err = task.txn.LogTxnEntry(task.segMeta.GetTable().GetID(), txnEntry, ids); err != nil {
+	txnEntry := txnentries.NewMergeBlocksEntry(
+		task.txn,
+		task.rel,
+		task.mergedSegs,
+		task.createdSegs,
+		task.mergedBlks,
+		task.createdBlks,
+		mapping,
+		fromAddr,
+		toAddr,
+		task.scheduler)
+	if err = task.txn.LogTxnEntry(task.toSegEntry.GetTable().GetID(), txnEntry, ids); err != nil {
 		return
 	}
 

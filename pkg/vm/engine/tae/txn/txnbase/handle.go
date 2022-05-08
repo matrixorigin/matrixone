@@ -57,6 +57,7 @@ func (rel *TxnRelation) BatchDedup(col *vector.Vector) error                    
 func (rel *TxnRelation) Append(data *batch.Batch) error                                       { return nil }
 func (rel *TxnRelation) GetMeta() interface{}                                                 { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)                 { return }
+func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                              { return }
 func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)                       { return }
 func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error)          { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v interface{}, err error)       { return }

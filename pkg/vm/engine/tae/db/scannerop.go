@@ -100,12 +100,14 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 		cntLimit = options.DefaultCatalogUnCkpLimit
 	}
 	if intervalLimit <= time.Duration(0) || intervalLimit >= time.Second*180 {
-		logutil.Warnf("Catalog checkpoint schedule interval limit %s is too small|big and is changed to %s", intervalLimit, options.DefaultCatalogCkpInterval)
-		intervalLimit = time.Duration(options.DefaultCatalogCkpInterval)
+		logutil.Warnf("Catalog checkpoint schedule interval limit %d is too small|big and is changed to %d", intervalLimit, options.DefaultCatalogCkpInterval)
+		intervalLimit = time.Millisecond * time.Duration(options.DefaultCatalogCkpInterval)
 	}
 	monitor := &catalogStatsMonitor{
 		LoopProcessor: new(catalog.LoopProcessor),
 		db:            db,
+		intervalLimit: intervalLimit,
+		cntLimit:      cntLimit,
 	}
 	monitor.BlockFn = monitor.onBlock
 	monitor.SegmentFn = monitor.onSegment
@@ -122,8 +124,13 @@ func (monitor *catalogStatsMonitor) PreExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) PostExecute() error {
-	logutil.Infof("[Monotor] Catalog Total Uncheckpointed Cnt [%d, %d]: %d", monitor.minTs, monitor.maxTs, monitor.unCheckpointedCnt)
+	if monitor.unCheckpointedCnt == 0 {
+		monitor.lastScheduleTime = time.Now()
+		return nil
+	}
 	if monitor.unCheckpointedCnt >= monitor.cntLimit || time.Since(monitor.lastScheduleTime) >= monitor.intervalLimit {
+		logutil.Infof("[Monotor] Catalog Total Uncheckpointed Cnt [%d, %d]: %d", monitor.minTs, monitor.maxTs, monitor.unCheckpointedCnt)
+		logutil.Info("Catalog Checkpoint Scheduled")
 		monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, nil, monitor.db.Catalog.CheckpointClosure(monitor.maxTs))
 		monitor.lastScheduleTime = time.Now()
 	}

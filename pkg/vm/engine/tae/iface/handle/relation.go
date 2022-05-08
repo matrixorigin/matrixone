@@ -37,6 +37,8 @@ type Relation interface {
 	CreateSegment() (Segment, error)
 	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
+
+	SoftDeleteSegment(id uint64) (err error)
 }
 
 type RelationIt interface {

@@ -74,7 +74,7 @@ func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskF
 		for _, blk := range blks {
 			scopes = append(scopes, *blk.AsCommonID())
 		}
-		factory = jobs.MergeBlocksTaskFactory(blks, nil, segment.scheduler)
+		factory = jobs.CompactSegmentTaskFactory(blks, segment.scheduler)
 		taskType = tasks.DataCompactionTask
 		return
 	}

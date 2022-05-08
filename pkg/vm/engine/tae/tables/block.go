@@ -59,6 +59,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		file:      file,
 		mvcc:      updates.NewMVCCHandle(meta),
 		scheduler: scheduler,
+		bufMgr:    bufMgr,
 	}
 	if meta.IsAppendable() {
 		node = newNode(bufMgr, block, file)
@@ -113,16 +114,24 @@ func (blk *dataBlock) RunCalibration() {
 	atomic.AddUint32(&blk.nice, uint32(1))
 }
 
+func (blk *dataBlock) resetNice() {
+	atomic.StoreUint32(&blk.nice, uint32(0))
+}
+
 func (blk *dataBlock) estimateRawScore() int {
 	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
 		return 100
 	}
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
+
+	if blk.mvcc.GetChangeNodeCnt() == 0 && !blk.meta.IsAppendable() {
+		return 0
+	} else if blk.mvcc.GetChangeNodeCnt() == 0 && blk.meta.IsAppendable() && blk.mvcc.LoadMaxVisible() <= blk.GetMaxCheckpointTS() {
 		return 0
 	}
+	ret := 0
 	cols := 0
-	factor := float64(0)
 	rows := blk.Rows(nil, true)
+	factor := float64(0)
 	for i := range blk.meta.GetSchema().ColDefs {
 		cols++
 		cnt := blk.mvcc.GetColumnUpdateCnt(uint16(i))
@@ -139,7 +148,7 @@ func (blk *dataBlock) estimateRawScore() int {
 	factor = factor / float64(cols)
 	deleteCnt := blk.mvcc.GetDeleteCnt()
 	factor += float64(deleteCnt) / float64(rows) * 50
-	ret := int(factor * 100)
+	ret += int(factor * 100)
 	if ret == 0 {
 		ret += 1
 	}
@@ -177,7 +186,12 @@ func (blk *dataBlock) EstimateScore() int {
 		blk.meta.RUnlock()
 		return 100
 	}
+
 	score := blk.estimateRawScore()
+	if score == 0 {
+		blk.resetNice()
+		return 0
+	}
 	score += int(atomic.LoadUint32(&blk.nice))
 	return score
 }
@@ -190,13 +204,15 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory
 	if dropped || inTxn {
 		return
 	}
-	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
-	taskType = tasks.DataCompactionTask
+	if !blk.meta.IsAppendable() || (blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows)) {
+		factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
+		taskType = tasks.DataCompactionTask
+	} else if blk.meta.IsAppendable() {
+		factory = jobs.CompactABlockTaskFactory(blk.meta, blk.scheduler)
+		taskType = tasks.DataCompactionTask
+	}
 	scopes = append(scopes, *blk.meta.AsCommonID())
 	return
-	// if !blk.meta.IsAppendable() {
-	// }
-	// return
 }
 
 func (blk *dataBlock) IsAppendable() bool {

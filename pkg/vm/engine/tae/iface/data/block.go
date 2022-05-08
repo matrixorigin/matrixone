@@ -60,6 +60,8 @@ type Block interface {
 	SetMaxCheckpointTS(ts uint64)
 	GetMaxCheckpointTS() uint64
 
+	ForceCompact() error
+
 	CheckpointWALClosure(endTs uint64) tasks.FuncT
 	SyncBlockDataClosure(ts uint64, rows uint32) tasks.FuncT
 	FlushColumnDataClosure(ts uint64, colIdx int, colData *vector.Vector, sync bool) tasks.FuncT

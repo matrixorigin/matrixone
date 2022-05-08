@@ -202,6 +202,7 @@ func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
 	// }
 	be.Txn = nil
 	be.LogIndex = index
+	// logutil.Infof("Apply0Index %s", index.String())
 	return nil
 }
 

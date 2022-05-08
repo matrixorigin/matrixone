@@ -3,8 +3,8 @@ package txnentries
 import (
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -15,24 +15,30 @@ import (
 
 type mergeBlocksEntry struct {
 	sync.RWMutex
-	txn       txnif.AsyncTxn
-	merged    []handle.Block
-	created   []handle.Block
-	mapping   []uint32
-	fromAddr  []uint32
-	toAddr    []uint32
-	scheduler tasks.TaskScheduler
+	txn         txnif.AsyncTxn
+	relation    handle.Relation
+	droppedSegs []*catalog.SegmentEntry
+	createdSegs []*catalog.SegmentEntry
+	droppedBlks []*catalog.BlockEntry
+	createdBlks []*catalog.BlockEntry
+	mapping     []uint32
+	fromAddr    []uint32
+	toAddr      []uint32
+	scheduler   tasks.TaskScheduler
 }
 
-func NewMergeBlocksEntry(txn txnif.AsyncTxn, merged []handle.Block, created []handle.Block, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler) *mergeBlocksEntry {
+func NewMergeBlocksEntry(txn txnif.AsyncTxn, relation handle.Relation, droppedSegs, createdSegs []*catalog.SegmentEntry, droppedBlks, createdBlks []*catalog.BlockEntry, mapping, fromAddr, toAddr []uint32, scheduler tasks.TaskScheduler) *mergeBlocksEntry {
 	return &mergeBlocksEntry{
-		txn:       txn,
-		created:   created,
-		merged:    merged,
-		mapping:   mapping,
-		fromAddr:  fromAddr,
-		toAddr:    toAddr,
-		scheduler: scheduler,
+		txn:         txn,
+		relation:    relation,
+		createdSegs: createdSegs,
+		droppedSegs: droppedSegs,
+		createdBlks: createdBlks,
+		droppedBlks: droppedBlks,
+		mapping:     mapping,
+		fromAddr:    fromAddr,
+		toAddr:      toAddr,
+		scheduler:   scheduler,
 	}
 }
 
@@ -48,20 +54,20 @@ func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (entry *mergeBlocksEntry) PostCommit() {
-	for _, blk := range entry.merged {
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, meta.AsCommonID(), meta.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
+	for _, blk := range entry.droppedBlks {
+		entry.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.AsCommonID(), blk.GetBlockData().CheckpointWALClosure(entry.txn.GetCommitTS()))
 	}
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	from := make([]*common.ID, 0)
-	for _, blk := range entry.merged {
-		from = append(from, (*common.ID)(blk.Fingerprint()))
+	for _, blk := range entry.droppedBlks {
+		id := blk.AsCommonID()
+		from = append(from, id)
 	}
 	to := make([]*common.ID, 0)
-	for _, blk := range entry.created {
-		to = append(to, (*common.ID)(blk.Fingerprint()))
+	for _, blk := range entry.createdBlks {
+		to = append(to, blk.AsCommonID())
 	}
 	cmd = newMergeBlocksCmd(from, to)
 	return
@@ -96,8 +102,21 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 }
 
 func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
-	for fromPos, merged := range entry.merged {
-		dataBlock := merged.GetMeta().(*catalog.BlockEntry).GetBlockData()
+	blks := make([]handle.Block, len(entry.createdBlks))
+	for i, meta := range entry.createdBlks {
+		id := meta.AsCommonID()
+		seg, err := entry.relation.GetSegment(id.SegmentID)
+		if err != nil {
+			return err
+		}
+		blk, err := seg.GetBlock(id.BlockID)
+		if err != nil {
+			return err
+		}
+		blks[i] = blk
+	}
+	for fromPos, dropped := range entry.droppedBlks {
+		dataBlock := dropped.GetBlockData()
 		v := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())
 		view := v.(*updates.BlockView)
 		if view == nil {
@@ -110,7 +129,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			for row, v := range view.UpdateVals[colIdx] {
 				toPos, toRow := entry.resolveAddr(fromPos, row)
 
-				if err = entry.created[toPos].Update(toRow, colIdx, v); err != nil {
+				if err = blks[toPos].Update(toRow, colIdx, v); err != nil {
 					return
 				}
 			}
@@ -123,7 +142,7 @@ func (entry *mergeBlocksEntry) PrepareCommit() (err error) {
 			for it.HasNext() {
 				row := it.Next()
 				toPos, toRow := entry.resolveAddr(fromPos, row)
-				if err = entry.created[toPos].RangeDelete(toRow, toRow); err != nil {
+				if err = blks[toPos].RangeDelete(toRow, toRow); err != nil {
 					return
 				}
 			}

@@ -68,6 +68,7 @@ type Table interface {
 	CreateNonAppendableSegment() (handle.Segment, error)
 	CreateBlock(sid uint64) (handle.Block, error)
 	GetBlock(id *common.ID) (handle.Block, error)
+	SoftDeleteSegment(id uint64) error
 	SoftDeleteBlock(id *common.ID) error
 	CreateNonAppendableBlock(sid uint64) (handle.Block, error)
 	CollectCmd(*commandManager) error
@@ -174,10 +175,22 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	if meta, err = tbl.entry.GetSegmentByID(id); err != nil {
 		return
 	}
+	meta.RLock()
 	if !meta.TxnCanRead(tbl.store.txn, nil) {
 		err = txnbase.ErrNotFound
 	}
+	meta.RUnlock()
 	seg = newSegment(tbl.store.txn, meta)
+	return
+}
+
+func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
+	txnEntry, err := tbl.entry.DropSegmentEntry(id, tbl.store.txn)
+	if err != nil {
+		return
+	}
+	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	tbl.store.warChecker.ReadTable(tbl.entry.AsCommonID())
 	return
 }
 

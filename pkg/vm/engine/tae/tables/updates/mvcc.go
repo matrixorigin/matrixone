@@ -204,7 +204,7 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs uint64) (index
 	if len(n.appends) == 0 {
 		return
 	}
-	startOffset, _, startOk := n.getMaxVisibleRowLocked(startTs)
+	startOffset, _, startOk := n.getMaxVisibleRowLocked(startTs - 1)
 	endOffset, _, endOk := n.getMaxVisibleRowLocked(endTs)
 	if !endOk {
 		return

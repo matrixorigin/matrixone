@@ -201,6 +201,20 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	return err
 }
 
+func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (deleted *SegmentEntry, err error) {
+	seg, err := entry.GetSegmentByID(id)
+	if err != nil {
+		return
+	}
+	seg.Lock()
+	defer seg.Unlock()
+	err = seg.DropEntryLocked(txn)
+	if err == nil {
+		deleted = seg
+	}
+	return
+}
+
 func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 	entry.Lock()
 	defer entry.Unlock()
