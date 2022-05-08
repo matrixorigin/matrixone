@@ -16,9 +16,12 @@ package function
 
 // function id list.
 const (
-	operatorEqualUint8Uint8 = iota
+	undefined = iota
+	operatorEqualUint8Uint8
 	operatorEqualUint16Uint16
 	operatorEqualUint32Uint32
 
-	operatorCaseWhenInt64
+	builtinCaseWhenInt64
+
+	aggregateMaxInt64
 )

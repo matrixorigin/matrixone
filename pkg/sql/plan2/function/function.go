@@ -16,23 +16,15 @@ package function
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"reflect"
-	"sync"
 )
 
 const (
-	// NoLimit is a flag that means no number limit for argument number
-	NoLimit = -1
-
 	// NullValueType is the type of const value `NULL`
 	// If input NULL as an argument, its type should be NullValue which can match each type.
 	// e.g.
@@ -87,73 +79,11 @@ type Arg struct {
 	Typ  types.T
 }
 
-var registerMutex = sync.RWMutex{} // read/write lock for functionRegister
-var functionRegister = map[string][]Function{
-	// Operators
-	"=": []Function{
-		{
-			Name: "=(uint8, uint8)",
-			Flag: plan.Function_STRICT,
-			Args: MakeLimitArgList([]Arg{
-				{Name: "left", Typ: types.T_uint8},
-				{Name: "right", Typ: types.T_uint8},
-			}),
-			ReturnTyp: types.T_uint8,
-			ID:        operatorEqualUint8Uint8,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				lv, rv := vs[0], vs[1]
-				lvs, rvs := lv.Col.([]uint8), rv.Col.([]uint8)
-				vec, err := process.Get(proc, int64(len(lvs)), lv.Typ)
-				if err != nil {
-					return nil, err
-				}
-				rs := encoding.DecodeUint8Slice(vec.Data)
-				rs = rs[:len(rvs)]
-				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
-				vector.SetCol(vec, add.Uint8Add(lvs, rvs, rs))
-				if lv.Ref == 0 {
-					process.Put(proc, lv)
-				}
-				if rv.Ref == 0 {
-					process.Put(proc, rv)
-				}
-				return vec, nil
-			},
-		},
-	},
-
-	"case": {
-		{
-			Name: "case_when_int64",
-			Flag: plan.Function_NONE,
-			Args: MakeUnLimitArgList(func(ts []types.T) bool {
-				l := len(ts)
-				if l < 3 {
-					return false
-				}
-
-				for i := 0; i < l-1; i += 2 { //case and then should be int64
-					if ts[i] != types.T_int64 && isNotNull(ts[i]) {
-						return false
-					}
-				}
-				if l%2 == 1 { // has else part
-					if ts[l-1] != types.T_int64 && isNotNull(ts[l-1]) {
-						return false
-					}
-				}
-				return true
-			}),
-			ReturnTyp: types.T_int64,
-			ID:        operatorCaseWhenInt64,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				return nil, nil
-			},
-		},
-	},
-	// Functions
-	// SubQuery
-}
+// functionRegister records the information about
+// all the operator, built-function and aggregate function.
+//
+// For use in other packages, see GetFunctionByID and GetFunctionByName
+var functionRegister = map[string][]Function{}
 
 func MakeLimitArgList(args []Arg) ArgList {
 	return ArgList{
@@ -173,22 +103,6 @@ func MakeUnLimitArgList(fn func([]types.T) bool) ArgList {
 			TypeCheckFn func(inputTypes []types.T) bool
 		}{TypeCheckFn: fn},
 	}
-}
-
-func AppendFunction(name string, newFunction Function) error {
-	if fs, ok := functionRegister[name]; ok {
-		for _, f := range fs {
-			if reflect.DeepEqual(f, newFunction) {
-				return errors.New(errno.DuplicateFunction, fmt.Sprintf("function %s(%v) existed.", name, f.Args))
-			}
-		}
-	}
-
-	registerMutex.Lock()
-	defer registerMutex.Unlock()
-
-	functionRegister[name] = append(functionRegister[name], newFunction)
-	return nil
 }
 
 // GetFunctionByID get function structure by its function id.
