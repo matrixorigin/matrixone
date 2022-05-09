@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 type heartbeater struct {

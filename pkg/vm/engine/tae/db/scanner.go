@@ -3,7 +3,7 @@ package db
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 type DBScanner interface {

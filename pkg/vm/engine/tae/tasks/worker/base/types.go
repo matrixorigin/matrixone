@@ -12,26 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ops
+package base
 
 import (
-	"time"
-
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
-	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
-type OpDoneCB = func(iops.IOp)
+type IOpWorker interface {
+	Start()
+	Stop()
+	SendOp(ops.IOp) bool
+	StopReceiver()
+	WaitStop()
+	StatsString() string
+}
 
-type Op struct {
-	Impl       iops.IOpInternal
-	ErrorC     chan error
-	Worker     iworker.IOpWorker
-	Err        error
-	Result     interface{}
-	CreateTime time.Time
-	StartTime  time.Time
-	EndTime    time.Time
-	DoneCB     OpDoneCB
-	Observers  []iops.Observer
+type IHeartbeater interface {
+	Start()
+	Stop()
+}
+
+type IHBHandle interface {
+	OnExec()
+	OnStopped()
 }

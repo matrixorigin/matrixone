@@ -18,8 +18,8 @@ import (
 	"errors"
 	"time"
 
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
-	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
+	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {

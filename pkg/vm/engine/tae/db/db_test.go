@@ -25,8 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )

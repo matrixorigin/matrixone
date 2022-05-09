@@ -231,6 +231,10 @@ func (be *BaseEntry) DeleteBefore(ts uint64) bool {
 	return false
 }
 
+func (be *BaseEntry) GetLogIndex() *wal.Index {
+	return be.LogIndex
+}
+
 func (be *BaseEntry) DeleteAfter(ts uint64) bool {
 	if be.DeleteAt != 0 {
 		return be.DeleteAt > ts

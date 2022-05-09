@@ -38,7 +38,25 @@ func (blk *dataBlock) CheckpointWAL(endTs uint64) (err error) {
 	if blk.meta.IsAppendable() {
 		return blk.ABlkCheckpointWAL(endTs)
 	}
-	// TODO
+	return blk.BlkCheckpointWAL(endTs)
+}
+
+func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
+	ckpTs := blk.GetMaxCheckpointTS()
+	if endTs <= ckpTs {
+		return
+	}
+	view := blk.CollectChangesInRange(ckpTs+1, endTs).(*updates.BlockView)
+	cnt := 0
+	for _, idxes := range view.ColLogIndexes {
+		cnt += len(idxes)
+		blk.scheduler.Checkpoint(idxes)
+		for _, index := range idxes {
+			logutil.Infof("Ckp2Index  %s", index.String())
+		}
+	}
+	// logutil.Infof("BLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, cnt, blk.meta.String())
+	blk.SetMaxCheckpointTS(endTs)
 	return
 }
 
@@ -53,7 +71,7 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 		blk.scheduler.Checkpoint(idxes)
 	}
 	blk.scheduler.Checkpoint(indexes)
-	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed ", ckpTs+1, endTs, len(indexes))
+	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
 	// for _, index := range indexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
 	// }

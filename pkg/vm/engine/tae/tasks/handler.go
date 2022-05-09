@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 
 var (

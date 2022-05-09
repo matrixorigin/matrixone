@@ -176,7 +176,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	meta.RLock()
-	if !meta.TxnCanRead(tbl.store.txn, nil) {
+	if !meta.TxnCanRead(tbl.store.txn, meta.RWMutex) {
 		err = txnbase.ErrNotFound
 	}
 	meta.RUnlock()

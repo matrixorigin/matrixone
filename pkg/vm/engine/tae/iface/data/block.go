@@ -59,6 +59,7 @@ type Block interface {
 
 	SetMaxCheckpointTS(ts uint64)
 	GetMaxCheckpointTS() uint64
+	GetMaxVisibleTS() uint64
 
 	ForceCompact() error
 

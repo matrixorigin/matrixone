@@ -2,8 +2,8 @@ package tasks
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var WaitableCtx = &Context{Waitable: true}

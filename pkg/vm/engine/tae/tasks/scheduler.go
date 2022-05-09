@@ -5,9 +5,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
 )
 
 var (
@@ -25,6 +25,7 @@ type TaskScheduler interface {
 	Scheduler
 	ScheduleTxnTask(ctx *Context, taskType TaskType, factory TxnTaskFactory) (Task, error)
 	ScheduleMultiScopedTxnTask(ctx *Context, taskType TaskType, scopes []common.ID, factory TxnTaskFactory) (Task, error)
+	ScheduleMultiScopedFn(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) (Task, error)
 	ScheduleFn(ctx *Context, taskType TaskType, fn func() error) (Task, error)
 	ScheduleScopedFn(ctx *Context, taskType TaskType, scope *common.ID, fn func() error) (Task, error)
 	Checkpoint(indexes []*wal.Index) error

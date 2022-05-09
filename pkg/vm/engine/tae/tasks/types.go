@@ -5,7 +5,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
@@ -26,6 +26,7 @@ const (
 
 	DataCompactionTask
 	CheckpointTask
+	GCTask
 	IOTask
 )
 
@@ -91,9 +92,11 @@ type ScopedFnTask struct {
 
 func NewScopedFnTask(ctx *Context, taskType TaskType, scope *common.ID, fn FuncT) *ScopedFnTask {
 	task := &ScopedFnTask{
-		FnTask: NewFnTask(ctx, taskType, fn),
+		FnTask: new(FnTask),
 		scope:  scope,
 	}
+	task.Fn = fn
+	task.BaseTask = NewBaseTask(task, taskType, ctx)
 	return task
 }
 
@@ -106,10 +109,14 @@ type MultiScopedFnTask struct {
 
 func NewMultiScopedFnTask(ctx *Context, taskType TaskType, scopes []common.ID, fn FuncT) *MultiScopedFnTask {
 	task := &MultiScopedFnTask{
-		FnTask: NewFnTask(ctx, taskType, fn),
+		FnTask: new(FnTask),
 		scopes: scopes,
 	}
+	task.Fn = fn
+	task.BaseTask = NewBaseTask(task, taskType, ctx)
 	return task
 }
 
-func (task *MultiScopedFnTask) Scopes() []common.ID { return task.scopes }
+func (task *MultiScopedFnTask) Scopes() []common.ID {
+	return task.scopes
+}

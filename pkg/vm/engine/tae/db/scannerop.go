@@ -19,6 +19,7 @@ type calibrationOp struct {
 	*catalog.LoopProcessor
 	db              *DB
 	blkCntOfSegment int
+	safeTs          uint64
 }
 
 func newCalibrationOp(db *DB) *calibrationOp {
@@ -42,7 +43,6 @@ func (processor *calibrationOp) onSegment(segmentEntry *catalog.SegmentEntry) (e
 
 func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry) (err error) {
 	if processor.blkCntOfSegment >= int(segmentEntry.GetTable().GetSchema().SegmentMaxBlocks) {
-		// processor.db.CKPDriver.EnqueueCheckpointUnit(segmentEntry.GetSegmentData())
 		segmentData := segmentEntry.GetSegmentData()
 		taskFactory, taskType, scopes, err := segmentData.BuildCompactionTaskFactory()
 		if err != nil || taskFactory == nil {
@@ -140,6 +140,27 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err error) {
 	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
+	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointed()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.maxTs) {
+		logIndex := entry.GetLogIndex()
+		if logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if gcNeeded {
+		scopes := MakeBlockScopes(entry)
+		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry))
+		if err != nil {
+			if err != tasks.ErrScheduleScopeConflict {
+				logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
+			}
+			err = nil
+		}
 	}
 	return
 }
@@ -147,6 +168,28 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err error) {
 	if monitor.minTs <= monitor.maxTs && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
+		return
+	}
+	checkpointed := monitor.db.Scheduler.GetCheckpointed()
+	gcNeeded := false
+	entry.RLock()
+	if entry.IsDroppedCommitted() {
+		logIndex := entry.GetLogIndex()
+		if logIndex != nil {
+			gcNeeded = checkpointed >= logIndex.LSN
+		}
+	}
+	entry.RUnlock()
+	if gcNeeded {
+		scopes := MakeSegmentScopes(entry)
+		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry))
+		if err != nil {
+			if err != tasks.ErrScheduleScopeConflict {
+				logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
+			}
+			err = nil
+		}
+		err = catalog.ErrStopCurrRecur
 	}
 	return
 }

@@ -148,3 +148,7 @@ func (entry *BlockEntry) CloneCreate() CheckpointItem {
 	}
 	return cloned
 }
+
+func (entry *BlockEntry) DestroyData() (err error) {
+	return entry.blkData.Destroy()
+}

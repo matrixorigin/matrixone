@@ -108,6 +108,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 	jobHandler := tasks.NewPoolHandler(asyncWorkers)
 	jobHandler.Start()
 	jobDispatcher.RegisterHandler(tasks.DataCompactionTask, jobHandler)
+	jobDispatcher.RegisterHandler(tasks.GCTask, jobHandler)
 
 	ckpDispatcher := tasks.NewBaseScopedDispatcher(tasks.DefaultScopeSharder)
 	for i := 0; i < 4; i++ {
@@ -123,6 +124,7 @@ func newTaskScheduler(db *DB, asyncWorkers int, ioWorkers int) *taskScheduler {
 		handler.Start()
 	}
 
+	s.RegisterDispatcher(tasks.GCTask, jobDispatcher)
 	s.RegisterDispatcher(tasks.DataCompactionTask, jobDispatcher)
 	s.RegisterDispatcher(tasks.IOTask, ioDispatcher)
 	s.RegisterDispatcher(tasks.CheckpointTask, ckpDispatcher)
@@ -143,6 +145,12 @@ func (s *taskScheduler) ScheduleTxnTask(ctx *tasks.Context, taskType tasks.TaskT
 
 func (s *taskScheduler) ScheduleMultiScopedTxnTask(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, factory tasks.TxnTaskFactory) (task tasks.Task, err error) {
 	task = NewScheduledTxnTask(ctx, s.db, taskType, scopes, factory)
+	err = s.Schedule(task)
+	return
+}
+
+func (s *taskScheduler) ScheduleMultiScopedFn(ctx *tasks.Context, taskType tasks.TaskType, scopes []common.ID, fn tasks.FuncT) (task tasks.Task, err error) {
+	task = tasks.NewMultiScopedFnTask(ctx, taskType, scopes, fn)
 	err = s.Schedule(task)
 	return
 }
@@ -178,7 +186,7 @@ func (s *taskScheduler) ScheduleScopedFn(ctx *tasks.Context, taskType tasks.Task
 
 func (s *taskScheduler) Schedule(task tasks.Task) (err error) {
 	taskType := task.Type()
-	if taskType == tasks.DataCompactionTask {
+	if taskType == tasks.DataCompactionTask || taskType == tasks.GCTask {
 		dispatcher := s.Dispatchers[task.Type()].(*asyncJobDispatcher)
 		return dispatcher.TryDispatch(task)
 	}

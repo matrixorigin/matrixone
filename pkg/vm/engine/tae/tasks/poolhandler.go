@@ -4,8 +4,8 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
-	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 	"github.com/panjf2000/ants/v2"
 )
 

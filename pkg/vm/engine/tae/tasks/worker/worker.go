@@ -20,8 +20,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/ops/base"
-	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/worker/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
+	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
 type Cmd = uint8
