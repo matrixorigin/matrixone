@@ -133,7 +133,15 @@ func (holder *nonAppendableBlockIndexHolder) InitFromHost(host data.Block, schem
 	return nil
 }
 
-
+func (holder *nonAppendableBlockIndexHolder) Destroy() (err error) {
+	if err = holder.zoneMapIndex.Destroy(); err != nil {
+		return err
+	}
+	if err = holder.staticFilterIndex.Destroy(); err != nil {
+		return err
+	}
+	return nil
+}
 
 func (holder *nonAppendableBlockIndexHolder) GetHostBlockId() uint64 {
 	return holder.host.GetID()

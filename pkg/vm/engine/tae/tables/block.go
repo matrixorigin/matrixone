@@ -87,6 +87,11 @@ func (blk *dataBlock) Destroy() (err error) {
 	if blk.file != nil {
 		blk.file.Close()
 	}
+	if blk.indexHolder != nil {
+		if err = blk.indexHolder.Destroy(); err != nil {
+			return err
+		}
+	}
 	return
 }
 

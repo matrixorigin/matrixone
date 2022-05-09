@@ -1243,6 +1243,11 @@ func TestGCBlock1(t *testing.T) {
 	assert.Equal(t, 1, tae.MTBufMgr.Count())
 	blkData.Destroy()
 	assert.Equal(t, 0, tae.MTBufMgr.Count())
+
+	assert.Equal(t, 2, idxCommon.MockIndexBufferManager.Count())
+	err = task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().Destroy()
+	assert.Nil(t, err)
+	assert.Equal(t, 0, idxCommon.MockIndexBufferManager.Count())
 }
 
 func TestLogIndex1(t *testing.T) {

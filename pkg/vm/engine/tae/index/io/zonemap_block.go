@@ -66,11 +66,14 @@ func (n *blockZoneMapIndexNode) OnUnload() {
 }
 
 func (n *blockZoneMapIndexNode) OnDestroy() {
-	// no-op
+	n.host.Unref()
 }
 
-func (n *blockZoneMapIndexNode) Close() error {
-	// no-op
+func (n *blockZoneMapIndexNode) Close() (err error) {
+	if err = n.Node.Close(); err != nil {
+		return err
+	}
+	n.inner = nil
 	return nil
 }
 
@@ -84,6 +87,13 @@ func NewBlockZoneMapIndexReader() *BlockZoneMapIndexReader {
 
 func (reader *BlockZoneMapIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
 	reader.inode = newBlockZoneMapIndexNode(mgr, host, id)
+	return nil
+}
+
+func (reader *BlockZoneMapIndexReader) Destroy() (err error) {
+	if err = reader.inode.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 

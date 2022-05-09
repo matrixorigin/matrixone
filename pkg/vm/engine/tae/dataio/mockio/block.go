@@ -127,6 +127,7 @@ func (bf *blockFile) Destory() {
 	}
 	bf.columns = nil
 	bf.deletes = nil
+	bf.indexMeta = nil
 }
 
 func (bf *blockFile) Sync() error { return nil }

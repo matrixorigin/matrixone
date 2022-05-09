@@ -26,4 +26,5 @@ type INonAppendableBlockIndexHolder interface {
 
 type IBlockIndexHolder interface {
 	GetHostBlockId() uint64
+	Destroy() error
 }

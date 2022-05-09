@@ -77,10 +77,11 @@ func (holder *appendableBlockIndexHolder) BatchDedup(keys *vector.Vector) error 
 	return nil
 }
 
-//func (holder *appendableBlockIndexHolder) Upgrade() (acif.INonAppendableBlockIndexHolder, error) {
-//	// TODO: implement
-//	return nil, nil
-//}
+func (holder *appendableBlockIndexHolder) Destroy() error {
+	holder.treeIndex = nil
+	holder.zoneMapIndex = nil
+	return nil
+}
 
 func (holder *appendableBlockIndexHolder) GetHostBlockId() uint64 {
 	return holder.host.GetID()

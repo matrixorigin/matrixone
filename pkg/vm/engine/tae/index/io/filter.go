@@ -67,11 +67,14 @@ func (n *staticFilterIndexNode) OnUnload() {
 }
 
 func (n *staticFilterIndexNode) OnDestroy() {
-	// no-op
+	n.host.Unref()
 }
 
-func (n *staticFilterIndexNode) Close() error {
-	// no-op
+func (n *staticFilterIndexNode) Close() (err error) {
+	if err = n.Node.Close(); err != nil {
+		return err
+	}
+	n.inner = nil
 	return nil
 }
 
@@ -85,6 +88,13 @@ func NewStaticFilterIndexReader() *StaticFilterIndexReader {
 
 func (reader *StaticFilterIndexReader) Init(mgr base.INodeManager, host gCommon.IVFile, id *gCommon.ID) error {
 	reader.inode = newStaticFilterIndexNode(mgr, host, id)
+	return nil
+}
+
+func (reader *StaticFilterIndexReader) Destroy() (err error) {
+	if err = reader.inode.Close(); err != nil {
+		return err
+	}
 	return nil
 }
 
