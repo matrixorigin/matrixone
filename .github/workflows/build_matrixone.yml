@@ -42,7 +42,7 @@ jobs:
       - name: Formats　Check
         run: |
           cd $GITHUB_WORKSPACE && make clean
-          if [ "$(make fmt | wc -l)" -gt 0 ]; then exit 1; fi
+          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
 
 
       - name: Detect non-ascii characters
