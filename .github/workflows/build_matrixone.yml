@@ -39,6 +39,12 @@ jobs:
         with:
           go-version: 1.18
 
+      - name: Formats　Check
+        run: |
+          cd $GITHUB_WORKSPACE && make clean
+          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
+
+
       - name: Detect non-ascii characters
         run: |
           na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
