@@ -137,7 +137,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f32", val))
 				}
-				col.F32 = append(col.F32, float32(colVal))
+				col.F32 = append(col.F32, colVal)
 				return nil
 			case plan.Type_FLOAT64, plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
 				colVal, ok := constant.Float64Val(val)

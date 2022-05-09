@@ -46,7 +46,7 @@ func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerC
 				C: &plan.Const{
 					Isnull: false,
 					Value: &plan.Const_Sval{
-						Sval: string(kindExpr.Parts[0]),
+						Sval: kindExpr.Parts[0],
 					},
 				},
 			},

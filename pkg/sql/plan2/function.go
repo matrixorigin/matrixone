@@ -19,7 +19,7 @@ import (
 )
 
 //
-// Function signature.  ArgTypeClass and ArgType need some explaination.
+// Function signature.  ArgTypeClass and ArgType need some explanation.
 // ArgTypeClass defines type equivalent class for this function.  The first
 // equivlent class is the return type.   For each argument of this function
 // it has a arg type, which is an index into the ArgTypeClass.   Let's
