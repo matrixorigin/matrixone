@@ -40,12 +40,14 @@ type Optimizer interface {
 
 //use for build select
 type SelectContext struct {
-	//when build_from we may set tableAlias and then use in build_where
 	//when build_projection we may set columnAlias and then use in build_orderby
-	tableAlias  map[string]string
 	columnAlias map[string]*plan.Expr
+	//when build_cte will set cteTables and use in build_from
+	cteTables map[string]*plan.TableDef
 
 	//use for build subquery
 	subQueryIsCorrelated bool
-	subQueryParentId     int32
+	subQueryIsScalar     bool
+
+	subQueryParentId []int32
 }

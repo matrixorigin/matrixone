@@ -16,12 +16,196 @@ package plan2
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
+	//Get function
+	functionSig, ok := BuiltinFunctionsMap[name]
+	if !ok {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function name '%v' is not exist", name))
+	}
+
+	//Check parameters length
+	if len(functionSig.ArgType) != len(exprs) {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("number of parameters does not match for function '%v'", functionSig.Name))
+	}
+
+	//Get original input expr
+	args := make([]*plan.Expr, 0, len(exprs))
+	//todo special case  need check
+	if name == "EXTRACT" {
+		kindExpr := exprs[0].(*tree.UnresolvedName)
+		args = append(args, &plan.Expr{
+			Expr: &plan.Expr_C{
+				C: &plan.Const{
+					Isnull: false,
+					Value: &plan.Const_Sval{
+						Sval: string(kindExpr.Parts[0]),
+					},
+				},
+			},
+			Typ: &plan.Type{
+				Id:        plan.Type_VARCHAR,
+				Nullable:  false,
+				Width:     math.MaxInt32,
+				Precision: 0,
+			},
+		})
+		exprs = []tree.Expr{exprs[1]}
+	}
+
+	for _, astExpr := range exprs {
+		expr, err := buildExpr(astExpr, ctx, query, selectCtx)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, expr)
+	}
+
+	//Convert input parameter types if necessary
+	returnType, err := covertArgsTypeAndGetReturnType(functionSig, args)
+	if err != nil {
+		return nil, err
+	}
+
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef(name),
+				Args: args,
+			},
+		},
+		Typ: returnType,
+	}, nil
+}
+
+func covertArgsTypeAndGetReturnType(fun *FunctionSig, args []*plan.Expr) (*plan.Type, error) {
+	var returnType *plan.Type
+	switch fun.Name {
+	case "+", "-", "*", "/", "%":
+		leftIsNumber := checkNumberType(args[0].Typ.Id, args[0].Alias) == nil
+		rightIsNumber := checkNumberType(args[1].Typ.Id, args[1].Alias) == nil
+
+		if !leftIsNumber && !rightIsNumber {
+			newExpr, err := appendCastExpr(args[0], plan.Type_INT64) // todo need research
+			if err != nil {
+				return nil, err
+			}
+			args[0] = newExpr
+
+			newExpr, err = appendCastExpr(args[1], plan.Type_INT64) // todo need research
+			if err != nil {
+				return nil, err
+			}
+			args[1] = newExpr
+			return &plan.Type{
+				Id: fun.ArgTypeClass[0],
+			}, nil
+		}
+
+		if !leftIsNumber {
+			newExpr, err := appendCastExpr(args[0], args[1].Typ.Id) // todo need research
+			if err != nil {
+				return nil, err
+			}
+			args[0] = newExpr
+			return &plan.Type{
+				Id: args[1].Typ.Id,
+			}, nil
+		}
+		if !rightIsNumber {
+			newExpr, err := appendCastExpr(args[1], args[0].Typ.Id) // todo need research
+			if err != nil {
+				return nil, err
+			}
+			args[0] = newExpr
+			return &plan.Type{
+				Id: args[0].Typ.Id,
+			}, nil
+		}
+
+		//equal type, return directly
+		if args[0].Typ.Id == args[1].Typ.Id {
+			return &plan.Type{
+				Id: args[0].Typ.Id,
+			}, nil
+		}
+
+		//cast low type to high type
+		_, ok := CastLowTypeToHighTypeMap[args[0].Typ.Id]
+		if !ok {
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type mapping not found, arg[0] type= %v", args[0].Typ.Id))
+		}
+		highType, ok := CastLowTypeToHighTypeMap[args[0].Typ.Id][args[1].Typ.Id]
+		if !ok {
+			return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type mapping not found, arg[1] type= %v", args[1].Typ.Id))
+		}
+		if args[0].Typ.Id != highType {
+			newExpr, err := appendCastExpr(args[0], highType)
+			if err != nil {
+				return nil, err
+			}
+			args[0] = newExpr
+		}
+		if args[1].Typ.Id != highType {
+			newExpr, err := appendCastExpr(args[1], highType)
+			if err != nil {
+				return nil, err
+			}
+			args[1] = newExpr
+		}
+		return &plan.Type{
+			Id: args[0].Typ.Id,
+		}, nil
+	case "UNARY_PLUS", "UNARY_MINUS":
+		expr := args[0]
+		isNumberType := checkNumberType(expr.Typ.Id, expr.Alias) == nil
+		if !isNumberType {
+			newExpr, err := appendCastExpr(expr, plan.Type_INT64)
+			if err != nil {
+				return nil, err
+			}
+			args[0] = newExpr
+			returnType = &plan.Type{ //need check
+				Id: plan.Type_INT64,
+			}
+		} else {
+			returnType = expr.Typ
+		}
+		return returnType, nil
+	default:
+		return &plan.Type{
+			Id: fun.ArgTypeClass[0],
+		}, nil
+	}
+}
+
+func appendCastExpr(expr *plan.Expr, toType plan.Type_TypeId) (*plan.Expr, error) {
+	//todo check and cast constant expr in buildding
+	return &plan.Expr{
+		Expr: &plan.Expr_F{
+			F: &plan.Function{
+				Func: getFunctionObjRef("CAST"),
+				Args: []*plan.Expr{expr},
+			},
+		},
+		Typ: &plan.Type{
+			Id: toType,
+		},
+	}, nil
+}
+
+func getFunctionObjRef(name string) *plan.ObjectRef {
+	return &plan.ObjectRef{
+		ObjName: name,
+	}
+}
 
 func checkFloatType(typ plan.Type_TypeId, alias string) error {
 	switch typ {
@@ -67,154 +251,12 @@ func checkNumberType(typ plan.Type_TypeId, alias string) error {
 	return nil
 }
 
-func checkTimeType(typ plan.Type_TypeId, alias string) error {
-	switch typ {
-	case plan.Type_DATE, plan.Type_TIME, plan.Type_DATETIME, plan.Type_TIMESTAMP, plan.Type_INTERVAL:
-		return nil
-	default:
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not time", alias))
-	}
-}
-
-func checkFunctionArgs(fun *FunctionSig, args []*plan.Expr) error {
-	for idx, typ := range fun.ArgType {
-		argType := fun.ArgTypeClass[typ]
-		switch argType {
-		case plan.Type_ANY:
-			//do nothing
-		case plan.Type_ANYFLOAT:
-			return checkFloatType(args[idx].Typ.Id, args[idx].Alias)
-		case plan.Type_ANYINT:
-			return checkIntType(args[idx].Typ.Id, args[idx].Alias)
-		case plan.Type_ANYNUMBER:
-			return checkNumberType(args[idx].Typ.Id, args[idx].Alias)
-		case plan.Type_ANYTIME:
-			return checkTimeType(args[idx].Typ.Id, args[idx].Alias)
-		default:
-			if argType != args[idx].Typ.Id {
-				return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not %v", args[idx].Alias, plan.Type_TypeId_name[int32(argType)]))
-			}
-		}
-	}
-	return nil
-}
-
-func coverArgToHigh(args []*plan.Expr) error {
-	leftTypeId := args[0].Typ.Id
-	rightTypeId := args[1].Typ.Id
-
-	// _, leftIsConstant := args[0].Expr.(*plan.Expr_C)
-	// _, rightIsConstant := args[1].Expr.(*plan.Expr_C)
-
-	leftIsInt := checkIntType(leftTypeId, "") == nil
-	rightIsInt := checkFloatType(rightTypeId, "") == nil
-	leftIsFloat := checkFloatType(leftTypeId, "") == nil
-	rightIsFloat := checkFloatType(rightTypeId, "") == nil
-	leftIsNumber := checkNumberType(leftTypeId, "") == nil
-	rightIsNumber := checkNumberType(rightTypeId, "") == nil
-
-	switch {
-	case leftIsInt && rightIsInt:
-		//fixme need compare, return f64 now, next pr to fixed
-		args[0].Typ.Id = plan.Type_INT64
-		args[1].Typ.Id = plan.Type_INT64
-	case leftIsFloat && rightIsFloat:
-		//fixme need compare, return f64 now, next pr to fixed
-		args[0].Typ.Id = plan.Type_FLOAT64
-		args[1].Typ.Id = plan.Type_FLOAT64
-	case leftIsInt && rightIsFloat:
-		//fixme cover left to float in next pr
-		args[0].Typ.Id = plan.Type_FLOAT64
-		args[1].Typ.Id = plan.Type_FLOAT64
-	case leftIsFloat && leftIsInt:
-		//fixme cover right to float in next pr
-		args[0].Typ.Id = plan.Type_FLOAT64
-		args[1].Typ.Id = plan.Type_FLOAT64
-	case leftIsNumber && !rightIsNumber:
-		//fixme rewrite right to null? in next pr
-		//selct (int_col1 / string_col1) a from tbl   MySQL will return null
-	case !leftIsNumber && rightIsNumber:
-		//fixme rewrite left to null? in next pr
-		//selct (int_col1 / string_col1) a from tbl   MySQL will return null
-	}
-
-	return nil
-}
-
-func covertFunctionArgsType(fun *FunctionSig, args []*plan.Expr) error {
-	switch fun.Name {
-	case "+", "-", "*", "/", "%":
-		return coverArgToHigh(args)
-	default:
-		return nil
-	}
-}
-
-func getFunctionReturnType(fun *FunctionSig, args []*plan.Expr) *plan.Type {
-	returnType := fun.ArgTypeClass[0]
-
-	switch returnType {
-	case plan.Type_ANYINT, plan.Type_ANYFLOAT, plan.Type_ANYNUMBER:
-		return args[0].Typ
-	default:
-		//todo confirm nullable/with/precision
-		return &plan.Type{
-			Id: returnType,
-		}
-	}
-}
-
-func getFunctionExprByNameAndExprs(name string, exprs []tree.Expr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
-	//Get function
-	functionSig, ok := BuiltinFunctionsMap[name]
-	if !ok {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("function name '%v' is not exist", name))
-	}
-
-	//Check parameters length
-	if len(functionSig.ArgType) != len(exprs) {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("number of parameters does not match for function '%v'", functionSig.Name))
-	}
-
-	//Get original input expr
-	var args []*plan.Expr
-	for _, astExpr := range exprs {
-		expr, err := buildExpr(astExpr, ctx, query, selectCtx)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, expr)
-	}
-
-	//Check input type
-	err := checkFunctionArgs(functionSig, args)
-	if err != nil {
-		return nil, err
-	}
-
-	//Convert input parameter types if necessary
-	//todo sometimes we will get constant return here. eg : number_col / str_col
-	err = covertFunctionArgsType(functionSig, args)
-	if err != nil {
-		return nil, err
-	}
-
-	//Determine the return value type
-	returnType := getFunctionReturnType(functionSig, args)
-
-	return &plan.Expr{
-		Expr: &plan.Expr_F{
-			F: &plan.Function{
-				Func: getFunctionObjRef(name),
-				Args: args,
-			},
-		},
-		Typ: returnType,
-	}, nil
-}
-
-func getFunctionObjRef(name string) *plan.ObjectRef {
-	return &plan.ObjectRef{
-		ObjName: name,
-	}
-}
+//todo use in time cast function
+// func checkTimeType(typ plan.Type_TypeId, alias string) error {
+// 	switch typ {
+// 	case plan.Type_DATE, plan.Type_TIME, plan.Type_DATETIME, plan.Type_TIMESTAMP, plan.Type_INTERVAL:
+// 		return nil
+// 	default:
+// 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("type error: arg '%v' is not time", alias))
+// 	}
+// }

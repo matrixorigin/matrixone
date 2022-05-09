@@ -23,31 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getSubqueryParentScanNodeId(query *Query, node *plan.Node) (int32, bool) {
-	if node.TableDef != nil {
-		return node.NodeId, true
-	}
-	if node.NodeType == plan.Node_JOIN {
-		return node.NodeId, true
-	}
-	for _, id := range node.Children {
-		nodeId, ok := getSubqueryParentScanNodeId(query, query.Nodes[id])
-		if ok {
-			return nodeId, true
-		}
-	}
-	return 0, false
-}
-
 func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
 	nowLength := len(query.Nodes)
-	nodeId, _ := getSubqueryParentScanNodeId(query, query.Nodes[nowLength-1])
-
+	nodeId := query.Nodes[nowLength-1].NodeId
+	subQueryParentId := append([]int32{nodeId}, selectCtx.subQueryParentId...)
 	newCtx := &SelectContext{
-		tableAlias:           make(map[string]string),
 		columnAlias:          make(map[string]*plan.Expr),
 		subQueryIsCorrelated: false,
-		subQueryParentId:     int32(nowLength) - 1,
+		subQueryParentId:     subQueryParentId,
+		cteTables:            selectCtx.cteTables,
 	}
 
 	expr := &plan.SubQuery{
@@ -63,25 +47,40 @@ func buildSubQuery(subquery *tree.Subquery, ctx CompilerContext, query *Query, s
 			return nil, err
 		}
 	case *tree.SelectClause:
-		// buildSelect(selectClause.Select, ctx, query)
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("support select statement: %T", subquery))
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", subquery))
 	}
-
 	expr.IsCorrelated = newCtx.subQueryIsCorrelated
 
-	//把子查询的节点放到前面去
-	query.Steps = []int32{int32(nowLength - 1)}
-	query.Nodes = append(query.Nodes[nowLength:], query.Nodes[:nowLength]...)
+	//move subquery node to top
+	for i := len(query.Nodes) - 1; i >= 0; i-- {
+		if query.Nodes[i].NodeId == nodeId {
+			query.Nodes = append(query.Nodes[i+1:], query.Nodes[:i+1]...)
+			break
+		}
+	}
 
-	return &plan.Expr{
+	returnExpr := &plan.Expr{
 		Expr: &plan.Expr_Sub{
 			Sub: expr,
 		},
 		Typ: &plan.Type{
-			Id:       plan.Type_TUPLE,
-			Nullable: false,
+			Id: plan.Type_TUPLE,
 		},
-	}, nil
+	}
+	if subquery.Exists {
+		returnExpr = &plan.Expr{
+			Expr: &plan.Expr_F{
+				F: &plan.Function{
+					Func: getFunctionObjRef("EXISTS"),
+					Args: []*plan.Expr{returnExpr},
+				},
+			},
+			Typ: &plan.Type{
+				Id: plan.Type_BOOL,
+			},
+		}
+	}
+	return returnExpr, nil
 }

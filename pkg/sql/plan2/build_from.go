@@ -16,7 +16,6 @@ package plan2
 
 import (
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -62,7 +61,7 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, selectCt
 			Children: []int32{leftNode.NodeId, rightNode.NodeId},
 		}
 		fillJoinProjectList(node, leftNode, rightNode)
-		appendQueryNode(query, node, true)
+		appendQueryNode(query, node, false)
 		i++
 	}
 	return nil
@@ -71,11 +70,19 @@ func buildFrom(stmt tree.TableExprs, ctx CompilerContext, query *Query, selectCt
 func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (bool, error) {
 	switch tbl := stmt.(type) {
 	case *tree.Select:
-		tmpCtx := &SelectContext{
-			tableAlias:  make(map[string]string),
-			columnAlias: make(map[string]*plan.Expr),
+		nowLength := len(query.Nodes)
+		var subQueryParentId []int32
+		if nowLength > 0 {
+			nodeId := query.Nodes[nowLength-1].NodeId
+			subQueryParentId = append([]int32{nodeId}, selectCtx.subQueryParentId...)
 		}
-		err := buildSelect(tbl, ctx, query, tmpCtx)
+		newCtx := &SelectContext{
+			columnAlias:          make(map[string]*plan.Expr),
+			subQueryIsCorrelated: false,
+			subQueryParentId:     subQueryParentId,
+			cteTables:            selectCtx.cteTables,
+		}
+		err := buildSelect(tbl, ctx, query, newCtx)
 		if err != nil {
 			return true, err
 		}
@@ -85,24 +92,25 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCt
 		if len(tbl.SchemaName) > 0 {
 			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
 		}
-		obj, tableDef := ctx.Resolve(name)
-		if tableDef == nil {
-			return false, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
-		}
 		node := &plan.Node{
 			NodeType: plan.Node_TABLE_SCAN,
-			ObjRef:   obj,
-			TableDef: tableDef,
 		}
-		fillTableScanProjectList(node)
-		selectCtx.tableAlias[tableDef.Name] = tableDef.Name
-		appendQueryNode(query, node, false)
+		if strings.ToUpper(name) == "DUAL" { //special table name
+			node.NodeType = plan.Node_FUNCTION_SCAN
+		} else {
+			obj, tableDef := getResolveTable(name, ctx, selectCtx)
+			if tableDef == nil {
+				return false, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
+			}
+			node.ObjRef = obj
+			node.TableDef = tableDef
+		}
+		appendQueryNode(query, node, true)
 		return false, nil
 	case *tree.JoinTableExpr:
-		//todo confirm how to deal with alias
 		err := buildJoinTable(tbl, ctx, query, selectCtx)
 		if err != nil {
-			return true, err
+			return false, err
 		}
 		return false, nil
 	case *tree.ParenTableExpr:
@@ -110,7 +118,14 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCt
 	case *tree.AliasedTableExpr: //allways AliasedTableExpr first
 		alias := string(tbl.As.Alias)
 		if alias == "" {
-			return buildTable(tbl.Expr, ctx, query, selectCtx)
+			isDerivedTable, err := buildTable(tbl.Expr, ctx, query, selectCtx)
+			if err != nil {
+				return false, err
+			}
+			if !isDerivedTable {
+				fillTableScanProjectList(query, "")
+			}
+			return false, nil
 		}
 
 		isDerivedTable, err := buildTable(tbl.Expr, ctx, query, selectCtx)
@@ -118,15 +133,17 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCt
 			return isDerivedTable, err
 		}
 		if isDerivedTable {
-			setDerivedTableAlias(query, ctx, selectCtx, alias)
+			err := setDerivedTableAlias(query, ctx, selectCtx, alias, tbl.As.Cols)
+			if err != nil {
+				return true, err
+			}
 		} else {
-			delete(selectCtx.tableAlias, query.Nodes[len(query.Nodes)-1].TableDef.Name)
-			selectCtx.tableAlias[alias] = query.Nodes[len(query.Nodes)-1].TableDef.Name
+			fillTableScanProjectList(query, alias)
+			query.Nodes[len(query.Nodes)-1].TableDef.Name = alias
 		}
-		//todo add tableAlias(colAlias1, colAlias2) support (ast not support now)
 		return isDerivedTable, nil
 	case *tree.StatementSource:
-		log.Printf("StatementSource")
+		// log.Printf("StatementSource")
 		return false, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
 	}
 	// Values table not support
@@ -189,7 +206,7 @@ func buildJoinTable(tbl *tree.JoinTableExpr, ctx CompilerContext, query *Query, 
 		Children: []int32{lefNode.NodeId, rightNode.NodeId},
 	}
 	fillJoinProjectList(node, lefNode, rightNode)
-	appendQueryNode(query, node, true)
+	appendQueryNode(query, node, false)
 
 	switch cond := tbl.Cond.(type) {
 	case *tree.OnJoinCond:

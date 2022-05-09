@@ -16,20 +16,22 @@ package explain
 
 import (
 	"fmt"
+	"strings"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"strings"
-	"testing"
 )
 
 func TestSingleSql(t *testing.T) {
 	//input := "explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0"
 	input := "explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10"
-	mock := plan2.NewMockOptimizer2()
+	mock := plan2.NewMockOptimizer()
 	err := runOneStmt(mock, t, input)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -48,7 +50,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY limit 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -72,10 +74,8 @@ func TestSingleTableQuery(t *testing.T) {
 		"explain verbose SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10", //test agg
 		"explain SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",         //test agg
 		"explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10",
-		"explain verbose SELECT DISTINCT N_NAME FROM NATION",                      //test distinct
-		"explain SELECT DISTINCT N_NAME FROM NATION",                              //test distinct
-		"explain verbose SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
-		"explain SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY",         //test distinct with group by
+		"explain verbose SELECT DISTINCT N_NAME FROM NATION", //test distinct
+		"explain SELECT DISTINCT N_NAME FROM NATION",         //test distinct
 		"explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"explain SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20",         //test more expr
 		"explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -85,7 +85,7 @@ func TestSingleTableQuery(t *testing.T) {
 		"explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		"explain SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -118,7 +118,7 @@ func TestJoinQuery(t *testing.T) {
 		"explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0",
 		"explain SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -142,7 +142,7 @@ func runTestShouldPass(opt plan2.Optimizer, t *testing.T, sqls []string) {
 }
 
 func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
-	t.Logf("SQL: %v\n", sql)
+	// t.Logf("SQL: %v\n", sql)
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -189,16 +189,16 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 
 		//this sql always return one stmt
 		ctx := opt.CurrentContext()
-		query, err := plan2.BuildPlan2(ctx, stmt.Statement)
+		query, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
 			fmt.Printf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
 
 		buffer := NewExplainDataBuffer()
-		explainQuery := NewExplainQueryImpl(query)
+		explainQuery := NewExplainQueryImpl((*plan.Query)(query))
 		explainQuery.ExplainPlan(buffer, es)
-		t.Logf("\n")
+		// t.Logf("\n")
 	}
 	return nil
 }

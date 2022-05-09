@@ -15,7 +15,6 @@
 package explain
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -47,8 +46,8 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 
 func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) {
 	var Nodes []*plan.Node = e.QueryPlan.Nodes
-	for index, rootNodeId := range e.QueryPlan.Steps {
-		logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
+	for _, rootNodeId := range e.QueryPlan.Steps {
+		// logutil.Infof("------------------------------------Query Plan-%v ---------------------------------------------", index)
 		settings := FormatSettings{
 			buffer: buffer,
 			offset: 0,
