@@ -16,18 +16,19 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (b *build) BuildExplainQuery(stmt *tree.ExplainStmt, plan *ExplainQuery) error {
 	panic("implement me")
-	return nil
+	// return nil
 }
 
 func BuildExplainResultColumns() []*Attribute {
 	return []*Attribute{
-		&Attribute{
+		{
 			Ref:  1,
 			Name: fmt.Sprintf("QUERY PLAN"),
 			Type: types.Type{

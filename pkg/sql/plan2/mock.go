@@ -197,7 +197,7 @@ func NewMockOptimizer() *MockOptimizer {
 	}
 }
 
-func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*plan.Query, error) {
 	ctx := moc.CurrentContext()
 	query, err := BuildPlan(ctx, stmt)
 	if err != nil {

@@ -533,7 +533,7 @@ func getJson(v any, t *testing.T) []byte {
 	return out.Bytes()
 }
 
-func outPutQuery(query *Query, toFile bool, t *testing.T) {
+func outPutQuery(query *plan.Query, toFile bool, t *testing.T) {
 	json := getJson(query, t)
 	if toFile {
 		err := ioutil.WriteFile("/tmp/mo_plan2_test.json", json, 0777)
@@ -545,7 +545,7 @@ func outPutQuery(query *Query, toFile bool, t *testing.T) {
 	}
 }
 
-func runOneStmt(opt Optimizer, t *testing.T, sql string) (*Query, error) {
+func runOneStmt(opt Optimizer, t *testing.T, sql string) (*plan.Query, error) {
 	stmts, err := mysql.Parse(sql)
 	if err != nil {
 		t.Fatalf("%+v", err)

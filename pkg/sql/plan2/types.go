@@ -34,7 +34,7 @@ type CompilerContext interface {
 }
 
 type Optimizer interface {
-	Optimize(stmt tree.Statement) (*Query, error) //todo confirm interface change
+	Optimize(stmt tree.Statement) (*plan.Query, error) //todo confirm interface change
 	CurrentContext() CompilerContext
 }
 

@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -196,7 +195,7 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 		}
 
 		buffer := NewExplainDataBuffer()
-		explainQuery := NewExplainQueryImpl((*plan.Query)(query))
+		explainQuery := NewExplainQueryImpl(query)
 		explainQuery.ExplainPlan(buffer, es)
 		// t.Logf("\n")
 	}
