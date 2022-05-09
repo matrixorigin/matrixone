@@ -196,6 +196,12 @@ func newMockOptimizer() *MockOptimizer {
 	}
 }
 
+func NewMockOptimizer2() *MockOptimizer {
+	return &MockOptimizer{
+		ctxt: *NewMockCompilerContext(),
+	}
+}
+
 func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	ctx := moc.CurrentContext()
 	query, err := buildPlan(ctx, stmt)

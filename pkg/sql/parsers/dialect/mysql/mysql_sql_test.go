@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select Quarter from ontime limit 1",
+		input: "explain (analyze true,verbose false) select * from emp;",
+		//output: "select * from R inner join S on R.uid = S.uid",
 	}
 )
 
@@ -55,18 +56,18 @@ var (
 		input  string
 		output string
 	}{{
-		input:  "select Quarter from ontime limit 1",
+		input: "select Quarter from ontime limit 1",
 	}, {
-		input:  "select month from ontime limit 1",
+		input: "select month from ontime limit 1",
 	}, {
-		input:  "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
+		input: "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
 	}, {
-		input:  "with tw as (select * from t2) select * from tw where a > 1",
+		input: "with tw as (select * from t2) select * from tw where a > 1",
 	}, {
 		input:  "create table t (a double(13))  // comment",
-		output:  "create table t (a double(13))",
+		output: "create table t (a double(13))",
 	}, {
-		input:  "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
+		input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
 	}, {
 		input:  "select extract(year from l_shipdate) as l_year from t",
 		output: "select extract(year, l_shipdate) as l_year from t",
@@ -330,7 +331,7 @@ var (
 	}, {
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
-		input: "select u.a, interval 1 second from t",
+		input:  "select u.a, interval 1 second from t",
 		output: "select u.a, interval(1, second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",

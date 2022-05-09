@@ -24,6 +24,7 @@ func initTokens(dialectType dialect.DialectType) {
 	switch dialectType {
 	case dialect.MYSQL:
 		LEX_ERROR = MYSQL_LEX_ERROR
+		VERBOSE = MYSQL_VERBOSE
 		SQL_TSI_MINUTE = MYSQL_SQL_TSI_MINUTE
 		SQL_TSI_SECOND = MYSQL_SQL_TSI_SECOND
 		SQL_TSI_YEAR = MYSQL_SQL_TSI_YEAR
@@ -872,6 +873,7 @@ func initTokens(dialectType dialect.DialectType) {
 		"var_pop":                  VAR_POP,
 		"var_samp":                 VAR_SAMP,
 		"type":                     TYPE,
+		"verbose":                  VERBOSE,
 		"sql_tsi_minute":           SQL_TSI_MINUTE,
 		"sql_tsi_second":           SQL_TSI_SECOND,
 		"sql_tsi_year":             SQL_TSI_YEAR,
@@ -1308,4 +1310,5 @@ var (
 	INT3                     int
 	INT4                     int
 	INT8                     int
+	VERBOSE                  int
 )
