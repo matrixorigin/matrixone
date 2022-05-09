@@ -26,7 +26,7 @@ func create_test_server() *MOServer {
 	}
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-	config.Mempool = mempool.New(/*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/)
+	config.Mempool = mempool.New( /*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/ )
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, nil)
 
 	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
@@ -54,9 +54,9 @@ func Test_Closed(t *testing.T) {
 	}()
 
 	time.Sleep(100 * time.Millisecond)
-	db := open_db(t,6001)
-	time.Sleep(100*time.Millisecond)
-	close_db(t,db)
+	db := open_db(t, 6001)
+	time.Sleep(100 * time.Millisecond)
+	close_db(t, db)
 	cf.Close()
 
 	err := mo.Stop()

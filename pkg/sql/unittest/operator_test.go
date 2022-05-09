@@ -88,7 +88,7 @@ func TestPlusOperator(t *testing.T) {
 		{sql: "select u4 + u1, u4 + u2, u4 + u3, u4 + u4, u4 + 2, 3 + u4 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u4 + u1", "u4 + u2", "u4 + u3", "u4 + u4", "u4 + 2", "3 + u4"},
-			data: [][]string{[]string{"3336", "3366", "3666", "6666", "3335", "3336"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"3336", "3366", "3666", "6666", "3335", "3336"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select f1 + f1, f1 - f1, f1 * f1, f1 / f1 from ffs;", res: executeResult{
@@ -104,44 +104,44 @@ func TestPlusOperator(t *testing.T) {
 		{sql: "select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;", res: executeResult{
 			null: false,
 			attr: []string{"f2 + f2", "f2 - f2", "f2 * f2", "f2 / f2"},
-			data: [][]string{{"444.444000", "0.000000", "49382.617284", "1.000000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"444.444000", "0.000000", "49382.617284", "1.000000"}, {"null", "null", "null", "null"}},
 		}},
 		{sql: "select f2 + 1.0, 1.0 + f2, f2 - 2.0, 2.0 - f2, f2 * 3.0, 3.0 * f2, f2 / 0.5, 0.5 / f2 from ffs;", res: executeResult{
 			null: false,
 			attr: []string{"f2 + 1.0", "1.0 + f2", "f2 - 2.0", "2.0 - f2", "f2 * 3.0", "3.0 * f2", "f2 / 0.5", "0.5 / f2"},
-			data: [][]string{[]string{"223.222000", "223.222000", "220.222000", "-220.222000", "666.666000", "666.666000", "444.444000", "0.002250"}, []string{"null", "null", "null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"223.222000", "223.222000", "220.222000", "-220.222000", "666.666000", "666.666000", "444.444000", "0.002250"}, {"null", "null", "null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i11 + i12, i21 + i22, i31 + i32, i41 + i42 from iis2;", res: executeResult{
 			null: false,
 			attr: []string{"i11 + i12", "i21 + i22", "i31 + i32", "i41 + i42"},
-			data: [][]string{[]string{"2", "44", "666", "8888"}},
+			data: [][]string{{"2", "44", "666", "8888"}},
 		}},
 		{sql: "select i11 + i12, i21 + i22, i31 + i32, i41 + i42, i11, i21, i31, i41 from iis2;", res: executeResult{
 			null: false,
 			attr: []string{"i11 + i12", "i21 + i22", "i31 + i32", "i41 + i42", "i11", "i21", "i31", "i41"},
-			data: [][]string{[]string{"2", "44", "666", "8888", "1", "22", "333", "4444"}},
+			data: [][]string{{"2", "44", "666", "8888", "1", "22", "333", "4444"}},
 		}},
 
 		{sql: "select u11 + u12, u21 + u22, u31 + u32, u41 + u42 from uus2;", res: executeResult{
 			null: false,
 			attr: []string{"u11 + u12", "u21 + u22", "u31 + u32", "u41 + u42"},
-			data: [][]string{[]string{"2", "44", "66", "888"}},
+			data: [][]string{{"2", "44", "66", "888"}},
 		}},
 		{sql: "select u11 + u12, u21 + u22, u31 + u32, u41 + u42, u11, u21, u31, u41 from uus2;", res: executeResult{
 			null: false,
 			attr: []string{"u11 + u12", "u21 + u22", "u31 + u32", "u41 + u42", "u11", "u21", "u31", "u41"},
-			data: [][]string{[]string{"2", "44", "66", "888", "1", "22", "33", "444"}},
+			data: [][]string{{"2", "44", "66", "888", "1", "22", "33", "444"}},
 		}},
 
 		{sql: "select f11 + f12, f21 + f22 from ffs2;", res: executeResult{
 			null: false,
 			attr: []string{"f11 + f12", "f21 + f22"},
-			data: [][]string{[]string{"44.400002", "444.444000"}, []string{"null", "null"}},
+			data: [][]string{{"44.400002", "444.444000"}, {"null", "null"}},
 		}},
 		{sql: "select f11 + f12, f21 + f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
 			attr: []string{"f11 + f12", "f21 + f22", "f11", "f21"},
-			data: [][]string{[]string{"44.400002", "444.444000", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"44.400002", "444.444000", "22.200001", "222.222000"}, {"null", "null", "null", "null"}},
 		}},
 		{sql: "select i1 + d1, i2 + d1, i3 + d1, i4 + d1, d1 + 1, d1 + 12.34, d1 + d1 from int_decimal;", res: executeResult{
 			null: false,
@@ -184,76 +184,76 @@ func TestMinusOperator(t *testing.T) {
 		{sql: "select i1 - i1, i1 - i2, i1 - i3, i1 - i4, i1 - 2, 3 - i1 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i1 - i1", "i1 - i2", "i1 - i3", "i1 - i4", "i1 - 2", "3 - i1"},
-			data: [][]string{[]string{"0", "-10", "-110", "-1110", "-1", "2"}, []string{"0", "null", "null", "0", "-1", "2"}},
+			data: [][]string{{"0", "-10", "-110", "-1110", "-1", "2"}, {"0", "null", "null", "0", "-1", "2"}},
 		}},
 		{sql: "select i2 - i1, i2 - i2, i2 - i3, i2 - i4, i2 - 2, 3 - i2 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i2 - i1", "i2 - i2", "i2 - i3", "i2 - i4", "i2 - 2", "3 - i2"},
-			data: [][]string{[]string{"10", "0", "-100", "-1100", "9", "-8"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"10", "0", "-100", "-1100", "9", "-8"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i3 - i1, i3 - i2, i3 - i3, i3 - i4, i3 - 2, 3 - i3 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i3 - i1", "i3 - i2", "i3 - i3", "i3 - i4", "i3 - 2", "3 - i3"},
-			data: [][]string{[]string{"110", "100", "0", "-1000", "109", "-108"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"110", "100", "0", "-1000", "109", "-108"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i4 - i1, i4 - i2, i4 - i3, i4 - i4, i4 - 2, 3 - i4 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i4 - i1", "i4 - i2", "i4 - i3", "i4 - i4", "i4 - 2", "3 - i4"},
-			data: [][]string{[]string{"1110", "1100", "1000", "0", "1109", "-1108"}, []string{"0", "null", "null", "0", "-1", "2"}},
+			data: [][]string{{"1110", "1100", "1000", "0", "1109", "-1108"}, {"0", "null", "null", "0", "-1", "2"}},
 		}},
 
 		{sql: "select u1 - u1, u1 - u2, u1 - u3, u1 - u4, u1 - 2, 3 - u1 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u1 - u1", "u1 - u2", "u1 - u3", "u1 - u4", "u1 - 2", "3 - u1"},
-			data: [][]string{[]string{"0", "65506", "4294966966", "18446744073709548286", "1", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"0", "65506", "4294966966", "18446744073709548286", "1", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u2 - u1, u2 - u2, u2 - u3, u2 - u4, u2 - 2, 3 - u2 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u2 - u1", "u2 - u2", "u2 - u3", "u2 - u4", "u2 - 2", "3 - u2"},
-			data: [][]string{[]string{"30", "0", "4294966996", "18446744073709548316", "31", "-30"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"30", "0", "4294966996", "18446744073709548316", "31", "-30"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 - u1, u3 - u2, u3 - u3, u3 - u4, u3 - 2, 3 - u3 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u3 - u1", "u3 - u2", "u3 - u3", "u3 - u4", "u3 - 2", "3 - u3"},
-			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "-330"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"330", "300", "0", "18446744073709548616", "331", "-330"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 - u1, u4 - u2, u4 - u3, u4 - u4, u4 - 2, 3 - u4 from uus;", res: executeResult{
 			null: false,
 			attr: []string{"u4 - u1", "u4 - u2", "u4 - u3", "u4 - u4", "u4 - 2", "3 - u4"},
-			data: [][]string{{"3330", "3300", "3000", "0", "3331", "-3330"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"3330", "3300", "3000", "0", "3331", "-3330"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select f11 - f12, f21 - f22 from ffs2;", res: executeResult{
 			null: false,
 			attr: []string{"f11 - f12", "f21 - f22"},
-			data: [][]string{[]string{"0.000000", "0.000000"}, []string{"null", "null"}},
+			data: [][]string{{"0.000000", "0.000000"}, {"null", "null"}},
 		}},
 		{sql: "select f11 - f12, f21 - f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
 			attr: []string{"f11 - f12", "f21 - f22", "f11", "f21"},
-			data: [][]string{{"0.000000", "0.000000", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"0.000000", "0.000000", "22.200001", "222.222000"}, {"null", "null", "null", "null"}},
 		}},
 
 		{sql: "select i11 - i12, i21 - i22, i31 - i32, i41 - i42 from iis2;", res: executeResult{
 			null: false,
 			attr: []string{"i11 - i12", "i21 - i22", "i31 - i32", "i41 - i42"},
-			data: [][]string{[]string{"0", "0", "0", "0"}},
+			data: [][]string{{"0", "0", "0", "0"}},
 		}},
 		{sql: "select i11 - i12, i21 - i22, i31 - i32, i41 - i42, i11, i21, i31, i41 from iis2;", res: executeResult{
 			null: false,
 			attr: []string{"i11 - i12", "i21 - i22", "i31 - i32", "i41 - i42", "i11", "i21", "i31", "i41"},
-			data: [][]string{[]string{"0", "0", "0", "0", "1", "22", "333", "4444"}},
+			data: [][]string{{"0", "0", "0", "0", "1", "22", "333", "4444"}},
 		}},
 
 		{sql: "select u11 - u12, u21 - u22, u31 - u32, u41 - u42 from uus2;", res: executeResult{
 			null: false,
 			attr: []string{"u11 - u12", "u21 - u22", "u31 - u32", "u41 - u42"},
-			data: [][]string{[]string{"0", "0", "0", "0"}},
+			data: [][]string{{"0", "0", "0", "0"}},
 		}},
 		{sql: "select u11 - u12, u21 - u22, u31 - u32, u41 - u42, u11, u21, u31, u41 from uus2;", res: executeResult{
 			null: false,
 			attr: []string{"u11 - u12", "u21 - u22", "u31 - u32", "u41 - u42", "u11", "u21", "u31", "u41"},
-			data: [][]string{[]string{"0", "0", "0", "0", "1", "22", "33", "444"}},
+			data: [][]string{{"0", "0", "0", "0", "1", "22", "33", "444"}},
 		}},
 		{sql: "select i1 - d1, i2 - d1, i3 - d1, i4 - d1, d1 - 1, d1 - 12.34, d1 - d1 from int_decimal;", res: executeResult{
 			null: false,
@@ -306,7 +306,7 @@ func TestMultiOperator(t *testing.T) {
 		{sql: "select i3 * i1, i3 * i2, i3 * i3, i3 * i4, i3 * 2, 3 * i3 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i3 * i1", "i3 * i2", "i3 * i3", "i3 * i4", "i3 * 2", "3 * i3"},
-			data: [][]string{[]string{"111", "1221", "12321", "123321", "222", "333"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"111", "1221", "12321", "123321", "222", "333"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i4 * i1, i4 * i2, i4 * i3, i4 * i4, i4 * 2, 3 * i4 from iis;", res: executeResult{
 			null: false,
@@ -316,42 +316,42 @@ func TestMultiOperator(t *testing.T) {
 
 		{sql: "select u1 * u1, u1 * u2, u1 * u3, u1 * u4, u1 * 2, 3 * u1 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"9", "99", "999", "9999", "6", "9"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"9", "99", "999", "9999", "6", "9"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u2 * u1, u2 * u2, u2 * u3, u2 * u4, u2 * 2, 3 * u2 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"99", "1089", "10989", "109989", "66", "99"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"99", "1089", "10989", "109989", "66", "99"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 * u1, u3 * u2, u3 * u3, u3 * u4, u3 * 2, 3 * u3 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"999", "10989", "110889", "1109889", "666", "999"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"999", "10989", "110889", "1109889", "666", "999"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 * u1, u4 * u2, u4 * u3, u4 * u4, u4 * 2, 3 * u4 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"9999", "109989", "1109889", "11108889", "6666", "9999"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"9999", "109989", "1109889", "11108889", "6666", "9999"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select f11 * f12, f21 * f22 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"492.840027", "49382.617284"}, []string{"null", "null"}},
+			data: [][]string{{"492.840027", "49382.617284"}, {"null", "null"}},
 		}},
 		{sql: "select f11 * f12, f21 * f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"492.840027", "49382.617284", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"492.840027", "49382.617284", "22.200001", "222.222000"}, {"null", "null", "null", "null"}},
 		}},
 
 		{sql: "select i11 * i12, i21 * i22, i31 * i32, i41 * i42 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "484", "110889", "19749136"}},
+			data: [][]string{{"1", "484", "110889", "19749136"}},
 		}},
 		{sql: "select i11 * i12, i21 * i22, i31 * i32, i41 * i42, i11, i21, i31, i41 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "484", "110889", "19749136", "1", "22", "333", "4444"}},
+			data: [][]string{{"1", "484", "110889", "19749136", "1", "22", "333", "4444"}},
 		}},
 
 		{sql: "select u11 * u12, u21 * u22, u31 * u32, u41 * u42 from uus2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "484", "1089", "197136"}},
+			data: [][]string{{"1", "484", "1089", "197136"}},
 		}},
 		{sql: "select u11 * u12, u21 * u22, u31 * u32, u41 * u42, u11, u21, u31, u41 from uus2;", res: executeResult{
 			null: false,
@@ -398,132 +398,132 @@ func TestDivOperator(t *testing.T) {
 		{sql: "select i1 / i1, i1 / i2, i1 / i3, i1 / i4, i1 / 2, 3 / i1 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i1 / i1", "i1 / i2", "i1 / i3", "i1 / i4", "i1 / 2", "3 / i1"},
-			data: [][]string{[]string{"1.000000", "0.090909", "0.009009", "0.000900", "0.500000", "3.000000"}, []string{"1.000000", "null", "null", "1.000000", "0.500000", "3.000000"}},
+			data: [][]string{{"1.000000", "0.090909", "0.009009", "0.000900", "0.500000", "3.000000"}, {"1.000000", "null", "null", "1.000000", "0.500000", "3.000000"}},
 		}},
 		{sql: "select i2 / i1, i2 / i2, i2 / i3, i2 / i4, i2 / 2, 3 / i2 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i2 / i1", "i2 / i2", "i2 / i3", "i2 / i4", "i2 / 2", "3 / i2"},
-			data: [][]string{[]string{"11.000000", "1.000000", "0.099099", "0.009901", "5.500000", "0.272727"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"11.000000", "1.000000", "0.099099", "0.009901", "5.500000", "0.272727"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i3 / i1, i3 / i2, i3 / i3, i3 / i4, i3 / 2, 3 / i3 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i3 / i1", "i3 / i2", "i3 / i3", "i3 / i4", "i3 / 2", "3 / i3"},
-			data: [][]string{{"111.000000", "10.090909", "1.000000", "0.099910", "55.500000", "0.027027"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"111.000000", "10.090909", "1.000000", "0.099910", "55.500000", "0.027027"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i4 / i1, i4 / i2, i4 / i3, i4 / i4, i4 / 2, 3 / i4 from iis;", res: executeResult{
 			null: false,
 			attr: []string{"i4 / i1", "i4 / i2", "i4 / i3", "i4 / i4", "i4 / 2", "3 / i4"},
-			data: [][]string{[]string{"1111.000000", "101.000000", "10.009009", "1.000000", "555.500000", "0.002700"}, []string{"1.000000", "null", "null", "1.000000", "0.500000", "3.000000"}},
+			data: [][]string{{"1111.000000", "101.000000", "10.009009", "1.000000", "555.500000", "0.002700"}, {"1.000000", "null", "null", "1.000000", "0.500000", "3.000000"}},
 		}},
 
 		{sql: "select i1 div i1, i1 div i2, i1 div i3, i1 div i4, i1 div 2, 3 div i1 from iis;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "0", "0", "0", "0", "3"}, []string{"1", "null", "null", "1", "0", "3"}},
+			data: [][]string{{"1", "0", "0", "0", "0", "3"}, {"1", "null", "null", "1", "0", "3"}},
 		}},
 		{sql: "select i2 div i1, i2 div i2, i2 div i3, i2 div i4, i2 div 2, 3 div i2 from iis;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"11", "1", "0", "0", "5", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"11", "1", "0", "0", "5", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i3 div i1, i3 div i2, i3 div i3, i3 div i4, i3 div 2, 3 div i3 from iis;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"111", "10", "1", "0", "55", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"111", "10", "1", "0", "55", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select i4 div i1, i4 div i2, i4 div i3, i4 div i4, i4 div 2, 3 div i4 from iis;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1111", "101", "10", "1", "555", "0"}, []string{"1", "null", "null", "1", "0", "3"}},
+			data: [][]string{{"1111", "101", "10", "1", "555", "0"}, {"1", "null", "null", "1", "0", "3"}},
 		}},
 
 		{sql: "select u1 / u1, u1 / u2, u1 / u3, u1 / u4, u1 / 2, 3 / u1 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "0.090909", "0.009009", "0.000900", "1.500000", "1.000000"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"1.000000", "0.090909", "0.009009", "0.000900", "1.500000", "1.000000"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u2 / u1, u2 / u2, u2 / u3, u2 / u4, u2 / 2, 3 / u2 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"11.000000", "1.000000", "0.099099", "0.009901", "16.500000", "0.090909"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"11.000000", "1.000000", "0.099099", "0.009901", "16.500000", "0.090909"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 / u1, u3 / u2, u3 / u3, u3 / u4, u3 / 2, 3 / u3 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"111.000000", "10.090909", "1.000000", "0.099910", "166.500000", "0.009009"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"111.000000", "10.090909", "1.000000", "0.099910", "166.500000", "0.009009"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 / u1, u4 / u2, u4 / u3, u4 / u4, u4 / 2, 3 / u4 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1111.000000", "101.000000", "10.009009", "1.000000", "1666.500000", "0.000900"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"1111.000000", "101.000000", "10.009009", "1.000000", "1666.500000", "0.000900"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select u1 div u1, u1 div u2, u1 div u3, u1 div u4, u1 div 2, 3 div u1 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "0", "0", "0", "1", "1"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"1", "0", "0", "0", "1", "1"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u2 div u1, u2 div u2, u2 div u3, u2 div u4, u2 div 2, 3 div u2 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"11", "1", "0", "0", "16", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"11", "1", "0", "0", "16", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u3 div u1, u3 div u2, u3 div u3, u3 div u4, u3 div 2, 3 div u3 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"111", "10", "1", "0", "166", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"111", "10", "1", "0", "166", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 		{sql: "select u4 div u1, u4 div u2, u4 div u3, u4 div u4, u4 div 2, 3 div u4 from uus;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1111", "101", "10", "1", "1666", "0"}, []string{"null", "null", "null", "null", "null", "null"}},
+			data: [][]string{{"1111", "101", "10", "1", "1666", "0"}, {"null", "null", "null", "null", "null", "null"}},
 		}},
 
 		{sql: "select i11 div i12, i21 div i22, i31 div i32, i41 div i42 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1", "1", "1"}},
+			data: [][]string{{"1", "1", "1", "1"}},
 		}},
 		{sql: "select i11 div i12, i21 div i22, i31 div i32, i41 div i42, i11, i21, i31, i41 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1", "1", "1", "1", "22", "333", "4444"}},
+			data: [][]string{{"1", "1", "1", "1", "1", "22", "333", "4444"}},
 		}},
 
 		{sql: "select i11 / i12, i21 / i22, i31 / i32, i41 / i42 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000", "1.000000", "1.000000"}},
+			data: [][]string{{"1.000000", "1.000000", "1.000000", "1.000000"}},
 		}},
 		{sql: "select i11 / i12, i21 / i22, i31 / i32, i41 / i42, i11, i21, i31, i41 from iis2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000", "1.000000", "1.000000", "1", "22", "333", "4444"}},
+			data: [][]string{{"1.000000", "1.000000", "1.000000", "1.000000", "1", "22", "333", "4444"}},
 		}},
 
 		{sql: "select u11 div u12, u21 div u22, u31 div u32, u41 div u42 from uus2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1", "1", "1"}},
+			data: [][]string{{"1", "1", "1", "1"}},
 		}},
 		{sql: "select u11 div u12, u21 div u22, u31 div u32, u41 div u42, u11, u21, u31, u41 from uus2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1", "1", "1", "1", "22", "33", "444"}},
+			data: [][]string{{"1", "1", "1", "1", "1", "22", "33", "444"}},
 		}},
 
 		{sql: "select u11 / u12, u21 / u22, u31 / u32, u41 / u42 from uus2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000", "1.000000", "1.000000"}},
+			data: [][]string{{"1.000000", "1.000000", "1.000000", "1.000000"}},
 		}},
 		{sql: "select u11 / u12, u21 / u22, u31 / u32, u41 / u42, u11, u21, u31, u41 from uus2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000", "1.000000", "1.000000", "1", "22", "33", "444"}},
+			data: [][]string{{"1.000000", "1.000000", "1.000000", "1.000000", "1", "22", "33", "444"}},
 		}},
 
 		{sql: "select f11 / f12, f21 / f22 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000"}, []string{"null", "null"}},
+			data: [][]string{{"1.000000", "1.000000"}, {"null", "null"}},
 		}},
 		{sql: "select f11 / f12, f21 / f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1.000000", "1.000000", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"1.000000", "1.000000", "22.200001", "222.222000"}, {"null", "null", "null", "null"}},
 		}},
 
 		{sql: "select f11 div f12, f21 div f22 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1"}, []string{"null", "null"}},
+			data: [][]string{{"1", "1"}, {"null", "null"}},
 		}},
 		{sql: "select f11 div f12, f21 div f22, f11, f21 from ffs2;", res: executeResult{
 			null: false,
-			data: [][]string{[]string{"1", "1", "22.200001", "222.222000"}, []string{"null", "null", "null", "null"}},
+			data: [][]string{{"1", "1", "22.200001", "222.222000"}, {"null", "null", "null", "null"}},
 		}},
 		{sql: "select i1 / d1, i2 / d1, i3 / d1, i4 / d1, d1 / 1, d1 / 12.34, d1 / d1 from int_decimal;", res: executeResult{
 			null: false,
 			attr: []string{"i1 / d1", "i2 / d1", "i3 / d1", "i4 / d1", "d1 / 1", "d1 / 12.34", "d1 / d1"},
-			data: [][]string{[]string{"{0 0}", "{0 0}", "{0 0}", "{0 0}", "{33333300 0}", "{2701239 0}", "{100000 0}"}},
+			data: [][]string{{"{0 0}", "{0 0}", "{0 0}", "{0 0}", "{33333300 0}", "{2701239 0}", "{100000 0}"}},
 		}},
 		{sql: "select i1 / d1, i2 / d1, i3 / d1, i4 / d1, d1 / 1, d1 / 12.34, d1 / d1 from int_decimal1;", res: executeResult{
 			null: false,
@@ -1363,7 +1363,7 @@ func TestComparisonOperator(t *testing.T) {
 		{sql: "select * from ffs where 3.5 < f1;", res: executeResult{
 			data: [][]string{
 				{"22.200001", "222.222000"},
-			},}},
+			}}},
 		{sql: "select * from ffs where 1 < f2 and f2 < 30;", res: executeResult{
 			null: true,
 		}},

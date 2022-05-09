@@ -27,7 +27,7 @@ func (b *build) BuildExplainQuery(stmt *tree.ExplainStmt, plan *ExplainQuery) er
 
 func BuildExplainResultColumns() []*Attribute {
 	return []*Attribute{
-		&Attribute{
+		{
 			Ref:  1,
 			Name: fmt.Sprintf("QUERY PLAN"),
 			Type: types.Type{

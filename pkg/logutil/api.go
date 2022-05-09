@@ -82,7 +82,6 @@ func Fatalf(msg string, fields ...interface{}) {
 //	}()
 //}
 
-
 type GoettyLogger struct{}
 
 func (l *GoettyLogger) Infof(msg string, fields ...interface{}) {

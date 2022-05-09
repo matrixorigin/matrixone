@@ -44,18 +44,18 @@ type Session struct {
 	closeRef *CloseExportData
 }
 
-func NewSession(proto Protocol,pdHook *PDCallbackImpl,
-		gm *guest.Mmu,mp *mempool.Mempool,PU *config.ParameterUnit) *Session {
+func NewSession(proto Protocol, pdHook *PDCallbackImpl,
+	gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit) *Session {
 	return &Session{
 		protocol: proto,
-		pdHook: pdHook,
+		pdHook:   pdHook,
 		GuestMmu: gm,
-		Mempool: mp,
-		Pu: PU,
+		Mempool:  mp,
+		Pu:       PU,
 		ep: &tree.ExportParam{
 			Outfile: false,
-			Fields: &tree.Fields{},
-			Lines: &tree.Lines{},
+			Fields:  &tree.Fields{},
+			Lines:   &tree.Lines{},
 		},
 	}
 }

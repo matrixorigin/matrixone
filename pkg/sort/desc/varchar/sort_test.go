@@ -35,7 +35,7 @@ func generate() *vector.Vector {
 			vs[i] = []byte(fmt.Sprintf("%v", rand.Int63()%Limit))
 		}
 	}
-    vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
 	if err := vector.Append(vec, vs); err != nil {
 		log.Fatal(err)
 	}

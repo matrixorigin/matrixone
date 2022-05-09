@@ -91,7 +91,6 @@ func TestTpeEngine_Create(t *testing.T) {
 	})
 }
 
-
 func TestTpeCubeKVEngine_Create(t *testing.T) {
 	convey.Convey("create series database", t, func() {
 		tpe, err := NewTpeEngine(&TpeConfig{
@@ -136,7 +135,6 @@ func TestTpeCubeKVEngine_Create(t *testing.T) {
 	})
 }
 
-
 func Test_TpeRemoveDeletedTable(t *testing.T) {
 	convey.Convey("Remove Deletedtable", t, func() {
 		tpe, err := NewTpeEngine(&TpeConfig{
@@ -145,12 +143,11 @@ func Test_TpeRemoveDeletedTable(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		
+
 		err = tpe.RemoveDeletedTable(0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
-
 
 func Test_TpeBootstrap(t *testing.T) {
 	convey.Convey("Bootstrap tpe database", t, func() {
@@ -160,7 +157,7 @@ func Test_TpeBootstrap(t *testing.T) {
 			ValueLayoutSerializerType: "default",
 			KVLimit:                   10000})
 		convey.So(err, convey.ShouldBeNil)
-		
+
 		err = tpe.Bootstrap()
 		convey.So(err, convey.ShouldBeNil)
 	})
