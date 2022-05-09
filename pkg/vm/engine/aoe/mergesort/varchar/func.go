@@ -277,8 +277,8 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 					nextNulls[s] = -1
 				}
 			} else {
-				d, _ := data[s], cursors[s]
-				strings[j] = d.Get(int64(s))
+				d, cur := data[s], cursors[s]
+				strings[j] = d.Get(int64(cur))
 				offset += uint32(len(strings[j]))
 			}
 

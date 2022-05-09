@@ -58,6 +58,6 @@ ON table1.column_name = table2.column_name;
 
 ```
 
-## **Examples**
+## **Constraints**
 Currently, `INNER JOIN` statement may cause crashing when executing some quiries.
 

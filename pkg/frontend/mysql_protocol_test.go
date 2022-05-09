@@ -28,6 +28,7 @@ import (
 
 	"github.com/fagongzi/goetty/buf"
 	"github.com/golang/mock/gomock"
+	fuzz "github.com/google/gofuzz"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/stretchr/testify/require"
@@ -2018,5 +2019,38 @@ func Test_handleHandshake(t *testing.T) {
 		payload = append(payload, []byte{'c', 'd', 0}...)
 		err = mp.handleHandshake(payload)
 		convey.So(err, convey.ShouldNotBeNil)
+	})
+}
+
+
+func Test_handleHandshake_Recover(t *testing.T) {
+	f := fuzz.New()
+	count := 10000
+	maxLen := 0
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ioses := mock_frontend.NewMockIOSession(ctrl)
+	ioses.EXPECT().WriteAndFlush(gomock.Any()).Return(nil).AnyTimes()
+
+	cvey.Convey("handleHandshake succ", t, func() {
+		var IO IOPackageImpl
+		var SV *config.SystemVariables = &config.SystemVariables{}
+		mp := &MysqlProtocolImpl{SV: SV}
+		mp.io = &IO
+		mp.tcpConn = ioses
+		var payload []byte
+		for i := 0; i < count; i++ {
+			f.Fuzz(&payload)
+			mp.handleHandshake(payload)
+			maxLen = Max(maxLen, len(payload))
+		}
+		maxLen = 0
+		var payload2 string
+		for i := 0; i < count; i++ {
+			f.Fuzz(&payload2)
+			mp.handleHandshake([]byte(payload2))
+			maxLen = Max(maxLen, len(payload2))
+		}
 	})
 }

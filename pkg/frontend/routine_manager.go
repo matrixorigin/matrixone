@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"errors"
+	"sync"
+
 	"github.com/fagongzi/goetty"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"sync"
 )
 
 type RoutineManager struct {
@@ -41,11 +42,6 @@ func (rm *RoutineManager) getParameterUnit() *config.ParameterUnit {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	defer func() {
-		if err := recover(); err != nil {
-			logutil.Errorf("create routine manager failed. err:%v",err)
-		}
-	}()
 	pro := NewMysqlClientProtocol(nextConnectionID(),rs, int(rm.pu.SV.GetMaxBytesInOutbufToFlush()),rm.pu.SV)
 	exe := NewMysqlCmdExecutor()
 	exe.SetRoutineManager(rm)
@@ -69,11 +65,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 When the io is closed, the Closed will be called.
 */
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
-	defer func() {
-		if err := recover(); err != nil {
-			logutil.Errorf("close routine manager failed. err:%v",err)
-		}
-	}()
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
 	defer delete(rm.clients, rs)
@@ -109,11 +100,6 @@ func (rm *RoutineManager) killStatement(id uint64) error {
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {
-	defer func() {
-		if err := recover(); err != nil {
-			logutil.Errorf("handle message failed. err:%v",err)
-		}
-	}()
 	if rm.pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
 		if !rm.pdHook.CanAcceptSomething() {
 			logutil.Errorf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")

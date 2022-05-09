@@ -183,7 +183,7 @@ func (i *BlockZoneMapIndex) Unmarshal(data []byte) error {
 		return nil
 	case types.T_float64:
 		i.MinV = encoding.DecodeFloat64(buf[:8])
-		buf = buf[4:]
+		buf = buf[8:]
 		i.MaxV = encoding.DecodeFloat64(buf[:8])
 		return nil
 	case types.T_date:

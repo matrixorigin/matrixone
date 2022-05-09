@@ -414,6 +414,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 	case 1:
 		for _, attr := range qry.Scope.Result.Attrs {
 			if attr == e.Parts[0] {
+				if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+					qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+				}
 				return &extend.Attribute{
 					Name: attr,
 					Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -426,6 +429,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 			name := e.Parts[1] + "." + e.Parts[0]
 			for _, attr := range qry.Scope.Result.Attrs {
 				if attr == name {
+					if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+						qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+					}
 					return &extend.Attribute{
 						Name: attr,
 						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -435,6 +441,9 @@ func (b *build) buildAttribute(e *tree.UnresolvedName, qry *Query) (extend.Exten
 		} else {
 			for _, attr := range qry.Scope.Result.Attrs {
 				if attr == e.Parts[0] {
+					if qry.Scope.Result.AttrsMap[attr].Type.Oid == types.T_char {
+						qry.Scope.Result.AttrsMap[attr].Type.Oid = types.T_varchar
+					}
 					return &extend.Attribute{
 						Name: attr,
 						Type: qry.Scope.Result.AttrsMap[attr].Type.Oid,
@@ -791,6 +800,12 @@ func buildConstantValue(typ types.Type, num *tree.NumVal) (interface{}, error) {
 			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
 		}
 	case constant.String:
+		switch typ.Oid {
+		case types.T_decimal64:
+			return types.ParseStringToDecimal64(str, typ.Width, typ.Scale)
+		case types.T_decimal128:
+			return types.ParseStringToDecimal128(str, typ.Width, typ.Scale)
+		}
 		if !num.Negative() {
 			switch typ.Oid {
 			case types.T_char, types.T_varchar:

@@ -29,6 +29,11 @@ import (
 )
 
 func init() {
+	overload.AppendCastRules(builtin.Weekday, 1, []types.T{types.T_char}, []types.Type{{Oid: types.T_datetime, Size: 8}})
+	overload.AppendCastRules(builtin.Weekday, 1, []types.T{types.T_varchar}, []types.Type{{Oid: types.T_datetime, Size: 8}})
+}
+
+func init() {
 	extend.FunctionRegistry["weekday"] = builtin.Weekday
 	extend.UnaryReturnTypes[builtin.Weekday] = func(_ extend.Extend) types.T {
 		return types.T_uint8
