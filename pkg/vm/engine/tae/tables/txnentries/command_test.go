@@ -38,9 +38,14 @@ func checkIDIsEqual(t *testing.T, id1, id2 *common.ID) {
 }
 
 func TestMergeBlocksCmd(t *testing.T) {
-	from := []*common.ID{{TableID: 1, SegmentID: 2, BlockID: 3}, {TableID: 1, SegmentID: 2, BlockID: 4}}
-	to := []*common.ID{{TableID: 1, SegmentID: 3, BlockID: 1}}
-	cmd := newMergeBlocksCmd(from, to)
+	droppedSegs := []*common.ID{{TableID: 1, SegmentID: 2}, {TableID: 1, SegmentID: 2}}
+	createdSegs := []*common.ID{{TableID: 1, SegmentID: 3}}
+	droppedBlks := []*common.ID{{TableID: 1, SegmentID: 2, BlockID: 3}, {TableID: 1, SegmentID: 2, BlockID: 4}}
+	createdBlks := []*common.ID{{TableID: 1, SegmentID: 3, BlockID: 1}}
+	mapping:=[]uint32{3445,4253,425,45,123,34,42,42,2,5,0}
+	fromAddr:=[]uint32{40000,40000,40000,42}
+	toAddr:=[]uint32{40000,40000,242}
+	cmd := newMergeBlocksCmd(0,droppedSegs, createdSegs,droppedBlks,createdBlks,mapping,fromAddr,toAddr)
 
 	var w bytes.Buffer
 	err := cmd.WriteTo(&w)
@@ -55,12 +60,23 @@ func TestMergeBlocksCmd(t *testing.T) {
 }
 
 func checkMergeBlocksCmdIsEqual(t *testing.T, cmd1, cmd2 *mergeBlocksCmd) {
-	assert.Equal(t, len(cmd1.from), len(cmd2.from))
-	for i, from1 := range cmd1.from {
-		checkIDIsEqual(t, from1, cmd2.from[i])
+	assert.Equal(t, len(cmd1.createdSegs), len(cmd2.createdSegs))
+	for i, seg1 := range cmd1.createdSegs {
+		checkIDIsEqual(t, seg1, cmd2.createdSegs[i])
 	}
-	assert.Equal(t, len(cmd1.to), len(cmd2.to))
-	for i, to1 := range cmd1.to {
-		checkIDIsEqual(t, to1, cmd2.to[i])
+	assert.Equal(t, len(cmd1.createdBlks), len(cmd2.createdBlks))
+	for i, blk1 := range cmd1.createdBlks {
+		checkIDIsEqual(t, blk1, cmd2.createdBlks[i])
 	}
+	assert.Equal(t, len(cmd1.droppedSegs), len(cmd2.droppedSegs))
+	for i, seg1 := range cmd1.droppedSegs {
+		checkIDIsEqual(t, seg1, cmd2.droppedSegs[i])
+	}
+	assert.Equal(t, len(cmd1.droppedBlks), len(cmd2.droppedBlks))
+	for i, blk1 := range cmd1.droppedBlks {
+		checkIDIsEqual(t, blk1, cmd2.droppedBlks[i])
+	}
+	assert.Equal(t,len(cmd1.mapping),len(cmd2.mapping))
+	assert.Equal(t,len(cmd1.fromAddr),len(cmd2.fromAddr))
+	assert.Equal(t,len(cmd1.toAddr),len(cmd2.toAddr))
 }

@@ -60,16 +60,26 @@ func (entry *mergeBlocksEntry) PostCommit() {
 }
 
 func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
-	from := make([]*common.ID, 0)
+	droppedSegs := make([]*common.ID, 0)
+	for _, blk := range entry.droppedSegs {
+		id := blk.AsCommonID()
+		droppedSegs = append(droppedSegs, id)
+	}
+	createdSegs := make([]*common.ID, 0)
+	for _, blk := range entry.createdSegs {
+		id := blk.AsCommonID()
+		createdSegs = append(createdSegs, id)
+	}
+	droppedBlks := make([]*common.ID, 0)
 	for _, blk := range entry.droppedBlks {
 		id := blk.AsCommonID()
-		from = append(from, id)
+		droppedBlks = append(droppedBlks, id)
 	}
-	to := make([]*common.ID, 0)
+	createdBlks := make([]*common.ID, 0)
 	for _, blk := range entry.createdBlks {
-		to = append(to, blk.AsCommonID())
+		createdBlks = append(createdBlks, blk.AsCommonID())
 	}
-	cmd = newMergeBlocksCmd(from, to)
+	cmd = newMergeBlocksCmd(entry.relation.ID(), droppedSegs, createdSegs, droppedBlks, createdBlks, entry.mapping, entry.fromAddr, entry.toAddr)
 	return
 }
 

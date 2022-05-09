@@ -9,90 +9,223 @@ import (
 )
 
 type mergeBlocksCmd struct {
-	from []*common.ID
-	to   []*common.ID
+	tid         uint64
+	droppedSegs []*common.ID
+	createdSegs []*common.ID
+	droppedBlks []*common.ID
+	createdBlks []*common.ID
+	mapping     []uint32
+	fromAddr    []uint32
+	toAddr      []uint32
 }
 
-func newMergeBlocksCmd(from, to []*common.ID) *mergeBlocksCmd {
+func newMergeBlocksCmd(tid uint64, droppedSegs, createdSegs, droppedBlks, createdBlks []*common.ID, mapping, fromAddr, toAddr []uint32) *mergeBlocksCmd {
 	return &mergeBlocksCmd{
-		from: from,
-		to:   to,
+		tid:         tid,
+		droppedSegs: droppedSegs,
+		createdSegs: createdSegs,
+		droppedBlks: droppedBlks,
+		createdBlks: createdBlks,
+		mapping:     mapping,
+		fromAddr:    fromAddr,
+		toAddr:      toAddr,
 	}
 }
-func (cmd *mergeBlocksCmd) GetType() int16 { return CmdMergeBlocks }
-func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (err error) {
-	if err = binary.Write(w, binary.BigEndian, CmdMergeBlocks); err != nil {
-		return
-	}
-	fromLength := uint32(len(cmd.from))
-	if err = binary.Write(w, binary.BigEndian, fromLength); err != nil {
-		return
-	}
-	for _, from := range cmd.from {
-		if err = binary.Write(w, binary.BigEndian, from.TableID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, from.SegmentID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, from.BlockID); err != nil {
-			return
-		}
-	}
 
-	toLength := uint32(len(cmd.to))
-	if err = binary.Write(w, binary.BigEndian, toLength); err != nil {
+func WriteSegID(w io.Writer, id *common.ID) (err error) {
+	if err = binary.Write(w, binary.BigEndian, id.TableID); err != nil {
 		return
 	}
-	for _, to := range cmd.to {
-		if err = binary.Write(w, binary.BigEndian, to.TableID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, to.SegmentID); err != nil {
-			return
-		}
-		if err = binary.Write(w, binary.BigEndian, to.BlockID); err != nil {
+	if err = binary.Write(w, binary.BigEndian, id.SegmentID); err != nil {
+		return
+	}
+	return
+}
+
+func ReadSegID(r io.Reader, id *common.ID) (err error) {
+	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+		return
+	}
+	return
+}
+
+func WriteBlkID(w io.Writer, id *common.ID) (err error) {
+	if err = binary.Write(w, binary.BigEndian, id.TableID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, id.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Write(w, binary.BigEndian, id.BlockID); err != nil {
+		return
+	}
+	return
+}
+
+func ReadBlkID(r io.Reader, id *common.ID) (err error) {
+	if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
+		return
+	}
+	return
+}
+
+func WriteUint32Array(w io.Writer, array []uint32) (err error) {
+	length := uint32(len(array))
+	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+		return
+	}
+	for _, i := range array {
+		if binary.Write(w, binary.BigEndian, i); err != nil {
 			return
 		}
 	}
 	return
 }
+
+func ReadUint32Array(r io.Reader) (array []uint32, err error) {
+	length := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	array = make([]uint32, length)
+	for i := 0; i < int(length); i++ {
+		if binary.Read(r, binary.BigEndian, &array[i]); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (cmd *mergeBlocksCmd) GetType() int16 { return CmdMergeBlocks }
+func (cmd *mergeBlocksCmd) WriteTo(w io.Writer) (err error) {
+	if err = binary.Write(w, binary.BigEndian, CmdMergeBlocks); err != nil {
+		return
+	}
+
+	// if err = binary.Write(w, binary.BigEndian, cmd.tid); err != nil {
+	// 	return
+	// }
+
+	droppedSegsLength := uint32(len(cmd.droppedSegs))
+	if err = binary.Write(w, binary.BigEndian, droppedSegsLength); err != nil {
+		return
+	}
+	for _, seg := range cmd.droppedSegs {
+		if err = WriteSegID(w, seg); err != nil {
+			return
+		}
+	}
+
+	createdSegsLength := uint32(len(cmd.createdSegs))
+	if err = binary.Write(w, binary.BigEndian, createdSegsLength); err != nil {
+		return
+	}
+	for _, seg := range cmd.createdSegs {
+		if err = WriteSegID(w, seg); err != nil {
+			return
+		}
+	}
+
+	droppedBlksLength := uint32(len(cmd.droppedBlks))
+	if err = binary.Write(w, binary.BigEndian, droppedBlksLength); err != nil {
+		return
+	}
+	for _, blk := range cmd.droppedBlks {
+		if err = WriteBlkID(w, blk); err != nil {
+			return
+		}
+	}
+
+	createdBlksLength := uint32(len(cmd.createdSegs))
+	if err = binary.Write(w, binary.BigEndian, createdBlksLength); err != nil {
+		return
+	}
+	for _, blk := range cmd.createdBlks {
+		if err = WriteBlkID(w, blk); err != nil {
+			return
+		}
+	}
+
+	if err = WriteUint32Array(w, cmd.mapping); err != nil {
+		return
+	}
+	if err = WriteUint32Array(w, cmd.toAddr); err != nil {
+		return
+	}
+	if err = WriteUint32Array(w, cmd.fromAddr); err != nil {
+		return
+	}
+	return
+}
 func (cmd *mergeBlocksCmd) ReadFrom(r io.Reader) (err error) {
-	fromLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &fromLength); err != nil {
+	dropSegmentLength := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &dropSegmentLength); err != nil {
 		return
 	}
-	cmd.from = make([]*common.ID, fromLength)
-	for i := 0; i < int(fromLength); i++ {
+	cmd.droppedSegs = make([]*common.ID, dropSegmentLength)
+	for i := 0; i < int(dropSegmentLength); i++ {
 		id := &common.ID{}
-		if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		if err = ReadSegID(r, id); err != nil {
 			return
 		}
-		if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
-			return
-		}
-		if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
-			return
-		}
-		cmd.from[i] = id
+		cmd.droppedSegs[i] = id
 	}
-	toLength := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &toLength); err != nil {
+
+	createSegmentLength := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &createSegmentLength); err != nil {
 		return
 	}
-	cmd.to = make([]*common.ID, toLength)
-	for i := 0; i < int(toLength); i++ {
+	cmd.createdSegs = make([]*common.ID, createSegmentLength)
+	for i := 0; i < int(createSegmentLength); i++ {
 		id := &common.ID{}
-		if err = binary.Read(r, binary.BigEndian, &id.TableID); err != nil {
+		if err = ReadSegID(r, id); err != nil {
 			return
 		}
-		if err = binary.Read(r, binary.BigEndian, &id.SegmentID); err != nil {
+		cmd.createdSegs[i] = id
+	}
+
+	dropBlkLength := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &dropBlkLength); err != nil {
+		return
+	}
+	cmd.droppedBlks = make([]*common.ID, dropBlkLength)
+	for i := 0; i < int(dropBlkLength); i++ {
+		id := &common.ID{}
+		if err = ReadBlkID(r, id); err != nil {
 			return
 		}
-		if err = binary.Read(r, binary.BigEndian, &id.BlockID); err != nil {
+		cmd.droppedBlks[i] = id
+	}
+	createBlkLength := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &createBlkLength); err != nil {
+		return
+	}
+	cmd.createdBlks = make([]*common.ID, createBlkLength)
+	for i := 0; i < int(createBlkLength); i++ {
+		id := &common.ID{}
+		if err = ReadBlkID(r, id); err != nil {
 			return
 		}
-		cmd.to[i] = id
+		cmd.createdBlks[i] = id
+	}
+
+	if cmd.mapping, err = ReadUint32Array(r); err != nil {
+		return
+	}
+	if cmd.toAddr, err = ReadUint32Array(r); err != nil {
+		return
+	}
+	if cmd.fromAddr, err = ReadUint32Array(r); err != nil {
+		return
 	}
 	return
 }
