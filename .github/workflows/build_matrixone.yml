@@ -4,7 +4,7 @@ name: Build MatrixOne
 # Controls when the workflow will run.
 on:
   # Triggers the workflow on push or pull request events but only for the main branch.
-  pull_request_target:
+  pull_request:
     types: [ opened, synchronize, reopened ]
     branches: main
     paths-ignore:
@@ -90,20 +90,6 @@ jobs:
       - name: Build Verification Testing
         run: |
           make bvt
-
-      - name: WeChat Work notification
-        if : ${{ github.event_name == 'pull_request_target' }}
-        continue-on-error: true
-        id: myRequest
-        uses: fjogeleit/http-request-action@v1
-        with:
-          url: ${{ secrets.WECHAT_WORK_BOT_WEBHOOK }}
-          method: 'POST'
-          data: '{"msgtype": "markdown", "markdown": {"content": "PR CI PASSED: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ env.ASSIGNEES }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>\n" }}'
-
-      - name: Show Response
-        continue-on-error: true
-        run: echo ${{ steps.myRequest.outputs.response }}
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
