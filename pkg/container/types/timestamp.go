@@ -12,6 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// timestamp data type:
+// Question 1: When should I use Datetime, and when should I use Timestamp?
+// 		Well, during insertion, the Datetime value will be stored as is(we have some bugs in here now),
+//		but for timestamp, the timestamp value passed in will be converted to a UTC timestamp, that is,
+//		the value passed in subtract by the server's local Time Zone
+// 		so, during retrieval, if the server's time zone is the same as the time zone when the timestamp value got inserted,
+//		the timestamp valued retrieved is the same value as the inserted, but if these two timezones are different, you
+// 		will get different timestamp value.
+//      for example:     		insertion timezone	insertion value					retrieval timezone  retrieval value
+// 								UTC+8 				2022-05-01 11:11:11				UTC+9				2022-05-01 12:11:11
+//
+// So, if your application is geo-distributed cross different timezones, using TIMESTAMP could save you trouble
+// you may otherwise encounter by using DATETIME
+//
+// Internal representation:
+// timestamp values are represented using a 64bit integer, the higher 40 bits stores the secs since January 1, year 1, local time zone, in Gregorian
+// calendar, and lower 20 bits hold the number of microseconds
+// the default fractional seconds precision(fsp) for TIMESTAMP is 6, as SQL standard requires.
+
 package types
 
 import (
