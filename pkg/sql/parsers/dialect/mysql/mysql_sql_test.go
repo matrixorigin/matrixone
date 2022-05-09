@@ -48,7 +48,7 @@ func TestDebug(t *testing.T) {
 
 // Not support:
 // revoke super(a, b, c) on procedure db.func from '@''h3'
-// insert into numtable values(5,1.2345678912345678912,1.2345678912345678912)
+// insert into numtable values(5,1.2345678912345678912,1.2345678912345678912) 
 // load data infile 'data.txt' into table db.a fields terminated by '\t' optionally enclosed by '\t' escaped by '\t'
 
 var (
