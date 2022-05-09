@@ -108,6 +108,11 @@ endif
 # static checks
 ###############################################################################
 
+.PHONY: fmt
+fmt:
+	gofmt -l -s .
+
+
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
