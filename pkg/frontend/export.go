@@ -122,7 +122,6 @@ var formatOutputString = func(oq *outputQueue, tmp, symbol []byte, enclosed byte
 	return nil
 }
 
-
 var Flush = func(ep *tree.ExportParam) error {
 	return ep.Writer.Flush()
 }
@@ -220,7 +219,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			}
 			continue
 		}
-		
+
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_DECIMAL:
 			return fmt.Errorf("unsupported Decimal")

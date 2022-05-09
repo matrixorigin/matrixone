@@ -44,7 +44,7 @@ func TestIndexHandlerImpl_WriteIntoIndex(t *testing.T) {
 
 		lines := randomLines(cnt, names, attrs)
 
-		FillBatch(lines,bat)
+		FillBatch(lines, bat)
 		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)
@@ -96,7 +96,7 @@ func TestIndexHandlerImpl_ReadFromIndex(t *testing.T) {
 
 		lines := randomLines(cnt, names, attrs)
 
-		FillBatch(lines,bat)
+		FillBatch(lines, bat)
 		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)
@@ -174,7 +174,7 @@ func TestIndexHandlerImpl_DeleteFromIndex(t *testing.T) {
 
 		lines := randomLines(cnt, names, attrs)
 
-		FillBatch(lines,bat)
+		FillBatch(lines, bat)
 		bat.Attrs = []string{"parentID", "ID", "Name", "desc"}
 
 		writeStates := make([]AttributeStateForWrite, 4)

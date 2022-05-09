@@ -89,7 +89,7 @@ func TestBatchAdapter_ForEach(t *testing.T) {
 			rowIdx++
 			return nil
 		}
-		
+
 		tableDesc := &descriptor.RelationDesc{Attributes: makeTableDefAttr(names, attrs)}
 		err := ba.ForEachTuple(&WriteContext{TableDesc: tableDesc}, callback)
 		convey.So(err, convey.ShouldBeNil)
