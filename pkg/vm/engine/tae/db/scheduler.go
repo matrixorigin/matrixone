@@ -164,11 +164,15 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	return
 }
 
-func (s *taskScheduler) GetPenddingCnt() uint64 {
+func (s *taskScheduler) GetSafeTS() uint64 {
+	return s.db.TxnMgr.StatSafeTS()
+}
+
+func (s *taskScheduler) GetPenddingLSNCnt() uint64 {
 	return s.db.Wal.GetPenddingCnt()
 }
 
-func (s *taskScheduler) GetCheckpointed() uint64 {
+func (s *taskScheduler) GetCheckpointedLSN() uint64 {
 	return s.db.Wal.GetCheckpointed()
 }
 

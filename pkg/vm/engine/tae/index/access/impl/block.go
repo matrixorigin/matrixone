@@ -98,7 +98,7 @@ func (holder *nonAppendableBlockIndexHolder) InitFromHost(host data.Block, schem
 			reader := io.NewBlockZoneMapIndexReader()
 			// TODO: refactor id generation
 			id := gCommon.ID{
-				BlockID:   host.GetID(),
+				BlockID:   host.GetID().BlockID,
 				SegmentID: uint64(meta.InternalIdx),
 				Idx:       meta.ColIdx,
 			}
@@ -117,7 +117,7 @@ func (holder *nonAppendableBlockIndexHolder) InitFromHost(host data.Block, schem
 			reader := io.NewStaticFilterIndexReader()
 			// TODO: refactor id generation
 			id := gCommon.ID{
-				BlockID:   host.GetID(),
+				BlockID:   host.GetID().BlockID,
 				SegmentID: uint64(meta.InternalIdx),
 				Idx:       meta.ColIdx,
 			}
@@ -144,5 +144,5 @@ func (holder *nonAppendableBlockIndexHolder) Destroy() (err error) {
 }
 
 func (holder *nonAppendableBlockIndexHolder) GetHostBlockId() uint64 {
-	return holder.host.GetID()
+	return holder.host.GetID().BlockID
 }

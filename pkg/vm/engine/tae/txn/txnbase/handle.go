@@ -111,7 +111,6 @@ func (blk *TxnBlock) GetColumnDataByName(attr string, compressed, decompressed *
 }
 
 func (blk *TxnBlock) GetSegment() (seg handle.Segment) { return }
-func (blk *TxnBlock) PrepareCompact() (err error)      { return }
 
 func (blk *TxnBlock) BatchDedup(*vector.Vector) (err error)                       { return }
 func (blk *TxnBlock) Append(*batch.Batch, uint32) (n uint32, err error)           { return }

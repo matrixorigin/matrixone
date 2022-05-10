@@ -13,6 +13,8 @@ import (
 
 type LogEntry = entry.Entry
 
+var EmptyCheckpoint = new(Checkpoint)
+
 const (
 	ETCatalogCheckpoint = entry.ETCustomizedStart + 100 + iota
 )

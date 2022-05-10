@@ -1,10 +1,10 @@
-package updates
+package model
 
 import (
 	"bytes"
 
 	"github.com/RoaringBitmap/roaring"
-	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
@@ -16,12 +16,12 @@ import (
 type BlockView struct {
 	Ts               uint64
 	Raw              batch.IBatch
-	RawBatch         *gbat.Batch
+	RawBatch         *mobat.Batch
 	UpdateMasks      map[uint16]*roaring.Bitmap
 	UpdateVals       map[uint16]map[uint32]interface{}
 	DeleteMask       *roaring.Bitmap
-	Applied          batch.IBatch
-	AppliedBatch     *gbat.Batch
+	AppliedIBatch    batch.IBatch
+	AppliedBatch     *mobat.Batch
 	ColLogIndexes    map[uint16][]*wal.Index
 	DeleteLogIndexes []*wal.Index
 }
@@ -32,13 +32,12 @@ func NewBlockView(ts uint64) *BlockView {
 		UpdateMasks:   make(map[uint16]*roaring.Bitmap),
 		UpdateVals:    make(map[uint16]map[uint32]interface{}),
 		ColLogIndexes: make(map[uint16][]*wal.Index),
-		// DeleteLogIndexes: make([]*wal.Index, 0),
 	}
 }
 
 func (view *BlockView) Eval() {
 	if len(view.UpdateMasks) == 0 {
-		view.Applied = view.Raw
+		view.AppliedIBatch = view.Raw
 		view.Raw = nil
 		return
 	}
@@ -62,7 +61,7 @@ func (view *BlockView) Eval() {
 
 		vecs[colIdx] = vec
 	}
-	view.Applied, err = batch.NewBatch(attrs, vecs)
+	view.AppliedIBatch, err = batch.NewBatch(attrs, vecs)
 	if err != nil {
 		panic(err)
 	}
@@ -97,12 +96,12 @@ func (view *BlockView) Marshal() (buf []byte, err error) {
 			byteBuf.Write(encoding.EncodeUint32(idx))
 		}
 	}
-	// Applied
-	if view.Applied == nil {
+	// AppliedIBatch
+	if view.AppliedIBatch == nil {
 		batLength := 0
 		byteBuf.Write(encoding.EncodeUint64(uint64(batLength)))
 	} else {
-		batBuf, err := view.Applied.Marshal()
+		batBuf, err := view.AppliedIBatch.Marshal()
 		if err != nil {
 			return nil, err
 		}
@@ -128,13 +127,13 @@ func (view *BlockView) Unmarshal(buf []byte) (err error) {
 		pos += 4
 		view.DeleteMask.Add(idx)
 	}
-	// Applied
+	// AppliedIBatch
 	batLength := encoding.DecodeUint64(buf[pos : pos+8])
 	pos += 8
 	if batLength == uint64(0) {
 		return
 	}
-	view.Applied = &batch.Batch{}
-	view.Applied.Unmarshal(buf[pos : pos+int(batLength)])
+	view.AppliedIBatch = &batch.Batch{}
+	view.AppliedIBatch.Unmarshal(buf[pos : pos+int(batLength)])
 	return
 }

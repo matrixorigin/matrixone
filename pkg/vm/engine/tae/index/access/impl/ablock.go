@@ -84,5 +84,5 @@ func (holder *appendableBlockIndexHolder) Destroy() error {
 }
 
 func (holder *appendableBlockIndexHolder) GetHostBlockId() uint64 {
-	return holder.host.GetID()
+	return holder.host.GetID().BlockID
 }

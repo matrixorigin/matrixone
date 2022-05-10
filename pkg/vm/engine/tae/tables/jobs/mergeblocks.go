@@ -3,15 +3,14 @@ package jobs
 import (
 	"unsafe"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -110,8 +109,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 
 	schema := task.mergedBlks[0].GetSchema()
-	var deletes *roaring.Bitmap
-	var vec *vector.Vector
+	var view *model.ColumnView
 	vecs := make([]*vector.Vector, 0)
 	rows := make([]uint32, len(task.compacted))
 	length := 0
@@ -119,10 +117,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	var toAddr []uint32
 	ids := make([]*common.ID, 0, len(task.compacted))
 	for i, block := range task.compacted {
-		if vec, deletes, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
+		if view, err = block.GetColumnDataById(int(schema.PrimaryKey), nil, nil); err != nil {
 			return
 		}
-		vec = compute.ApplyDeleteToVector(vec, deletes)
+		vec := view.ApplyDeletes()
 		vecs = append(vecs, vec)
 		rows[i] = uint32(gvec.Length(vec))
 		fromAddr = append(fromAddr, uint32(length))
@@ -173,7 +171,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		if err = BuildAndFlushBlockIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
 			return
 		}
-		if err = meta.GetBlockData().RefreshIndex(); err != nil {
+		if err = meta.GetBlockData().ReplayData(); err != nil {
 			return
 		}
 		// bf := blk.GetMeta().(*catalog.BlockEntry).GetBlockData().GetBlockFile()
@@ -188,10 +186,10 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
-			if vec, deletes, err = block.GetColumnDataById(i, nil, nil); err != nil {
+			if view, err = block.GetColumnDataById(i, nil, nil); err != nil {
 				return
 			}
-			vec = compute.ApplyDeleteToVector(vec, deletes)
+			vec := view.ApplyDeletes()
 			vecs = append(vecs, vec)
 		}
 		vecs, _ = task.mergeColumn(vecs, &sortedIdx, false, rows, to)

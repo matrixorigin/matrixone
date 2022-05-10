@@ -114,8 +114,8 @@ func main() {
 				logutil.Info(blk.String())
 				compressed.Reset()
 				decompressed.Reset()
-				vec, _, err := blk.GetColumnDataById(0, &compressed, &decompressed)
-				logutil.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(vec))
+				view, err := blk.GetColumnDataById(0, &compressed, &decompressed)
+				logutil.Infof("Block %s Rows %d", blk.Fingerprint().ToBlockFileName(), vector.Length(view.AppliedVec))
 				if err != nil {
 					panic(err)
 				}

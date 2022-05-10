@@ -235,11 +235,11 @@ func TestTxn3(t *testing.T) {
 
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, dels, err := blk.GetColumnDataById(0, &comp, &decomp)
+		view, err := blk.GetColumnDataById(0, &comp, &decomp)
 		assert.Nil(t, err)
-		assert.Equal(t, int(rows), vector.Length(vec))
-		assert.Equal(t, 3, int(dels.GetCardinality()))
-		assert.Equal(t, int8(100), compute.GetValue(vec, 5))
+		assert.Equal(t, int(rows), vector.Length(view.AppliedVec))
+		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
+		assert.Equal(t, int8(100), compute.GetValue(view.AppliedVec, 5))
 		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
 		// Check w-w with uncommitted col update
 		{
@@ -294,18 +294,18 @@ func TestTxn3(t *testing.T) {
 		// t.Log(chain.StringLocked())
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, dels, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &comp, &decomp)
+		view, err := it2.GetBlock().GetColumnDataByName(schema.ColDefs[0].Name, &comp, &decomp)
+		vec := view.AppliedVec
 		assert.Nil(t, err)
-		t.Log(vec.String())
 		assert.Equal(t, int(rows), vector.Length(vec))
-		assert.Equal(t, 3, int(dels.GetCardinality()))
+		assert.Equal(t, 3, int(view.DeleteMask.GetCardinality()))
 		assert.Equal(t, int8(100), compute.GetValue(vec, 5))
 		// assert.Equal(t, int32(100), compute.GetValue(vec, 2))
 		assert.Equal(t, int8(40), compute.GetValue(vec, 20))
 		// assert.Equal(t, int32(50), compute.GetValue(vec, 17))
 
 		assert.Nil(t, txn.Commit())
-		vec, _, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &comp, &decomp)
+		view, err = it2.GetBlock().GetColumnDataByName(schema.ColDefs[colIdx].Name, &comp, &decomp)
 		assert.Nil(t, err)
 		t.Log(vec.Typ.String())
 		// chain = it2.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().GetUpdateChain().(*updates.BlockUpdateChain)
@@ -506,11 +506,11 @@ func TestTxn6(t *testing.T) {
 				comp.Reset()
 				decomp.Reset()
 				blk := it.GetBlock()
-				vec, dels, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
+				view, err := blk.GetColumnDataByName(schema.ColDefs[3].Name, &comp, &decomp)
 				assert.Nil(t, err)
-				assert.Equal(t, gvec.Length(bats[0].Vecs[0]), gvec.Length(vec))
-				assert.True(t, dels.Contains(row+1))
-				t.Log(dels.String())
+				assert.Equal(t, gvec.Length(bats[0].Vecs[0]), gvec.Length(view.AppliedVec))
+				assert.True(t, view.DeleteMask.Contains(row+1))
+				t.Log(view.DeleteMask.String())
 				it.Next()
 			}
 
@@ -568,7 +568,6 @@ func TestMergeBlocks1(t *testing.T) {
 			blk := it.GetBlock()
 			meta := blk.GetMeta().(*catalog.BlockEntry)
 			blks = append(blks, meta)
-			// vec, _, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 			it.Next()
 		}
 		{
@@ -607,16 +606,15 @@ func TestMergeBlocks1(t *testing.T) {
 		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
-			vec, mask, _ := blk.GetColumnDataById(3, nil, nil)
-			assert.NotNil(t, vec)
-			if mask != nil {
-				t.Log(mask.String())
+			view, _ := blk.GetColumnDataById(3, nil, nil)
+			assert.NotNil(t, view)
+			if view.DeleteMask != nil {
+				t.Log(view.DeleteMask.String())
 			}
-			var pkVec *gvec.Vector
-			pkVec, _, _ = blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
-			for i := 0; i < gvec.Length(pkVec); i++ {
-				pkv := compute.GetValue(pkVec, uint32(i))
-				colv := compute.GetValue(vec, uint32(i))
+			pkView, _ := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
+			for i := 0; i < gvec.Length(pkView.AppliedVec); i++ {
+				pkv := compute.GetValue(pkView.AppliedVec, uint32(i))
+				colv := compute.GetValue(view.AppliedVec, uint32(i))
 				assert.Equal(t, mapping[pkv.(int32)], colv)
 			}
 			it.Next()

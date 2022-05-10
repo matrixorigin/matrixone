@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"io"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type BlockIt interface {
@@ -41,17 +41,14 @@ type BlockReader interface {
 	ID() uint64
 	String() string
 	GetByFilter(filter Filter) (uint32, error)
-	GetColumnDataByName(string, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
-	GetColumnDataById(int, *bytes.Buffer, *bytes.Buffer) (*vector.Vector, *roaring.Bitmap, error)
+	GetColumnDataByName(string, *bytes.Buffer, *bytes.Buffer) (*model.ColumnView, error)
+	GetColumnDataById(int, *bytes.Buffer, *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() interface{}
 	Fingerprint() *common.ID
 	Rows() int
 	BatchDedup(col *vector.Vector) error
 
 	IsAppendableBlock() bool
-	// IsAppendable() bool
-
-	PrepareCompact() error
 
 	GetSegment() Segment
 
@@ -60,7 +57,6 @@ type BlockReader interface {
 
 type BlockWriter interface {
 	io.Closer
-	String() string
 	Append(data *batch.Batch, offset uint32) (uint32, error)
 	Update(row uint32, col uint16, v interface{}) error
 	RangeDelete(start, end uint32) error

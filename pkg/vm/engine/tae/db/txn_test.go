@@ -16,6 +16,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
@@ -211,25 +212,25 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 	blockIt := rel.MakeBlockIt()
 	var comp bytes.Buffer
 	var decomp bytes.Buffer
-	var vec *gvec.Vector
+	var view *model.ColumnView
 	for blockIt.Valid() {
 		comp.Reset()
 		decomp.Reset()
 		blk := blockIt.GetBlock()
-		vec, _, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name, &comp, &decomp)
+		view, err = blk.GetColumnDataByName(repertory.ColDefs[1].Name, &comp, &decomp)
 		if err != nil {
 			return
 		}
-		rows := gvec.Length(vec)
+		rows := gvec.Length(view.AppliedVec)
 		for i := 0; i < rows; i++ {
-			v := compute.GetValue(vec, uint32(i))
+			v := compute.GetValue(view.AppliedVec, uint32(i))
 			if v == goodId {
 				id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 				offset = uint32(i)
 				comp.Reset()
 				decomp.Reset()
-				vec, _, _ := blk.GetColumnDataByName(repertory.ColDefs[2].Name, &comp, &decomp)
-				count = compute.GetValue(vec, offset).(uint64)
+				view, _ := blk.GetColumnDataByName(repertory.ColDefs[2].Name, &comp, &decomp)
+				count = compute.GetValue(view.AppliedVec, offset).(uint64)
 				return
 			}
 		}
@@ -241,9 +242,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 
 // TODO: rewrite
 func (c *APP1Client) GetGoodEntry(goodId uint64) (id *common.ID, offset uint32, entry *APP1Goods, err error) {
-	filter := new(handle.Filter)
-	filter.Op = handle.FilterEq
-	filter.Val = goodId
+	filter := handle.NewEQFilter(goodId)
 	goodRel, _ := c.DB.GetRelationByName(goods.Name)
 	id, offset, err = goodRel.GetByFilter(filter)
 	if err != nil {
@@ -523,8 +522,8 @@ func TestWarehouse(t *testing.T) {
 		blk := it.GetBlock()
 		var comp bytes.Buffer
 		var decomp bytes.Buffer
-		vec, _, _ := blk.GetColumnDataById(1, &comp, &decomp)
-		t.Log(vec.String())
+		view, _ := blk.GetColumnDataById(1, &comp, &decomp)
+		t.Log(view.AppliedVec.String())
 	}
 
 }

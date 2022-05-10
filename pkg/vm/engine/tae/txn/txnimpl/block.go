@@ -4,13 +4,12 @@ import (
 	"bytes"
 	"sync"
 
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -132,10 +131,10 @@ func (blk *txnBlock) Update(row uint32, col uint16, v interface{}) (err error) {
 // TODO: temp use coarse rows
 func (blk *txnBlock) Rows() int { return blk.entry.GetBlockData().Rows(blk.Txn, true) }
 
-func (blk *txnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *txnBlock) GetColumnDataById(colIdx int, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
 	return blk.entry.GetBlockData().GetColumnDataById(blk.Txn, colIdx, compressed, decompressed)
 }
-func (blk *txnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (vec *vector.Vector, deletes *roaring.Bitmap, err error) {
+func (blk *txnBlock) GetColumnDataByName(attr string, compressed, decompressed *bytes.Buffer) (*model.ColumnView, error) {
 	return blk.entry.GetBlockData().GetColumnDataByName(blk.Txn, attr, compressed, decompressed)
 }
 

@@ -118,8 +118,8 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 
 func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
-	monitor.minTs = monitor.db.Catalog.GetCheckpointed() + 1
-	monitor.maxTs = monitor.db.TxnMgr.StatSafeTS()
+	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS + 1
+	monitor.maxTs = monitor.db.Scheduler.GetSafeTS()
 	return nil
 }
 
@@ -142,7 +142,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 		monitor.unCheckpointedCnt++
 		return
 	}
-	checkpointed := monitor.db.Scheduler.GetCheckpointed()
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
 	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.maxTs) {
@@ -170,7 +170,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 		monitor.unCheckpointedCnt++
 		return
 	}
-	checkpointed := monitor.db.Scheduler.GetCheckpointed()
+	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
 	if entry.IsDroppedCommitted() {

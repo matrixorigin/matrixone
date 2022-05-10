@@ -262,13 +262,13 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs uint64) *CheckpointEntr
 	return ckpEntry
 }
 
-func (catalog *Catalog) GetCheckpointed() uint64 {
+func (catalog *Catalog) GetCheckpointed() *Checkpoint {
 	catalog.ckpmu.RLock()
 	defer catalog.ckpmu.RUnlock()
 	if len(catalog.checkpoints) == 0 {
-		return 0
+		return EmptyCheckpoint
 	}
-	return catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
+	return catalog.checkpoints[len(catalog.checkpoints)-1]
 }
 
 func (catalog *Catalog) CheckpointClosure(maxTs uint64) tasks.FuncT {

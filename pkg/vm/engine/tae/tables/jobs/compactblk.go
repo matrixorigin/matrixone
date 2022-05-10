@@ -7,7 +7,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -67,11 +66,11 @@ func (task *compactBlockTask) PrepareData() (bat *batch.Batch, err error) {
 	bat = batch.New(true, attrs)
 
 	for i := range task.meta.GetSchema().ColDefs {
-		vec, mask, err := task.compacted.GetColumnDataById(i, nil, nil)
+		view, err := task.compacted.GetColumnDataById(i, nil, nil)
 		if err != nil {
 			return bat, err
 		}
-		vec = compute.ApplyDeleteToVector(vec, mask)
+		vec := view.ApplyDeletes()
 		bat.Vecs[i] = vec
 	}
 	if err = mergesort.SortBlockColumns(bat.Vecs, int(task.meta.GetSchema().PrimaryKey)); err != nil {
@@ -109,7 +108,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 
-	if err = newBlkData.RefreshIndex(); err != nil {
+	if err = newBlkData.ReplayData(); err != nil {
 		return err
 	}
 	task.created = newBlk

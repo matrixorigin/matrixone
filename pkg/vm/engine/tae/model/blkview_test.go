@@ -1,4 +1,4 @@
-package updates
+package model
 
 import (
 	"testing"
@@ -38,14 +38,14 @@ func TestEval(t *testing.T) {
 
 	view.Eval()
 
-	vec1, err := view.Applied.GetVectorByAttr(1)
+	vec1, err := view.AppliedIBatch.GetVectorByAttr(1)
 	assert.Nil(t, err)
 	val, err := vec1.GetValue(3)
 	assert.Nil(t, err)
 	assert.Equal(t, int16(7), val)
 	t.Logf("%v", vec1)
 
-	vec2, err := view.Applied.GetVectorByAttr(13)
+	vec2, err := view.AppliedIBatch.GetVectorByAttr(13)
 	assert.Nil(t, err)
 	val, err = vec2.GetValue(4)
 	assert.Nil(t, err)
@@ -71,7 +71,7 @@ func TestMarshal(t *testing.T) {
 	}
 	bat, err := batch.NewBatch(attrs1, vecs1)
 	assert.Nil(t, err)
-	view.Applied = bat
+	view.AppliedIBatch = bat
 
 	view.DeleteMask = &roaring.Bitmap{}
 	view.DeleteMask.Add(0)
@@ -87,18 +87,18 @@ func TestMarshal(t *testing.T) {
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
-	assert.Equal(t,3,int(view2.DeleteMask.GetCardinality()))
-	assert.True(t,view2.DeleteMask.Contains(0))
-	assert.True(t,view2.DeleteMask.Contains(3))
-	assert.True(t,view2.DeleteMask.Contains(88))
+	assert.Equal(t, 3, int(view2.DeleteMask.GetCardinality()))
+	assert.True(t, view2.DeleteMask.Contains(0))
+	assert.True(t, view2.DeleteMask.Contains(3))
+	assert.True(t, view2.DeleteMask.Contains(88))
 
-	assert.Equal(t,len(view.Applied.GetAttrs()),len(view2.Applied.GetAttrs()))
+	assert.Equal(t, len(view.AppliedIBatch.GetAttrs()), len(view2.AppliedIBatch.GetAttrs()))
 }
 
 func TestMarshal2(t *testing.T) {
 	view := NewBlockView(123455)
 
-	view.Applied = nil
+	view.AppliedIBatch = nil
 
 	view.DeleteMask = &roaring.Bitmap{}
 	view.DeleteMask.Add(0)
@@ -114,12 +114,12 @@ func TestMarshal2(t *testing.T) {
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
-	assert.Equal(t,3,int(view2.DeleteMask.GetCardinality()))
-	assert.True(t,view2.DeleteMask.Contains(0))
-	assert.True(t,view2.DeleteMask.Contains(3))
-	assert.True(t,view2.DeleteMask.Contains(88))
+	assert.Equal(t, 3, int(view2.DeleteMask.GetCardinality()))
+	assert.True(t, view2.DeleteMask.Contains(0))
+	assert.True(t, view2.DeleteMask.Contains(3))
+	assert.True(t, view2.DeleteMask.Contains(88))
 
-	assert.Nil(t,view2.Applied)
+	assert.Nil(t, view2.AppliedIBatch)
 }
 
 func TestMarshal3(t *testing.T) {
@@ -137,7 +137,7 @@ func TestMarshal3(t *testing.T) {
 	}
 	bat, err := batch.NewBatch(attrs1, vecs1)
 	assert.Nil(t, err)
-	view.Applied = bat
+	view.AppliedIBatch = bat
 
 	// _, err = view.Marshal()
 	// assert.Nil(t, err)
@@ -148,7 +148,7 @@ func TestMarshal3(t *testing.T) {
 
 	assert.Equal(t, uint64(123455), view2.Ts)
 
-	assert.Equal(t,0,int(view2.DeleteMask.GetCardinality()))
+	assert.Equal(t, 0, int(view2.DeleteMask.GetCardinality()))
 
-	assert.Equal(t,len(view.Applied.GetAttrs()),len(view2.Applied.GetAttrs()))
+	assert.Equal(t, len(view.AppliedIBatch.GetAttrs()), len(view2.AppliedIBatch.GetAttrs()))
 }

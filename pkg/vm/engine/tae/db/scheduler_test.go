@@ -179,7 +179,6 @@ func TestCheckpoint2(t *testing.T) {
 	assert.Equal(t, uint64(4), tae.Wal.GetPenddingCnt())
 	t.Log(tae.Wal.GetPenddingCnt())
 	doAppend(bats[8], schema1.Name)
-	// tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
 	// t.Log(tae.MTBufMgr.String())
 	{
 		txn := tae.StartTxn(nil)
@@ -201,7 +200,7 @@ func TestCheckpoint2(t *testing.T) {
 	// })
 	t.Log(tae.Wal.GetPenddingCnt())
 	meta.GetBlockData().Destroy()
-	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.TxnMgr.StatSafeTS()))
+	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetSafeTS()))
 	assert.Nil(t, err)
 	err = task.WaitDone()
 	assert.Nil(t, err)

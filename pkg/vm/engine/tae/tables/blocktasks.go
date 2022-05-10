@@ -6,7 +6,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -46,15 +45,16 @@ func (blk *dataBlock) BlkCheckpointWAL(endTs uint64) (err error) {
 	if endTs <= ckpTs {
 		return
 	}
-	view := blk.CollectChangesInRange(ckpTs+1, endTs).(*updates.BlockView)
+	view := blk.CollectChangesInRange(ckpTs+1, endTs)
 	cnt := 0
 	for _, idxes := range view.ColLogIndexes {
 		cnt += len(idxes)
 		blk.scheduler.Checkpoint(idxes)
-		for _, index := range idxes {
-			logutil.Infof("Ckp2Index  %s", index.String())
-		}
+		// for _, index := range idxes {
+		// 	logutil.Infof("Ckp2Index  %s", index.String())
+		// }
 	}
+	blk.scheduler.Checkpoint(view.DeleteLogIndexes)
 	// logutil.Infof("BLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, cnt, blk.meta.String())
 	blk.SetMaxCheckpointTS(endTs)
 	return
@@ -66,11 +66,12 @@ func (blk *dataBlock) ABlkCheckpointWAL(endTs uint64) (err error) {
 		return
 	}
 	indexes := blk.CollectAppendLogIndexes(ckpTs+1, endTs)
-	view := blk.CollectChangesInRange(ckpTs+1, endTs).(*updates.BlockView)
+	view := blk.CollectChangesInRange(ckpTs+1, endTs)
 	for _, idxes := range view.ColLogIndexes {
 		blk.scheduler.Checkpoint(idxes)
 	}
 	blk.scheduler.Checkpoint(indexes)
+	blk.scheduler.Checkpoint(view.DeleteLogIndexes)
 	logutil.Infof("ABLK | [%d,%d] | CNT=[%d] | Checkpointed | %s", ckpTs+1, endTs, len(indexes), blk.meta.String())
 	// for _, index := range indexes {
 	// 	logutil.Infof("Ckp1Index  %s", index.String())
