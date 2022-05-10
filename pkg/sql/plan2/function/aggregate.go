@@ -35,12 +35,11 @@ func initAggregateFunction() {
 var aggregates = map[string][]Function{
 	"max": {
 		{
-			Name: "max(int64)",
-			Flag: plan.Function_AGG,
-			ID:   aggregateMaxInt64,
-			Args: MakeLimitArgList([]Arg{
-				{"item", types.T_int64},
-			}),
+			Name:          "max(int64)",
+			Flag:          plan.Function_AGG,
+			ID:            aggregateMaxInt64,
+			Args:          []types.T{types.T_int64},
+			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
 			AggregateInfo: nil, // ring.intRing and ring.type is int64, retTyp is int64
 		},

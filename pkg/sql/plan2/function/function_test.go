@@ -75,7 +75,7 @@ func Test_argumentCheck(t *testing.T) {
 		{
 			name: "test_constant_5",
 			input: input{
-				args:  []types.T{NullValueType, types.T_int32},
+				args:  []types.T{NullType, types.T_int32},
 				fArgs: MakeLimitArgList(makeSimpleArgs([]types.T{types.T_int64, types.T_int32})),
 			},
 			want: true,
@@ -107,9 +107,9 @@ func Test_argumentCheck(t *testing.T) {
 		{
 			name: "test_variadic_3",
 			input: input{
-				args: []types.T{types.T_float64, types.T_float64, NullValueType},
+				args: []types.T{types.T_float64, types.T_float64, NullType},
 				fArgs: MakeUnLimitArgList(func(ts []types.T) bool {
-					if len(ts) == 3 && ts[2] == NullValueType {
+					if len(ts) == 3 && ts[2] == NullType {
 						return true
 					}
 					return false
@@ -120,7 +120,7 @@ func Test_argumentCheck(t *testing.T) {
 		{
 			name: "test_variadic_4",
 			input: input{
-				args: []types.T{NullValueType, NullValueType, NullValueType},
+				args: []types.T{NullType, NullType, NullType},
 				fArgs: MakeUnLimitArgList(func(_ []types.T) bool {
 					return true
 				}),
@@ -130,7 +130,7 @@ func Test_argumentCheck(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := argumentCheck(tt.input.args, tt.input.fArgs); got != tt.want {
+			if got := strictTypeCheck(tt.input.args, tt.input.fArgs); got != tt.want {
 				t.Errorf("case name: '%s', argumentCheck() = %v, want %v", tt.name, got, tt.want)
 			}
 		})

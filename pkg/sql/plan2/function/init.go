@@ -16,9 +16,6 @@ func init() {
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
 // Ensure that no duplicate functions will be added.
 func appendFunction(name string, newFunction Function) error {
-	if newFunction.ID == undefined {
-		return errors.New(errno.UndefinedObject, fmt.Sprintf("ID of function %s is undefined"))
-	}
 
 	if fs, ok := functionRegister[name]; ok {
 		for _, f := range fs {
@@ -29,5 +26,18 @@ func appendFunction(name string, newFunction Function) error {
 	}
 
 	functionRegister[name] = append(functionRegister[name], newFunction)
+	return nil
+}
+
+func completenessCheck(f Function, name string) error {
+	if f.ID == undefined {
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("ID of function %s is undefined", name))
+	}
+	if f.Fn == nil {
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function '%s' missing its's Fn", name))
+	}
+	if f.TypeCheckFn == nil {
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function '%s' missing its's type check function", name))
+	}
 	return nil
 }

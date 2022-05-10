@@ -25,58 +25,73 @@ import (
 )
 
 const (
-	// NullValueType is the type of const value `NULL`
+	// NullType is the type of const value `NULL`
 	// If input NULL as an argument, its type should be NullValue which can match each type.
 	// e.g.
 	// built_in_function(100, NULL)
-	// its argument type is [types.T_int64, NullValueType]
-	NullValueType = types.T_any
+	// its argument type is [types.T_int64, NullType]
+	NullType = types.T_any
 )
 
-var emptyFunction = Function{Name: "empty function structure"}
+var (
+	// an empty function structure just for return when we couldn't meet
+	// any function.
+	emptyFunction = Function{}
+
+	aggregateEvalError = errors.New(errno.AmbiguousFunction, "aggregate function should not call eval() directly")
+)
 
 // Function is an overload of
 // a built-in function or an aggregate function or an operator
 type Function struct {
-	// Name records info of the function overload used to print
-	Name string
 	Flag plan.Function_FuncFlag
 
-	Args      ArgList
+	Args      []types.T
 	ReturnTyp types.T
 
 	// ID is a unique flag for the overload. It is helpful to find the overload quickly.
 	ID int64
 
-	// Fn is executed method of built-in function and operator
+	// Fn is implementation of built-in function and operator
+	// it received vector list, and return result vector.
 	Fn func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
-	// AggregateInfo is related information if it's an aggregate function.
-	// TODO(cms): maybe it will record the Ring id
+	// TypeCheckFn is function's own argument type check function.
+	// return true if inputTypes meet the type requirement.
+	TypeCheckFn func(inputTypes []types.T, requiredTypes []types.T) (match bool)
+
+	// AggregateInfo is related information about aggregate function.
 	AggregateInfo interface{}
 
 	// SQLFn returns the sql string of the function. Maybe useful.
 	// TODO(cms): if useless, just remove it.
-	SQLFn func(vs []*vector.Vector) (string, error)
+	SQLFn func(argNames []string) (string, error)
+
+	// Info records information about the function overload used to print
+	Info string
 }
 
-// ArgList is a structure to record argument info of a function overload.
-type ArgList struct {
-	Limit bool // if true, argument number of function is constant
+// TypeCheck returns true if input arguments meets function's type requirement.
+func (f Function) TypeCheck(args []types.T) bool {
+	return f.TypeCheckFn(args, f.Args)
+}
 
-	// if Limit is true, ArgTypes1 records all argument types
-	ArgTypes1 []Arg
+func (f Function) ReturnType() types.T {
+	return f.ReturnTyp
+}
 
-	// if Limit is false, ArgTypes2 records all argument types
-	ArgTypes2 struct {
-		// TypeCheckFn is function's own argument type check function.
-		TypeCheckFn func(inputTypes []types.T) bool
+func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if f.IsAggregate() {
+		return nil, aggregateEvalError
 	}
+	return f.Fn(vs, proc)
 }
 
-type Arg struct {
-	Name string // for function help, or for developers
-	Typ  types.T
+func (f Function) IsAggregate() bool {
+	if f.Flag == plan.Function_AGG {
+		return true
+	}
+	return false
 }
 
 // functionRegister records the information about
@@ -84,26 +99,6 @@ type Arg struct {
 //
 // For use in other packages, see GetFunctionByID and GetFunctionByName
 var functionRegister = map[string][]Function{}
-
-func MakeLimitArgList(args []Arg) ArgList {
-	return ArgList{
-		Limit:     true,
-		ArgTypes1: args,
-	}
-}
-
-func MakeUnLimitArgList(fn func([]types.T) bool) ArgList {
-	if fn == nil {
-		panic("function with variable-length parameters should have its own type-check function")
-	}
-
-	return ArgList{
-		Limit: false,
-		ArgTypes2: struct {
-			TypeCheckFn func(inputTypes []types.T) bool
-		}{TypeCheckFn: fn},
-	}
-}
 
 // GetFunctionByID get function structure by its function id.
 func GetFunctionByID(name string, id int64) (Function, error) {
@@ -119,27 +114,19 @@ func GetFunctionByID(name string, id int64) (Function, error) {
 	return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function id '%d'", id))
 }
 
-// GetFunctionByName check if a function exist or not by function name and arg types, if matches, return its function structure.
+// GetFunctionByName check a function exist or not by function name and arg types,
+// if matches, return its function structure.
 func GetFunctionByName(name string, args []types.T) (Function, error) {
-	// TODO(cms): may add some cast rule for function's arguments here
-	//		and return the castRule. So we can init the CastExpr for arguments while making the plan-node-tree.
-	//		but the logic should be more flexible ?
-	if _, ok := SearchCastRule(name, args); ok {
-		// ...
-		// copy(args, rules)
-		// ...
-	}
-
 	matches := make([]Function, 0, 4)
 
 	if fs, ok := functionRegister[name]; ok {
 		for _, f := range fs {
-			if argumentCheck(args, f.Args) {
+			if f.TypeCheck(args) {
 				matches = append(matches, f)
 			}
 		}
 	}
-	// must only match 1 function
+	// must match only 1 function
 	if len(matches) == 0 {
 		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s(%v)", name, args))
 	}
@@ -147,25 +134,23 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 		errMessage := "too much function matches:"
 		for i := range matches {
 			errMessage += "\n"
-			errMessage += matches[i].Name
+			errMessage += name
+			errMessage += fmt.Sprintf("%s", matches[i].Args)
 		}
 		return emptyFunction, errors.New(errno.SyntaxError, errMessage)
 	}
 	return matches[0], nil
 }
 
-func argumentCheck(args []types.T, fArgs ArgList) bool {
-	// if function's argument number is un-limit
-	// should call its own special type-check function
-	if !fArgs.Limit {
-		return fArgs.ArgTypes2.TypeCheckFn(args)
-	}
-
-	if len(args) != len(fArgs.ArgTypes1) {
+// strictTypeCheck is a general type check method.
+// it returns true only when each input type meets requirement.
+// Watch that : NullType can match each requirement at this function.
+func strictTypeCheck(args []types.T, require []types.T) bool {
+	if len(args) != len(require) {
 		return false
 	}
 	for i := range args {
-		if args[i] != fArgs.ArgTypes1[i].Typ && isNotNull(args[i]) {
+		if args[i] != require[i] && isNotNull(args[i]) {
 			return false
 		}
 	}
@@ -173,19 +158,8 @@ func argumentCheck(args []types.T, fArgs ArgList) bool {
 }
 
 func isNotNull(t types.T) bool {
-	if t != NullValueType {
+	if t != NullType {
 		return true
 	}
 	return false
-}
-
-func (f Function) IsAggregate() bool {
-	if f.Flag == plan.Function_AGG {
-		return true
-	}
-	return false
-}
-
-func (f Function) ReturnType() types.T {
-	return f.ReturnTyp
 }
