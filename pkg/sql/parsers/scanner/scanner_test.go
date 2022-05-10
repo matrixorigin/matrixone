@@ -130,11 +130,11 @@ func TestString(t *testing.T) {
 		id:   LEX_ERROR,
 		want: "hello",
 	}, {
-		in: "'C:\\Program Files(x86)'",
+		in:   "'C:\\Program Files(x86)'",
 		id:   STRING,
 		want: "C:Program Files(x86)",
 	}, {
-		in: "'C:\\\\Program Files(x86)'",
+		in:   "'C:\\\\Program Files(x86)'",
 		id:   STRING,
 		want: "C:\\Program Files(x86)",
 	}}

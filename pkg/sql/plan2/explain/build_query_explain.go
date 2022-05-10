@@ -100,7 +100,6 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		for _, line := range extraInfo {
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
-
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, "unimplement explain format json")
 		panic("implement me")

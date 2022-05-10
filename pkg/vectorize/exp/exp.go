@@ -46,70 +46,74 @@ func init() {
 
 func expUint8(xs []uint8, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expUint16(xs []uint16, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expUint32(xs []uint32, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expUint64(xs []uint64, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expInt8(xs []int8, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expInt16(xs []int16, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expInt32(xs []int32, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expInt64(xs []int64, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expFloat32(xs []float32, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(float64(n))
+		rs[i] = Exponential(float64(n))
 	}
 	return rs
 }
 
 func expFloat64(xs []float64, rs []float64) []float64 {
 	for i, n := range xs {
-		rs[i] = math.Exp(n)
+		rs[i] = Exponential(n)
 	}
 	return rs
+}
+
+func Exponential(value float64) float64 {
+	return math.Exp(value)
 }

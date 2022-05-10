@@ -36,8 +36,9 @@ var (
 	Decimal64Shuffle  = fixedLengthShuffle[types.Decimal64]
 	Decimal128Shuffle = fixedLengthShuffle[types.Decimal128]
 
-	DateShuffle     = fixedLengthShuffle[types.Date]
-	DatetimeShuffle = fixedLengthShuffle[types.Datetime]
+	DateShuffle      = fixedLengthShuffle[types.Date]
+	DatetimeShuffle  = fixedLengthShuffle[types.Datetime]
+	TimestampShuffle = fixedLengthShuffle[types.Timestamp]
 
 	TupleShuffle = tupleShuffle
 

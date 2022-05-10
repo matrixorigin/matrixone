@@ -35,7 +35,7 @@ func TestSingleSql(t *testing.T) {
 	//input := "explain verbose INSERT INTO  NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
 	//input := "explain verbose INSERT INTO NATION SELECT * FROM NATION2"
 	input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
-	mock := plan2.NewMockOptimizer2()
+	mock := plan2.NewMockOptimizer()
 
 	err := runOneStmt(mock, t, input)
 	if err != nil {
@@ -55,7 +55,7 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY limit 10",
 		"explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10 offset 20",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -92,7 +92,7 @@ func TestSingleTableQuery(t *testing.T) {
 		"explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 		"explain SELECT N_REGIONKEY FROM NATION where N_REGIONKEY is null and N_NAME is not null",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -125,7 +125,7 @@ func TestJoinQuery(t *testing.T) {
 		"explain verbose SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0",
 		"explain SELECT * FROM NATION a join REGION b on a.N_REGIONKEY = b.R_REGIONKEY WHERE abs(a.N_REGIONKEY) > 0",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -152,7 +152,7 @@ func TestNestedQuery(t *testing.T) {
 				l_partkey = p_partkey
 		);`, //tpch q17
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -170,7 +170,7 @@ func TestDerivedTableQuery(t *testing.T) {
 		"explain select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 		"explain verbose select * from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -188,7 +188,7 @@ func TestDMLInsert(t *testing.T) {
 		"explain INSERT INTO NATION SELECT * FROM NATION2",
 		"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -201,7 +201,7 @@ func TestDMLUpdate(t *testing.T) {
 		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -214,7 +214,7 @@ func TestDMLDelete(t *testing.T) {
 		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
 		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
-	mockOptimizer := plan2.NewMockOptimizer2()
+	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
@@ -275,7 +275,7 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 
 		//this sql always return one stmt
 		ctx := opt.CurrentContext()
-		query, err := plan2.BuildPlan2(ctx, stmt.Statement)
+		query, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
 			fmt.Printf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err

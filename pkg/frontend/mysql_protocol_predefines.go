@@ -2995,313 +2995,313 @@ const (
 	ER_MUST_CHANGE_EXPIRED_PASSWORD                  uint16 = 10928
 	ER_SYSTEM_TABLES_NOT_SUPPORTED_BY_STORAGE_ENGINE uint16 = 10929
 	//OBSOLETE_ER_FILESORT_TERMINATED uint16 = 10930
-	ER_SERVER_STARTUP_MSG                                       uint16 = 10931
-	ER_FAILED_TO_FIND_LOCALE_NAME                               uint16 = 10932
-	ER_FAILED_TO_FIND_COLLATION_NAME                            uint16 = 10933
-	ER_SERVER_OUT_OF_RESOURCES                                  uint16 = 10934
-	ER_SERVER_OUTOFMEMORY                                       uint16 = 10935
-	ER_INVALID_COLLATION_FOR_CHARSET                            uint16 = 10936
-	ER_CANT_START_ERROR_LOG_SERVICE                             uint16 = 10937
-	ER_CREATING_NEW_UUID_FIRST_START                            uint16 = 10938
-	ER_FAILED_TO_GET_ABSOLUTE_PATH                              uint16 = 10939
-	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_BOOTSTRAP           uint16 = 10940
-	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_SHUTDOWN            uint16 = 10941
-	ER_DUP_FD_OPEN_FAILED                                       uint16 = 10942
-	ER_SYSTEM_VIEW_INIT_FAILED                                  uint16 = 10943
-	ER_RESOURCE_GROUP_POST_INIT_FAILED                          uint16 = 10944
-	ER_RESOURCE_GROUP_SUBSYSTEM_INIT_FAILED                     uint16 = 10945
-	ER_FAILED_START_MYSQLD_DAEMON                               uint16 = 10946
-	ER_CANNOT_CHANGE_TO_ROOT_DIR                                uint16 = 10947
-	ER_PERSISTENT_PRIVILEGES_BOOTSTRAP                          uint16 = 10948
-	ER_BASEDIR_SET_TO                                           uint16 = 10949
-	ER_RPL_FILTER_ADD_WILD_DO_TABLE_FAILED                      uint16 = 10950
-	ER_RPL_FILTER_ADD_WILD_IGNORE_TABLE_FAILED                  uint16 = 10951
-	ER_PRIVILEGE_SYSTEM_INIT_FAILED                             uint16 = 10952
-	ER_CANNOT_SET_LOG_ERROR_SERVICES                            uint16 = 10953
-	ER_PERFSCHEMA_TABLES_INIT_FAILED                            uint16 = 10954
+	ER_SERVER_STARTUP_MSG                                        uint16 = 10931
+	ER_FAILED_TO_FIND_LOCALE_NAME                                uint16 = 10932
+	ER_FAILED_TO_FIND_COLLATION_NAME                             uint16 = 10933
+	ER_SERVER_OUT_OF_RESOURCES                                   uint16 = 10934
+	ER_SERVER_OUTOFMEMORY                                        uint16 = 10935
+	ER_INVALID_COLLATION_FOR_CHARSET                             uint16 = 10936
+	ER_CANT_START_ERROR_LOG_SERVICE                              uint16 = 10937
+	ER_CREATING_NEW_UUID_FIRST_START                             uint16 = 10938
+	ER_FAILED_TO_GET_ABSOLUTE_PATH                               uint16 = 10939
+	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_BOOTSTRAP            uint16 = 10940
+	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_SHUTDOWN             uint16 = 10941
+	ER_DUP_FD_OPEN_FAILED                                        uint16 = 10942
+	ER_SYSTEM_VIEW_INIT_FAILED                                   uint16 = 10943
+	ER_RESOURCE_GROUP_POST_INIT_FAILED                           uint16 = 10944
+	ER_RESOURCE_GROUP_SUBSYSTEM_INIT_FAILED                      uint16 = 10945
+	ER_FAILED_START_MYSQLD_DAEMON                                uint16 = 10946
+	ER_CANNOT_CHANGE_TO_ROOT_DIR                                 uint16 = 10947
+	ER_PERSISTENT_PRIVILEGES_BOOTSTRAP                           uint16 = 10948
+	ER_BASEDIR_SET_TO                                            uint16 = 10949
+	ER_RPL_FILTER_ADD_WILD_DO_TABLE_FAILED                       uint16 = 10950
+	ER_RPL_FILTER_ADD_WILD_IGNORE_TABLE_FAILED                   uint16 = 10951
+	ER_PRIVILEGE_SYSTEM_INIT_FAILED                              uint16 = 10952
+	ER_CANNOT_SET_LOG_ERROR_SERVICES                             uint16 = 10953
+	ER_PERFSCHEMA_TABLES_INIT_FAILED                             uint16 = 10954
 	ER_TX_EXTRACTION_ALGORITHM_FOR_BINLOG_TX_DEPENDENCY_TRACKING uint16 = 10955
-	ER_INVALID_REPLICATION_TIMESTAMPS                           uint16 = 10956
-	ER_RPL_TIMESTAMPS_RETURNED_TO_NORMAL                        uint16 = 10957
-	ER_BINLOG_FILE_OPEN_FAILED                                  uint16 = 10958
-	ER_BINLOG_EVENT_WRITE_TO_STMT_CACHE_FAILED                  uint16 = 10959
-	ER_SLAVE_RELAY_LOG_TRUNCATE_INFO                            uint16 = 10960
-	ER_SLAVE_RELAY_LOG_PURGE_FAILED                             uint16 = 10961
-	ER_RPL_SLAVE_FILTER_CREATE_FAILED                           uint16 = 10962
-	ER_RPL_SLAVE_GLOBAL_FILTERS_COPY_FAILED                     uint16 = 10963
-	ER_RPL_SLAVE_RESET_FILTER_OPTIONS                           uint16 = 10964
-	ER_MISSING_GRANT_SYSTEM_TABLE                               uint16 = 10965
-	ER_MISSING_ACL_SYSTEM_TABLE                                 uint16 = 10966
-	ER_ANONYMOUS_AUTH_ID_NOT_ALLOWED_IN_MANDATORY_ROLES         uint16 = 10967
-	ER_UNKNOWN_AUTH_ID_IN_MANDATORY_ROLE                        uint16 = 10968
-	ER_WRITE_ROW_TO_PARTITION_FAILED                            uint16 = 10969
-	ER_RESOURCE_GROUP_METADATA_UPDATE_SKIPPED                   uint16 = 10970
-	ER_FAILED_TO_PERSIST_RESOURCE_GROUP_METADATA                uint16 = 10971
-	ER_FAILED_TO_DESERIALIZE_RESOURCE_GROUP                     uint16 = 10972
-	ER_FAILED_TO_UPDATE_RESOURCE_GROUP                          uint16 = 10973
-	ER_RESOURCE_GROUP_VALIDATION_FAILED                         uint16 = 10974
-	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP             uint16 = 10975
-	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP_HASH        uint16 = 10976
-	ER_FAILED_TO_ADD_RESOURCE_GROUP_TO_MAP                      uint16 = 10977
-	ER_RESOURCE_GROUP_IS_DISABLED                               uint16 = 10978
-	ER_FAILED_TO_APPLY_RESOURCE_GROUP_CONTROLLER                uint16 = 10979
-	ER_FAILED_TO_ACQUIRE_LOCK_ON_RESOURCE_GROUP                 uint16 = 10980
-	ER_PFS_NOTIFICATION_FUNCTION_REGISTER_FAILED                uint16 = 10981
-	ER_RES_GRP_SET_THR_AFFINITY_FAILED                          uint16 = 10982
-	ER_RES_GRP_SET_THR_AFFINITY_TO_CPUS_FAILED                  uint16 = 10983
-	ER_RES_GRP_THD_UNBIND_FROM_CPU_FAILED                       uint16 = 10984
-	ER_RES_GRP_SET_THREAD_PRIORITY_FAILED                       uint16 = 10985
-	ER_RES_GRP_FAILED_TO_DETERMINE_NICE_CAPABILITY              uint16 = 10986
-	ER_RES_GRP_FAILED_TO_GET_THREAD_HANDLE                      uint16 = 10987
-	ER_RES_GRP_GET_THREAD_PRIO_NOT_SUPPORTED                    uint16 = 10988
-	ER_RES_GRP_FAILED_DETERMINE_CPU_COUNT                       uint16 = 10989
-	ER_RES_GRP_FEATURE_NOT_AVAILABLE                            uint16 = 10990
-	ER_RES_GRP_INVALID_THREAD_PRIORITY                          uint16 = 10991
-	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_CPUID_FAILED           uint16 = 10992
-	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_THREAD_FAILED          uint16 = 10993
-	ER_RES_GRP_SOLARIS_PROCESSOR_AFFINITY_FAILED                uint16 = 10994
-	ER_DD_UPGRADE_RENAME_IDX_STATS_FILE_FAILED                  uint16 = 10995
-	ER_DD_UPGRADE_DD_OPEN_FAILED                                uint16 = 10996
-	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLESPACES                   uint16 = 10997
-	ER_DD_UPGRADE_FAILED_TO_ACQUIRE_TABLESPACE                  uint16 = 10998
-	ER_DD_UPGRADE_FAILED_TO_RESOLVE_TABLESPACE_ENGINE           uint16 = 10999
-	ER_FAILED_TO_CREATE_SDI_FOR_TABLESPACE                      uint16 = 11000
-	ER_FAILED_TO_STORE_SDI_FOR_TABLESPACE                       uint16 = 11001
-	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLES                        uint16 = 11002
-	ER_DD_UPGRADE_DD_POPULATED                                  uint16 = 11003
-	ER_DD_UPGRADE_INFO_FILE_OPEN_FAILED                         uint16 = 11004
-	ER_DD_UPGRADE_INFO_FILE_CLOSE_FAILED                        uint16 = 11005
-	ER_DD_UPGRADE_TABLESPACE_MIGRATION_FAILED                   uint16 = 11006
-	ER_DD_UPGRADE_FAILED_TO_CREATE_TABLE_STATS                  uint16 = 11007
-	ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED                 uint16 = 11008
-	ER_DD_UPGRADE_FAILED_TO_CREATE_INDEX_STATS                  uint16 = 11009
-	ER_DD_UPGRADE_INDEX_STATS_MIGRATE_COMPLETED                 uint16 = 11010
-	ER_DD_UPGRADE_FAILED_FIND_VALID_DATA_DIR                    uint16 = 11011
-	ER_DD_UPGRADE_START                                         uint16 = 11012
-	ER_DD_UPGRADE_FAILED_INIT_DD_SE                             uint16 = 11013
-	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_ABORT             uint16 = 11014
-	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_CONTINUE          uint16 = 11015
-	ER_DD_UPGRADE_SE_LOGS_FAILED                                uint16 = 11016
-	ER_DD_UPGRADE_SDI_INFO_UPDATE_FAILED                        uint16 = 11017
-	ER_SKIP_UPDATING_METADATA_IN_SE_RO_MODE                     uint16 = 11018
-	ER_CREATED_SYSTEM_WITH_VERSION                              uint16 = 11019
-	ER_UNKNOWN_ERROR_DETECTED_IN_SE                             uint16 = 11020
-	ER_READ_LOG_EVENT_FAILED                                    uint16 = 11021
-	ER_ROW_DATA_TOO_BIG_TO_WRITE_IN_BINLOG                      uint16 = 11022
-	ER_FAILED_TO_CONSTRUCT_DROP_EVENT_QUERY                     uint16 = 11023
-	ER_FAILED_TO_BINLOG_DROP_EVENT                              uint16 = 11024
-	ER_FAILED_TO_START_SLAVE_THREAD                             uint16 = 11025
-	ER_RPL_IO_THREAD_KILLED                                     uint16 = 11026
-	ER_SLAVE_RECONNECT_FAILED                                   uint16 = 11027
-	ER_SLAVE_KILLED_AFTER_RECONNECT                             uint16 = 11028
-	ER_SLAVE_NOT_STARTED_ON_SOME_CHANNELS                       uint16 = 11029
-	ER_FAILED_TO_ADD_RPL_FILTER                                 uint16 = 11030
-	ER_PER_CHANNEL_RPL_FILTER_CONF_FOR_GRP_RPL                  uint16 = 11031
-	ER_RPL_FILTERS_NOT_ATTACHED_TO_CHANNEL                      uint16 = 11032
-	ER_FAILED_TO_BUILD_DO_AND_IGNORE_TABLE_HASHES               uint16 = 11033
-	ER_CLONE_PLUGIN_NOT_LOADED_TRACE                            uint16 = 11034
-	ER_CLONE_HANDLER_EXIST_TRACE                                uint16 = 11035
-	ER_CLONE_CREATE_HANDLER_FAIL_TRACE                          uint16 = 11036
-	ER_CYCLE_TIMER_IS_NOT_AVAILABLE                             uint16 = 11037
-	ER_NANOSECOND_TIMER_IS_NOT_AVAILABLE                        uint16 = 11038
-	ER_MICROSECOND_TIMER_IS_NOT_AVAILABLE                       uint16 = 11039
-	ER_PFS_MALLOC_ARRAY_OVERFLOW                                uint16 = 11040
-	ER_PFS_MALLOC_ARRAY_OOM                                     uint16 = 11041
-	ER_INNODB_FAILED_TO_FIND_IDX_WITH_KEY_NO                    uint16 = 11042
-	ER_INNODB_FAILED_TO_FIND_IDX                                uint16 = 11043
-	ER_INNODB_FAILED_TO_FIND_IDX_FROM_DICT_CACHE                uint16 = 11044
-	ER_INNODB_ACTIVE_INDEX_CHANGE_FAILED                        uint16 = 11045
-	ER_INNODB_DIFF_IN_REF_LEN                                   uint16 = 11046
-	ER_WRONG_TYPE_FOR_COLUMN_PREFIX_IDX_FLD                     uint16 = 11047
-	ER_INNODB_CANNOT_CREATE_TABLE                               uint16 = 11048
-	ER_INNODB_INTERNAL_INDEX                                    uint16 = 11049
-	ER_INNODB_IDX_CNT_MORE_THAN_DEFINED_IN_MYSQL                uint16 = 11050
-	ER_INNODB_IDX_CNT_FEWER_THAN_DEFINED_IN_MYSQL               uint16 = 11051
-	ER_INNODB_IDX_COLUMN_CNT_DIFF                               uint16 = 11052
-	ER_INNODB_USE_MONITOR_GROUP_NAME                            uint16 = 11053
-	ER_INNODB_MONITOR_DEFAULT_VALUE_NOT_DEFINED                 uint16 = 11054
-	ER_INNODB_MONITOR_IS_ENABLED                                uint16 = 11055
-	ER_INNODB_INVALID_MONITOR_COUNTER_NAME                      uint16 = 11056
-	ER_WIN_LOAD_LIBRARY_FAILED                                  uint16 = 11057
-	ER_PARTITION_HANDLER_ADMIN_MSG                              uint16 = 11058
-	ER_RPL_RLI_INIT_INFO_MSG                                    uint16 = 11059
-	ER_DD_UPGRADE_TABLE_INTACT_ERROR                            uint16 = 11060
-	ER_SERVER_INIT_COMPILED_IN_COMMANDS                         uint16 = 11061
-	ER_MYISAM_CHECK_METHOD_ERROR                                uint16 = 11062
-	ER_MYISAM_CRASHED_ERROR                                     uint16 = 11063
-	ER_WAITPID_FAILED                                           uint16 = 11064
-	ER_FAILED_TO_FIND_MYSQLD_STATUS                             uint16 = 11065
-	ER_INNODB_ERROR_LOGGER_MSG                                  uint16 = 11066
-	ER_INNODB_ERROR_LOGGER_FATAL_MSG                            uint16 = 11067
-	ER_DEPRECATED_SYNTAX_WITH_REPLACEMENT                       uint16 = 11068
-	ER_DEPRECATED_SYNTAX_NO_REPLACEMENT                         uint16 = 11069
-	ER_DEPRECATE_MSG_NO_REPLACEMENT                             uint16 = 11070
-	ER_LOG_PRINTF_MSG                                           uint16 = 11071
-	ER_BINLOG_LOGGING_NOT_POSSIBLE                              uint16 = 11072
-	ER_FAILED_TO_SET_PERSISTED_OPTIONS                          uint16 = 11073
-	ER_COMPONENTS_FAILED_TO_ACQUIRE_SERVICE_IMPLEMENTATION      uint16 = 11074
-	ER_RES_GRP_INVALID_VCPU_RANGE                               uint16 = 11075
-	ER_RES_GRP_INVALID_VCPU_ID                                  uint16 = 11076
-	ER_ERROR_DURING_FLUSH_LOG_COMMIT_PHASE                      uint16 = 11077
-	ER_DROP_DATABASE_FAILED_RMDIR_MANUALLY                      uint16 = 11078
-	ER_EXPIRE_LOGS_DAYS_IGNORED                                 uint16 = 11079
-	ER_BINLOG_MALFORMED_OR_OLD_RELAY_LOG                        uint16 = 11080
-	ER_DD_UPGRADE_VIEW_COLUMN_NAME_TOO_LONG                     uint16 = 11081
-	ER_TABLE_NEEDS_DUMP_UPGRADE                                 uint16 = 11082
-	ER_DD_UPGRADE_FAILED_TO_UPDATE_VER_NO_IN_TABLESPACE         uint16 = 11083
-	ER_KEYRING_MIGRATION_FAILED                                 uint16 = 11084
-	ER_KEYRING_MIGRATION_SUCCESSFUL                             uint16 = 11085
-	ER_RESTART_RECEIVED_INFO                                    uint16 = 11086
-	ER_LCTN_CHANGED                                             uint16 = 11087
-	ER_DD_INITIALIZE                                            uint16 = 11088
-	ER_DD_RESTART                                               uint16 = 11089
-	ER_DD_UPGRADE                                               uint16 = 11090
-	ER_DD_UPGRADE_OFF                                           uint16 = 11091
-	ER_DD_UPGRADE_VERSION_NOT_SUPPORTED                         uint16 = 11092
-	ER_DD_UPGRADE_SCHEMA_UNAVAILABLE                            uint16 = 11093
-	ER_DD_MINOR_DOWNGRADE                                       uint16 = 11094
-	ER_DD_MINOR_DOWNGRADE_VERSION_NOT_SUPPORTED                 uint16 = 11095
-	ER_DD_NO_VERSION_FOUND                                      uint16 = 11096
-	ER_THREAD_POOL_NOT_SUPPORTED_ON_PLATFORM                    uint16 = 11097
-	ER_THREAD_POOL_SIZE_TOO_LOW                                 uint16 = 11098
-	ER_THREAD_POOL_SIZE_TOO_HIGH                                uint16 = 11099
-	ER_THREAD_POOL_ALGORITHM_INVALID                            uint16 = 11100
-	ER_THREAD_POOL_INVALID_STALL_LIMIT                          uint16 = 11101
-	ER_THREAD_POOL_INVALID_PRIO_KICKUP_TIMER                    uint16 = 11102
-	ER_THREAD_POOL_MAX_UNUSED_THREADS_INVALID                   uint16 = 11103
-	ER_THREAD_POOL_CON_HANDLER_INIT_FAILED                      uint16 = 11104
-	ER_THREAD_POOL_INIT_FAILED                                  uint16 = 11105
-	ER_THREAD_POOL_PLUGIN_STARTED                               uint16 = 11106
-	ER_THREAD_POOL_CANNOT_SET_THREAD_SPECIFIC_DATA              uint16 = 11107
-	ER_THREAD_POOL_FAILED_TO_CREATE_CONNECT_HANDLER_THD         uint16 = 11108
-	ER_THREAD_POOL_FAILED_TO_CREATE_THD_AND_AUTH_CONN           uint16 = 11109
-	ER_THREAD_POOL_FAILED_PROCESS_CONNECT_EVENT                 uint16 = 11110
-	ER_THREAD_POOL_FAILED_TO_CREATE_POOL                        uint16 = 11111
-	ER_THREAD_POOL_RATE_LIMITED_ERROR_MSGS                      uint16 = 11112
-	ER_TRHEAD_POOL_LOW_LEVEL_INIT_FAILED                        uint16 = 11113
-	ER_THREAD_POOL_LOW_LEVEL_REARM_FAILED                       uint16 = 11114
-	ER_THREAD_POOL_BUFFER_TOO_SMALL                             uint16 = 11115
-	ER_MECAB_NOT_SUPPORTED                                      uint16 = 11116
-	ER_MECAB_NOT_VERIFIED                                       uint16 = 11117
-	ER_MECAB_CREATING_MODEL                                     uint16 = 11118
-	ER_MECAB_FAILED_TO_CREATE_MODEL                             uint16 = 11119
-	ER_MECAB_FAILED_TO_CREATE_TRIGGER                           uint16 = 11120
-	ER_MECAB_UNSUPPORTED_CHARSET                                uint16 = 11121
-	ER_MECAB_CHARSET_LOADED                                     uint16 = 11122
-	ER_MECAB_PARSE_FAILED                                       uint16 = 11123
-	ER_MECAB_OOM_WHILE_PARSING_TEXT                             uint16 = 11124
-	ER_MECAB_CREATE_LATTICE_FAILED                              uint16 = 11125
-	ER_SEMISYNC_TRACE_ENTER_FUNC                                uint16 = 11126
-	ER_SEMISYNC_TRACE_EXIT_WITH_INT_EXIT_CODE                   uint16 = 11127
-	ER_SEMISYNC_TRACE_EXIT_WITH_BOOL_EXIT_CODE                  uint16 = 11128
-	ER_SEMISYNC_TRACE_EXIT                                      uint16 = 11129
-	ER_SEMISYNC_RPL_INIT_FOR_TRX                                uint16 = 11130
-	ER_SEMISYNC_FAILED_TO_ALLOCATE_TRX_NODE                     uint16 = 11131
-	ER_SEMISYNC_BINLOG_WRITE_OUT_OF_ORDER                       uint16 = 11132
-	ER_SEMISYNC_INSERT_LOG_INFO_IN_ENTRY                        uint16 = 11133
-	ER_SEMISYNC_PROBE_LOG_INFO_IN_ENTRY                         uint16 = 11134
-	ER_SEMISYNC_CLEARED_ALL_ACTIVE_TRANSACTION_NODES            uint16 = 11135
-	ER_SEMISYNC_CLEARED_ACTIVE_TRANSACTION_TILL_POS             uint16 = 11136
-	ER_SEMISYNC_REPLY_MAGIC_NO_ERROR                            uint16 = 11137
-	ER_SEMISYNC_REPLY_PKT_LENGTH_TOO_SMALL                      uint16 = 11138
-	ER_SEMISYNC_REPLY_BINLOG_FILE_TOO_LARGE                     uint16 = 11139
-	ER_SEMISYNC_SERVER_REPLY                                    uint16 = 11140
-	ER_SEMISYNC_FUNCTION_CALLED_TWICE                           uint16 = 11141
-	ER_SEMISYNC_RPL_ENABLED_ON_MASTER                           uint16 = 11142
-	ER_SEMISYNC_MASTER_OOM                                      uint16 = 11143
-	ER_SEMISYNC_DISABLED_ON_MASTER                              uint16 = 11144
-	ER_SEMISYNC_FORCED_SHUTDOWN                                 uint16 = 11145
-	ER_SEMISYNC_MASTER_GOT_REPLY_AT_POS                         uint16 = 11146
-	ER_SEMISYNC_MASTER_SIGNAL_ALL_WAITING_THREADS               uint16 = 11147
-	ER_SEMISYNC_MASTER_TRX_WAIT_POS                             uint16 = 11148
-	ER_SEMISYNC_BINLOG_REPLY_IS_AHEAD                           uint16 = 11149
-	ER_SEMISYNC_MOVE_BACK_WAIT_POS                              uint16 = 11150
-	ER_SEMISYNC_INIT_WAIT_POS                                   uint16 = 11151
-	ER_SEMISYNC_WAIT_TIME_FOR_BINLOG_SENT                       uint16 = 11152
-	ER_SEMISYNC_WAIT_FOR_BINLOG_TIMEDOUT                        uint16 = 11153
-	ER_SEMISYNC_WAIT_TIME_ASSESSMENT_FOR_COMMIT_TRX_FAILED      uint16 = 11154
-	ER_SEMISYNC_RPL_SWITCHED_OFF                                uint16 = 11155
-	ER_SEMISYNC_RPL_SWITCHED_ON                                 uint16 = 11156
-	ER_SEMISYNC_NO_SPACE_IN_THE_PKT                             uint16 = 11157
-	ER_SEMISYNC_SYNC_HEADER_UPDATE_INFO                         uint16 = 11158
-	ER_SEMISYNC_FAILED_TO_INSERT_TRX_NODE                       uint16 = 11159
-	ER_SEMISYNC_TRX_SKIPPED_AT_POS                              uint16 = 11160
-	ER_SEMISYNC_MASTER_FAILED_ON_NET_FLUSH                      uint16 = 11161
-	ER_SEMISYNC_RECEIVED_ACK_IS_SMALLER                         uint16 = 11162
-	ER_SEMISYNC_ADD_ACK_TO_SLOT                                 uint16 = 11163
-	ER_SEMISYNC_UPDATE_EXISTING_SLAVE_ACK                       uint16 = 11164
-	ER_SEMISYNC_FAILED_TO_START_ACK_RECEIVER_THD                uint16 = 11165
-	ER_SEMISYNC_STARTING_ACK_RECEIVER_THD                       uint16 = 11166
-	ER_SEMISYNC_FAILED_TO_WAIT_ON_DUMP_SOCKET                   uint16 = 11167
-	ER_SEMISYNC_STOPPING_ACK_RECEIVER_THREAD                    uint16 = 11168
-	ER_SEMISYNC_FAILED_REGISTER_SLAVE_TO_RECEIVER               uint16 = 11169
-	ER_SEMISYNC_START_BINLOG_DUMP_TO_SLAVE                      uint16 = 11170
-	ER_SEMISYNC_STOP_BINLOG_DUMP_TO_SLAVE                       uint16 = 11171
-	ER_SEMISYNC_UNREGISTER_TRX_OBSERVER_FAILED                  uint16 = 11172
-	ER_SEMISYNC_UNREGISTER_BINLOG_STORAGE_OBSERVER_FAILED       uint16 = 11173
-	ER_SEMISYNC_UNREGISTER_BINLOG_TRANSMIT_OBSERVER_FAILED      uint16 = 11174
-	ER_SEMISYNC_UNREGISTERED_REPLICATOR                         uint16 = 11175
-	ER_SEMISYNC_SOCKET_FD_TOO_LARGE                             uint16 = 11176
-	ER_SEMISYNC_SLAVE_REPLY                                     uint16 = 11177
-	ER_SEMISYNC_MISSING_MAGIC_NO_FOR_SEMISYNC_PKT               uint16 = 11178
-	ER_SEMISYNC_SLAVE_START                                     uint16 = 11179
-	ER_SEMISYNC_SLAVE_REPLY_WITH_BINLOG_INFO                    uint16 = 11180
-	ER_SEMISYNC_SLAVE_NET_FLUSH_REPLY_FAILED                    uint16 = 11181
-	ER_SEMISYNC_SLAVE_SEND_REPLY_FAILED                         uint16 = 11182
-	ER_SEMISYNC_EXECUTION_FAILED_ON_MASTER                      uint16 = 11183
-	ER_SEMISYNC_NOT_SUPPORTED_BY_MASTER                         uint16 = 11184
-	ER_SEMISYNC_SLAVE_SET_FAILED                                uint16 = 11185
-	ER_SEMISYNC_FAILED_TO_STOP_ACK_RECEIVER_THD                 uint16 = 11186
-	ER_FIREWALL_FAILED_TO_READ_FIREWALL_TABLES                  uint16 = 11187
-	ER_FIREWALL_FAILED_TO_REG_DYNAMIC_PRIVILEGES                uint16 = 11188
-	ER_FIREWALL_RECORDING_STMT_WAS_TRUNCATED                    uint16 = 11189
-	ER_FIREWALL_RECORDING_STMT_WITHOUT_TEXT                     uint16 = 11190
-	ER_FIREWALL_SUSPICIOUS_STMT                                 uint16 = 11191
-	ER_FIREWALL_ACCESS_DENIED                                   uint16 = 11192
-	ER_FIREWALL_SKIPPED_UNKNOWN_USER_MODE                       uint16 = 11193
-	ER_FIREWALL_RELOADING_CACHE                                 uint16 = 11194
-	ER_FIREWALL_RESET_FOR_USER                                  uint16 = 11195
-	ER_FIREWALL_STATUS_FLUSHED                                  uint16 = 11196
-	ER_KEYRING_LOGGER_ERROR_MSG                                 uint16 = 11197
-	ER_AUDIT_LOG_FILTER_IS_NOT_INSTALLED                        uint16 = 11198
-	ER_AUDIT_LOG_SWITCHING_TO_INCLUDE_LIST                      uint16 = 11199
-	ER_AUDIT_LOG_CANNOT_SET_LOG_POLICY_WITH_OTHER_POLICIES      uint16 = 11200
-	ER_AUDIT_LOG_ONLY_INCLUDE_LIST_USED                         uint16 = 11201
-	ER_AUDIT_LOG_INDEX_MAP_CANNOT_ACCESS_DIR                    uint16 = 11202
-	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED                      uint16 = 11203
-	ER_AUDIT_LOG_WRITER_DEST_FILE_ALREADY_EXISTS                uint16 = 11204
-	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED_REMOVE_FILE_MANUALLY uint16 = 11205
-	ER_AUDIT_LOG_WRITER_INCOMPLETE_FILE_RENAMED                 uint16 = 11206
-	ER_AUDIT_LOG_WRITER_FAILED_TO_WRITE_TO_FILE                 uint16 = 11207
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_ENCRYPTION            uint16 = 11208
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_COMPRESSION           uint16 = 11209
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_CREATE_FILE                uint16 = 11210
-	ER_AUDIT_LOG_RENAME_LOG_FILE_BEFORE_FLUSH                   uint16 = 11211
-	ER_AUDIT_LOG_FILTER_RESULT_MSG                              uint16 = 11212
-	ER_AUDIT_LOG_JSON_READER_FAILED_TO_PARSE                    uint16 = 11213
-	ER_AUDIT_LOG_JSON_READER_BUF_TOO_SMALL                      uint16 = 11214
-	ER_AUDIT_LOG_JSON_READER_FAILED_TO_OPEN_FILE                uint16 = 11215
-	ER_AUDIT_LOG_JSON_READER_FILE_PARSING_ERROR                 uint16 = 11216
-	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_COUNT                    uint16 = 11217
-	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_DEFINITION               uint16 = 11218
-	ER_AUDIT_LOG_FILTER_FAILED_TO_STORE_TABLE_FLDS              uint16 = 11219
-	ER_AUDIT_LOG_FILTER_FAILED_TO_UPDATE_TABLE                  uint16 = 11220
-	ER_AUDIT_LOG_FILTER_FAILED_TO_INSERT_INTO_TABLE             uint16 = 11221
-	ER_AUDIT_LOG_FILTER_FAILED_TO_DELETE_FROM_TABLE             uint16 = 11222
-	ER_AUDIT_LOG_FILTER_FAILED_TO_INIT_TABLE_FOR_READ           uint16 = 11223
-	ER_AUDIT_LOG_FILTER_FAILED_TO_READ_TABLE                    uint16 = 11224
-	ER_AUDIT_LOG_FILTER_FAILED_TO_CLOSE_TABLE_AFTER_READING     uint16 = 11225
-	ER_AUDIT_LOG_FILTER_USER_AND_HOST_CANNOT_BE_EMPTY           uint16 = 11226
-	ER_AUDIT_LOG_FILTER_FLD_FILTERNAME_CANNOT_BE_EMPTY          uint16 = 11227
-	ER_VALIDATE_PWD_DICT_FILE_NOT_SPECIFIED                     uint16 = 11228
-	ER_VALIDATE_PWD_DICT_FILE_NOT_LOADED                        uint16 = 11229
-	ER_VALIDATE_PWD_DICT_FILE_TOO_BIG                           uint16 = 11230
-	ER_VALIDATE_PWD_FAILED_TO_READ_DICT_FILE                    uint16 = 11231
-	ER_VALIDATE_PWD_FAILED_TO_GET_FLD_FROM_SECURITY_CTX         uint16 = 11232
-	ER_VALIDATE_PWD_FAILED_TO_GET_SECURITY_CTX                  uint16 = 11233
-	ER_VALIDATE_PWD_LENGTH_CHANGED                              uint16 = 11234
-	ER_REWRITER_QUERY_ERROR_MSG                                 uint16 = 11235
-	ER_REWRITER_QUERY_FAILED                                    uint16 = 11236
-	ER_XPLUGIN_STARTUP_FAILED                                   uint16 = 11237
+	ER_INVALID_REPLICATION_TIMESTAMPS                            uint16 = 10956
+	ER_RPL_TIMESTAMPS_RETURNED_TO_NORMAL                         uint16 = 10957
+	ER_BINLOG_FILE_OPEN_FAILED                                   uint16 = 10958
+	ER_BINLOG_EVENT_WRITE_TO_STMT_CACHE_FAILED                   uint16 = 10959
+	ER_SLAVE_RELAY_LOG_TRUNCATE_INFO                             uint16 = 10960
+	ER_SLAVE_RELAY_LOG_PURGE_FAILED                              uint16 = 10961
+	ER_RPL_SLAVE_FILTER_CREATE_FAILED                            uint16 = 10962
+	ER_RPL_SLAVE_GLOBAL_FILTERS_COPY_FAILED                      uint16 = 10963
+	ER_RPL_SLAVE_RESET_FILTER_OPTIONS                            uint16 = 10964
+	ER_MISSING_GRANT_SYSTEM_TABLE                                uint16 = 10965
+	ER_MISSING_ACL_SYSTEM_TABLE                                  uint16 = 10966
+	ER_ANONYMOUS_AUTH_ID_NOT_ALLOWED_IN_MANDATORY_ROLES          uint16 = 10967
+	ER_UNKNOWN_AUTH_ID_IN_MANDATORY_ROLE                         uint16 = 10968
+	ER_WRITE_ROW_TO_PARTITION_FAILED                             uint16 = 10969
+	ER_RESOURCE_GROUP_METADATA_UPDATE_SKIPPED                    uint16 = 10970
+	ER_FAILED_TO_PERSIST_RESOURCE_GROUP_METADATA                 uint16 = 10971
+	ER_FAILED_TO_DESERIALIZE_RESOURCE_GROUP                      uint16 = 10972
+	ER_FAILED_TO_UPDATE_RESOURCE_GROUP                           uint16 = 10973
+	ER_RESOURCE_GROUP_VALIDATION_FAILED                          uint16 = 10974
+	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP              uint16 = 10975
+	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP_HASH         uint16 = 10976
+	ER_FAILED_TO_ADD_RESOURCE_GROUP_TO_MAP                       uint16 = 10977
+	ER_RESOURCE_GROUP_IS_DISABLED                                uint16 = 10978
+	ER_FAILED_TO_APPLY_RESOURCE_GROUP_CONTROLLER                 uint16 = 10979
+	ER_FAILED_TO_ACQUIRE_LOCK_ON_RESOURCE_GROUP                  uint16 = 10980
+	ER_PFS_NOTIFICATION_FUNCTION_REGISTER_FAILED                 uint16 = 10981
+	ER_RES_GRP_SET_THR_AFFINITY_FAILED                           uint16 = 10982
+	ER_RES_GRP_SET_THR_AFFINITY_TO_CPUS_FAILED                   uint16 = 10983
+	ER_RES_GRP_THD_UNBIND_FROM_CPU_FAILED                        uint16 = 10984
+	ER_RES_GRP_SET_THREAD_PRIORITY_FAILED                        uint16 = 10985
+	ER_RES_GRP_FAILED_TO_DETERMINE_NICE_CAPABILITY               uint16 = 10986
+	ER_RES_GRP_FAILED_TO_GET_THREAD_HANDLE                       uint16 = 10987
+	ER_RES_GRP_GET_THREAD_PRIO_NOT_SUPPORTED                     uint16 = 10988
+	ER_RES_GRP_FAILED_DETERMINE_CPU_COUNT                        uint16 = 10989
+	ER_RES_GRP_FEATURE_NOT_AVAILABLE                             uint16 = 10990
+	ER_RES_GRP_INVALID_THREAD_PRIORITY                           uint16 = 10991
+	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_CPUID_FAILED            uint16 = 10992
+	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_THREAD_FAILED           uint16 = 10993
+	ER_RES_GRP_SOLARIS_PROCESSOR_AFFINITY_FAILED                 uint16 = 10994
+	ER_DD_UPGRADE_RENAME_IDX_STATS_FILE_FAILED                   uint16 = 10995
+	ER_DD_UPGRADE_DD_OPEN_FAILED                                 uint16 = 10996
+	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLESPACES                    uint16 = 10997
+	ER_DD_UPGRADE_FAILED_TO_ACQUIRE_TABLESPACE                   uint16 = 10998
+	ER_DD_UPGRADE_FAILED_TO_RESOLVE_TABLESPACE_ENGINE            uint16 = 10999
+	ER_FAILED_TO_CREATE_SDI_FOR_TABLESPACE                       uint16 = 11000
+	ER_FAILED_TO_STORE_SDI_FOR_TABLESPACE                        uint16 = 11001
+	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLES                         uint16 = 11002
+	ER_DD_UPGRADE_DD_POPULATED                                   uint16 = 11003
+	ER_DD_UPGRADE_INFO_FILE_OPEN_FAILED                          uint16 = 11004
+	ER_DD_UPGRADE_INFO_FILE_CLOSE_FAILED                         uint16 = 11005
+	ER_DD_UPGRADE_TABLESPACE_MIGRATION_FAILED                    uint16 = 11006
+	ER_DD_UPGRADE_FAILED_TO_CREATE_TABLE_STATS                   uint16 = 11007
+	ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED                  uint16 = 11008
+	ER_DD_UPGRADE_FAILED_TO_CREATE_INDEX_STATS                   uint16 = 11009
+	ER_DD_UPGRADE_INDEX_STATS_MIGRATE_COMPLETED                  uint16 = 11010
+	ER_DD_UPGRADE_FAILED_FIND_VALID_DATA_DIR                     uint16 = 11011
+	ER_DD_UPGRADE_START                                          uint16 = 11012
+	ER_DD_UPGRADE_FAILED_INIT_DD_SE                              uint16 = 11013
+	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_ABORT              uint16 = 11014
+	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_CONTINUE           uint16 = 11015
+	ER_DD_UPGRADE_SE_LOGS_FAILED                                 uint16 = 11016
+	ER_DD_UPGRADE_SDI_INFO_UPDATE_FAILED                         uint16 = 11017
+	ER_SKIP_UPDATING_METADATA_IN_SE_RO_MODE                      uint16 = 11018
+	ER_CREATED_SYSTEM_WITH_VERSION                               uint16 = 11019
+	ER_UNKNOWN_ERROR_DETECTED_IN_SE                              uint16 = 11020
+	ER_READ_LOG_EVENT_FAILED                                     uint16 = 11021
+	ER_ROW_DATA_TOO_BIG_TO_WRITE_IN_BINLOG                       uint16 = 11022
+	ER_FAILED_TO_CONSTRUCT_DROP_EVENT_QUERY                      uint16 = 11023
+	ER_FAILED_TO_BINLOG_DROP_EVENT                               uint16 = 11024
+	ER_FAILED_TO_START_SLAVE_THREAD                              uint16 = 11025
+	ER_RPL_IO_THREAD_KILLED                                      uint16 = 11026
+	ER_SLAVE_RECONNECT_FAILED                                    uint16 = 11027
+	ER_SLAVE_KILLED_AFTER_RECONNECT                              uint16 = 11028
+	ER_SLAVE_NOT_STARTED_ON_SOME_CHANNELS                        uint16 = 11029
+	ER_FAILED_TO_ADD_RPL_FILTER                                  uint16 = 11030
+	ER_PER_CHANNEL_RPL_FILTER_CONF_FOR_GRP_RPL                   uint16 = 11031
+	ER_RPL_FILTERS_NOT_ATTACHED_TO_CHANNEL                       uint16 = 11032
+	ER_FAILED_TO_BUILD_DO_AND_IGNORE_TABLE_HASHES                uint16 = 11033
+	ER_CLONE_PLUGIN_NOT_LOADED_TRACE                             uint16 = 11034
+	ER_CLONE_HANDLER_EXIST_TRACE                                 uint16 = 11035
+	ER_CLONE_CREATE_HANDLER_FAIL_TRACE                           uint16 = 11036
+	ER_CYCLE_TIMER_IS_NOT_AVAILABLE                              uint16 = 11037
+	ER_NANOSECOND_TIMER_IS_NOT_AVAILABLE                         uint16 = 11038
+	ER_MICROSECOND_TIMER_IS_NOT_AVAILABLE                        uint16 = 11039
+	ER_PFS_MALLOC_ARRAY_OVERFLOW                                 uint16 = 11040
+	ER_PFS_MALLOC_ARRAY_OOM                                      uint16 = 11041
+	ER_INNODB_FAILED_TO_FIND_IDX_WITH_KEY_NO                     uint16 = 11042
+	ER_INNODB_FAILED_TO_FIND_IDX                                 uint16 = 11043
+	ER_INNODB_FAILED_TO_FIND_IDX_FROM_DICT_CACHE                 uint16 = 11044
+	ER_INNODB_ACTIVE_INDEX_CHANGE_FAILED                         uint16 = 11045
+	ER_INNODB_DIFF_IN_REF_LEN                                    uint16 = 11046
+	ER_WRONG_TYPE_FOR_COLUMN_PREFIX_IDX_FLD                      uint16 = 11047
+	ER_INNODB_CANNOT_CREATE_TABLE                                uint16 = 11048
+	ER_INNODB_INTERNAL_INDEX                                     uint16 = 11049
+	ER_INNODB_IDX_CNT_MORE_THAN_DEFINED_IN_MYSQL                 uint16 = 11050
+	ER_INNODB_IDX_CNT_FEWER_THAN_DEFINED_IN_MYSQL                uint16 = 11051
+	ER_INNODB_IDX_COLUMN_CNT_DIFF                                uint16 = 11052
+	ER_INNODB_USE_MONITOR_GROUP_NAME                             uint16 = 11053
+	ER_INNODB_MONITOR_DEFAULT_VALUE_NOT_DEFINED                  uint16 = 11054
+	ER_INNODB_MONITOR_IS_ENABLED                                 uint16 = 11055
+	ER_INNODB_INVALID_MONITOR_COUNTER_NAME                       uint16 = 11056
+	ER_WIN_LOAD_LIBRARY_FAILED                                   uint16 = 11057
+	ER_PARTITION_HANDLER_ADMIN_MSG                               uint16 = 11058
+	ER_RPL_RLI_INIT_INFO_MSG                                     uint16 = 11059
+	ER_DD_UPGRADE_TABLE_INTACT_ERROR                             uint16 = 11060
+	ER_SERVER_INIT_COMPILED_IN_COMMANDS                          uint16 = 11061
+	ER_MYISAM_CHECK_METHOD_ERROR                                 uint16 = 11062
+	ER_MYISAM_CRASHED_ERROR                                      uint16 = 11063
+	ER_WAITPID_FAILED                                            uint16 = 11064
+	ER_FAILED_TO_FIND_MYSQLD_STATUS                              uint16 = 11065
+	ER_INNODB_ERROR_LOGGER_MSG                                   uint16 = 11066
+	ER_INNODB_ERROR_LOGGER_FATAL_MSG                             uint16 = 11067
+	ER_DEPRECATED_SYNTAX_WITH_REPLACEMENT                        uint16 = 11068
+	ER_DEPRECATED_SYNTAX_NO_REPLACEMENT                          uint16 = 11069
+	ER_DEPRECATE_MSG_NO_REPLACEMENT                              uint16 = 11070
+	ER_LOG_PRINTF_MSG                                            uint16 = 11071
+	ER_BINLOG_LOGGING_NOT_POSSIBLE                               uint16 = 11072
+	ER_FAILED_TO_SET_PERSISTED_OPTIONS                           uint16 = 11073
+	ER_COMPONENTS_FAILED_TO_ACQUIRE_SERVICE_IMPLEMENTATION       uint16 = 11074
+	ER_RES_GRP_INVALID_VCPU_RANGE                                uint16 = 11075
+	ER_RES_GRP_INVALID_VCPU_ID                                   uint16 = 11076
+	ER_ERROR_DURING_FLUSH_LOG_COMMIT_PHASE                       uint16 = 11077
+	ER_DROP_DATABASE_FAILED_RMDIR_MANUALLY                       uint16 = 11078
+	ER_EXPIRE_LOGS_DAYS_IGNORED                                  uint16 = 11079
+	ER_BINLOG_MALFORMED_OR_OLD_RELAY_LOG                         uint16 = 11080
+	ER_DD_UPGRADE_VIEW_COLUMN_NAME_TOO_LONG                      uint16 = 11081
+	ER_TABLE_NEEDS_DUMP_UPGRADE                                  uint16 = 11082
+	ER_DD_UPGRADE_FAILED_TO_UPDATE_VER_NO_IN_TABLESPACE          uint16 = 11083
+	ER_KEYRING_MIGRATION_FAILED                                  uint16 = 11084
+	ER_KEYRING_MIGRATION_SUCCESSFUL                              uint16 = 11085
+	ER_RESTART_RECEIVED_INFO                                     uint16 = 11086
+	ER_LCTN_CHANGED                                              uint16 = 11087
+	ER_DD_INITIALIZE                                             uint16 = 11088
+	ER_DD_RESTART                                                uint16 = 11089
+	ER_DD_UPGRADE                                                uint16 = 11090
+	ER_DD_UPGRADE_OFF                                            uint16 = 11091
+	ER_DD_UPGRADE_VERSION_NOT_SUPPORTED                          uint16 = 11092
+	ER_DD_UPGRADE_SCHEMA_UNAVAILABLE                             uint16 = 11093
+	ER_DD_MINOR_DOWNGRADE                                        uint16 = 11094
+	ER_DD_MINOR_DOWNGRADE_VERSION_NOT_SUPPORTED                  uint16 = 11095
+	ER_DD_NO_VERSION_FOUND                                       uint16 = 11096
+	ER_THREAD_POOL_NOT_SUPPORTED_ON_PLATFORM                     uint16 = 11097
+	ER_THREAD_POOL_SIZE_TOO_LOW                                  uint16 = 11098
+	ER_THREAD_POOL_SIZE_TOO_HIGH                                 uint16 = 11099
+	ER_THREAD_POOL_ALGORITHM_INVALID                             uint16 = 11100
+	ER_THREAD_POOL_INVALID_STALL_LIMIT                           uint16 = 11101
+	ER_THREAD_POOL_INVALID_PRIO_KICKUP_TIMER                     uint16 = 11102
+	ER_THREAD_POOL_MAX_UNUSED_THREADS_INVALID                    uint16 = 11103
+	ER_THREAD_POOL_CON_HANDLER_INIT_FAILED                       uint16 = 11104
+	ER_THREAD_POOL_INIT_FAILED                                   uint16 = 11105
+	ER_THREAD_POOL_PLUGIN_STARTED                                uint16 = 11106
+	ER_THREAD_POOL_CANNOT_SET_THREAD_SPECIFIC_DATA               uint16 = 11107
+	ER_THREAD_POOL_FAILED_TO_CREATE_CONNECT_HANDLER_THD          uint16 = 11108
+	ER_THREAD_POOL_FAILED_TO_CREATE_THD_AND_AUTH_CONN            uint16 = 11109
+	ER_THREAD_POOL_FAILED_PROCESS_CONNECT_EVENT                  uint16 = 11110
+	ER_THREAD_POOL_FAILED_TO_CREATE_POOL                         uint16 = 11111
+	ER_THREAD_POOL_RATE_LIMITED_ERROR_MSGS                       uint16 = 11112
+	ER_TRHEAD_POOL_LOW_LEVEL_INIT_FAILED                         uint16 = 11113
+	ER_THREAD_POOL_LOW_LEVEL_REARM_FAILED                        uint16 = 11114
+	ER_THREAD_POOL_BUFFER_TOO_SMALL                              uint16 = 11115
+	ER_MECAB_NOT_SUPPORTED                                       uint16 = 11116
+	ER_MECAB_NOT_VERIFIED                                        uint16 = 11117
+	ER_MECAB_CREATING_MODEL                                      uint16 = 11118
+	ER_MECAB_FAILED_TO_CREATE_MODEL                              uint16 = 11119
+	ER_MECAB_FAILED_TO_CREATE_TRIGGER                            uint16 = 11120
+	ER_MECAB_UNSUPPORTED_CHARSET                                 uint16 = 11121
+	ER_MECAB_CHARSET_LOADED                                      uint16 = 11122
+	ER_MECAB_PARSE_FAILED                                        uint16 = 11123
+	ER_MECAB_OOM_WHILE_PARSING_TEXT                              uint16 = 11124
+	ER_MECAB_CREATE_LATTICE_FAILED                               uint16 = 11125
+	ER_SEMISYNC_TRACE_ENTER_FUNC                                 uint16 = 11126
+	ER_SEMISYNC_TRACE_EXIT_WITH_INT_EXIT_CODE                    uint16 = 11127
+	ER_SEMISYNC_TRACE_EXIT_WITH_BOOL_EXIT_CODE                   uint16 = 11128
+	ER_SEMISYNC_TRACE_EXIT                                       uint16 = 11129
+	ER_SEMISYNC_RPL_INIT_FOR_TRX                                 uint16 = 11130
+	ER_SEMISYNC_FAILED_TO_ALLOCATE_TRX_NODE                      uint16 = 11131
+	ER_SEMISYNC_BINLOG_WRITE_OUT_OF_ORDER                        uint16 = 11132
+	ER_SEMISYNC_INSERT_LOG_INFO_IN_ENTRY                         uint16 = 11133
+	ER_SEMISYNC_PROBE_LOG_INFO_IN_ENTRY                          uint16 = 11134
+	ER_SEMISYNC_CLEARED_ALL_ACTIVE_TRANSACTION_NODES             uint16 = 11135
+	ER_SEMISYNC_CLEARED_ACTIVE_TRANSACTION_TILL_POS              uint16 = 11136
+	ER_SEMISYNC_REPLY_MAGIC_NO_ERROR                             uint16 = 11137
+	ER_SEMISYNC_REPLY_PKT_LENGTH_TOO_SMALL                       uint16 = 11138
+	ER_SEMISYNC_REPLY_BINLOG_FILE_TOO_LARGE                      uint16 = 11139
+	ER_SEMISYNC_SERVER_REPLY                                     uint16 = 11140
+	ER_SEMISYNC_FUNCTION_CALLED_TWICE                            uint16 = 11141
+	ER_SEMISYNC_RPL_ENABLED_ON_MASTER                            uint16 = 11142
+	ER_SEMISYNC_MASTER_OOM                                       uint16 = 11143
+	ER_SEMISYNC_DISABLED_ON_MASTER                               uint16 = 11144
+	ER_SEMISYNC_FORCED_SHUTDOWN                                  uint16 = 11145
+	ER_SEMISYNC_MASTER_GOT_REPLY_AT_POS                          uint16 = 11146
+	ER_SEMISYNC_MASTER_SIGNAL_ALL_WAITING_THREADS                uint16 = 11147
+	ER_SEMISYNC_MASTER_TRX_WAIT_POS                              uint16 = 11148
+	ER_SEMISYNC_BINLOG_REPLY_IS_AHEAD                            uint16 = 11149
+	ER_SEMISYNC_MOVE_BACK_WAIT_POS                               uint16 = 11150
+	ER_SEMISYNC_INIT_WAIT_POS                                    uint16 = 11151
+	ER_SEMISYNC_WAIT_TIME_FOR_BINLOG_SENT                        uint16 = 11152
+	ER_SEMISYNC_WAIT_FOR_BINLOG_TIMEDOUT                         uint16 = 11153
+	ER_SEMISYNC_WAIT_TIME_ASSESSMENT_FOR_COMMIT_TRX_FAILED       uint16 = 11154
+	ER_SEMISYNC_RPL_SWITCHED_OFF                                 uint16 = 11155
+	ER_SEMISYNC_RPL_SWITCHED_ON                                  uint16 = 11156
+	ER_SEMISYNC_NO_SPACE_IN_THE_PKT                              uint16 = 11157
+	ER_SEMISYNC_SYNC_HEADER_UPDATE_INFO                          uint16 = 11158
+	ER_SEMISYNC_FAILED_TO_INSERT_TRX_NODE                        uint16 = 11159
+	ER_SEMISYNC_TRX_SKIPPED_AT_POS                               uint16 = 11160
+	ER_SEMISYNC_MASTER_FAILED_ON_NET_FLUSH                       uint16 = 11161
+	ER_SEMISYNC_RECEIVED_ACK_IS_SMALLER                          uint16 = 11162
+	ER_SEMISYNC_ADD_ACK_TO_SLOT                                  uint16 = 11163
+	ER_SEMISYNC_UPDATE_EXISTING_SLAVE_ACK                        uint16 = 11164
+	ER_SEMISYNC_FAILED_TO_START_ACK_RECEIVER_THD                 uint16 = 11165
+	ER_SEMISYNC_STARTING_ACK_RECEIVER_THD                        uint16 = 11166
+	ER_SEMISYNC_FAILED_TO_WAIT_ON_DUMP_SOCKET                    uint16 = 11167
+	ER_SEMISYNC_STOPPING_ACK_RECEIVER_THREAD                     uint16 = 11168
+	ER_SEMISYNC_FAILED_REGISTER_SLAVE_TO_RECEIVER                uint16 = 11169
+	ER_SEMISYNC_START_BINLOG_DUMP_TO_SLAVE                       uint16 = 11170
+	ER_SEMISYNC_STOP_BINLOG_DUMP_TO_SLAVE                        uint16 = 11171
+	ER_SEMISYNC_UNREGISTER_TRX_OBSERVER_FAILED                   uint16 = 11172
+	ER_SEMISYNC_UNREGISTER_BINLOG_STORAGE_OBSERVER_FAILED        uint16 = 11173
+	ER_SEMISYNC_UNREGISTER_BINLOG_TRANSMIT_OBSERVER_FAILED       uint16 = 11174
+	ER_SEMISYNC_UNREGISTERED_REPLICATOR                          uint16 = 11175
+	ER_SEMISYNC_SOCKET_FD_TOO_LARGE                              uint16 = 11176
+	ER_SEMISYNC_SLAVE_REPLY                                      uint16 = 11177
+	ER_SEMISYNC_MISSING_MAGIC_NO_FOR_SEMISYNC_PKT                uint16 = 11178
+	ER_SEMISYNC_SLAVE_START                                      uint16 = 11179
+	ER_SEMISYNC_SLAVE_REPLY_WITH_BINLOG_INFO                     uint16 = 11180
+	ER_SEMISYNC_SLAVE_NET_FLUSH_REPLY_FAILED                     uint16 = 11181
+	ER_SEMISYNC_SLAVE_SEND_REPLY_FAILED                          uint16 = 11182
+	ER_SEMISYNC_EXECUTION_FAILED_ON_MASTER                       uint16 = 11183
+	ER_SEMISYNC_NOT_SUPPORTED_BY_MASTER                          uint16 = 11184
+	ER_SEMISYNC_SLAVE_SET_FAILED                                 uint16 = 11185
+	ER_SEMISYNC_FAILED_TO_STOP_ACK_RECEIVER_THD                  uint16 = 11186
+	ER_FIREWALL_FAILED_TO_READ_FIREWALL_TABLES                   uint16 = 11187
+	ER_FIREWALL_FAILED_TO_REG_DYNAMIC_PRIVILEGES                 uint16 = 11188
+	ER_FIREWALL_RECORDING_STMT_WAS_TRUNCATED                     uint16 = 11189
+	ER_FIREWALL_RECORDING_STMT_WITHOUT_TEXT                      uint16 = 11190
+	ER_FIREWALL_SUSPICIOUS_STMT                                  uint16 = 11191
+	ER_FIREWALL_ACCESS_DENIED                                    uint16 = 11192
+	ER_FIREWALL_SKIPPED_UNKNOWN_USER_MODE                        uint16 = 11193
+	ER_FIREWALL_RELOADING_CACHE                                  uint16 = 11194
+	ER_FIREWALL_RESET_FOR_USER                                   uint16 = 11195
+	ER_FIREWALL_STATUS_FLUSHED                                   uint16 = 11196
+	ER_KEYRING_LOGGER_ERROR_MSG                                  uint16 = 11197
+	ER_AUDIT_LOG_FILTER_IS_NOT_INSTALLED                         uint16 = 11198
+	ER_AUDIT_LOG_SWITCHING_TO_INCLUDE_LIST                       uint16 = 11199
+	ER_AUDIT_LOG_CANNOT_SET_LOG_POLICY_WITH_OTHER_POLICIES       uint16 = 11200
+	ER_AUDIT_LOG_ONLY_INCLUDE_LIST_USED                          uint16 = 11201
+	ER_AUDIT_LOG_INDEX_MAP_CANNOT_ACCESS_DIR                     uint16 = 11202
+	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED                       uint16 = 11203
+	ER_AUDIT_LOG_WRITER_DEST_FILE_ALREADY_EXISTS                 uint16 = 11204
+	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED_REMOVE_FILE_MANUALLY  uint16 = 11205
+	ER_AUDIT_LOG_WRITER_INCOMPLETE_FILE_RENAMED                  uint16 = 11206
+	ER_AUDIT_LOG_WRITER_FAILED_TO_WRITE_TO_FILE                  uint16 = 11207
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_ENCRYPTION             uint16 = 11208
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_COMPRESSION            uint16 = 11209
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_CREATE_FILE                 uint16 = 11210
+	ER_AUDIT_LOG_RENAME_LOG_FILE_BEFORE_FLUSH                    uint16 = 11211
+	ER_AUDIT_LOG_FILTER_RESULT_MSG                               uint16 = 11212
+	ER_AUDIT_LOG_JSON_READER_FAILED_TO_PARSE                     uint16 = 11213
+	ER_AUDIT_LOG_JSON_READER_BUF_TOO_SMALL                       uint16 = 11214
+	ER_AUDIT_LOG_JSON_READER_FAILED_TO_OPEN_FILE                 uint16 = 11215
+	ER_AUDIT_LOG_JSON_READER_FILE_PARSING_ERROR                  uint16 = 11216
+	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_COUNT                     uint16 = 11217
+	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_DEFINITION                uint16 = 11218
+	ER_AUDIT_LOG_FILTER_FAILED_TO_STORE_TABLE_FLDS               uint16 = 11219
+	ER_AUDIT_LOG_FILTER_FAILED_TO_UPDATE_TABLE                   uint16 = 11220
+	ER_AUDIT_LOG_FILTER_FAILED_TO_INSERT_INTO_TABLE              uint16 = 11221
+	ER_AUDIT_LOG_FILTER_FAILED_TO_DELETE_FROM_TABLE              uint16 = 11222
+	ER_AUDIT_LOG_FILTER_FAILED_TO_INIT_TABLE_FOR_READ            uint16 = 11223
+	ER_AUDIT_LOG_FILTER_FAILED_TO_READ_TABLE                     uint16 = 11224
+	ER_AUDIT_LOG_FILTER_FAILED_TO_CLOSE_TABLE_AFTER_READING      uint16 = 11225
+	ER_AUDIT_LOG_FILTER_USER_AND_HOST_CANNOT_BE_EMPTY            uint16 = 11226
+	ER_AUDIT_LOG_FILTER_FLD_FILTERNAME_CANNOT_BE_EMPTY           uint16 = 11227
+	ER_VALIDATE_PWD_DICT_FILE_NOT_SPECIFIED                      uint16 = 11228
+	ER_VALIDATE_PWD_DICT_FILE_NOT_LOADED                         uint16 = 11229
+	ER_VALIDATE_PWD_DICT_FILE_TOO_BIG                            uint16 = 11230
+	ER_VALIDATE_PWD_FAILED_TO_READ_DICT_FILE                     uint16 = 11231
+	ER_VALIDATE_PWD_FAILED_TO_GET_FLD_FROM_SECURITY_CTX          uint16 = 11232
+	ER_VALIDATE_PWD_FAILED_TO_GET_SECURITY_CTX                   uint16 = 11233
+	ER_VALIDATE_PWD_LENGTH_CHANGED                               uint16 = 11234
+	ER_REWRITER_QUERY_ERROR_MSG                                  uint16 = 11235
+	ER_REWRITER_QUERY_FAILED                                     uint16 = 11236
+	ER_XPLUGIN_STARTUP_FAILED                                    uint16 = 11237
 	//OBSOLETE_ER_XPLUGIN_SERVER_EXITING uint16 = 11238
 	//OBSOLETE_ER_XPLUGIN_SERVER_EXITED uint16 = 11239
 	ER_XPLUGIN_USING_SSL_CONF_FROM_SERVER                   uint16 = 11240
@@ -8390,313 +8390,313 @@ var errorMsgRefer = map[uint16]errorMsgItem{
 	ER_MUST_CHANGE_EXPIRED_PASSWORD:                  {10928, []string{"HY000"}, "Your password has expired. To log in you must change it using a client that supports expired passwords."},
 	ER_SYSTEM_TABLES_NOT_SUPPORTED_BY_STORAGE_ENGINE: {10929, []string{"HY000"}, "Storage engine '%s' does not support system tables. [%s.%s]."},
 	//OBSOLETE_ER_FILESORT_TERMINATED : {10930,[]string{"HY000"},"Sort aborted"},
-	ER_SERVER_STARTUP_MSG:                                       {10931, []string{"HY000"}, "%s: ready for connections. Version: '%s'  socket: '%s'  port: %d  %s."},
-	ER_FAILED_TO_FIND_LOCALE_NAME:                               {10932, []string{"HY000"}, "Unknown locale: '%-.64s'."},
-	ER_FAILED_TO_FIND_COLLATION_NAME:                            {10933, []string{"HY000"}, "Unknown collation: '%-.64s'."},
-	ER_SERVER_OUT_OF_RESOURCES:                                  {10934, []string{"HY000"}, "Out of memory; check if mysqld or some other process uses all available memory; if not, you may have to use 'ulimit' to allow mysqld to use more memory or you can add more swap space"},
-	ER_SERVER_OUTOFMEMORY:                                       {10935, []string{"HY000"}, "Out of memory; restart server and try again (needed %d bytes)"},
-	ER_INVALID_COLLATION_FOR_CHARSET:                            {10936, []string{"HY000"}, "COLLATION '%s' is not valid for CHARACTER SET '%s'"},
-	ER_CANT_START_ERROR_LOG_SERVICE:                             {10937, []string{"HY000"}, "Failed to set %s at or around \"%s\" -- service is valid, but can not be initialized; please check its configuration and make sure it can read its input(s) and write to its output(s)."},
-	ER_CREATING_NEW_UUID_FIRST_START:                            {10938, []string{"HY000"}, "Generating a new UUID: %s."},
-	ER_FAILED_TO_GET_ABSOLUTE_PATH:                              {10939, []string{"HY000"}, "Failed to get absolute path of program executable %s"},
-	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_BOOTSTRAP:           {10940, []string{"HY000"}, "Failed to bootstrap performance schema components infrastructure."},
-	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_SHUTDOWN:            {10941, []string{"HY000"}, "Failed to deinit performance schema components infrastructure."},
-	ER_DUP_FD_OPEN_FAILED:                                       {10942, []string{"HY000"}, "Could not open duplicate fd for %s: %s."},
-	ER_SYSTEM_VIEW_INIT_FAILED:                                  {10943, []string{"HY000"}, "System views initialization failed."},
-	ER_RESOURCE_GROUP_POST_INIT_FAILED:                          {10944, []string{"HY000"}, "Resource group post initialization failed."},
-	ER_RESOURCE_GROUP_SUBSYSTEM_INIT_FAILED:                     {10945, []string{"HY000"}, "Resource Group subsystem initialization failed."},
-	ER_FAILED_START_MYSQLD_DAEMON:                               {10946, []string{"HY000"}, "Failed to start mysqld daemon. Check mysqld error log."},
-	ER_CANNOT_CHANGE_TO_ROOT_DIR:                                {10947, []string{"HY000"}, "Cannot change to root directory: %s."},
-	ER_PERSISTENT_PRIVILEGES_BOOTSTRAP:                          {10948, []string{"HY000"}, "Failed to bootstrap persistent privileges."},
-	ER_BASEDIR_SET_TO:                                           {10949, []string{"HY000"}, "Basedir set to %s."},
-	ER_RPL_FILTER_ADD_WILD_DO_TABLE_FAILED:                      {10950, []string{"HY000"}, "Could not add wild do table rule '%s'!"},
-	ER_RPL_FILTER_ADD_WILD_IGNORE_TABLE_FAILED:                  {10951, []string{"HY000"}, "Could not add wild ignore table rule '%s'!"},
-	ER_PRIVILEGE_SYSTEM_INIT_FAILED:                             {10952, []string{"HY000"}, "The privilege system failed to initialize correctly. For complete instructions on how to upgrade MySQL to a new version please see the 'Upgrading MySQL' section from the MySQL manual."},
-	ER_CANNOT_SET_LOG_ERROR_SERVICES:                            {10953, []string{"HY000"}, "Cannot set services \"%s\" requested in --log-error-services, using defaults."},
-	ER_PERFSCHEMA_TABLES_INIT_FAILED:                            {10954, []string{"HY000"}, "Performance schema tables initialization failed."},
+	ER_SERVER_STARTUP_MSG:                                        {10931, []string{"HY000"}, "%s: ready for connections. Version: '%s'  socket: '%s'  port: %d  %s."},
+	ER_FAILED_TO_FIND_LOCALE_NAME:                                {10932, []string{"HY000"}, "Unknown locale: '%-.64s'."},
+	ER_FAILED_TO_FIND_COLLATION_NAME:                             {10933, []string{"HY000"}, "Unknown collation: '%-.64s'."},
+	ER_SERVER_OUT_OF_RESOURCES:                                   {10934, []string{"HY000"}, "Out of memory; check if mysqld or some other process uses all available memory; if not, you may have to use 'ulimit' to allow mysqld to use more memory or you can add more swap space"},
+	ER_SERVER_OUTOFMEMORY:                                        {10935, []string{"HY000"}, "Out of memory; restart server and try again (needed %d bytes)"},
+	ER_INVALID_COLLATION_FOR_CHARSET:                             {10936, []string{"HY000"}, "COLLATION '%s' is not valid for CHARACTER SET '%s'"},
+	ER_CANT_START_ERROR_LOG_SERVICE:                              {10937, []string{"HY000"}, "Failed to set %s at or around \"%s\" -- service is valid, but can not be initialized; please check its configuration and make sure it can read its input(s) and write to its output(s)."},
+	ER_CREATING_NEW_UUID_FIRST_START:                             {10938, []string{"HY000"}, "Generating a new UUID: %s."},
+	ER_FAILED_TO_GET_ABSOLUTE_PATH:                               {10939, []string{"HY000"}, "Failed to get absolute path of program executable %s"},
+	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_BOOTSTRAP:            {10940, []string{"HY000"}, "Failed to bootstrap performance schema components infrastructure."},
+	ER_PERFSCHEMA_COMPONENTS_INFRASTRUCTURE_SHUTDOWN:             {10941, []string{"HY000"}, "Failed to deinit performance schema components infrastructure."},
+	ER_DUP_FD_OPEN_FAILED:                                        {10942, []string{"HY000"}, "Could not open duplicate fd for %s: %s."},
+	ER_SYSTEM_VIEW_INIT_FAILED:                                   {10943, []string{"HY000"}, "System views initialization failed."},
+	ER_RESOURCE_GROUP_POST_INIT_FAILED:                           {10944, []string{"HY000"}, "Resource group post initialization failed."},
+	ER_RESOURCE_GROUP_SUBSYSTEM_INIT_FAILED:                      {10945, []string{"HY000"}, "Resource Group subsystem initialization failed."},
+	ER_FAILED_START_MYSQLD_DAEMON:                                {10946, []string{"HY000"}, "Failed to start mysqld daemon. Check mysqld error log."},
+	ER_CANNOT_CHANGE_TO_ROOT_DIR:                                 {10947, []string{"HY000"}, "Cannot change to root directory: %s."},
+	ER_PERSISTENT_PRIVILEGES_BOOTSTRAP:                           {10948, []string{"HY000"}, "Failed to bootstrap persistent privileges."},
+	ER_BASEDIR_SET_TO:                                            {10949, []string{"HY000"}, "Basedir set to %s."},
+	ER_RPL_FILTER_ADD_WILD_DO_TABLE_FAILED:                       {10950, []string{"HY000"}, "Could not add wild do table rule '%s'!"},
+	ER_RPL_FILTER_ADD_WILD_IGNORE_TABLE_FAILED:                   {10951, []string{"HY000"}, "Could not add wild ignore table rule '%s'!"},
+	ER_PRIVILEGE_SYSTEM_INIT_FAILED:                              {10952, []string{"HY000"}, "The privilege system failed to initialize correctly. For complete instructions on how to upgrade MySQL to a new version please see the 'Upgrading MySQL' section from the MySQL manual."},
+	ER_CANNOT_SET_LOG_ERROR_SERVICES:                             {10953, []string{"HY000"}, "Cannot set services \"%s\" requested in --log-error-services, using defaults."},
+	ER_PERFSCHEMA_TABLES_INIT_FAILED:                             {10954, []string{"HY000"}, "Performance schema tables initialization failed."},
 	ER_TX_EXTRACTION_ALGORITHM_FOR_BINLOG_TX_DEPENDENCY_TRACKING: {10955, []string{"HY000"}, "The transaction_write_set_extraction must be set to %s when binlog_transaction_dependency_tracking is %s."},
-	ER_INVALID_REPLICATION_TIMESTAMPS:                           {10956, []string{"HY000"}, "Invalid replication timestamps: original commit timestamp is more recent than the immediate commit timestamp. This may be an issue if delayed replication is active. Make sure that servers have their clocks set to the correct time. No further message will be emitted until after timestamps become valid again."},
-	ER_RPL_TIMESTAMPS_RETURNED_TO_NORMAL:                        {10957, []string{"HY000"}, "The replication timestamps have returned to normal values."},
-	ER_BINLOG_FILE_OPEN_FAILED:                                  {10958, []string{"HY000"}, "%s."},
-	ER_BINLOG_EVENT_WRITE_TO_STMT_CACHE_FAILED:                  {10959, []string{"HY000"}, "Failed to write an incident event into stmt_cache."},
-	ER_SLAVE_RELAY_LOG_TRUNCATE_INFO:                            {10960, []string{"HY000"}, "Relaylog file %s size was %llu, but was truncated at %llu."},
-	ER_SLAVE_RELAY_LOG_PURGE_FAILED:                             {10961, []string{"HY000"}, "Unable to purge relay log files. %s:%s."},
-	ER_RPL_SLAVE_FILTER_CREATE_FAILED:                           {10962, []string{"HY000"}, "Slave: failed in creating filter for channel '%s'."},
-	ER_RPL_SLAVE_GLOBAL_FILTERS_COPY_FAILED:                     {10963, []string{"HY000"}, "Slave: failed in copying the global filters to its own per-channel filters on configuration for channel '%s'."},
-	ER_RPL_SLAVE_RESET_FILTER_OPTIONS:                           {10964, []string{"HY000"}, "There are per-channel replication filter(s) configured for channel '%.192s' which does not exist. The filter(s) have been discarded."},
-	ER_MISSING_GRANT_SYSTEM_TABLE:                               {10965, []string{"HY000"}, "The system table mysql.global_grants is missing. Please perform the MySQL upgrade procedure."},
-	ER_MISSING_ACL_SYSTEM_TABLE:                                 {10966, []string{"HY000"}, "ACL table mysql.%.*s missing. Some operations may fail."},
-	ER_ANONYMOUS_AUTH_ID_NOT_ALLOWED_IN_MANDATORY_ROLES:         {10967, []string{"HY000"}, "Can't set mandatory_role %s@%s: Anonymous authorization IDs are not allowed as roles."},
-	ER_UNKNOWN_AUTH_ID_IN_MANDATORY_ROLE:                        {10968, []string{"HY000"}, "Can't set mandatory_role: There's no such authorization RelationName %s@%s."},
-	ER_WRITE_ROW_TO_PARTITION_FAILED:                            {10969, []string{"HY000"}, "Table '%-192s' failed to move/insert a row from part %d into part %d: %s."},
-	ER_RESOURCE_GROUP_METADATA_UPDATE_SKIPPED:                   {10970, []string{"HY000"}, "Skipped updating resource group metadata in InnoDB read only mode."},
-	ER_FAILED_TO_PERSIST_RESOURCE_GROUP_METADATA:                {10971, []string{"HY000"}, "Failed to persist resource group %s to DataSource Dictionary."},
-	ER_FAILED_TO_DESERIALIZE_RESOURCE_GROUP:                     {10972, []string{"HY000"}, "Failed to deserialize resource group %s."},
-	ER_FAILED_TO_UPDATE_RESOURCE_GROUP:                          {10973, []string{"HY000"}, "Update of resource group %s failed."},
-	ER_RESOURCE_GROUP_VALIDATION_FAILED:                         {10974, []string{"HY000"}, "Validation of resource group %s failed. Resource group is disabled."},
-	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP:             {10975, []string{"HY000"}, "Unable to allocate memory for Resource Group %s."},
-	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP_HASH:        {10976, []string{"HY000"}, "Failed to allocate memory for resource group hash."},
-	ER_FAILED_TO_ADD_RESOURCE_GROUP_TO_MAP:                      {10977, []string{"HY000"}, "Failed to add resource group %s to resource group map."},
-	ER_RESOURCE_GROUP_IS_DISABLED:                               {10978, []string{"HY000"}, "Resource group feature is disabled. (Server is compiled with DISABLE_PSI_THREAD)."},
-	ER_FAILED_TO_APPLY_RESOURCE_GROUP_CONTROLLER:                {10979, []string{"HY000"}, "Unable to apply resource group controller %s."},
-	ER_FAILED_TO_ACQUIRE_LOCK_ON_RESOURCE_GROUP:                 {10980, []string{"HY000"}, "Unable to acquire lock on the resource group %s. Hint to switch resource group shall be ignored."},
-	ER_PFS_NOTIFICATION_FUNCTION_REGISTER_FAILED:                {10981, []string{"HY000"}, "PFS %s notification function registration failed."},
-	ER_RES_GRP_SET_THR_AFFINITY_FAILED:                          {10982, []string{"HY000"}, "Unable to bind thread id %llu to cpu id %u (error code %d - %-.192s)."},
-	ER_RES_GRP_SET_THR_AFFINITY_TO_CPUS_FAILED:                  {10983, []string{"HY000"}, "Unable to bind thread id %llu to cpu ids (error code %d - %-.192s)."},
-	ER_RES_GRP_THD_UNBIND_FROM_CPU_FAILED:                       {10984, []string{"HY000"}, "Unbind thread id %llu failed. (error code %d - %-.192s)."},
-	ER_RES_GRP_SET_THREAD_PRIORITY_FAILED:                       {10985, []string{"HY000"}, "Setting thread priority %d to thread id %llu failed. (error code %d - %-.192s)."},
-	ER_RES_GRP_FAILED_TO_DETERMINE_NICE_CAPABILITY:              {10986, []string{"HY000"}, "Unable to determine CAP_SYS_NICE capabilities."},
-	ER_RES_GRP_FAILED_TO_GET_THREAD_HANDLE:                      {10987, []string{"HY000"}, "%s failed: Failed to get handle for thread %llu."},
-	ER_RES_GRP_GET_THREAD_PRIO_NOT_SUPPORTED:                    {10988, []string{"HY000"}, "Retrieval of thread priority unsupported on %s."},
-	ER_RES_GRP_FAILED_DETERMINE_CPU_COUNT:                       {10989, []string{"HY000"}, "Unable to determine the number of CPUs."},
-	ER_RES_GRP_FEATURE_NOT_AVAILABLE:                            {10990, []string{"HY000"}, "Resource group feature shall not be available. Incompatible thread handling option."},
-	ER_RES_GRP_INVALID_THREAD_PRIORITY:                          {10991, []string{"HY000"}, "Invalid thread priority %d for a %s resource group. Allowed range is [%d, %d]."},
-	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_CPUID_FAILED:           {10992, []string{"HY000"}, "bind_to_cpu failed: processor_bind for cpuid %u failed (error code %d - %-.192s)."},
-	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_THREAD_FAILED:          {10993, []string{"HY000"}, "bind_to_cpu failed: processor_bind for thread %%llx with cpu id %u (error code %d - %-.192s)."},
-	ER_RES_GRP_SOLARIS_PROCESSOR_AFFINITY_FAILED:                {10994, []string{"HY000"}, "%s failed: processor_affinity failed (error code %d - %-.192s)."},
-	ER_DD_UPGRADE_RENAME_IDX_STATS_FILE_FAILED:                  {10995, []string{"HY000"}, "Error in renaming mysql_index_stats.ibd."},
-	ER_DD_UPGRADE_DD_OPEN_FAILED:                                {10996, []string{"HY000"}, "Error in opening data directory %s."},
-	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLESPACES:                   {10997, []string{"HY000"}, "Error in fetching list of tablespaces."},
-	ER_DD_UPGRADE_FAILED_TO_ACQUIRE_TABLESPACE:                  {10998, []string{"HY000"}, "Error in acquiring Tablespace for SDI insertion %s."},
-	ER_DD_UPGRADE_FAILED_TO_RESOLVE_TABLESPACE_ENGINE:           {10999, []string{"HY000"}, "Error in resolving Engine name for tablespace %s with engine %s."},
-	ER_FAILED_TO_CREATE_SDI_FOR_TABLESPACE:                      {11000, []string{"HY000"}, "Error in creating SDI for %s tablespace."},
-	ER_FAILED_TO_STORE_SDI_FOR_TABLESPACE:                       {11001, []string{"HY000"}, "Error in storing SDI for %s tablespace."},
-	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLES:                        {11002, []string{"HY000"}, "Error in fetching list of tables."},
-	ER_DD_UPGRADE_DD_POPULATED:                                  {11003, []string{"HY000"}, "Finished populating DataSource Dictionary tables with data."},
-	ER_DD_UPGRADE_INFO_FILE_OPEN_FAILED:                         {11004, []string{"HY000"}, "Could not open the upgrade info file '%s' in the MySQL servers datadir, errno: %d."},
-	ER_DD_UPGRADE_INFO_FILE_CLOSE_FAILED:                        {11005, []string{"HY000"}, "Could not close the upgrade info file '%s' in the MySQL servers datadir, errno: %d."},
-	ER_DD_UPGRADE_TABLESPACE_MIGRATION_FAILED:                   {11006, []string{"HY000"}, "Got error %d from SE while migrating tablespaces."},
-	ER_DD_UPGRADE_FAILED_TO_CREATE_TABLE_STATS:                  {11007, []string{"HY000"}, "Error in creating TABLE statistics entry. Fix statistics data by using ANALYZE command."},
-	ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED:                 {11008, []string{"HY000"}, "Finished migrating TABLE statistics data."},
-	ER_DD_UPGRADE_FAILED_TO_CREATE_INDEX_STATS:                  {11009, []string{"HY000"}, "Error in creating Index statistics entry. Fix statistics data by using ANALYZE command."},
-	ER_DD_UPGRADE_INDEX_STATS_MIGRATE_COMPLETED:                 {11010, []string{"HY000"}, "Finished migrating INDEX statistics data."},
-	ER_DD_UPGRADE_FAILED_FIND_VALID_DATA_DIR:                    {11011, []string{"HY000"}, "Failed to find valid data directory."},
-	ER_DD_UPGRADE_START:                                         {11012, []string{"HY000"}, "Starting upgrade of data directory."},
-	ER_DD_UPGRADE_FAILED_INIT_DD_SE:                             {11013, []string{"HY000"}, "Failed to initialize DD Storage Engine."},
-	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_ABORT:             {11014, []string{"HY000"}, "Found partially upgraded DD. Aborting upgrade and deleting all DD tables. Start the upgrade process again."},
-	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_CONTINUE:          {11015, []string{"HY000"}, "Found partially upgraded DD. Upgrade will continue and start the server."},
-	ER_DD_UPGRADE_SE_LOGS_FAILED:                                {11016, []string{"HY000"}, "Error in upgrading engine logs."},
-	ER_DD_UPGRADE_SDI_INFO_UPDATE_FAILED:                        {11017, []string{"HY000"}, "Error in updating SDI information."},
-	ER_SKIP_UPDATING_METADATA_IN_SE_RO_MODE:                     {11018, []string{"HY000"}, "Skip updating %s metadata in InnoDB read-only mode."},
-	ER_CREATED_SYSTEM_WITH_VERSION:                              {11019, []string{"HY000"}, "Created system views with I_S version %d."},
-	ER_UNKNOWN_ERROR_DETECTED_IN_SE:                             {11020, []string{"HY000"}, "Unknown error detected %d in handler."},
-	ER_READ_LOG_EVENT_FAILED:                                    {11021, []string{"HY000"}, "Error in Log_event::read_log_event(): '%s', data_len: %lu, event_type: %d."},
-	ER_ROW_DATA_TOO_BIG_TO_WRITE_IN_BINLOG:                      {11022, []string{"HY000"}, "The row data is greater than 4GB, which is too big to write to the binary log."},
-	ER_FAILED_TO_CONSTRUCT_DROP_EVENT_QUERY:                     {11023, []string{"HY000"}, "Unable to construct DROP EVENT SQL query string."},
-	ER_FAILED_TO_BINLOG_DROP_EVENT:                              {11024, []string{"HY000"}, "Unable to binlog drop event %s.%s."},
-	ER_FAILED_TO_START_SLAVE_THREAD:                             {11025, []string{"HY000"}, "Failed to start slave threads for channel '%s'."},
-	ER_RPL_IO_THREAD_KILLED:                                     {11026, []string{"HY000"}, "%s%s."},
-	ER_SLAVE_RECONNECT_FAILED:                                   {11027, []string{"HY000"}, "Failed registering on master, reconnecting to try again, log '%s' at position %s. %s."},
-	ER_SLAVE_KILLED_AFTER_RECONNECT:                             {11028, []string{"HY000"}, "Slave I/Operator thread killed during or after reconnect."},
-	ER_SLAVE_NOT_STARTED_ON_SOME_CHANNELS:                       {11029, []string{"HY000"}, "Some of the channels are not created/initialized properly. Check for additional messages above. You will not be able to start replication on those channels until the issue is resolved and the server restarted."},
-	ER_FAILED_TO_ADD_RPL_FILTER:                                 {11030, []string{"HY000"}, "Failed to add a replication filter into filter map for channel '%.192s'."},
-	ER_PER_CHANNEL_RPL_FILTER_CONF_FOR_GRP_RPL:                  {11031, []string{"HY000"}, "There are per-channel replication filter(s) configured for group replication channel '%.192s' which is disallowed. The filter(s) have been discarded."},
-	ER_RPL_FILTERS_NOT_ATTACHED_TO_CHANNEL:                      {11032, []string{"HY000"}, "There are per-channel replication filter(s) configured for channel '%.192s' which does not exist. The filter(s) have been discarded."},
-	ER_FAILED_TO_BUILD_DO_AND_IGNORE_TABLE_HASHES:               {11033, []string{"HY000"}, "An error occurred while building do_table and ignore_table rules to hashes for per-channel filter."},
-	ER_CLONE_PLUGIN_NOT_LOADED_TRACE:                            {11034, []string{"HY000"}, "Clone plugin cannot be loaded."},
-	ER_CLONE_HANDLER_EXIST_TRACE:                                {11035, []string{"HY000"}, "Clone Handler exists."},
-	ER_CLONE_CREATE_HANDLER_FAIL_TRACE:                          {11036, []string{"HY000"}, "Could not create Clone Handler."},
-	ER_CYCLE_TIMER_IS_NOT_AVAILABLE:                             {11037, []string{"HY000"}, "The CYCLE timer is not available. WAIT events in the performance_schema will not be timed."},
-	ER_NANOSECOND_TIMER_IS_NOT_AVAILABLE:                        {11038, []string{"HY000"}, "The NANOSECOND timer is not available. IDLE/STAGE/STATEMENT/TRANSACTION events in the performance_schema will not be timed."},
-	ER_MICROSECOND_TIMER_IS_NOT_AVAILABLE:                       {11039, []string{"HY000"}, "The MICROSECOND timer is not available. IDLE/STAGE/STATEMENT/TRANSACTION events in the performance_schema will not be timed."},
-	ER_PFS_MALLOC_ARRAY_OVERFLOW:                                {11040, []string{"HY000"}, "Failed to allocate memory for %zu chunks each of size %zu for buffer '%s' due to overflow."},
-	ER_PFS_MALLOC_ARRAY_OOM:                                     {11041, []string{"HY000"}, "Failed to allocate %zu bytes for buffer '%s' due to out-of-memory."},
-	ER_INNODB_FAILED_TO_FIND_IDX_WITH_KEY_NO:                    {11042, []string{"HY000"}, "InnoDB could not find index %s key no %u for table %s through its index translation table."},
-	ER_INNODB_FAILED_TO_FIND_IDX:                                {11043, []string{"HY000"}, "Cannot find index %s in InnoDB index translation table."},
-	ER_INNODB_FAILED_TO_FIND_IDX_FROM_DICT_CACHE:                {11044, []string{"HY000"}, "InnoDB could not find key no %u with name %s from dict cache for table %s."},
-	ER_INNODB_ACTIVE_INDEX_CHANGE_FAILED:                        {11045, []string{"HY000"}, "InnoDB: change_active_index(%u) failed."},
-	ER_INNODB_DIFF_IN_REF_LEN:                                   {11046, []string{"HY000"}, "Stored ref len is %lu, but table ref len is %lu."},
-	ER_WRONG_TYPE_FOR_COLUMN_PREFIX_IDX_FLD:                     {11047, []string{"HY000"}, "MySQL is trying to create a column prefix index field, on an inappropriate data type. Table name %s, column name %s."},
-	ER_INNODB_CANNOT_CREATE_TABLE:                               {11048, []string{"HY000"}, "Cannot create table %s."},
-	ER_INNODB_INTERNAL_INDEX:                                    {11049, []string{"HY000"}, "Found index %s in InnoDB index list but not its MySQL index number. It could be an InnoDB internal index."},
-	ER_INNODB_IDX_CNT_MORE_THAN_DEFINED_IN_MYSQL:                {11050, []string{"HY000"}, "InnoDB: Table %s contains %lu indexes inside InnoDB, which is different from the number of indexes %u defined in MySQL."},
-	ER_INNODB_IDX_CNT_FEWER_THAN_DEFINED_IN_MYSQL:               {11051, []string{"HY000"}, "Table %s contains fewer indexes inside InnoDB than are defined in the MySQL. Have you mixed up with data dictionary from different installation?"},
-	ER_INNODB_IDX_COLUMN_CNT_DIFF:                               {11052, []string{"HY000"}, "Index %s of %s has %lu columns unique inside InnoDB, but MySQL is asking statistics for %lu columns. Have you mixed data dictionary from different installation?"},
-	ER_INNODB_USE_MONITOR_GROUP_NAME:                            {11053, []string{"HY000"}, "Monitor counter '%s' cannot be turned on/off individually. Please use its module name to turn on/off the counters in the module as a group."},
-	ER_INNODB_MONITOR_DEFAULT_VALUE_NOT_DEFINED:                 {11054, []string{"HY000"}, "Default value is not defined for this set option. Please specify correct counter or module name."},
-	ER_INNODB_MONITOR_IS_ENABLED:                                {11055, []string{"HY000"}, "InnoDB: Monitor %s is already enabled."},
-	ER_INNODB_INVALID_MONITOR_COUNTER_NAME:                      {11056, []string{"HY000"}, "Invalid monitor counter : %s."},
-	ER_WIN_LOAD_LIBRARY_FAILED:                                  {11057, []string{"HY000"}, "LoadLibrary(\"%s\") failed: GetLastError returns %lu."},
-	ER_PARTITION_HANDLER_ADMIN_MSG:                              {11058, []string{"HY000"}, "%s."},
-	ER_RPL_RLI_INIT_INFO_MSG:                                    {11059, []string{"HY000"}, "%s."},
-	ER_DD_UPGRADE_TABLE_INTACT_ERROR:                            {11060, []string{"HY000"}, "%s."},
-	ER_SERVER_INIT_COMPILED_IN_COMMANDS:                         {11061, []string{"HY000"}, "%s."},
-	ER_MYISAM_CHECK_METHOD_ERROR:                                {11062, []string{"HY000"}, "%s."},
-	ER_MYISAM_CRASHED_ERROR:                                     {11063, []string{"HY000"}, "%s."},
-	ER_WAITPID_FAILED:                                           {11064, []string{"HY000"}, "Unable to wait for process %lld."},
-	ER_FAILED_TO_FIND_MYSQLD_STATUS:                             {11065, []string{"HY000"}, "Unable to determine if daemon is running: %s (rc=%d)."},
-	ER_INNODB_ERROR_LOGGER_MSG:                                  {11066, []string{"HY000"}, "%s"},
-	ER_INNODB_ERROR_LOGGER_FATAL_MSG:                            {11067, []string{"HY000"}, "[FATAL] InnoDB: %s"},
-	ER_DEPRECATED_SYNTAX_WITH_REPLACEMENT:                       {11068, []string{"HY000"}, "The syntax '%s' is deprecated and will be removed in a future release. Please use %s instead."},
-	ER_DEPRECATED_SYNTAX_NO_REPLACEMENT:                         {11069, []string{"HY000"}, "The syntax '%s' is deprecated and will be removed in a future release."},
-	ER_DEPRECATE_MSG_NO_REPLACEMENT:                             {11070, []string{"HY000"}, "'%s' is deprecated and will be removed in a future release."},
-	ER_LOG_PRINTF_MSG:                                           {11071, []string{"HY000"}, "%s"},
-	ER_BINLOG_LOGGING_NOT_POSSIBLE:                              {11072, []string{"HY000"}, "Binary logging not possible. Message: %s."},
-	ER_FAILED_TO_SET_PERSISTED_OPTIONS:                          {11073, []string{"HY000"}, "Failed to set persisted options."},
-	ER_COMPONENTS_FAILED_TO_ACQUIRE_SERVICE_IMPLEMENTATION:      {11074, []string{"HY000"}, "Cannot acquire specified service implementation: '%.192s'."},
-	ER_RES_GRP_INVALID_VCPU_RANGE:                               {11075, []string{"HY000"}, "Invalid VCPU range %u-%u."},
-	ER_RES_GRP_INVALID_VCPU_ID:                                  {11076, []string{"HY000"}, "Invalid cpu id %u."},
-	ER_ERROR_DURING_FLUSH_LOG_COMMIT_PHASE:                      {11077, []string{"HY000"}, "Got error %d during FLUSH_LOGS."},
-	ER_DROP_DATABASE_FAILED_RMDIR_MANUALLY:                      {11078, []string{"HY000"}, "Problem while dropping database. Can't remove database directory (%s). Please remove it manually."},
-	ER_EXPIRE_LOGS_DAYS_IGNORED:                                 {11079, []string{"HY000"}, "The option expire_logs_days cannot be used together with option binlog_expire_logs_seconds. Therefore, value of expire_logs_days is ignored."},
-	ER_BINLOG_MALFORMED_OR_OLD_RELAY_LOG:                        {11080, []string{"HY000"}, "malformed or very old relay log which does not have FormatDescriptor."},
-	ER_DD_UPGRADE_VIEW_COLUMN_NAME_TOO_LONG:                     {11081, []string{"HY000"}, "Upgrade of view '%s.%s' failed. Re-create the view with the explicit column name lesser than 64 characters."},
-	ER_TABLE_NEEDS_DUMP_UPGRADE:                                 {11082, []string{"HY000"}, "Table upgrade required for `%-.64s`.`%-.64s`. Please dump/reload table to fix it!"},
-	ER_DD_UPGRADE_FAILED_TO_UPDATE_VER_NO_IN_TABLESPACE:         {11083, []string{"HY000"}, "Error in updating version number in %s tablespace."},
-	ER_KEYRING_MIGRATION_FAILED:                                 {11084, []string{"HY000"}, "Keyring migration failed."},
-	ER_KEYRING_MIGRATION_SUCCESSFUL:                             {11085, []string{"HY000"}, "Keyring migration successful."},
-	ER_RESTART_RECEIVED_INFO:                                    {11086, []string{"HY000"}, "Received RESTART from user %s.  Restarting mysqld (Version: %s)."},
-	ER_LCTN_CHANGED:                                             {11087, []string{"HY000"}, "Different lower_case_table_names settings for server ('%u') and data dictionary ('%u')."},
-	ER_DD_INITIALIZE:                                            {11088, []string{"HY000"}, "DataSource dictionary initializing version '%u'."},
-	ER_DD_RESTART:                                               {11089, []string{"HY000"}, "DataSource dictionary restarting version '%u'."},
-	ER_DD_UPGRADE:                                               {11090, []string{"HY000"}, "DataSource dictionary upgrading from version '%u' to '%u'."},
-	ER_DD_UPGRADE_OFF:                                           {11091, []string{"HY000"}, "DataSource dictionary upgrade prohibited by the command line option '--no_dd_upgrade'."},
-	ER_DD_UPGRADE_VERSION_NOT_SUPPORTED:                         {11092, []string{"HY000"}, "Upgrading the data dictionary from dictionary version '%u' is not supported."},
-	ER_DD_UPGRADE_SCHEMA_UNAVAILABLE:                            {11093, []string{"HY000"}, "Upgrading the data dictionary failed, temporary schema name '%-.192s' not available."},
-	ER_DD_MINOR_DOWNGRADE:                                       {11094, []string{"HY000"}, "DataSource dictionary minor downgrade from version '%u' to '%u'."},
-	ER_DD_MINOR_DOWNGRADE_VERSION_NOT_SUPPORTED:                 {11095, []string{"HY000"}, "Minor downgrade of the DataSource dictionary from dictionary version '%u' is not supported."},
-	ER_DD_NO_VERSION_FOUND:                                      {11096, []string{"HY000"}, "No data dictionary version number found."},
-	ER_THREAD_POOL_NOT_SUPPORTED_ON_PLATFORM:                    {11097, []string{"HY000"}, "Thread pool not supported, requires a minimum of %s."},
-	ER_THREAD_POOL_SIZE_TOO_LOW:                                 {11098, []string{"HY000"}, "thread_pool_size=0 means thread pool disabled, Allowed range of thread_pool_size is %d-%d."},
-	ER_THREAD_POOL_SIZE_TOO_HIGH:                                {11099, []string{"HY000"}, "thread_pool_size=%lu is too high, %d is maximum, thread pool is disabled. Allowed range of thread_pool_size is %d-%d."},
-	ER_THREAD_POOL_ALGORITHM_INVALID:                            {11100, []string{"HY000"}, "thread_pool_algorithm can be set to 0 and 1, 0 indicates the default low concurrency algorithm, 1 means a high concurrency algorithm."},
-	ER_THREAD_POOL_INVALID_STALL_LIMIT:                          {11101, []string{"HY000"}, "thread_pool_stall_limit can be %d at minimum and %d at maximum, smaller values would render the thread pool fairly useless and higher values could make it possible to have undetected deadlock issues in the MySQL Server."},
-	ER_THREAD_POOL_INVALID_PRIO_KICKUP_TIMER:                    {11102, []string{"HY000"}, "Invalid value of thread_pool_prio_kickup_timer specified. Value of thread_pool_prio_kickup_timer should be in range 0-4294967294."},
-	ER_THREAD_POOL_MAX_UNUSED_THREADS_INVALID:                   {11103, []string{"HY000"}, "thread_pool_max_unused_threads cannot be set higher than %d."},
-	ER_THREAD_POOL_CON_HANDLER_INIT_FAILED:                      {11104, []string{"HY000"}, "Failed to instantiate the connection handler object."},
-	ER_THREAD_POOL_INIT_FAILED:                                  {11105, []string{"HY000"}, "Failed to initialize thread pool plugin."},
-	ER_THREAD_POOL_PLUGIN_STARTED:                               {11106, []string{"HY000"}, "Thread pool plugin started successfully with parameters: thread_pool_size = %lu, thread_pool_algorithm = %s, thread_pool_stall_limit = %u, thread_pool_prio_kickup_timer = %u, thread_pool_max_unused_threads = %u, thread_pool_high_priority_connection = %d."},
-	ER_THREAD_POOL_CANNOT_SET_THREAD_SPECIFIC_DATA:              {11107, []string{"HY000"}, "Can't setup connection teardown thread-specific data."},
-	ER_THREAD_POOL_FAILED_TO_CREATE_CONNECT_HANDLER_THD:         {11108, []string{"HY000"}, "Creation of connect handler thread failed."},
-	ER_THREAD_POOL_FAILED_TO_CREATE_THD_AND_AUTH_CONN:           {11109, []string{"HY000"}, "Failed to create thd and authenticate connection."},
-	ER_THREAD_POOL_FAILED_PROCESS_CONNECT_EVENT:                 {11110, []string{"HY000"}, "Failed to process connection event."},
-	ER_THREAD_POOL_FAILED_TO_CREATE_POOL:                        {11111, []string{"HY000"}, "Can't create pool thread (error %d, errno: %d)."},
-	ER_THREAD_POOL_RATE_LIMITED_ERROR_MSGS:                      {11112, []string{"HY000"}, "%.*s."},
-	ER_TRHEAD_POOL_LOW_LEVEL_INIT_FAILED:                        {11113, []string{"HY000"}, "tp_group_low_level_init() failed."},
-	ER_THREAD_POOL_LOW_LEVEL_REARM_FAILED:                       {11114, []string{"HY000"}, "Rearm failed even after 30 seconds, can't continue without notify socket."},
-	ER_THREAD_POOL_BUFFER_TOO_SMALL:                             {11115, []string{"HY000"}, "%s: %s buffer is too small"},
-	ER_MECAB_NOT_SUPPORTED:                                      {11116, []string{"HY000"}, "Mecab v%s is not supported, the lowest version supported is v%s."},
-	ER_MECAB_NOT_VERIFIED:                                       {11117, []string{"HY000"}, "Mecab v%s is not verified, the highest version supported is v%s."},
-	ER_MECAB_CREATING_MODEL:                                     {11118, []string{"HY000"}, "Mecab: Trying createModel(%s)."},
-	ER_MECAB_FAILED_TO_CREATE_MODEL:                             {11119, []string{"HY000"}, "Mecab: createModel() failed: %s."},
-	ER_MECAB_FAILED_TO_CREATE_TRIGGER:                           {11120, []string{"HY000"}, "Mecab: createTagger() failed: %s."},
-	ER_MECAB_UNSUPPORTED_CHARSET:                                {11121, []string{"HY000"}, "Mecab: Unsupported dictionary charset %s."},
-	ER_MECAB_CHARSET_LOADED:                                     {11122, []string{"HY000"}, "Mecab: Loaded dictionary charset is %s."},
-	ER_MECAB_PARSE_FAILED:                                       {11123, []string{"HY000"}, "Mecab: parse() failed: %s."},
-	ER_MECAB_OOM_WHILE_PARSING_TEXT:                             {11124, []string{"HY000"}, "Mecab: parse() failed: out of memory."},
-	ER_MECAB_CREATE_LATTICE_FAILED:                              {11125, []string{"HY000"}, "Mecab: createLattice() failed: %s."},
-	ER_SEMISYNC_TRACE_ENTER_FUNC:                                {11126, []string{"HY000"}, "---> %s enter."},
-	ER_SEMISYNC_TRACE_EXIT_WITH_INT_EXIT_CODE:                   {11127, []string{"HY000"}, "<--- %s exit (%d)."},
-	ER_SEMISYNC_TRACE_EXIT_WITH_BOOL_EXIT_CODE:                  {11128, []string{"HY000"}, "<--- %s exit (%s)."},
-	ER_SEMISYNC_TRACE_EXIT:                                      {11129, []string{"HY000"}, "<--- %s exit."},
-	ER_SEMISYNC_RPL_INIT_FOR_TRX:                                {11130, []string{"HY000"}, "Semi-sync replication initialized for transactions."},
-	ER_SEMISYNC_FAILED_TO_ALLOCATE_TRX_NODE:                     {11131, []string{"HY000"}, "%s: transaction node allocation failed for: (%s, %lu)."},
-	ER_SEMISYNC_BINLOG_WRITE_OUT_OF_ORDER:                       {11132, []string{"HY000"}, "%s: binlog write out-of-order, tail (%s, %lu), new node (%s, %lu)."},
-	ER_SEMISYNC_INSERT_LOG_INFO_IN_ENTRY:                        {11133, []string{"HY000"}, "%s: insert (%s, %lu) in entry(%u)."},
-	ER_SEMISYNC_PROBE_LOG_INFO_IN_ENTRY:                         {11134, []string{"HY000"}, "%s: probe (%s, %lu) in entry(%u)."},
-	ER_SEMISYNC_CLEARED_ALL_ACTIVE_TRANSACTION_NODES:            {11135, []string{"HY000"}, "%s: cleared all nodes."},
-	ER_SEMISYNC_CLEARED_ACTIVE_TRANSACTION_TILL_POS:             {11136, []string{"HY000"}, "%s: cleared %d nodes back until pos (%s, %lu)."},
-	ER_SEMISYNC_REPLY_MAGIC_NO_ERROR:                            {11137, []string{"HY000"}, "Read semi-sync reply magic number error."},
-	ER_SEMISYNC_REPLY_PKT_LENGTH_TOO_SMALL:                      {11138, []string{"HY000"}, "Read semi-sync reply length error: packet is too small."},
-	ER_SEMISYNC_REPLY_BINLOG_FILE_TOO_LARGE:                     {11139, []string{"HY000"}, "Read semi-sync reply binlog file length too large."},
-	ER_SEMISYNC_SERVER_REPLY:                                    {11140, []string{"HY000"}, "%s: Got reply(%s, %lu) from server %u."},
-	ER_SEMISYNC_FUNCTION_CALLED_TWICE:                           {11141, []string{"HY000"}, "%s called twice."},
-	ER_SEMISYNC_RPL_ENABLED_ON_MASTER:                           {11142, []string{"HY000"}, "Semi-sync replication enabled on the master."},
-	ER_SEMISYNC_MASTER_OOM:                                      {11143, []string{"HY000"}, "Cannot allocate memory to enable semi-sync on the master."},
-	ER_SEMISYNC_DISABLED_ON_MASTER:                              {11144, []string{"HY000"}, "Semi-sync replication disabled on the master."},
-	ER_SEMISYNC_FORCED_SHUTDOWN:                                 {11145, []string{"HY000"}, "SEMISYNC: Forced shutdown. Some updates might not be replicated."},
-	ER_SEMISYNC_MASTER_GOT_REPLY_AT_POS:                         {11146, []string{"HY000"}, "%s: Got reply at (%s, %lu)."},
-	ER_SEMISYNC_MASTER_SIGNAL_ALL_WAITING_THREADS:               {11147, []string{"HY000"}, "%s: signal all waiting threads."},
-	ER_SEMISYNC_MASTER_TRX_WAIT_POS:                             {11148, []string{"HY000"}, "%s: wait pos (%s, %lu), repl(%d)."},
-	ER_SEMISYNC_BINLOG_REPLY_IS_AHEAD:                           {11149, []string{"HY000"}, "%s: Binlog reply is ahead (%s, %lu)."},
-	ER_SEMISYNC_MOVE_BACK_WAIT_POS:                              {11150, []string{"HY000"}, "%s: move back wait position (%s, %lu)."},
-	ER_SEMISYNC_INIT_WAIT_POS:                                   {11151, []string{"HY000"}, "%s: init wait position (%s, %lu)."},
-	ER_SEMISYNC_WAIT_TIME_FOR_BINLOG_SENT:                       {11152, []string{"HY000"}, "%s: wait %lu ms for binlog sent (%s, %lu)."},
-	ER_SEMISYNC_WAIT_FOR_BINLOG_TIMEDOUT:                        {11153, []string{"HY000"}, "Timeout waiting for reply of binlog (file: %s, pos: %lu), semi-sync up to file %s, position %lu."},
-	ER_SEMISYNC_WAIT_TIME_ASSESSMENT_FOR_COMMIT_TRX_FAILED:      {11154, []string{"HY000"}, "Assessment of waiting time for commitTrx failed at wait position (%s, %lu)."},
-	ER_SEMISYNC_RPL_SWITCHED_OFF:                                {11155, []string{"HY000"}, "Semi-sync replication switched OFF."},
-	ER_SEMISYNC_RPL_SWITCHED_ON:                                 {11156, []string{"HY000"}, "Semi-sync replication switched ON at (%s, %lu)."},
-	ER_SEMISYNC_NO_SPACE_IN_THE_PKT:                             {11157, []string{"HY000"}, "No enough space in the packet for semi-sync extra header, semi-sync replication disabled."},
-	ER_SEMISYNC_SYNC_HEADER_UPDATE_INFO:                         {11158, []string{"HY000"}, "%s: server(%d), (%s, %lu) sync(%d), repl(%d)."},
-	ER_SEMISYNC_FAILED_TO_INSERT_TRX_NODE:                       {11159, []string{"HY000"}, "Semi-sync failed to insert tranx_node for binlog file: %s, position: %lu."},
-	ER_SEMISYNC_TRX_SKIPPED_AT_POS:                              {11160, []string{"HY000"}, "%s: Transaction skipped at (%s, %lu)."},
-	ER_SEMISYNC_MASTER_FAILED_ON_NET_FLUSH:                      {11161, []string{"HY000"}, "Semi-sync master failed on net_flush() before waiting for slave reply."},
-	ER_SEMISYNC_RECEIVED_ACK_IS_SMALLER:                         {11162, []string{"HY000"}, "The received ack is smaller than m_greatest_ack."},
-	ER_SEMISYNC_ADD_ACK_TO_SLOT:                                 {11163, []string{"HY000"}, "Add the ack into slot %u."},
-	ER_SEMISYNC_UPDATE_EXISTING_SLAVE_ACK:                       {11164, []string{"HY000"}, "Update an existing ack in slot %u."},
-	ER_SEMISYNC_FAILED_TO_START_ACK_RECEIVER_THD:                {11165, []string{"HY000"}, "Failed to start semi-sync ACK receiver thread,  could not create thread(errno:%d)."},
-	ER_SEMISYNC_STARTING_ACK_RECEIVER_THD:                       {11166, []string{"HY000"}, "Starting ack receiver thread."},
-	ER_SEMISYNC_FAILED_TO_WAIT_ON_DUMP_SOCKET:                   {11167, []string{"HY000"}, "Failed to wait on semi-sync dump sockets, error: errno=%d."},
-	ER_SEMISYNC_STOPPING_ACK_RECEIVER_THREAD:                    {11168, []string{"HY000"}, "Stopping ack receiver thread."},
-	ER_SEMISYNC_FAILED_REGISTER_SLAVE_TO_RECEIVER:               {11169, []string{"HY000"}, "Failed to register slave to semi-sync ACK receiver thread."},
-	ER_SEMISYNC_START_BINLOG_DUMP_TO_SLAVE:                      {11170, []string{"HY000"}, "Start %s binlog_dump to slave (server_id: %d), pos(%s, %lu)."},
-	ER_SEMISYNC_STOP_BINLOG_DUMP_TO_SLAVE:                       {11171, []string{"HY000"}, "Stop %s binlog_dump to slave (server_id: %d)."},
-	ER_SEMISYNC_UNREGISTER_TRX_OBSERVER_FAILED:                  {11172, []string{"HY000"}, "unregister_trans_observer failed."},
-	ER_SEMISYNC_UNREGISTER_BINLOG_STORAGE_OBSERVER_FAILED:       {11173, []string{"HY000"}, "unregister_binlog_storage_observer failed."},
-	ER_SEMISYNC_UNREGISTER_BINLOG_TRANSMIT_OBSERVER_FAILED:      {11174, []string{"HY000"}, "unregister_binlog_transmit_observer failed."},
-	ER_SEMISYNC_UNREGISTERED_REPLICATOR:                         {11175, []string{"HY000"}, "unregister_replicator OK."},
-	ER_SEMISYNC_SOCKET_FD_TOO_LARGE:                             {11176, []string{"HY000"}, "Semisync slave socket fd is %u. select() cannot handle if the socket fd is bigger than %u (FD_SETSIZE)."},
-	ER_SEMISYNC_SLAVE_REPLY:                                     {11177, []string{"HY000"}, "%s: reply - %d."},
-	ER_SEMISYNC_MISSING_MAGIC_NO_FOR_SEMISYNC_PKT:               {11178, []string{"HY000"}, "Missing magic number for semi-sync packet, packet len: %lu."},
-	ER_SEMISYNC_SLAVE_START:                                     {11179, []string{"HY000"}, "Slave I/Operator thread: Start %s replication to master '%s@%s:%d' in log '%s' at position %lu."},
-	ER_SEMISYNC_SLAVE_REPLY_WITH_BINLOG_INFO:                    {11180, []string{"HY000"}, "%s: reply (%s, %lu)."},
-	ER_SEMISYNC_SLAVE_NET_FLUSH_REPLY_FAILED:                    {11181, []string{"HY000"}, "Semi-sync slave net_flush() reply failed."},
-	ER_SEMISYNC_SLAVE_SEND_REPLY_FAILED:                         {11182, []string{"HY000"}, "Semi-sync slave send reply failed: %s (%d)."},
-	ER_SEMISYNC_EXECUTION_FAILED_ON_MASTER:                      {11183, []string{"HY000"}, "Execution failed on master: %s; error %d"},
-	ER_SEMISYNC_NOT_SUPPORTED_BY_MASTER:                         {11184, []string{"HY000"}, "Master server does not support semi-sync, fallback to asynchronous replication"},
-	ER_SEMISYNC_SLAVE_SET_FAILED:                                {11185, []string{"HY000"}, "Set 'rpl_semi_sync_slave=1' on master failed"},
-	ER_SEMISYNC_FAILED_TO_STOP_ACK_RECEIVER_THD:                 {11186, []string{"HY000"}, "Failed to stop ack receiver thread on my_thread_join, errno(%d)."},
-	ER_FIREWALL_FAILED_TO_READ_FIREWALL_TABLES:                  {11187, []string{"HY000"}, "Failed to read the firewall tables"},
-	ER_FIREWALL_FAILED_TO_REG_DYNAMIC_PRIVILEGES:                {11188, []string{"HY000"}, "Failed to register dynamic privileges"},
-	ER_FIREWALL_RECORDING_STMT_WAS_TRUNCATED:                    {11189, []string{"HY000"}, "Statement was truncated and not recorded: %s"},
-	ER_FIREWALL_RECORDING_STMT_WITHOUT_TEXT:                     {11190, []string{"HY000"}, "Statement with no text was not recorded"},
-	ER_FIREWALL_SUSPICIOUS_STMT:                                 {11191, []string{"HY000"}, "SUSPICIOUS STATEMENT from '%s'. Reason: %s Statement: %s"},
-	ER_FIREWALL_ACCESS_DENIED:                                   {11192, []string{"HY000"}, "ACCESS DENIED for '%s'. Reason: %s Statement: %s"},
-	ER_FIREWALL_SKIPPED_UNKNOWN_USER_MODE:                       {11193, []string{"HY000"}, "Skipped unknown user mode '%s'"},
-	ER_FIREWALL_RELOADING_CACHE:                                 {11194, []string{"HY000"}, "Reloading cache from disk"},
-	ER_FIREWALL_RESET_FOR_USER:                                  {11195, []string{"HY000"}, "FIREWALL RESET for '%s'"},
-	ER_FIREWALL_STATUS_FLUSHED:                                  {11196, []string{"HY000"}, "Counters are reset to zero"},
-	ER_KEYRING_LOGGER_ERROR_MSG:                                 {11197, []string{"HY000"}, "%s"},
-	ER_AUDIT_LOG_FILTER_IS_NOT_INSTALLED:                        {11198, []string{"HY000"}, "Audit Log plugin supports a filtering, which has not been installed yet. Audit Log plugin will run in the legacy mode, which will be disabled in the next release."},
-	ER_AUDIT_LOG_SWITCHING_TO_INCLUDE_LIST:                      {11199, []string{"HY000"}, "Previously exclude list is used, now we start using include list, exclude list is set to NULL."},
-	ER_AUDIT_LOG_CANNOT_SET_LOG_POLICY_WITH_OTHER_POLICIES:      {11200, []string{"HY000"}, "Cannot set audit_log_policy simultaneously with either audit_log_connection_policy or  audit_log_statement_policy, setting audit_log_connection_policy and audit_log_statement_policy based on audit_log_policy."},
-	ER_AUDIT_LOG_ONLY_INCLUDE_LIST_USED:                         {11201, []string{"HY000"}, "Both include and exclude lists provided, include list is preferred, exclude list is set to NULL."},
-	ER_AUDIT_LOG_INDEX_MAP_CANNOT_ACCESS_DIR:                    {11202, []string{"HY000"}, "Could not access '%s' directory."},
-	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED:                      {11203, []string{"HY000"}, "Could not rename file from '%s' to '%s'."},
-	ER_AUDIT_LOG_WRITER_DEST_FILE_ALREADY_EXISTS:                {11204, []string{"HY000"}, "File '%s' should not exist. It may be incomplete. The server crashed."},
-	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED_REMOVE_FILE_MANUALLY: {11205, []string{"HY000"}, "Could not rename file from '%s' to '%s'. Remove the file manually."},
-	ER_AUDIT_LOG_WRITER_INCOMPLETE_FILE_RENAMED:                 {11206, []string{"HY000"}, "Incomplete file renamed from '%s' to '%s'."},
-	ER_AUDIT_LOG_WRITER_FAILED_TO_WRITE_TO_FILE:                 {11207, []string{"HY000"}, "Error writing file '%-.200s' (errno: %d - %s)."},
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_ENCRYPTION:            {11208, []string{"HY000"}, "Could not initialize audit log file encryption."},
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_COMPRESSION:           {11209, []string{"HY000"}, "Could not initialize audit log file compression."},
-	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_CREATE_FILE:                {11210, []string{"HY000"}, "Could not create '%s' file for audit logging."},
-	ER_AUDIT_LOG_RENAME_LOG_FILE_BEFORE_FLUSH:                   {11211, []string{"HY000"}, "Audit log file (%s) must be manually renamed before audit_log_flush is set to true."},
-	ER_AUDIT_LOG_FILTER_RESULT_MSG:                              {11212, []string{"HY000"}, "%s"},
-	ER_AUDIT_LOG_JSON_READER_FAILED_TO_PARSE:                    {11213, []string{"HY000"}, "Error parsing JSON event. Event not accessible."},
-	ER_AUDIT_LOG_JSON_READER_BUF_TOO_SMALL:                      {11214, []string{"HY000"}, "Buffer is too small to hold JSON event. Number of events skipped: %zu."},
-	ER_AUDIT_LOG_JSON_READER_FAILED_TO_OPEN_FILE:                {11215, []string{"HY000"}, "Could not open JSON file for reading. Reading next file if exists."},
-	ER_AUDIT_LOG_JSON_READER_FILE_PARSING_ERROR:                 {11216, []string{"HY000"}, "JSON file parsing error. Reading next file if exists"},
-	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_COUNT:                    {11217, []string{"HY000"}, "Invalid column count in the '%s.%s' table."},
-	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_DEFINITION:               {11218, []string{"HY000"}, "Invalid column definition of the '%s.%s' table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_STORE_TABLE_FLDS:              {11219, []string{"HY000"}, "Could not store field of the %s table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_UPDATE_TABLE:                  {11220, []string{"HY000"}, "Could not update %s table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_INSERT_INTO_TABLE:             {11221, []string{"HY000"}, "Could not insert into %s table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_DELETE_FROM_TABLE:             {11222, []string{"HY000"}, "Could not delete from %s table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_INIT_TABLE_FOR_READ:           {11223, []string{"HY000"}, "Could not initialize %s table for reading."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_READ_TABLE:                    {11224, []string{"HY000"}, "Could not read %s table."},
-	ER_AUDIT_LOG_FILTER_FAILED_TO_CLOSE_TABLE_AFTER_READING:     {11225, []string{"HY000"}, "Could not close %s table reading."},
-	ER_AUDIT_LOG_FILTER_USER_AND_HOST_CANNOT_BE_EMPTY:           {11226, []string{"HY000"}, "Both user and host columns of %s table cannot be empty."},
-	ER_AUDIT_LOG_FILTER_FLD_FILTERNAME_CANNOT_BE_EMPTY:          {11227, []string{"HY000"}, "Filtername column of %s table cannot be empty."},
-	ER_VALIDATE_PWD_DICT_FILE_NOT_SPECIFIED:                     {11228, []string{"HY000"}, "Dictionary file not specified"},
-	ER_VALIDATE_PWD_DICT_FILE_NOT_LOADED:                        {11229, []string{"HY000"}, "Dictionary file not loaded"},
-	ER_VALIDATE_PWD_DICT_FILE_TOO_BIG:                           {11230, []string{"HY000"}, "Dictionary file size exceeded MAX_DICTIONARY_FILE_LENGTH, not loaded"},
-	ER_VALIDATE_PWD_FAILED_TO_READ_DICT_FILE:                    {11231, []string{"HY000"}, "Exception while reading the dictionary file"},
-	ER_VALIDATE_PWD_FAILED_TO_GET_FLD_FROM_SECURITY_CTX:         {11232, []string{"HY000"}, "Can't retrieve the %s from the security context"},
-	ER_VALIDATE_PWD_FAILED_TO_GET_SECURITY_CTX:                  {11233, []string{"HY000"}, "Can't retrieve the security context"},
-	ER_VALIDATE_PWD_LENGTH_CHANGED:                              {11234, []string{"HY000"}, "Effective value of validate_password_length is changed. New value is %d"},
-	ER_REWRITER_QUERY_ERROR_MSG:                                 {11235, []string{"HY000"}, "%s"},
-	ER_REWRITER_QUERY_FAILED:                                    {11236, []string{"HY000"}, "Rewritten query failed to parse:%s"},
-	ER_XPLUGIN_STARTUP_FAILED:                                   {11237, []string{"HY000"}, "Startup failed with error \"%s\""},
+	ER_INVALID_REPLICATION_TIMESTAMPS:                            {10956, []string{"HY000"}, "Invalid replication timestamps: original commit timestamp is more recent than the immediate commit timestamp. This may be an issue if delayed replication is active. Make sure that servers have their clocks set to the correct time. No further message will be emitted until after timestamps become valid again."},
+	ER_RPL_TIMESTAMPS_RETURNED_TO_NORMAL:                         {10957, []string{"HY000"}, "The replication timestamps have returned to normal values."},
+	ER_BINLOG_FILE_OPEN_FAILED:                                   {10958, []string{"HY000"}, "%s."},
+	ER_BINLOG_EVENT_WRITE_TO_STMT_CACHE_FAILED:                   {10959, []string{"HY000"}, "Failed to write an incident event into stmt_cache."},
+	ER_SLAVE_RELAY_LOG_TRUNCATE_INFO:                             {10960, []string{"HY000"}, "Relaylog file %s size was %llu, but was truncated at %llu."},
+	ER_SLAVE_RELAY_LOG_PURGE_FAILED:                              {10961, []string{"HY000"}, "Unable to purge relay log files. %s:%s."},
+	ER_RPL_SLAVE_FILTER_CREATE_FAILED:                            {10962, []string{"HY000"}, "Slave: failed in creating filter for channel '%s'."},
+	ER_RPL_SLAVE_GLOBAL_FILTERS_COPY_FAILED:                      {10963, []string{"HY000"}, "Slave: failed in copying the global filters to its own per-channel filters on configuration for channel '%s'."},
+	ER_RPL_SLAVE_RESET_FILTER_OPTIONS:                            {10964, []string{"HY000"}, "There are per-channel replication filter(s) configured for channel '%.192s' which does not exist. The filter(s) have been discarded."},
+	ER_MISSING_GRANT_SYSTEM_TABLE:                                {10965, []string{"HY000"}, "The system table mysql.global_grants is missing. Please perform the MySQL upgrade procedure."},
+	ER_MISSING_ACL_SYSTEM_TABLE:                                  {10966, []string{"HY000"}, "ACL table mysql.%.*s missing. Some operations may fail."},
+	ER_ANONYMOUS_AUTH_ID_NOT_ALLOWED_IN_MANDATORY_ROLES:          {10967, []string{"HY000"}, "Can't set mandatory_role %s@%s: Anonymous authorization IDs are not allowed as roles."},
+	ER_UNKNOWN_AUTH_ID_IN_MANDATORY_ROLE:                         {10968, []string{"HY000"}, "Can't set mandatory_role: There's no such authorization RelationName %s@%s."},
+	ER_WRITE_ROW_TO_PARTITION_FAILED:                             {10969, []string{"HY000"}, "Table '%-192s' failed to move/insert a row from part %d into part %d: %s."},
+	ER_RESOURCE_GROUP_METADATA_UPDATE_SKIPPED:                    {10970, []string{"HY000"}, "Skipped updating resource group metadata in InnoDB read only mode."},
+	ER_FAILED_TO_PERSIST_RESOURCE_GROUP_METADATA:                 {10971, []string{"HY000"}, "Failed to persist resource group %s to DataSource Dictionary."},
+	ER_FAILED_TO_DESERIALIZE_RESOURCE_GROUP:                      {10972, []string{"HY000"}, "Failed to deserialize resource group %s."},
+	ER_FAILED_TO_UPDATE_RESOURCE_GROUP:                           {10973, []string{"HY000"}, "Update of resource group %s failed."},
+	ER_RESOURCE_GROUP_VALIDATION_FAILED:                          {10974, []string{"HY000"}, "Validation of resource group %s failed. Resource group is disabled."},
+	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP:              {10975, []string{"HY000"}, "Unable to allocate memory for Resource Group %s."},
+	ER_FAILED_TO_ALLOCATE_MEMORY_FOR_RESOURCE_GROUP_HASH:         {10976, []string{"HY000"}, "Failed to allocate memory for resource group hash."},
+	ER_FAILED_TO_ADD_RESOURCE_GROUP_TO_MAP:                       {10977, []string{"HY000"}, "Failed to add resource group %s to resource group map."},
+	ER_RESOURCE_GROUP_IS_DISABLED:                                {10978, []string{"HY000"}, "Resource group feature is disabled. (Server is compiled with DISABLE_PSI_THREAD)."},
+	ER_FAILED_TO_APPLY_RESOURCE_GROUP_CONTROLLER:                 {10979, []string{"HY000"}, "Unable to apply resource group controller %s."},
+	ER_FAILED_TO_ACQUIRE_LOCK_ON_RESOURCE_GROUP:                  {10980, []string{"HY000"}, "Unable to acquire lock on the resource group %s. Hint to switch resource group shall be ignored."},
+	ER_PFS_NOTIFICATION_FUNCTION_REGISTER_FAILED:                 {10981, []string{"HY000"}, "PFS %s notification function registration failed."},
+	ER_RES_GRP_SET_THR_AFFINITY_FAILED:                           {10982, []string{"HY000"}, "Unable to bind thread id %llu to cpu id %u (error code %d - %-.192s)."},
+	ER_RES_GRP_SET_THR_AFFINITY_TO_CPUS_FAILED:                   {10983, []string{"HY000"}, "Unable to bind thread id %llu to cpu ids (error code %d - %-.192s)."},
+	ER_RES_GRP_THD_UNBIND_FROM_CPU_FAILED:                        {10984, []string{"HY000"}, "Unbind thread id %llu failed. (error code %d - %-.192s)."},
+	ER_RES_GRP_SET_THREAD_PRIORITY_FAILED:                        {10985, []string{"HY000"}, "Setting thread priority %d to thread id %llu failed. (error code %d - %-.192s)."},
+	ER_RES_GRP_FAILED_TO_DETERMINE_NICE_CAPABILITY:               {10986, []string{"HY000"}, "Unable to determine CAP_SYS_NICE capabilities."},
+	ER_RES_GRP_FAILED_TO_GET_THREAD_HANDLE:                       {10987, []string{"HY000"}, "%s failed: Failed to get handle for thread %llu."},
+	ER_RES_GRP_GET_THREAD_PRIO_NOT_SUPPORTED:                     {10988, []string{"HY000"}, "Retrieval of thread priority unsupported on %s."},
+	ER_RES_GRP_FAILED_DETERMINE_CPU_COUNT:                        {10989, []string{"HY000"}, "Unable to determine the number of CPUs."},
+	ER_RES_GRP_FEATURE_NOT_AVAILABLE:                             {10990, []string{"HY000"}, "Resource group feature shall not be available. Incompatible thread handling option."},
+	ER_RES_GRP_INVALID_THREAD_PRIORITY:                           {10991, []string{"HY000"}, "Invalid thread priority %d for a %s resource group. Allowed range is [%d, %d]."},
+	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_CPUID_FAILED:            {10992, []string{"HY000"}, "bind_to_cpu failed: processor_bind for cpuid %u failed (error code %d - %-.192s)."},
+	ER_RES_GRP_SOLARIS_PROCESSOR_BIND_TO_THREAD_FAILED:           {10993, []string{"HY000"}, "bind_to_cpu failed: processor_bind for thread %%llx with cpu id %u (error code %d - %-.192s)."},
+	ER_RES_GRP_SOLARIS_PROCESSOR_AFFINITY_FAILED:                 {10994, []string{"HY000"}, "%s failed: processor_affinity failed (error code %d - %-.192s)."},
+	ER_DD_UPGRADE_RENAME_IDX_STATS_FILE_FAILED:                   {10995, []string{"HY000"}, "Error in renaming mysql_index_stats.ibd."},
+	ER_DD_UPGRADE_DD_OPEN_FAILED:                                 {10996, []string{"HY000"}, "Error in opening data directory %s."},
+	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLESPACES:                    {10997, []string{"HY000"}, "Error in fetching list of tablespaces."},
+	ER_DD_UPGRADE_FAILED_TO_ACQUIRE_TABLESPACE:                   {10998, []string{"HY000"}, "Error in acquiring Tablespace for SDI insertion %s."},
+	ER_DD_UPGRADE_FAILED_TO_RESOLVE_TABLESPACE_ENGINE:            {10999, []string{"HY000"}, "Error in resolving Engine name for tablespace %s with engine %s."},
+	ER_FAILED_TO_CREATE_SDI_FOR_TABLESPACE:                       {11000, []string{"HY000"}, "Error in creating SDI for %s tablespace."},
+	ER_FAILED_TO_STORE_SDI_FOR_TABLESPACE:                        {11001, []string{"HY000"}, "Error in storing SDI for %s tablespace."},
+	ER_DD_UPGRADE_FAILED_TO_FETCH_TABLES:                         {11002, []string{"HY000"}, "Error in fetching list of tables."},
+	ER_DD_UPGRADE_DD_POPULATED:                                   {11003, []string{"HY000"}, "Finished populating DataSource Dictionary tables with data."},
+	ER_DD_UPGRADE_INFO_FILE_OPEN_FAILED:                          {11004, []string{"HY000"}, "Could not open the upgrade info file '%s' in the MySQL servers datadir, errno: %d."},
+	ER_DD_UPGRADE_INFO_FILE_CLOSE_FAILED:                         {11005, []string{"HY000"}, "Could not close the upgrade info file '%s' in the MySQL servers datadir, errno: %d."},
+	ER_DD_UPGRADE_TABLESPACE_MIGRATION_FAILED:                    {11006, []string{"HY000"}, "Got error %d from SE while migrating tablespaces."},
+	ER_DD_UPGRADE_FAILED_TO_CREATE_TABLE_STATS:                   {11007, []string{"HY000"}, "Error in creating TABLE statistics entry. Fix statistics data by using ANALYZE command."},
+	ER_DD_UPGRADE_TABLE_STATS_MIGRATE_COMPLETED:                  {11008, []string{"HY000"}, "Finished migrating TABLE statistics data."},
+	ER_DD_UPGRADE_FAILED_TO_CREATE_INDEX_STATS:                   {11009, []string{"HY000"}, "Error in creating Index statistics entry. Fix statistics data by using ANALYZE command."},
+	ER_DD_UPGRADE_INDEX_STATS_MIGRATE_COMPLETED:                  {11010, []string{"HY000"}, "Finished migrating INDEX statistics data."},
+	ER_DD_UPGRADE_FAILED_FIND_VALID_DATA_DIR:                     {11011, []string{"HY000"}, "Failed to find valid data directory."},
+	ER_DD_UPGRADE_START:                                          {11012, []string{"HY000"}, "Starting upgrade of data directory."},
+	ER_DD_UPGRADE_FAILED_INIT_DD_SE:                              {11013, []string{"HY000"}, "Failed to initialize DD Storage Engine."},
+	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_ABORT:              {11014, []string{"HY000"}, "Found partially upgraded DD. Aborting upgrade and deleting all DD tables. Start the upgrade process again."},
+	ER_DD_UPGRADE_FOUND_PARTIALLY_UPGRADED_DD_CONTINUE:           {11015, []string{"HY000"}, "Found partially upgraded DD. Upgrade will continue and start the server."},
+	ER_DD_UPGRADE_SE_LOGS_FAILED:                                 {11016, []string{"HY000"}, "Error in upgrading engine logs."},
+	ER_DD_UPGRADE_SDI_INFO_UPDATE_FAILED:                         {11017, []string{"HY000"}, "Error in updating SDI information."},
+	ER_SKIP_UPDATING_METADATA_IN_SE_RO_MODE:                      {11018, []string{"HY000"}, "Skip updating %s metadata in InnoDB read-only mode."},
+	ER_CREATED_SYSTEM_WITH_VERSION:                               {11019, []string{"HY000"}, "Created system views with I_S version %d."},
+	ER_UNKNOWN_ERROR_DETECTED_IN_SE:                              {11020, []string{"HY000"}, "Unknown error detected %d in handler."},
+	ER_READ_LOG_EVENT_FAILED:                                     {11021, []string{"HY000"}, "Error in Log_event::read_log_event(): '%s', data_len: %lu, event_type: %d."},
+	ER_ROW_DATA_TOO_BIG_TO_WRITE_IN_BINLOG:                       {11022, []string{"HY000"}, "The row data is greater than 4GB, which is too big to write to the binary log."},
+	ER_FAILED_TO_CONSTRUCT_DROP_EVENT_QUERY:                      {11023, []string{"HY000"}, "Unable to construct DROP EVENT SQL query string."},
+	ER_FAILED_TO_BINLOG_DROP_EVENT:                               {11024, []string{"HY000"}, "Unable to binlog drop event %s.%s."},
+	ER_FAILED_TO_START_SLAVE_THREAD:                              {11025, []string{"HY000"}, "Failed to start slave threads for channel '%s'."},
+	ER_RPL_IO_THREAD_KILLED:                                      {11026, []string{"HY000"}, "%s%s."},
+	ER_SLAVE_RECONNECT_FAILED:                                    {11027, []string{"HY000"}, "Failed registering on master, reconnecting to try again, log '%s' at position %s. %s."},
+	ER_SLAVE_KILLED_AFTER_RECONNECT:                              {11028, []string{"HY000"}, "Slave I/Operator thread killed during or after reconnect."},
+	ER_SLAVE_NOT_STARTED_ON_SOME_CHANNELS:                        {11029, []string{"HY000"}, "Some of the channels are not created/initialized properly. Check for additional messages above. You will not be able to start replication on those channels until the issue is resolved and the server restarted."},
+	ER_FAILED_TO_ADD_RPL_FILTER:                                  {11030, []string{"HY000"}, "Failed to add a replication filter into filter map for channel '%.192s'."},
+	ER_PER_CHANNEL_RPL_FILTER_CONF_FOR_GRP_RPL:                   {11031, []string{"HY000"}, "There are per-channel replication filter(s) configured for group replication channel '%.192s' which is disallowed. The filter(s) have been discarded."},
+	ER_RPL_FILTERS_NOT_ATTACHED_TO_CHANNEL:                       {11032, []string{"HY000"}, "There are per-channel replication filter(s) configured for channel '%.192s' which does not exist. The filter(s) have been discarded."},
+	ER_FAILED_TO_BUILD_DO_AND_IGNORE_TABLE_HASHES:                {11033, []string{"HY000"}, "An error occurred while building do_table and ignore_table rules to hashes for per-channel filter."},
+	ER_CLONE_PLUGIN_NOT_LOADED_TRACE:                             {11034, []string{"HY000"}, "Clone plugin cannot be loaded."},
+	ER_CLONE_HANDLER_EXIST_TRACE:                                 {11035, []string{"HY000"}, "Clone Handler exists."},
+	ER_CLONE_CREATE_HANDLER_FAIL_TRACE:                           {11036, []string{"HY000"}, "Could not create Clone Handler."},
+	ER_CYCLE_TIMER_IS_NOT_AVAILABLE:                              {11037, []string{"HY000"}, "The CYCLE timer is not available. WAIT events in the performance_schema will not be timed."},
+	ER_NANOSECOND_TIMER_IS_NOT_AVAILABLE:                         {11038, []string{"HY000"}, "The NANOSECOND timer is not available. IDLE/STAGE/STATEMENT/TRANSACTION events in the performance_schema will not be timed."},
+	ER_MICROSECOND_TIMER_IS_NOT_AVAILABLE:                        {11039, []string{"HY000"}, "The MICROSECOND timer is not available. IDLE/STAGE/STATEMENT/TRANSACTION events in the performance_schema will not be timed."},
+	ER_PFS_MALLOC_ARRAY_OVERFLOW:                                 {11040, []string{"HY000"}, "Failed to allocate memory for %zu chunks each of size %zu for buffer '%s' due to overflow."},
+	ER_PFS_MALLOC_ARRAY_OOM:                                      {11041, []string{"HY000"}, "Failed to allocate %zu bytes for buffer '%s' due to out-of-memory."},
+	ER_INNODB_FAILED_TO_FIND_IDX_WITH_KEY_NO:                     {11042, []string{"HY000"}, "InnoDB could not find index %s key no %u for table %s through its index translation table."},
+	ER_INNODB_FAILED_TO_FIND_IDX:                                 {11043, []string{"HY000"}, "Cannot find index %s in InnoDB index translation table."},
+	ER_INNODB_FAILED_TO_FIND_IDX_FROM_DICT_CACHE:                 {11044, []string{"HY000"}, "InnoDB could not find key no %u with name %s from dict cache for table %s."},
+	ER_INNODB_ACTIVE_INDEX_CHANGE_FAILED:                         {11045, []string{"HY000"}, "InnoDB: change_active_index(%u) failed."},
+	ER_INNODB_DIFF_IN_REF_LEN:                                    {11046, []string{"HY000"}, "Stored ref len is %lu, but table ref len is %lu."},
+	ER_WRONG_TYPE_FOR_COLUMN_PREFIX_IDX_FLD:                      {11047, []string{"HY000"}, "MySQL is trying to create a column prefix index field, on an inappropriate data type. Table name %s, column name %s."},
+	ER_INNODB_CANNOT_CREATE_TABLE:                                {11048, []string{"HY000"}, "Cannot create table %s."},
+	ER_INNODB_INTERNAL_INDEX:                                     {11049, []string{"HY000"}, "Found index %s in InnoDB index list but not its MySQL index number. It could be an InnoDB internal index."},
+	ER_INNODB_IDX_CNT_MORE_THAN_DEFINED_IN_MYSQL:                 {11050, []string{"HY000"}, "InnoDB: Table %s contains %lu indexes inside InnoDB, which is different from the number of indexes %u defined in MySQL."},
+	ER_INNODB_IDX_CNT_FEWER_THAN_DEFINED_IN_MYSQL:                {11051, []string{"HY000"}, "Table %s contains fewer indexes inside InnoDB than are defined in the MySQL. Have you mixed up with data dictionary from different installation?"},
+	ER_INNODB_IDX_COLUMN_CNT_DIFF:                                {11052, []string{"HY000"}, "Index %s of %s has %lu columns unique inside InnoDB, but MySQL is asking statistics for %lu columns. Have you mixed data dictionary from different installation?"},
+	ER_INNODB_USE_MONITOR_GROUP_NAME:                             {11053, []string{"HY000"}, "Monitor counter '%s' cannot be turned on/off individually. Please use its module name to turn on/off the counters in the module as a group."},
+	ER_INNODB_MONITOR_DEFAULT_VALUE_NOT_DEFINED:                  {11054, []string{"HY000"}, "Default value is not defined for this set option. Please specify correct counter or module name."},
+	ER_INNODB_MONITOR_IS_ENABLED:                                 {11055, []string{"HY000"}, "InnoDB: Monitor %s is already enabled."},
+	ER_INNODB_INVALID_MONITOR_COUNTER_NAME:                       {11056, []string{"HY000"}, "Invalid monitor counter : %s."},
+	ER_WIN_LOAD_LIBRARY_FAILED:                                   {11057, []string{"HY000"}, "LoadLibrary(\"%s\") failed: GetLastError returns %lu."},
+	ER_PARTITION_HANDLER_ADMIN_MSG:                               {11058, []string{"HY000"}, "%s."},
+	ER_RPL_RLI_INIT_INFO_MSG:                                     {11059, []string{"HY000"}, "%s."},
+	ER_DD_UPGRADE_TABLE_INTACT_ERROR:                             {11060, []string{"HY000"}, "%s."},
+	ER_SERVER_INIT_COMPILED_IN_COMMANDS:                          {11061, []string{"HY000"}, "%s."},
+	ER_MYISAM_CHECK_METHOD_ERROR:                                 {11062, []string{"HY000"}, "%s."},
+	ER_MYISAM_CRASHED_ERROR:                                      {11063, []string{"HY000"}, "%s."},
+	ER_WAITPID_FAILED:                                            {11064, []string{"HY000"}, "Unable to wait for process %lld."},
+	ER_FAILED_TO_FIND_MYSQLD_STATUS:                              {11065, []string{"HY000"}, "Unable to determine if daemon is running: %s (rc=%d)."},
+	ER_INNODB_ERROR_LOGGER_MSG:                                   {11066, []string{"HY000"}, "%s"},
+	ER_INNODB_ERROR_LOGGER_FATAL_MSG:                             {11067, []string{"HY000"}, "[FATAL] InnoDB: %s"},
+	ER_DEPRECATED_SYNTAX_WITH_REPLACEMENT:                        {11068, []string{"HY000"}, "The syntax '%s' is deprecated and will be removed in a future release. Please use %s instead."},
+	ER_DEPRECATED_SYNTAX_NO_REPLACEMENT:                          {11069, []string{"HY000"}, "The syntax '%s' is deprecated and will be removed in a future release."},
+	ER_DEPRECATE_MSG_NO_REPLACEMENT:                              {11070, []string{"HY000"}, "'%s' is deprecated and will be removed in a future release."},
+	ER_LOG_PRINTF_MSG:                                            {11071, []string{"HY000"}, "%s"},
+	ER_BINLOG_LOGGING_NOT_POSSIBLE:                               {11072, []string{"HY000"}, "Binary logging not possible. Message: %s."},
+	ER_FAILED_TO_SET_PERSISTED_OPTIONS:                           {11073, []string{"HY000"}, "Failed to set persisted options."},
+	ER_COMPONENTS_FAILED_TO_ACQUIRE_SERVICE_IMPLEMENTATION:       {11074, []string{"HY000"}, "Cannot acquire specified service implementation: '%.192s'."},
+	ER_RES_GRP_INVALID_VCPU_RANGE:                                {11075, []string{"HY000"}, "Invalid VCPU range %u-%u."},
+	ER_RES_GRP_INVALID_VCPU_ID:                                   {11076, []string{"HY000"}, "Invalid cpu id %u."},
+	ER_ERROR_DURING_FLUSH_LOG_COMMIT_PHASE:                       {11077, []string{"HY000"}, "Got error %d during FLUSH_LOGS."},
+	ER_DROP_DATABASE_FAILED_RMDIR_MANUALLY:                       {11078, []string{"HY000"}, "Problem while dropping database. Can't remove database directory (%s). Please remove it manually."},
+	ER_EXPIRE_LOGS_DAYS_IGNORED:                                  {11079, []string{"HY000"}, "The option expire_logs_days cannot be used together with option binlog_expire_logs_seconds. Therefore, value of expire_logs_days is ignored."},
+	ER_BINLOG_MALFORMED_OR_OLD_RELAY_LOG:                         {11080, []string{"HY000"}, "malformed or very old relay log which does not have FormatDescriptor."},
+	ER_DD_UPGRADE_VIEW_COLUMN_NAME_TOO_LONG:                      {11081, []string{"HY000"}, "Upgrade of view '%s.%s' failed. Re-create the view with the explicit column name lesser than 64 characters."},
+	ER_TABLE_NEEDS_DUMP_UPGRADE:                                  {11082, []string{"HY000"}, "Table upgrade required for `%-.64s`.`%-.64s`. Please dump/reload table to fix it!"},
+	ER_DD_UPGRADE_FAILED_TO_UPDATE_VER_NO_IN_TABLESPACE:          {11083, []string{"HY000"}, "Error in updating version number in %s tablespace."},
+	ER_KEYRING_MIGRATION_FAILED:                                  {11084, []string{"HY000"}, "Keyring migration failed."},
+	ER_KEYRING_MIGRATION_SUCCESSFUL:                              {11085, []string{"HY000"}, "Keyring migration successful."},
+	ER_RESTART_RECEIVED_INFO:                                     {11086, []string{"HY000"}, "Received RESTART from user %s.  Restarting mysqld (Version: %s)."},
+	ER_LCTN_CHANGED:                                              {11087, []string{"HY000"}, "Different lower_case_table_names settings for server ('%u') and data dictionary ('%u')."},
+	ER_DD_INITIALIZE:                                             {11088, []string{"HY000"}, "DataSource dictionary initializing version '%u'."},
+	ER_DD_RESTART:                                                {11089, []string{"HY000"}, "DataSource dictionary restarting version '%u'."},
+	ER_DD_UPGRADE:                                                {11090, []string{"HY000"}, "DataSource dictionary upgrading from version '%u' to '%u'."},
+	ER_DD_UPGRADE_OFF:                                            {11091, []string{"HY000"}, "DataSource dictionary upgrade prohibited by the command line option '--no_dd_upgrade'."},
+	ER_DD_UPGRADE_VERSION_NOT_SUPPORTED:                          {11092, []string{"HY000"}, "Upgrading the data dictionary from dictionary version '%u' is not supported."},
+	ER_DD_UPGRADE_SCHEMA_UNAVAILABLE:                             {11093, []string{"HY000"}, "Upgrading the data dictionary failed, temporary schema name '%-.192s' not available."},
+	ER_DD_MINOR_DOWNGRADE:                                        {11094, []string{"HY000"}, "DataSource dictionary minor downgrade from version '%u' to '%u'."},
+	ER_DD_MINOR_DOWNGRADE_VERSION_NOT_SUPPORTED:                  {11095, []string{"HY000"}, "Minor downgrade of the DataSource dictionary from dictionary version '%u' is not supported."},
+	ER_DD_NO_VERSION_FOUND:                                       {11096, []string{"HY000"}, "No data dictionary version number found."},
+	ER_THREAD_POOL_NOT_SUPPORTED_ON_PLATFORM:                     {11097, []string{"HY000"}, "Thread pool not supported, requires a minimum of %s."},
+	ER_THREAD_POOL_SIZE_TOO_LOW:                                  {11098, []string{"HY000"}, "thread_pool_size=0 means thread pool disabled, Allowed range of thread_pool_size is %d-%d."},
+	ER_THREAD_POOL_SIZE_TOO_HIGH:                                 {11099, []string{"HY000"}, "thread_pool_size=%lu is too high, %d is maximum, thread pool is disabled. Allowed range of thread_pool_size is %d-%d."},
+	ER_THREAD_POOL_ALGORITHM_INVALID:                             {11100, []string{"HY000"}, "thread_pool_algorithm can be set to 0 and 1, 0 indicates the default low concurrency algorithm, 1 means a high concurrency algorithm."},
+	ER_THREAD_POOL_INVALID_STALL_LIMIT:                           {11101, []string{"HY000"}, "thread_pool_stall_limit can be %d at minimum and %d at maximum, smaller values would render the thread pool fairly useless and higher values could make it possible to have undetected deadlock issues in the MySQL Server."},
+	ER_THREAD_POOL_INVALID_PRIO_KICKUP_TIMER:                     {11102, []string{"HY000"}, "Invalid value of thread_pool_prio_kickup_timer specified. Value of thread_pool_prio_kickup_timer should be in range 0-4294967294."},
+	ER_THREAD_POOL_MAX_UNUSED_THREADS_INVALID:                    {11103, []string{"HY000"}, "thread_pool_max_unused_threads cannot be set higher than %d."},
+	ER_THREAD_POOL_CON_HANDLER_INIT_FAILED:                       {11104, []string{"HY000"}, "Failed to instantiate the connection handler object."},
+	ER_THREAD_POOL_INIT_FAILED:                                   {11105, []string{"HY000"}, "Failed to initialize thread pool plugin."},
+	ER_THREAD_POOL_PLUGIN_STARTED:                                {11106, []string{"HY000"}, "Thread pool plugin started successfully with parameters: thread_pool_size = %lu, thread_pool_algorithm = %s, thread_pool_stall_limit = %u, thread_pool_prio_kickup_timer = %u, thread_pool_max_unused_threads = %u, thread_pool_high_priority_connection = %d."},
+	ER_THREAD_POOL_CANNOT_SET_THREAD_SPECIFIC_DATA:               {11107, []string{"HY000"}, "Can't setup connection teardown thread-specific data."},
+	ER_THREAD_POOL_FAILED_TO_CREATE_CONNECT_HANDLER_THD:          {11108, []string{"HY000"}, "Creation of connect handler thread failed."},
+	ER_THREAD_POOL_FAILED_TO_CREATE_THD_AND_AUTH_CONN:            {11109, []string{"HY000"}, "Failed to create thd and authenticate connection."},
+	ER_THREAD_POOL_FAILED_PROCESS_CONNECT_EVENT:                  {11110, []string{"HY000"}, "Failed to process connection event."},
+	ER_THREAD_POOL_FAILED_TO_CREATE_POOL:                         {11111, []string{"HY000"}, "Can't create pool thread (error %d, errno: %d)."},
+	ER_THREAD_POOL_RATE_LIMITED_ERROR_MSGS:                       {11112, []string{"HY000"}, "%.*s."},
+	ER_TRHEAD_POOL_LOW_LEVEL_INIT_FAILED:                         {11113, []string{"HY000"}, "tp_group_low_level_init() failed."},
+	ER_THREAD_POOL_LOW_LEVEL_REARM_FAILED:                        {11114, []string{"HY000"}, "Rearm failed even after 30 seconds, can't continue without notify socket."},
+	ER_THREAD_POOL_BUFFER_TOO_SMALL:                              {11115, []string{"HY000"}, "%s: %s buffer is too small"},
+	ER_MECAB_NOT_SUPPORTED:                                       {11116, []string{"HY000"}, "Mecab v%s is not supported, the lowest version supported is v%s."},
+	ER_MECAB_NOT_VERIFIED:                                        {11117, []string{"HY000"}, "Mecab v%s is not verified, the highest version supported is v%s."},
+	ER_MECAB_CREATING_MODEL:                                      {11118, []string{"HY000"}, "Mecab: Trying createModel(%s)."},
+	ER_MECAB_FAILED_TO_CREATE_MODEL:                              {11119, []string{"HY000"}, "Mecab: createModel() failed: %s."},
+	ER_MECAB_FAILED_TO_CREATE_TRIGGER:                            {11120, []string{"HY000"}, "Mecab: createTagger() failed: %s."},
+	ER_MECAB_UNSUPPORTED_CHARSET:                                 {11121, []string{"HY000"}, "Mecab: Unsupported dictionary charset %s."},
+	ER_MECAB_CHARSET_LOADED:                                      {11122, []string{"HY000"}, "Mecab: Loaded dictionary charset is %s."},
+	ER_MECAB_PARSE_FAILED:                                        {11123, []string{"HY000"}, "Mecab: parse() failed: %s."},
+	ER_MECAB_OOM_WHILE_PARSING_TEXT:                              {11124, []string{"HY000"}, "Mecab: parse() failed: out of memory."},
+	ER_MECAB_CREATE_LATTICE_FAILED:                               {11125, []string{"HY000"}, "Mecab: createLattice() failed: %s."},
+	ER_SEMISYNC_TRACE_ENTER_FUNC:                                 {11126, []string{"HY000"}, "---> %s enter."},
+	ER_SEMISYNC_TRACE_EXIT_WITH_INT_EXIT_CODE:                    {11127, []string{"HY000"}, "<--- %s exit (%d)."},
+	ER_SEMISYNC_TRACE_EXIT_WITH_BOOL_EXIT_CODE:                   {11128, []string{"HY000"}, "<--- %s exit (%s)."},
+	ER_SEMISYNC_TRACE_EXIT:                                       {11129, []string{"HY000"}, "<--- %s exit."},
+	ER_SEMISYNC_RPL_INIT_FOR_TRX:                                 {11130, []string{"HY000"}, "Semi-sync replication initialized for transactions."},
+	ER_SEMISYNC_FAILED_TO_ALLOCATE_TRX_NODE:                      {11131, []string{"HY000"}, "%s: transaction node allocation failed for: (%s, %lu)."},
+	ER_SEMISYNC_BINLOG_WRITE_OUT_OF_ORDER:                        {11132, []string{"HY000"}, "%s: binlog write out-of-order, tail (%s, %lu), new node (%s, %lu)."},
+	ER_SEMISYNC_INSERT_LOG_INFO_IN_ENTRY:                         {11133, []string{"HY000"}, "%s: insert (%s, %lu) in entry(%u)."},
+	ER_SEMISYNC_PROBE_LOG_INFO_IN_ENTRY:                          {11134, []string{"HY000"}, "%s: probe (%s, %lu) in entry(%u)."},
+	ER_SEMISYNC_CLEARED_ALL_ACTIVE_TRANSACTION_NODES:             {11135, []string{"HY000"}, "%s: cleared all nodes."},
+	ER_SEMISYNC_CLEARED_ACTIVE_TRANSACTION_TILL_POS:              {11136, []string{"HY000"}, "%s: cleared %d nodes back until pos (%s, %lu)."},
+	ER_SEMISYNC_REPLY_MAGIC_NO_ERROR:                             {11137, []string{"HY000"}, "Read semi-sync reply magic number error."},
+	ER_SEMISYNC_REPLY_PKT_LENGTH_TOO_SMALL:                       {11138, []string{"HY000"}, "Read semi-sync reply length error: packet is too small."},
+	ER_SEMISYNC_REPLY_BINLOG_FILE_TOO_LARGE:                      {11139, []string{"HY000"}, "Read semi-sync reply binlog file length too large."},
+	ER_SEMISYNC_SERVER_REPLY:                                     {11140, []string{"HY000"}, "%s: Got reply(%s, %lu) from server %u."},
+	ER_SEMISYNC_FUNCTION_CALLED_TWICE:                            {11141, []string{"HY000"}, "%s called twice."},
+	ER_SEMISYNC_RPL_ENABLED_ON_MASTER:                            {11142, []string{"HY000"}, "Semi-sync replication enabled on the master."},
+	ER_SEMISYNC_MASTER_OOM:                                       {11143, []string{"HY000"}, "Cannot allocate memory to enable semi-sync on the master."},
+	ER_SEMISYNC_DISABLED_ON_MASTER:                               {11144, []string{"HY000"}, "Semi-sync replication disabled on the master."},
+	ER_SEMISYNC_FORCED_SHUTDOWN:                                  {11145, []string{"HY000"}, "SEMISYNC: Forced shutdown. Some updates might not be replicated."},
+	ER_SEMISYNC_MASTER_GOT_REPLY_AT_POS:                          {11146, []string{"HY000"}, "%s: Got reply at (%s, %lu)."},
+	ER_SEMISYNC_MASTER_SIGNAL_ALL_WAITING_THREADS:                {11147, []string{"HY000"}, "%s: signal all waiting threads."},
+	ER_SEMISYNC_MASTER_TRX_WAIT_POS:                              {11148, []string{"HY000"}, "%s: wait pos (%s, %lu), repl(%d)."},
+	ER_SEMISYNC_BINLOG_REPLY_IS_AHEAD:                            {11149, []string{"HY000"}, "%s: Binlog reply is ahead (%s, %lu)."},
+	ER_SEMISYNC_MOVE_BACK_WAIT_POS:                               {11150, []string{"HY000"}, "%s: move back wait position (%s, %lu)."},
+	ER_SEMISYNC_INIT_WAIT_POS:                                    {11151, []string{"HY000"}, "%s: init wait position (%s, %lu)."},
+	ER_SEMISYNC_WAIT_TIME_FOR_BINLOG_SENT:                        {11152, []string{"HY000"}, "%s: wait %lu ms for binlog sent (%s, %lu)."},
+	ER_SEMISYNC_WAIT_FOR_BINLOG_TIMEDOUT:                         {11153, []string{"HY000"}, "Timeout waiting for reply of binlog (file: %s, pos: %lu), semi-sync up to file %s, position %lu."},
+	ER_SEMISYNC_WAIT_TIME_ASSESSMENT_FOR_COMMIT_TRX_FAILED:       {11154, []string{"HY000"}, "Assessment of waiting time for commitTrx failed at wait position (%s, %lu)."},
+	ER_SEMISYNC_RPL_SWITCHED_OFF:                                 {11155, []string{"HY000"}, "Semi-sync replication switched OFF."},
+	ER_SEMISYNC_RPL_SWITCHED_ON:                                  {11156, []string{"HY000"}, "Semi-sync replication switched ON at (%s, %lu)."},
+	ER_SEMISYNC_NO_SPACE_IN_THE_PKT:                              {11157, []string{"HY000"}, "No enough space in the packet for semi-sync extra header, semi-sync replication disabled."},
+	ER_SEMISYNC_SYNC_HEADER_UPDATE_INFO:                          {11158, []string{"HY000"}, "%s: server(%d), (%s, %lu) sync(%d), repl(%d)."},
+	ER_SEMISYNC_FAILED_TO_INSERT_TRX_NODE:                        {11159, []string{"HY000"}, "Semi-sync failed to insert tranx_node for binlog file: %s, position: %lu."},
+	ER_SEMISYNC_TRX_SKIPPED_AT_POS:                               {11160, []string{"HY000"}, "%s: Transaction skipped at (%s, %lu)."},
+	ER_SEMISYNC_MASTER_FAILED_ON_NET_FLUSH:                       {11161, []string{"HY000"}, "Semi-sync master failed on net_flush() before waiting for slave reply."},
+	ER_SEMISYNC_RECEIVED_ACK_IS_SMALLER:                          {11162, []string{"HY000"}, "The received ack is smaller than m_greatest_ack."},
+	ER_SEMISYNC_ADD_ACK_TO_SLOT:                                  {11163, []string{"HY000"}, "Add the ack into slot %u."},
+	ER_SEMISYNC_UPDATE_EXISTING_SLAVE_ACK:                        {11164, []string{"HY000"}, "Update an existing ack in slot %u."},
+	ER_SEMISYNC_FAILED_TO_START_ACK_RECEIVER_THD:                 {11165, []string{"HY000"}, "Failed to start semi-sync ACK receiver thread,  could not create thread(errno:%d)."},
+	ER_SEMISYNC_STARTING_ACK_RECEIVER_THD:                        {11166, []string{"HY000"}, "Starting ack receiver thread."},
+	ER_SEMISYNC_FAILED_TO_WAIT_ON_DUMP_SOCKET:                    {11167, []string{"HY000"}, "Failed to wait on semi-sync dump sockets, error: errno=%d."},
+	ER_SEMISYNC_STOPPING_ACK_RECEIVER_THREAD:                     {11168, []string{"HY000"}, "Stopping ack receiver thread."},
+	ER_SEMISYNC_FAILED_REGISTER_SLAVE_TO_RECEIVER:                {11169, []string{"HY000"}, "Failed to register slave to semi-sync ACK receiver thread."},
+	ER_SEMISYNC_START_BINLOG_DUMP_TO_SLAVE:                       {11170, []string{"HY000"}, "Start %s binlog_dump to slave (server_id: %d), pos(%s, %lu)."},
+	ER_SEMISYNC_STOP_BINLOG_DUMP_TO_SLAVE:                        {11171, []string{"HY000"}, "Stop %s binlog_dump to slave (server_id: %d)."},
+	ER_SEMISYNC_UNREGISTER_TRX_OBSERVER_FAILED:                   {11172, []string{"HY000"}, "unregister_trans_observer failed."},
+	ER_SEMISYNC_UNREGISTER_BINLOG_STORAGE_OBSERVER_FAILED:        {11173, []string{"HY000"}, "unregister_binlog_storage_observer failed."},
+	ER_SEMISYNC_UNREGISTER_BINLOG_TRANSMIT_OBSERVER_FAILED:       {11174, []string{"HY000"}, "unregister_binlog_transmit_observer failed."},
+	ER_SEMISYNC_UNREGISTERED_REPLICATOR:                          {11175, []string{"HY000"}, "unregister_replicator OK."},
+	ER_SEMISYNC_SOCKET_FD_TOO_LARGE:                              {11176, []string{"HY000"}, "Semisync slave socket fd is %u. select() cannot handle if the socket fd is bigger than %u (FD_SETSIZE)."},
+	ER_SEMISYNC_SLAVE_REPLY:                                      {11177, []string{"HY000"}, "%s: reply - %d."},
+	ER_SEMISYNC_MISSING_MAGIC_NO_FOR_SEMISYNC_PKT:                {11178, []string{"HY000"}, "Missing magic number for semi-sync packet, packet len: %lu."},
+	ER_SEMISYNC_SLAVE_START:                                      {11179, []string{"HY000"}, "Slave I/Operator thread: Start %s replication to master '%s@%s:%d' in log '%s' at position %lu."},
+	ER_SEMISYNC_SLAVE_REPLY_WITH_BINLOG_INFO:                     {11180, []string{"HY000"}, "%s: reply (%s, %lu)."},
+	ER_SEMISYNC_SLAVE_NET_FLUSH_REPLY_FAILED:                     {11181, []string{"HY000"}, "Semi-sync slave net_flush() reply failed."},
+	ER_SEMISYNC_SLAVE_SEND_REPLY_FAILED:                          {11182, []string{"HY000"}, "Semi-sync slave send reply failed: %s (%d)."},
+	ER_SEMISYNC_EXECUTION_FAILED_ON_MASTER:                       {11183, []string{"HY000"}, "Execution failed on master: %s; error %d"},
+	ER_SEMISYNC_NOT_SUPPORTED_BY_MASTER:                          {11184, []string{"HY000"}, "Master server does not support semi-sync, fallback to asynchronous replication"},
+	ER_SEMISYNC_SLAVE_SET_FAILED:                                 {11185, []string{"HY000"}, "Set 'rpl_semi_sync_slave=1' on master failed"},
+	ER_SEMISYNC_FAILED_TO_STOP_ACK_RECEIVER_THD:                  {11186, []string{"HY000"}, "Failed to stop ack receiver thread on my_thread_join, errno(%d)."},
+	ER_FIREWALL_FAILED_TO_READ_FIREWALL_TABLES:                   {11187, []string{"HY000"}, "Failed to read the firewall tables"},
+	ER_FIREWALL_FAILED_TO_REG_DYNAMIC_PRIVILEGES:                 {11188, []string{"HY000"}, "Failed to register dynamic privileges"},
+	ER_FIREWALL_RECORDING_STMT_WAS_TRUNCATED:                     {11189, []string{"HY000"}, "Statement was truncated and not recorded: %s"},
+	ER_FIREWALL_RECORDING_STMT_WITHOUT_TEXT:                      {11190, []string{"HY000"}, "Statement with no text was not recorded"},
+	ER_FIREWALL_SUSPICIOUS_STMT:                                  {11191, []string{"HY000"}, "SUSPICIOUS STATEMENT from '%s'. Reason: %s Statement: %s"},
+	ER_FIREWALL_ACCESS_DENIED:                                    {11192, []string{"HY000"}, "ACCESS DENIED for '%s'. Reason: %s Statement: %s"},
+	ER_FIREWALL_SKIPPED_UNKNOWN_USER_MODE:                        {11193, []string{"HY000"}, "Skipped unknown user mode '%s'"},
+	ER_FIREWALL_RELOADING_CACHE:                                  {11194, []string{"HY000"}, "Reloading cache from disk"},
+	ER_FIREWALL_RESET_FOR_USER:                                   {11195, []string{"HY000"}, "FIREWALL RESET for '%s'"},
+	ER_FIREWALL_STATUS_FLUSHED:                                   {11196, []string{"HY000"}, "Counters are reset to zero"},
+	ER_KEYRING_LOGGER_ERROR_MSG:                                  {11197, []string{"HY000"}, "%s"},
+	ER_AUDIT_LOG_FILTER_IS_NOT_INSTALLED:                         {11198, []string{"HY000"}, "Audit Log plugin supports a filtering, which has not been installed yet. Audit Log plugin will run in the legacy mode, which will be disabled in the next release."},
+	ER_AUDIT_LOG_SWITCHING_TO_INCLUDE_LIST:                       {11199, []string{"HY000"}, "Previously exclude list is used, now we start using include list, exclude list is set to NULL."},
+	ER_AUDIT_LOG_CANNOT_SET_LOG_POLICY_WITH_OTHER_POLICIES:       {11200, []string{"HY000"}, "Cannot set audit_log_policy simultaneously with either audit_log_connection_policy or  audit_log_statement_policy, setting audit_log_connection_policy and audit_log_statement_policy based on audit_log_policy."},
+	ER_AUDIT_LOG_ONLY_INCLUDE_LIST_USED:                          {11201, []string{"HY000"}, "Both include and exclude lists provided, include list is preferred, exclude list is set to NULL."},
+	ER_AUDIT_LOG_INDEX_MAP_CANNOT_ACCESS_DIR:                     {11202, []string{"HY000"}, "Could not access '%s' directory."},
+	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED:                       {11203, []string{"HY000"}, "Could not rename file from '%s' to '%s'."},
+	ER_AUDIT_LOG_WRITER_DEST_FILE_ALREADY_EXISTS:                 {11204, []string{"HY000"}, "File '%s' should not exist. It may be incomplete. The server crashed."},
+	ER_AUDIT_LOG_WRITER_RENAME_FILE_FAILED_REMOVE_FILE_MANUALLY:  {11205, []string{"HY000"}, "Could not rename file from '%s' to '%s'. Remove the file manually."},
+	ER_AUDIT_LOG_WRITER_INCOMPLETE_FILE_RENAMED:                  {11206, []string{"HY000"}, "Incomplete file renamed from '%s' to '%s'."},
+	ER_AUDIT_LOG_WRITER_FAILED_TO_WRITE_TO_FILE:                  {11207, []string{"HY000"}, "Error writing file '%-.200s' (errno: %d - %s)."},
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_ENCRYPTION:             {11208, []string{"HY000"}, "Could not initialize audit log file encryption."},
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_INIT_COMPRESSION:            {11209, []string{"HY000"}, "Could not initialize audit log file compression."},
+	ER_AUDIT_LOG_EC_WRITER_FAILED_TO_CREATE_FILE:                 {11210, []string{"HY000"}, "Could not create '%s' file for audit logging."},
+	ER_AUDIT_LOG_RENAME_LOG_FILE_BEFORE_FLUSH:                    {11211, []string{"HY000"}, "Audit log file (%s) must be manually renamed before audit_log_flush is set to true."},
+	ER_AUDIT_LOG_FILTER_RESULT_MSG:                               {11212, []string{"HY000"}, "%s"},
+	ER_AUDIT_LOG_JSON_READER_FAILED_TO_PARSE:                     {11213, []string{"HY000"}, "Error parsing JSON event. Event not accessible."},
+	ER_AUDIT_LOG_JSON_READER_BUF_TOO_SMALL:                       {11214, []string{"HY000"}, "Buffer is too small to hold JSON event. Number of events skipped: %zu."},
+	ER_AUDIT_LOG_JSON_READER_FAILED_TO_OPEN_FILE:                 {11215, []string{"HY000"}, "Could not open JSON file for reading. Reading next file if exists."},
+	ER_AUDIT_LOG_JSON_READER_FILE_PARSING_ERROR:                  {11216, []string{"HY000"}, "JSON file parsing error. Reading next file if exists"},
+	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_COUNT:                     {11217, []string{"HY000"}, "Invalid column count in the '%s.%s' table."},
+	ER_AUDIT_LOG_FILTER_INVALID_COLUMN_DEFINITION:                {11218, []string{"HY000"}, "Invalid column definition of the '%s.%s' table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_STORE_TABLE_FLDS:               {11219, []string{"HY000"}, "Could not store field of the %s table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_UPDATE_TABLE:                   {11220, []string{"HY000"}, "Could not update %s table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_INSERT_INTO_TABLE:              {11221, []string{"HY000"}, "Could not insert into %s table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_DELETE_FROM_TABLE:              {11222, []string{"HY000"}, "Could not delete from %s table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_INIT_TABLE_FOR_READ:            {11223, []string{"HY000"}, "Could not initialize %s table for reading."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_READ_TABLE:                     {11224, []string{"HY000"}, "Could not read %s table."},
+	ER_AUDIT_LOG_FILTER_FAILED_TO_CLOSE_TABLE_AFTER_READING:      {11225, []string{"HY000"}, "Could not close %s table reading."},
+	ER_AUDIT_LOG_FILTER_USER_AND_HOST_CANNOT_BE_EMPTY:            {11226, []string{"HY000"}, "Both user and host columns of %s table cannot be empty."},
+	ER_AUDIT_LOG_FILTER_FLD_FILTERNAME_CANNOT_BE_EMPTY:           {11227, []string{"HY000"}, "Filtername column of %s table cannot be empty."},
+	ER_VALIDATE_PWD_DICT_FILE_NOT_SPECIFIED:                      {11228, []string{"HY000"}, "Dictionary file not specified"},
+	ER_VALIDATE_PWD_DICT_FILE_NOT_LOADED:                         {11229, []string{"HY000"}, "Dictionary file not loaded"},
+	ER_VALIDATE_PWD_DICT_FILE_TOO_BIG:                            {11230, []string{"HY000"}, "Dictionary file size exceeded MAX_DICTIONARY_FILE_LENGTH, not loaded"},
+	ER_VALIDATE_PWD_FAILED_TO_READ_DICT_FILE:                     {11231, []string{"HY000"}, "Exception while reading the dictionary file"},
+	ER_VALIDATE_PWD_FAILED_TO_GET_FLD_FROM_SECURITY_CTX:          {11232, []string{"HY000"}, "Can't retrieve the %s from the security context"},
+	ER_VALIDATE_PWD_FAILED_TO_GET_SECURITY_CTX:                   {11233, []string{"HY000"}, "Can't retrieve the security context"},
+	ER_VALIDATE_PWD_LENGTH_CHANGED:                               {11234, []string{"HY000"}, "Effective value of validate_password_length is changed. New value is %d"},
+	ER_REWRITER_QUERY_ERROR_MSG:                                  {11235, []string{"HY000"}, "%s"},
+	ER_REWRITER_QUERY_FAILED:                                     {11236, []string{"HY000"}, "Rewritten query failed to parse:%s"},
+	ER_XPLUGIN_STARTUP_FAILED:                                    {11237, []string{"HY000"}, "Startup failed with error \"%s\""},
 	//OBSOLETE_ER_XPLUGIN_SERVER_EXITING : {11238,[]string{"HY000"},"Exiting"},
 	//OBSOLETE_ER_XPLUGIN_SERVER_EXITED : {11239,[]string{"HY000"},"Exit done"},
 	ER_XPLUGIN_USING_SSL_CONF_FROM_SERVER:                   {11240, []string{"HY000"}, "Using SSL configuration from MySQL Server"},

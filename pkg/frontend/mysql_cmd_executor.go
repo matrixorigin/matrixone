@@ -16,16 +16,17 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"os"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -430,6 +431,19 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					} else {
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_timestamp:
+				precision := vec.Typ.Precision
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Timestamp)
+					row[i] = vs[rowIndex].String2(precision)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Timestamp)
+						row[i] = vs[rowIndex].String2(precision)
 					}
 				}
 			case types.T_decimal64:
@@ -888,6 +902,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	es := explain.NewExplainDefaultOptions()
+
 	for _, v := range stmt.Options {
 		if strings.EqualFold(v.Name, "VERBOSE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -922,7 +937,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 	//get CompilerContext
 	ctx := plan2.NewMockCompilerContext()
-	query, err := plan2.BuildPlan2(ctx, stmt.Statement)
+	qry, err := plan2.BuildPlan(ctx, stmt.Statement)
 	if err != nil {
 		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
@@ -931,7 +946,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(query)
+	explainQuery := explain.NewExplainQueryImpl(qry)
 	explainQuery.ExplainPlan(buffer, es)
 
 	session := mce.GetSession()
@@ -1563,6 +1578,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_timestamp:
+		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:

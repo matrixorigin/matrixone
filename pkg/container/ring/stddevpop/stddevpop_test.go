@@ -20,8 +20,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStdDevPopRing(t *testing.T) {

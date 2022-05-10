@@ -59,6 +59,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	tpchSchema["PART"] = []col{
 		{"P_PARTKEY", plan.Type_INT32, false, 0, 0},
 		{"P_NAME", plan.Type_VARCHAR, false, 55, 0},
+		{"P_MFGR", plan.Type_VARCHAR, false, 25, 0},
 		{"P_BRAND", plan.Type_VARCHAR, false, 10, 0},
 		{"P_TYPE", plan.Type_VARCHAR, false, 25, 0},
 		{"P_SIZE", plan.Type_INT32, false, 0, 0},
@@ -127,7 +128,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	//build tpch context data(schema)
 	tableIdx := 0
 	for tableName, cols := range tpchSchema {
-		var colDefs []*plan.ColDef
+		colDefs := make([]*plan.ColDef, 0, len(cols))
 
 		for _, col := range cols {
 			colDefs = append(colDefs, &plan.ColDef{
@@ -172,7 +173,7 @@ func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.Table
 }
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
-	var c Cost
+	c := &Cost{}
 	div := 1.0
 	if e != nil {
 		div = 10.0
@@ -183,28 +184,22 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	c.Ndv = 900000 / div
 	c.Start = 0
 	c.Total = 1000
-	return &c
+	return c
 }
 
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
 
-func newMockOptimizer() *MockOptimizer {
+func NewMockOptimizer() *MockOptimizer {
 	return &MockOptimizer{
 		ctxt: *NewMockCompilerContext(),
 	}
 }
 
-func NewMockOptimizer2() *MockOptimizer {
-	return &MockOptimizer{
-		ctxt: *NewMockCompilerContext(),
-	}
-}
-
-func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*plan.Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := buildPlan(ctx, stmt)
+	query, err := BuildPlan(ctx, stmt)
 	if err != nil {
 		// fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err

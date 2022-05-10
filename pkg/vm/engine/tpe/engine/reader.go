@@ -39,8 +39,7 @@ var (
 	errorVectorIsInvalid                         = errors.New("vector is invalid")
 )
 
-
-func (tr *  TpeReader) NewFilter() engine.Filter {
+func (tr *TpeReader) NewFilter() engine.Filter {
 	return nil
 }
 
@@ -51,7 +50,6 @@ func (tr *TpeReader) NewSummarizer() engine.Summarizer {
 func (tr *TpeReader) NewSparseFilter() engine.SparseFilter {
 	return nil
 }
-
 
 func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error) {
 	if tr.isDumpReader {
@@ -93,8 +91,8 @@ func (tr *TpeReader) Read(refCnts []uint64, attrs []string) (*batch.Batch, error
 			ParallelReader:      tr.parallelReader,
 			MultiNode:           tr.multiNode,
 			ReadCount:           0,
-			DumpData:			 tr.dumpData,
-			Opt: 				 tr.opt,
+			DumpData:            tr.dumpData,
+			Opt:                 tr.opt,
 		}
 		if tr.readCtx.ParallelReader || tr.readCtx.MultiNode {
 			tr.readCtx.ParallelReaderContext = tuplecodec.ParallelReaderContext{

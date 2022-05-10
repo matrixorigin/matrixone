@@ -23,7 +23,7 @@ import (
 // FmtCtx contains formatted text of the node.
 type FmtCtx struct {
 	*strings.Builder
-	dialectType   dialect.DialectType
+	dialectType dialect.DialectType
 }
 
 func NewFmtCtx(dialectType dialect.DialectType) *FmtCtx {

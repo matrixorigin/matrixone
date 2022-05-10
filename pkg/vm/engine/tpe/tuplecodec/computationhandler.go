@@ -430,9 +430,9 @@ func (chi *ComputationHandlerImpl) GetNodesHoldTheTable(dbId uint64, desc *descr
 		dumpShards := &CubeShards{
 			Shards: []metapb.Shard{
 				{
-					ID: 0,
+					ID:    0,
 					Start: nil,
-					End: nil,
+					End:   nil,
 				},
 			},
 		}
@@ -525,10 +525,10 @@ type WriteContext struct {
 	NodeID uint64
 
 	//to set
-	keys   []TupleKey
-	values []TupleValue
-	t0     time.Duration
-	colIndex	map[string]int
+	keys     []TupleKey
+	values   []TupleValue
+	t0       time.Duration
+	colIndex map[string]int
 }
 
 func (wc *WriteContext) resetWriteCache() {
@@ -653,9 +653,9 @@ type ReadContext struct {
 
 	SingleReaderContext
 
-	DumpData 	bool // dumpData flag
+	DumpData bool // dumpData flag
 
-	Opt	*batch.DumpOption
+	Opt *batch.DumpOption
 }
 
 func (rc *ReadContext) AddReadCount() int {

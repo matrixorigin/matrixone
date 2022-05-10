@@ -45,7 +45,7 @@ var (
 	// dates contains all time-related types in mo. It has its own compute and express logic, so
 	// it is different to other types and can not use the same template as others.
 	dates = []types.T{
-		types.T_date, types.T_datetime,
+		types.T_date, types.T_datetime, types.T_timestamp,
 	}
 )
 
