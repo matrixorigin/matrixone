@@ -64,13 +64,13 @@ func (td *TpeDatabase) Relation(name string) (engine.Relation, error) {
 	logutil.Infof("cube_store_id %d", td.storeID)
 
 	return &TpeRelation{
-		id:               uint64(tableDesc.ID),
-		dbDesc:           td.desc,
-		desc:             tableDesc,
-		computeHandler:   td.computeHandler,
-		nodes:            nodes,
-		shards:           shards,
-		storeID:          td.storeID,
+		id:             uint64(tableDesc.ID),
+		dbDesc:         td.desc,
+		desc:           tableDesc,
+		computeHandler: td.computeHandler,
+		nodes:          nodes,
+		shards:         shards,
+		storeID:        td.storeID,
 	}, nil
 }
 

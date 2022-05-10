@@ -16,21 +16,21 @@ package frontend
 
 /**
 phase statistics
- */
+*/
 type PhaseProfiler interface {
 	/**
 	start the statistics for the phase.
 	name: the name of the phase
-	 */
+	*/
 	StartPhase(name string)
 
 	/**
 	stop the statistics for the phase
-	 */
+	*/
 	EndPhase()
 
 	// ToString convert the phase info into the string
-	ToString()string
+	ToString() string
 }
 
 //OperatorProfiler : operator statistics
@@ -45,7 +45,7 @@ type OperatorProfiler interface {
 	AddOperator(operator interface{})
 
 	//convert the operator info into the string
-	ToString()string
+	ToString() string
 }
 
 //query statistics

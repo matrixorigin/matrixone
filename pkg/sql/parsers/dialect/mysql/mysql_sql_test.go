@@ -474,6 +474,9 @@ var (
 	}, {
 		input: "explain select a from A",
 	}, {
+		input:  "explain (format text) select a from A",
+		output: "explain (format text) select a from A",
+	}, {
 		input:  "explain analyze select * from t",
 		output: "explain (analyze) select * from t",
 	}, {

@@ -177,9 +177,9 @@ type LengthScaleOpt struct {
 }
 
 const (
-	DefaultDisplayWidth = -1
+	DefaultDisplayWidth   = -1
 	NotDefineDisplayWidth = 0
-	NotDefineDec = -1
+	NotDefineDec          = -1
 )
 
 func GetDisplayWith(val int32) int32 {

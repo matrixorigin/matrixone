@@ -21,11 +21,11 @@ import (
 )
 
 type Argument struct {
-	Ts 		        uint64
-	Relation        engine.Relation
-	M	  	 	    sync.Mutex
-	AffectedRows    uint64
-	UpdateList      []extend.UpdateExtend
-	UpdateAttrs     []string
-	OtherAttrs		[]string
+	Ts           uint64
+	Relation     engine.Relation
+	M            sync.Mutex
+	AffectedRows uint64
+	UpdateList   []extend.UpdateExtend
+	UpdateAttrs  []string
+	OtherAttrs   []string
 }

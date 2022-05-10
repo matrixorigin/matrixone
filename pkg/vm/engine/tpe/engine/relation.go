@@ -66,14 +66,14 @@ func (trel *TpeRelation) ID() string {
 
 func (trel *TpeRelation) Nodes() engine.Nodes {
 	for i, node := range trel.nodes {
-		cs :=& tuplecodec.CubeShards{}
+		cs := &tuplecodec.CubeShards{}
 		err := json.Unmarshal(node.Data, cs)
 		if err != nil {
-			logutil.Errorf("decode cubeshards failed.err : %v",err)
+			logutil.Errorf("decode cubeshards failed.err : %v", err)
 			return nil
 		}
-		logutil.Infof("readCtx table %s index %d thisStoreID %v onStore %v cubeshards \n %v \n",trel.desc.Name,i,trel.storeID,node.Addr,cs)
-		logutil.Infof("readCtx table %s index %d thisStoreID %v onStore %v all_nodes_tpe \n %v \n",trel.desc.Name, i, trel.storeID,node.Addr, node)
+		logutil.Infof("readCtx table %s index %d thisStoreID %v onStore %v cubeshards \n %v \n", trel.desc.Name, i, trel.storeID, node.Addr, cs)
+		logutil.Infof("readCtx table %s index %d thisStoreID %v onStore %v all_nodes_tpe \n %v \n", trel.desc.Name, i, trel.storeID, node.Addr, node)
 	}
 	return trel.nodes
 }
@@ -219,7 +219,7 @@ func (trel *TpeRelation) DelTableDef(u uint64, def engine.TableDef) error {
 	panic("implement me")
 }
 
-func (trel *TpeRelation) parallelReader(cnt int,payload []byte) []engine.Reader {
+func (trel *TpeRelation) parallelReader(cnt int, payload []byte) []engine.Reader {
 	tcnt := cnt
 	if cnt <= 0 {
 		tcnt = 1
@@ -236,7 +236,7 @@ func (trel *TpeRelation) parallelReader(cnt int,payload []byte) []engine.Reader 
 
 	for i, shard := range shardsThisNodeWillRead.Shards {
 		logutil.Infof("+++parallelReader table %s shardIndex %d shardID %d startKey %v  endKey %v\n",
-			trel.desc.Name,i,shard.GetID(),shard.GetStart(),shard.GetEnd())
+			trel.desc.Name, i, shard.GetID(), shard.GetStart(), shard.GetEnd())
 	}
 
 	shardInfos := shardsThisNodeWillRead.Shards
@@ -302,8 +302,8 @@ func (trel *TpeRelation) parallelReader(cnt int,payload []byte) []engine.Reader 
 }
 
 func (trel *TpeRelation) NewReader(cnt int, _ extend.Extend, payload []byte) []engine.Reader {
-	logutil.Infof("table %s newreader cnt %d storeID %d\n",trel.desc.Name, cnt,trel.storeID)
-	logutil.Infof("table %s storeID %d payload len %d \n",trel.desc.Name,trel.storeID,len(payload))
+	logutil.Infof("table %s newreader cnt %d storeID %d\n", trel.desc.Name, cnt, trel.storeID)
+	logutil.Infof("table %s storeID %d payload len %d \n", trel.desc.Name, trel.storeID, len(payload))
 	if trel.computeHandler.ParallelReader() || trel.computeHandler.MultiNode() {
 		return trel.parallelReader(cnt, payload)
 	}
@@ -325,7 +325,7 @@ func (trel *TpeRelation) NewReader(cnt int, _ extend.Extend, payload []byte) []e
 	}
 	for i, shard := range shardsThisNodeWillRead.Shards {
 		logutil.Infof("+++singlereader table %s shardIndex %d shardID %d startKey %v  endKey %v\n",
-			trel.desc.Name,i,shard.GetID(),shard.GetStart(),shard.GetEnd())
+			trel.desc.Name, i, shard.GetID(), shard.GetStart(), shard.GetEnd())
 	}
 	shardInfos := shardsThisNodeWillRead.Shards
 	for _, info := range shardInfos {

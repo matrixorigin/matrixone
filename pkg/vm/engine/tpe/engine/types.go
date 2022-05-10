@@ -49,8 +49,8 @@ type TpeConfig struct {
 
 	TpeDedupSetBatchTimeout  time.Duration
 	TpeDedupSetBatchTrycount int
-	TpeScanTimeout time.Duration
-	TpeScanTryCount int
+	TpeScanTimeout           time.Duration
+	TpeScanTryCount          int
 	PBKV                     *pebble.Storage
 }
 

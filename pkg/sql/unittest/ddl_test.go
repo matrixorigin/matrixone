@@ -35,14 +35,14 @@ func TestTableFunction(t *testing.T) {
 			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
 				{"orderId", "varchar(100)", "", "", "NULL", ""},
-				{"uid", 	"int(32)", 		"", "", "NULL", ""},
-				{"price",   "float(32)", 	"", "", "NULL", ""},
+				{"uid", "int(32)", "", "", "NULL", ""},
+				{"price", "float(32)", "", "", "NULL", ""},
 			},
 		}},
 		{sql: "show columns from ddlt2 like 'pri%';", res: executeResult{
 			attr: []string{"Field", "Type", "Null", "Key", "Default", "Extra"},
 			data: [][]string{
-				{"price",   "float(32)", 	"", "", "NULL", ""},
+				{"price", "float(32)", "", "", "NULL", ""},
 			},
 		}},
 		{sql: "show create table ddlt2", res: executeResult{

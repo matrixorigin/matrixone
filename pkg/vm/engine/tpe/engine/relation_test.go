@@ -116,9 +116,9 @@ func TestTpeRelation_Write(t *testing.T) {
 		dumpShards := &tuplecodec.CubeShards{
 			Shards: []metapb.Shard{
 				{
-					ID: 0,
+					ID:    0,
 					Start: nil,
-					End: nil,
+					End:   nil,
 				},
 			},
 		}

@@ -17,7 +17,7 @@ package tree
 type With struct {
 	statementImpl
 	IsRecursive bool
-	CTEs		[]*CTE
+	CTEs        []*CTE
 }
 
 func (node *With) Format(ctx *FmtCtx) {
@@ -34,8 +34,8 @@ func (node *With) Format(ctx *FmtCtx) {
 }
 
 type CTE struct {
-	Name	*AliasClause
-	Stmt    Statement
+	Name *AliasClause
+	Stmt Statement
 }
 
 func (node *CTE) Format(ctx *FmtCtx) {
