@@ -39,7 +39,7 @@ func initOperators() {
 
 // operators contains the operator function indexed by name.
 var operators = map[string][]Function{
-	"=": []Function{
+	"=": {
 		{
 			Index: 0,
 			Flag:  plan.Function_STRICT,
