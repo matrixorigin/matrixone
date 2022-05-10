@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "select * from R join S on R.uid = S.uid",
-		output: "select * from R inner join S on R.uid = S.uid",
+		input: "explain (analyze true,verbose false) select * from emp",
+		//output: "select * from R inner join S on R.uid = S.uid",
 	}
 )
 
@@ -56,6 +56,25 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select Quarter from ontime limit 1",
+	}, {
+		input: "select month from ontime limit 1",
+	}, {
+		input: "with tw as (select * from t2), tf as (select * from t3) select * from tw where a > 1",
+	}, {
+		input: "with tw as (select * from t2) select * from tw where a > 1",
+	}, {
+		input:  "create table t (a double(13))  // comment",
+		output: "create table t (a double(13))",
+	}, {
+		input: "select a as promo_revenue from (select * from r) as c_orders(c_custkey, c_count)",
+	}, {
+		input:  "select extract(year from l_shipdate) as l_year from t",
+		output: "select extract(year, l_shipdate) as l_year from t",
+	}, {
+		input:  "select * from R join S on R.uid = S.uid where l_shipdate <= date '1998-12-01' - interval '112 day'",
+		output: "select * from R inner join S on R.uid = S.uid where l_shipdate <= date(1998-12-01) - interval(112 day)",
+	}, {
 		input: "create table deci_table (a decimal(10, 5))",
 	}, {
 		input: "create table deci_table (a decimal(20, 5))",
@@ -312,7 +331,8 @@ var (
 	}, {
 		input: "select sum(distinct s) from tbl where 1",
 	}, {
-		input: "select u.a, interval 1 second from t",
+		input:  "select u.a, interval 1 second from t",
+		output: "select u.a, interval(1, second) from t",
 	}, {
 		input: "select u.a, (select t.a from sa.t, u) from t where (u.a, u.b, u.c) in (select * from t)",
 	}, {
@@ -454,10 +474,11 @@ var (
 	}, {
 		input: "explain select a from A",
 	}, {
-		input:  "explain format = 'tree' select a from A",
-		output: "explain format = tree select a from A",
+		input:  "explain (format text) select a from A",
+		output: "explain (format text) select a from A",
 	}, {
-		input: "explain analyze select * from t",
+		input:  "explain analyze select * from t",
+		output: "explain (analyze) select * from t",
 	}, {
 		input:  "explain format = 'tree' for connection 10",
 		output: "explain format = tree for connection 10",
@@ -617,7 +638,8 @@ var (
 	}, {
 		input: "create table t (a float(20, 20) not null, b int(20) null, c int(30) null)",
 	}, {
-		input: "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
+		input:  "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1) null)",
+		output: "create table t1 (t time(3) null, dt datetime(6) null, ts timestamp(1, 1) null)",
 	}, {
 		input:  "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",
 		output: "create table t1 (a int default 1 + 1 - 2 * 3 / 4 div 7 ^ 8 << 9 >> 10 % 11)",

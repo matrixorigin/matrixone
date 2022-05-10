@@ -584,6 +584,38 @@ func toDecimal(e *extend.ValueExtend) error {
 	return nil
 }
 
+func toDate(e *extend.ValueExtend) error {
+	vec := vector.New(types.Type{Oid: types.T_date, Size: 4})
+	vec.Ref = 1
+
+	if e.V.Typ.Oid == types.T_char || e.V.Typ.Oid == types.T_varchar {
+		d, err := types.ParseDate(string(e.V.Col.(*types.Bytes).Get(0)))
+		if err != nil {
+			return err
+		}
+		vec.Col = []types.Date{d}
+		e.V = vec
+		return nil
+	}
+	return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to date", e.V.Typ))
+}
+
+func toDatetime(e *extend.ValueExtend) error {
+	vec := vector.New(types.Type{Oid: types.T_datetime, Size: 8})
+	vec.Ref = 1
+
+	if e.V.Typ.Oid == types.T_char || e.V.Typ.Oid == types.T_varchar {
+		d, err := types.ParseDatetime(string(e.V.Col.(*types.Bytes).Get(0)))
+		if err != nil {
+			return err
+		}
+		vec.Col = []types.Datetime{d}
+		e.V = vec
+		return nil
+	}
+	return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to datetime", e.V.Typ))
+}
+
 func toChar(e *extend.ValueExtend) error {
 	switch e.V.Typ.Oid {
 	case types.T_varchar:
@@ -593,4 +625,20 @@ func toChar(e *extend.ValueExtend) error {
 		return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to char", e.V.Typ))
 	}
 	return nil
+}
+
+func toTimestamp(e *extend.ValueExtend) error {
+	vec := vector.New(types.Type{Oid: types.T_datetime, Size: 8})
+	vec.Ref = 1
+
+	if e.V.Typ.Oid == types.T_char || e.V.Typ.Oid == types.T_varchar {
+		d, err := types.ParseTimestamp(string(e.V.Col.(*types.Bytes).Get(0)), 6) // 6 is the default fsp for timestamp
+		if err != nil {
+			return err
+		}
+		vec.Col = []types.Timestamp{d}
+		e.V = vec
+		return nil
+	}
+	return errors.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to datetime", e.V.Typ))
 }

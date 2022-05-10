@@ -653,9 +653,9 @@ func GetRow(writeCtx interface{}, bat *batch.Batch, row []interface{}, j int) er
 	for i, vec := range bat.Vecs { //col index
 		if vec.Typ.Oid != indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid {
 			logutil.Errorf("the input dataType is not consistent, the defined datatype is %d, the actual input dataType is %d\n",
-							indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
+				indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
 			return fmt.Errorf("the input dataType is not consistent, the defined datatype is %d, the actual input dataType is %d\n",
-							indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
+				indexWriteCtx.TableDesc.Attributes[indexWriteCtx.colIndex[bat.Attrs[i]]].TypesType.Oid, vec.Typ.Oid)
 		}
 		switch vec.Typ.Oid { //get col
 		case types.T_int8:

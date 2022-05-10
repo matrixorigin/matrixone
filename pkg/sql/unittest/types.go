@@ -81,8 +81,8 @@ type testCase struct {
 }
 
 type executeResult struct {
-	null bool		// null is true means expected an empty result
-	attr []string	// attr records the expected attribute names, if no care about that, just set it nil
+	null bool       // null is true means expected an empty result
+	attr []string   // attr records the expected attribute names, if no care about that, just set it nil
 	data [][]string // data records the expected data, if no care about that, just set it nil
 }
 
@@ -125,11 +125,15 @@ func test(t *testing.T, testCases []testCase) {
 		res, err := executeSQL(tc.sql, e, proc)
 		switch {
 		case len(tc.err) != 0: // we expect receive an error from running this SQL
-			require.Equal(t, tc.err, err.Error(), tc.sql)
-		case tc.res.null: 	   // we expect receive an empty batch
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			require.Equal(t, tc.err, errStr, tc.sql)
+		case tc.res.null: // we expect receive an empty batch
 			require.NoError(t, err, tc.sql)
 			if !res.null && (res.attr != nil || res.data != nil) {
-				require.Equal(t, "nothing returns", fmt.Sprintf("%v", res.data), tc.sql)
+				require.Equal(t, "", fmt.Sprintf("%v", res.data), tc.sql)
 			}
 		case tc.res.attr != nil:
 			require.NoError(t, err, tc.sql)

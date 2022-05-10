@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	errIndexExists = errors.New(errno.InvalidName, "index already existed")
+	errIndexExists           = errors.New(errno.InvalidName, "index already existed")
 	errIndexTypeNotSupported = errors.New(errno.FeatureNotSupported, "unsupported index type")
 
 	// err for index support
@@ -63,7 +63,7 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	}
 
 	if stmt.IndexOption != nil {
-		switch stmt.IndexOption.IType{
+		switch stmt.IndexOption.IType {
 		case tree.INDEX_TYPE_BSI:
 			engineIndexType = engine.BsiIndex
 		default:
@@ -74,8 +74,8 @@ func (b *build) BuildCreateIndex(stmt *tree.CreateIndex, plan *CreateIndex) erro
 	}
 
 	def := &engine.IndexTableDef{
-		Typ:      engineIndexType,
-		Name:     indexName,
+		Typ:  engineIndexType,
+		Name: indexName,
 	}
 
 	// return error for unsupported type of index

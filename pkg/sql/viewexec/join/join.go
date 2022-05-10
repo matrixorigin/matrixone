@@ -223,8 +223,10 @@ func (ctr *Container) processPureJoin(n, start int, bat, rbat *batch.Batch, proc
 			ctr.sels = append(ctr.sels, int64(i+start))
 		}
 		for i, j := range ctr.is {
-			if err := vector.Union(rbat.Vecs[j], bat.Vecs[ctr.ois[i]], ctr.sels, proc.Mp); err != nil {
-				return err
+			for _, sel := range ctr.sels {
+				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[ctr.ois[i]], sel, proc.Mp); err != nil {
+					return err
+				}
 			}
 		}
 	} else {
@@ -246,8 +248,10 @@ func (ctr *Container) processPureJoin(n, start int, bat, rbat *batch.Batch, proc
 				ctr.sels = append(ctr.sels, row)
 			}
 			for i, j := range v.is {
-				if err := vector.Union(rbat.Vecs[j], v.bat.Vecs[v.ois[i]], ctr.sels, proc.Mp); err != nil {
-					return err
+				for _, sel := range ctr.sels {
+					if err := vector.UnionOne(rbat.Vecs[j], v.bat.Vecs[v.ois[i]], sel, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -298,8 +302,10 @@ func (ctr *Container) processJoin(n, start int, bat, rbat *batch.Batch, proc *pr
 	for j, rows := range ctr.mx {
 		if j == 0 {
 			for i, k := range ctr.is {
-				if err := vector.Union(rbat.Vecs[k], bat.Vecs[ctr.ois[i]], rows, proc.Mp); err != nil {
-					return err
+				for _, row := range rows {
+					if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[ctr.ois[i]], row, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for x, row := range rows {
@@ -308,8 +314,10 @@ func (ctr *Container) processJoin(n, start int, bat, rbat *batch.Batch, proc *pr
 		} else {
 			v := ctr.views[j-1]
 			for i, k := range v.is {
-				if err := vector.Union(rbat.Vecs[k], v.bat.Vecs[v.ois[i]], rows, proc.Mp); err != nil {
-					return err
+				for _, row := range rows {
+					if err := vector.UnionOne(rbat.Vecs[k], v.bat.Vecs[ctr.ois[i]], row, proc.Mp); err != nil {
+						return err
+					}
 				}
 			}
 			for x, row := range rows {

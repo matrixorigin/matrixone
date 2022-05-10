@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	DefaultReadBufferSize int = 512
+	DefaultReadBufferSize  int = 512
 	DefaultWriteBufferSize int = 512
 )
 
@@ -83,7 +83,7 @@ type IOPackageImpl struct {
 	endian bool
 }
 
-func NewIOPackage(littleEndian bool) *IOPackageImpl{
+func NewIOPackage(littleEndian bool) *IOPackageImpl {
 	return &IOPackageImpl{
 		endian: littleEndian,
 	}
@@ -93,7 +93,7 @@ func (bio *IOPackageImpl) IsLittleEndian() bool {
 	return bio.endian
 }
 
-func (bio *IOPackageImpl) WriteUint8(data []byte,pos int,value uint8) int  {
+func (bio *IOPackageImpl) WriteUint8(data []byte, pos int, value uint8) int {
 	data[pos] = value
 	return pos + 1
 }
@@ -125,23 +125,23 @@ func (bio *IOPackageImpl) WriteUint64(data []byte, pos int, value uint64) int {
 	return pos + 8
 }
 
-func (bio *IOPackageImpl) AppendUint8(data []byte,value uint8)[]byte {
+func (bio *IOPackageImpl) AppendUint8(data []byte, value uint8) []byte {
 	return append(data, value)
 }
 
-func (bio *IOPackageImpl) AppendUint16(data []byte,value uint16)[]byte {
+func (bio *IOPackageImpl) AppendUint16(data []byte, value uint16) []byte {
 	tmp := make([]byte, 2)
 	bio.WriteUint16(tmp, 0, value)
 	return append(data, tmp...)
 }
 
-func (bio *IOPackageImpl) AppendUint32(data []byte,value uint32)[]byte {
+func (bio *IOPackageImpl) AppendUint32(data []byte, value uint32) []byte {
 	tmp := make([]byte, 4)
 	bio.WriteUint32(tmp, 0, value)
 	return append(data, tmp...)
 }
 
-func (bio *IOPackageImpl) AppendUint64(data []byte,value uint64)[]byte {
+func (bio *IOPackageImpl) AppendUint64(data []byte, value uint64) []byte {
 	tmp := make([]byte, 8)
 	bio.WriteUint64(tmp, 0, value)
 	return append(data, tmp...)
@@ -154,7 +154,7 @@ func (bio *IOPackageImpl) ReadUint8(data []byte, pos int) (uint8, int, bool) {
 	return data[pos], pos + 1, true
 }
 
-func (bio *IOPackageImpl) ReadUint16(data []byte,pos int)(uint16,int,bool) {
+func (bio *IOPackageImpl) ReadUint16(data []byte, pos int) (uint16, int, bool) {
 	if pos+1 >= len(data) {
 		return 0, 0, false
 	}
@@ -186,4 +186,3 @@ func (bio *IOPackageImpl) ReadUint64(data []byte, pos int) (uint64, int, bool) {
 		return binary.BigEndian.Uint64(data[pos : pos+8]), pos + 8, true
 	}
 }
-

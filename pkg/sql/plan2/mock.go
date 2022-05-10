@@ -15,6 +15,8 @@
 package plan2
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -26,7 +28,7 @@ type MockCompilerContext struct {
 
 type col struct {
 	Name      string
-	Id        uint32
+	Id        plan.Type_TypeId
 	Nullable  bool
 	Width     int32
 	Precision int32
@@ -38,85 +40,87 @@ func NewMockCompilerContext() *MockCompilerContext {
 
 	tpchSchema := make(map[string][]col)
 	tpchSchema["NATION"] = []col{
-		{"N_NATIONKEY", 1, false, 0, 0},
-		{"N_NAME", 2, false, 0, 0},
-		{"N_REGIONKEY", 3, false, 0, 0},
-		{"N_COMMENT", 4, false, 0, 0},
+		{"N_NATIONKEY", plan.Type_INT32, false, 0, 0},
+		{"N_NAME", plan.Type_VARCHAR, false, 25, 0},
+		{"N_REGIONKEY", plan.Type_INT32, false, 0, 0},
+		{"N_COMMENT", plan.Type_VARCHAR, true, 152, 0},
 	}
 	tpchSchema["NATION2"] = []col{ //not exist in tpch, create for test NaturalJoin And UsingJoin
-		{"N_NATIONKEY", 1, false, 0, 0},
-		{"N_NAME", 2, false, 0, 0},
-		{"R_REGIONKEY", 3, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
-		{"N_COMMENT", 4, false, 0, 0},
+		{"N_NATIONKEY", plan.Type_INT32, false, 0, 0},
+		{"N_NAME", plan.Type_VARCHAR, false, 25, 0},
+		{"R_REGIONKEY", plan.Type_INT32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
+		{"N_COMMENT", plan.Type_VARCHAR, true, 152, 0},
 	}
 	tpchSchema["REGION"] = []col{
-		{"R_REGIONKEY", 1, false, 0, 0},
-		{"R_NAME", 2, false, 0, 0},
-		{"R_COMMENT", 3, false, 0, 0},
+		{"R_REGIONKEY", plan.Type_INT32, false, 0, 0},
+		{"R_NAME", plan.Type_VARCHAR, false, 25, 0},
+		{"R_COMMENT", plan.Type_VARCHAR, true, 152, 0},
 	}
 	tpchSchema["PART"] = []col{
-		{"P_PARTKEY", 1, false, 0, 0},
-		{"P_NAME", 2, false, 0, 0},
-		{"P_BRAND", 3, false, 0, 0},
-		{"P_TYPE", 4, false, 0, 0},
-		{"P_SIZE", 5, false, 0, 0},
-		{"P_CONTAINER", 6, false, 0, 0},
-		{"P_RETAILPRICE", 7, false, 0, 0},
-		{"P_COMMENT", 8, false, 0, 0},
+		{"P_PARTKEY", plan.Type_INT32, false, 0, 0},
+		{"P_NAME", plan.Type_VARCHAR, false, 55, 0},
+		{"P_MFGR", plan.Type_VARCHAR, false, 25, 0},
+		{"P_BRAND", plan.Type_VARCHAR, false, 10, 0},
+		{"P_TYPE", plan.Type_VARCHAR, false, 25, 0},
+		{"P_SIZE", plan.Type_INT32, false, 0, 0},
+		{"P_CONTAINER", plan.Type_VARCHAR, false, 10, 0},
+		{"P_RETAILPRICE", plan.Type_DECIMAL, false, 15, 2},
+		{"P_COMMENT", plan.Type_VARCHAR, false, 23, 0},
 	}
 	tpchSchema["SUPPLIER"] = []col{
-		{"S_SUPPKEY", 1, false, 0, 0},
-		{"S_NAME", 2, false, 0, 0},
-		{"S_ADDRESS", 3, false, 0, 0},
-		{"S_NATIONKEY", 4, false, 0, 0},
-		{"S_PHONE", 5, false, 0, 0},
-		{"S_ACCTBAL", 6, false, 0, 0},
-		{"S_COMMENT", 7, false, 0, 0},
+		{"S_SUPPKEY", plan.Type_INT32, false, 0, 0},
+		{"S_NAME", plan.Type_VARCHAR, false, 25, 0},
+		{"S_ADDRESS", plan.Type_VARCHAR, false, 40, 0},
+		{"S_NATIONKEY", plan.Type_INT32, false, 0, 0},
+		{"S_PHONE", plan.Type_VARCHAR, false, 15, 0},
+		{"S_ACCTBAL", plan.Type_DECIMAL, false, 15, 2},
+		{"S_COMMENT", plan.Type_VARCHAR, false, 101, 0},
 	}
 	tpchSchema["PARTSUPP"] = []col{
-		{"PS_PARTKEY", 1, false, 0, 0},
-		{"PS_SUPPKEY", 2, false, 0, 0},
-		{"PS_AVAILQTY", 3, false, 0, 0},
-		{"PS_SUPPLYCOST", 4, false, 0, 0},
-		{"PS_COMMENT", 5, false, 0, 0},
+		{"PS_PARTKEY", plan.Type_INT32, false, 0, 0},
+		{"PS_SUPPKEY", plan.Type_INT32, false, 0, 0},
+		{"PS_AVAILQTY", plan.Type_INT32, false, 0, 0},
+		{"PS_SUPPLYCOST", plan.Type_DECIMAL, false, 15, 2},
+		{"PS_COMMENT", plan.Type_VARCHAR, false, 199, 0},
 	}
 	tpchSchema["CUSTOMER"] = []col{
-		{"C_CUSTKEY", 1, false, 0, 0},
-		{"C_NAME", 2, false, 0, 0},
-		{"C_ADDRESS", 3, false, 0, 0},
-		{"C_NATIONKEY", 4, false, 0, 0},
-		{"C_PHONE", 5, false, 0, 0},
-		{"C_ACCTBAL", 6, false, 0, 0},
-		{"C_MKTSEGMENT", 7, false, 0, 0},
-		{"C_COMMENT", 8, false, 0, 0},
+		{"C_CUSTKEY", plan.Type_INT32, false, 0, 0},
+		{"C_NAME", plan.Type_VARCHAR, false, 25, 0},
+		{"C_ADDRESS", plan.Type_VARCHAR, false, 40, 0},
+		{"C_NATIONKEY", plan.Type_INT32, false, 0, 0},
+		{"C_PHONE", plan.Type_VARCHAR, false, 15, 0},
+		{"C_ACCTBAL", plan.Type_DECIMAL, false, 15, 2},
+		{"C_MKTSEGMENT", plan.Type_VARCHAR, false, 10, 0},
+		{"C_COMMENT", plan.Type_VARCHAR, false, 117, 0},
 	}
 	tpchSchema["ORDERS"] = []col{
-		{"O_ORDERKEY", 1, false, 0, 0},
-		{"O_CUSTKEY", 2, false, 0, 0},
-		{"O_TOTALPRICE", 3, false, 0, 0},
-		{"O_ORDERDATE", 4, false, 0, 0},
-		{"O_ORDERPRIORITY", 5, false, 0, 0},
-		{"O_CLERK", 6, false, 0, 0},
-		{"O_SHIPPRIORITY", 7, false, 0, 0},
-		{"O_COMMENT", 8, false, 0, 0},
+		{"O_ORDERKEY", plan.Type_INT64, false, 0, 0},
+		{"O_CUSTKEY", plan.Type_INT32, false, 0, 0},
+		{"O_ORDERSTATUS", plan.Type_VARCHAR, false, 1, 0},
+		{"O_TOTALPRICE", plan.Type_DECIMAL, false, 15, 2},
+		{"O_ORDERDATE", plan.Type_DATE, false, 0, 0},
+		{"O_ORDERPRIORITY", plan.Type_VARCHAR, false, 15, 0},
+		{"O_CLERK", plan.Type_VARCHAR, false, 15, 0},
+		{"O_SHIPPRIORITY", plan.Type_INT32, false, 0, 0},
+		{"O_COMMENT", plan.Type_VARCHAR, false, 79, 0},
 	}
 	tpchSchema["LINEITEM"] = []col{
-		{"L_ORDERKEY", 1, false, 0, 0},
-		{"L_PARTKEY", 2, false, 0, 0},
-		{"L_SUPPKEY", 3, false, 0, 0},
-		{"L_LINENUMBER", 4, false, 0, 0},
-		{"L_QUANTITY", 5, false, 0, 0},
-		{"L_EXTENDEDPRICE", 6, false, 0, 0},
-		{"L_DISCOUNT", 7, false, 0, 0},
-		{"L_TAX", 8, false, 0, 0},
-		{"L_RETURNFLAG", 9, false, 0, 0},
-		{"L_LINESTATUS", 10, false, 0, 0},
-		{"L_SHIPDATE", 11, false, 0, 0},
-		{"L_COMMITDATE", 12, false, 0, 0},
-		{"L_RECEIPTDATE", 13, false, 0, 0},
-		{"L_SHIPINSTRUCT", 14, false, 0, 0},
-		{"L_SHIPMODE", 15, false, 0, 0},
-		{"L_COMMENT", 15, false, 0, 0},
+		{"L_ORDERKEY", plan.Type_INT64, false, 0, 0},
+		{"L_PARTKEY", plan.Type_INT32, false, 0, 0},
+		{"L_SUPPKEY", plan.Type_INT32, false, 0, 0},
+		{"L_LINENUMBER", plan.Type_INT32, false, 0, 0},
+		{"L_QUANTITY", plan.Type_INT32, false, 0, 0},
+		{"L_EXTENDEDPRICE", plan.Type_DECIMAL, false, 15, 2},
+		{"L_DISCOUNT", plan.Type_DECIMAL, false, 15, 2},
+		{"L_TAX", plan.Type_DECIMAL, false, 15, 2},
+		{"L_RETURNFLAG", plan.Type_VARCHAR, false, 1, 0},
+		{"L_LINESTATUS", plan.Type_VARCHAR, false, 1, 0},
+		{"L_SHIPDATE", plan.Type_DATE, false, 0, 0},
+		{"L_COMMITDATE", plan.Type_DATE, false, 0, 0},
+		{"L_RECEIPTDATE", plan.Type_DATE, false, 0, 0},
+		{"L_SHIPINSTRUCT", plan.Type_VARCHAR, false, 25, 0},
+		{"L_SHIPMODE", plan.Type_VARCHAR, false, 10, 0},
+		{"L_COMMENT", plan.Type_VARCHAR, false, 44, 0},
 	}
 
 	defaultDbName := "tpch"
@@ -124,7 +128,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	//build tpch context data(schema)
 	tableIdx := 0
 	for tableName, cols := range tpchSchema {
-		var colDefs []*plan.ColDef
+		colDefs := make([]*plan.ColDef, 0, len(cols))
 
 		for _, col := range cols {
 			colDefs = append(colDefs, &plan.ColDef{
@@ -164,11 +168,12 @@ func NewMockCompilerContext() *MockCompilerContext {
 }
 
 func (m *MockCompilerContext) Resolve(name string) (*plan.ObjectRef, *plan.TableDef) {
+	name = strings.ToUpper(name)
 	return m.objects[name], m.tables[name]
 }
 
 func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
-	var c Cost
+	c := &Cost{}
 	div := 1.0
 	if e != nil {
 		div = 10.0
@@ -179,22 +184,22 @@ func (m *MockCompilerContext) Cost(obj *ObjectRef, e *Expr) *Cost {
 	c.Ndv = 900000 / div
 	c.Start = 0
 	c.Total = 1000
-	return &c
+	return c
 }
 
 type MockOptimizer struct {
 	ctxt MockCompilerContext
 }
 
-func newMockOptimizer() *MockOptimizer {
+func NewMockOptimizer() *MockOptimizer {
 	return &MockOptimizer{
 		ctxt: *NewMockCompilerContext(),
 	}
 }
 
-func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
+func (moc *MockOptimizer) Optimize(stmt tree.Statement) (*plan.Query, error) {
 	ctx := moc.CurrentContext()
-	query, err := buildPlan(ctx, stmt)
+	query, err := BuildPlan(ctx, stmt)
 	if err != nil {
 		// fmt.Printf("Optimize statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return nil, err

@@ -1071,8 +1071,18 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
-				err := toInt64(re)
+				err := toChar(re)
 				if err != nil {
 					return nil, err
 				}
@@ -1152,8 +1162,18 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
+				if err != nil {
+					return nil, err
+				}
 			} else {
-				err := toInt64(le)
+				err := toChar(le)
 				if err != nil {
 					return nil, err
 				}
@@ -1237,8 +1257,18 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
-				err := toFloat64(re)
+				err := toChar(re)
 				if err != nil {
 					return nil, err
 				}
@@ -1313,6 +1343,16 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 		case types.T_char:
 			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
 				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
 				if err != nil {
 					return nil, err
 				}
@@ -1401,6 +1441,16 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				err := toChar(re)
 				if err != nil {
@@ -1477,6 +1527,16 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 		case types.T_char:
 			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
 				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
 				if err != nil {
 					return nil, err
 				}
@@ -1565,6 +1625,16 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				err := toChar(re)
 				if err != nil {
@@ -1641,6 +1711,16 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 		case types.T_char:
 			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
 				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
 				if err != nil {
 					return nil, err
 				}
@@ -1729,6 +1809,16 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				err := toChar(re)
 				if err != nil {
@@ -1805,6 +1895,16 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 		case types.T_char:
 			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
 				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
 				if err != nil {
 					return nil, err
 				}
@@ -1893,6 +1993,16 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 				if err != nil {
 					return nil, err
 				}
+			} else if e.Left.ReturnType() == types.T_date {
+				err := toDate(re)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Left.ReturnType() == types.T_datetime {
+				err := toDatetime(re)
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				err := toChar(re)
 				if err != nil {
@@ -1969,6 +2079,16 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 		case types.T_char:
 			if e.Right.ReturnType() == types.T_decimal128 || e.Right.ReturnType() == types.T_decimal64 {
 				err := toDecimal(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_date {
+				err := toDate(le)
+				if err != nil {
+					return nil, err
+				}
+			} else if e.Right.ReturnType() == types.T_datetime {
+				err := toDatetime(le)
 				if err != nil {
 					return nil, err
 				}

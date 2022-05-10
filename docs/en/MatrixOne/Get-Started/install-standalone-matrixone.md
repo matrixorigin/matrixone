@@ -46,14 +46,22 @@ $ ./mo-server system_vars_config.toml
 
 ## **Downloading binary packages**
 
-Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux environment.
+Starting with 0.3.0, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
 #### 1. Download binary packages and decompress
 
+Linux Environment
+```bash
+$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-linux-amd64.zip
+$ unzip mo-server-v0.4.0-linux-amd64.zip
 ```
-$ wget https://github.com/matrixorigin/matrixone/releases/download/v0.3.0/mo-server-v0.3.0-linux-amd64.zip
-$ unzip mo-server-v0.3.0-linux-amd64.zip
+
+MacOS Environment
+```bash
+$ https://github.com/matrixorigin/matrixone/releases/download/v0.4.0/mo-server-v0.4.0-darwin-x86_64.zip
+$ unzip mo-server-v0.4.0-darwin-x86_64.zip
 ```
+
 #### 2.Launch MatrixOne server
 
 ```

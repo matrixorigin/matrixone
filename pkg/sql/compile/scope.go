@@ -22,7 +22,10 @@ import (
 	"net"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/updateTag"
 
@@ -225,6 +228,36 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 		}
 		vs = vs[:count]
 
+		vec := vector.New(attrs[0].Type)
+		if err := vector.Append(vec, vs); err != nil {
+			return err
+		}
+		bat.Vecs[0] = vec
+		bat.InitZsOne(count)
+	}
+	return fill(u, bat)
+}
+
+// ExplainQuery fill batch with all query plan tree
+func (s *Scope) ExplainQuery(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	p, _ := s.Plan.(*plan.ExplainQuery)
+	attrs := p.ResultColumns()
+	bat := batch.New(true, []string{attrs[0].Name})
+	// Column 1
+	{
+		explainQueryImpl := explain.NewExplainQueryImpl(p.Query)
+		explainQueryImpl.ExplainPlan(p.Buffer, p.Options)
+
+		rs := p.Buffer.Lines
+		vs := make([][]byte, len(rs))
+
+		count := 0
+		for _, r := range rs {
+			str := []byte(r)
+			vs[count] = str
+			count++
+		}
+		vs = vs[:count]
 		vec := vector.New(attrs[0].Type)
 		if err := vector.Append(vec, vs); err != nil {
 			return err
@@ -476,39 +509,52 @@ func (s *Scope) Run(e engine.Engine) (err error) {
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(e engine.Engine) error {
 	var err error
+	var mu sync.Mutex
 
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
 			go func(cs *Scope) {
 				if rerr := cs.Run(e); rerr != nil {
+					mu.Lock()
 					err = rerr
+					mu.Unlock()
 				}
 			}(s.PreScopes[i])
 		case Merge:
 			go func(cs *Scope) {
 				if rerr := cs.MergeRun(e); rerr != nil {
+					mu.Lock()
 					err = rerr
+					mu.Unlock()
 				}
 			}(s.PreScopes[i])
 		case Remote:
 			go func(cs *Scope) {
 				if rerr := cs.RemoteRun(e); rerr != nil {
+					mu.Lock()
 					err = rerr
+					mu.Unlock()
 				}
 			}(s.PreScopes[i])
 		case Parallel:
 			go func(cs *Scope) {
 				if rerr := cs.ParallelRun(e); rerr != nil {
+					mu.Lock()
 					err = rerr
+					mu.Unlock()
 				}
 			}(s.PreScopes[i])
 		}
 	}
 	p := pipeline.NewMerge(s.Instructions)
 	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
+		mu.Lock()
 		err = rerr
+		mu.Unlock()
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	return err
 }
 
