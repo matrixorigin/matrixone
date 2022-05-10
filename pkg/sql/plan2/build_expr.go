@@ -107,7 +107,7 @@ func buildExpr(stmt tree.Expr, ctx CompilerContext, query *Query, selectCtx *Sel
 			},
 		}, nil
 	case *tree.CaseExpr:
-		return biuldCase(astExpr, ctx, query, selectCtx)
+		return buildCase(astExpr, ctx, query, selectCtx)
 	case *tree.IntervalExpr:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("expr interval'%v' is not support now", stmt))
 	case *tree.XorExpr:
@@ -170,7 +170,7 @@ func buildCast(astExpr *tree.CastExpr, ctx CompilerContext, query *Query, select
 	}, nil
 }
 
-func biuldCase(astExpr *tree.CaseExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
+func buildCase(astExpr *tree.CaseExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
 	var caseExpr *plan.Expr
 	var elseExpr *plan.Expr
 	var whenExpr *plan.Expr
