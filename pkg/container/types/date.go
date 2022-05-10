@@ -364,7 +364,7 @@ func isLeap(year int32) bool {
 }
 
 func (d Date) ToTime() Datetime {
-	return Datetime(int64(d)*secsPerDay-localTZ) << 20
+	return Datetime(int64(d)*secsPerDay) << 20
 }
 
 func (d Date) Month() uint8 {

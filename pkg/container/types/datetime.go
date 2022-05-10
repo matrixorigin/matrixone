@@ -166,7 +166,7 @@ func Now() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
-	return Date((dt.sec() + localTZ) / secsPerDay)
+	return Date((dt.sec()) / secsPerDay)
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
