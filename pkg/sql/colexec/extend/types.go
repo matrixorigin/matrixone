@@ -44,7 +44,7 @@ type BinaryExtend struct {
 
 type UpdateExtend struct {
 	// CanNull	   bool
-	Attr  	     Attribute
+	Attr         Attribute
 	UpdateExtend Extend
 }
 

@@ -28,22 +28,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-
 func init() {
-	extend.FunctionRegistry["sinh"] = builtin.Sinh	// register function name
+	extend.FunctionRegistry["sinh"] = builtin.Sinh // register function name
 
 	extend.UnaryReturnTypes[builtin.Sinh] = func(extend extend.Extend) types.T {
 		return types.T_float64
 	}
 
-	extend.UnaryStrings[builtin.Sinh] = func(e extend.Extend) string {	// define a stringify function for sinh
+	extend.UnaryStrings[builtin.Sinh] = func(e extend.Extend) string { // define a stringify function for sinh
 		return fmt.Sprintf("sinh(%s)", e)
 	}
-	overload.OpTypes[builtin.Sinh] = overload.Unary	// register sinh function type
+	overload.OpTypes[builtin.Sinh] = overload.Unary // register sinh function type
 
-	overload.UnaryOps[builtin.Sinh] = []*overload.UnaryOp {
+	overload.UnaryOps[builtin.Sinh] = []*overload.UnaryOp{
 		{
-			Typ: types.T_float32,
+			Typ:        types.T_float32,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float32)
@@ -60,7 +59,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_float64,
+			Typ:        types.T_float64,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]float64)
@@ -83,7 +82,7 @@ func init() {
 		},
 
 		{
-			Typ: types.T_uint8,
+			Typ:        types.T_uint8,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]uint8)
@@ -100,7 +99,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_uint16,
+			Typ:        types.T_uint16,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]uint16)
@@ -117,7 +116,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_uint32,
+			Typ:        types.T_uint32,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]uint32)
@@ -134,7 +133,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_uint64,
+			Typ:        types.T_uint64,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]uint64)
@@ -152,7 +151,7 @@ func init() {
 		},
 
 		{
-			Typ: types.T_int8,
+			Typ:        types.T_int8,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]int8)
@@ -169,7 +168,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_int16,
+			Typ:        types.T_int16,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]int16)
@@ -186,7 +185,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_int32,
+			Typ:        types.T_int32,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]int32)
@@ -203,7 +202,7 @@ func init() {
 			},
 		},
 		{
-			Typ: types.T_int64,
+			Typ:        types.T_int64,
 			ReturnType: types.T_float64,
 			Fn: func(origVec *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
 				origVecCol := origVec.Col.([]int64)

@@ -786,8 +786,8 @@ func (ihi *IndexHandlerImpl) encodePrimaryIndexValue(columnGroupID uint64, write
 // judge whether the primary key is modified, true for modified, false for not modified
 func judgePrimatyKeyModified(writeCtx interface{}, bat *batch.Batch, row1, row2 []interface{}) (bool, error) {
 	indexWriteCtx, ok := writeCtx.(*WriteContext)
-    if !ok {
-        return false, errorWriteContextIsInvalid
+	if !ok {
+		return false, errorWriteContextIsInvalid
 	}
 
 	for _, attr := range indexWriteCtx.IndexDesc.Attributes {
@@ -821,7 +821,7 @@ func (ihi *IndexHandlerImpl) UpdateIntoIndex(writeCtx interface{}, bat *batch.Ba
 			return err
 		}
 
-		err = GetRow(writeCtx, bat, row2, j + n/2)
+		err = GetRow(writeCtx, bat, row2, j+n/2)
 		if err != nil {
 			return err
 		}

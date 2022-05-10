@@ -668,7 +668,7 @@ type When struct {
 	Val  Expr
 }
 
-func (node * When) Format(ctx *FmtCtx) {
+func (node *When) Format(ctx *FmtCtx) {
 	ctx.WriteString("when ")
 	node.Cond.Format(ctx)
 	ctx.WriteString(" then ")

@@ -22,6 +22,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -95,11 +101,11 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 }
 
 type outputQueue struct {
-	proto  MysqlProtocol
-	mrs    *MysqlResultSet
-	rowIdx uint64
-	length uint64
-	ep     *tree.ExportParam
+	proto   MysqlProtocol
+	mrs     *MysqlResultSet
+	rowIdx  uint64
+	length  uint64
+	ep      *tree.ExportParam
 	lineStr []byte
 
 	getEmptyRowTime time.Duration
@@ -425,6 +431,19 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					} else {
 						vs := vec.Col.([]types.Datetime)
 						row[i] = vs[rowIndex]
+					}
+				}
+			case types.T_timestamp:
+				precision := vec.Typ.Precision
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]types.Timestamp)
+					row[i] = vs[rowIndex].String2(precision)
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]types.Timestamp)
+						row[i] = vs[rowIndex].String2(precision)
 					}
 				}
 			case types.T_decimal64:
@@ -881,6 +900,160 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 	return mce.doComQuery(sql)
 }
 
+func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
+	es := &explain.ExplainOptions{
+		Verbose: false,
+		Anzlyze: false,
+		Format:  explain.EXPLAIN_FORMAT_TEXT,
+	}
+
+	for _, v := range stmt.Options {
+		if strings.EqualFold(v.Name, "VERBOSE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Verbose = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Verbose = false
+			} else {
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "ANALYZE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Anzlyze = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Anzlyze = false
+			} else {
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "FORMAT") {
+			if v.Name == "NULL" {
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
+			} else if strings.EqualFold(v.Value, "TEXT") {
+				es.Format = explain.EXPLAIN_FORMAT_TEXT
+			} else if strings.EqualFold(v.Value, "JSON") {
+				es.Format = explain.EXPLAIN_FORMAT_JSON
+			} else {
+				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+			}
+		} else {
+			return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+		}
+	}
+
+	//get CompilerContext
+	ctx := plan2.NewMockCompilerContext()
+	qry, err := plan2.BuildPlan(ctx, stmt.Statement)
+	if err != nil {
+		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
+	}
+
+	// build explain data buffer
+	buffer := explain.NewExplainDataBuffer()
+	// generator query explain
+	explainQuery := explain.NewExplainQueryImpl(qry)
+	explainQuery.ExplainPlan(buffer, es)
+
+	session := mce.GetSession()
+	protocol := session.GetMysqlProtocol()
+
+	attrs := plan.BuildExplainResultColumns()
+	columns, err := GetExplainColumns(attrs)
+	if err != nil {
+		logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
+		return err
+	}
+	/*
+		Step 1 : send column count and column definition.
+	*/
+	//send column count
+	colCnt := uint64(len(columns))
+	err = protocol.SendColumnCountPacket(colCnt)
+	if err != nil {
+		return err
+	}
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := session.Cmd
+	for _, c := range columns {
+		mysqlc := c.(Column)
+		session.Mrs.AddColumn(mysqlc)
+		/*
+			mysql COM_QUERY response: send the column definition per column
+		*/
+		err := protocol.SendColumnDefinitionPacket(mysqlc, cmd)
+		if err != nil {
+			return err
+		}
+	}
+	/*
+		mysql COM_QUERY response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = protocol.SendEOFPacketIf(0, 0)
+	if err != nil {
+		return err
+	}
+
+	err = buildMoExplainQuery(attrs, buffer, session, getDataFromPipeline)
+	if err != nil {
+		return err
+	}
+
+	err = protocol.sendEOFOrOkPacket(0, 0)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func GetExplainColumns(attrs []*plan.Attribute) ([]interface{}, error) {
+	//attrs := plan.BuildExplainResultColumns()
+	cols := make([]*compile.Col, len(attrs))
+	for i, attr := range attrs {
+		cols[i] = &compile.Col{
+			Name: attr.Name,
+			Typ:  attr.Type.Oid,
+		}
+	}
+	//e.resultCols = cols
+	var mysqlCols []interface{} = make([]interface{}, len(cols))
+	var err error = nil
+	for i, c := range cols {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(c.Typ, col)
+		if err != nil {
+			return nil, err
+		}
+		mysqlCols[i] = col
+	}
+	return mysqlCols, err
+}
+
+func buildMoExplainQuery(attrs []*plan.Attribute, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
+	bat := batch.New(true, []string{attrs[0].Name})
+	rs := buffer.Lines
+	vs := make([][]byte, len(rs))
+
+	count := 0
+	for _, r := range rs {
+		str := []byte(r)
+		vs[count] = str
+		count++
+	}
+	vs = vs[:count]
+	vec := vector.New(attrs[0].Type)
+	if err := vector.Append(vec, vs); err != nil {
+		return err
+	}
+	bat.Vecs[0] = vec
+	bat.InitZsOne(count)
+
+	return fill(session, bat)
+}
+
+//----------------------------------------------------------------------------------------------------
+
 type ComputationWrapperImpl struct {
 	exec *compile.Exec
 }
@@ -1098,7 +1271,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if err = mce.handleAnalyzeStmt(st); err != nil {
 				return err
 			}
-
+		case *tree.ExplainStmt:
+			selfHandle = true
+			if err = mce.handleExplainStmt(st); err != nil {
+				return err
+			}
+		case *tree.ExplainAnalyze:
+			selfHandle = true
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
 		}
 
 		if selfHandle {
@@ -1402,6 +1582,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DATE)
 	case types.T_datetime:
 		col.SetColumnType(defines.MYSQL_TYPE_DATETIME)
+	case types.T_timestamp:
+		col.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
 	case types.T_decimal64:
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_decimal128:

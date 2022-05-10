@@ -149,13 +149,15 @@ import (
     varExpr *tree.VarExpr
     loadColumn tree.LoadColumn
     loadColumns []tree.LoadColumn
-	assignments []*tree.Assignment
-	assignment *tree.Assignment
+    assignments []*tree.Assignment
+    assignment *tree.Assignment
     properties []tree.Property
     property tree.Property
     exportParm *tree.ExportParam
 
-	whenClause *tree.When
+    epxlainOptions []tree.OptionElem
+    epxlainOption tree.OptionElem
+    whenClause *tree.When
     whenClauseList []*tree.When
     withClause *tree.With
     cte *tree.CTE
@@ -251,7 +253,7 @@ import (
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
-%token <str> FORMAT CONNECTION
+%token <str> FORMAT VERBOSE CONNECTION
 
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
@@ -440,7 +442,7 @@ import (
 %type <subquery> subquery
 %type <numVal> int_num_val
 
-%type <lengthOpt> length_opt length_option_opt length
+%type <lengthOpt> length_opt length_option_opt length timestamp_option_opt
 %type <lengthScaleOpt> float_length_opt decimal_length_opt
 %type <unsignedOpt> unsigned_opt header_opt
 %type <zeroFillOpt> zero_fill_opt
@@ -481,6 +483,12 @@ import (
 %type <withClause> with_clause
 %type <cte> common_table_expr
 %type <cteList> cte_list
+
+%type <epxlainOptions> utility_option_list
+%type <epxlainOption> utility_option_elem
+%type <str> utility_option_name utility_option_arg
+%type <str> explain_option_key
+%type <str> explain_foramt_value
 
 %start start_command
 
@@ -1510,21 +1518,74 @@ explain_stmt:
     }
 |   explain_sym explainable_stmt
     {
-        $$ = tree.NewExplainStmt($2, "row")
+        $$ = tree.NewExplainStmt($2, "text")
     }
-|   explain_sym FORMAT '=' STRING explainable_stmt
+|   explain_sym VERBOSE explainable_stmt
     {
-        $$ = tree.NewExplainStmt($5, $4)
+	explainStmt := tree.NewExplainStmt($3, "text")
+	optionElem := tree.MakeOptionElem("verbose", "NULL")
+        options := tree.MakeOptions(optionElem)
+	explainStmt.Options = options
+	$$ = explainStmt
+
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-        $$ = tree.NewExplainAnalyze($3, "")
+	explainStmt := tree.NewExplainStmt($3, "text")
+	optionElem := tree.MakeOptionElem("analyze", "NULL")
+        options := tree.MakeOptions(optionElem)
+        explainStmt.Options = options
+	$$ = explainStmt
+    }
+|   explain_sym ANALYZE VERBOSE explainable_stmt
+    {
+        explainStmt := tree.NewExplainStmt($4, "text")
+        optionElem1 := tree.MakeOptionElem("analyze", "NULL")
+	optionElem2 := tree.MakeOptionElem("verbose", "NULL")
+	options := tree.MakeOptions(optionElem1)
+	options = append(options, optionElem2)
+	explainStmt.Options = options
+        $$ = explainStmt
+    }
+|   explain_sym '(' utility_option_list ')' explainable_stmt
+    {
+        explainStmt := tree.NewExplainStmt($5, "text")
+        explainStmt.Options = $3
+        $$ = explainStmt
     }
 
 explain_sym:
     EXPLAIN
 |   DESCRIBE
 |   DESC
+
+utility_option_list:
+    utility_option_elem
+    {
+        $$ =  tree.MakeOptions($1)
+    }
+| utility_option_list ',' utility_option_elem
+    {
+        $$ = append($1, $3);
+    }
+
+utility_option_elem:
+    utility_option_name utility_option_arg
+    {
+        $$ = tree.MakeOptionElem($1, $2)
+    }
+
+utility_option_name:
+    explain_option_key
+    {
+         $$ = $1
+    }
+
+utility_option_arg:
+    TRUE				    { $$ = "true" }
+|   FALSE			            { $$ = "false" }
+|   explain_foramt_value                    { $$ = $1 }
+
 
 analyze_stmt:
     ANALYZE TABLE table_name '(' column_list ')' 
@@ -5452,19 +5513,24 @@ time_type:
 	        },
         }
     }
-|   TIMESTAMP length_opt
+|   TIMESTAMP timestamp_option_opt
     {
         locale := ""
-        $$ = &tree.T{
-            InternalType: tree.InternalType{
+        if $2 < 0 || $2 > 6 {
+        		yylex.Error("For Timestamp(fsp), fsp must in [0, 6]")
+        		return 1
+                } else {
+                $$ = &tree.T{
+            		InternalType: tree.InternalType{
 		        Family:             tree.TimestampFamily,
-		        Precision:          0,
-                FamilyString: $1,
-                DisplayWith: $2,
-		        TimePrecisionIsSet: false,
+		        Precision:          $2,
+                	FamilyString: $1,
+                	DisplayWith: $2,
+		        TimePrecisionIsSet: true,
 		        Locale:             &locale,
 		        Oid:                uint32(defines.MYSQL_TYPE_TIMESTAMP),
 	        },
+	    }
         }
     }
 |   DATETIME length_opt
@@ -5725,6 +5791,16 @@ length_opt:
         $$ = 0
     }
 |	length
+
+timestamp_option_opt:
+    /* EMPTY */
+    	{
+    	    $$ = 6
+    	}
+|	'(' INTEGRAL ')'
+    {
+        $$ = int32($2.(int64))
+    }
 
 length_option_opt:
 	{
@@ -6177,6 +6253,16 @@ not_keyword:
 |   VAR_POP
 |   VAR_SAMP
 |   AVG
+
+explain_option_key:
+    ANALYZE
+|   VERBOSE
+|   FORMAT
+
+explain_foramt_value:
+    JSON
+|   TEXT
+
 
 //mo_keywords:
 //	PROPERTIES

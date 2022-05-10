@@ -937,7 +937,7 @@ type TableOptionProperties struct {
 	Preperties []Property
 }
 
-func (node *TableOptionProperties) Format(ctx *FmtCtx){
+func (node *TableOptionProperties) Format(ctx *FmtCtx) {
 	ctx.WriteString("properties")
 	if node.Preperties != nil {
 		prefix := "("

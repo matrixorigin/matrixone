@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Query, error) {
 	query := &Query{
 		Steps: []int32{0},
 	}
@@ -32,13 +32,13 @@ func buildPlan(ctx CompilerContext, stmt tree.Statement) (*Query, error) {
 	if err != nil {
 		return nil, err
 	}
-	return query, nil
+	return (*plan.Query)(query), nil
 }
 
 func buildStatement(stmt tree.Statement, ctx CompilerContext, query *Query) error {
 	selectCtx := &SelectContext{
-		tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
+		cteTables:   make(map[string]*plan.TableDef),
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
