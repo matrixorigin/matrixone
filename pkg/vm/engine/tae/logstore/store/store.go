@@ -518,7 +518,6 @@ func (s *baseStore) Replay(h ApplyHandle) error {
 	for _, ent := range r.entrys {
 		s.synced.ids[ent.group] = ent.commitId
 	}
-	//TODO uncommit entry info
 	r.Apply()
 	s.OnReplay(r)
 	return nil

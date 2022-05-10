@@ -128,7 +128,9 @@ func newSyncBase() *syncBase {
 func (base *syncBase) OnReplay(r *replayer) {
 	base.addrs = r.addrs
 	base.groupLSN = r.groupLSN
-	base.synced.ids = r.groupLSN
+	for k, v := range r.groupLSN {
+		base.synced.ids[k] = v
+	}
 	for groupId, ckps := range r.checkpointrange {
 		base.checkpointed.ids[groupId] = ckps.Intervals[0].End
 	}

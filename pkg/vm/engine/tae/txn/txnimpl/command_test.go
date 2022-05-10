@@ -21,7 +21,9 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -137,6 +139,198 @@ func TestComposedCmd(t *testing.T) {
 			}
 		}
 	}
+}
+func TestReplay(t *testing.T) {
+	dir := testutils.InitTestEnv(ModuleName, t)
+	ctlg1, err := catalog.OpenCatalog(dir, "mock", nil, nil)
+	assert.Nil(t, err)
+	txnMgr := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(ctlg1), catalog.MockTxnFactory(ctlg1))
+	txnMgr.Start()
+	driver := wal.NewDriverWithStore(ctlg1.GetStore(), false)
+
+	name := "db"
+	tbName := "tb"
+	txn1 := txnMgr.StartTxn(nil)
+
+	db, err := ctlg1.CreateDBEntry(name, txn1)
+	assert.Nil(t, err)
+	db.PrepareCommit()
+	cmdMgr := newCommandManager(driver)
+	cmd, err := db.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err := cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	dbToDrop, err := ctlg1.CreateDBEntry("db_drop", txn1)
+	assert.Nil(t, err)
+	dbToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = dbToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	dbToDrop, err = ctlg1.DropDBEntry("db_drop", txn1)
+	assert.Nil(t, err)
+	dbToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = dbToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	schema := catalog.MockSchema(1)
+	schema.Name = tbName
+	tb, err := db.CreateTableEntry(schema, txn1, nil)
+	assert.Nil(t, err)
+	tb.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = tb.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	schemaDrop := catalog.MockSchema(1)
+	schemaDrop.Name = "tb_drop"
+	tbToDrop, err := db.CreateTableEntry(schemaDrop, txn1, nil)
+	assert.Nil(t, err)
+	tbToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = tbToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	tbToDrop, err = db.DropTableEntry("tb_drop", txn1)
+	assert.Nil(t, err)
+	tbToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = tbToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	seg, err := tb.CreateSegment(txn1, catalog.ES_Appendable, nil)
+	assert.Nil(t, err)
+	seg.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = seg.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	segToDrop, err := tb.CreateSegment(txn1, catalog.ES_Appendable, nil)
+	assert.Nil(t, err)
+	segToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = segToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	segToDrop, err = tb.DropSegmentEntry(segToDrop.ID, txn1)
+	assert.Nil(t, err)
+	segToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = segToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	blk, err := seg.CreateBlock(txn1, 0, nil)
+	assert.Nil(t, err)
+	blk.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = blk.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	blkToDrop, err := seg.CreateBlock(txn1, 0, nil)
+	assert.Nil(t, err)
+	blkToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = blkToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	blkToDrop, err = seg.DropBlockEntry(blkToDrop.ID, txn1)
+	assert.Nil(t, err)
+	blkToDrop.PrepareCommit()
+	cmdMgr = newCommandManager(driver)
+	cmd, err = blkToDrop.MakeCommand(0)
+	assert.Nil(t, err)
+	cmdMgr.AddCmd(cmd)
+	e, err = cmdMgr.ApplyTxnRecord()
+	assert.Nil(t, err)
+	e.WaitDone()
+
+	err = txn1.Commit()
+	assert.Nil(t, err)
+
+	driver.Close()
+	txnMgr.Stop()
+	ctlg1.Close()
+
+	catalog2, err := catalog.OpenCatalog(dir, "mock", nil, nil)
+	assert.Nil(t, err)
+	txnMgr2 := txnbase.NewTxnManager(catalog.MockTxnStoreFactory(catalog2), catalog.MockTxnFactory(catalog2))
+	txnMgr2.Start()
+
+	db2, err := catalog2.GetDatabaseByID(db.ID)
+	assert.Nil(t, err)
+
+	dbTodrop2, err := catalog2.GetDatabaseByID(dbToDrop.ID)
+	assert.Nil(t, err)
+	assert.True(t, dbTodrop2.IsDroppedCommitted())
+
+	tb2, err := db2.GetTableEntryByID(tb.ID)
+	assert.Nil(t, err)
+
+	tbToDrop2, err := db2.GetTableEntryByID(tbToDrop.ID)
+	assert.Nil(t, err)
+	assert.True(t, tbToDrop2.IsDroppedCommitted())
+
+	seg2, err := tb2.GetSegmentByID(seg.ID)
+	assert.Nil(t, err)
+
+	segToDrop2, err := tb2.GetSegmentByID(segToDrop.ID)
+	assert.Nil(t, err)
+	assert.True(t, segToDrop2.IsDroppedCommitted())
+
+	_, err = seg2.GetBlockEntryByID(blk.ID)
+	assert.Nil(t, err)
+
+	blkToDrop2, err := seg2.GetBlockEntryByID(blkToDrop.ID)
+	assert.Nil(t, err)
+	assert.True(t, blkToDrop2.IsDroppedCommitted())
+
+	txnMgr2.Stop()
+	catalog2.Close()
+
 }
 
 func TestAppendCmd(t *testing.T) {
