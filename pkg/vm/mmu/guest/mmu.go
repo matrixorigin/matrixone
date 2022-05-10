@@ -15,6 +15,8 @@
 package guest
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
@@ -27,7 +29,7 @@ func New(limit int64, mmu *host.Mmu) *Mmu {
 }
 
 func (m *Mmu) Size() int64 {
-	return m.size
+	return atomic.LoadInt64(&m.size)
 }
 
 func (m *Mmu) HostSize() int64 {
@@ -35,23 +37,24 @@ func (m *Mmu) HostSize() int64 {
 }
 
 func (m *Mmu) Free(size int64) {
-	if size == 0 {
+	if m.Size() == 0 {
 		return
 	}
-	m.size -= size
+	atomic.AddInt64(&m.size, size*-1)
 	m.Mmu.Free(size)
 }
 
 func (m *Mmu) Alloc(size int64) error {
-	if size == 0 {
+	if m.Size() == 0 {
 		return nil
 	}
-	if m.size+size > m.Limit {
+	if atomic.LoadInt64(&m.size)+size > m.Limit {
 		return mmu.OutOfMemory
 	}
 	if err := m.Mmu.Alloc(size); err != nil {
 		return err
 	}
-	m.size += size
+	for v := atomic.LoadInt64(&m.size); !atomic.CompareAndSwapInt64(&m.size, v, v+size); v = atomic.LoadInt64(&m.size) {
+	}
 	return nil
 }
