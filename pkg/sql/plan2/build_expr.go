@@ -412,7 +412,7 @@ func buildComparisonExpr(expr *tree.ComparisonExpr, ctx CompilerContext, query *
 			},
 		}, nil
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now2", expr))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", expr))
 }
 
 func buildUnaryExpr(expr *tree.UnaryExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
@@ -422,11 +422,11 @@ func buildUnaryExpr(expr *tree.UnaryExpr, ctx CompilerContext, query *Query, sel
 	case tree.UNARY_PLUS:
 		return getFunctionExprByNameAndExprs("UNARY_PLUS", []tree.Expr{expr.Expr}, ctx, query, selectCtx)
 	case tree.UNARY_TILDE:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now3", expr))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", expr))
 	case tree.UNARY_MARK:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now4", expr))
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", expr))
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now5", expr))
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", expr))
 }
 
 func buildBinaryExpr(expr *tree.BinaryExpr, ctx CompilerContext, query *Query, selectCtx *SelectContext) (*plan.Expr, error) {
