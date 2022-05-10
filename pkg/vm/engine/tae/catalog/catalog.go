@@ -252,7 +252,7 @@ func (catalog *Catalog) replayhandle(group uint32, commitId uint64, payload []by
 		return
 	}
 	r := bytes.NewBuffer(payload)
-	txncmd, err := txnbase.BuildCommandFrom(r)
+	txncmd, _, err := txnbase.BuildCommandFrom(r)
 	catalog.replayCmd(txncmd)
 	return
 }
