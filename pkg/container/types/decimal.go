@@ -72,6 +72,10 @@ import (
 //      *(__int128*)result = *(__int128*)a * (*(int64_t*)b);
 //      return ;
 // }
+// void mul_int128_uint64(void* a, void* b, void* result) {
+//      *(__int128*)result = *(__int128*)a * (*(uint64_t*)b);
+//      return ;
+// }
 // void mul_int128_int128(void* a, void* b, void* result) {
 //      *(__int128*)result = (*(__int128*)a) * (*(__int128*)b);
 //      return ;
@@ -239,6 +243,16 @@ func InitDecimal128(value int64) (result Decimal128) {
 	} else {
 		C.init_int128_as_1(unsafe.Pointer(&result))
 		C.mul_int128_int64(unsafe.Pointer(&result), unsafe.Pointer(&value), unsafe.Pointer(&result))
+	}
+	return result
+}
+
+func InitDecimal128UsingUint(value uint64) (result Decimal128) {
+	if value == 1 {
+		C.init_int128_as_1(unsafe.Pointer(&result))
+	} else {
+		C.init_int128_as_1(unsafe.Pointer(&result))
+		C.mul_int128_uint64(unsafe.Pointer(&result), unsafe.Pointer(&value), unsafe.Pointer(&result))
 	}
 	return result
 }

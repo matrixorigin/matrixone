@@ -107,6 +107,12 @@ func New(typ types.Type) *Vector {
 			Col: []types.Datetime{},
 			Nsp: &nulls.Nulls{},
 		}
+	case types.T_timestamp:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Timestamp{},
+			Nsp: &nulls.Nulls{},
+		}
 	case types.T_sel:
 		return &Vector{
 			Typ: typ,
@@ -259,6 +265,13 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 		}
 		v.Data = data
 		v.Col = encoding.DecodeDatetimeSlice(v.Data)[:0]
+	case types.T_timestamp:
+		data, err := mheap.Alloc(m, int64(rows*8))
+		if err != nil {
+			return
+		}
+		v.Data = data
+		v.Col = encoding.DecodeTimestampSlice(v.Data)[:0]
 	case types.T_char, types.T_varchar:
 		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
 		data, err := mheap.Alloc(m, int64(rows*len(ws.Data)/len(ws.Offsets)))
@@ -314,6 +327,8 @@ func SetLength(v *Vector, n int) {
 		setLengthFixed[types.Date](v, n)
 	case types.T_datetime:
 		setLengthFixed[types.Datetime](v, n)
+	case types.T_timestamp:
+		setLengthFixed[types.Timestamp](v, n)
 	case types.T_decimal64:
 		setLengthFixed[types.Decimal64](v, n)
 	case types.T_decimal128:
@@ -563,6 +578,22 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Ref:  v.Ref,
 			Link: v.Link,
 		}, nil
+	case types.T_timestamp:
+		vs := v.Col.([]types.Timestamp)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeTimestampSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	case types.T_decimal64:
 		vs := v.Col.([]types.Decimal64)
 		data, err := mheap.Alloc(m, int64(len(vs)*8))
@@ -647,6 +678,9 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	case types.T_datetime:
 		w.Col = v.Col.([]types.Datetime)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	case types.T_timestamp:
+		w.Col = v.Col.([]types.Timestamp)[start:end]
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	case types.T_decimal64:
 		w.Col = v.Col.([]types.Decimal64)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
@@ -685,6 +719,8 @@ func Append(v *Vector, arg interface{}) error {
 		v.Col = append(v.Col.([]types.Date), arg.([]types.Date)...)
 	case types.T_datetime:
 		v.Col = append(v.Col.([]types.Datetime), arg.([]types.Datetime)...)
+	case types.T_timestamp:
+		v.Col = append(v.Col.([]types.Timestamp), arg.([]types.Timestamp)...)
 	case types.T_sel:
 		v.Col = append(v.Col.([]int64), arg.([]int64)...)
 	case types.T_tuple:
@@ -805,6 +841,13 @@ func Shrink(v *Vector, sels []int64) {
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	case types.T_datetime:
 		vs := v.Col.([]types.Datetime)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_timestamp:
+		vs := v.Col.([]types.Timestamp)
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
@@ -979,6 +1022,16 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		}
 		ws := encoding.DecodeDatetimeSlice(data)
 		v.Col = shuffle.DatetimeShuffle(vs, ws, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		mheap.Free(m, data)
+	case types.T_timestamp:
+		vs := v.Col.([]types.Timestamp)
+		data, err := mheap.Alloc(m, int64(len(vs)*8))
+		if err != nil {
+			return err
+		}
+		ws := encoding.DecodeTimestampSlice(data)
+		v.Col = shuffle.TimestampShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		mheap.Free(m, data)
 	case types.T_decimal64:
@@ -1401,6 +1454,33 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 			vs = append(vs, w.Col.([]types.Datetime)[sel])
 			v.Col = vs
 		}
+	case types.T_timestamp:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 8*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeTimestampSlice(data)
+			vs[0] = w.Col.([]types.Timestamp)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Timestamp)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeTimestampSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]types.Timestamp)[sel])
+			v.Col = vs
+		}
 	case types.T_decimal64:
 		if len(v.Data) == 0 {
 			data, err := mheap.Alloc(m, 8*8)
@@ -1733,6 +1813,27 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) error {
 			}
 			mheap.Free(m, v.Data)
 			vs = encoding.DecodeDatetimeSlice(data)
+			v.Data = data
+		}
+		vs = vs[:n+cnt]
+		j := n
+		for i, sel := range sels {
+			vs[i] = ws[sel]
+			j++
+		}
+		v.Col = vs
+	case types.T_timestamp:
+		cnt := len(sels)
+		ws := w.Col.([]types.Timestamp)
+		vs := v.Col.([]types.Timestamp)
+		n := len(vs)
+		if n+cnt >= cap(vs) {
+			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
+			if err != nil {
+				return err
+			}
+			mheap.Free(m, v.Data)
+			vs = encoding.DecodeTimestampSlice(data)
 			v.Data = data
 		}
 		vs = vs[:n+cnt]
@@ -2331,6 +2432,49 @@ func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mhe
 			v.Col = vs
 		}
 
+	case types.T_timestamp:
+		col := w.Col.([]types.Timestamp)
+		if len(v.Data) == 0 {
+			newSize := 8
+			for newSize < cnt {
+				newSize <<= 1
+			}
+			data, err := mheap.Alloc(m, int64(newSize)*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := encoding.DecodeTimestampSlice(data)[:cnt]
+			for i, j := 0, 0; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Timestamp)
+			n := len(vs)
+			if n+cnt > cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = encoding.DecodeTimestampSlice(data)
+				v.Data = data
+			}
+			vs = vs[:n+cnt]
+			for i, j := 0, n; i < len(flags); i++ {
+				if flags[i] > 0 {
+					vs[j] = col[int(offset)+i]
+					j++
+				}
+			}
+			v.Col = vs
+		}
+
 	case types.T_decimal64:
 		col := w.Col.([]types.Decimal64)
 		if len(v.Data) == 0 {
@@ -2577,6 +2721,18 @@ func (v *Vector) Show() ([]byte, error) {
 		}
 		buf.Write(encoding.EncodeDatetimeSlice(v.Col.([]types.Datetime)))
 		return buf.Bytes(), nil
+	case types.T_timestamp:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeTimestampSlice(v.Col.([]types.Timestamp)))
+		return buf.Bytes(), nil
 	case types.T_sel:
 		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
@@ -2792,6 +2948,17 @@ func (v *Vector) Read(data []byte) error {
 			}
 			v.Col = encoding.DecodeDatetimeSlice(data[size:])
 		}
+	case types.T_timestamp:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeTimestampSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeTimestampSlice(data[size:])
+		}
 	case types.T_char, types.T_varchar, types.T_json:
 		Col := v.Col.(*types.Bytes)
 		Col.Reset()
@@ -2965,6 +3132,15 @@ func (v *Vector) String() string {
 		}
 	case types.T_datetime:
 		col := v.Col.([]types.Datetime)
+		if len(col) == 1 {
+			if nulls.Contains(v.Nsp, 0) {
+				return "null"
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_timestamp:
+		col := v.Col.([]types.Timestamp)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
 				return "null"
@@ -3357,6 +3533,33 @@ func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []s
 		}
 	case types.T_datetime:
 		vs := v.Col.([]types.Datetime)
+		for i := 0; i < rows; i++ {
+			index := i
+			count := occurCounts[i]
+			if count <= 0 {
+				i--
+				continue
+			}
+			if ifSel {
+				index = int(selectIndexs[i])
+			}
+			if allData {
+				rs[i] = fmt.Sprintf("%s", vs[index].String())
+			} else {
+				if nulls.Contains(v.Nsp, uint64(index)) {
+					rs[i] = nullStr
+				} else {
+					rs[i] = fmt.Sprintf("%s", vs[index].String())
+				}
+			}
+			for count > 1 {
+				count--
+				i++
+				rs[i] = rs[i-1]
+			}
+		}
+	case types.T_timestamp:
+		vs := v.Col.([]types.Timestamp)
 		for i := 0; i < rows; i++ {
 			index := i
 			count := occurCounts[i]
