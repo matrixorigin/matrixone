@@ -1,11 +1,26 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package store
 
 import (
 	"errors"
 	"fmt"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
-	"io"
 )
 
 type noopObserver struct {
@@ -48,7 +63,7 @@ func (r *replayer) updateVinfoAddrs(groupId uint32, lsn uint64, offset int) {
 	r.vinfoAddrs[groupId] = m
 }
 func (r *replayer) updateaddrs(groupId uint32, version int, lsn uint64) {
-	if groupId==entry.GTNoop{
+	if groupId == entry.GTNoop {
 	}
 	m, ok := r.addrs[groupId]
 	if !ok {
@@ -152,14 +167,14 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 	case entry.ETFlush:
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
+		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		return nil
 	case entry.ETCheckpoint:
 		// fmt.Printf("ETCheckpoint\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
+		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		info.Info = &VFileAddress{
@@ -191,7 +206,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("ETUncommitted\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
+		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		for _, tinfo := range info.Uncommits {
@@ -216,7 +231,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("ETTxn\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
+		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		info.Info = &VFileAddress{
@@ -239,7 +254,7 @@ func (r *replayer) onReplayEntry(e entry.Entry, vf ReplayObserver) error {
 		// fmt.Printf("default\n")
 		infobuf := e.GetInfoBuf()
 		info := entry.Unmarshal(infobuf)
-		r.updateVinfoAddrs(info.Group,info.GroupLSN,r.state.pos)
+		r.updateVinfoAddrs(info.Group, info.GroupLSN, r.state.pos)
 		r.updateaddrs(info.Group, r.version, info.GroupLSN)
 		r.updateGroupLSN(info.Group, info.GroupLSN)
 		info.Info = &VFileAddress{

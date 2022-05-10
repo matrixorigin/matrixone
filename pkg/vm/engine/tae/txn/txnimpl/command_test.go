@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package txnimpl
 
 import (
@@ -129,7 +143,7 @@ func TestAppendCmd(t *testing.T) {
 	infos := make([]*appendInfo, 0)
 	infos = append(infos, mockAppendInfo())
 	node := mockInsertNodeWithAppendInfo(infos)
-	cmd,_,err := node.MakeCommand(0,true)
+	cmd, _, err := node.MakeCommand(0, true)
 	assert.Nil(t, err)
 
 	var w bytes.Buffer
@@ -152,11 +166,11 @@ func checkAppendCmdIsEqual(t *testing.T, cmd1, cmd2 *AppendCmd) {
 	}
 	assert.Equal(t, len(cmd1.infos), len(cmd2.infos))
 	for i, info1 := range cmd1.infos {
-		checkAppendInfoIsEqual(t,info1,cmd2.infos[i])
+		checkAppendInfoIsEqual(t, info1, cmd2.infos[i])
 	}
 }
 
 func checkAppendInfoIsEqual(t *testing.T, info1, info2 *appendInfo) {
-	assert.Equal(t,info1.seq,info2.seq)
-	assert.Equal(t,info1.destLen,info2.destLen)
+	assert.Equal(t, info1.seq, info2.seq)
+	assert.Equal(t, info1.destLen, info2.destLen)
 }

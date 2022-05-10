@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package txnentries
 
 import (
@@ -42,10 +56,10 @@ func TestMergeBlocksCmd(t *testing.T) {
 	createdSegs := []*common.ID{{TableID: 1, SegmentID: 3}}
 	droppedBlks := []*common.ID{{TableID: 1, SegmentID: 2, BlockID: 3}, {TableID: 1, SegmentID: 2, BlockID: 4}}
 	createdBlks := []*common.ID{{TableID: 1, SegmentID: 3, BlockID: 1}}
-	mapping:=[]uint32{3445,4253,425,45,123,34,42,42,2,5,0}
-	fromAddr:=[]uint32{40000,40000,40000,42}
-	toAddr:=[]uint32{40000,40000,242}
-	cmd := newMergeBlocksCmd(0,droppedSegs, createdSegs,droppedBlks,createdBlks,mapping,fromAddr,toAddr)
+	mapping := []uint32{3445, 4253, 425, 45, 123, 34, 42, 42, 2, 5, 0}
+	fromAddr := []uint32{40000, 40000, 40000, 42}
+	toAddr := []uint32{40000, 40000, 242}
+	cmd := newMergeBlocksCmd(0, droppedSegs, createdSegs, droppedBlks, createdBlks, mapping, fromAddr, toAddr)
 
 	var w bytes.Buffer
 	err := cmd.WriteTo(&w)
@@ -76,7 +90,7 @@ func checkMergeBlocksCmdIsEqual(t *testing.T, cmd1, cmd2 *mergeBlocksCmd) {
 	for i, blk1 := range cmd1.droppedBlks {
 		checkIDIsEqual(t, blk1, cmd2.droppedBlks[i])
 	}
-	assert.Equal(t,len(cmd1.mapping),len(cmd2.mapping))
-	assert.Equal(t,len(cmd1.fromAddr),len(cmd2.fromAddr))
-	assert.Equal(t,len(cmd1.toAddr),len(cmd2.toAddr))
+	assert.Equal(t, len(cmd1.mapping), len(cmd2.mapping))
+	assert.Equal(t, len(cmd1.fromAddr), len(cmd2.fromAddr))
+	assert.Equal(t, len(cmd1.toAddr), len(cmd2.toAddr))
 }

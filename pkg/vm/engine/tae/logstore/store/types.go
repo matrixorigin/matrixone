@@ -1,9 +1,24 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package store
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 type StoreCfg struct {
@@ -36,7 +51,7 @@ type VFile interface {
 
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)
 	LoadMeta() error
-	
+
 	FreeMeta()
 	OnReplay(r *replayer)
 }
@@ -104,7 +119,7 @@ type Store interface {
 	GetSynced(uint32) uint64
 	GetPenddingCnt(uint32) uint64
 	GetCurrSeqNum(uint32) uint64
-	AppendEntry(groupId uint32,e entry.Entry) (uint64, error)
+	AppendEntry(groupId uint32, e entry.Entry) (uint64, error)
 	TryCompact() error
 	TryTruncate(int64) error
 	Load(groupId uint32, lsn uint64) (entry.Entry, error)
