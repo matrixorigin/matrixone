@@ -66,11 +66,7 @@ jobs:
 
       - name: Unit Testing
         run: |
-          if [[ 'schedule' == ${{ github.event_name }} ]]; then
-            make ut
-          else
-            make ut SKIP_TEST="race"
-          fi
+          make ut
 
       - name: Build Verification Testing
         run: |
