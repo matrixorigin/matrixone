@@ -247,26 +247,20 @@ func TestNodeTree(t *testing.T) {
 		},
 		//update
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20": {
-			root: 2,
+			root: 1,
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
-				1: plan.Node_SORT,
-				2: plan.Node_UPDATE,
+				1: plan.Node_UPDATE,
 			},
 			children: map[int][]int32{
 				1: {0},
-				2: {1},
 			},
 		},
 		//delete
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
-			root: 1,
+			root: 0,
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
-				1: plan.Node_SORT,
-			},
-			children: map[int][]int32{
-				1: {0},
 			},
 		},
 		// unrelated subquery
