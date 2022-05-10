@@ -22,7 +22,6 @@ import (
 	"net"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
@@ -508,54 +507,62 @@ func (s *Scope) Run(e engine.Engine) (err error) {
 
 // MergeRun range and run the scope's pre-scopes by go-routine, and finally run itself to do merge work.
 func (s *Scope) MergeRun(e engine.Engine) error {
-	var err error
-	var mu sync.Mutex
+	errChan := make(chan error, len(s.PreScopes))
 
 	for i := range s.PreScopes {
 		switch s.PreScopes[i].Magic {
 		case Normal:
 			go func(cs *Scope) {
-				if rerr := cs.Run(e); rerr != nil {
-					mu.Lock()
-					err = rerr
-					mu.Unlock()
-				}
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+
+				err = cs.Run(e)
 			}(s.PreScopes[i])
 		case Merge:
 			go func(cs *Scope) {
-				if rerr := cs.MergeRun(e); rerr != nil {
-					mu.Lock()
-					err = rerr
-					mu.Unlock()
-				}
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+
+				err = cs.MergeRun(e)
 			}(s.PreScopes[i])
 		case Remote:
 			go func(cs *Scope) {
-				if rerr := cs.RemoteRun(e); rerr != nil {
-					mu.Lock()
-					err = rerr
-					mu.Unlock()
-				}
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+
+				err = cs.RemoteRun(e)
 			}(s.PreScopes[i])
 		case Parallel:
 			go func(cs *Scope) {
-				if rerr := cs.ParallelRun(e); rerr != nil {
-					mu.Lock()
-					err = rerr
-					mu.Unlock()
-				}
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+
+				err = cs.ParallelRun(e)
 			}(s.PreScopes[i])
 		}
 	}
+
 	p := pipeline.NewMerge(s.Instructions)
-	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
-		mu.Lock()
-		err = rerr
-		mu.Unlock()
+	if _, err := p.RunMerge(s.Proc); err != nil {
+		return err
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	return err
+
+	// check sub-goroutine's error
+	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
