@@ -59,7 +59,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx
 	//lock
 	preNode := query.Nodes[len(query.Nodes)-1]
 	preNode.ProjectList = projections
-	query.Steps[0] = preNode.NodeId
+	query.Steps = append(query.Steps, preNode.NodeId)
 	return nil
 }
 
@@ -76,7 +76,7 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		//add a projection node
 		alias := string(cte.Name.Alias)
 		node := &plan.Node{
-			NodeType: plan.Node_PROJECT,
+			NodeType: plan.Node_MATERIAL,
 		}
 		preNode := query.Nodes[len(query.Nodes)-1]
 

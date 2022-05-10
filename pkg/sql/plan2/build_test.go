@@ -27,7 +27,7 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY`
+	sql := `select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey) a where ff > 0`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
@@ -52,14 +52,14 @@ func TestNodeTree(t *testing.T) {
 		"SELECT abs(-1)": {
 			root: 0,
 			nodeType: map[int]plan.Node_NodeType{
-				0: plan.Node_FUNCTION_SCAN,
+				0: plan.Node_VALUE_SCAN,
 			},
 			children: nil,
 		},
 		"SELECT abs(-1) from dual": {
 			root: 0,
 			nodeType: map[int]plan.Node_NodeType{
-				0: plan.Node_FUNCTION_SCAN,
+				0: plan.Node_VALUE_SCAN,
 			},
 			children: nil,
 		},
@@ -304,8 +304,8 @@ func TestNodeTree(t *testing.T) {
 			t.Fatalf("%+v, sql=%v", err, sql)
 		}
 
-		if query.Steps[0] != check.root {
-			t.Fatalf("run sql[%+v] error, query.Steps[0] should be [%+v] but now is [%+v]", sql, check.root, query.Steps[0])
+		if query.Steps[len(query.Steps)-1] != check.root {
+			t.Fatalf("run sql[%+v] error, root should be [%+v] but now is [%+v]", sql, check.root, query.Steps[0])
 		}
 		for idx, typ := range check.nodeType {
 			if idx >= len(query.Nodes) {
