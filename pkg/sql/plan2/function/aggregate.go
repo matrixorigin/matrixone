@@ -35,9 +35,8 @@ func initAggregateFunction() {
 var aggregates = map[string][]Function{
 	"max": {
 		{
-			Name:          "max(int64)",
+			Index:         0,
 			Flag:          plan.Function_AGG,
-			ID:            aggregateMaxInt64,
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,

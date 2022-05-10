@@ -41,14 +41,13 @@ func initOperators() {
 var operators = map[string][]Function{
 	"=": []Function{
 		{
-			Name: "=(uint8, uint8)",
-			Flag: plan.Function_STRICT,
-			Args: MakeLimitArgList([]Arg{
-				{Name: "left", Typ: types.T_uint8},
-				{Name: "right", Typ: types.T_uint8},
-			}),
+			Index: 0,
+			Flag:  plan.Function_STRICT,
+			Args: []types.T{
+				types.T_int8, // left part of +
+				types.T_int8, // right part of +
+			},
 			ReturnTyp: types.T_uint8,
-			ID:        operatorEqualUint8Uint8,
 			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 				lv, rv := vs[0], vs[1]
 				lvs, rvs := lv.Col.([]uint8), rv.Col.([]uint8)
@@ -68,6 +67,7 @@ var operators = map[string][]Function{
 				}
 				return vec, nil
 			},
+			TypeCheckFn: strictTypeCheck,
 		},
 	},
 }

@@ -25,17 +25,16 @@ import (
 )
 
 const (
-	// NullType is the type of const value `NULL`
-	// If input NULL as an argument, its type should be NullValue which can match each type.
+	// NullType means the type of constant value `NULL`
+	// which can meet each required type.
 	// e.g.
-	// built_in_function(100, NULL)
-	// its argument type is [types.T_int64, NullType]
+	// if we input a SQL `select built_in_function(100, NULL);`
+	// it will use [types.T_int64, NullType] to search function when we were building the query plan.
 	NullType = types.T_any
 )
 
 var (
-	// an empty function structure just for return when we couldn't meet
-	// any function.
+	// an empty function structure just for return when we couldn't meet any function.
 	emptyFunction = Function{}
 
 	aggregateEvalError = errors.New(errno.AmbiguousFunction, "aggregate function should not call eval() directly")
@@ -44,13 +43,13 @@ var (
 // Function is an overload of
 // a built-in function or an aggregate function or an operator
 type Function struct {
+	// Index is the function's location number of all the overloads with the same functionName.
+	Index int64
+
 	Flag plan.Function_FuncFlag
 
 	Args      []types.T
 	ReturnTyp types.T
-
-	// ID is a unique flag for the overload. It is helpful to find the overload quickly.
-	ID int64
 
 	// Fn is implementation of built-in function and operator
 	// it received vector list, and return result vector.
@@ -100,18 +99,13 @@ func (f Function) IsAggregate() bool {
 // For use in other packages, see GetFunctionByID and GetFunctionByName
 var functionRegister = map[string][]Function{}
 
-// GetFunctionByID get function structure by its function id.
-func GetFunctionByID(name string, id int64) (Function, error) {
+// GetFunctionByIndex get function structure by its index id.
+func GetFunctionByIndex(name string, index int64) (Function, error) {
 	fs, ok := functionRegister[name]
 	if !ok {
 		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function name '%s'", name))
 	}
-	for _, f := range fs {
-		if f.ID == id {
-			return f, nil
-		}
-	}
-	return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function id '%d'", id))
+	return fs[index], nil
 }
 
 // GetFunctionByName check a function exist or not by function name and arg types,

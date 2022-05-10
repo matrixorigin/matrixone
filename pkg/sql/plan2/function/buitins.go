@@ -37,31 +37,36 @@ func initBuiltIns() {
 var builtins = map[string][]Function{
 	"case": {
 		{
-			Name: "case_when_int64",
-			Flag: plan.Function_NONE,
-			Args: MakeUnLimitArgList(func(ts []types.T) bool {
-				l := len(ts)
+			Index:     0,
+			Flag:      plan.Function_NONE,
+			Args:      nil,
+			ReturnTyp: types.T_int64,
+			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+				// not implement now.
+				return nil, nil
+			},
+			TypeCheckFn: func(inputTypes []types.T, _ []types.T) (match bool) {
+				l := len(inputTypes)
 				if l < 3 {
 					return false
 				}
-
-				for i := 0; i < l-1; i += 2 { //case and then should be int64
-					if ts[i] != types.T_int64 && isNotNull(ts[i]) {
+				caseType := inputTypes[0]
+				for i := 0; i < l-1; i += 2 { // when should be caseType
+					if inputTypes[i] != caseType && isNotNull(inputTypes[i]) {
+						return false
+					}
+				}
+				for i := 1; i < l-1; i += 2 { // then should be int64
+					if inputTypes[i] != types.T_int64 && isNotNull(inputTypes[i]) {
 						return false
 					}
 				}
 				if l%2 == 1 { // has else part
-					if ts[l-1] != types.T_int64 && isNotNull(ts[l-1]) {
+					if inputTypes[l-1] != types.T_int64 && isNotNull(inputTypes[l-1]) {
 						return false
 					}
 				}
 				return true
-			}),
-			ReturnTyp: types.T_int64,
-			ID:        builtinCaseWhenInt64,
-			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-				// not implement now.
-				return nil, nil
 			},
 		},
 	},
