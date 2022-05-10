@@ -76,7 +76,7 @@ func TestParameter(t *testing.T) {
 		update-mode = "fix"
 		`
 	var results = map[string]parameter{
-		"autocommit": parameter{
+		"autocommit": {
 			Name:       "autocommit",
 			Scope:      []string{"global", "session"},
 			Access:     []string{"file"},
@@ -86,7 +86,7 @@ func TestParameter(t *testing.T) {
 			Comment:    "autocommit",
 			UpdateMode: "dynamic",
 		},
-		"back-log": parameter{
+		"back-log": {
 			Name:       "back-log",
 			Scope:      []string{"global"},
 			Access:     []string{"file"},

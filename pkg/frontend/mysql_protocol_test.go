@@ -1588,7 +1588,7 @@ func Test_openpacket(t *testing.T) {
 		}
 
 		data16MB := func(cnt int) []byte {
-			data := make([]byte, cnt * int(MaxPayloadSize))
+			data := make([]byte, cnt*int(MaxPayloadSize))
 			return data
 		}
 
@@ -2021,7 +2021,6 @@ func Test_handleHandshake(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
-
 
 func Test_handleHandshake_Recover(t *testing.T) {
 	f := fuzz.New()

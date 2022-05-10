@@ -19,7 +19,7 @@ type CmdExecutor interface {
 	PrepareSessionBeforeExecRequest(*Session)
 
 	// ExecRequest execute the request and get the response
-	ExecRequest(req *Request) (*Response,error)
+	ExecRequest(req *Request) (*Response, error)
 
 	Close()
 }
@@ -27,4 +27,3 @@ type CmdExecutor interface {
 type CmdExecutorImpl struct {
 	CmdExecutor
 }
-
