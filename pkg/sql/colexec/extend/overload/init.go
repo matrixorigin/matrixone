@@ -679,7 +679,7 @@ func initCastRulesForBinaryOps() {
 	// EQ / NE / GE / GT / LE / LT
 	{
 		ops := []int{EQ, NE, GT, GE, LT, LE}
-		// comparison operation involving decimal 
+		// comparison operation involving decimal
 		for _, op := range ops {
 			{
 				targetType := []types.Type{
