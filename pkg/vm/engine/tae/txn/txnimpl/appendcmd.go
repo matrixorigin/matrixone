@@ -69,7 +69,7 @@ func (c *AppendCmd) String() string {
 }
 
 func (e *AppendCmd) GetType() int16 { return CmdAppend }
-func (c *AppendCmd) WriteTo(w io.Writer) (err error) {
+func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
 		return
 	}
@@ -79,16 +79,20 @@ func (c *AppendCmd) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, uint32(len(c.infos))); err != nil {
 		return
 	}
+	var sn int64
+	n = 10
 	for _, info := range c.infos {
-		if err = info.WriteTo(w); err != nil {
+		if sn, err = info.WriteTo(w); err != nil {
 			return
 		}
+		n += sn
 	}
-	err = c.ComposedCmd.WriteTo(w)
-	return err
+	sn, err = c.ComposedCmd.WriteTo(w)
+	n += sn
+	return
 }
 
-func (c *AppendCmd) ReadFrom(r io.Reader) (err error) {
+func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
 		return
 	}
@@ -96,21 +100,25 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
 		return
 	}
+	var sn int64
+	n = 8
 	c.infos = make([]*appendInfo, length)
 	for i := 0; i < int(length); i++ {
 		c.infos[i] = &appendInfo{dest: &common.ID{}}
-		if err = c.infos[i].ReadFrom(r); err != nil {
+		if sn, err = c.infos[i].ReadFrom(r); err != nil {
 			return
 		}
+		n += sn
 	}
-	cc, err := txnbase.BuildCommandFrom(r)
+	cc, sn, err := txnbase.BuildCommandFrom(r)
 	c.ComposedCmd = cc.(*txnbase.ComposedCmd)
+	n += sn
 	return
 }
 
 func (c *AppendCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = c.WriteTo(&bbuf); err != nil {
+	if _, err = c.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -119,6 +127,6 @@ func (c *AppendCmd) Marshal() (buf []byte, err error) {
 
 func (c *AppendCmd) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	err := c.ReadFrom(bbuf)
+	_, err := c.ReadFrom(bbuf)
 	return err
 }

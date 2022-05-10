@@ -76,7 +76,7 @@ func NewEmptySchema(name string) *Schema {
 	}
 }
 
-func (s *Schema) ReadFrom(r io.Reader) (err error) {
+func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.BlockMaxRows); err != nil {
 		return
 	}
@@ -86,23 +86,27 @@ func (s *Schema) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &s.SegmentMaxBlocks); err != nil {
 		return
 	}
-	if s.Name, err = common.ReadString(r); err != nil {
+	var sn int64
+	if s.Name, sn, err = common.ReadString(r); err != nil {
 		return
 	}
 	colCnt := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &colCnt); err != nil {
 		return
 	}
+	n = sn + 4 + 4 + 4 + 2
 	colBuf := make([]byte, encoding.TypeSize)
 	for i := uint16(0); i < colCnt; i++ {
 		if _, err = r.Read(colBuf); err != nil {
 			return
 		}
+		n += int64(encoding.TypeSize)
 		colDef := new(ColDef)
 		colDef.Type = encoding.DecodeType(colBuf)
-		if colDef.Name, err = common.ReadString(r); err != nil {
+		if colDef.Name, sn, err = common.ReadString(r); err != nil {
 			return
 		}
+		n += sn
 		s.ColDefs = append(s.ColDefs, colDef)
 		colDef.Idx = int(i)
 	}

@@ -355,13 +355,13 @@ func TestCommand(t *testing.T) {
 	assert.Nil(t, err)
 
 	var w bytes.Buffer
-	err = cdb.WriteTo(&w)
+	_, err = cdb.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd, err := txnbase.BuildCommandFrom(r)
+	cmd, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	t.Log(cmd.GetType())
 	eCmd := cmd.(*EntryCommand)
@@ -376,13 +376,13 @@ func TestCommand(t *testing.T) {
 	assert.Nil(t, err)
 
 	w.Reset()
-	err = cdb.WriteTo(&w)
+	_, err = cdb.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf = w.Bytes()
 	r = bytes.NewBuffer(buf)
 
-	cmd, err = txnbase.BuildCommandFrom(r)
+	cmd, _, err = txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 
 	eCmd = cmd.(*EntryCommand)
@@ -398,13 +398,13 @@ func TestCommand(t *testing.T) {
 	cmd, err = tb.MakeCommand(2)
 	assert.Nil(t, err)
 
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf = w.Bytes()
 	r = bytes.NewBuffer(buf)
 
-	cmd, err = txnbase.BuildCommandFrom(r)
+	cmd, _, err = txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	eCmd = cmd.(*EntryCommand)
 	assert.Equal(t, tb.ID, eCmd.Table.ID)
@@ -419,13 +419,13 @@ func TestCommand(t *testing.T) {
 	assert.Nil(t, err)
 
 	w.Reset()
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf = w.Bytes()
 	r = bytes.NewBuffer(buf)
 
-	cmd, err = txnbase.BuildCommandFrom(r)
+	cmd, _, err = txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	eCmd = cmd.(*EntryCommand)
 	assert.Equal(t, tb.ID, eCmd.entry.ID)

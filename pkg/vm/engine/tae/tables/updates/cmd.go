@@ -90,7 +90,8 @@ func (c *UpdateCmd) String() string {
 
 func (c *UpdateCmd) GetType() int16 { return c.cmdType }
 
-func (c *UpdateCmd) WriteTo(w io.Writer) (err error) {
+func (c *UpdateCmd) WriteTo(w io.Writer) (n int64, err error) {
+	var sn int64
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
 		return
 	}
@@ -99,33 +100,35 @@ func (c *UpdateCmd) WriteTo(w io.Writer) (err error) {
 	}
 	switch c.GetType() {
 	case txnbase.CmdUpdate:
-		err = c.update.WriteTo(w)
+		sn, err = c.update.WriteTo(w)
 	case txnbase.CmdDelete:
-		err = c.delete.WriteTo(w)
+		sn, err = c.delete.WriteTo(w)
 	case txnbase.CmdAppend:
-		err = c.append.WriteTo(w)
+		sn, err = c.append.WriteTo(w)
 	}
+	n += sn + 2 + 4
 	return
 }
 
-func (c *UpdateCmd) ReadFrom(r io.Reader) (err error) {
+func (c *UpdateCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
 		return
 	}
 	switch c.GetType() {
 	case txnbase.CmdUpdate:
-		err = c.update.ReadFrom(r)
+		n, err = c.update.ReadFrom(r)
 	case txnbase.CmdDelete:
-		err = c.delete.ReadFrom(r)
+		n, err = c.delete.ReadFrom(r)
 	case txnbase.CmdAppend:
-		err = c.append.ReadFrom(r)
+		n, err = c.append.ReadFrom(r)
 	}
+	n += 4
 	return
 }
 
 func (c *UpdateCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = c.WriteTo(&bbuf); err != nil {
+	if _, err = c.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -134,5 +137,6 @@ func (c *UpdateCmd) Marshal() (buf []byte, err error) {
 
 func (c *UpdateCmd) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	return c.ReadFrom(bbuf)
+	_, err := c.ReadFrom(bbuf)
+	return err
 }

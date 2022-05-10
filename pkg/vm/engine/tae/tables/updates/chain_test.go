@@ -227,12 +227,12 @@ func TestColumnChain3(t *testing.T) {
 	assert.Nil(t, err)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, err)
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	updateCmd := cmd2.(*UpdateCmd)
 	assert.Equal(t, txnbase.CmdUpdate, updateCmd.GetType())
@@ -420,13 +420,13 @@ func TestDeleteChain1(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	assert.Equal(t, txnbase.CmdDelete, cmd2.GetType())
 	assert.Equal(t, txnbase.CmdDelete, cmd2.(*UpdateCmd).cmdType)

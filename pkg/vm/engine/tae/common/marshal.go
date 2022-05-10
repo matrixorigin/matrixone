@@ -28,7 +28,7 @@ func WriteString(str string, w io.Writer) (n int64, err error) {
 	return int64(wn + 2), err
 }
 
-func ReadString(r io.Reader) (str string, err error) {
+func ReadString(r io.Reader) (str string, n int64, err error) {
 	strLen := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &strLen); err != nil {
 		return
@@ -38,5 +38,6 @@ func ReadString(r io.Reader) (str string, err error) {
 		return
 	}
 	str = string(buf)
+	n = 2 + int64(strLen)
 	return
 }

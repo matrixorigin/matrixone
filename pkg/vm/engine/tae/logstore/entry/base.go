@@ -387,7 +387,7 @@ func (b *Base) Unmarshal(buf []byte) error {
 	return nil
 }
 
-func (b *Base) ReadFrom(r io.Reader) (int, error) {
+func (b *Base) ReadFrom(r io.Reader) (int64, error) {
 	if b.node == nil {
 		b.node = common.GPool.Alloc(uint64(b.GetPayloadSize()))
 		b.payload = b.node.Buf[:b.GetPayloadSize()]
@@ -395,14 +395,14 @@ func (b *Base) ReadFrom(r io.Reader) (int, error) {
 	infoBuf := make([]byte, b.GetInfoSize())
 	n1, err := r.Read(infoBuf)
 	if err != nil {
-		return n1, err
+		return int64(n1), err
 	}
 	b.SetInfoBuf(infoBuf)
 	n2, err := r.Read(b.payload)
 	if err != nil {
-		return n2, err
+		return int64(n2), err
 	}
-	return n1 + n2, nil
+	return int64(n1 + n2), nil
 }
 
 func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
@@ -425,18 +425,18 @@ func (b *Base) ReadAt(r *os.File, offset int) (int, error) {
 	return n1 + n2, nil
 }
 
-func (b *Base) WriteTo(w io.Writer) (int, error) {
+func (b *Base) WriteTo(w io.Writer) (int64, error) {
 	n1, err := b.descriptor.WriteTo(w)
 	if err != nil {
 		return n1, err
 	}
 	n2, err := w.Write(b.GetInfoBuf())
 	if err != nil {
-		return n2, err
+		return int64(n2), err
 	}
 	n3, err := w.Write(b.payload)
 	if err != nil {
-		return n3, err
+		return int64(n3), err
 	}
-	return n1 + n2 + n3, err
+	return n1 + int64(n2) + int64(n3), err
 }

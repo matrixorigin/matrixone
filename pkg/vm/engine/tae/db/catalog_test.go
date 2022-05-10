@@ -153,12 +153,12 @@ func TestLogBlock(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, nil)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	entryCmd := cmd2.(*catalog.EntryCommand)
 	t.Log(meta.StringLocked())
@@ -184,12 +184,12 @@ func TestLogSegment(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, nil)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	entryCmd := cmd2.(*catalog.EntryCommand)
 	t.Log(meta.StringLocked())
@@ -215,12 +215,12 @@ func TestLogTable(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, nil)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	entryCmd := cmd2.(*catalog.EntryCommand)
 	t.Log(meta.StringLocked())
@@ -248,12 +248,12 @@ func TestLogDatabase(t *testing.T) {
 	assert.NotNil(t, cmd)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, nil)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	entryCmd := cmd2.(*catalog.EntryCommand)
 	t.Log(meta.StringLocked())

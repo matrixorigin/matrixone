@@ -90,12 +90,12 @@ func MarshalBatch(types []types.Type, data batch.IBatch) ([]byte, error) {
 	return buf, nil
 }
 
-func UnmarshalBatch(buf []byte) (vecTypes []types.Type, bat batch.IBatch, err error) {
+func UnmarshalBatch(buf []byte) (vecTypes []types.Type, bat batch.IBatch, n int64, err error) {
 	r := bytes.NewBuffer(buf)
 	return UnmarshalBatchFrom(r)
 }
 
-func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, err error) {
+func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, n int64, err error) {
 	var size uint32
 	var vecs uint16
 	pos := 0
@@ -138,5 +138,6 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, e
 	}
 
 	bat, err = batch.NewBatch(attrs, cols)
+	n = int64(size)
 	return
 }

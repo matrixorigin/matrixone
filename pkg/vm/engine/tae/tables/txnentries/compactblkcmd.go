@@ -34,7 +34,7 @@ func newCompactBlockCmd(from, to *common.ID) *compactBlockCmd {
 	}
 }
 func (cmd *compactBlockCmd) GetType() int16 { return CmdCompactBlock }
-func (cmd *compactBlockCmd) WriteTo(w io.Writer) (err error) {
+func (cmd *compactBlockCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, CmdCompactBlock); err != nil {
 		return
 	}
@@ -57,9 +57,10 @@ func (cmd *compactBlockCmd) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, cmd.to.BlockID); err != nil {
 		return
 	}
+	n = 2 + 8 + 8 + 8 + 8 + 8 + 8
 	return
 }
-func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (err error) {
+func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmd.from = &common.ID{}
 	if err = binary.Read(r, binary.BigEndian, &cmd.from.TableID); err != nil {
 		return
@@ -80,11 +81,12 @@ func (cmd *compactBlockCmd) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &cmd.to.BlockID); err != nil {
 		return
 	}
+	n = 8 + 8 + 8 + 8 + 8 + 8
 	return
 }
 func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = cmd.WriteTo(&bbuf); err != nil {
+	if _, err = cmd.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -92,7 +94,7 @@ func (cmd *compactBlockCmd) Marshal() (buf []byte, err error) {
 }
 func (cmd *compactBlockCmd) Unmarshal(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
-	err = cmd.ReadFrom(bbuf)
+	_, err = cmd.ReadFrom(bbuf)
 	return
 }
 func (cmd *compactBlockCmd) String() string { return "" }

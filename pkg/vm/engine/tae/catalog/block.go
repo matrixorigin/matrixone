@@ -124,21 +124,24 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *BlockEntry) WriteTo(w io.Writer) (err error) {
-	if err = entry.BaseEntry.WriteTo(w); err != nil {
+func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
 		return
 	}
+	n += 1
 	return
 }
 
-func (entry *BlockEntry) ReadFrom(r io.Reader) (err error) {
-	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
-	return binary.Read(r, binary.BigEndian, &entry.state)
+	err = binary.Read(r, binary.BigEndian, &entry.state)
+	n += 1
+	return
 }
 
 func (entry *BlockEntry) MakeLogEntry() *EntryCommand {

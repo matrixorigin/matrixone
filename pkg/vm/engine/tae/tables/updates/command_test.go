@@ -27,13 +27,13 @@ func TestCompactBlockCmd(t *testing.T) {
 	cmd := NewAppendCmd(1, node)
 
 	var w bytes.Buffer
-	err := cmd.WriteTo(&w)
+	_, err := cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	checkAppendCmdIsEqual(t, cmd, cmd2.(*UpdateCmd))
 }

@@ -258,29 +258,33 @@ func (e *DBEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *DBEntry) WriteTo(w io.Writer) (err error) {
-	if err = entry.BaseEntry.WriteTo(w); err != nil {
+func (entry *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, uint16(len(entry.name))); err != nil {
 		return
 	}
-	_, err = w.Write([]byte(entry.name))
+	var sn int
+	sn, err = w.Write([]byte(entry.name))
+	n += int64(sn) + 2
 	return
 }
 
-func (entry *DBEntry) ReadFrom(r io.Reader) (err error) {
-	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (entry *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
 	size := uint16(0)
 	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
 	}
+	n += 2
 	buf := make([]byte, size)
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
+	n += int64(size)
 	entry.name = string(buf)
 	return
 }

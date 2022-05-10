@@ -248,26 +248,31 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *TableEntry) WriteTo(w io.Writer) (err error) {
-	if err = entry.BaseEntry.WriteTo(w); err != nil {
+func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
+	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
 	buf, err := entry.schema.Marshal()
 	if err != nil {
 		return
 	}
-	_, err = w.Write(buf)
+	sn := int(0)
+	sn, err = w.Write(buf)
+	n += int64(sn)
 	return
 }
 
-func (entry *TableEntry) ReadFrom(r io.Reader) (err error) {
-	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
 	if entry.schema == nil {
 		entry.schema = NewEmptySchema("")
 	}
-	return entry.schema.ReadFrom(r)
+	sn := int64(0)
+	sn, err = entry.schema.ReadFrom(r)
+	n += sn
+	return
 }
 
 func (entry *TableEntry) MakeLogEntry() *EntryCommand {

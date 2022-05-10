@@ -194,7 +194,7 @@ func (node *DeleteNode) StringLocked() string {
 	return s
 }
 
-func (node *DeleteNode) WriteTo(w io.Writer) (err error) {
+func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	buf, err := node.mask.ToBytes()
 	if err != nil {
 		return
@@ -202,17 +202,20 @@ func (node *DeleteNode) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, uint32(len(buf))); err != nil {
 		return
 	}
-	if _, err = w.Write(buf); err != nil {
+	sn := int(0)
+	if sn, err = w.Write(buf); err != nil {
 		return
 	}
+	n = int64(sn) + 4
 	return
 }
 
-func (node *DeleteNode) ReadFrom(r io.Reader) (err error) {
+func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	cnt := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &cnt); err != nil {
 		return
 	}
+	n = 4
 	if cnt == 0 {
 		return
 	}
@@ -220,6 +223,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (err error) {
 	if _, err = r.Read(buf); err != nil {
 		return
 	}
+	n += int64(cnt)
 	node.mask = roaring.New()
 	err = node.mask.UnmarshalBinary(buf)
 	return

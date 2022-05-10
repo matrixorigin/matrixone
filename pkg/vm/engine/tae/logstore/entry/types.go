@@ -64,8 +64,8 @@ type Entry interface {
 
 	Unmarshal([]byte) error
 	UnmarshalFromNode(*common.MemNode, bool) error
-	ReadFrom(io.Reader) (int, error)
-	WriteTo(io.Writer) (int, error)
+	ReadFrom(io.Reader) (int64, error)
+	WriteTo(io.Writer) (int64, error)
 
 	WaitDone() error
 	DoneWithErr(error)

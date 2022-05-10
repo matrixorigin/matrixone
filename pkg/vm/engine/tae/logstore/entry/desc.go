@@ -87,8 +87,9 @@ func (desc *descriptor) TotalSizeExpectMeta() int {
 	return desc.GetPayloadSize() + desc.GetInfoSize()
 }
 
-func (desc *descriptor) WriteTo(w io.Writer) (int, error) {
-	return w.Write(desc.descBuf)
+func (desc *descriptor) WriteTo(w io.Writer) (int64, error) {
+	n, err := w.Write(desc.descBuf)
+	return int64(n), err
 }
 
 func (desc *descriptor) ReadMeta(r io.Reader) (int, error) {

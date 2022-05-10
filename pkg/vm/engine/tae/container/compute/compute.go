@@ -133,8 +133,8 @@ func GetValue(col *gvec.Vector, row uint32) interface{} {
 	default:
 		return vector.ErrVecTypeNotSupport
 	}
-	return nil
 }
+
 func SetFixSizeTypeValue(col *gvec.Vector, row uint32, val interface{}) error {
 	vals := col.Col
 	switch col.Typ.Oid {

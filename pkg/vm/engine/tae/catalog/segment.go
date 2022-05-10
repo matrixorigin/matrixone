@@ -229,21 +229,25 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 	return
 }
 
-func (entry *SegmentEntry) WriteTo(w io.Writer) (err error) {
-	if err = entry.BaseEntry.WriteTo(w); err != nil {
+func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
+	sn := int64(0)
+	if sn, err = entry.BaseEntry.WriteTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
 		return
 	}
+	n = sn + 1
 	return
 }
 
-func (entry *SegmentEntry) ReadFrom(r io.Reader) (err error) {
-	if err = entry.BaseEntry.ReadFrom(r); err != nil {
+func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
+	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
 		return
 	}
-	return binary.Read(r, binary.BigEndian, &entry.state)
+	err = binary.Read(r, binary.BigEndian, &entry.state)
+	n += 1
+	return
 }
 
 func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {

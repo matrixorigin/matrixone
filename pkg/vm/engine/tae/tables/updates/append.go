@@ -78,17 +78,19 @@ func (n *AppendNode) ApplyCommit(index *wal.Index) error {
 	return nil
 }
 
-func (node *AppendNode) WriteTo(w io.Writer) (err error) {
+func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, node.maxRow); err != nil {
 		return
 	}
+	n = 4
 	return
 }
 
-func (node *AppendNode) ReadFrom(r io.Reader) (err error) {
+func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &node.maxRow); err != nil {
 		return
 	}
+	n = 4
 	return
 }
 

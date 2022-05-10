@@ -20,8 +20,8 @@ import (
 )
 
 type TxnCmd interface {
-	WriteTo(io.Writer) error
-	ReadFrom(io.Reader) error
+	WriteTo(io.Writer) (int64, error)
+	ReadFrom(io.Reader) (int64, error)
 	Marshal() ([]byte, error)
 	Unmarshal([]byte) error
 	GetType() int16

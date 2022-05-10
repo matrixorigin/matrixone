@@ -186,7 +186,7 @@ func (e *CheckpointEntry) Unmarshal(buf []byte) (err error) {
 		return
 	}
 	for i := 0; i < int(cmdCnt); i++ {
-		cmd, err := txnbase.BuildCommandFrom(r)
+		cmd, _, err := txnbase.BuildCommandFrom(r)
 		if err != nil {
 			return err
 		}
@@ -213,7 +213,7 @@ func (e *CheckpointEntry) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, cmd := range e.Entries {
-		if err = cmd.WriteTo(&w); err != nil {
+		if _, err = cmd.WriteTo(&w); err != nil {
 			return
 		}
 	}

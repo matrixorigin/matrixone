@@ -128,7 +128,7 @@ func (e *PointerCmd) String() string {
 	return s
 }
 
-func (e *PointerCmd) WriteTo(w io.Writer) (err error) {
+func (e *PointerCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
 		return
 	}
@@ -138,31 +138,33 @@ func (e *PointerCmd) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, e.Lsn); err != nil {
 		return
 	}
+	n = 14
 	return
 }
 
 func (e *PointerCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = e.WriteTo(&bbuf); err != nil {
+	if _, err = e.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
 	return
 }
 
-func (e *PointerCmd) ReadFrom(r io.Reader) (err error) {
+func (e *PointerCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &e.Group); err != nil {
 		return
 	}
 	if err = binary.Read(r, binary.BigEndian, &e.Lsn); err != nil {
 		return
 	}
+	n = 12
 	return
 }
 
 func (e *PointerCmd) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	err := e.ReadFrom(bbuf)
+	_, err := e.ReadFrom(bbuf)
 	return err
 }
 
@@ -170,26 +172,27 @@ func (e *DeleteBitmapCmd) GetType() int16 {
 	return CmdDeleteBitmap
 }
 
-func (e *DeleteBitmapCmd) ReadFrom(r io.Reader) (err error) {
+func (e *DeleteBitmapCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	e.Bitmap = roaring.NewBitmap()
-	_, err = e.Bitmap.ReadFrom(r)
+	n, err = e.Bitmap.ReadFrom(r)
 	return
 }
 
-func (e *DeleteBitmapCmd) WriteTo(w io.Writer) (err error) {
+func (e *DeleteBitmapCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if e == nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
 		return
 	}
-	_, err = e.Bitmap.WriteTo(w)
+	n, err = e.Bitmap.WriteTo(w)
+	n += 2
 	return
 }
 
 func (e *DeleteBitmapCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = e.WriteTo(&bbuf); err != nil {
+	if _, err = e.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -198,7 +201,7 @@ func (e *DeleteBitmapCmd) Marshal() (buf []byte, err error) {
 
 func (e *DeleteBitmapCmd) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	err := e.ReadFrom(bbuf)
+	_, err := e.ReadFrom(bbuf)
 	return err
 }
 
@@ -213,7 +216,7 @@ func (e *BatchCmd) GetType() int16 {
 
 func (e *BatchCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = e.WriteTo(&bbuf); err != nil {
+	if _, err = e.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -222,16 +225,16 @@ func (e *BatchCmd) Marshal() (buf []byte, err error) {
 
 func (e *BatchCmd) Unmarshal(buf []byte) error {
 	bbuf := bytes.NewBuffer(buf)
-	err := e.ReadFrom(bbuf)
+	_, err := e.ReadFrom(bbuf)
 	return err
 }
 
-func (e *BatchCmd) ReadFrom(r io.Reader) (err error) {
-	e.Types, e.Bat, err = UnmarshalBatchFrom(r)
-	return err
+func (e *BatchCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	e.Types, e.Bat, n, err = UnmarshalBatchFrom(r)
+	return
 }
 
-func (e *BatchCmd) WriteTo(w io.Writer) (err error) {
+func (e *BatchCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, e.GetType()); err != nil {
 		return
 	}
@@ -239,7 +242,8 @@ func (e *BatchCmd) WriteTo(w io.Writer) (err error) {
 	if err != nil {
 		return
 	}
-	_, err = w.Write(colsBuf)
+	in, err := w.Write(colsBuf)
+	n = int64(in) + 2
 	return
 }
 
@@ -254,7 +258,7 @@ func (e *ComposedCmd) GetType() int16 {
 
 func (cc *ComposedCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer
-	if err = cc.WriteTo(&bbuf); err != nil {
+	if _, err = cc.WriteTo(&bbuf); err != nil {
 		return
 	}
 	buf = bbuf.Bytes()
@@ -263,35 +267,44 @@ func (cc *ComposedCmd) Marshal() (buf []byte, err error) {
 
 func (cc *ComposedCmd) Unmarshal(buf []byte) (err error) {
 	bbuf := bytes.NewBuffer(buf)
-	err = cc.ReadFrom(bbuf)
+	_, err = cc.ReadFrom(bbuf)
 	return err
 }
 
-func (cc *ComposedCmd) WriteTo(w io.Writer) (err error) {
+func (cc *ComposedCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, cc.GetType()); err != nil {
 		return
 	}
+	n += 2
 	cmds := uint32(len(cc.Cmds))
 	if err = binary.Write(w, binary.BigEndian, cmds); err != nil {
 		return
 	}
+	n += 4
+	var cn int64
 	for _, cmd := range cc.Cmds {
-		if err = cmd.WriteTo(w); err != nil {
+		if cn, err = cmd.WriteTo(w); err != nil {
 			break
+		} else {
+			n += cn
 		}
 	}
 	return
 }
 
-func (cc *ComposedCmd) ReadFrom(r io.Reader) (err error) {
+func (cc *ComposedCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	cmds := uint32(0)
 	if err = binary.Read(r, binary.BigEndian, &cmds); err != nil {
 		return
 	}
+	n += 4
+	var cn int64
 	cc.Cmds = make([]txnif.TxnCmd, cmds)
 	for i := 0; i < int(cmds); i++ {
-		if cc.Cmds[i], err = BuildCommandFrom(r); err != nil {
+		if cc.Cmds[i], cn, err = BuildCommandFrom(r); err != nil {
 			break
+		} else {
+			n += cn
 		}
 	}
 	return
@@ -313,7 +326,7 @@ func (cc *ComposedCmd) String() string {
 	return cc.ToString("")
 }
 
-func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, err error) {
+func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, n int64, err error) {
 	var cmdType int16
 	if err = binary.Read(r, binary.BigEndian, &cmdType); err != nil {
 		return
@@ -322,6 +335,7 @@ func BuildCommandFrom(r io.Reader) (cmd txnif.TxnCmd, err error) {
 	factory := txnif.GetCmdFactory(cmdType)
 
 	cmd = factory(cmdType)
-	err = cmd.ReadFrom(r)
+	n, err = cmd.ReadFrom(r)
+	n += 2
 	return
 }

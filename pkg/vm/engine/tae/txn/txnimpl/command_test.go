@@ -38,7 +38,7 @@ func TestPointerCmd(t *testing.T) {
 			mashalled, err := cmd.Marshal()
 			assert.Nil(t, err)
 			r := bytes.NewBuffer(mashalled)
-			cmd2, err := txnbase.BuildCommandFrom(r)
+			cmd2, _, err := txnbase.BuildCommandFrom(r)
 			assert.Nil(t, err)
 			assert.Equal(t, cmd.Group, cmd2.(*txnbase.PointerCmd).Group)
 			assert.Equal(t, cmd.Lsn, cmd2.(*txnbase.PointerCmd).Lsn)
@@ -97,13 +97,13 @@ func TestComposedCmd(t *testing.T) {
 		composed.AddCmd(comp)
 	}
 	var w bytes.Buffer
-	err := composed.WriteTo(&w)
+	_, err := composed.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 
 	r := bytes.NewBuffer(buf)
-	composed2, err := txnbase.BuildCommandFrom(r)
+	composed2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	cmd1 := composed.Cmds
 	cmd2 := composed2.(*txnbase.ComposedCmd).Cmds
@@ -147,13 +147,13 @@ func TestAppendCmd(t *testing.T) {
 	assert.Nil(t, err)
 
 	var w bytes.Buffer
-	err = cmd.WriteTo(&w)
+	_, err = cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	checkAppendCmdIsEqual(t, cmd.(*AppendCmd), cmd2.(*AppendCmd))
 }

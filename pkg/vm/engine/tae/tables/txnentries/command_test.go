@@ -29,13 +29,13 @@ func TestCompactBlockCmd(t *testing.T) {
 	cmd := newCompactBlockCmd(from, to)
 
 	var w bytes.Buffer
-	err := cmd.WriteTo(&w)
+	_, err := cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	checkCompactBlockCmdIsEqual(t, cmd, cmd2.(*compactBlockCmd))
 }
@@ -62,13 +62,13 @@ func TestMergeBlocksCmd(t *testing.T) {
 	cmd := newMergeBlocksCmd(0, droppedSegs, createdSegs, droppedBlks, createdBlks, mapping, fromAddr, toAddr)
 
 	var w bytes.Buffer
-	err := cmd.WriteTo(&w)
+	_, err := cmd.WriteTo(&w)
 	assert.Nil(t, err)
 
 	buf := w.Bytes()
 	r := bytes.NewBuffer(buf)
 
-	cmd2, err := txnbase.BuildCommandFrom(r)
+	cmd2, _, err := txnbase.BuildCommandFrom(r)
 	assert.Nil(t, err)
 	checkMergeBlocksCmdIsEqual(t, cmd, cmd2.(*mergeBlocksCmd))
 }

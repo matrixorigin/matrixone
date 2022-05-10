@@ -51,17 +51,19 @@ type CommitInfo struct {
 	LogIndex *wal.Index
 }
 
-func (info *CommitInfo) WriteTo(w io.Writer) (err error) {
+func (info *CommitInfo) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, info.CurrOp); err != nil {
 		return
 	}
+	n = 1
 	return
 }
 
-func (info *CommitInfo) ReadFrom(r io.Reader) (err error) {
+func (info *CommitInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &info.CurrOp); err != nil {
 		return
 	}
+	n = 1
 	return
 }
 
@@ -114,7 +116,7 @@ func (be *BaseEntry) Clone() *BaseEntry {
 	return cloned
 }
 
-func (be *BaseEntry) WriteTo(w io.Writer) (err error) {
+func (be *BaseEntry) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
 		return
 	}
@@ -124,13 +126,15 @@ func (be *BaseEntry) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, be.DeleteAt); err != nil {
 		return
 	}
-	if err = be.CommitInfo.WriteTo(w); err != nil {
+	sn := int64(0)
+	if sn, err = be.CommitInfo.WriteTo(w); err != nil {
 		return
 	}
+	n = sn + 8 + 8 + 8
 	return
 }
 
-func (be *BaseEntry) ReadFrom(r io.Reader) (err error) {
+func (be *BaseEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &be.ID); err != nil {
 		return
 	}
@@ -140,7 +144,10 @@ func (be *BaseEntry) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &be.DeleteAt); err != nil {
 		return
 	}
-	return be.CommitInfo.ReadFrom(r)
+	sn := int64(0)
+	sn, err = be.CommitInfo.ReadFrom(r)
+	n = sn + 8 + 8 + 8
+	return
 }
 
 func (be *BaseEntry) GetTxn() txnif.TxnReader { return be.Txn }

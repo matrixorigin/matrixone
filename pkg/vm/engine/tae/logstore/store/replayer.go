@@ -303,8 +303,8 @@ func (r *replayer) replayHandler(v VFile, o ReplayObserver) error {
 		vfile.Truncate(int64(r.state.pos))
 		return err
 	}
-	if n != entry.TotalSizeExpectMeta() {
-		if current.pos == r.state.pos+n {
+	if int(n) != entry.TotalSizeExpectMeta() {
+		if current.pos == r.state.pos+int(n) {
 			vfile.Truncate(int64(current.pos))
 			return io.EOF
 		} else {

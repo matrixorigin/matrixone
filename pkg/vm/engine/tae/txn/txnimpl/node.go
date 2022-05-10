@@ -94,7 +94,7 @@ func (info *appendInfo) String() string {
 		info.seq, info.srcOff, info.srcLen+info.srcOff, info.dest.ToBlockFileName(), info.destOff, info.destLen+info.destOff)
 	return s
 }
-func (info *appendInfo) WriteTo(w io.Writer) (err error) {
+func (info *appendInfo) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, info.seq); err != nil {
 		return
 	}
@@ -119,9 +119,10 @@ func (info *appendInfo) WriteTo(w io.Writer) (err error) {
 	if err = binary.Write(w, binary.BigEndian, info.destLen); err != nil {
 		return
 	}
+	n = 4 + 4 + 4 + 8 + 8 + 8 + 4 + 4
 	return
 }
-func (info *appendInfo) ReadFrom(r io.Reader) (err error) {
+func (info *appendInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &info.seq); err != nil {
 		return
 	}
@@ -147,6 +148,7 @@ func (info *appendInfo) ReadFrom(r io.Reader) (err error) {
 	if err = binary.Read(r, binary.BigEndian, &info.destLen); err != nil {
 		return
 	}
+	n = 4 + 4 + 4 + 8 + 8 + 8 + 4 + 4
 	return
 }
 
@@ -270,7 +272,7 @@ func (n *insertNode) OnLoad() {
 	logutil.Debugf("GetPayloadSize=%d", e.GetPayloadSize())
 	buf := e.GetPayload()
 	r := bytes.NewBuffer(buf)
-	cmd, err := txnbase.BuildCommandFrom(r)
+	cmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		panic(err)
 	}
