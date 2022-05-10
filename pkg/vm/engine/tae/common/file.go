@@ -74,11 +74,11 @@ func (f *rwFile) Read(p []byte) (n int, err error) {
 	return
 }
 
-func (f *rwFile) Ref()                             {}
-func (f *rwFile) Unref()                           {}
-func (f *rwFile) RefCount() int64                  { return 0 }
-func (f *rwFile) Stat() FileInfo                   { return &f.stat }
-func (f *rwFile) GetFileType() FileType            { return DiskFile }
+func (f *rwFile) Ref()                  {}
+func (f *rwFile) Unref()                {}
+func (f *rwFile) RefCount() int64       { return 0 }
+func (f *rwFile) Stat() FileInfo        { return &f.stat }
+func (f *rwFile) GetFileType() FileType { return DiskFile }
 
 type baseFileInfo struct {
 	size int64

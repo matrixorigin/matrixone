@@ -51,7 +51,7 @@ func newAsyncJobDispatcher() *asyncJobDispatcher {
 }
 
 func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (err error) {
-	for active, _ := range dispatcher.actives {
+	for active := range dispatcher.actives {
 		for _, scope := range scopes {
 			if err = ScopeConflictCheck(&active, &scope); err != nil {
 				break

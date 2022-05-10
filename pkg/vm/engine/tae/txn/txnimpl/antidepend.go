@@ -88,7 +88,7 @@ func (checker *warChecker) ReadBlock(id *common.ID) {
 
 func (checker *warChecker) check() (err error) {
 	var entry *catalog.BaseEntry
-	for key, _ := range checker.symTable {
+	for key := range checker.symTable {
 		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
 		if checker.db != nil && checker.db.GetID() != did {
 			panic(fmt.Sprintf("not expected: %d, %d", checker.db.GetID(), did))

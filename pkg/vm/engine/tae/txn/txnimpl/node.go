@@ -436,7 +436,7 @@ func (n *insertNode) PrintDeletes() string {
 // TODO: Rewrite later
 func (n *insertNode) Window(start, end uint32) (*gbat.Batch, error) {
 	attrs := make([]string, len(n.table.GetSchema().ColDefs))
-	for i, _ := range attrs {
+	for i := range attrs {
 		attrs[i] = n.table.GetSchema().ColDefs[i].Name
 	}
 	ret := gbat.New(true, attrs)

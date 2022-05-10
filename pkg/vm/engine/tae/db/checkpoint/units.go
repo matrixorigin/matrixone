@@ -104,7 +104,7 @@ func (lunits *LeveledUnits) RunCalibration() {
 	for i := len(lunits.levels) - 1; i >= 0; i-- {
 		level := lunits.levels[i]
 		units := level.ConsumeAll()
-		for unit, _ := range units {
+		for unit := range units {
 			// unit.RunCalibration()
 			lunits.AddUnit(unit)
 		}
@@ -119,7 +119,7 @@ func (lunits *LeveledUnits) Scan() {
 		}
 		units := level.ConsumeAll()
 		level.UpdateTS()
-		for unit, _ := range units {
+		for unit := range units {
 			if lunits.policy.DecideLevel(unit.EstimateScore()) < i {
 				lunits.AddUnit(unit)
 				continue

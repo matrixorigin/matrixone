@@ -296,7 +296,7 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.entry.DeleteAt); err != nil {
 			return
 		}
-		n += 8 + 8 +8 + 8
+		n += 8 + 8 + 8 + 8
 	case CmdDropBlock:
 		if err = binary.Write(w, binary.BigEndian, cmd.Table.db.ID); err != nil {
 			return
@@ -313,7 +313,7 @@ func (cmd *EntryCommand) WriteTo(w io.Writer) (n int64, err error) {
 		if err = binary.Write(w, binary.BigEndian, cmd.entry.DeleteAt); err != nil {
 			return
 		}
-		n += 8 + 8 +8 + 8 + 8
+		n += 8 + 8 + 8 + 8 + 8
 	}
 	return
 }
@@ -442,7 +442,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		cmd.entry.CurrOp = OpCreate
 		cmd.Segment = &SegmentEntry{
 			BaseEntry: cmd.entry,
-			state: state,
+			state:     state,
 		}
 		n += 8 + 8 + 8
 	case CmdCreateBlock:
@@ -515,7 +515,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		if err = binary.Read(r, binary.BigEndian, &cmd.entry.DeleteAt); err != nil {
 			return
 		}
-		
+
 		n += 8 + 8 + 8 + 8 + 8
 	}
 	return

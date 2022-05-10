@@ -186,7 +186,7 @@ func Merge(col []*vector.Vector, src *[]uint32, fromLayout, toLayout []uint32) (
 }
 
 func Multiplex(col []*vector.Vector, src []uint32, fromLayout, toLayout []uint32) (ret []*vector.Vector) {
-	for i, _ := range col {
+	for i := range col {
 		if nulls.Any(col[i].Nsp) {
 			ret = multiplexNullableBlocks(col, src, fromLayout, toLayout)
 			return

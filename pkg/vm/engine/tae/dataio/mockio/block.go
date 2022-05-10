@@ -50,7 +50,7 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	bf.deletes = newDeletes(bf)
 	bf.indexMeta = newData(nil)
 	bf.OnZeroCB = bf.close
-	for i, _ := range bf.columns {
+	for i := range bf.columns {
 		cnt := 0
 		if indexCnt != nil {
 			cnt = indexCnt[i]

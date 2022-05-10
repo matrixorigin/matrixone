@@ -57,7 +57,7 @@ func (store *mockTxnStore) BindTxn(txn txnif.AsyncTxn) {
 }
 
 func (store *mockTxnStore) PrepareCommit() error {
-	for e, _ := range store.entries {
+	for e := range store.entries {
 		err := e.PrepareCommit()
 		if err != nil {
 			return err
@@ -67,7 +67,7 @@ func (store *mockTxnStore) PrepareCommit() error {
 }
 
 func (store *mockTxnStore) ApplyCommit() error {
-	for e, _ := range store.entries {
+	for e := range store.entries {
 		err := e.ApplyCommit(nil)
 		if err != nil {
 			return err

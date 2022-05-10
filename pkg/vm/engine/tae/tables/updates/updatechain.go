@@ -100,7 +100,7 @@ func (chain *ColumnChain) DeleteNode(node *common.DLNode) {
 
 func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
 	n := node.GetPayload().(*ColumnNode)
-	for row, _ := range n.txnVals {
+	for row := range n.txnVals {
 		chain.view.Delete(row, n)
 	}
 	chain.Delete(node)

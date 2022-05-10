@@ -130,4 +130,3 @@ func CompareGeneric(a, b interface{}, t types.Type) int {
 		panic("unsupported type")
 	}
 }
-

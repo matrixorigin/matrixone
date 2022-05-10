@@ -221,7 +221,7 @@ func (view *ColumnView) RowStringLocked(row uint32, link *common.Link) string {
 
 func (view *ColumnView) StringLocked() string {
 	mask := roaring.New()
-	for k, _ := range view.links {
+	for k := range view.links {
 		mask.Add(k)
 	}
 	s := "[VIEW]"

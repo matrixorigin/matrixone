@@ -34,7 +34,7 @@ func newColumnBlock(block *blockFile, indexCnt int) *columnBlock {
 		block:   block,
 		indexes: make([]*indexFile, indexCnt),
 	}
-	for i, _ := range cb.indexes {
+	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)

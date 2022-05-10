@@ -60,7 +60,7 @@ var (
 
 func init() {
 	pools = make([]sync.Pool, len(PageSizes))
-	for idx, _ := range PageSizes {
+	for idx := range PageSizes {
 		pools[idx] = sync.Pool{
 			New: func(i int) func() interface{} {
 				return func() interface{} {
@@ -186,7 +186,7 @@ func NewMempool(capacity uint64) *Mempool {
 		pools:    make([]poolWrapper, len(PageSizes)),
 	}
 
-	for idx, _ := range PageSizes {
+	for idx := range PageSizes {
 		mp.pools[idx].idx = idx
 		mp.pools[idx].Pool = sync.Pool{New: pools[idx].New}
 		mp.pools[idx].Pool.Put(pools[idx].Get())
