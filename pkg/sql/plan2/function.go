@@ -19,7 +19,7 @@ import (
 )
 
 //
-// Function signature.  ArgTypeClass and ArgType need some explaination.
+// Function signature.  ArgTypeClass and ArgType need some explanation.
 // ArgTypeClass defines type equivalent class for this function.  The first
 // equivlent class is the return type.   For each argument of this function
 // it has a arg type, which is an index into the ArgTypeClass.   Let's
@@ -122,7 +122,7 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"BOOLAGG_AND", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL}, []int8{1}},
 	{"BOOLAGG_OR", plan.Function_AGG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL}, []int8{1}},
 
-	{"CASE", plan.Function_NONE, CASE_WHEN_EXPRESSION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_ANY, plan.Type_ARRAY, plan.Type_ARRAY}, []int8{1, 2, 3}},
+	{"CASE", plan.Function_NONE, CASE_WHEN_EXPRESSION, []plan.Type_TypeId{plan.Type_ANY, plan.Type_ANY, plan.Type_ARRAY, plan.Type_ANY}, []int8{1, 2, 3}},
 	{"CEIL", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANYNUMBER, plan.Type_INT32}, []int8{0, -1}},
 	{"CHR", plan.Function_STRICT, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_INT32}, []int8{1}},
 	{"COALESCE", plan.Function_VARARG, STANDARD_FUNCTION, []plan.Type_TypeId{plan.Type_ANY}, []int8{0}},
@@ -232,4 +232,10 @@ var BuiltinFunctions = [...]*FunctionSig{
 	{"EXISTS", plan.Function_STRICT, IN_EXISTS_EXPRESSION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ALL", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
 	{"ANY", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_BOOL, plan.Type_ARRAY}, []int8{1}},
+
+	//add for tpch
+	{"DATE", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_DATE, plan.Type_VARCHAR}, []int8{1}},
+	{"INTERVAL", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_INTERVAL, plan.Type_VARCHAR}, []int8{1}},
+	{"EXTRACT", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_ANYTIME, plan.Type_VARCHAR}, []int8{1, 0}},
+	{"SUBSTRING", plan.Function_STRICT, UNKNOW_KIND_FUNCTION, []plan.Type_TypeId{plan.Type_VARCHAR, plan.Type_ANYINT}, []int8{0, 1, 1}},
 }

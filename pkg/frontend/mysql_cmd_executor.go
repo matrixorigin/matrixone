@@ -16,16 +16,17 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 	"os"
 	"runtime/pprof"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan2/explain"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -940,7 +941,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 
 	//get CompilerContext
 	ctx := plan2.NewMockCompilerContext()
-	query, err := plan2.BuildPlan2(ctx, stmt.Statement)
+	qry, err := plan2.BuildPlan(ctx, stmt.Statement)
 	if err != nil {
 		//fmt.Sprintf("build Query statement error: '%v'", tree.String(stmt, dialect.MYSQL))
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Build Query statement error:'%v'", tree.String(stmt.Statement, dialect.MYSQL)))
@@ -949,7 +950,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(query)
+	explainQuery := explain.NewExplainQueryImpl(qry)
 	explainQuery.ExplainPlan(buffer, es)
 
 	session := mce.GetSession()

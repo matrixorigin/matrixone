@@ -16,6 +16,7 @@ package explain
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan2"
 )
@@ -93,7 +94,7 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 	case plan2.COMPARISON_OPERATOR:
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
 	case plan2.CAST_EXPRESSION:
-		panic("CAST_EXPRESSION is not support now")
+		// panic("CAST_EXPRESSION is not support now")
 	case plan2.CASE_WHEN_EXPRESSION:
 		panic("CASE_WHEN_EXPRESSION is not support now")
 	case plan2.BETWEEN_AND_EXPRESSION:

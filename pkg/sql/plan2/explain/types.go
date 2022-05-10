@@ -16,9 +16,9 @@ package explain
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 //type TableDef plan.TableDef
@@ -120,7 +120,7 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	logutil.Infof(buf.Lines[buf.CurrentLine])
+	// logutil.Infof(buf.Lines[buf.CurrentLine])
 	buf.End++
 }
 

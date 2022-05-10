@@ -35,7 +35,6 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
 		Limit:   stmt.Limit,
 	}
 	selectCtx := &SelectContext{
-		tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
 	}
 	return buildSelect(selectStmt, ctx, query, selectCtx)
