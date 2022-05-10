@@ -44,7 +44,7 @@ var (
 // a built-in function or an aggregate function or an operator
 type Function struct {
 	// Index is the function's location number of all the overloads with the same functionName.
-	Index int64
+	Index int
 
 	Flag plan.Function_FuncFlag
 
@@ -100,7 +100,7 @@ func (f Function) IsAggregate() bool {
 var functionRegister = map[string][]Function{}
 
 // GetFunctionByIndex get function structure by its index id.
-func GetFunctionByIndex(name string, index int64) (Function, error) {
+func GetFunctionByIndex(name string, index int) (Function, error) {
 	fs, ok := functionRegister[name]
 	if !ok {
 		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function name '%s'", name))
