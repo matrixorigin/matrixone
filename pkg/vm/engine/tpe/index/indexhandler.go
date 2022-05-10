@@ -20,7 +20,6 @@ import (
 )
 
 type IndexHandler interface {
-
 	ReadFromIndex(readCtx interface{}) (*batch.Batch, int, error)
 
 	WriteIntoTable(table *descriptor.RelationDesc, writeCtx interface{}, bat *batch.Batch) error

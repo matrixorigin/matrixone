@@ -255,15 +255,15 @@ func Test_ParallelReader(t *testing.T) {
 		dumpShards := &tuplecodec.CubeShards{
 			Shards: []metapb.Shard{
 				{
-					ID: 0,
+					ID:    0,
 					Start: nil,
-					End: nil,
+					End:   nil,
 				},
 			},
 		}
 
 		payload, err := json.Marshal(dumpShards)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		readers := tableDesc.NewReader(1, nil, payload)
 		readers[0].(*TpeReader).parallelReader = false
@@ -296,7 +296,6 @@ func Test_ParallelReader(t *testing.T) {
 	})
 }
 
-
 func Test_printBatch(t *testing.T) {
 	convey.Convey("test printBatch", t, func() {
 		tpe, err := NewTpeEngine(&TpeConfig{
@@ -313,9 +312,9 @@ func Test_printBatch(t *testing.T) {
 
 		//(a,b,c)
 		//(uint64,uint64,uint64)
-		_, attrDefs := tuplecodec.MakeAttributes(types.T_int8, types.T_uint8, types.T_int16, types.T_uint16, types.T_int32, 
-										types.T_uint32, types.T_int64, types.T_uint64, types.T_float32, types.T_float64, 
-										types.T_char, types.T_varchar, types.T_date, types.T_datetime)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_int8, types.T_uint8, types.T_int16, types.T_uint16, types.T_int32,
+			types.T_uint32, types.T_int64, types.T_uint64, types.T_float32, types.T_float64,
+			types.T_char, types.T_varchar, types.T_date, types.T_datetime)
 
 		attrNames := []string{
 			"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n",
@@ -346,14 +345,14 @@ func Test_printBatch(t *testing.T) {
 		dumpShards := &tuplecodec.CubeShards{
 			Shards: []metapb.Shard{
 				{
-					ID: 0,
+					ID:    0,
 					Start: nil,
-					End: nil,
+					End:   nil,
 				},
 			},
 		}
 		payload, err := json.Marshal(dumpShards)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		var get *batch.Batch
 		readers := tableDesc.NewReader(1, nil, payload)
@@ -362,13 +361,13 @@ func Test_printBatch(t *testing.T) {
 
 		for i := 0; i < len(bat.Vecs); i++ {
 			bat.Vecs[i].Nsp = &nulls.Nulls{Np: roaring.New()}
-			bat.Vecs[i].Nsp.Np.AddInt(1)	
+			bat.Vecs[i].Nsp.Np.AddInt(1)
 		}
 		printBatch(readers[0].(*TpeReader), bat, attrNames)
 
 		for i := 0; i < len(bat.Vecs); i++ {
 			bat.Vecs[i].Nsp = &nulls.Nulls{Np: roaring.New()}
-			bat.Vecs[i].Nsp.Np.AddInt(0)	
+			bat.Vecs[i].Nsp.Np.AddInt(0)
 		}
 		printBatch(readers[0].(*TpeReader), bat, attrNames)
 	})

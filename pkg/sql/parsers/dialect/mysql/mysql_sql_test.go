@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "explain (analyze true,verbose false) select * from emp;",
+		input: "explain (analyze true,verbose false) select * from emp",
 		//output: "select * from R inner join S on R.uid = S.uid",
 	}
 )
@@ -474,10 +474,11 @@ var (
 	}, {
 		input: "explain select a from A",
 	}, {
-		input:  "explain format = 'tree' select a from A",
-		output: "explain format = tree select a from A",
+		input:  "explain (format text) select a from A",
+		output: "explain (format text) select a from A",
 	}, {
-		input: "explain analyze select * from t",
+		input:  "explain analyze select * from t",
+		output: "explain (analyze) select * from t",
 	}, {
 		input:  "explain format = 'tree' for connection 10",
 		output: "explain format = tree for connection 10",

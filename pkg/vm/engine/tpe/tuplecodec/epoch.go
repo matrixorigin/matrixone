@@ -33,12 +33,12 @@ type EpochHandler struct {
 }
 
 func NewEpochHandler(tch *TupleCodecHandler,
-		dh descriptor.DescriptorHandler,
-		kv KVHandler) *EpochHandler {
+	dh descriptor.DescriptorHandler,
+	kv KVHandler) *EpochHandler {
 	return &EpochHandler{
 		tch: tch,
-		dh: dh,
-		kv: kv,
+		dh:  dh,
+		kv:  kv,
 	}
 }
 
@@ -48,7 +48,7 @@ func (eh *EpochHandler) SetEpoch(e uint64) {
 	eh.epoch = e
 }
 
-func (eh *EpochHandler) GetEpoch() uint64{
+func (eh *EpochHandler) GetEpoch() uint64 {
 	eh.rwlock.RLock()
 	defer eh.rwlock.RUnlock()
 	return eh.epoch
@@ -66,7 +66,7 @@ func (eh *EpochHandler) RemoveDeletedTable(epoch uint64) (int, error) {
 
 	tke := eh.tch.GetEncoder()
 
-	dhi,ok := eh.dh.(*DescriptorHandlerImpl)
+	dhi, ok := eh.dh.(*DescriptorHandlerImpl)
 	if !ok {
 		return 0, errorItIsNotDescriptorHandlerImpl
 	}
@@ -76,16 +76,16 @@ func (eh *EpochHandler) RemoveDeletedTable(epoch uint64) (int, error) {
 		//logutil.Infof("epoch %d saveEpoch %d dbid %d tableid %d",
 		//	epoch,item.Epoch,item.DbID,item.TableID)
 		//delete the data in the table
-		prefixDeleted, _ := tke.EncodeIndexPrefix(nil, item.DbID, item.TableID,uint64(PrimaryIndexID))
+		prefixDeleted, _ := tke.EncodeIndexPrefix(nil, item.DbID, item.TableID, uint64(PrimaryIndexID))
 		err = eh.kv.DeleteWithPrefix(prefixDeleted)
 		if err != nil {
 			return 0, err
 		}
 
 		//3.delete gc item in asyncGC table
-		epochItemKeyDeleted,_ := dhi.MakePrefixWithEpochAndDBIDAndTableID(
-			InternalDatabaseID,InternalAsyncGCTableID,uint64(PrimaryIndexID),
-			item.Epoch,item.DbID,item.TableID)
+		epochItemKeyDeleted, _ := dhi.MakePrefixWithEpochAndDBIDAndTableID(
+			InternalDatabaseID, InternalAsyncGCTableID, uint64(PrimaryIndexID),
+			item.Epoch, item.DbID, item.TableID)
 
 		err = dhi.kvHandler.Delete(epochItemKeyDeleted)
 		if err != nil {

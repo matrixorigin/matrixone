@@ -11,7 +11,7 @@ type ComputationWrapper interface {
 
 	SetDatabaseName(db string) error
 
-	GetColumns() ([]interface{},error)
+	GetColumns() ([]interface{}, error)
 
 	GetAffectedRows() uint64
 
