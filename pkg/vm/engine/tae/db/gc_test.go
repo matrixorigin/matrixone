@@ -74,7 +74,7 @@ func TestGCBlock1(t *testing.T) {
 func TestAutoGC1(t *testing.T) {
 	opts := new(options.Options)
 	opts.CheckpointCfg = new(options.CheckpointCfg)
-	opts.CheckpointCfg.ScannerInterval = 5
+	opts.CheckpointCfg.ScannerInterval = 10
 	opts.CheckpointCfg.ExecutionLevels = 5
 	opts.CheckpointCfg.ExecutionInterval = 1
 	opts.CheckpointCfg.CatalogCkpInterval = 5
@@ -119,7 +119,7 @@ func TestAutoGC1(t *testing.T) {
 		return nil
 	}
 
-	testutils.WaitExpect(1000, func() bool {
+	testutils.WaitExpect(4000, func() bool {
 		cnt = 0
 		tae.Catalog.RecurLoop(processor)
 		return tae.Scheduler.GetPenddingLSNCnt() == 0 && cnt == 12
