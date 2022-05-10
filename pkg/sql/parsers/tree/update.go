@@ -306,18 +306,18 @@ type ExportParam struct {
 	MaxFileSize uint64
 	// curFileSize
 	CurFileSize uint64
-	Rows uint64
-	FileCnt uint
+	Rows        uint64
+	FileCnt     uint
 	// header flag
-	Header bool
+	Header     bool
 	ForceQuote []string
 	ColumnFlag []bool
-	Symbol []string
+	Symbol     [][]byte
 
 	// default flush size
 	DefaultBufSize int64
-	OutputStr []byte
-	LineSize uint64
+	OutputStr      []byte
+	LineSize       uint64
 }
 
 func (ep *ExportParam) Format(ctx *FmtCtx) {

@@ -39,6 +39,12 @@ jobs:
         with:
           go-version: 1.18
 
+      - name: Formats　Check
+        run: |
+          cd $GITHUB_WORKSPACE && make clean
+          if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
+
+
       - name: Detect non-ascii characters
         run: |
           na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
@@ -48,9 +54,9 @@ jobs:
             exit 1
           fi
 
-      - name: Build Configure
+      - name: Build MatrixOne
         run: |
-          cd $GITHUB_WORKSPACE && make clean && make config
+          cd $GITHUB_WORKSPACE && make clean && make config && make build
 
       - name: Static Code Analysis
         continue-on-error: true
@@ -77,23 +83,13 @@ jobs:
           cd $GITHUB_WORKSPACE
           echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' profile.raw)" >> $GITHUB_ENV
 
-      - name: WeChat Work notification
-        if : ${{ (github.event_name == 'pull_request') && (github.event.action == 'opened') }}
-        continue-on-error: true
-        uses: x-actions/wechat-work@v1
-        env:
-          WECHAT_WEBHOOK_KEY: ${{secrets.WECHAT_WORK_BOT_WEBHOOK}}
-          MSGTYPE: markdown
-          CONTENT: |
-            "New Pull Request Opened: [${{ github.event.pull_request.title }}](${{ github.event.pull_request.html_url }})\nRequested reviewers:<font color=\"warning\">${{ join(github.event.pull_request.requested_reviewers.*.login, ', ') }}</font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nCode Coverage Summary:<font color=\"warning\">${{ env.CODE_COVERAGE }}</font>"
-
-      - name: Build Binary
+      - name: get requested reviewers
         run: |
-          make build
+          echo "ASSIGNEES=${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}" >> $GITHUB_ENV
 
       - name: Build Verification Testing
         run: |
-          make bvt 
+          make bvt
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}

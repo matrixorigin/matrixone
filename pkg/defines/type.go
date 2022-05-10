@@ -57,13 +57,13 @@ const (
 //flags
 //in mysql 8.0.23 source code : include/mysql_com.h
 const (
-	NOT_NULL_FLAG     uint32 = 1 << 0   /**< Field can't be NULL */
-	PRI_KEY_FLAG      uint32 = 1 << 1   /**< Field is part of a primary key */
-	UNIQUE_KEY_FLAG   uint32 = 1 << 2   /**< Field is part of a unique key */
-	MULTIPLE_KEY_FLAG uint32 = 1 << 3   /**< Field is part of a key */
-	BLOB_FLAG         uint32 = 1 << 4  /**< Field is a blob */
-	UNSIGNED_FLAG     uint32 = 1 << 5  /**< Field is unsigned */
-	ZEROFILL_FLAG     uint32 = 1 << 6  /**< Field is zerofill */
+	NOT_NULL_FLAG     uint32 = 1 << 0 /**< Field can't be NULL */
+	PRI_KEY_FLAG      uint32 = 1 << 1 /**< Field is part of a primary key */
+	UNIQUE_KEY_FLAG   uint32 = 1 << 2 /**< Field is part of a unique key */
+	MULTIPLE_KEY_FLAG uint32 = 1 << 3 /**< Field is part of a key */
+	BLOB_FLAG         uint32 = 1 << 4 /**< Field is a blob */
+	UNSIGNED_FLAG     uint32 = 1 << 5 /**< Field is unsigned */
+	ZEROFILL_FLAG     uint32 = 1 << 6 /**< Field is zerofill */
 	BINARY_FLAG       uint32 = 1 << 7 /**< Field is binary   */
 
 	/* The following are only sent to new clients */

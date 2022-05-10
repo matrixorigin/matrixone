@@ -29,8 +29,8 @@ type Select struct {
 	Select  SelectStatement
 	OrderBy OrderBy
 	Limit   *Limit
-	With	*With
-	Ep *ExportParam
+	With    *With
+	Ep      *ExportParam
 }
 
 func (node *Select) Format(ctx *FmtCtx) {
@@ -400,8 +400,8 @@ func (node *AliasClause) Format(ctx *FmtCtx) {
 //the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr 	TableExpr
-	As   	AliasClause
+	Expr TableExpr
+	As   AliasClause
 }
 
 func (node *AliasedTableExpr) Format(ctx *FmtCtx) {

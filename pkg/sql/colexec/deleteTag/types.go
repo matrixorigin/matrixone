@@ -20,8 +20,8 @@ import (
 )
 
 type Argument struct {
-	Ts 		     uint64
+	Ts           uint64
 	Relation     engine.Relation
-	M	  	 	 sync.Mutex
+	M            sync.Mutex
 	AffectedRows uint64
 }

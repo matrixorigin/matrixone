@@ -23,24 +23,24 @@ import (
 )
 
 func TestOrderedEncoder_EncodeKey(t *testing.T) {
-	convey.Convey("encodeKey null",t, func() {
+	convey.Convey("encodeKey null", t, func() {
 		oe := &OrderedEncoder{}
-		d,_ := oe.EncodeKey([]byte{},nil)
-		convey.So(d[len(d) - 1],convey.ShouldEqual,nullEncoding)
+		d, _ := oe.EncodeKey([]byte{}, nil)
+		convey.So(d[len(d)-1], convey.ShouldEqual, nullEncoding)
 	})
 }
 
 func TestOrderedEncoder_EncodeNull(t *testing.T) {
-	convey.Convey("encodeNUll",t, func() {
+	convey.Convey("encodeNUll", t, func() {
 		oe := &OrderedEncoder{}
 		kases := [][]byte{
 			nil,
-			[]byte{},
-			[]byte{0x0,0x1},
+			{},
+			{0x0, 0x1},
 		}
 		for _, k := range kases {
-			d,_ := oe.EncodeNull(k)
-			convey.So(d[len(d) - 1],convey.ShouldEqual,nullEncoding)
+			d, _ := oe.EncodeNull(k)
+			convey.So(d[len(d)-1], convey.ShouldEqual, nullEncoding)
 		}
 	})
 }
@@ -48,37 +48,37 @@ func TestOrderedEncoder_EncodeNull(t *testing.T) {
 func TestOrderedEncoder_EncodeUint64(t *testing.T) {
 	type args struct {
 		value uint64
-		want []byte
+		want  []byte
 	}
-	convey.Convey("encodeUint64",t, func() {
+	convey.Convey("encodeUint64", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
 			{0, []byte{136}},
 			{1, []byte{137}},
 			{encodingPrefixForSplit, []byte{245}},
-			{encodingPrefixForSplit+1, []byte{246,110}},
-			{0xff,[]byte{246,255}},
-			{0xff+1,[]byte{247,1,0}},
-			{0xffff,[]byte{247,255,255}},
-			{0xffff+1,[]byte{248,1,0,0}},
-			{0xffffff,[]byte{248,255,255,255}},
-			{0xffffff+1,[]byte{249,1,0,0,0}},
-			{0xffffffff,[]byte{249,255,255,255,255}},
-			{0xffffffff+1,[]byte{250,1,0,0,0,0}},
-			{0xffffffffff,[]byte{250,255,255,255,255,255}},
-			{0xffffffffff+1,[]byte{251,1,0,0,0,0,0}},
-			{0xffffffffffff,[]byte{251,255,255,255,255,255,255}},
-			{0xffffffffffff+1,[]byte{252,1,0,0,0,0,0,0}},
-			{0xffffffffffffff,[]byte{252,255,255,255,255,255,255,255}},
-			{0xffffffffffffff+1,[]byte{253,1,0,0,0,0,0,0,0}},
-			{math.MaxUint64-1,[]byte{253,255,255,255,255,255,255,255,254}},
-			{math.MaxUint64,[]byte{253,255,255,255,255,255,255,255,255}},
+			{encodingPrefixForSplit + 1, []byte{246, 110}},
+			{0xff, []byte{246, 255}},
+			{0xff + 1, []byte{247, 1, 0}},
+			{0xffff, []byte{247, 255, 255}},
+			{0xffff + 1, []byte{248, 1, 0, 0}},
+			{0xffffff, []byte{248, 255, 255, 255}},
+			{0xffffff + 1, []byte{249, 1, 0, 0, 0}},
+			{0xffffffff, []byte{249, 255, 255, 255, 255}},
+			{0xffffffff + 1, []byte{250, 1, 0, 0, 0, 0}},
+			{0xffffffffff, []byte{250, 255, 255, 255, 255, 255}},
+			{0xffffffffff + 1, []byte{251, 1, 0, 0, 0, 0, 0}},
+			{0xffffffffffff, []byte{251, 255, 255, 255, 255, 255, 255}},
+			{0xffffffffffff + 1, []byte{252, 1, 0, 0, 0, 0, 0, 0}},
+			{0xffffffffffffff, []byte{252, 255, 255, 255, 255, 255, 255, 255}},
+			{0xffffffffffffff + 1, []byte{253, 1, 0, 0, 0, 0, 0, 0, 0}},
+			{math.MaxUint64 - 1, []byte{253, 255, 255, 255, 255, 255, 255, 255, 254}},
+			{math.MaxUint64, []byte{253, 255, 255, 255, 255, 255, 255, 255, 255}},
 		}
 
 		for _, kase := range kases {
-			d,_ := oe.EncodeUint64(nil,kase.value)
-			convey.So(d,should.Resemble,kase.want)
+			d, _ := oe.EncodeUint64(nil, kase.value)
+			convey.So(d, should.Resemble, kase.want)
 		}
 	})
 }
@@ -86,10 +86,10 @@ func TestOrderedEncoder_EncodeUint64(t *testing.T) {
 func TestOrderedEncoder_EncodeBytes(t *testing.T) {
 	type args struct {
 		value []byte
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeBytes",t, func() {
+	convey.Convey("encodeBytes", t, func() {
 		oe := &OrderedEncoder{}
 
 		tag := encodingPrefixForBytes
@@ -99,16 +99,16 @@ func TestOrderedEncoder_EncodeBytes(t *testing.T) {
 		bfbe := byteForBytesEnding
 
 		kases := []args{
-			{[]byte{0},[]byte{tag,fb,sb,btbe,bfbe}},
-			{[]byte{0,1},[]byte{tag,fb,sb,1,btbe,bfbe}},
-			{[]byte{0xff,0,1},[]byte{tag,0xff,fb,sb,1,btbe,bfbe}},
-			{[]byte{0,0},[]byte{tag,fb,sb,fb,sb,btbe,bfbe}},
-			{[]byte{0,0,0},[]byte{tag,fb,sb,fb,sb,fb,sb,btbe,bfbe}},
-			{[]byte("matrix"),[]byte{tag,'m','a','t','r','i','x',btbe,bfbe}},
+			{[]byte{0}, []byte{tag, fb, sb, btbe, bfbe}},
+			{[]byte{0, 1}, []byte{tag, fb, sb, 1, btbe, bfbe}},
+			{[]byte{0xff, 0, 1}, []byte{tag, 0xff, fb, sb, 1, btbe, bfbe}},
+			{[]byte{0, 0}, []byte{tag, fb, sb, fb, sb, btbe, bfbe}},
+			{[]byte{0, 0, 0}, []byte{tag, fb, sb, fb, sb, fb, sb, btbe, bfbe}},
+			{[]byte("matrix"), []byte{tag, 'm', 'a', 't', 'r', 'i', 'x', btbe, bfbe}},
 		}
 		for _, kase := range kases {
-			d,_ := oe.EncodeBytes(nil,kase.value)
-			convey.So(d,should.Resemble,kase.want)
+			d, _ := oe.EncodeBytes(nil, kase.value)
+			convey.So(d, should.Resemble, kase.want)
 		}
 	})
 }
@@ -116,10 +116,10 @@ func TestOrderedEncoder_EncodeBytes(t *testing.T) {
 func TestOrderedEncoder_EncodeString(t *testing.T) {
 	type args struct {
 		value string
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeString",t, func() {
+	convey.Convey("encodeString", t, func() {
 		oe := &OrderedEncoder{}
 
 		tag := encodingPrefixForBytes
@@ -129,16 +129,16 @@ func TestOrderedEncoder_EncodeString(t *testing.T) {
 		bfbe := byteForBytesEnding
 
 		kases := []args{
-			{"\x00",[]byte{tag,fb,sb,btbe,bfbe}},
-			{"\x00\x01",[]byte{tag,fb,sb,1,btbe,bfbe}},
-			{"\xff\x00\x01",[]byte{tag,0xff,fb,sb,1,btbe,bfbe}},
-			{"\x00\x00",[]byte{tag,fb,sb,fb,sb,btbe,bfbe}},
-			{"\x00\x00\x00",[]byte{tag,fb,sb,fb,sb,fb,sb,btbe,bfbe}},
-			{"matrix",[]byte{tag,'m','a','t','r','i','x',btbe,bfbe}},
+			{"\x00", []byte{tag, fb, sb, btbe, bfbe}},
+			{"\x00\x01", []byte{tag, fb, sb, 1, btbe, bfbe}},
+			{"\xff\x00\x01", []byte{tag, 0xff, fb, sb, 1, btbe, bfbe}},
+			{"\x00\x00", []byte{tag, fb, sb, fb, sb, btbe, bfbe}},
+			{"\x00\x00\x00", []byte{tag, fb, sb, fb, sb, fb, sb, btbe, bfbe}},
+			{"matrix", []byte{tag, 'm', 'a', 't', 'r', 'i', 'x', btbe, bfbe}},
 		}
 		for _, kase := range kases {
-			d,_ := oe.EncodeString(nil,kase.value)
-			convey.So(d,should.Resemble,kase.want)
+			d, _ := oe.EncodeString(nil, kase.value)
+			convey.So(d, should.Resemble, kase.want)
 		}
 	})
 }
@@ -146,10 +146,10 @@ func TestOrderedEncoder_EncodeString(t *testing.T) {
 func TestOrderedEncoder_EncodeBool(t *testing.T) {
 	type args struct {
 		value bool
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeBool",t, func() {
+	convey.Convey("encodeBool", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -166,10 +166,10 @@ func TestOrderedEncoder_EncodeBool(t *testing.T) {
 func TestOrderedEncoder_EncodeInt8(t *testing.T) {
 	type args struct {
 		value int8
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeInt8",t, func() {
+	convey.Convey("encodeInt8", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -189,10 +189,10 @@ func TestOrderedEncoder_EncodeInt8(t *testing.T) {
 func TestOrderedEncoder_EncodeInt16(t *testing.T) {
 	type args struct {
 		value int16
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeInt16",t, func() {
+	convey.Convey("encodeInt16", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -221,10 +221,10 @@ func TestOrderedEncoder_EncodeInt16(t *testing.T) {
 func TestOrderedEncoder_EncodeInt32(t *testing.T) {
 	type args struct {
 		value int32
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeInt32",t, func() {
+	convey.Convey("encodeInt32", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -256,10 +256,10 @@ func TestOrderedEncoder_EncodeInt32(t *testing.T) {
 func TestOrderedEncoder_EncodeInt64(t *testing.T) {
 	type args struct {
 		value int64
-		want []byte
+		want  []byte
 	}
 
-	convey.Convey("encodeInt64",t, func() {
+	convey.Convey("encodeInt64", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -284,9 +284,9 @@ func TestOrderedEncoder_EncodeInt64(t *testing.T) {
 func TestOrderedEncoder_EncodeFloat32(t *testing.T) {
 	type args struct {
 		value float32
-		want []byte
+		want  []byte
 	}
-	convey.Convey("encodeFloat32",t, func() {
+	convey.Convey("encodeFloat32", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
@@ -302,13 +302,12 @@ func TestOrderedEncoder_EncodeFloat32(t *testing.T) {
 	})
 }
 
-
 func TestOrderedEncoder_EncodeFloat64(t *testing.T) {
 	type args struct {
 		value float64
-		want []byte
+		want  []byte
 	}
-	convey.Convey("encodeFloat64",t, func() {
+	convey.Convey("encodeFloat64", t, func() {
 		oe := &OrderedEncoder{}
 
 		kases := []args{
