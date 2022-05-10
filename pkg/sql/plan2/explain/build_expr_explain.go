@@ -58,12 +58,13 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 	//SysFunsAndOperatorsMap
 	var result string
 	funcName := funcExpr.F.GetFunc().GetObjName()
+	// Get function explain type
 	funcProtoType, ok := plan2.BuiltinFunctionsMap[funcName]
 	if !ok {
 		panic("unkonw expression")
 	}
 	switch funcProtoType.Kind {
-	case plan2.STANDARD_FUNCTION:
+	case plan2.STANDARD_FUNCTION: //standard function call
 		result += funcExpr.F.Func.GetObjName() + "("
 		if len(funcExpr.F.Args) > 0 {
 			var first bool = true
@@ -76,7 +77,7 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 			}
 		}
 		result += ")"
-	case plan2.UNARY_ARITHMETIC_OPERATOR:
+	case plan2.UNARY_ARITHMETIC_OPERATOR: //unary arithmetic operator
 		var opertator string
 		if funcExpr.F.Func.GetObjName() == "UNARY_PLUS" {
 			opertator = "+"
@@ -84,25 +85,23 @@ func FuncExprExplain(funcExpr *plan.Expr_F) string {
 			opertator = "-"
 		}
 		result += opertator + DescribeExpr(funcExpr.F.Args[0])
-	case plan2.BINARY_ARITHMETIC_OPERATOR:
+	case plan2.BINARY_ARITHMETIC_OPERATOR: //binary arithmetic operator
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
-	case plan2.UNARY_LOGICAL_OPERATOR:
+	case plan2.UNARY_LOGICAL_OPERATOR: // unary logical operator
 		result += funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[0])
-	case plan2.BINARY_LOGICAL_OPERATOR:
+	case plan2.BINARY_LOGICAL_OPERATOR: // binary logical operator
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
-	case plan2.COMPARISON_OPERATOR:
+	case plan2.COMPARISON_OPERATOR: // comparison operator
 		result += DescribeExpr(funcExpr.F.Args[0]) + " " + funcExpr.F.Func.GetObjName() + " " + DescribeExpr(funcExpr.F.Args[1])
-	case plan2.CAST_EXPRESSION:
+	case plan2.CAST_EXPRESSION: // cast expression
 		panic("CAST_EXPRESSION is not support now")
-	case plan2.CASE_WHEN_EXPRESSION:
+	case plan2.CASE_WHEN_EXPRESSION: // case when expression
 		panic("CASE_WHEN_EXPRESSION is not support now")
-	case plan2.BETWEEN_AND_EXPRESSION:
+	case plan2.IN_EXISTS_EXPRESSION: // in exists expression
 		panic("CASE_WHEN_EXPRESSION is not support now")
-	case plan2.IN_EXISTS_EXPRESSION:
-		panic("CASE_WHEN_EXPRESSION is not support now")
-	case plan2.IS_NULL_EXPRESSION:
+	case plan2.IS_NULL_EXPRESSION: // is null expression
 		result += DescribeExpr(funcExpr.F.Args[0]) + " IS NULL"
-	case plan2.NOPARAMETER_FUNCTION:
+	case plan2.NOPARAMETER_FUNCTION: // noparameter function
 		result += funcExpr.F.Func.GetObjName()
 	case plan2.UNKNOW_KIND_FUNCTION:
 		panic("UNKNOW_KIND_FUNCTION is not support now")

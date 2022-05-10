@@ -887,12 +887,7 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(stmt *tree.AnalyzeStmt) error {
 }
 
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
-	es := &explain.ExplainOptions{
-		Verbose: false,
-		Anzlyze: false,
-		Format:  explain.EXPLAIN_FORMAT_TEXT,
-	}
-
+	es := explain.NewExplainDefaultOptions()
 	for _, v := range stmt.Options {
 		if strings.EqualFold(v.Name, "VERBOSE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {

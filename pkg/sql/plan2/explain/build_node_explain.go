@@ -14,7 +14,11 @@
 
 package explain
 
-import "github.com/matrixorigin/matrixone/pkg/pb/plan"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strconv"
+)
 
 var _ NodeDescribe = &NodeDescribeImpl{}
 
@@ -32,11 +36,12 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 	var result string
 	var pname string /* node type name for text output */
 
+	// Get the Node Name
 	switch ndesc.Node.NodeType {
 	case plan.Node_UNKNOWN:
 		pname = "UnKnow Node"
 	case plan.Node_VALUE_SCAN:
-		pname = "Value Scan"
+		pname = "Values Scan"
 	case plan.Node_TABLE_SCAN:
 		pname = "Table Scan"
 	case plan.Node_FUNCTION_SCAN:
@@ -79,20 +84,29 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 		pname = "Gather"
 	case plan.Node_ASSERT:
 		pname = "Assert"
+	case plan.Node_INSERT:
+		pname = "Insert"
+	case plan.Node_UPDATE:
+		pname = "Update"
+	//case plan.Node_DELETE:
+	//	pname = "Delete"
 	default:
 		pname = "???"
 	}
 
+	// Get Node's operator object info ,such as table, view
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += pname
 		switch ndesc.Node.NodeType {
 		case plan.Node_VALUE_SCAN:
-			fallthrough
+			result += " \"*VALUES*\" "
 		case plan.Node_TABLE_SCAN:
 			fallthrough
 		case plan.Node_FUNCTION_SCAN:
 			fallthrough
 		case plan.Node_EXTERNAL_SCAN:
+			fallthrough
+		case plan.Node_INSERT:
 			result += " on "
 			if ndesc.Node.ObjRef != nil {
 				objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
@@ -101,6 +115,36 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 				tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
 				result += tableDefImpl.GetDescription(options)
 			}
+		case plan.Node_UPDATE:
+			result += " on columns("
+			if ndesc.Node.UpdateList != nil {
+				updateListDesc := &UpdateListDescribeImpl{
+					UpdateList: ndesc.Node.UpdateList,
+				}
+				result += updateListDesc.GetDescription(options)
+			}
+			result += ")"
+			/*
+				OuYuanning will add table definition information:
+				result += " on "
+					if ndesc.Node.ObjRef != nil {
+						objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
+						result += objRefImpl.GetDescription(options)
+					} else if ndesc.Node.TableDef != nil {
+						tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
+						result += tableDefImpl.GetDescription(options)
+					}
+
+			*/
+		//case plan.Node_DELETE:
+		//	result += " on "
+		//	if ndesc.Node.ObjRef != nil {
+		//		objRefImpl := NewObjRefDescribeImpl(ndesc.Node.ObjRef)
+		//		result += objRefImpl.GetDescription(options)
+		//	} else if ndesc.Node.TableDef != nil {
+		//		tableDefImpl := NewTableDefDescribeImpl(ndesc.Node.TableDef)
+		//		result += tableDefImpl.GetDescription(options)
+		//	}
 		case plan.Node_PROJECT:
 			fallthrough
 		case plan.Node_EXTERNAL_FUNCTION:
@@ -144,6 +188,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 		}
 	}
 
+	// Get Costs info of Node
 	if options.Format == EXPLAIN_FORMAT_TEXT {
 		result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
 	} else {
@@ -155,26 +200,31 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) string 
 
 func (ndesc *NodeDescribeImpl) GetExtraInfo(options *ExplainOptions) []string {
 	lines := make([]string, 0)
+	// Get Sort list info
 	if ndesc.Node.OrderBy != nil {
 		orderByInfo := ndesc.GetOrderByInfo(options)
 		lines = append(lines, orderByInfo)
 	}
 
+	// Get Join Condition info
 	if ndesc.Node.OnList != nil {
 		joinOnInfo := ndesc.GetJoinConditionInfo(options)
 		lines = append(lines, joinOnInfo)
 	}
 
+	// Get Group key info
 	if ndesc.Node.GroupBy != nil {
 		groupByInfo := ndesc.GetGroupByInfo(options)
 		lines = append(lines, groupByInfo)
 	}
 
+	// Get Filter list info
 	if ndesc.Node.WhereList != nil {
 		filterInfo := ndesc.GetWhereConditionInfo(options)
 		lines = append(lines, filterInfo)
 	}
 
+	// Get Limit And Offset info
 	if ndesc.Node.Limit != nil {
 		var temp string
 		limitInfo := DescribeExpr(ndesc.Node.Limit)
@@ -261,14 +311,19 @@ var _ NodeElemDescribe = &WinSpecDescribeImpl{}
 var _ NodeElemDescribe = &TableDefDescribeImpl{}
 var _ NodeElemDescribe = &ObjRefDescribeImpl{}
 var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
+var _ NodeElemDescribe = &UpdateListDescribeImpl{}
 
 type CostDescribeImpl struct {
-	Cost *Cost
+	Cost *plan.Cost
 }
 
 func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) string {
-	//TODO implement me
-	panic("implement me")
+	//(cost=11.75..13.15 rows=140 width=4)
+	var result string = "(cost=" + fmt.Sprintf("%.2f", c.Cost.Start) +
+		".." + fmt.Sprintf("%.2f", c.Cost.Total) +
+		" card=" + fmt.Sprintf("%.0f", c.Cost.Card) +
+		" rowsize=" + fmt.Sprintf("%f", c.Cost.Rowsize)
+	return result
 }
 
 type ExprListDescribeImpl struct {
@@ -361,10 +416,41 @@ func (o *ObjRefDescribeImpl) GetDescription(options *ExplainOptions) string {
 }
 
 type RowsetDataDescribeImpl struct {
-	RowsetData *RowsetData
+	RowsetData *plan.RowsetData
 }
 
 func (r *RowsetDataDescribeImpl) GetDescription(options *ExplainOptions) string {
-	//TODO implement me
-	panic("implement me")
+	var result string
+	var first bool = true
+	for index, _ := range r.RowsetData.Cols {
+		if !first {
+			result += ", "
+		}
+		first = false
+		result += "\"*VALUES*\".column" + strconv.Itoa(index+1)
+	}
+	return result
+}
+
+type UpdateListDescribeImpl struct {
+	UpdateList *plan.UpdateList
+}
+
+func (u *UpdateListDescribeImpl) GetDescription(options *ExplainOptions) string {
+	//u.UpdateList.Columns
+	var result string
+	var first bool = true
+	if len(u.UpdateList.Columns) != len(u.UpdateList.Columns) {
+		panic("update node number of columns and values is not equal")
+	}
+	for i, column := range u.UpdateList.Columns {
+		if !first {
+			result += ", "
+		}
+		colstr := DescribeExpr(column)
+		valstr := DescribeExpr(u.UpdateList.Values[i])
+		result += colstr + " = " + valstr
+		first = false
+	}
+	return result
 }

@@ -16,22 +16,8 @@ package explain
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strings"
 )
-
-//type TableDef plan.TableDef
-//type ObjectRef plan.ObjectRef
-type Cost plan.Cost
-type Const plan.Const
-
-//type Expr plan.Expr
-
-//type Node plan.Node
-type RowsetData plan.RowsetData
-
-//type Query plan.Query
 
 type ExplainQuery interface {
 	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions)
@@ -60,12 +46,11 @@ type FormatSettings struct {
 }
 
 type ExplainDataBuffer struct {
-	Start          int
-	End            int
-	CurrentLine    int
-	NodeSize       int
-	LineWidthLimit int
-	Lines          []string
+	Start       int
+	End         int
+	CurrentLine int
+	NodeSize    int
+	Lines       []string
 }
 
 func NewExplainDataBuffer() *ExplainDataBuffer {
@@ -120,18 +105,9 @@ func (buf *ExplainDataBuffer) PushNewLine(line string, isNewNode bool, level int
 	}
 	buf.CurrentLine++
 	buf.Lines = append(buf.Lines, prefix+line)
-	logutil.Infof(buf.Lines[buf.CurrentLine])
+	//logutil.Infof(buf.Lines[buf.CurrentLine])
+	fmt.Println(buf.Lines[buf.CurrentLine])
 	buf.End++
-}
-
-func (buf *ExplainDataBuffer) IsFull() bool {
-	return false
-	//TODO
-}
-
-func (buf *ExplainDataBuffer) Empty() bool {
-	return false
-	//TODO
 }
 
 type ExplainFormat int32
@@ -149,8 +125,12 @@ type ExplainOptions struct {
 	Format  ExplainFormat
 }
 
-func NewExplainPlanOptions() *ExplainOptions {
-	return nil
+func NewExplainDefaultOptions() *ExplainOptions {
+	return &ExplainOptions{
+		Verbose: false,
+		Anzlyze: false,
+		Format:  EXPLAIN_FORMAT_TEXT,
+	}
 }
 
 type QueryPlanSetting struct {
