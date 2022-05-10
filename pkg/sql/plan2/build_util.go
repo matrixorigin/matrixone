@@ -341,11 +341,11 @@ func setDerivedTableAlias(query *Query, ctx CompilerContext, selectCtx *SelectCo
 	return nil
 }
 
-func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectContext) (*plan.ObjectRef, *plan.TableDef) {
+func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectContext) (*plan.ObjectRef, *plan.TableDef, bool) {
 	//get table from context
 	objRef, tableDef := ctx.Resolve(tblName)
 	if tableDef != nil {
-		return objRef, tableDef
+		return objRef, tableDef, false
 	}
 
 	//get table from CTE
@@ -354,7 +354,7 @@ func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectConte
 		objRef = &plan.ObjectRef{
 			ObjName: tblName,
 		}
-		return objRef, tableDef
+		return objRef, tableDef, true
 	}
-	return nil, nil
+	return nil, nil, false
 }
