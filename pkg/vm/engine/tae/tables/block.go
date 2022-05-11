@@ -623,10 +623,16 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	if visibilityMap == nil {
 		panic("unexpected error")
 	}
-	view, err := blk.GetColumnDataById(txn, int(blk.meta.GetSchema().PrimaryKey), nil, nil)
+	pkIdx := int(blk.meta.GetSchema().PrimaryKey)
+	wrapper, err := blk.getVectorWrapper(pkIdx)
 	if err != nil {
 		return err
 	}
+	defer common.GPool.Free(wrapper.MNode)
+	view := model.NewColumnView(txn.GetStartTS(), pkIdx)
+	blk.mvcc.RLock()
+	blk.FillColumnDeletes(view)
+	blk.mvcc.RUnlock()
 	deduplicate := func(v interface{}) error {
 		if _, exist := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); exist {
 			return txnbase.ErrDuplicated
