@@ -55,6 +55,7 @@ jobs:
           cd $GITHUB_WORKSPACE
           echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
       - name: Unit Testing
+        timeout-minutes: 60
         run: |
           make ut SKIP_TEST="race"
       - name: calc pkg code coverage
