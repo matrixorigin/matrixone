@@ -17,8 +17,9 @@ package limit
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

@@ -20,14 +20,14 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +39,6 @@ const (
 // add unit tests for cases
 type limitTestCase struct {
 	arg    *Argument
-	attrs  []string
 	types  []types.Type
 	proc   *process.Process
 	cancel context.CancelFunc
@@ -73,19 +72,12 @@ func TestPrepare(t *testing.T) {
 }
 
 func TestLimit(t *testing.T) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	tcs = []limitTestCase{
-		newTestCase(mheap.New(gm), 8),
-		newTestCase(mheap.New(gm), 10),
-		newTestCase(mheap.New(gm), 12),
-	}
 	for _, tc := range tcs {
 		Prepare(tc.proc, tc.arg)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.attrs, tc.proc)
+		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.attrs, tc.proc)
+		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, Rows)
 		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
 		tc.proc.Reg.MergeReceivers[1].Ch <- nil
 		for {
@@ -97,29 +89,30 @@ func TestLimit(t *testing.T) {
 }
 
 func BenchmarkLimit(b *testing.B) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	tcs = []limitTestCase{
-		newTestCase(mheap.New(gm), 8),
-		newTestCase(mheap.New(gm), 10),
-		newTestCase(mheap.New(gm), 12),
-	}
-
-	t := new(testing.T)
-	for _, tc := range tcs {
-		Prepare(tc.proc, tc.arg)
-		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.attrs, tc.proc)
-		tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[0].Ch <- nil
-		tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.attrs, tc.proc)
-		tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
-		tc.proc.Reg.MergeReceivers[1].Ch <- nil
-		for {
-			if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
-				break
-			}
+	for i := 0; i < b.N; i++ {
+		hm := host.New(1 << 30)
+		gm := guest.New(1<<30, hm)
+		tcs = []limitTestCase{
+			newTestCase(mheap.New(gm), 8),
+			newTestCase(mheap.New(gm), 10),
+			newTestCase(mheap.New(gm), 12),
 		}
 
+		t := new(testing.T)
+		for _, tc := range tcs {
+			Prepare(tc.proc, tc.arg)
+			tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
+			tc.proc.Reg.MergeReceivers[0].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[0].Ch <- nil
+			tc.proc.Reg.MergeReceivers[1].Ch <- newBatch(t, tc.types, tc.proc, BenchmarkRows)
+			tc.proc.Reg.MergeReceivers[1].Ch <- &batch.Batch{}
+			tc.proc.Reg.MergeReceivers[1].Ch <- nil
+			for {
+				if ok, err := Call(tc.proc, tc.arg); ok || err != nil {
+					break
+				}
+			}
+		}
 	}
 }
 
@@ -136,8 +129,7 @@ func newTestCase(m *mheap.Mheap, limit uint64) limitTestCase {
 		Ch:  make(chan *batch.Batch, 3),
 	}
 	return limitTestCase{
-		proc:  proc,
-		attrs: []string{"1"},
+		proc: proc,
 		types: []types.Type{
 			{Oid: types.T_int8},
 		},
@@ -148,56 +140,52 @@ func newTestCase(m *mheap.Mheap, limit uint64) limitTestCase {
 	}
 }
 
-// create a new block based on the attribute information, flg indicates if the data is all duplicated
-func newBatch(t *testing.T, ts []types.Type, attrs []string, proc *process.Process) *batch.Batch {
-	bat := batch.New(true, attrs)
-	bat.Zs = make([]int64, Rows)
-	bat.Ht = []*vector.Vector{}
-	for i := range bat.Zs {
-		bat.Zs[i] = 1
-	}
+// create a new block based on the type information
+func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+	bat := batch.New(len(ts))
+	bat.InitZsOne(int(rows))
 	for i := range bat.Vecs {
 		vec := vector.New(ts[i])
 		switch vec.Typ.Oid {
 		case types.T_int8:
-			data, err := mheap.Alloc(proc.Mp, Rows*1)
+			data, err := mheap.Alloc(proc.Mp, rows*1)
 			require.NoError(t, err)
 			vec.Data = data
-			vs := encoding.DecodeInt8Slice(vec.Data)[:Rows]
+			vs := encoding.DecodeInt8Slice(vec.Data)[:rows]
 			for i := range vs {
 				vs[i] = int8(i)
 			}
 			vec.Col = vs
 		case types.T_int64:
-			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			data, err := mheap.Alloc(proc.Mp, rows*8)
 			require.NoError(t, err)
 			vec.Data = data
-			vs := encoding.DecodeInt64Slice(vec.Data)[:Rows]
+			vs := encoding.DecodeInt64Slice(vec.Data)[:rows]
 			for i := range vs {
 				vs[i] = int64(i)
 			}
 			vec.Col = vs
 		case types.T_float64:
-			data, err := mheap.Alloc(proc.Mp, Rows*8)
+			data, err := mheap.Alloc(proc.Mp, rows*8)
 			require.NoError(t, err)
 			vec.Data = data
-			vs := encoding.DecodeFloat64Slice(vec.Data)[:Rows]
+			vs := encoding.DecodeFloat64Slice(vec.Data)[:rows]
 			for i := range vs {
 				vs[i] = float64(i)
 			}
 			vec.Col = vs
 		case types.T_date:
-			data, err := mheap.Alloc(proc.Mp, Rows*4)
+			data, err := mheap.Alloc(proc.Mp, rows*4)
 			require.NoError(t, err)
 			vec.Data = data
-			vs := encoding.DecodeDateSlice(vec.Data)[:Rows]
+			vs := encoding.DecodeDateSlice(vec.Data)[:rows]
 			for i := range vs {
 				vs[i] = types.Date(i)
 			}
 			vec.Col = vs
 		case types.T_char, types.T_varchar:
 			size := 0
-			vs := make([][]byte, Rows)
+			vs := make([][]byte, rows)
 			for i := range vs {
 				vs[i] = []byte(strconv.Itoa(i))
 				size += len(vs[i])
