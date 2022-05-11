@@ -504,13 +504,16 @@ func (blk *dataBlock) RangeDelete(txn txnif.AsyncTxn, start, end uint32) (node t
 }
 
 func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v interface{}, err error) {
+	ts := txn.GetStartTS()
 	blk.mvcc.RLock()
 	deleteChain := blk.mvcc.GetDeleteChain()
-	deleted := deleteChain.IsDeleted(row, txn.GetStartTS())
+	deleteChain.RLock()
+	deleted := deleteChain.IsDeleted(row, ts)
+	deleteChain.RUnlock()
 	if !deleted {
 		chain := blk.mvcc.GetColumnChain(col)
 		chain.RLock()
-		v, err = chain.GetValueLocked(row, txn.GetStartTS())
+		v, err = chain.GetValueLocked(row, ts)
 		chain.RUnlock()
 		if err != nil {
 			v = nil
