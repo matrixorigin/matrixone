@@ -88,8 +88,8 @@ type Timestamp int64
 
 type Decimal64 int64
 type Decimal128 struct {
-	lo int64
-	hi int64
+	Lo int64
+	Hi int64
 }
 
 var Types map[string]T = map[string]T{
