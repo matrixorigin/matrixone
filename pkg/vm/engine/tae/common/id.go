@@ -239,3 +239,12 @@ func ParseSegmentNameToID(name string) (ID, error) {
 	id.TableID, id.SegmentID = tid, sid
 	return id, nil
 }
+
+func IDArraryString(ids []ID) string {
+	str := "["
+	for _, id := range ids {
+		str = fmt.Sprintf("%s%s,", str, id.String())
+	}
+	str = fmt.Sprintf("%s]", str)
+	return str
+}

@@ -23,8 +23,7 @@ import (
 // Destory is not thread-safe
 func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 	return func() error {
-		// logutil.Infof("[GC] | Block | %s", entry.String())
-		// return nil
+		logutil.Infof("[GC] | Block | %s | Started", entry.String())
 		segment := entry.GetSegment()
 		segment.RLock()
 		segDropped := segment.IsDroppedCommitted()
