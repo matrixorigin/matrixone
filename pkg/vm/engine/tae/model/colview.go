@@ -17,6 +17,7 @@ package model
 import (
 	"github.com/RoaringBitmap/roaring"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 )
@@ -31,6 +32,7 @@ type ColumnView struct {
 	DeleteMask  *roaring.Bitmap
 	AppliedVec  *movec.Vector
 	AppliedIVec vector.IVector
+	MemNode     *common.MemNode
 }
 
 func NewColumnView(ts uint64, colIdx int) *ColumnView {
@@ -75,4 +77,18 @@ func (view *ColumnView) Length() int {
 
 func (view *ColumnView) GetValue(row uint32) interface{} {
 	return compute.GetValue(view.AppliedVec, row)
+}
+
+func (view *ColumnView) Free() {
+	if view.MemNode != nil {
+		common.GPool.Free(view.MemNode)
+		view.MemNode = nil
+	}
+	view.RawVec = nil
+	view.RawIVec = nil
+	view.UpdateMask = nil
+	view.UpdateVals = nil
+	view.DeleteMask = nil
+	view.AppliedVec = nil
+	view.AppliedIVec = nil
 }

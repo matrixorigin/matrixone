@@ -37,6 +37,9 @@ func NewColumnView() *ColumnView {
 }
 
 func (view *ColumnView) CollectUpdates(ts uint64) (mask *roaring.Bitmap, vals map[uint32]interface{}) {
+	if len(view.links) == 0 {
+		return
+	}
 	mask = roaring.New()
 	vals = make(map[uint32]interface{})
 	it := view.mask.Iterator()

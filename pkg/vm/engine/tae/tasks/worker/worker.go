@@ -18,11 +18,15 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
+
+var ErrOpCancelled = errors.New("Op cancelled")
 
 type Cmd = uint8
 
@@ -86,14 +90,15 @@ func (s *Stats) String() string {
 }
 
 type OpWorker struct {
-	Name     string
-	OpC      chan iops.IOp
-	CmdC     chan Cmd
-	State    State
-	Pending  int64
-	ClosedCh chan struct{}
-	Stats    Stats
-	ExecFunc OpExecFunc
+	Name       string
+	OpC        chan iops.IOp
+	CmdC       chan Cmd
+	State      State
+	Pending    int64
+	ClosedCh   chan struct{}
+	Stats      Stats
+	ExecFunc   OpExecFunc
+	CancelFunc OpExecFunc
 }
 
 func NewOpWorker(name string, args ...int) *OpWorker {
@@ -118,6 +123,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 		ClosedCh: make(chan struct{}),
 	}
 	worker.ExecFunc = worker.onOp
+	worker.CancelFunc = worker.opCancelOp
 	return worker
 }
 
@@ -129,12 +135,18 @@ func (w *OpWorker) Start() {
 	w.State = RUNNING
 	go func() {
 		for {
-			if atomic.LoadInt32(&w.State) == STOPPED {
+			state := atomic.LoadInt32(&w.State)
+			if state == STOPPED {
 				break
 			}
 			select {
 			case op := <-w.OpC:
 				w.ExecFunc(op)
+				// if state == RUNNING {
+				// 	w.ExecFunc(op)
+				// } else {
+				// 	w.CancelFunc(op)
+				// }
 				atomic.AddInt64(&w.Pending, int64(-1))
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
@@ -192,6 +204,10 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 	}
 	w.OpC <- op
 	return true
+}
+
+func (w *OpWorker) opCancelOp(op iops.IOp) {
+	op.SetError(ErrOpCancelled)
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {
