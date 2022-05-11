@@ -296,12 +296,21 @@ func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) s
 	return s
 }
 
-func (blk *dataBlock) FillColumnView(view *model.ColumnView) (err error) {
+func (blk *dataBlock) FillColumnUpdates(view *model.ColumnView) {
 	chain := blk.mvcc.GetColumnChain(uint16(view.ColIdx))
 	chain.RLock()
 	view.UpdateMask, view.UpdateVals = chain.CollectUpdatesLocked(view.Ts)
 	chain.RUnlock()
-	return nil
+}
+
+func (blk *dataBlock) FillColumnDeletes(view *model.ColumnView) {
+	deleteChain := blk.mvcc.GetDeleteChain()
+	deleteChain.RLock()
+	dnode := deleteChain.CollectDeletesLocked(view.Ts, false).(*updates.DeleteNode)
+	deleteChain.RUnlock()
+	if dnode != nil {
+		view.DeleteMask = dnode.GetDeleteMaskLocked()
+	}
 }
 
 func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err error) {
@@ -366,22 +375,14 @@ func (blk *dataBlock) GetColumnDataById(txn txnif.AsyncTxn, colIdx int, compress
 	}
 
 	view = model.NewColumnView(txn.GetStartTS(), colIdx)
-	if compressed == nil {
-		compressed = &bytes.Buffer{}
-		decompressed = &bytes.Buffer{}
-	}
 	if view.RawVec, err = blk.getVectorWithBuffer(colIdx, compressed, decompressed); err != nil {
 		return
 	}
 
 	blk.mvcc.RLock()
-	err = blk.FillColumnView(view)
-	deleteChain := blk.mvcc.GetDeleteChain()
-	dnode := deleteChain.CollectDeletesLocked(txn.GetStartTS(), false).(*updates.DeleteNode)
+	blk.FillColumnUpdates(view)
+	blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
-	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
 	view.Eval(true)
 	return
 }
@@ -427,15 +428,9 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	}
 
 	blk.mvcc.RLock()
-	err = blk.FillColumnView(view)
-	deleteChain := blk.mvcc.GetDeleteChain()
-	deleteChain.RLock()
-	dnode := deleteChain.CollectDeletesLocked(ts, false).(*updates.DeleteNode)
-	deleteChain.RUnlock()
+	blk.FillColumnUpdates(view)
+	blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
-	if dnode != nil {
-		view.DeleteMask = dnode.GetDeleteMaskLocked()
-	}
 
 	view.Eval(true)
 
@@ -531,7 +526,11 @@ func (blk *dataBlock) getVectorWithBuffer(colIdx int, compressed, decompressed *
 
 	wrapper := vector.NewEmptyWrapper(blk.meta.GetSchema().ColDefs[colIdx].Type)
 	wrapper.File = dataFile
-	_, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed)
+	if compressed == nil || decompressed == nil {
+		_, err = wrapper.ReadFrom(dataFile)
+	} else {
+		_, err = wrapper.ReadWithBuffer(dataFile, compressed, decompressed)
+	}
 	if err != nil {
 		return
 	}
