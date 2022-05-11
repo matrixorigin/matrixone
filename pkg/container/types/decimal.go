@@ -135,6 +135,7 @@ import (
 // 			src_int128_p++;
 // 			dst_int128_p++;
 // 		}
+// 		return;
 // }
 // void div_int128_by_10(void* a, void* result) {
 //      *(__int128*)result = (*(__int128*)a) / 10;
@@ -172,7 +173,7 @@ func ScaleDecimal64(a Decimal64, b int64) (result Decimal64) {
 	return Decimal64(int64(a) * b)
 }
 
-func AlignDecimal64UsingScaleDiff(src, dst []Decimal64, scaleDiff int32) []Decimal64 {
+func AlignDecimal64UsingScaleDiffBatch(src, dst []Decimal64, scaleDiff int32) []Decimal64 {
 	scale := int64(math.Pow10(int(scaleDiff)))
 	length := len(src)
 	for i := 0; i < length; i++ {
@@ -240,10 +241,10 @@ func CompareDecimal128Decimal128(a, b Decimal128, aScale, bScale int32) (result 
 }
 
 // void align_int128_using_scale_diff(void* src, void* dst, void* length, void* scale_diff) {
-func AlignDecimal128UsingScaleDiff(src, dst []Decimal128, scaleDiff int32) []Decimal128 {
+func AlignDecimal128UsingScaleDiffBatch(src, dst []Decimal128, scaleDiff int32) {
 	length := int64(len(src))
-	C.align_int128_using_scale_diff(unsafe.Pointer(&src), unsafe.Pointer(&dst), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
-	return dst
+	C.align_int128_using_scale_diff(unsafe.Pointer(&src[0]), unsafe.Pointer(&dst[0]), unsafe.Pointer(&length), unsafe.Pointer(&scaleDiff))
+	return
 }
 
 func ScaleDecimal128By10(a Decimal128) (result Decimal128) {
