@@ -51,4 +51,5 @@ const (
 	Weekday
 	EndsWith
 	Date
+	Sign
 )
