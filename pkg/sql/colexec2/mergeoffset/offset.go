@@ -17,26 +17,24 @@ package mergeoffset
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	batch "github.com/matrixorigin/matrixone/pkg/container/batch2"
+	process "github.com/matrixorigin/matrixone/pkg/vm/process2"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	argument := arg.(*Argument)
-	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", argument.Offset))
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("mergeOffset(%d)", n.Offset))
 }
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	argument := arg.(*Argument)
-	argument.ctr.seen = 0
+	n := arg.(*Argument)
+	n.ctr.seen = 0
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	argument := arg.(*Argument)
-
+	n := arg.(*Argument)
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		rec := proc.Reg.MergeReceivers[i]
 		bat := <-rec.Ch
@@ -55,41 +53,30 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 		}
 
-		if argument.ctr.seen > argument.Offset {
+		if n.ctr.seen > n.Offset {
 			return false, nil
 		}
 		length := len(bat.Zs)
 		// bat = PartOne + PartTwo, and PartTwo is required.
-		if argument.ctr.seen+uint64(length) > argument.Offset {
-			data, sels, err := newSels(int64(argument.Offset-argument.ctr.seen), int64(length)-int64(argument.Offset-argument.ctr.seen), proc.Mp)
-			if err != nil {
-				batch.Clean(bat, proc.Mp)
-				return false, err
-			}
-			argument.ctr.seen += uint64(length)
+		if n.ctr.seen+uint64(length) > n.Offset {
+			sels := newSels(int64(n.Offset-n.ctr.seen), int64(length)-int64(n.Offset-n.ctr.seen))
+			n.ctr.seen += uint64(length)
 			batch.Shrink(bat, sels)
-			mheap.Free(proc.Mp, data)
 			proc.Reg.InputBatch = bat
 			return false, nil
 		}
-
-		argument.ctr.seen += uint64(length)
+		n.ctr.seen += uint64(length)
 		batch.Clean(bat, proc.Mp)
 		proc.Reg.InputBatch = nil
 		i--
 	}
-
 	return true, nil
 }
 
-func newSels(start, count int64, mp *mheap.Mheap) ([]byte, []int64, error) {
-	data, err := mheap.Alloc(mp, count*8)
-	if err != nil {
-		return nil, nil, err
-	}
-	sels := encoding.DecodeInt64Slice(data)
+func newSels(start, count int64) []int64 {
+	sels := make([]int64, count)
 	for i := int64(0); i < count; i++ {
 		sels[i] = start + i
 	}
-	return data, sels[:count], nil
+	return sels[:count]
 }
