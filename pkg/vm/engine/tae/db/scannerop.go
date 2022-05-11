@@ -62,8 +62,8 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 		if err != nil || taskFactory == nil {
 			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
 		}
-		processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-		logutil.Infof("Mergeblocks %s was scheduled", segmentEntry.String())
+		_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
+		logutil.Infof("Mergeblocks %s was scheduled: %v", segmentEntry.String(), err)
 	}
 	processor.blkCntOfSegment = 0
 	return
