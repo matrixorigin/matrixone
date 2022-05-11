@@ -165,6 +165,43 @@ func TestAppend2(t *testing.T) {
 	t.Logf("Checkpointed: %d", db.Scheduler.GetCheckpointedLSN())
 	t.Logf("GetPenddingLSNCnt: %d", db.Scheduler.GetPenddingLSNCnt())
 	assert.Equal(t, uint64(0), db.Scheduler.GetPenddingLSNCnt())
+	t.Log(db.Catalog.SimplePPString(common.PPL1))
+	wg.Add(1)
+	appendFailClosure(t, bats[0], schema.Name, db, &wg)()
+	wg.Wait()
+}
+
+func TestAppend3(t *testing.T) {
+	opts := new(options.Options)
+	opts.CheckpointCfg = new(options.CheckpointCfg)
+	opts.CheckpointCfg.ScannerInterval = 10
+	opts.CheckpointCfg.ExecutionLevels = 2
+	opts.CheckpointCfg.ExecutionInterval = 10
+	opts.CheckpointCfg.CatalogCkpInterval = 10
+	opts.CheckpointCfg.CatalogUnCkpLimit = 1
+	tae := initDB(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchema(2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	{
+		txn := tae.StartTxn(nil)
+		db, _ := txn.CreateDatabase("db")
+		db.CreateRelation(schema)
+		assert.Nil(t, txn.Commit())
+	}
+	bat := compute.MockBatch(schema.Types(), uint64(schema.BlockMaxRows), int(schema.PrimaryKey), nil)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	appendClosure(t, bat, schema.Name, tae, &wg)()
+	wg.Wait()
+	testutils.WaitExpect(2000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	// t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	wg.Add(1)
+	appendFailClosure(t, bat, schema.Name, tae, &wg)()
+	wg.Wait()
 }
 
 func TestTableHandle(t *testing.T) {
