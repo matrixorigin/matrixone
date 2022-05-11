@@ -584,7 +584,7 @@ func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnMa
 	driver := wal.NewDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, nil)
+	factory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, nil, dir)
 	// factory := tables.NewDataFactory(dataio.SegmentFileMockFactory, mutBufMgr)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory), TxnFactory(c))
 	mgr.Start()
