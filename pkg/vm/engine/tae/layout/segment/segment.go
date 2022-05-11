@@ -6,12 +6,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
+	"sync"
 )
 
+const INODE_NUM = 10240
 const BLOCK_SIZE = 4096
 const SIZE = 4 * 1024 * 1024 * 1024
 const LOG_START = 2 * 4096
-const DATA_START = LOG_START + 1024*10240
+const DATA_START = LOG_START + 1024*INODE_NUM
 const DATA_SIZE = SIZE - DATA_START
 const LOG_SIZE = DATA_START - LOG_START
 
@@ -23,6 +25,7 @@ type SuperBlock struct {
 }
 
 type Segment struct {
+	mutex     sync.Mutex
 	segFile   *os.File
 	lastInode uint64
 	super     SuperBlock
@@ -96,7 +99,7 @@ func (s *Segment) Mount() {
 	s.lastInode = 1
 	var seq uint64
 	seq = 0
-	s.nodes = make(map[string]*BlockFile, 4096)
+	s.nodes = make(map[string]*BlockFile, INODE_NUM)
 	ino := Inode{inode: s.super.lognode.inode}
 	logFile := &BlockFile{
 		snode:   ino,
@@ -120,6 +123,7 @@ func (s *Segment) Mount() {
 }
 
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
+	s.mutex.Lock()
 	file := s.nodes[fname]
 	var ino Inode
 	if file == nil {
@@ -137,6 +141,7 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
+	s.mutex.Unlock()
 	return file
 }
 
