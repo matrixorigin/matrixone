@@ -232,3 +232,13 @@ func TestDecimal64ToDecimal128(t *testing.T) {
 	result1 := Decimal64ToDecimal128(a1)
 	require.Equal(t, Decimal128{-123, -1}, result1)
 }
+
+func TestAlignDecimal64UsingScaleDiff(t *testing.T) {
+	src := []Decimal64{12, 13, 4321, 987}
+	dst := make([]Decimal64, len(src))
+	AlignDecimal64UsingScaleDiff(src, dst, 3)
+	expectedResult := []Decimal64{12000, 13000, 4321000, 987000}
+	for i := range dst {
+		require.Equal(t, expectedResult[i], dst[i])
+	}
+}
