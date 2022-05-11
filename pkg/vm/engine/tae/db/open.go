@@ -15,12 +15,12 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -64,7 +64,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
-	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
+	//dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
+	dataFactory := tables.NewDataFactory(segmentio.SegmentFileIOFactory, mutBufMgr, db.Scheduler, db.Dir)
 	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil, db.Scheduler)
 	db.Catalog = db.Opts.Catalog
 
