@@ -364,6 +364,20 @@ func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	return
 }
 
+func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnView, err error) {
+	pkIdx := int(blk.meta.GetSchema().PrimaryKey)
+	wrapper, err := blk.getVectorWrapper(pkIdx)
+	if err != nil {
+		return view, err
+	}
+	view = model.NewColumnView(ts, pkIdx)
+	view.MemNode = wrapper.MNode
+	blk.mvcc.RLock()
+	blk.FillColumnDeletes(view)
+	blk.mvcc.RUnlock()
+	return
+}
+
 func (blk *dataBlock) GetColumnDataByName(txn txnif.AsyncTxn, attr string, compressed, decompressed *bytes.Buffer) (view *model.ColumnView, err error) {
 	colIdx := blk.meta.GetSchema().GetColIdx(attr)
 	return blk.GetColumnDataById(txn, colIdx, compressed, decompressed)
@@ -514,8 +528,10 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row uint32, col uint16) (v in
 		view, _ = blk.getVectorCopy(txn.GetStartTS(), int(col), nil, nil, true)
 	} else {
 		wrapper, _ := blk.getVectorWrapper(int(col))
-		defer common.GPool.Free(wrapper.MNode)
+		// defer common.GPool.Free(wrapper.MNode)
 		view.RawVec = &wrapper.Vector
+		view.MemNode = wrapper.MNode
+		defer view.Free()
 	}
 	v = compute.GetValue(view.RawVec, row)
 	return
@@ -623,16 +639,11 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks *gvec.Vector) (err erro
 	if visibilityMap == nil {
 		panic("unexpected error")
 	}
-	pkIdx := int(blk.meta.GetSchema().PrimaryKey)
-	wrapper, err := blk.getVectorWrapper(pkIdx)
+	view, err := blk.GetPKColumnDataOptimized(txn.GetStartTS())
 	if err != nil {
 		return err
 	}
-	defer common.GPool.Free(wrapper.MNode)
-	view := model.NewColumnView(txn.GetStartTS(), pkIdx)
-	blk.mvcc.RLock()
-	blk.FillColumnDeletes(view)
-	blk.mvcc.RUnlock()
+	defer view.Free()
 	deduplicate := func(v interface{}) error {
 		if _, exist := compute.CheckRowExists(view.AppliedVec, v, view.DeleteMask); exist {
 			return txnbase.ErrDuplicated
