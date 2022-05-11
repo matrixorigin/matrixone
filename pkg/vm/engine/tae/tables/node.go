@@ -36,13 +36,14 @@ import (
 
 type appendableNode struct {
 	*buffer.Node
-	file    file.Block
-	block   *dataBlock
-	data    batch.IBatch
-	rows    uint32
-	mgr     base.INodeManager
-	flushTs uint64
-	ckpTs   uint64
+	file      file.Block
+	block     *dataBlock
+	data      batch.IBatch
+	rows      uint32
+	mgr       base.INodeManager
+	flushTs   uint64
+	ckpTs     uint64
+	execption *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
@@ -51,6 +52,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 		panic(err)
 	}
 	impl := new(appendableNode)
+	impl.execption = new(atomic.Value)
 	id := block.meta.AsCommonID()
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
 	impl.UnloadFunc = impl.OnUnload
@@ -86,6 +88,10 @@ func (node *appendableNode) OnDestory() {
 }
 
 func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, err error) {
+	if exception := node.execption.Load(); exception != nil {
+		err = exception.(error)
+		return
+	}
 	attrs := node.data.GetAttrs()
 	vecs := make([]vector.IVector, len(attrs))
 	for _, attrId := range attrs {
@@ -100,6 +106,10 @@ func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, er
 }
 
 func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector.IVector, err error) {
+	if exception := node.execption.Load(); exception != nil {
+		err = exception.(error)
+		return
+	}
 	ivec, err := node.data.GetVectorByAttr(colIdx)
 	if err != nil {
 		return
@@ -110,6 +120,11 @@ func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector
 
 // TODO: Apply updates and txn sels
 func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	ro, err := node.GetVectorView(maxRow, colIdx)
 	if err != nil {
 		return
@@ -129,14 +144,23 @@ func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
 }
 
 func (node *appendableNode) OnLoad() {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		return
+	}
 	var err error
 	schema := node.block.meta.GetSchema()
 	if node.data, err = node.file.LoadIBatch(schema.Types(), schema.BlockMaxRows); err != nil {
-		panic(err)
+		node.execption.Store(err)
 	}
 }
 
 func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	mvcc := node.block.mvcc
 	if node.GetBlockMaxFlushTS() == ts {
 		logutil.Infof("[TS=%d] Unloading block with no flush: %s", ts, node.block.meta.AsCommonID().String())
@@ -174,13 +198,19 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 }
 
 func (node *appendableNode) OnUnload() {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		return
+	}
 	ts := node.block.mvcc.LoadMaxVisible()
 	needCkp := true
 	if err := node.flushData(ts, node.data); err != nil {
+		needCkp = false
 		if err == data.ErrStaleRequest {
-			needCkp = false
+			err = nil
 		} else {
-			panic(err)
+			logutil.Warnf("%s: %v", node.block.meta.String(), err)
+			node.execption.Store(err)
 		}
 	}
 	node.data.Close()
@@ -190,16 +220,31 @@ func (node *appendableNode) OnUnload() {
 	}
 }
 
-func (node *appendableNode) Close() error {
+func (node *appendableNode) Close() (err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Warnf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	node.Node.Close()
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Warnf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
 	}
-	return nil
+	return
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
 	if left == 0 {
 		err = data.ErrNotAppendable
@@ -214,6 +259,11 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Errorf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	if node.data == nil {
 		vecs := make([]vector.IVector, len(bat.Vecs))
 		attrs := make([]int, len(bat.Vecs))
