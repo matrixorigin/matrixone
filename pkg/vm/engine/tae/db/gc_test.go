@@ -30,6 +30,30 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func appendFailClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+	return func() {
+		defer wg.Done()
+		txn := e.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(name)
+		err := rel.Append(data)
+		assert.NotNil(t, err)
+		assert.Nil(t, txn.Rollback())
+	}
+}
+
+func appendClosure(t *testing.T, data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
+	return func() {
+		defer wg.Done()
+		txn := e.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(name)
+		err := rel.Append(data)
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+}
+
 func TestGCBlock1(t *testing.T) {
 	tae := initDB(t, nil)
 	defer tae.Close()
@@ -97,20 +121,9 @@ func TestAutoGC1(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	var wg sync.WaitGroup
-	doAppend := func(data *gbat.Batch, name string, e *DB, wg *sync.WaitGroup) func() {
-		return func() {
-			defer wg.Done()
-			txn := e.StartTxn(nil)
-			database, _ := txn.GetDatabase("db")
-			rel, _ := database.GetRelationByName(name)
-			err := rel.Append(data)
-			assert.Nil(t, err)
-			assert.Nil(t, txn.Commit())
-		}
-	}
 	for _, data := range bats {
 		wg.Add(1)
-		pool.Submit(doAppend(data, schema.Name, tae, &wg))
+		pool.Submit(appendClosure(t, data, schema.Name, tae, &wg))
 	}
 	cnt := 0
 	processor := new(catalog.LoopProcessor)

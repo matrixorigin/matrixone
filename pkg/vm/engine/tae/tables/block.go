@@ -372,9 +372,11 @@ func (blk *dataBlock) GetPKColumnDataOptimized(ts uint64) (view *model.ColumnVie
 	}
 	view = model.NewColumnView(ts, pkIdx)
 	view.MemNode = wrapper.MNode
+	view.RawVec = &wrapper.Vector
 	blk.mvcc.RLock()
 	blk.FillColumnDeletes(view)
 	blk.mvcc.RUnlock()
+	view.AppliedVec = view.RawVec
 	return
 }
 
