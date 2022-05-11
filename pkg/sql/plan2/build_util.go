@@ -358,3 +358,18 @@ func getResolveTable(tblName string, ctx CompilerContext, selectCtx *SelectConte
 	}
 	return nil, nil, false
 }
+
+//getLastTableDef get insert/update/delete tableDef
+func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
+	node := query.Nodes[query.Steps[len(query.Steps)-1]]
+	for {
+		if node.TableDef != nil {
+			return node.ObjRef, node.TableDef
+		}
+		if len(node.Children) == 0 {
+			break
+		}
+		node = query.Nodes[node.Children[0]]
+	}
+	return nil, nil
+}
