@@ -63,7 +63,7 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
 		}
 		_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-		logutil.Infof("Mergeblocks %s was scheduled: %v", segmentEntry.String(), err)
+		logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v", segmentEntry.String(), err)
 	}
 	processor.blkCntOfSegment = 0
 	return
@@ -144,7 +144,7 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 	}
 	if monitor.unCheckpointedCnt >= monitor.cntLimit || time.Since(monitor.lastScheduleTime) >= monitor.intervalLimit {
 		logutil.Infof("[Monotor] Catalog Total Uncheckpointed Cnt [%d, %d]: %d", monitor.minTs, monitor.maxTs, monitor.unCheckpointedCnt)
-		logutil.Info("Catalog Checkpoint Scheduled")
+		// logutil.Info("Catalog Checkpoint Scheduled")
 		monitor.db.Scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, nil, monitor.db.Catalog.CheckpointClosure(monitor.maxTs))
 		monitor.lastScheduleTime = time.Now()
 	}

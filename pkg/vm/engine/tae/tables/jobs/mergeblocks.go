@@ -15,10 +15,12 @@
 package jobs
 
 import (
+	"fmt"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -109,6 +111,16 @@ func (task *mergeBlocksTask) mergeColumn(vecs []*vector.Vector, sortedIdx *[]uin
 }
 
 func (task *mergeBlocksTask) Execute() (err error) {
+	segStr := ""
+	for _, seg := range task.mergedSegs {
+		segStr = fmt.Sprintf("%d,", seg.GetID())
+	}
+	message := fmt.Sprintf("[MergeBlocks] | Segments[%s] | Blocks[", segStr)
+	for _, blk := range task.mergedBlks {
+		message = fmt.Sprintf("%s%d,", message, blk.GetID())
+	}
+	message = fmt.Sprintf("%s] | Started", message)
+	logutil.Info(message)
 	var toSegEntry handle.Segment
 	if task.toSegEntry == nil {
 		if toSegEntry, err = task.rel.CreateNonAppendableSegment(); err != nil {
