@@ -103,7 +103,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 	appendQueryNode(query, node, false)
 
 	preNode := query.Nodes[len(query.Nodes)-1]
-	query.Steps[0] = preNode.NodeId
+	query.Steps = append(query.Steps, preNode.NodeId)
 
 	return nil
 }

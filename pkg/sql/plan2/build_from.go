@@ -92,20 +92,27 @@ func buildTable(stmt tree.TableExpr, ctx CompilerContext, query *Query, selectCt
 		if len(tbl.SchemaName) > 0 {
 			name = strings.Join([]string{string(tbl.SchemaName), name}, ".")
 		}
-		node := &plan.Node{
-			NodeType: plan.Node_TABLE_SCAN,
-		}
 		if strings.ToUpper(name) == "DUAL" { //special table name
-			node.NodeType = plan.Node_FUNCTION_SCAN
+			node := &plan.Node{
+				NodeType: plan.Node_VALUE_SCAN,
+			}
+			appendQueryNode(query, node, true)
 		} else {
-			obj, tableDef := getResolveTable(name, ctx, selectCtx)
+			obj, tableDef, isCte := getResolveTable(name, ctx, selectCtx)
 			if tableDef == nil {
 				return false, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", name))
 			}
-			node.ObjRef = obj
-			node.TableDef = tableDef
+			node := &plan.Node{
+				ObjRef:   obj,
+				TableDef: tableDef,
+			}
+			if isCte {
+				node.NodeType = plan.Node_MATERIAL_SCAN
+			} else {
+				node.NodeType = plan.Node_TABLE_SCAN
+			}
+			appendQueryNode(query, node, true)
 		}
-		appendQueryNode(query, node, true)
 		return false, nil
 	case *tree.JoinTableExpr:
 		err := buildJoinTable(tbl, ctx, query, selectCtx)

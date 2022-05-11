@@ -42,7 +42,7 @@ import (
 const microSecondsDigits = 6
 
 func (ts Timestamp) String() string {
-	dt := Datetime(int64(ts) + localTZ)
+	dt := Datetime(int64(ts) + localTZ<<20)
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	msec := int64(ts) & 0xfffff // the lower 20 bits of timestamp stores the microseconds value
@@ -51,7 +51,7 @@ func (ts Timestamp) String() string {
 
 // String2 stringify timestamp, including its fractional seconds precision part(fsp)
 func (ts Timestamp) String2(precision int32) string {
-	dt := Datetime(int64(ts))
+	dt := Datetime(int64(ts) + localTZ<<20)
 	y, m, d, _ := dt.ToDate().Calendar(true)
 	hour, minute, sec := dt.Clock()
 	if precision > 0 {
@@ -122,7 +122,6 @@ func ParseTimestamp(s string, precision int32) (Timestamp, error) {
 				for i := 0; i < padZeros; i++ {
 					msecStr = msecStr + string('0')
 				}
-				fmt.Println("len(s) > 19, msecStr is", msecStr)
 				m, err := strconv.ParseUint(msecStr, 10, 32)
 				if err != nil {
 					return -1, errIncorrectDatetimeValue
@@ -177,7 +176,7 @@ func TimestampToDatetime(xs []Timestamp, rs []Datetime) ([]Datetime, error) {
 	return rs, nil
 }
 
-// FromClock2 gets the utc time value in Timestamp
+// FromClockUTC gets the utc time value in Timestamp
 func FromClockUTC(year int32, month, day, hour, min, sec uint8, msec uint32) Timestamp {
 	days := FromCalendar(year, month, day)
 	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec) - localTZ
