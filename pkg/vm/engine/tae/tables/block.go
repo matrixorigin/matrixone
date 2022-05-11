@@ -129,7 +129,9 @@ func (blk *dataBlock) Destroy() (err error) {
 		return
 	}
 	if blk.node != nil {
-		blk.node.Close()
+		if err = blk.node.Close(); err != nil {
+			return
+		}
 	}
 	for _, file := range blk.colFiles {
 		file.Unref()

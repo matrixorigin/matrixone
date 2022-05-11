@@ -209,7 +209,7 @@ func (node *appendableNode) OnUnload() {
 		if err == data.ErrStaleRequest {
 			err = nil
 		} else {
-			logutil.Warnf("%v", err)
+			logutil.Warnf("%s: %v", node.block.meta.String(), err)
 			node.execption.Store(err)
 		}
 	}
@@ -220,13 +220,23 @@ func (node *appendableNode) OnUnload() {
 	}
 }
 
-func (node *appendableNode) Close() error {
+func (node *appendableNode) Close() (err error) {
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Warnf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	node.Node.Close()
+	if exception := node.execption.Load(); exception != nil {
+		logutil.Warnf("%v", exception)
+		err = exception.(error)
+		return
+	}
 	if node.data != nil {
 		node.data.Close()
 		node.data = nil
 	}
-	return nil
+	return
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
