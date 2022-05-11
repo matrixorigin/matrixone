@@ -37,7 +37,7 @@ go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
-UT_TIMEOUT=60
+UT_TIMEOUT=30
 LOG="$G_TS-$TEST_TYPE.log"
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -93,7 +93,7 @@ function run_tests(){
     local cover_profile='profile.raw'
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -covermode=count -coverprofile=$cover_profile -coverpkg=./pkg/... $test_scope | tee $UT_REPORT
+        go test -x -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -covermode=count -coverprofile=$cover_profile -coverpkg=./pkg/... $test_scope | tee $UT_REPORT
         local html_coverage="coverage.html"
         logger "INF" "Check on code coverage"
         cat $cover_profile | egrep -v $(echo ${leave_out[*]} | tr " " "|") > $RAW_COVERAGE
@@ -101,7 +101,7 @@ function run_tests(){
         cp -f $CODE_COVERAGE $html_coverage
     else
         logger "INF" "Run UT with race check"
-        go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        go test -x -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
