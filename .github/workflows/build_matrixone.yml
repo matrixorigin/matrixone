@@ -71,6 +71,7 @@ jobs:
           echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
 
       - name: Unit Testing
+        timeout-minutes: 60
         run: |
           if [[ 'schedule' == ${{ github.event_name }} ]]; then
             make ut
