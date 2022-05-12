@@ -132,5 +132,5 @@ static-check:
 	@go vet -vettool=$(shell which molint) ./...
 	@go-licenses check ./...
 	@for p in $(DIRS); do \
-    golangci-lint run $(EXTRA_LINTERS) $$p; \
+    golangci-lint run $(EXTRA_LINTERS) --new-from-rev=HEAD~ $$p ; \
   done;
