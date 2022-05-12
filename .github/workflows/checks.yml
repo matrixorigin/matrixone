@@ -1,0 +1,20 @@
+name: checks
+
+on:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event-name }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: ./.github/actions/checks
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}

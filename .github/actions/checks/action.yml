@@ -1,0 +1,29 @@
+# check files license header and go code checks with golangci-lint
+name: checks
+description: "check license and go code"
+inputs:
+  github_token:
+    description: "Github Token"
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: pre_env
+      uses: ./.github/actions/pre_env
+
+    - name: check_license_header
+      uses: apache/skywalking-eyes@main
+      env:
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+      with:
+        log: info
+        config: .github/licenserc.yml
+
+    - name: golangci_lint
+      uses: golangci/golangci-lint-action@v3.1.0
+      with:
+        version: ${{ env.golangci-lint-version }}
+        
+

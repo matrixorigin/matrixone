@@ -1,0 +1,17 @@
+header:
+  license:
+    spdx-id: Apache-2.0
+    copyright-owner: Matrix Origin
+  paths-ignore:
+    - 'docs/'
+    - 'optools/'
+    - '**/go.mod'
+    - '**/go.sum'
+    - 'LICENSE'
+    - 'Makefile'
+    - '**/Dockerfile'
+    - '.github/'
+    - '.golangci.yml'
+    - '.editorconfig'
+    - '**/*.md'
+    - 'proto/'

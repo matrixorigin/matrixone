@@ -1,0 +1,36 @@
+run:
+  timeout: 30m
+
+output:
+  sort-results: true
+
+linters:
+  disable-all: true
+  # https://golangci-lint.run/usage/linters/#enabled-by-default-linters
+  enable:
+    - revive
+#    - staticcheck
+#    - unused
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - revive
+        - staticcheck
+
+#linters-settings:
+#  staticcheck:
+#    go: "1.18"
+#    # https://staticcheck.io/docs/configuration/options/#checks
+#    checks: [
+#    "all",
+#    "-S1*",
+#    "-ST1*",
+#    "-SA5011",
+#    "-SA1019",
+#    "-SA2002"
+#    ]
+#
+#  unused:
+#    go: "1.18"
