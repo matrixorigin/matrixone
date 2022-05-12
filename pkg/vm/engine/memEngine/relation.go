@@ -2,11 +2,11 @@ package memEngine
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/pierrec/lz4"
@@ -45,7 +45,9 @@ func (r *relation) TableDefs() []engine.TableDef {
 	}
 	j := len(r.md.Attrs)
 	for _, index := range r.md.Index {
-		defs[j] = &index
+		// Don't refer to enclosing loop variables directly.
+		localIndex := index
+		defs[j] = &localIndex
 		j++
 	}
 	return defs
