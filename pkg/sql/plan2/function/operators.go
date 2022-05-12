@@ -43,6 +43,7 @@ var operators = map[string][]Function{
 		{
 			Index: 0,
 			Flag:  plan.Function_STRICT,
+			Kind:  COMPARISON_OPERATOR,
 			Args: []types.T{
 				types.T_int8, // left part of +
 				types.T_int8, // right part of +

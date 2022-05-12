@@ -39,6 +39,7 @@ var builtins = map[string][]Function{
 		{
 			Index:     0,
 			Flag:      plan.Function_NONE,
+			Kind:      CASE_WHEN_EXPRESSION,
 			Args:      nil,
 			ReturnTyp: types.T_int64,
 			Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -52,17 +53,17 @@ var builtins = map[string][]Function{
 				}
 				caseType := inputTypes[0]
 				for i := 0; i < l-1; i += 2 { // when should be caseType
-					if inputTypes[i] != caseType && isNotNull(inputTypes[i]) {
+					if inputTypes[i] != caseType && isNotScalarNull(inputTypes[i]) {
 						return false
 					}
 				}
 				for i := 1; i < l-1; i += 2 { // then should be int64
-					if inputTypes[i] != types.T_int64 && isNotNull(inputTypes[i]) {
+					if inputTypes[i] != types.T_int64 && isNotScalarNull(inputTypes[i]) {
 						return false
 					}
 				}
 				if l%2 == 1 { // has else part
-					if inputTypes[l-1] != types.T_int64 && isNotNull(inputTypes[l-1]) {
+					if inputTypes[l-1] != types.T_int64 && isNotScalarNull(inputTypes[l-1]) {
 						return false
 					}
 				}

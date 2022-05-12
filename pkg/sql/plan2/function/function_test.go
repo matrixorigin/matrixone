@@ -21,9 +21,10 @@ import (
 	"testing"
 )
 
-func mockFunctionRegister() map[string][]Function {
-	mockRegister := make(map[string][]Function)
-	mockRegister["f1"] = []Function{
+func mockFunctionRegister() [][]Function {
+	mockRegister := make([][]Function, 2)
+	// function f1
+	mockRegister[0] = []Function{
 		{
 			Index:       0,
 			Args:        []types.T{types.T_int64, types.T_int64},
@@ -35,7 +36,8 @@ func mockFunctionRegister() map[string][]Function {
 			TypeCheckFn: strictTypeCheck,
 		},
 	}
-	mockRegister["f2"] = []Function{
+	// function f2
+	mockRegister[1] = []Function{
 		{
 			Index: 0,
 			TypeCheckFn: func(inputTypes []types.T, _ []types.T) bool {
@@ -58,10 +60,17 @@ func mockFunctionRegister() map[string][]Function {
 	return mockRegister
 }
 
+func mockFunctionIdRegister() map[string]int {
+	mockIds := make(map[string]int)
+	mockIds["f1"] = 0
+	mockIds["f2"] = 1
+	return mockIds
+}
+
 func TestFunctionEqual(t *testing.T) {
 	fr := mockFunctionRegister()
-	fs1 := fr["f1"]
-	fs2 := fr["f2"]
+	fs1 := fr[0]
+	fs2 := fr[1]
 
 	require.Equal(t, true, functionsEqual(fs1[0], fs1[0]))
 	require.Equal(t, false, functionsEqual(fs1[0], fs1[1]))
@@ -73,6 +82,7 @@ func TestFunctionEqual(t *testing.T) {
 func TestFunctionRegister(t *testing.T) {
 	const notFound = -1
 	functionRegister = mockFunctionRegister()
+	functionIdRegister = mockFunctionIdRegister()
 
 	testCases := []struct {
 		id    int
@@ -95,7 +105,7 @@ func TestFunctionRegister(t *testing.T) {
 		{
 			id:    2,
 			fname: "f1",
-			args:  []types.T{types.T_int64, NullType},
+			args:  []types.T{types.T_int64, ScalarNull},
 			index: notFound,
 		},
 		{
@@ -132,8 +142,10 @@ func TestFunctionRegister(t *testing.T) {
 			require.Equal(t, emptyFunction, f1, msg)
 		} else {
 			require.NoError(t, err)
-			f2, err2 := GetFunctionByIndex(tc.fname, f1.Index)
+			id, err2 := getFunctionId(tc.fname)
 			require.NoError(t, err2, msg)
+			f2, err3 := GetFunctionByIndex(id, f1.Index)
+			require.NoError(t, err3, msg)
 			require.Equal(t, true, functionsEqual(f1, f2), msg)
 		}
 	}

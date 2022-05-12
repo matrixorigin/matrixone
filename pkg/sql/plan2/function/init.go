@@ -8,13 +8,23 @@ import (
 	"sync"
 )
 
+// init function fills the functionRegister from
+// aggregates,	see initAggregateFunction
+// builtins,	see initBuiltIns
+// operators,	see initOperators
 func init() {
+	initRelatedStructure()
+
 	initOperators()
 	initBuiltIns()
 	initAggregateFunction()
 }
 
 var registerMutex sync.RWMutex
+
+func initRelatedStructure() {
+	functionRegister = make([][]Function, FUNCTION_END_NUMBER)
+}
 
 // appendFunction is a method only used at init-functions to add a new function into supported-function list.
 // Ensure that no duplicate functions will be added.
@@ -23,21 +33,25 @@ func appendFunction(name string, newFunction Function) error {
 		return err
 	}
 
-	if fs, ok := functionRegister[name]; ok {
-		requiredIndex := len(fs)
-		if newFunction.Index != requiredIndex {
-			return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %s(%v)'s index number is duplicate", name, newFunction.Args))
-		}
+	fid, err := getFunctionId(name)
+	if err != nil {
+		return err
+	}
+	fs := functionRegister[fid]
 
-		for _, f := range fs {
-			if functionsEqual(f, newFunction) {
-				return errors.New(errno.DuplicateFunction, fmt.Sprintf("conflict happens, duplicate function %s(%v)", name, f.Args))
-			}
+	requiredIndex := len(fs)
+	if newFunction.Index != requiredIndex {
+		return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function %s(%v)'s index should be %d", name, newFunction.Args, requiredIndex))
+	}
+
+	for _, f := range fs {
+		if functionsEqual(f, newFunction) {
+			return errors.New(errno.DuplicateFunction, fmt.Sprintf("conflict happens, duplicate function %s(%v)", name, f.Args))
 		}
 	}
 
 	registerMutex.Lock()
-	functionRegister[name] = append(functionRegister[name], newFunction)
+	functionRegister[fid] = append(functionRegister[fid], newFunction)
 	registerMutex.Unlock()
 	return nil
 }

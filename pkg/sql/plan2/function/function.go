@@ -25,12 +25,12 @@ import (
 )
 
 const (
-	// NullType means the type of constant value `NULL`
+	// ScalarNull means of scalar NULL
 	// which can meet each required type.
 	// e.g.
-	// if we input a SQL `select built_in_function(100, NULL);`
-	// it will use [types.T_int64, NullType] to search function when we were building the query plan.
-	NullType = types.T_any
+	// if we input a SQL `select built_in_function(columnA, NULL);`, and columnA is int64 column.
+	// it will use [types.T_int64, ScalarNull] to match function when we were building the query plan.
+	ScalarNull = types.T_any
 )
 
 var (
@@ -47,6 +47,10 @@ type Function struct {
 	Index int
 
 	Flag plan.Function_FuncFlag
+
+	// Kind adapt to plan2/function.go, used for explaining.
+	// TODO: combine Kind with SQLFn, or just make a map (from function_id to Kind) outside ?
+	Kind Kind
 
 	Args      []types.T
 	ReturnTyp types.T
@@ -75,8 +79,10 @@ func (f Function) TypeCheck(args []types.T) bool {
 	return f.TypeCheckFn(args, f.Args)
 }
 
-func (f Function) ReturnType() types.T {
-	return f.ReturnTyp
+// ReturnType return result-type of function, and the result is nullable
+// if nullable is false, function won't return a vector with null value.
+func (f Function) ReturnType() (typ types.T, nullable bool) {
+	return f.ReturnTyp, true
 }
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -96,30 +102,39 @@ func (f Function) IsAggregate() bool {
 // functionRegister records the information about
 // all the operator, built-function and aggregate function.
 //
-// For use in other packages, see GetFunctionByID and GetFunctionByName
-var functionRegister = map[string][]Function{}
+// For use in other packages, see GetFunctionByIndex and GetFunctionByName
+var functionRegister = [][]Function{nil}
+
+// get function id from map functionIdRegister, see functionIds.go
+func getFunctionId(name string) (int, error) {
+	if fid, ok := functionIdRegister[name]; ok {
+		return fid, nil
+	}
+	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, can't get its id", name))
+}
 
 // GetFunctionByIndex get function structure by its index id.
-func GetFunctionByIndex(name string, index int) (Function, error) {
-	fs, ok := functionRegister[name]
-	if !ok {
-		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function name '%s'", name))
-	}
-	return fs[index], nil
+func GetFunctionByIndex(functionId int, overloadIndex int) (Function, error) {
+	fs := functionRegister[functionId]
+	return fs[overloadIndex], nil
 }
 
 // GetFunctionByName check a function exist or not by function name and arg types,
 // if matches, return its function structure.
 func GetFunctionByName(name string, args []types.T) (Function, error) {
 	matches := make([]Function, 0, 4)
+	fid, err := getFunctionId(name)
+	if err != nil {
+		return emptyFunction, err
+	}
 
-	if fs, ok := functionRegister[name]; ok {
-		for _, f := range fs {
-			if f.TypeCheck(args) {
-				matches = append(matches, f)
-			}
+	fs := functionRegister[fid]
+	for _, f := range fs {
+		if f.TypeCheck(args) {
+			matches = append(matches, f)
 		}
 	}
+
 	// must match only 1 function
 	if len(matches) == 0 {
 		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s(%v)", name, args))
@@ -138,21 +153,21 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 
 // strictTypeCheck is a general type check method.
 // it returns true only when each input type meets requirement.
-// Watch that : NullType can match each requirement at this function.
+// Watch that : ScalarNull can match each requirement at this function.
 func strictTypeCheck(args []types.T, require []types.T) bool {
 	if len(args) != len(require) {
 		return false
 	}
 	for i := range args {
-		if args[i] != require[i] && isNotNull(args[i]) {
+		if args[i] != require[i] && isNotScalarNull(args[i]) {
 			return false
 		}
 	}
 	return true
 }
 
-func isNotNull(t types.T) bool {
-	if t != NullType {
+func isNotScalarNull(t types.T) bool {
+	if t != ScalarNull {
 		return true
 	}
 	return false

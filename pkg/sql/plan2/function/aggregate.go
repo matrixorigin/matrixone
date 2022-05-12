@@ -37,6 +37,7 @@ var aggregates = map[string][]Function{
 		{
 			Index:         0,
 			Flag:          plan.Function_AGG,
+			Kind:          STANDARD_FUNCTION,
 			Args:          []types.T{types.T_int64},
 			TypeCheckFn:   strictTypeCheck,
 			ReturnTyp:     types.T_int64,
