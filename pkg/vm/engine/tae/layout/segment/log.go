@@ -3,7 +3,6 @@ package segment
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
 )
 
 type Log struct {
@@ -17,9 +16,9 @@ func (ex Extent) Replay() {
 
 }
 
-func (l Log) Append(file *BlockFile) error{
+func (l Log) Append(file *BlockFile) error {
 	var (
-		err error
+		err     error
 		ibuffer bytes.Buffer
 	)
 	segment := l.logFile.segment
@@ -46,14 +45,14 @@ func (l Log) Append(file *BlockFile) error{
 
 	ibufLen := (segment.super.blockSize - (uint32(ibuffer.Len()) % segment.super.blockSize)) + uint32(ibuffer.Len())
 	//if ibufLen > uint32(ibuffer.Len()) {
-		//zero := make([]byte, ibufLen-uint32(ibuffer.Len()))
-		//binary.Write(&ibuffer, binary.BigEndian, zero)
+	//zero := make([]byte, ibufLen-uint32(ibuffer.Len()))
+	//binary.Write(&ibuffer, binary.BigEndian, zero)
 	//}
 	offset, allocated := l.allocator.Allocate(uint64(ibufLen))
-	if _, err = segment.segFile.Seek(int64(offset+LOG_START), io.SeekStart); err != nil {
+	/*if _, err = segment.segFile.Seek(int64(offset+LOG_START), io.SeekStart); err != nil {
 		return err
-	}
-	if _, err = segment.segFile.Write(ibuffer.Bytes()); err != nil {
+	}*/
+	if _, err = segment.segFile.WriteAt(ibuffer.Bytes(), int64(offset+LOG_START)); err != nil {
 		return err
 	}
 	//logutil.Infof("level1 is %x, level0 is %x, offset is %d, allocated is %d, level08 is %x",
