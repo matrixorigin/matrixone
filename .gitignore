@@ -33,3 +33,14 @@ pkg/vm/engine/tpe/tuplecodec/clusterstore
 pkg/vm/engine/tpe/tuplecodec/read_profile
 pkg/vm/engine/tpe/engine/read_profile
 !pkg/vectorize/bin
+
+# tools binary files
+tmp/
+
+# go workspace
+go.work
+
+# Emacs save files
+*~
+\#*\#
+.\#*

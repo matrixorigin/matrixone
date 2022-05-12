@@ -113,24 +113,38 @@ fmt:
 	gofmt -l -s .
 
 
-.PHONY: install-static-check-tools
-install-static-check-tools:
-	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
-	@go install github.com/google/go-licenses@latest
+TOOLS_BIN_DIR ?= $(shell pwd)/tmp/bin
+GOLANGCILINTER_BINARY=$(TOOLS_BIN_DIR)/golangci-lint
+MOLINT_BINARY=$(TOOLS_BIN_DIR)/molint
+GOLICENSES_BINARY=$(TOOLS_BIN_DIR)/go-licenses
+TOOLING=$(GOLANGCILINTER_BINARY) $(MOLINT_BINARY) $(GOLICENSES_BINARY)
 
-# TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
+
+# Install static checks  tools
+$(TOOLS_BIN_DIR):
+	mkdir -p $(TOOLS_BIN_DIR)
+
+$(TOOLING): $(TOOLS_BIN_DIR)
+	@echo Installing tools from optools/optools.go
+	@cat optools/optools.go | grep _ | awk -F'"' '{print $$2}' | GOBIN=$(TOOLS_BIN_DIR) xargs -tI % go install -mod=readonly -modfile=optools/go.mod %
+
+
 DIRS=pkg/... \
 	 cmd/...
 
 EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt -E stylecheck
 
+# QA with golangci-lint
+.PHONY: go-lint
+go-lint: $(GOLANGCILINTER_BINARY)
+	$(GOLANGCILINTER_BINARY) run
+
 .PHONY: static-check
-static-check:
+static-check: $(GOLANGCILINTER_BINARY) $(MOLINT_BINARY)
 	@go generate ./pkg/sql/colexec/extend/overload
-	@go vet -vettool=$(shell which molint) ./...
-	@go-licenses check ./...
+	@go vet -vettool=$(MOLINT_BINARY) ./...
+	@$(GOLICENSES_BINARY) check ./...
 	@for p in $(DIRS); do \
-    golangci-lint run $(EXTRA_LINTERS) $$p; \
+    $(GOLANGCILINTER_BINARY) run $(EXTRA_LINTERS) $$p; \
   done;
