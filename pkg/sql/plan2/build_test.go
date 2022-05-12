@@ -27,7 +27,7 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey) a where ff > 0`
+	sql := `DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
@@ -258,9 +258,10 @@ func TestNodeTree(t *testing.T) {
 		},
 		//delete
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20": {
-			root: 0,
+			root: 1,
 			nodeType: map[int]plan.Node_NodeType{
 				0: plan.Node_TABLE_SCAN,
+				1: plan.Node_DELETE,
 			},
 		},
 		// unrelated subquery

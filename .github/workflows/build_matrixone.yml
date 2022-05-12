@@ -65,6 +65,7 @@ jobs:
           make static-check &>lint.out
 
       - name: Unit Testing
+        timeout-minutes: 60
         run: |
           make ut SKIP_TEST="race"
 
