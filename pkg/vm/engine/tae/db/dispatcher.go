@@ -15,10 +15,8 @@
 package db
 
 import (
-	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -66,17 +64,17 @@ func (dispatcher *asyncJobDispatcher) checkConflictLocked(scopes []common.ID) (e
 func (dispatcher *asyncJobDispatcher) TryDispatch(task tasks.Task) (err error) {
 	mscoped := task.(tasks.MScopedTask)
 	scopes := mscoped.Scopes()
-	if scopes == nil || len(scopes) == 0 {
+	if len(scopes) == 0 {
 		dispatcher.Dispatch(task)
-		return nil
+		return
 	}
 	dispatcher.Lock()
 	if err = dispatcher.checkConflictLocked(scopes); err != nil {
-		str := ""
-		for scope := range dispatcher.actives {
-			str = fmt.Sprintf("%s%s,", str, scope.String())
-		}
-		logutil.Warnf("ActiveScopes: %s, Incomming: %s", str, common.IDArraryString(scopes))
+		// str := ""
+		// for scope := range dispatcher.actives {
+		// 	str = fmt.Sprintf("%s%s,", str, scope.String())
+		// }
+		// logutil.Warnf("ActiveScopes: %s, Incomming: %s", str, common.IDArraryString(scopes))
 		dispatcher.Unlock()
 		return
 	}

@@ -34,7 +34,6 @@ type calibrationOp struct {
 	*catalog.LoopProcessor
 	db              *DB
 	blkCntOfSegment int
-	safeTs          uint64
 }
 
 func newCalibrationOp(db *DB) *calibrationOp {
@@ -170,11 +169,11 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	if gcNeeded {
 		scopes := MakeBlockScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry))
-		logutil.Infof("Schedule | [GC BLK] | %s | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
-			if err != tasks.ErrScheduleScopeConflict {
-				// logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
-			}
+			// if err == tasks.ErrScheduleScopeConflict {
+			// 	logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
+			// }
 			err = nil
 		}
 	}
@@ -199,11 +198,11 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry))
-		logutil.Infof("Schedule | [GC SEG] | %s | Err=%v | Scopes=%s", entry.String(), err, common.IDArraryString(scopes))
+		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
-			if err != tasks.ErrScheduleScopeConflict {
-				// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
-			}
+			// if err != tasks.ErrScheduleScopeConflict {
+			// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
+			// }
 			err = nil
 		}
 		err = catalog.ErrStopCurrRecur
