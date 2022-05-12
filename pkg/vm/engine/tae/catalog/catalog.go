@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 // +--------+---------+----------+----------+------------+
@@ -47,8 +46,7 @@ type Catalog struct {
 	nameNodes map[string]*nodeList
 	link      *common.Link
 
-	nodesMu  sync.RWMutex
-	commitMu sync.RWMutex
+	nodesMu sync.RWMutex
 }
 
 func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
@@ -100,57 +98,100 @@ func (catalog *Catalog) replayCmd(txncmd txnif.TxnCmd) (err error) {
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
-		db, err := catalog.GetDatabaseByID(cmd.DBID)
-		if err != nil {
-			return err
-		}
-		tbl, err := db.GetTableEntryByID(cmd.TableID)
-		if err != nil {
-			return err
-		}
-		seg, err := tbl.GetSegmentByID(cmd.SegmentID)
-		if err != nil {
-			return err
-		}
-		seg.addEntryLocked(cmd.Block)
+		catalog.onReplayBlock(cmd)
 	case CmdLogSegment:
 		cmd := txncmd.(*EntryCommand)
-		db, err := catalog.GetDatabaseByID(cmd.DBID)
-		if err != nil {
-			return err
-		}
-		tbl, err := db.GetTableEntryByID(cmd.TableID)
-		if err != nil {
-			return err
-		}
-		tbl.addEntryLocked(cmd.Segment)
+		catalog.onReplaySegment(cmd)
 	case CmdLogTable:
 		cmd := txncmd.(*EntryCommand)
-		db, err := catalog.GetDatabaseByID(cmd.DBID)
-		if err != nil {
-			return err
-		}
-		db.addEntryLocked(cmd.Table)
+		catalog.onReplayTable(cmd)
 	case CmdLogDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.addEntryLocked(cmd.DB)
+		catalog.onReplayDatabase(cmd)
 	default:
 		// panic("unsupport")
 	}
 	return
 }
 
-func (catalog *Catalog) replayhandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
-	if group != wal.GroupC {
+func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) (err error) {
+	cmd.DB.catalog = catalog
+	if cmd.DB.CurrOp == OpCreate {
+		return catalog.addEntryLocked(cmd.DB)
+	} else {
+		panic("todo")
+	}
+}
+
+func (catalog *Catalog) onReplayTable(cmd *EntryCommand) (err error) {
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	if err != nil {
 		return
 	}
+	cmd.Table.db = db
+	if cmd.Table.CurrOp == OpCreate {
+		return db.addEntryLocked(cmd.Table)
+	} else {
+		panic("todo")
+	}
+}
+
+func (catalog *Catalog) onReplaySegment(cmd *EntryCommand) (err error) {
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	if err != nil {
+		return
+	}
+	rel, err := db.GetTableEntryByID(cmd.TableID)
+	if err != nil {
+		return
+	}
+	cmd.Segment.table = rel
+	if cmd.Segment.CurrOp == OpCreate {
+		rel.addEntryLocked(cmd.Segment)
+	} else {
+		panic("todo")
+	}
+	return nil
+}
+
+func (catalog *Catalog) onReplayBlock(cmd *EntryCommand) (err error) {
+	db, err := catalog.GetDatabaseByID(cmd.DBID)
+	if err != nil {
+		return
+	}
+	rel, err := db.GetTableEntryByID(cmd.TableID)
+	if err != nil {
+		return
+	}
+	seg, err := rel.GetSegmentByID(cmd.SegmentID)
+	if err != nil {
+		return
+	}
+	cmd.Block.segment = seg
+	if cmd.Block.CurrOp == OpCreate {
+		seg.addEntryLocked(cmd.Block)
+	} else {
+		panic("todo")
+	}
+	return nil
+}
+
+func (catalog *Catalog) replayhandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
 	if typ != ETCatalogCheckpoint {
 		return
 	}
-	e := &CheckpointEntry{}
+	e := NewEmptyCheckpointEntry()
 	e.Unarshal(payload)
+	checkpoint := new(Checkpoint)
+	checkpoint.LSN = commitId
+	checkpoint.MaxTS = e.MaxTS
 	for _, cmd := range e.Entries {
 		catalog.replayCmd(cmd)
+	}
+	if len(catalog.checkpoints) == 0 {
+		catalog.checkpoints = append(catalog.checkpoints, checkpoint)
+	} else {
+		catalog.checkpoints[0] = checkpoint
 	}
 	return
 }

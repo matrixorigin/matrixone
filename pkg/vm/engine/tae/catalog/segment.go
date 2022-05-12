@@ -59,6 +59,15 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 	return e
 }
 
+func NewReplaySegmentEntry() *SegmentEntry {
+	e := &SegmentEntry{
+		BaseEntry: new(BaseEntry),
+		link:      new(common.Link),
+		entries:   make(map[uint64]*common.DLNode),
+	}
+	return e
+}
+
 func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err error) {
 	entry.RLock()
 	defer entry.RUnlock()

@@ -57,6 +57,15 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	return e
 }
 
+func NewReplayTableEntry() *TableEntry {
+	e := &TableEntry{
+		BaseEntry: new(BaseEntry),
+		link:      new(common.Link),
+		entries:   make(map[uint64]*common.DLNode),
+	}
+	return e
+}
+
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
 		BaseEntry: &BaseEntry{

@@ -147,6 +147,7 @@ func (be *BaseEntry) ReadFrom(r io.Reader) (n int64, err error) {
 	sn := int64(0)
 	sn, err = be.CommitInfo.ReadFrom(r)
 	n = sn + 8 + 8 + 8
+	be.RWMutex = new(sync.RWMutex)
 	return
 }
 
