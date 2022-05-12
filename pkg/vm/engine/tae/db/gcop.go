@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-// Destory is not thread-safe
+// Destroy is not thread-safe
 func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 	return func() error {
 		logutil.Debugf("[GCBLK] | %s | Started", entry.Repr())
@@ -44,7 +44,7 @@ func gcBlockClosure(entry *catalog.BlockEntry) tasks.FuncT {
 	}
 }
 
-// Destory is not thread-safe
+// Destroy is not thread-safe
 func gcSegmentClosure(entry *catalog.SegmentEntry) tasks.FuncT {
 	return func() error {
 		logutil.Debugf("[GCSEG] | %s | Started", entry.Repr())

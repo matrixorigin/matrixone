@@ -398,7 +398,7 @@ func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, rwlocker *sync.RWMutex) bool
 	}
 
 	// This entry was deleted before txn start
-	// Delete is uncommited by other txn, skip this entry
+	// Delete is uncommitted by other txn, skip this entry
 	if !be.IsCommitting() {
 		return false
 	}

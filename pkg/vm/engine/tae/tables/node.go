@@ -43,7 +43,7 @@ type appendableNode struct {
 	mgr       base.INodeManager
 	flushTs   uint64
 	ckpTs     uint64
-	execption *atomic.Value
+	exception *atomic.Value
 }
 
 func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendableNode {
@@ -52,7 +52,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 		panic(err)
 	}
 	impl := new(appendableNode)
-	impl.execption = new(atomic.Value)
+	impl.exception = new(atomic.Value)
 	id := block.meta.AsCommonID()
 	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(catalog.EstimateBlockSize(block.meta, block.meta.GetSchema().BlockMaxRows)))
 	impl.UnloadFunc = impl.OnUnload
@@ -88,7 +88,7 @@ func (node *appendableNode) OnDestory() {
 }
 
 func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
@@ -106,7 +106,7 @@ func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, er
 }
 
 func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector.IVector, err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
@@ -120,7 +120,7 @@ func (node *appendableNode) GetVectorView(maxRow uint32, colIdx int) (vec vector
 
 // TODO: Apply updates and txn sels
 func (node *appendableNode) GetVectorCopy(maxRow uint32, colIdx int, compressed, decompressed *bytes.Buffer) (vec *gvec.Vector, err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
 		return
@@ -144,19 +144,19 @@ func (node *appendableNode) GetBlockMaxFlushTS() uint64 {
 }
 
 func (node *appendableNode) OnLoad() {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		return
 	}
 	var err error
 	schema := node.block.meta.GetSchema()
 	if node.data, err = node.file.LoadIBatch(schema.Types(), schema.BlockMaxRows); err != nil {
-		node.execption.Store(err)
+		node.exception.Store(err)
 	}
 }
 
 func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
 		return
@@ -198,7 +198,7 @@ func (node *appendableNode) flushData(ts uint64, colData batch.IBatch) (err erro
 }
 
 func (node *appendableNode) OnUnload() {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		return
 	}
@@ -210,7 +210,7 @@ func (node *appendableNode) OnUnload() {
 			err = nil
 		} else {
 			logutil.Warnf("%s: %v", node.block.meta.String(), err)
-			node.execption.Store(err)
+			node.exception.Store(err)
 		}
 	}
 	node.data.Close()
@@ -221,13 +221,13 @@ func (node *appendableNode) OnUnload() {
 }
 
 func (node *appendableNode) Close() (err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Warnf("%v", exception)
 		err = exception.(error)
 		return
 	}
 	node.Node.Close()
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Warnf("%v", exception)
 		err = exception.(error)
 		return
@@ -240,7 +240,7 @@ func (node *appendableNode) Close() (err error) {
 }
 
 func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
 		return
@@ -259,7 +259,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 }
 
 func (node *appendableNode) ApplyAppend(bat *gbat.Batch, offset, length uint32, txn txnif.AsyncTxn) (from uint32, err error) {
-	if exception := node.execption.Load(); exception != nil {
+	if exception := node.exception.Load(); exception != nil {
 		logutil.Errorf("%v", exception)
 		err = exception.(error)
 		return
