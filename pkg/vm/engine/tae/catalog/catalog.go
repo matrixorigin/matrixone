@@ -119,7 +119,11 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) (err error) {
 	if cmd.DB.CurrOp == OpCreate {
 		return catalog.addEntryLocked(cmd.DB)
 	} else {
-		panic("todo")
+		db, _ := catalog.GetDatabaseByID(cmd.DB.ID)
+		if db != nil {
+			catalog.RemoveEntry(db)
+		}
+		return catalog.addEntryLocked(cmd.DB)
 	}
 }
 
@@ -132,7 +136,11 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand) (err error) {
 	if cmd.Table.CurrOp == OpCreate {
 		return db.addEntryLocked(cmd.Table)
 	} else {
-		panic("todo")
+		rel, _ := db.GetTableEntryByID(cmd.Table.ID)
+		if rel != nil {
+			db.RemoveEntry(rel)
+		}
+		return db.addEntryLocked(cmd.Table)
 	}
 }
 
@@ -149,7 +157,11 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand) (err error) {
 	if cmd.Segment.CurrOp == OpCreate {
 		rel.addEntryLocked(cmd.Segment)
 	} else {
-		panic("todo")
+		seg, _ := rel.GetSegmentByID(cmd.Segment.ID)
+		if seg != nil {
+			rel.deleteEntryLocked(seg)
+		}
+		rel.addEntryLocked(cmd.Segment)
 	}
 	return nil
 }
@@ -171,7 +183,11 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand) (err error) {
 	if cmd.Block.CurrOp == OpCreate {
 		seg.addEntryLocked(cmd.Block)
 	} else {
-		panic("todo")
+		blk, _ := seg.GetBlockEntryByID(cmd.Block.ID)
+		if blk != nil {
+			seg.deleteEntryLocked(blk)
+		}
+		seg.addEntryLocked(cmd.Block)
 	}
 	return nil
 }

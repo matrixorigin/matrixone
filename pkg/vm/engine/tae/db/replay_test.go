@@ -77,3 +77,45 @@ func TestReplayCatalog1(t *testing.T) {
 	t.Logf("GetCatalogCheckpointed2: %v", c.GetCheckpointed())
 	assert.Equal(t, tae.Catalog.GetCheckpointed(), c.GetCheckpointed())
 }
+
+func TestReplayCatalog2(t *testing.T) {
+	tae := initDB(t, nil)
+	schema := catalog.MockSchema(2)
+	txn := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	rel, _ := db.CreateRelation(schema)
+	seg, _ := rel.CreateSegment()
+	blk1, _ := seg.CreateBlock()
+	blk1Meta := blk1.GetMeta().(*catalog.BlockEntry)
+	seg.CreateBlock()
+	assert.Nil(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	seg, _ = rel.GetSegment(blk1Meta.GetSegment().ID)
+	seg.SoftDeleteBlock(blk1Meta.ID)
+	assert.Nil(t, txn.Commit())
+	ts := txn.GetCommitTS()
+
+	txn = tae.StartTxn(nil)
+	db, _ = txn.GetDatabase("db")
+	rel, _ = db.GetRelationByName(schema.Name)
+	seg, _ = rel.CreateSegment()
+	seg.CreateBlock()
+	assert.Nil(t, txn.Commit())
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
+	err := tae.Catalog.Checkpoint(ts)
+	assert.Nil(t, err)
+	t.Logf("GetCatalogCheckpointed: %v", tae.Catalog.GetCheckpointed())
+	tae.Close()
+
+	c, err := catalog.OpenCatalog(tae.Dir, CATALOGDir, nil, nil)
+	assert.Nil(t, err)
+	defer c.Close()
+
+	t.Log(c.SimplePPString(common.PPL1))
+	// t.Logf("GetCatalogCheckpointed: %v", tae.Catalog.GetCheckpointed())
+	// t.Logf("GetCatalogCheckpointed2: %v", c.GetCheckpointed())
+	// assert.Equal(t, tae.Catalog.GetCheckpointed(), c.GetCheckpointed())
+}
