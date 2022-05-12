@@ -25,17 +25,17 @@ var (
 
 // Less decides the key is less than another key
 func (tk TupleKey) Less(another TupleKey) bool {
-	return bytes.Compare(tk,another) < 0
+	return bytes.Compare(tk, another) < 0
 }
 
 // Compare compares the key with another key
 func (tk TupleKey) Compare(another TupleKey) int {
-	return bytes.Compare(tk,another)
+	return bytes.Compare(tk, another)
 }
 
 // Equal decides the key is equal to another key
 func (tk TupleKey) Equal(another TupleKey) bool {
-	return bytes.Equal(tk,another)
+	return bytes.Equal(tk, another)
 }
 
 // IsPredecessor decides the is the predecessor of the another key
@@ -43,9 +43,9 @@ func (tk TupleKey) IsPredecessor(another TupleKey) bool {
 	//1. the length of the key + 1 == the length of the another key.
 	//2. the last byte of the another key is zero.
 	//3. other bytes are equal.
-	return len(tk) + 1 == len(another) &&
-		another[len(another) - 1] == 0 &&
-		tk.Equal(another[:len(another) - 1])
+	return len(tk)+1 == len(another) &&
+		another[len(another)-1] == 0 &&
+		tk.Equal(another[:len(another)-1])
 }
 
 // SuccessorOfKey gets the successor of the key.
@@ -54,14 +54,14 @@ func SuccessorOfKey(key TupleKey) TupleKey {
 	l := len(key) + 1
 	if cap(key) > len(key) {
 		ret := key[:l]
-		if ret[l - 1] == 0 {
+		if ret[l-1] == 0 {
 			return ret
 		}
 	}
 
 	ret := make([]byte, l)
-	copy(ret,key)
-	ret[l - 1] = 0
+	copy(ret, key)
+	ret[l-1] = 0
 	return ret
 }
 
@@ -70,12 +70,12 @@ func SuccessorOfPrefix(prefix TupleKey) TupleKey {
 	if len(prefix) == 0 {
 		return TupleKey{0xFF}
 	}
-	ret := make([]byte,len(prefix))
-	copy(ret,prefix)
-	for i := len(ret) - 1; i >= 0 ; i-- {
+	ret := make([]byte, len(prefix))
+	copy(ret, prefix)
+	for i := len(ret) - 1; i >= 0; i-- {
 		ret[i] = ret[i] + 1
 		if ret[i] != 0 {
-			return ret[:i + 1]
+			return ret[:i+1]
 		}
 	}
 	return prefix
@@ -83,17 +83,17 @@ func SuccessorOfPrefix(prefix TupleKey) TupleKey {
 
 func (r Range) IsValid() bool {
 	if len(r.startKey) == 0 &&
-			len(r.endKey) == 0 {
+		len(r.endKey) == 0 {
 		return false
 	}
 
 	//endKey can be empty
-	if len(r.endKey) == 0{
+	if len(r.endKey) == 0 {
 		return true
 	}
 
 	//startKey < endKey
-	if bytes.Compare(r.startKey,r.endKey) >= 0 {
+	if bytes.Compare(r.startKey, r.endKey) >= 0 {
 		return false
 	}
 
@@ -101,20 +101,20 @@ func (r Range) IsValid() bool {
 }
 
 // Contain checks the key in the range
-func (r Range) Contain(key TupleKey) bool  {
+func (r Range) Contain(key TupleKey) bool {
 	//startKey <= key < endKey
-	return bytes.Compare(key,r.startKey) >= 0 &&
-		bytes.Compare(key,r.endKey) < 0
+	return bytes.Compare(key, r.startKey) >= 0 &&
+		bytes.Compare(key, r.endKey) < 0
 }
 
 // Equal checks the range is equal to the another range.
 func (r Range) Equal(another Range) bool {
-	return bytes.Compare(r.startKey,another.startKey) == 0 &&
-		bytes.Compare(r.endKey,another.endKey) == 0
+	return bytes.Compare(r.startKey, another.startKey) == 0 &&
+		bytes.Compare(r.endKey, another.endKey) == 0
 }
 
 // Merge merges two ranges
-func (r Range) Merge(another Range) Range  {
+func (r Range) Merge(another Range) Range {
 	if !(r.IsValid() && another.IsValid()) {
 		return Range{}
 	}
@@ -140,10 +140,10 @@ func (r Range) Merge(another Range) Range  {
 
 	if start.Equal(end) {
 		return Range{startKey: start}
-	}else if r.startKey.Equal(end) || another.startKey.Equal(end) {
+	} else if r.startKey.Equal(end) || another.startKey.Equal(end) {
 		return Range{startKey: start, endKey: SuccessorOfKey(end)}
 	}
-	return Range{startKey: start,endKey: end}
+	return Range{startKey: start, endKey: end}
 }
 
 // Overlap checks the range overlaps or not.
@@ -153,16 +153,16 @@ func (r Range) Overlap(another Range) bool {
 	}
 
 	if len(r.endKey) == 0 && len(another.endKey) == 0 {
-		return bytes.Compare(r.startKey,another.startKey) == 0
-	}else if len(r.endKey) == 0 {
-		return bytes.Compare(r.startKey,another.startKey) >= 0 &&
-			bytes.Compare(r.startKey,another.endKey) < 0
-	}else if len(another.endKey) == 0 {
-		return bytes.Compare(another.startKey,r.startKey) >= 0 &&
-			bytes.Compare(another.startKey,r.endKey) < 0
+		return bytes.Compare(r.startKey, another.startKey) == 0
+	} else if len(r.endKey) == 0 {
+		return bytes.Compare(r.startKey, another.startKey) >= 0 &&
+			bytes.Compare(r.startKey, another.endKey) < 0
+	} else if len(another.endKey) == 0 {
+		return bytes.Compare(another.startKey, r.startKey) >= 0 &&
+			bytes.Compare(another.startKey, r.endKey) < 0
 	}
-	return bytes.Compare(r.endKey,another.startKey) > 0 &&
-		bytes.Compare(r.startKey,another.endKey) < 0
+	return bytes.Compare(r.endKey, another.startKey) > 0 &&
+		bytes.Compare(r.startKey, another.endKey) < 0
 }
 
 // Intersect gets the intersected range.
@@ -188,7 +188,7 @@ func (r Range) Intersect(another Range) Range {
 	if another.endKey.Less(end) {
 		end = another.endKey
 	}
-	return Range{start,end}
+	return Range{start, end}
 }
 
 // Contain check the range contains the another range.
@@ -199,14 +199,14 @@ func (r Range) ContainRange(another Range) bool {
 
 	if len(r.endKey) == 0 && len(another.endKey) == 0 {
 		return r.startKey.Equal(another.startKey)
-	}else if len(r.endKey) == 0 {
+	} else if len(r.endKey) == 0 {
 		return false
-	}else if len(another.endKey) == 0 {
-		return bytes.Compare(another.startKey,r.startKey) >= 0 &&
-			bytes.Compare(another.startKey,r.endKey) < 0
+	} else if len(another.endKey) == 0 {
+		return bytes.Compare(another.startKey, r.startKey) >= 0 &&
+			bytes.Compare(another.startKey, r.endKey) < 0
 	}
-	return bytes.Compare(r.startKey,another.startKey) <= 0 &&
-		bytes.Compare(r.endKey,another.endKey) >= 0
+	return bytes.Compare(r.startKey, another.startKey) <= 0 &&
+		bytes.Compare(r.endKey, another.endKey) >= 0
 }
 
 // IsValid check the Range is valid or not.
@@ -216,13 +216,13 @@ func IsValid(r Range) bool {
 	if len(r.startKey) == 0 &&
 		len(r.endKey) == 0 {
 		return true
-	}else if len(r.endKey) == 0 || len(r.startKey) == 0 {
+	} else if len(r.endKey) == 0 || len(r.startKey) == 0 {
 		//startKey or endKey can be empty
 		return true
 	}
 
 	//startKey < endKey
-	if bytes.Compare(r.startKey,r.endKey) >= 0 {
+	if bytes.Compare(r.startKey, r.endKey) >= 0 {
 		return false
 	}
 
@@ -235,8 +235,8 @@ func IsValid(r Range) bool {
 // return parameters:
 // bool:
 // error
-func isOverlap(wantRange,checkRange Range) (bool,error) {
-	if !IsValid(wantRange) || !IsValid(checkRange){
+func isOverlap(wantRange, checkRange Range) (bool, error) {
+	if !IsValid(wantRange) || !IsValid(checkRange) {
 		return false, errorInvalidRange
 	}
 
@@ -255,57 +255,57 @@ func isOverlap(wantRange,checkRange Range) (bool,error) {
 	if wantNegativeInfinity && wantPositiveInfinity {
 		//(-infinity,+infinity)
 		ok = true
-	}else if wantNegativeInfinity && !wantPositiveInfinity {
+	} else if wantNegativeInfinity && !wantPositiveInfinity {
 		//(-infinity,x)
 		if checkNegativeInfinity && checkPositiveInfinity {
 			ok = true
-		}else if checkNegativeInfinity && !checkPositiveInfinity {
+		} else if checkNegativeInfinity && !checkPositiveInfinity {
 			//(-infinity,y)
 			// x<=y, or x > y
 			ok = true
-		}else if !checkNegativeInfinity && checkPositiveInfinity {
+		} else if !checkNegativeInfinity && checkPositiveInfinity {
 			//[y,infinity)
-			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
-		}else{
+			ok = bytes.Compare(wantRange.endKey, checkRange.startKey) > 0
+		} else {
 			//[y,z)
-			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
+			ok = bytes.Compare(wantRange.endKey, checkRange.startKey) > 0
 		}
-	}else if !wantNegativeInfinity && wantPositiveInfinity {
+	} else if !wantNegativeInfinity && wantPositiveInfinity {
 		//[x,infinity)
 		if checkNegativeInfinity && checkPositiveInfinity {
 			ok = true
-		}else if checkNegativeInfinity && !checkPositiveInfinity {
+		} else if checkNegativeInfinity && !checkPositiveInfinity {
 			//(-infinity,y)
-			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-		}else if !checkNegativeInfinity && checkPositiveInfinity {
+			ok = bytes.Compare(wantRange.startKey, checkRange.endKey) < 0
+		} else if !checkNegativeInfinity && checkPositiveInfinity {
 			//[y,infinity)
 			ok = true
-		}else{
+		} else {
 			//[y,z)
-			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
+			ok = bytes.Compare(wantRange.startKey, checkRange.endKey) < 0
 		}
-	}else{
+	} else {
 		//[a, b)
 		if checkNegativeInfinity && checkPositiveInfinity {
 			ok = true
-		}else if checkNegativeInfinity && !checkPositiveInfinity {
+		} else if checkNegativeInfinity && !checkPositiveInfinity {
 			//(-infinity,y)
-			ok = bytes.Compare(wantRange.startKey,checkRange.endKey) < 0
-		}else if !checkNegativeInfinity && checkPositiveInfinity {
+			ok = bytes.Compare(wantRange.startKey, checkRange.endKey) < 0
+		} else if !checkNegativeInfinity && checkPositiveInfinity {
 			//[y,infinity)
-			ok = bytes.Compare(wantRange.endKey,checkRange.startKey) > 0
-		}else{
-			checkFunc := func(wantRange,checkRange Range) bool {
-				return bytes.Compare(wantRange.endKey,checkRange.startKey) > 0 &&
-					bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0 ||
-					bytes.Compare(wantRange.startKey,checkRange.startKey) >= 0 &&
-						bytes.Compare(wantRange.startKey,checkRange.endKey) < 0 ||
-					bytes.Compare(wantRange.startKey,checkRange.startKey) >=0 &&
-						bytes.Compare(wantRange.endKey,checkRange.endKey) <= 0
+			ok = bytes.Compare(wantRange.endKey, checkRange.startKey) > 0
+		} else {
+			checkFunc := func(wantRange, checkRange Range) bool {
+				return bytes.Compare(wantRange.endKey, checkRange.startKey) > 0 &&
+					bytes.Compare(wantRange.endKey, checkRange.endKey) <= 0 ||
+					bytes.Compare(wantRange.startKey, checkRange.startKey) >= 0 &&
+						bytes.Compare(wantRange.startKey, checkRange.endKey) < 0 ||
+					bytes.Compare(wantRange.startKey, checkRange.startKey) >= 0 &&
+						bytes.Compare(wantRange.endKey, checkRange.endKey) <= 0
 			}
 			//[y,z)
-			ok = checkFunc(wantRange,checkRange) ||
-				checkFunc(checkRange,wantRange)
+			ok = checkFunc(wantRange, checkRange) ||
+				checkFunc(checkRange, wantRange)
 		}
 	}
 	return ok, nil

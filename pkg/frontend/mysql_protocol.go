@@ -1257,7 +1257,6 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 
 		switch mysqlColumn.ColumnType() {
 		case defines.MYSQL_TYPE_DECIMAL:
-			fmt.Println("inside mysql_protocol.go, makeResultSetTextRow")
 			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2
 			} else {
@@ -1321,8 +1320,14 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value.(types.Datetime).String())
 			}
-		case defines.MYSQL_TYPE_TIMESTAMP, defines.MYSQL_TYPE_TIME:
-			return nil, fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_TIME:
+			return nil, fmt.Errorf("unsupported MYSQL_TYPE_TIME")
 		default:
 			return nil, fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())
 		}

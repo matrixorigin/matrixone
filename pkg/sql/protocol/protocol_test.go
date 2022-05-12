@@ -79,85 +79,85 @@ func TestTransform(t *testing.T) {
 
 func TestInstruction(t *testing.T) {
 	insArray := []vm.Instruction{
-		vm.Instruction{
+		{
 			Op: vm.Top,
 			Arg: &top.Argument{
 				Limit: 123,
-				Fs:    []top.Field{top.Field{Attr: "hello", Type: top.Ascending}},
+				Fs:    []top.Field{{Attr: "hello", Type: top.Ascending}},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Plus,
 			Arg: &plus.Argument{
 				Typ: 123897,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Limit,
 			Arg: &limit.Argument{
 				Seen:  12893792345,
 				Limit: 89757435634,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Join,
 			Arg: &join.Argument{
-				Vars: [][]string{[]string{"x"}, []string{"y"}},
+				Vars: [][]string{{"x"}, {"y"}},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Merge,
 			Arg: &merge.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Dedup,
 			Arg: &dedup.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Order,
 			Arg: &order.Argument{
 				Fs: []order.Field{
-					order.Field{
+					{
 						Attr: "order field attr",
 						Type: 1,
 					},
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Oplus,
 			Arg: &oplus.Argument{Typ: 12312423},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Output,
 			Arg: &output.Argument{Attrs: []string{"the", "first", "loop"}},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Offset,
 			Arg: &offset.Argument{
 				Seen:   1231245,
 				Offset: 65784654,
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Restrict,
 			Arg: &restrict.Argument{
 				Attrs: []string{"the", "first", "loop"},
 				E:     &extend.StarExtend{},
 			},
 		},
-		vm.Instruction{
+		{
 			Op:  vm.Connector,
 			Arg: &connector.Argument{},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Connector,
 			Arg: &transform.Argument{
 				Typ:      12312312,
 				IsMerge:  false,
 				FreeVars: []string{"vm", "times", "test"},
 				BoundVars: []transformer.Transformer{
-					transformer.Transformer{
+					{
 						Op:    1231,
 						Ref:   897897,
 						Name:  "happening",
@@ -166,7 +166,7 @@ func TestInstruction(t *testing.T) {
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.Projection,
 			Arg: &projection.Argument{
 				Rs: []uint64{123, 98789, 3456456},
@@ -176,7 +176,7 @@ func TestInstruction(t *testing.T) {
 				},
 			},
 		},
-		vm.Instruction{
+		{
 			Op: vm.UnTransform,
 			Arg: &untransform.Argument{
 				FreeVars: []string{"the", "first", "loop"},

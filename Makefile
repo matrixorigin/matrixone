@@ -71,7 +71,7 @@ ut:
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 30m ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 # Running build verification tests
@@ -81,7 +81,7 @@ bvt: mo-server
 ifeq ($(UNAME_S),Darwin)
 	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
 else
-	@cd optools; timeout 30m ./run_bvt.sh BVT False $(BVT_BRANCH)
+	@cd optools; timeout 60m ./run_bvt.sh BVT False $(BVT_BRANCH)
 endif
 
 # Tear down
@@ -108,9 +108,16 @@ endif
 # static checks
 ###############################################################################
 
+.PHONY: fmt
+fmt:
+	gofmt -l -s .
+
+
 .PHONY: install-static-check-tools
 install-static-check-tools:
 	@curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | bash -s -- -b $(GOPATH)/bin v1.45.2
+	@go install github.com/matrixorigin/linter/cmd/molint@latest
+	@go install github.com/google/go-licenses@latest
 
 # TODO: tracking https://github.com/golangci/golangci-lint/issues/2649
 DIRS=pkg/... \
@@ -122,14 +129,8 @@ EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconv
 .PHONY: static-check
 static-check:
 	@go generate ./pkg/sql/colexec/extend/overload
+	@go vet -vettool=$(shell which molint) ./...
+	@go-licenses check ./...
 	@for p in $(DIRS); do \
     golangci-lint run $(EXTRA_LINTERS) $$p; \
   done;
-
-.PHONY: install-molint
-install-molint:
-	@go install github.com/matrixorigin/linter/cmd/molint@latest
-
-.PHONY: molint
-molint:
-	@go vet -vettool=$(shell which molint) ./...

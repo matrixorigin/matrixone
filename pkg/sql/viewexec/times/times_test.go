@@ -75,7 +75,7 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int8},
+			{Oid: types.T_int8},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int8}},
@@ -97,7 +97,7 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int8},
+			{Oid: types.T_int8},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int8}},
@@ -119,7 +119,7 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int64},
+			{Oid: types.T_int64},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int64}},
@@ -141,8 +141,8 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
@@ -164,9 +164,9 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
@@ -188,10 +188,10 @@ func init() {
 		},
 
 		factTypes: []types.Type{
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
-			types.Type{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
+			{Oid: types.T_int64},
 		},
 		dimensionTypes: [][]types.Type{
 			{types.Type{Oid: types.T_int64}, types.Type{Oid: types.T_int64}},
@@ -215,7 +215,7 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}},
@@ -237,7 +237,7 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}},
@@ -259,7 +259,7 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}},
@@ -281,7 +281,7 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}},
@@ -303,8 +303,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
@@ -326,8 +326,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
@@ -349,8 +349,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
@@ -372,8 +372,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_int8},
+				{Oid: types.T_int8},
+				{Oid: types.T_int8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_int8}, types.Type{Oid: types.T_int8}},
@@ -395,8 +395,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int32},
-				types.Type{Oid: types.T_uint8},
+				{Oid: types.T_int32},
+				{Oid: types.T_uint8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
@@ -418,8 +418,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int32},
-				types.Type{Oid: types.T_uint8},
+				{Oid: types.T_int32},
+				{Oid: types.T_uint8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
@@ -441,8 +441,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int32},
-				types.Type{Oid: types.T_uint8},
+				{Oid: types.T_int32},
+				{Oid: types.T_uint8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
@@ -464,8 +464,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int32},
-				types.Type{Oid: types.T_uint8},
+				{Oid: types.T_int32},
+				{Oid: types.T_uint8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_uint8}, types.Type{Oid: types.T_int64}},
@@ -487,8 +487,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 10},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
@@ -510,8 +510,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 10},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
@@ -533,8 +533,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 10},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
@@ -556,8 +556,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 10},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_varchar, Width: 10}},
@@ -579,8 +579,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_int8},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
@@ -602,8 +602,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_int8},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
@@ -625,8 +625,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_int8},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
@@ -648,8 +648,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_int8},
-				types.Type{Oid: types.T_varchar, Width: 10},
+				{Oid: types.T_int8},
+				{Oid: types.T_varchar, Width: 10},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 10}, types.Type{Oid: types.T_int8}},
@@ -671,8 +671,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 8},
-				types.Type{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
@@ -694,8 +694,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 8},
-				types.Type{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
@@ -717,8 +717,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 8},
-				types.Type{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
@@ -740,8 +740,8 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 8},
-				types.Type{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
+				{Oid: types.T_varchar, Width: 8},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 8}, types.Type{Oid: types.T_varchar, Width: 8}},
@@ -763,9 +763,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
@@ -787,9 +787,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
@@ -811,9 +811,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
@@ -835,9 +835,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
-				types.Type{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
+				{Oid: types.T_varchar, Width: 12},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar, Width: 12}, types.Type{Oid: types.T_varchar, Width: 12}},
@@ -859,9 +859,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
@@ -883,9 +883,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
@@ -907,9 +907,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},
@@ -931,9 +931,9 @@ func init() {
 			},
 
 			factTypes: []types.Type{
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
-				types.Type{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
+				{Oid: types.T_varchar},
 			},
 			dimensionTypes: [][]types.Type{
 				{types.Type{Oid: types.T_varchar}, types.Type{Oid: types.T_varchar}},

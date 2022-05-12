@@ -4,8 +4,11 @@ go 1.18
 
 require (
 	github.com/BurntSushi/toml v1.0.0
+	github.com/FastFilter/xorfilter v0.1.1
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
+	github.com/bxcodec/faker/v3 v3.8.0
+	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.13.0
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
@@ -15,33 +18,30 @@ require (
 	github.com/google/btree v1.0.1
 	github.com/google/gofuzz v1.2.0
 	github.com/lni/goutils v1.3.0
-	github.com/matrixorigin/matrixcube v0.3.1-0.20220406054210-215b778d2f95
+	github.com/matrixorigin/matrixcube v0.3.1-0.20220511071845-cfc4bac02bb4
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
+	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/smartystreets/assertions v1.2.0
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.1
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
+	go.etcd.io/etcd/raft/v3 v3.5.1
 	go.uber.org/zap v1.19.1
 	golang.org/x/sys v0.0.0-20220209214540-3681064d5158
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-require (
-	github.com/coreos/etcd v3.3.13+incompatible // indirect
-	github.com/golang/protobuf v1.5.2 // indirect
-	go.etcd.io/etcd/raft/v3 v3.5.1 // indirect
-)
+require github.com/golang/protobuf v1.5.2 // indirect
 
 require (
 	cloud.google.com/go v0.99.0 // indirect
 	github.com/DataDog/zstd v1.5.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.2.0 // indirect
-	github.com/cespare/xxhash/v2 v2.1.2 // indirect
 	github.com/cockroachdb/errors v1.8.2 // indirect
 	github.com/cockroachdb/logtags v0.0.0-20190617123548-eb05cc24525f // indirect
 	github.com/cockroachdb/redact v1.0.8 // indirect
@@ -96,7 +96,6 @@ require (
 	github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 // indirect
 	github.com/yusufpapurcu/wmi v1.2.2 // indirect
 	go.etcd.io/bbolt v1.3.6 // indirect
-	go.etcd.io/etcd v3.3.27+incompatible
 	go.etcd.io/etcd/api/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.1 // indirect
 	go.etcd.io/etcd/client/v2 v2.305.1 // indirect

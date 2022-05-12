@@ -15,7 +15,7 @@ import (
 )
 
 func Test_getParamFromCommand(t *testing.T) {
-	convey.Convey("getParamFromCommand function",t, func() {
+	convey.Convey("getParamFromCommand function", t, func() {
 		tpeMock, _ := NewTpeEngine(&TpeConfig{
 			KvType:                    tuplecodec.KV_MEMORY,
 			SerialType:                tuplecodec.ST_JSON,
@@ -29,29 +29,29 @@ func Test_getParamFromCommand(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		dbDesc, err := tpeMock.Database("ssb")
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64,types.T_uint64,types.T_int64)
+		_, attrDefs := tuplecodec.MakeAttributes(types.T_uint64, types.T_uint64, types.T_int64)
 		attrNames := []string{
-			"a","b","c",
+			"a", "b", "c",
 		}
 		var defs []vm_engine.TableDef
 		for i, def := range attrDefs {
 			def.Attr.Name = attrNames[i]
-			defs = append(defs,def)
+			defs = append(defs, def)
 		}
-	
-		defs = append(defs,&vm_engine.CommentDef{
+
+		defs = append(defs, &vm_engine.CommentDef{
 			Comment: "A(a,b,c)",
 		})
 
 		err = dbDesc.Create(0, "t1", defs)
-		convey.So(err,convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
 		table, err := dbDesc.Relation("t1")
-        convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeNil)
 
-        tpe_relation, ok := table.(*TpeRelation)
+		tpe_relation, ok := table.(*TpeRelation)
 		convey.So(ok, convey.ShouldBeTrue)
 
 		cnt := 2
@@ -142,11 +142,11 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(result.Decode_keys.Vecs, convey.ShouldResemble, []batch.DumpDecodeItem{batch.DumpDecodeItem(nil)})
 			attr := append(result.Decode_keys.Attrs, attrNames...)
 			convey.So(result.Decode_values.Attrs, convey.ShouldResemble, attr)
-			convey.So(result.Decode_values.Vecs, convey.ShouldResemble, []batch.DumpDecodeItem{batch.DumpDecodeItem(nil), 
-						batch.DumpDecodeItem(nil), batch.DumpDecodeItem(nil), batch.DumpDecodeItem(nil)})
+			convey.So(result.Decode_values.Vecs, convey.ShouldResemble, []batch.DumpDecodeItem{batch.DumpDecodeItem(nil),
+				batch.DumpDecodeItem(nil), batch.DumpDecodeItem(nil), batch.DumpDecodeItem(nil)})
 
-			header := "Keys" + "\t\t\t\t" + "Values" + "\t\t\t\t" + fmt.Sprintf("%v", result.Decode_keys.Attrs) + 
-							"\t\t\t\t" + fmt.Sprintf("%v", result.Decode_values.Attrs)
+			header := "Keys" + "\t\t\t\t" + "Values" + "\t\t\t\t" + fmt.Sprintf("%v", result.Decode_keys.Attrs) +
+				"\t\t\t\t" + fmt.Sprintf("%v", result.Decode_values.Attrs)
 			header2 := getDumpDataHeader(opt, result)
 			convey.So(header, convey.ShouldEqual, header2)
 
@@ -159,15 +159,15 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < cnt; i++ {
 				for j := 0; j < len(attrNames); j++ {
-					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j + 1][i])
+					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j+1][i])
 					convey.So(str, convey.ShouldEqual, lines[i][j])
 				}
 			}
 		})
 
 		convey.Convey("GetAllvalues for designated key of table", func() {
-			args := []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1", 
-						"-getValueofKey", "139,139,137", "-limit", "0,1"}
+			args := []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1",
+				"-getValueofKey", "139,139,137", "-limit", "0,1"}
 			opt := &batch.DumpOption{}
 			err = getParamFromCommand(opt, args)
 			convey.So(err, convey.ShouldBeNil)
@@ -186,13 +186,13 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < 1; i++ {
 				for j := 0; j < len(attrNames); j++ {
-					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j + 1][i])
+					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j+1][i])
 					convey.So(str, convey.ShouldEqual, lines[i][j])
 				}
 			}
 
-			args = []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1", 
-						"-getValueofOriginKey", "1234"}
+			args = []string{"system_vars_config.toml", "-keys", "-values", "-decode_key", "-decode_value", "-db", "ssb", "-table", "t1",
+				"-getValueofOriginKey", "1234"}
 			opt = &batch.DumpOption{}
 			err = getParamFromCommand(opt, args)
 			convey.So(err, convey.ShouldBeNil)
@@ -207,13 +207,13 @@ func Test_getParamFromCommand(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			for i := 0; i < 1; i++ {
 				for j := 0; j < len(attrNames); j++ {
-					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j + 1][i])
+					str := fmt.Sprintf("%v", result.Decode_values.Vecs[j+1][i])
 					convey.So(str, convey.ShouldEqual, lines[i][j])
 				}
 			}
 
 		})
-	
+
 		err = dbDesc.Delete(0, "t1")
 		convey.So(err, convey.ShouldBeNil)
 	})

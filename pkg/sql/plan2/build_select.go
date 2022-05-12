@@ -16,6 +16,7 @@ package plan2
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,38 +27,37 @@ import (
 
 func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
 	//with
+	err := buildCTE(stmt.With, ctx, query, selectCtx)
+	if err != nil {
+		return err
+	}
 
 	//clause
 	var projections []*plan.Expr
+
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		tmp, err := buildSelectClause(selectClause, ctx, query, selectCtx)
+		projections, err = buildSelectClause(selectClause, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
-		projections = tmp
 	case *tree.ParenSelect:
 		return buildSelect(selectClause.Select, ctx, query, selectCtx)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 
-	preNode := query.Nodes[len(query.Nodes)-1]
+	rootId := int32(len(query.Nodes) - 1)
 
-	if stmt.OrderBy == nil && stmt.Limit == nil {
-		if projections != nil {
-			preNode.ProjectList = projections
-		}
-		return nil
-	}
-
-	node := &plan.Node{
-		NodeType:    plan.Node_SORT,
-		ProjectList: projections,
-		Children:    []int32{preNode.NodeId},
-	} //orderby
+	// Build ORDER BY clause
 	if stmt.OrderBy != nil {
-		var orderBys []*plan.OrderBySpec
+		node := &plan.Node{
+			NodeType: plan.Node_SORT,
+			NodeId:   rootId + 1,
+			Children: []int32{rootId},
+		}
+
+		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
 		for _, order := range stmt.OrderBy {
 			orderBy := &plan.OrderBySpec{}
 			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
@@ -77,9 +77,12 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx
 			orderBys = append(orderBys, orderBy)
 		}
 		node.OrderBy = orderBys
+
+		query.Nodes = append(query.Nodes, node)
+		rootId++
 	}
 
-	//limit
+	// Build LIMIT clause
 	if stmt.Limit != nil {
 		//offset
 		if stmt.Limit.Offset != nil {
@@ -87,7 +90,7 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx
 			if err != nil {
 				return err
 			}
-			node.Offset = expr
+			query.Nodes[rootId].Offset = expr
 		}
 
 		//limit
@@ -96,14 +99,82 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx
 			if err != nil {
 				return err
 			}
-			node.Limit = expr
+			query.Nodes[rootId].Limit = expr
 		}
 	}
-	appendQueryNode(query, node, true)
 
 	//fetch
 
 	//lock
+	preNode := query.Nodes[len(query.Nodes)-1]
+	preNode.ProjectList = projections
+	query.Steps = append(query.Steps, preNode.NodeId)
+	return nil
+}
+
+func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
+	if withExpr == nil {
+		return nil
+	}
+
+	for _, cte := range withExpr.CTEs {
+		err := buildStatement(cte.Stmt, ctx, query)
+		if err != nil {
+			return err
+		}
+		//add a projection node
+		alias := string(cte.Name.Alias)
+		node := &plan.Node{
+			NodeType: plan.Node_MATERIAL,
+		}
+		preNode := query.Nodes[len(query.Nodes)-1]
+
+		columnLength := len(preNode.ProjectList)
+		tableDef := &plan.TableDef{
+			Name: alias,
+			Cols: make([]*plan.ColDef, columnLength),
+		}
+		exprs := make([]*plan.Expr, columnLength)
+		if cte.Name.Cols != nil {
+			if len(preNode.ProjectList) != len(cte.Name.Cols) {
+				return errors.New(errno.InvalidColumnReference, fmt.Sprintf("CTE table column length not match"))
+			}
+			for idx, col := range cte.Name.Cols {
+				exprs[idx] = &plan.Expr{
+					Expr:  nil,
+					Alias: alias + "." + string(col),
+					Typ:   preNode.ProjectList[idx].Typ,
+				}
+				tableDef.Cols[idx] = &plan.ColDef{
+					Typ:  preNode.ProjectList[idx].Typ,
+					Name: string(col),
+				}
+			}
+			node.ProjectList = exprs
+		} else {
+			for idx, col := range preNode.ProjectList {
+				exprs[idx] = &plan.Expr{
+					Expr:  nil,
+					Alias: alias + "." + col.Alias,
+					Typ:   col.Typ,
+				}
+				tableDef.Cols[idx] = &plan.ColDef{
+					Typ:  col.Typ,
+					Name: col.Alias,
+				}
+			}
+			node.ProjectList = exprs
+		}
+
+		//set cte table to selectCtx
+		selectCtx.cteTables[strings.ToUpper(alias)] = tableDef
+		//append node
+		appendQueryNode(query, node, false)
+
+		//set cte table node_id to step
+		cteNodeId := query.Nodes[len(query.Nodes)-1].NodeId
+		query.Steps = append(query.Steps, cteNodeId)
+	}
 
 	return nil
 }
@@ -128,7 +199,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 
 	//projection
 	//todo get windowspec
-	var projections []*plan.Expr
+	var projectionList []*plan.Expr
 	for _, selectExpr := range stmt.Exprs {
 		expr, err := buildExpr(selectExpr.Expr, ctx, query, selectCtx)
 		if err != nil {
@@ -138,7 +209,7 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 		case *plan.Expr_List:
 			//select a.* from tbl a or select * from tbl,   buildExpr() will return ExprList
 			for _, col := range listExpr.List.List {
-				projections = append(projections, col)
+				projectionList = append(projectionList, col)
 			}
 		default:
 			alias := string(selectExpr.As)
@@ -148,23 +219,19 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 				expr.Alias = alias
 				selectCtx.columnAlias[alias] = expr
 			}
-			projections = append(projections, expr)
+			projectionList = append(projectionList, expr)
 		}
 	}
 
-	if stmt.GroupBy == nil && stmt.Having == nil && !stmt.Distinct {
-		return projections, nil
-	}
-
+	//Agg (group by && having)
 	if stmt.GroupBy != nil || stmt.Having != nil {
-		preNode := query.Nodes[len(query.Nodes)-1]
 		aggNode := &plan.Node{
-			NodeType:    plan.Node_AGG,
-			ProjectList: projections,
+			NodeType: plan.Node_AGG,
 		}
+
 		//group_by
 		if stmt.GroupBy != nil {
-			var exprs []*plan.Expr
+			exprs := make([]*plan.Expr, 0, len(stmt.GroupBy))
 			for _, groupByExpr := range stmt.GroupBy {
 				expr, err := buildExpr(groupByExpr, ctx, query, selectCtx)
 				if err != nil {
@@ -174,36 +241,29 @@ func buildSelectClause(stmt *tree.SelectClause, ctx CompilerContext, query *Quer
 			}
 			aggNode.GroupBy = exprs
 		}
+
 		//having
 		if stmt.Having != nil {
-			if stmt.GroupBy == nil {
-				//todo select a from tbl having max(a) > 10   will rewrite to  select a from tbl group by null having max(a) > 10
-			}
 			exprs, err := splitAndBuildExpr(stmt.Having.Expr, ctx, query, selectCtx)
 			if err != nil {
 				return nil, err
 			}
-			//todo confirm
 			aggNode.WhereList = append(aggNode.WhereList, exprs...)
 		}
-		aggNode.Children = []int32{preNode.NodeId}
-		appendQueryNode(query, aggNode, true)
-		if !stmt.Distinct {
-			projections = nil
-		}
+		appendQueryNode(query, aggNode, false)
 	}
 
 	//distinct
 	if stmt.Distinct {
-		preNode := query.Nodes[len(query.Nodes)-1]
+		if stmt.GroupBy != nil {
+			return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport select statement(distinct with group by): %T", stmt))
+		}
 		distinctNode := &plan.Node{
 			NodeType: plan.Node_AGG,
 		}
-		distinctNode.GroupBy = projections
-		distinctNode.Children = []int32{preNode.NodeId}
-		appendQueryNode(query, distinctNode, true)
-		projections = nil
+		distinctNode.GroupBy = projectionList
+		appendQueryNode(query, distinctNode, false)
 	}
 
-	return projections, nil
+	return projectionList, nil
 }

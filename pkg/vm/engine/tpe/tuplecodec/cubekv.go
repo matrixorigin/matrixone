@@ -70,7 +70,7 @@ type CubeKV struct {
 	tpeDedupSetBatchTimeout  time.Duration
 	tpeDedupSetBatchTryCount int
 
-	tpeScanTimeout time.Duration
+	tpeScanTimeout  time.Duration
 	tpeScanTryCount int
 }
 
@@ -115,8 +115,8 @@ func NewCubeKV(cd driver.CubeDriver, limit uint64, tpeDedupSetBatchTimeout time.
 		limit:                    limit,
 		tpeDedupSetBatchTimeout:  tpeDedupSetBatchTimeout,
 		tpeDedupSetBatchTryCount: tpeDedupSetBatchTryCount,
-		tpeScanTimeout: tpeScanTimeout,
-		tpeScanTryCount: tpeScanTryCount}
+		tpeScanTimeout:           tpeScanTimeout,
+		tpeScanTryCount:          tpeScanTryCount}
 
 	err := initIDPool(cd, DATABASE_ID, &ck.dbIDPool)
 	if err != nil {
@@ -449,7 +449,7 @@ func (ckec *checkKeysExistedContext) callbackForCheckKeysExisted(cr driver.Custo
 				ckec.getKey(realKeyIndex))
 		}
 	} else {
-		logutil.Errorf("DedupSetBatch get nil repsonse.")
+		logutil.Errorf("DedupSetBatch get nil response.")
 		ckec.setShardError(cr.ToShard, errorAsyncTpeCheckKeysExistGenNilResponse)
 	}
 	ckec.done()
@@ -964,7 +964,7 @@ func (ck *CubeKV) GetWithPrefix(prefixOrStartkey TupleKey, prefixLen int, prefix
 
 		for i := 0; i < len(scanKeys); i++ {
 			keys = append(keys, scanKeys[i])
-			if (!needKeyOnly) {
+			if !needKeyOnly {
 				values = append(values, scanValues[i])
 			}
 		}

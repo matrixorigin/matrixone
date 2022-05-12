@@ -38,30 +38,30 @@ type Batch struct {
 	// Vecs col data
 	Vecs []*vector.Vector
 	// ring
-	Zs   []int64
-	As   []string // alias list
-	Refs []uint64 // reference count
-	Rs   []ring.Ring
-	Ht   interface{} // hash table
+	Zs     []int64
+	As     []string // alias list
+	Refs   []uint64 // reference count
+	Rs     []ring.Ring
+	Ht     interface{} // hash table
 	Result *DumpResult
 }
 
 type DumpOption struct {
-    Db_name 		[]string
-    Table_name 		[]string
-    Keys 			bool
-    Values 			bool
-    Decode_key 		bool
-    Decode_value 	bool
-    Limit 			[]uint64
-    Filename 		string
-    Max_file_size 	int64
-	Writer 			*bufio.Writer
-	PrimaryKey 		[]byte
-	ReadCnt			uint64
-	UseKey 			bool
-	PrimaryValue 	[]string
-	UseValue 		bool
+	Db_name       []string
+	Table_name    []string
+	Keys          bool
+	Values        bool
+	Decode_key    bool
+	Decode_value  bool
+	Limit         []uint64
+	Filename      string
+	Max_file_size int64
+	Writer        *bufio.Writer
+	PrimaryKey    []byte
+	ReadCnt       uint64
+	UseKey        bool
+	PrimaryValue  []string
+	UseValue      bool
 }
 
 type DumpKey []byte
@@ -75,8 +75,8 @@ type DecodeItem struct {
 }
 
 type DumpResult struct {
-    Keys []DumpKey
-    Values []DumpValue
-    Decode_keys DecodeItem
-    Decode_values DecodeItem
-} 
+	Keys          []DumpKey
+	Values        []DumpValue
+	Decode_keys   DecodeItem
+	Decode_values DecodeItem
+}

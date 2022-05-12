@@ -23,19 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getLastTableDef(query *Query, node *plan.Node) *plan.TableDef {
-	if node.TableDef != nil {
-		return node.TableDef
-	}
-	for _, id := range node.Children {
-		val := getLastTableDef(query, query.Nodes[id])
-		if val != nil {
-			return val
-		}
-	}
-	return nil
-}
-
 func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 	//build select
 	selectStmt := &tree.Select{
@@ -52,7 +39,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		Limit:   stmt.Limit,
 	}
 	selectCtx := &SelectContext{
-		tableAlias:  make(map[string]string),
+		// tableAlias:  make(map[string]string),
 		columnAlias: make(map[string]*plan.Expr),
 	}
 	err := buildSelect(selectStmt, ctx, query, selectCtx)
@@ -61,7 +48,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 	}
 
 	//get table def
-	tableDef := getLastTableDef(query, query.Nodes[len(query.Nodes)-1])
+	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
 		return errors.New(errno.CaseNotFound, "can not find table in sql")
 	}
@@ -84,8 +71,13 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		return nil
 	}
 
-	var columns []*plan.Expr
-	var values []*plan.Expr
+	columnLength := len(stmt.Exprs)
+	if columnLength == 0 {
+		return errors.New(errno.CaseNotFound, "no column will be update")
+	}
+
+	columns := make([]*plan.Expr, 0, columnLength)
+	values := make([]*plan.Expr, 0, columnLength)
 	for _, expr := range stmt.Exprs {
 		if len(expr.Names) != 1 {
 			return errors.New(errno.CaseNotFound, "the set list of update must be one")
@@ -93,25 +85,28 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 		if expr.Names[0].NumParts != 1 {
 			return errors.New(errno.CaseNotFound, "the set list of update must be one")
 		}
+
 		column := getColumnName(expr.Names[0].Parts[0])
 		if column == nil {
 			return errors.New(errno.CaseNotFound, fmt.Sprintf("set column name [%v] is not found", expr.Names[0].Parts[0]))
 		}
-		columns = append(columns, column)
 
-		value, err := buildExpr(expr.Expr, ctx, query, nil)
+		value, err := buildExpr(expr.Expr, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
 
-		//check value type
-		matchType(column.Typ, value.Typ)
+		//cast value type
+		if column.Typ.Id != value.Typ.Id {
+			tmp, err := appendCastExpr(value, column.Typ.Id)
+			if err != nil {
+				return err
+			}
+			value = tmp
+		}
 
+		columns = append(columns, column)
 		values = append(values, value)
-	}
-
-	if len(columns) == 0 {
-		return errors.New(errno.CaseNotFound, "no column will be update")
 	}
 
 	node := &plan.Node{
@@ -120,18 +115,13 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 			Columns: columns,
 			Values:  values,
 		},
-		Children: []int32{int32(len(query.Nodes) - 1)},
+		ObjRef:   objRef,
+		TableDef: tableDef,
 	}
-	appendQueryNode(query, node, true)
+	appendQueryNode(query, node, false)
 
-	return nil
-}
+	preNode := query.Nodes[len(query.Nodes)-1]
+	query.Steps = append(query.Steps, preNode.NodeId)
 
-func matchType(left *plan.Type, right *plan.Type) error {
-	if left.Id == right.Id {
-		return nil
-	}
-	//todo check update type
-	// return errors.New(errno.CaseNotFound, "type not match")
 	return nil
 }

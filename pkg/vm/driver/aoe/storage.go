@@ -115,7 +115,7 @@ func (s *Storage) adjustFeature() {
 
 //Stats returns the stats of the Storage
 func (s *Storage) Stats() stats.Stats {
-	return s.stats
+	return s.stats.Copy()
 }
 
 func (s *Storage) Feature() storage.Feature {

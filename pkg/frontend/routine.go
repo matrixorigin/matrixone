@@ -43,7 +43,7 @@ type Routine struct {
 	//channel of notify
 	notifyChan chan interface{}
 
-	onceCloseNotifyChan    sync.Once
+	onceCloseNotifyChan sync.Once
 
 	routineMgr *RoutineManager
 }
@@ -67,24 +67,25 @@ func (routine *Routine) SetRoutineMgr(rtMgr *RoutineManager) {
 func (routine *Routine) GetRoutineMgr() *RoutineManager {
 	return routine.routineMgr
 }
+
 /*
 After the handshake with the client is done, the routine goes into processing loop.
- */
+*/
 func (routine *Routine) Loop() {
 	var req *Request = nil
 	var err error
 	var resp *Response
 	defer routine.Quit()
-	for{
+	for {
 		quit := false
 		select {
-		case <- routine.notifyChan:
+		case <-routine.notifyChan:
 			logutil.Infof("-----routine quit")
 			quit = true
-		case req = <- routine.requestChan:
+		case req = <-routine.requestChan:
 		}
 
-		if quit{
+		if quit {
 			break
 		}
 
@@ -93,7 +94,7 @@ func (routine *Routine) Loop() {
 		mgr := routine.GetRoutineMgr()
 
 		routine.protocol.(*MysqlProtocolImpl).sequenceId = req.seq
-		ses := NewSession(routine.protocol,mgr.getEpochgc(),routine.guestMmu,routine.mempool,mgr.getParameterUnit())
+		ses := NewSession(routine.protocol, mgr.getEpochgc(), routine.guestMmu, routine.mempool, mgr.getParameterUnit())
 
 		routine.executor.PrepareSessionBeforeExecRequest(ses)
 
@@ -115,7 +116,7 @@ func (routine *Routine) Loop() {
 
 /*
 When the io is closed, the Quit will be called.
- */
+*/
 func (routine *Routine) Quit() {
 	routine.notifyClose()
 
@@ -131,18 +132,18 @@ func (routine *Routine) Quit() {
 
 /*
 notify routine to quit
- */
+*/
 func (routine *Routine) notifyClose() {
 	if routine.executor != nil {
 		routine.executor.Close()
 	}
 }
 
-func NewRoutine(protocol MysqlProtocol, executor CmdExecutor,pu *config.ParameterUnit) *Routine {
+func NewRoutine(protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
 	ri := &Routine{
 		protocol:    protocol,
 		executor:    executor,
-		requestChan: make(chan *Request,1),
+		requestChan: make(chan *Request, 1),
 		notifyChan:  make(chan interface{}),
 		guestMmu:    guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
 		mempool:     pu.Mempool,

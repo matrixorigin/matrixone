@@ -166,11 +166,11 @@ func Now() Datetime {
 }
 
 func (dt Datetime) ToDate() Date {
-	return Date((dt.sec() + localTZ) / secsPerDay)
+	return Date((dt.sec()) / secsPerDay)
 }
 
 func (dt Datetime) Clock() (hour, min, sec int8) {
-	t := (dt.sec() + localTZ) % secsPerDay
+	t := (dt.sec()) % secsPerDay
 	hour = int8(t / secsPerHour)
 	min = int8(t % secsPerHour / secsPerMinute)
 	sec = int8(t % secsPerMinute)
@@ -179,7 +179,7 @@ func (dt Datetime) Clock() (hour, min, sec int8) {
 
 func FromClock(year int32, month, day, hour, min, sec uint8, msec uint32) Datetime {
 	days := FromCalendar(year, month, day)
-	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec) - localTZ
+	secs := int64(days)*secsPerDay + int64(hour)*secsPerHour + int64(min)*secsPerMinute + int64(sec)
 	return Datetime((secs << 20) + int64(msec))
 }
 

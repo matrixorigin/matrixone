@@ -25,16 +25,16 @@ type TupleValue []byte
 // Range for [startKey, endKey)
 type Range struct {
 	startKey TupleKey
-	endKey TupleKey
+	endKey   TupleKey
 }
 
 type TupleKeyEncoder struct {
-	oe *orderedcodec.OrderedEncoder
+	oe           *orderedcodec.OrderedEncoder
 	tenantPrefix *TupleKey
 }
 
 type TupleKeyDecoder struct {
-	od *orderedcodec.OrderedDecoder
+	od           *orderedcodec.OrderedDecoder
 	tenantPrefix *TupleKey
 }
 
@@ -56,7 +56,7 @@ func (tch *TupleCodecHandler) GetEncoder() *TupleKeyEncoder {
 	return tch.tke
 }
 
-func (tch *TupleCodecHandler) GetDecoder() *TupleKeyDecoder  {
+func (tch *TupleCodecHandler) GetDecoder() *TupleKeyDecoder {
 	return tch.tkd
 }
 
@@ -64,13 +64,13 @@ func (tch *TupleCodecHandler) GetDecoder() *TupleKeyDecoder  {
 type Tuple interface {
 	GetAttributeCount() (uint32, error)
 
-	GetAttribute(colIdx uint32)(types.Type,string,error)
+	GetAttribute(colIdx uint32) (types.Type, string, error)
 
-	IsNull(colIdx uint32) (bool,error)
+	IsNull(colIdx uint32) (bool, error)
 
-	GetValue(colIdx uint32) (interface{},error)
+	GetValue(colIdx uint32) (interface{}, error)
 
-	GetInt(colIdx uint32)(int,error)
+	GetInt(colIdx uint32) (int, error)
 
 	//others data type
 }
@@ -78,21 +78,21 @@ type Tuple interface {
 type Tuples []Tuple
 
 const (
-	SERIAL_TYPE_NULL byte = 0
-	SERIAL_TYPE_STRING byte = SERIAL_TYPE_NULL + 1
-	SERIAL_TYPE_BYTES byte = SERIAL_TYPE_STRING + 1
-	SERIAL_TYPE_BOOL byte = SERIAL_TYPE_BYTES + 1
-	SERIAL_TYPE_INT8 byte = SERIAL_TYPE_BOOL + 1
-	SERIAL_TYPE_INT16 byte = SERIAL_TYPE_INT8 + 1
-	SERIAL_TYPE_INT32 byte = SERIAL_TYPE_INT16 + 1
-	SERIAL_TYPE_INT64 byte = SERIAL_TYPE_INT32 + 1
-	SERIAL_TYPE_UINT8 byte = SERIAL_TYPE_INT64 + 1
-	SERIAL_TYPE_UINT16 byte = SERIAL_TYPE_UINT8 + 1
-	SERIAL_TYPE_UINT32 byte = SERIAL_TYPE_UINT16 + 1
-	SERIAL_TYPE_UINT64 byte = SERIAL_TYPE_UINT32 + 1
-	SERIAL_TYPE_FLOAT32 byte = SERIAL_TYPE_UINT64 + 1
-	SERIAL_TYPE_FLOAT64 byte = SERIAL_TYPE_FLOAT32 + 1
-	SERIAL_TYPE_DATE byte = SERIAL_TYPE_FLOAT64 + 1
+	SERIAL_TYPE_NULL     byte = 0
+	SERIAL_TYPE_STRING   byte = SERIAL_TYPE_NULL + 1
+	SERIAL_TYPE_BYTES    byte = SERIAL_TYPE_STRING + 1
+	SERIAL_TYPE_BOOL     byte = SERIAL_TYPE_BYTES + 1
+	SERIAL_TYPE_INT8     byte = SERIAL_TYPE_BOOL + 1
+	SERIAL_TYPE_INT16    byte = SERIAL_TYPE_INT8 + 1
+	SERIAL_TYPE_INT32    byte = SERIAL_TYPE_INT16 + 1
+	SERIAL_TYPE_INT64    byte = SERIAL_TYPE_INT32 + 1
+	SERIAL_TYPE_UINT8    byte = SERIAL_TYPE_INT64 + 1
+	SERIAL_TYPE_UINT16   byte = SERIAL_TYPE_UINT8 + 1
+	SERIAL_TYPE_UINT32   byte = SERIAL_TYPE_UINT16 + 1
+	SERIAL_TYPE_UINT64   byte = SERIAL_TYPE_UINT32 + 1
+	SERIAL_TYPE_FLOAT32  byte = SERIAL_TYPE_UINT64 + 1
+	SERIAL_TYPE_FLOAT64  byte = SERIAL_TYPE_FLOAT32 + 1
+	SERIAL_TYPE_DATE     byte = SERIAL_TYPE_FLOAT64 + 1
 	SERIAL_TYPE_DATETIME byte = SERIAL_TYPE_DATE + 1
-	SERIAL_TYPE_UNKNOWN byte = 255
+	SERIAL_TYPE_UNKNOWN  byte = 255
 )

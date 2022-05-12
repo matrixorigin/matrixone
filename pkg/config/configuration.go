@@ -27,7 +27,7 @@ var GlobalSystemVariables SystemVariables
 var HostMmu *host.Mmu = nil
 
 //mempool
-var Mempool  *mempool.Mempool = nil
+var Mempool *mempool.Mempool = nil
 
 //Storage Engine
 var StorageEngine engine.Engine
@@ -81,7 +81,7 @@ type ParameterUnit struct {
 	HostMmu *host.Mmu
 
 	//mempool
-	Mempool  *mempool.Mempool
+	Mempool *mempool.Mempool
 
 	//Storage Engine
 	StorageEngine engine.Engine
@@ -95,11 +95,11 @@ type ParameterUnit struct {
 
 func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes engine.Nodes, catalogRef *catalog.Catalog) *ParameterUnit {
 	return &ParameterUnit{
-		SV:            sv,
-		HostMmu:      hostMmu,
-		Mempool: mempool,
-		StorageEngine: storageEngine,
-		ClusterNodes:  clusterNodes,
+		SV:             sv,
+		HostMmu:        hostMmu,
+		Mempool:        mempool,
+		StorageEngine:  storageEngine,
+		ClusterNodes:   clusterNodes,
 		ClusterCatalog: catalogRef,
 	}
 }

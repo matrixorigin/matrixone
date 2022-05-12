@@ -67,7 +67,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 	switch rows := stmt.Rows.Select.(type) {
 	case *tree.Select:
 		selectCtx := &SelectContext{
-			tableAlias:  make(map[string]string),
+			// tableAlias:  make(map[string]string),
 			columnAlias: make(map[string]*plan.Expr),
 		}
 		err := buildSelect(rows, ctx, query, selectCtx)
@@ -90,7 +90,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 			NodeType:   plan.Node_VALUE_SCAN,
 			RowsetData: rowset,
 		}
-		appendQueryNode(query, node, true)
+		appendQueryNode(query, node, false)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport rows expr: %T", stmt))
 	}
@@ -99,9 +99,11 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, query *Query) error {
 		NodeType: plan.Node_INSERT,
 		ObjRef:   objRef,
 		TableDef: tableDef,
-		Children: []int32{int32(len(query.Nodes) - 1)},
 	}
-	appendQueryNode(query, node, true)
+	appendQueryNode(query, node, false)
+
+	preNode := query.Nodes[len(query.Nodes)-1]
+	query.Steps = append(query.Steps, preNode.NodeId)
 
 	return nil
 }
@@ -135,7 +137,7 @@ func getValues(rowset *plan.RowsetData, rows *tree.ValuesClause, columnCount int
 				if !ok {
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("can not cast [%+v] as  f32", val))
 				}
-				col.F32 = append(col.F32, float32(colVal))
+				col.F32 = append(col.F32, colVal)
 				return nil
 			case plan.Type_FLOAT64, plan.Type_DECIMAL, plan.Type_DECIMAL64, plan.Type_DECIMAL128:
 				colVal, ok := constant.Float64Val(val)

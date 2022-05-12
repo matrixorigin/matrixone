@@ -33,7 +33,7 @@ type Node struct {
 }
 
 func (n Node) String() string {
-	return fmt.Sprintf("Id %v \n Addr %v \n Data len %d\n",n.Id,n.Addr,len(n.Data))
+	return fmt.Sprintf("Id %v \n Addr %v \n Data len %d\n", n.Id, n.Addr, len(n.Data))
 }
 
 type Attribute struct {
