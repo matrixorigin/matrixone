@@ -21,7 +21,7 @@ import (
 )
 
 var (
-	IntervalNotContinousErr = errors.New("interval not continous")
+	IntervalNotContinousErr = errors.New("interval not continuous")
 	IntervalInvalidErr      = errors.New("invalid interval")
 )
 

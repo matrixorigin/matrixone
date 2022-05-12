@@ -956,7 +956,7 @@ func TestMVCC1(t *testing.T) {
 
 // 1. Txn1 create db, relation and append 10 rows. committed -- PASS
 // 2. Txn2 append 10 rows. Get the 5th append row value -- PASS
-// 3. Txn2 delete the 5th row value in uncommited state -- PASS
+// 3. Txn2 delete the 5th row value in uncommitted state -- PASS
 // 4. Txn2 get the 5th row value -- NotFound
 func TestMVCC2(t *testing.T) {
 	db := initDB(t, nil)

@@ -1278,7 +1278,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		case *tree.ExplainAnalyze:
 			selfHandle = true
-			return errors.New(errno.FeatureNotSupported, "not support explain analyze statment now")
+			return errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
 		}
 
 		if selfHandle {

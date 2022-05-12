@@ -449,7 +449,7 @@ func (ckec *checkKeysExistedContext) callbackForCheckKeysExisted(cr driver.Custo
 				ckec.getKey(realKeyIndex))
 		}
 	} else {
-		logutil.Errorf("DedupSetBatch get nil repsonse.")
+		logutil.Errorf("DedupSetBatch get nil response.")
 		ckec.setShardError(cr.ToShard, errorAsyncTpeCheckKeysExistGenNilResponse)
 	}
 	ckec.done()

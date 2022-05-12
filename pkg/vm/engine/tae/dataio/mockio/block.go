@@ -69,7 +69,7 @@ func (bf *blockFile) Fingerprint() *common.ID {
 
 func (bf *blockFile) close() {
 	bf.Close()
-	bf.Destory()
+	bf.Destroy()
 }
 
 func (bf *blockFile) WriteRows(rows uint32) (err error) {
@@ -134,8 +134,8 @@ func (bf *blockFile) Close() error {
 	return nil
 }
 
-func (bf *blockFile) Destory() {
-	logutil.Infof("Destoring Blk %d @ TS %d", bf.id, bf.ts)
+func (bf *blockFile) Destroy() {
+	logutil.Infof("Destroying Blk %d @ TS %d", bf.id, bf.ts)
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}
