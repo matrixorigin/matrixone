@@ -20,3 +20,4 @@ header:
     - '.editorconfig'
     - '**/*.md'
     - 'proto/'
+  comment: on-failure
