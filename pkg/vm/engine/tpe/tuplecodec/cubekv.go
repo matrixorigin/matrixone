@@ -545,6 +545,27 @@ func checkErrorsFunc(errs []error, needAllError bool) error {
 	return e
 }
 
+
+//func checkShardsErrorsFunc(errs map[uint64]error, needAllError bool) error {
+//	var e error = nil
+//	//check errors
+//	for _, err := range errs {
+//		if err != nil {
+//			if needAllError { //return any error includes the ErrTimeout
+//				e = err
+//				break
+//			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
+//				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
+//				e = err
+//				break
+//			}
+//		}
+//	}
+
+//	return e
+//}
+
+
 func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	if len(keys) != len(values) {
 		return errorInvalidKeyValueCount

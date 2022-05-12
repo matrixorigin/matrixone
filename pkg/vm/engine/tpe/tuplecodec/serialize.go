@@ -844,6 +844,8 @@ const (
 	bit7mask byte = (1 << 7)
 	bit6mask byte = (1 << 6)
 	bit5mask byte = (1 << 5)
+//	bit4mask byte = (1 << 4)
+//	bit3mask byte = (1 << 3)
 	bit2mask byte = (1 << 2)
 	bit1mask byte = (1 << 1)
 	bit0mask byte = (1 << 0)

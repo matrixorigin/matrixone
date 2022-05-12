@@ -33,6 +33,11 @@ type txnRelation struct {
 	handle handle.Relation
 }
 
+//TODO: commented due to static check
+//type txnSegment struct {
+//	handle handle.Segment
+//}
+
 type txnBlock struct {
 	handle handle.Block
 }
