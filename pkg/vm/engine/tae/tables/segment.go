@@ -27,6 +27,7 @@ import (
 )
 
 type dataSegment struct {
+	common.ClosedState
 	meta      *catalog.SegmentEntry
 	file      file.Segment
 	bufMgr    base.INodeManager
@@ -46,6 +47,15 @@ func newSegment(meta *catalog.SegmentEntry, factory file.SegmentFileFactory, buf
 
 func (segment *dataSegment) GetSegmentFile() file.Segment {
 	return segment.file
+}
+
+func (segment *dataSegment) Destory() (err error) {
+	if !segment.TryClose() {
+		return
+	}
+	segment.file.Close()
+	segment.file.Unref()
+	return
 }
 
 func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }

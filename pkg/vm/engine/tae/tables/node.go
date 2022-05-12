@@ -58,7 +58,7 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl.UnloadFunc = impl.OnUnload
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadableFunc = impl.CheckUnloadable
-	impl.DestroyFunc = impl.OnDestory
+	// impl.DestroyFunc = impl.OnDestory
 	impl.file = file
 	impl.mgr = mgr
 	impl.block = block
@@ -81,10 +81,6 @@ func (node *appendableNode) Rows(txn txnif.AsyncTxn, coarse bool) uint32 {
 
 func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
-}
-
-func (node *appendableNode) OnDestory() {
-	node.file.Unref()
 }
 
 func (node *appendableNode) GetColumnsView(maxRow uint32) (view batch.IBatch, err error) {

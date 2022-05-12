@@ -316,3 +316,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 	}
 	return blks
 }
+
+func (entry *SegmentEntry) DestroyData() (err error) {
+	return entry.segData.Destory()
+}
