@@ -20,4 +20,5 @@ package tools
 import (
 	_ "github.com/golangci/golangci-lint/cmd/golangci-lint"
 	_ "github.com/google/go-licenses"
+	_ "github.com/matrixorigin/linter/cmd/molint"
 )

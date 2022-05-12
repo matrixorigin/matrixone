@@ -5,6 +5,7 @@ go 1.18
 require (
 	github.com/golangci/golangci-lint v1.46.1
 	github.com/google/go-licenses v1.2.0
+	github.com/matrixorigin/linter v0.0.0-20220507133553-04287f64d793
 )
 
 require (

@@ -538,6 +538,8 @@ github.com/maratori/testpackage v1.0.1 h1:QtJ5ZjqapShm0w5DosRjg0PRlSdAdlx+W6cCKo
 github.com/maratori/testpackage v1.0.1/go.mod h1:ddKdw+XG0Phzhx8BFDTKgpWP4i7MpApTE5fXSKAqwDU=
 github.com/matoous/godox v0.0.0-20210227103229-6504466cf951 h1:pWxk9e//NbPwfxat7RXkts09K+dEBJWakUWwICVqYbA=
 github.com/matoous/godox v0.0.0-20210227103229-6504466cf951/go.mod h1:1BELzlh859Sh1c6+90blK8lbYy0kwQf1bYlBhBysy1s=
+github.com/matrixorigin/linter v0.0.0-20220507133553-04287f64d793 h1:YgwOLxcHk0XM7v2h0PfuXgDUE3uaAE0QpGc+c75vyAg=
+github.com/matrixorigin/linter v0.0.0-20220507133553-04287f64d793/go.mod h1:l0CVmuwWxxzHqEgR0BTub+eTmi5aCWjEg7YAusp78ms=
 github.com/matryer/is v1.4.0 h1:sosSmIWwkYITGrxZ25ULNDeKiMNzFSr4V/eqBQP0PeE=
 github.com/matryer/is v1.4.0/go.mod h1:8I/i5uYgLzgsgEloJE1U6xx5HkBQpAZvepWuujKwMRU=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=
