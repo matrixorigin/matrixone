@@ -256,35 +256,9 @@ func (ctr *Container) processH8(bat *batch.Batch, ap *Argument, proc *process.Pr
 			}
 		}
 		ctr.hashes[0] = 0
-		ctr.intHashMap.InsertBatch(int(n), ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
-		{ // batch
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if v > ctr.rows {
-					ctr.inserted[k] = 1
-					ctr.rows++
-					cnt++
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
-			}
-			if cnt > 0 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						return err
-					}
-				}
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grows(cnt, proc.Mp); err != nil {
-						return err
-					}
-				}
-			}
-			for j, r := range ctr.bat.Rs {
-				r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
-			}
+		ctr.intHashMap.InsertBatch(n, ctr.hashes, unsafe.Pointer(&ctr.h8.keys[0]), ctr.values)
+		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -319,34 +293,8 @@ func (ctr *Container) processH24(bat *batch.Batch, ap *Argument, proc *process.P
 			}
 		}
 		ctr.strHashMap.InsertString24Batch(ctr.strHashStates, ctr.h24.keys[:n], ctr.values)
-		{ // batch
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if v > ctr.rows {
-					ctr.inserted[k] = 1
-					ctr.rows++
-					cnt++
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
-			}
-			if cnt > 0 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						return err
-					}
-				}
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grows(cnt, proc.Mp); err != nil {
-						return err
-					}
-				}
-			}
-			for j, r := range ctr.bat.Rs {
-				r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
-			}
+		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -381,34 +329,8 @@ func (ctr *Container) processH32(bat *batch.Batch, ap *Argument, proc *process.P
 			}
 		}
 		ctr.strHashMap.InsertString32Batch(ctr.strHashStates, ctr.h32.keys[:n], ctr.values)
-		{ // batch
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if v > ctr.rows {
-					ctr.inserted[k] = 1
-					ctr.rows++
-					cnt++
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
-			}
-			if cnt > 0 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						return err
-					}
-				}
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grows(cnt, proc.Mp); err != nil {
-						return err
-					}
-				}
-			}
-			for j, r := range ctr.bat.Rs {
-				r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
-			}
+		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -443,34 +365,8 @@ func (ctr *Container) processH40(bat *batch.Batch, ap *Argument, proc *process.P
 			}
 		}
 		ctr.strHashMap.InsertString40Batch(ctr.strHashStates, ctr.h40.keys[:n], ctr.values)
-		{ // batch
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if v > ctr.rows {
-					ctr.inserted[k] = 1
-					ctr.rows++
-					cnt++
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
-			}
-			if cnt > 0 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						return err
-					}
-				}
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grows(cnt, proc.Mp); err != nil {
-						return err
-					}
-				}
-			}
-			for j, r := range ctr.bat.Rs {
-				r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
-			}
+		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -524,35 +420,40 @@ func (ctr *Container) processHStr(bat *batch.Batch, ap *Argument, proc *process.
 			}
 		}
 		ctr.strHashMap.InsertStringBatch(ctr.strHashStates, ctr.hstr.keys[:n], ctr.values)
-		{ // batch
-			cnt := 0
-			copy(ctr.inserted[:n], ctr.zInserted[:n])
-			for k, v := range ctr.values[:n] {
-				if v > ctr.rows {
-					ctr.inserted[k] = 1
-					ctr.rows++
-					cnt++
-					ctr.bat.Zs = append(ctr.bat.Zs, 0)
-				}
-				ai := int64(v) - 1
-				ctr.bat.Zs[ai] += bat.Zs[i+k]
-			}
-			if cnt > 0 {
-				for j, vec := range ctr.bat.Vecs {
-					if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
-						return err
-					}
-				}
-				for _, r := range ctr.bat.Rs {
-					if err := r.Grows(cnt, proc.Mp); err != nil {
-						return err
-					}
-				}
-			}
-			for j, r := range ctr.bat.Rs {
-				r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
+		if err := ctr.batchFill(i, n, bat, ap, proc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *Container) batchFill(i int, n int, bat *batch.Batch, ap *Argument, proc *process.Process) error {
+	cnt := 0
+	copy(ctr.inserted[:n], ctr.zInserted[:n])
+	for k, v := range ctr.values[:n] {
+		if v > ctr.rows {
+			ctr.inserted[k] = 1
+			ctr.rows++
+			cnt++
+			ctr.bat.Zs = append(ctr.bat.Zs, 0)
+		}
+		ai := int64(v) - 1
+		ctr.bat.Zs[ai] += bat.Zs[i+k]
+	}
+	if cnt > 0 {
+		for j, vec := range ctr.bat.Vecs {
+			if err := vector.UnionBatch(vec, bat.Vecs[ap.Poses[j]], int64(i), cnt, ctr.inserted[:n], proc.Mp); err != nil {
+				return err
 			}
 		}
+		for _, r := range ctr.bat.Rs {
+			if err := r.Grows(cnt, proc.Mp); err != nil {
+				return err
+			}
+		}
+	}
+	for j, r := range ctr.bat.Rs {
+		r.BatchFill(int64(i), ctr.inserted[:n], ctr.values, bat.Zs, bat.Vecs[ap.Aggs[j].Pos])
 	}
 	return nil
 }
