@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
@@ -33,7 +34,6 @@ type calibrationOp struct {
 	*catalog.LoopProcessor
 	db              *DB
 	blkCntOfSegment int
-	safeTs          uint64
 }
 
 func newCalibrationOp(db *DB) *calibrationOp {
@@ -63,7 +63,7 @@ func (processor *calibrationOp) onPostSegment(segmentEntry *catalog.SegmentEntry
 			logutil.Warnf("%s: %v", segmentData.MutationInfo(), err)
 		}
 		_, err = processor.db.Scheduler.ScheduleMultiScopedTxnTask(nil, taskType, scopes, taskFactory)
-		logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v", segmentEntry.String(), err)
+		logutil.Infof("[Mergeblocks] | %s | Scheduled | State=%v | Scopes=%s", segmentEntry.String(), err, common.IDArraryString(scopes))
 	}
 	processor.blkCntOfSegment = 0
 	return
@@ -169,10 +169,11 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	if gcNeeded {
 		scopes := MakeBlockScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcBlockClosure(entry))
+		logutil.Infof("[GCBLK] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
-			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
-			}
+			// if err == tasks.ErrScheduleScopeConflict {
+			// 	logutil.Infof("Schedule | [GC BLK] | %s | Err=%s | Scopes=%s", entry.String(), err, scopes)
+			// }
 			err = nil
 		}
 	}
@@ -197,10 +198,11 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	if gcNeeded {
 		scopes := MakeSegmentScopes(entry)
 		_, err = monitor.db.Scheduler.ScheduleMultiScopedFn(nil, tasks.GCTask, scopes, gcSegmentClosure(entry))
+		logutil.Infof("[GCSEG] | %s | Scheduled | Err=%v | Scopes=%s", entry.Repr(), err, common.IDArraryString(scopes))
 		if err != nil {
-			if err != tasks.ErrScheduleScopeConflict {
-				logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
-			}
+			// if err != tasks.ErrScheduleScopeConflict {
+			// logutil.Warnf("Schedule | [GC] | %s | Err=%s", entry.String(), err)
+			// }
 			err = nil
 		}
 		err = catalog.ErrStopCurrRecur

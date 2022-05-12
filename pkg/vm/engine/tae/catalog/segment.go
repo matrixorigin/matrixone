@@ -113,6 +113,11 @@ func (entry *SegmentEntry) StringLocked() string {
 	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.BaseEntry.String())
 }
 
+func (entry *SegmentEntry) Repr() string {
+	id := entry.AsCommonID()
+	return fmt.Sprintf("[%s]SEGMENT[%s]", entry.state.Repr(), id.String())
+}
+
 func (entry *SegmentEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -221,7 +226,9 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetTable().RemoveEntry(entry)
+		if err = entry.GetTable().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return

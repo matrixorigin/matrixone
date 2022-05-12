@@ -90,6 +90,11 @@ func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string
 	return s
 }
 
+func (entry *BlockEntry) Repr() string {
+	id := entry.AsCommonID()
+	return fmt.Sprintf("[%s]BLOCK[%s]", entry.state.Repr(), id.String())
+}
+
 func (entry *BlockEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
@@ -116,7 +121,9 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 	currOp := entry.CurrOp
 	entry.RUnlock()
 	if currOp == OpCreate {
-		err = entry.GetSegment().RemoveEntry(entry)
+		if err = entry.GetSegment().RemoveEntry(entry); err != nil {
+			return
+		}
 	}
 	if err = entry.BaseEntry.PrepareRollback(); err != nil {
 		return
