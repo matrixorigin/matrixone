@@ -545,7 +545,6 @@ func checkErrorsFunc(errs []error, needAllError bool) error {
 	return e
 }
 
-
 //func checkShardsErrorsFunc(errs map[uint64]error, needAllError bool) error {
 //	var e error = nil
 //	//check errors
@@ -564,7 +563,6 @@ func checkErrorsFunc(errs []error, needAllError bool) error {
 
 //	return e
 //}
-
 
 func (ck *CubeKV) DedupSetBatch(keys []TupleKey, values []TupleValue) error {
 	if len(keys) != len(values) {
