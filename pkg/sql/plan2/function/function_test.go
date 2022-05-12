@@ -17,6 +17,8 @@ package function
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -148,5 +150,22 @@ func TestFunctionRegister(t *testing.T) {
 			require.NoError(t, err3, msg)
 			require.Equal(t, true, functionsEqual(f1, f2), msg)
 		}
+	}
+
+	// test errMsg
+	{
+		_, err := GetFunctionByName("testFunctionName", nil)
+		require.Equal(t, errors.New(errno.UndefinedFunction, "function 'testFunctionName' doesn't register, get id failed"), err)
+	}
+	{
+		_, err := GetFunctionByName("f1", []types.T{})
+		require.Equal(t, errors.New(errno.UndefinedFunction, "undefined function f1[]"), err)
+	}
+	{
+		errMessage := "too much function matches:\n" +
+			"f1[BIGINT BIGINT]\n" +
+			"f1[BIGINT DOUBLE]"
+		_, err := GetFunctionByName("f1", []types.T{types.T_int64, ScalarNull})
+		require.Equal(t, errors.New(errno.SyntaxError, errMessage), err)
 	}
 }

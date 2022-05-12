@@ -110,7 +110,7 @@ func getFunctionId(name string) (int, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, can't get its id", name))
+	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("function '%s' doesn't register, get id failed", name))
 }
 
 // GetFunctionByIndex get function structure by its index id.
@@ -137,14 +137,14 @@ func GetFunctionByName(name string, args []types.T) (Function, error) {
 
 	// must match only 1 function
 	if len(matches) == 0 {
-		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s(%v)", name, args))
+		return emptyFunction, errors.New(errno.UndefinedFunction, fmt.Sprintf("undefined function %s%v", name, args))
 	}
 	if len(matches) > 1 {
 		errMessage := "too much function matches:"
 		for i := range matches {
 			errMessage += "\n"
 			errMessage += name
-			errMessage += fmt.Sprintf("%s", matches[i].Args)
+			errMessage += fmt.Sprintf("%v", matches[i].Args)
 		}
 		return emptyFunction, errors.New(errno.SyntaxError, errMessage)
 	}
