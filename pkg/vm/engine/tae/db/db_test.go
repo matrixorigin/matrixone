@@ -653,11 +653,11 @@ func TestAutoCompactABlk1(t *testing.T) {
 		rel.Append(bat)
 		assert.Nil(t, txn.Commit())
 	}
+	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
 	})
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
-	assert.Nil(t, err)
 	assert.Equal(t, uint64(0), tae.Scheduler.GetPenddingLSNCnt())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	{
