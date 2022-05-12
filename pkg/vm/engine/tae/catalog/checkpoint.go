@@ -222,6 +222,28 @@ func (e *CheckpointEntry) Marshal() (buf []byte, err error) {
 	return
 }
 
+func (e *CheckpointEntry) Unarshal(buf []byte) (err error) {
+	r := bytes.NewBuffer(buf)
+	if err = binary.Read(r, binary.BigEndian, &e.MinTS); err != nil {
+		return
+	}
+	if err = binary.Read(r, binary.BigEndian, &e.MaxTS); err != nil {
+		return
+	}
+	length:=uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+		return
+	}
+	e.Entries=make([]*EntryCommand, length)
+	for i:=0;i<int(length);i++ {
+		 txnEntry,_,err:=txnbase.BuildCommandFrom(r)
+		 if err != nil {
+			return err
+		}
+		e.Entries = append(e.Entries, txnEntry.(*EntryCommand))
+	}
+	return
+}
 func (e *CheckpointEntry) MakeLogEntry() (logEntry LogEntry, err error) {
 	var buf []byte
 	if buf, err = e.Marshal(); err != nil {
