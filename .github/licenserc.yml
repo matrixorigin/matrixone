@@ -8,6 +8,8 @@ header:
     - '**/go.mod'
     - '**/go.sum'
     - 'LICENSE'
+    - '**/*.csv'
+    - '**/*.proto'
     - 'Makefile'
     - 'LICENSES/'
     - '**/*.toml'
