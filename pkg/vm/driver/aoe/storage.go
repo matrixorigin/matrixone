@@ -115,16 +115,7 @@ func (s *Storage) adjustFeature() {
 
 //Stats returns the stats of the Storage
 func (s *Storage) Stats() stats.Stats {
-	// https://github.com/matrixorigin/matrixone/issues/2447
-	// TODO: Implement a method with copy semantics for stats.Stats.
-	//       Avoid race condition via `atomic` primitive.
-	return stats.Stats{
-		WrittenKeys:  atomic.LoadUint64(&s.stats.WrittenKeys),
-		WrittenBytes: atomic.LoadUint64(&s.stats.WrittenBytes),
-		ReadKeys:     atomic.LoadUint64(&s.stats.ReadKeys),
-		ReadBytes:    atomic.LoadUint64(&s.stats.ReadBytes),
-		SyncCount:    atomic.LoadUint64(&s.stats.SyncCount),
-	}
+	return s.stats.Copy()
 }
 
 func (s *Storage) Feature() storage.Feature {

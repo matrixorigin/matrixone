@@ -151,21 +151,15 @@ func buildCast(astExpr *tree.CastExpr, ctx CompilerContext, query *Query, select
 	if !ok {
 		return nil, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("'%v' is not support now", astExpr))
 	}
-	typeExpr := &plan.Expr{
-		Expr: nil,
-		Typ: &plan.Type{
-			Id: typeId,
-		},
-	}
 	return &plan.Expr{
 		Expr: &plan.Expr_F{
 			F: &plan.Function{
 				Func: getFunctionObjRef("CAST"),
-				Args: []*plan.Expr{expr, typeExpr},
+				Args: []*plan.Expr{expr},
 			},
 		},
 		Typ: &plan.Type{
-			Id: plan.Type_ANY,
+			Id: typeId,
 		},
 	}, nil
 }

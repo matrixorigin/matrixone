@@ -15,7 +15,11 @@
 package plan2
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -37,5 +41,32 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, query *Query) error {
 	selectCtx := &SelectContext{
 		columnAlias: make(map[string]*plan.Expr),
 	}
-	return buildSelect(selectStmt, ctx, query, selectCtx)
+	err := buildSelect(selectStmt, ctx, query, selectCtx)
+	if err != nil {
+		return err
+	}
+
+	return appendDeleteNode(query)
+}
+
+func appendDeleteNode(query *Query) error {
+	//get tableDef
+	objRef, tableDef := getLastTableDef(query)
+	if tableDef == nil {
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("cannot find delete table"))
+	}
+
+	//append delete node
+	node := &plan.Node{
+		NodeType: plan.Node_DELETE,
+		ObjRef:   objRef,
+		TableDef: tableDef,
+	}
+	appendQueryNode(query, node, false)
+
+	//reset root node
+	preNode := query.Nodes[len(query.Nodes)-1]
+	query.Steps[len(query.Steps)-1] = preNode.NodeId
+
+	return nil
 }

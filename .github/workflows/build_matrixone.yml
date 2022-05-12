@@ -39,11 +39,10 @@ jobs:
         with:
           go-version: 1.18
 
-      - name: Formats　Check
+      - name: Formats Check
         run: |
           cd $GITHUB_WORKSPACE && make clean
           if [ "$(make fmt | grep -v gofmt | wc -l)" -gt 0 ]; then exit 1; fi
-
 
       - name: Detect non-ascii characters
         run: |
@@ -65,31 +64,19 @@ jobs:
           make install-static-check-tools
           make static-check &>lint.out
 
-      - name: count sca failed files
-        run: |
-          cd $GITHUB_WORKSPACE
-          echo "FAILED_FILES_NUM=$(cat lint.out | grep -E '^pkg|^cmd' | awk -F ".go" '{if(NF>=2) {print $1}}' | sort -u | wc -l)" >> $GITHUB_ENV
-
       - name: Unit Testing
+        timeout-minutes: 60
         run: |
-          if [[ 'schedule' == ${{ github.event_name }} ]]; then
-            make ut
-          else
-            make ut SKIP_TEST="race"
-          fi
-
-      - name: calc pkg code coverage
-        run: |
-          cd $GITHUB_WORKSPACE
-          echo "CODE_COVERAGE=$(awk '{if ($3>1) covered[$1] = true; all[$1] = true} END {print length(covered) / length(all)}' profile.raw)" >> $GITHUB_ENV
-
-      - name: get requested reviewers
-        run: |
-          echo "ASSIGNEES=${{ join(github.event.pull_request.requested_reviewers.*.login, ',') }}" >> $GITHUB_ENV
+          make ut SKIP_TEST="race"
 
       - name: Build Verification Testing
         run: |
           make bvt
+
+      - name: Archive Files
+        run: |
+          cd ${{ github.workspace }}
+          tar zcvf code_quality_reports.tar.gz coverage.html lint.out
 
       - uses: actions/upload-artifact@v2
         if: ${{ always() }}
@@ -97,5 +84,5 @@ jobs:
         with:
           name: test_reports
           path: |
-            ${{ github.workspace }}
+            ${{ github.workspace }}/code_quality_reports.tar.gz
           retention-days: 7 

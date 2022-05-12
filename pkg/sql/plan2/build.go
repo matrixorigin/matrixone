@@ -24,9 +24,7 @@ import (
 )
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Query, error) {
-	query := &Query{
-		Steps: []int32{0},
-	}
+	query := &Query{}
 	err := buildStatement(stmt, ctx, query)
 	if err != nil {
 		return nil, err

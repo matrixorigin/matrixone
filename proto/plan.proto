@@ -248,6 +248,7 @@ message Node {
 		TABLE_SCAN		= 2;
 		FUNCTION_SCAN	= 3;
 		EXTERNAL_SCAN	= 4;
+		MATERIAL_SCAN   = 5;
 
 		// Proj, for convinience
 		PROJECT = 10; 
@@ -281,6 +282,7 @@ message Node {
 		//
 		INSERT          = 51;
 		UPDATE  		= 52;
+		DELETE  		= 53;
 	}
 
 	enum JoinFlag {

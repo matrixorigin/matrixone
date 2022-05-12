@@ -19,6 +19,54 @@ import (
 	"testing"
 )
 
+func TestTimestamp_String(t *testing.T) {
+	a, err := ParseTimestamp("2012-01-01 11:11:11", 6)
+	require.NoError(t, err)
+	resultStr := a.String()
+	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr)
+	a, err = ParseTimestamp("20120101111111", 6)
+	require.NoError(t, err)
+	resultStr = a.String()
+	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr)
+
+	resultStr1 := a.String()
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr1)
+
+	resultStr2 := a.String()
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.000000", resultStr2)
+
+	a, err = ParseTimestamp("2012-01-01 11:11:11.123", 6)
+	resultStr3 := a.String()
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr3)
+	a, err = ParseTimestamp("20120101111111.123", 6)
+	resultStr3 = a.String()
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr3)
+
+	resultStr4 := a.String2(3)
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123", resultStr4)
+
+	resultStr5 := a.String2(6)
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr5)
+
+	a, err = ParseTimestamp("2012-01-01 11:11:11.123456", 3)
+	resultStr6 := a.String2(0)
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11", resultStr6)
+
+	resultStr7 := a.String2(3)
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123", resultStr7)
+
+	resultStr8 := a.String2(6)
+	require.NoError(t, err)
+	require.Equal(t, "2012-01-01 11:11:11.123000", resultStr8)
+}
 func TestTimestamp_String2(t *testing.T) {
 	a, err := ParseTimestamp("2012-01-01 11:11:11", 6)
 	require.NoError(t, err)
