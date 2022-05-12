@@ -85,7 +85,7 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
-	err = catalog.store.Replay(catalog.replayhandle)
+	err = catalog.store.Replay(catalog.OnRelay)
 	return catalog, err
 }
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
@@ -176,7 +176,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand) (err error) {
 	return nil
 }
 
-func (catalog *Catalog) replayhandle(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
+func (catalog *Catalog) OnRelay(group uint32, commitId uint64, payload []byte, typ uint16, info interface{}) (err error) {
 	if typ != ETCatalogCheckpoint {
 		return
 	}
