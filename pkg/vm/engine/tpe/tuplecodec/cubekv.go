@@ -820,7 +820,7 @@ func (ck *CubeKV) Get(key TupleKey) (TupleValue, error) {
 }
 
 func (ck *CubeKV) GetBatch(keys []TupleKey) ([]TupleValue, error) {
-	var values []TupleValue
+	values := make([]TupleValue, 0, len(keys))
 	for _, key := range keys {
 		get, err := ck.Get(key)
 		if err != nil {
