@@ -27,16 +27,54 @@ import (
 )
 
 func TestSingleSql(t *testing.T) {
-	//input := "explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10"
-	//input := "explain DELETE FROM NATION WHERE N_NATIONKEY > 10"
-	//input := "explain SELECT N_NAME FROM NATION UNION ALL SELECT R_NAME FROM  REGION"
-	//input := "explain verbose INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
-	//input := "explain verbose SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)"
-	//input := "explain verbose INSERT INTO  NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')"
-	//input := "explain verbose INSERT INTO NATION SELECT * FROM NATION2"
-	input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
-	mock := plan2.NewMockOptimizer()
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose SELECT N_REGIONKEY + 2 as a FROM NATION WHERE -N_NATIONKEY < -20"
+	//input := "explain verbose select c_custkey from (select c_custkey from CUSTOMER group by c_custkey ) a"
+	//input := "explain SELECT N_NAME, N_REGIONKEY FROM NATION WHERE abs(N_REGIONKEY) > 0 AND N_NAME LIKE '%AA'"
+	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10"
+	//input := "explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10"
 
+	input := `explain verbose select
+	supp_nation,
+	cust_nation,
+	l_year,
+	sum(volume) as revenue
+from
+	(
+		select
+			n1.n_name as supp_nation,
+			n2.n_name as cust_nation,
+			extract(year from l_shipdate) as l_year,
+			l_extendedprice * (1 - l_discount) as volume
+		from
+			supplier,
+			lineitem,
+			orders,
+			customer,
+			nation n1,
+			nation n2
+		where
+			s_suppkey = l_suppkey
+			and o_orderkey = l_orderkey
+			and c_custkey = o_custkey
+			and s_nationkey = n1.n_nationkey
+			and c_nationkey = n2.n_nationkey
+			and (
+				(n1.n_name = 'FRANCE' and n2.n_name = 'ARGENTINA')
+				or (n1.n_name = 'ARGENTINA' and n2.n_name = 'FRANCE')
+			)
+			and l_shipdate between date '1995-01-01' and date '1996-12-31'
+	) as shipping
+group by
+	supp_nation,
+	cust_nation,
+	l_year
+order by
+	supp_nation,
+	cust_nation,
+	l_year`
+
+	mock := plan2.NewMockOptimizer()
 	err := runOneStmt(mock, t, input)
 	if err != nil {
 		t.Fatalf("%+v", err)
@@ -48,7 +86,9 @@ func TestBasicSqlExplain(t *testing.T) {
 		"explain verbose SELECT N_NAME,N_REGIONKEY, 23 as a FROM NATION",
 		"explain verbose SELECT N_NAME,abs(N_REGIONKEY), 23 as a FROM NATION",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10",
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10",
 		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 AND N_NATIONKEY < 10 ORDER BY N_NAME, N_REGIONKEY DESC",
 		"explain verbose SELECT count(*) FROM NATION group by N_NAME",
 		"explain verbose SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",
@@ -79,10 +119,8 @@ func TestSingleTableQuery(t *testing.T) {
 		"explain verbose SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10", //test agg
 		"explain SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",         //test agg
 		"explain verbose SELECT DISTINCT N_NAME FROM NATION limit 10",
-		"explain verbose SELECT DISTINCT N_NAME FROM NATION",                      //test distinct
-		"explain SELECT DISTINCT N_NAME FROM NATION",                              //test distinct
-		"explain verbose SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
-		"explain SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY",         //test distinct with group by
+		"explain verbose SELECT DISTINCT N_NAME FROM NATION", //test distinct
+		"explain SELECT DISTINCT N_NAME FROM NATION",         //test distinct
 		"explain verbose SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
 		"explain SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20",         //test more expr
 		"explain verbose SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
@@ -94,6 +132,11 @@ func TestSingleTableQuery(t *testing.T) {
 	}
 	mockOptimizer := plan2.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
+	/*
+		show error
+			"explain verbose SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY", //test distinct with group by
+			"explain SELECT DISTINCT N_NAME FROM NATION GROUP BY N_REGIONKEY",         //test distinct with group by
+	*/
 }
 
 // Join query

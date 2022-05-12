@@ -20,22 +20,22 @@ import (
 )
 
 type ExplainQuery interface {
-	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions)
-	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions)
+	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error
+	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error
 }
 
 type NodeDescribe interface {
-	GetNodeBasicInfo(options *ExplainOptions) string
-	GetExtraInfo(options *ExplainOptions) []string
-	GetProjectListInfo(options *ExplainOptions) string
-	GetJoinConditionInfo(options *ExplainOptions) string
-	GetWhereConditionInfo(options *ExplainOptions) string
-	GetOrderByInfo(options *ExplainOptions) string
-	GetGroupByInfo(options *ExplainOptions) string
+	GetNodeBasicInfo(options *ExplainOptions) (string, error)
+	GetExtraInfo(options *ExplainOptions) ([]string, error)
+	GetProjectListInfo(options *ExplainOptions) (string, error)
+	GetJoinConditionInfo(options *ExplainOptions) (string, error)
+	GetWhereConditionInfo(options *ExplainOptions) (string, error)
+	GetOrderByInfo(options *ExplainOptions) (string, error)
+	GetGroupByInfo(options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {
-	GetDescription(options *ExplainOptions) string
+	GetDescription(options *ExplainOptions) (string, error)
 }
 
 type FormatSettings struct {
