@@ -53,9 +53,10 @@ func ParseVersion(name, prefix, suffix string) (int, error) {
 	return v, nil
 }
 
-type files struct {
-	files []*vFile
-}
+//TODO: commented due to static check
+//type files struct {
+//	files []*vFile
+//}
 
 type rotateFile struct {
 	*sync.RWMutex

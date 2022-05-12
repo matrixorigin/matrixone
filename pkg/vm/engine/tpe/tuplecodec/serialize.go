@@ -29,13 +29,11 @@ import (
 )
 
 var (
-	errorTheUvarintOfTheColumnGroupIsTooLarge = errors.New("the uvarint of the column group is too large")
-	errorSecondaryIndexIsUnsupported          = errors.New("secondary index is unsupported now")
-	errorDuplicateAttributeIDInIndex          = errors.New("duplicate attribute id in the index")
-	errorAttributeIDInFormatIsUnsupported     = errors.New("the attributeID in format is unsupported now")
-	errorNoSuchAttributeInTuple               = errors.New("no such attribute in the tuple")
-	errorGetOffsetArrayLenFailed              = errors.New("get offsetArrayLen failed")
-	errorNoSuchField                          = errors.New("no such field")
+	errorSecondaryIndexIsUnsupported      = errors.New("secondary index is unsupported now")
+	errorDuplicateAttributeIDInIndex      = errors.New("duplicate attribute id in the index")
+	errorAttributeIDInFormatIsUnsupported = errors.New("the attributeID in format is unsupported now")
+	errorNoSuchAttributeInTuple           = errors.New("no such attribute in the tuple")
+	errorNoSuchField                      = errors.New("no such field")
 )
 
 type SerializerType int
@@ -846,8 +844,8 @@ const (
 	bit7mask byte = (1 << 7)
 	bit6mask byte = (1 << 6)
 	bit5mask byte = (1 << 5)
-	bit4mask byte = (1 << 4)
-	bit3mask byte = (1 << 3)
+	//	bit4mask byte = (1 << 4)
+	//	bit3mask byte = (1 << 3)
 	bit2mask byte = (1 << 2)
 	bit1mask byte = (1 << 1)
 	bit0mask byte = (1 << 0)

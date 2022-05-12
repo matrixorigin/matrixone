@@ -30,7 +30,6 @@ import (
 
 var (
 	errorColumnIndexIsInvalid                              = errors.New("column index is invalid")
-	errorAttributeCountNotEqual                            = errors.New("attribute count is not equal to the definition")
 	errorInvalidAttributeId                                = errors.New("attributeId is invalid")
 	errorInvalidAttributePosition                          = errors.New("attribute position is invalid")
 	errorUnsupportedType                                   = errors.New("unsupported type")

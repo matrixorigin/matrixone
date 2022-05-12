@@ -8,6 +8,7 @@ package varchar
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -123,12 +124,6 @@ func medianOfThree(vs *types.Bytes, os []int64, m1, m0, m2 int) {
 		}
 	}
 	// now data[m0] <= data[m1] <= data[m2]
-}
-
-func swapRange(vs *types.Bytes, os []int64, a, b, n int) {
-	for i := 0; i < n; i++ {
-		os[a+i], os[b+i] = os[b+i], os[a+i]
-	}
 }
 
 func doPivot(vs *types.Bytes, os []int64, lo, hi int) (midlo, midhi int) {
