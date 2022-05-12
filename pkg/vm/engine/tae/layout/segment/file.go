@@ -55,11 +55,15 @@ func (b *BlockFile) Append(offset uint64, data []byte) error {
 	//zero := make([]byte, cbufLen-uint32(sbuffer.Len()))
 	//binary.Write(&sbuffer, binary.BigEndian, zero)
 	//}
-	_, err := b.segment.segFile.Seek(int64(offset), io.SeekStart)
+	/*_, err := b.segment.segFile.Seek(int64(offset), io.SeekStart)
 	if err != nil {
 		return err
 	}
 	_, err = b.segment.segFile.Write(sbuffer.Bytes())
+	if err != nil {
+		return err
+	}*/
+	_, err := b.segment.segFile.WriteAt(sbuffer.Bytes(), int64(offset))
 	if err != nil {
 		return err
 	}
