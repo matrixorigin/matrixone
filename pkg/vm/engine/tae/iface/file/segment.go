@@ -14,6 +14,8 @@
 
 package file
 
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+
 type SegmentFileFactory = func(dir string, id uint64) Segment
 
 type Segment interface {
@@ -22,5 +24,6 @@ type Segment interface {
 	WriteTS(ts uint64) error
 	ReadTS() uint64
 	String() string
+	GetSegmentFile() *segment.Segment
 	// IsAppendable() bool
 }
