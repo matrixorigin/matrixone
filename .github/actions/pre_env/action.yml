@@ -13,4 +13,4 @@ runs:
       uses: actions/setup-go@v3
       with:
         go-version:
-          $${{ env.golang-version }}
+          ${{ env.golang-version }}
