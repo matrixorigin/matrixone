@@ -22,12 +22,12 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -49,6 +49,7 @@ const (
 )
 
 func initDB(t *testing.T, opts *options.Options) *DB {
+	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
 	idxCommon.MockIndexBufferManager = buffer.NewNodeManager(1024*1024*150, nil)
@@ -280,13 +281,13 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		expectVal := compute.GetValue(bat.Vecs[2], 4)
 		assert.Equal(t, expectVal, v)
-		assert.Equal(t, gvec.Length(bat.Vecs[0]), blk.Rows())
+		assert.Equal(t, vector.Length(bat.Vecs[0]), blk.Rows())
 
 		view, err := dataBlk.GetColumnDataById(txn, 2, nil, nil)
 		assert.Nil(t, err)
 		assert.Nil(t, view.DeleteMask)
 		t.Log(view.AppliedVec.String())
-		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[2]), vector.Length(view.AppliedVec))
 
 		_, err = dataBlk.RangeDelete(txn, 1, 2)
 		assert.Nil(t, err)
@@ -295,7 +296,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
-		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[2]), vector.Length(view.AppliedVec))
 
 		_, err = dataBlk.Update(txn, 3, 2, int32(999))
 		assert.Nil(t, err)
@@ -305,7 +306,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(1))
 		assert.True(t, view.DeleteMask.Contains(2))
-		assert.Equal(t, gvec.Length(bat.Vecs[2]), gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[2]), vector.Length(view.AppliedVec))
 		v = compute.GetValue(view.AppliedVec, 3)
 		assert.Equal(t, int32(999), v)
 		t.Log(view.AppliedVec.String())
@@ -414,7 +415,7 @@ func TestCompactBlock1(t *testing.T) {
 		filter.Val = v
 		id, _, err := rel.GetByFilter(&filter)
 		assert.Nil(t, err)
-		seg, err := rel.GetSegment(id.SegmentID)
+		seg, _ := rel.GetSegment(id.SegmentID)
 		block, err := seg.GetBlock(id.BlockID)
 		assert.Nil(t, err)
 		blkMeta := block.GetMeta().(*catalog.BlockEntry)
@@ -562,7 +563,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.Nil(t, view.DeleteMask)
 		v := compute.GetValue(view.AppliedVec, 1)
 		assert.Equal(t, int64(999), v)
-		assert.Equal(t, gvec.Length(bat.Vecs[0])-2, gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(view.AppliedVec))
 
 		cnt := 0
 		it := rel.MakeBlockIt()
@@ -606,7 +607,7 @@ func TestCompactBlock2(t *testing.T) {
 		assert.True(t, view.DeleteMask.Contains(5))
 		v := compute.GetValue(view.AppliedVec, 3)
 		assert.Equal(t, int64(1999), v)
-		assert.Equal(t, gvec.Length(bat.Vecs[0])-2, gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[0])-2, vector.Length(view.AppliedVec))
 
 		txn2 := db.StartTxn(nil)
 		database2, _ := txn2.GetDatabase("db")
@@ -707,7 +708,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 		assert.Nil(t, txn.Commit())
 	}
 	bat := compute.MockBatch(schema1.Types(), uint64(schema1.BlockMaxRows)*3-1, int(schema1.PrimaryKey), nil)
-	bats := compute.SplitBatch(bat, gvec.Length(bat.Vecs[0]))
+	bats := compute.SplitBatch(bat, vector.Length(bat.Vecs[0]))
 
 	pool, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
@@ -1071,7 +1072,7 @@ func TestUnload1(t *testing.T) {
 			for it.Valid() {
 				blk := it.GetBlock()
 				view, _ := blk.GetColumnDataByName(schema.ColDefs[schema.PrimaryKey].Name, nil, nil)
-				assert.Equal(t, int(schema.BlockMaxRows), gvec.Length(view.AppliedVec))
+				assert.Equal(t, int(schema.BlockMaxRows), vector.Length(view.AppliedVec))
 				it.Next()
 			}
 		}
@@ -1105,7 +1106,7 @@ func TestUnload2(t *testing.T) {
 	}
 
 	bat := compute.MockBatch(schema1.Types(), uint64(schema1.BlockMaxRows*5)+5, int(schema1.PrimaryKey), nil)
-	bats := compute.SplitBatch(bat, gvec.Length(bat.Vecs[0]))
+	bats := compute.SplitBatch(bat, vector.Length(bat.Vecs[0]))
 
 	p, _ := ants.NewPool(10)
 	var wg sync.WaitGroup
@@ -1196,7 +1197,7 @@ func TestDelete1(t *testing.T) {
 		pkCol := bat.Vecs[schema.PrimaryKey]
 		pkVal := compute.GetValue(pkCol, 5)
 		filter := handle.NewEQFilter(pkVal)
-		id, row, err = rel.GetByFilter(filter)
+		_, _, err = rel.GetByFilter(filter)
 		assert.Equal(t, txnbase.ErrNotFound, err)
 		assert.Nil(t, txn.Commit())
 	}
@@ -1224,7 +1225,7 @@ func TestDelete1(t *testing.T) {
 		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 		assert.Nil(t, err)
 		assert.Nil(t, view.DeleteMask)
-		assert.Equal(t, gvec.Length(bat.Vecs[0])-1, gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(view.AppliedVec))
 
 		err = blk.RangeDelete(0, 0)
 		assert.Nil(t, err)
@@ -1246,7 +1247,7 @@ func TestDelete1(t *testing.T) {
 		view, err := blk.GetColumnDataById(int(schema.PrimaryKey), nil, nil)
 		assert.Nil(t, err)
 		assert.True(t, view.DeleteMask.Contains(0))
-		assert.Equal(t, gvec.Length(bat.Vecs[0])-1, gvec.Length(view.AppliedVec))
+		assert.Equal(t, vector.Length(bat.Vecs[0])-1, vector.Length(view.AppliedVec))
 		v := compute.GetValue(bat.Vecs[schema.PrimaryKey], 0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
