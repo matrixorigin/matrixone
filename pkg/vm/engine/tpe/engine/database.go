@@ -17,9 +17,9 @@ package engine
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
@@ -33,11 +33,12 @@ var (
 )
 
 func (td *TpeDatabase) Relations() []string {
-	var names []string
 	tableDescs, err := td.computeHandler.ListTables(td.id)
 	if err != nil {
-		return names
+		return nil
 	}
+
+	names := make([]string, 0, len(tableDescs))
 	for _, desc := range tableDescs {
 		names = append(names, desc.Name)
 	}

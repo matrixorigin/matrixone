@@ -14,10 +14,10 @@
 
 package tree
 
-type Precendence int
+type Precedence int
 
 const (
-	Syntactic Precendence = iota
+	Syntactic Precedence = iota
 	P1
 	P2
 	P3
@@ -37,7 +37,7 @@ const (
 	P17
 )
 
-func precedenceFor(in Expr) Precendence {
+func precedenceFor(in Expr) Precedence {
 	switch node := in.(type) {
 	case *OrExpr:
 		return P16

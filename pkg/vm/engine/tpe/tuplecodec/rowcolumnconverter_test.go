@@ -28,7 +28,7 @@ import (
 )
 
 func makeTableDefAttr(names []string, attr []*engine.AttributeDef) []descriptor.AttributeDesc {
-	var ret []descriptor.AttributeDesc
+	ret := make([]descriptor.AttributeDesc, 0, len(names))
 	for i, name := range names {
 		temp := descriptor.AttributeDesc{}
 		temp.Name = name
