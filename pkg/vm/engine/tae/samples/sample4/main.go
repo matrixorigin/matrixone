@@ -29,11 +29,6 @@ import (
 )
 
 var sampleDir = "/tmp/sample4"
-var txnBufSize = common.G
-var mutBufSize = common.G
-var dbName = "db"
-var cpuprofile = "/tmp/sample4/cpuprofile"
-var memprofile = "/tmp/sample4/memprofile"
 
 var querys = []string{
 	"CREATE DATABASE IF NOT EXISTS test;",

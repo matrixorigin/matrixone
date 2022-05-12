@@ -34,8 +34,6 @@ import (
 )
 
 var sampleDir = "/tmp/sample3"
-var txnBufSize = common.G
-var mutBufSize = common.G
 var dbName = "db"
 var cpuprofile = "/tmp/sample3/cpuprofile"
 var memprofile = "/tmp/sample3/memprofile"

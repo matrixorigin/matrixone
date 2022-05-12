@@ -42,15 +42,12 @@ const (
 
 var (
 	errorAllocateIDTimeout                    = errors.New("allocate id timeout")
-	errorCanNotComeHere                       = errors.New("can not come here")
 	errorIDTypeDoesNotExist                   = errors.New("id type does not exist")
 	errorInitIDPoolTimeout                    = errors.New("init id pool is timeout")
 	errorCubeDriverIsNull                     = errors.New("cube driver is nil")
 	errorInvalidIDPool                        = errors.New("invalid idpool")
 	errorInvalidKeyValueCount                 = errors.New("key count != value count")
-	errorUnsupportedInCubeKV                  = errors.New("unsupported in cubekv")
 	errorPrefixLengthIsLongerThanStartKey     = errors.New("the preifx length is longer than the startKey 1")
-	errorRangeIsInvalid                       = errors.New("the range is invalid")
 	errorNoKeysToSet                          = errors.New("the count of keys is zero")
 	errorAsyncTpeCheckKeysExistGenNilResponse = errors.New("TpeAsyncCheckKeysExist generates nil response")
 )
@@ -539,25 +536,6 @@ func checkErrorsFunc(errs []error, needAllError bool) error {
 				break
 			} else if !isTimeoutError(err) {
 				//if there is a error that is not the ErrTimeout, just return it
-				e = err
-				break
-			}
-		}
-	}
-
-	return e
-}
-
-func checkShardsErrorsFunc(errs map[uint64]error, needAllError bool) error {
-	var e error = nil
-	//check errors
-	for _, err := range errs {
-		if err != nil {
-			if needAllError { //return any error includes the ErrTimeout
-				e = err
-				break
-			} else if !(isTimeoutError(err) || isNeedReRouteError(err)) {
-				//if there is a error that is not the ErrTimeout and the NeedReRoutError, just return it
 				e = err
 				break
 			}

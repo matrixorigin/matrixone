@@ -33,10 +33,6 @@ type txnRelation struct {
 	handle handle.Relation
 }
 
-type txnSegment struct {
-	handle handle.Segment
-}
-
 type txnBlock struct {
 	handle handle.Block
 }

@@ -30,14 +30,6 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-const (
-	blockRows          = 10000
-	blockCntPerSegment = 2
-	colCnt             = 4
-	segmentCnt         = 5
-	blockCnt           = blockCntPerSegment * segmentCnt
-)
-
 var preAllocShardNum = uint64(1)
 
 var dataDir = "./clusterstore"

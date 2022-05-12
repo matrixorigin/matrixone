@@ -402,10 +402,6 @@ type batch struct {
 	infos []*entry.Info
 }
 
-type prepareCommit struct {
-	checkpointing, syncing map[uint32]uint64
-}
-
 func (bs *baseStore) Close() error {
 	if !bs.TryClose() {
 		return nil

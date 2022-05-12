@@ -27,7 +27,6 @@ import (
 )
 
 var (
-	errorUnsupportedTableDef     = errors.New("unsupported tableDef")
 	errorDuplicatePrimaryKeyName = errors.New("duplicate primary key name")
 	errorDuplicateAttributeName  = errors.New("duplicate attribute name")
 )
