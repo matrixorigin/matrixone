@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	idxCommon "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index/common"
+	"sync"
 )
 
 type blockFile struct {
@@ -37,6 +38,7 @@ type blockFile struct {
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
+	destroy   sync.Mutex
 }
 
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
@@ -141,6 +143,11 @@ func (bf *blockFile) removeData(data *dataFile) {
 }
 
 func (bf *blockFile) Destroy() error {
+	bf.destroy.Lock()
+	defer bf.destroy.Unlock()
+	if bf.columns == nil {
+		return nil
+	}
 	for _, cb := range bf.columns {
 		cb.Unref()
 		bf.removeData(cb.data)

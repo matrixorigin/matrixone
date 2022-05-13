@@ -60,6 +60,7 @@ func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 		defer cb.mutex.Unlock()
 		cb.data.file = append(cb.data.file,
 			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
+		logutil.Infof("WriteTs:%v", fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts))
 	}
 	return
 }
