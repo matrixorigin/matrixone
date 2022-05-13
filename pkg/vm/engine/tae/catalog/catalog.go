@@ -45,6 +45,7 @@ type Catalog struct {
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
 	link      *common.Link
+	sysDB     *DBEntry
 
 	nodesMu sync.RWMutex
 }
@@ -66,7 +67,7 @@ func MockCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
-	// catalog.StateMachine.Start()
+	catalog.InitSystemDB()
 	return catalog
 }
 
@@ -85,9 +86,21 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
+	catalog.InitSystemDB()
 	err = catalog.store.Replay(catalog.OnRelay)
 	return catalog, err
 }
+
+func (catalog *Catalog) InitSystemDB() {
+	catalog.sysDB = NewSystemDBEntry(catalog)
+	dbTables := NewSystemTableEntry(catalog.sysDB, SystemTable_DB_ID, SystemDBSchema)
+	tableTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Table_ID, SystemTableSchema)
+	columnTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Columns_ID, SystemColumnSchema)
+	catalog.sysDB.addEntryLocked(dbTables)
+	catalog.sysDB.addEntryLocked(tableTables)
+	catalog.sysDB.addEntryLocked(columnTables)
+}
+
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 func (catalog *Catalog) replayCmd(txncmd txnif.TxnCmd) (err error) {
 	switch txncmd.GetType() {
