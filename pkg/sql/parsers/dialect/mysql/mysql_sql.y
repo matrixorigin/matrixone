@@ -303,7 +303,7 @@ import (
 %type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt
 %type <statement> drop_role_stmt drop_user_stmt
 %type <statement> create_user_stmt create_role_stmt
-%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt
+%type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
 %type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt
 %type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
@@ -488,7 +488,7 @@ import (
 %type <epxlainOption> utility_option_elem
 %type <str> utility_option_name utility_option_arg
 %type <str> explain_option_key
-%type <str> explain_foramt_value
+%type <str> explain_foramt_value view_recursive_opt
 
 %start start_command
 
@@ -2840,6 +2840,33 @@ create_ddl_stmt:
     create_table_stmt
 |   create_database_stmt
 |   create_index_stmt
+|	create_view_stmt
+
+create_view_stmt:
+	CREATE temporary_opt view_recursive_opt VIEW table_name column_list_opt AS select_stmt
+	{
+		$$ = &tree.CreateView{
+			Name: $5,
+			ColNames: $6,
+			AsSource: $8,
+			Temporary: $2,
+			IfNotExists: false,
+		}
+	}
+|	CREATE temporary_opt view_recursive_opt VIEW IF NOT EXISTS table_name column_list_opt AS select_stmt
+    {
+		$$ = &tree.CreateView{
+        	Name: $8,
+        	ColNames: $9,
+        	AsSource: $11,
+        	Temporary: $2,
+        	IfNotExists: true,
+       }
+    }
+
+view_recursive_opt:
+	{}
+|	RECURSIVE
 
 create_user_stmt:
     CREATE USER not_exists_opt user_spec_list require_clause_opt conn_options
