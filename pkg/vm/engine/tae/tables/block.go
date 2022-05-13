@@ -414,9 +414,8 @@ func (blk *dataBlock) getVectorCopy(ts uint64, colIdx int, compressed, decompres
 	defer h.Close()
 
 	maxRow := uint32(0)
-	visible := true
 	blk.mvcc.RLock()
-	maxRow, visible = blk.mvcc.GetMaxVisibleRowLocked(ts)
+	maxRow, visible := blk.mvcc.GetMaxVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
 	if !visible {
 		return

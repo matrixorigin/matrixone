@@ -163,7 +163,7 @@ func TestColumnChain2(t *testing.T) {
 	v, err = chain.view.GetValue(2, txn1.GetStartTS())
 	assert.Equal(t, int32(22), v)
 	assert.Nil(t, err)
-	v, err = chain.view.GetValue(2, txn2.GetStartTS())
+	_, err = chain.view.GetValue(2, txn2.GetStartTS())
 	assert.NotNil(t, err)
 	v, err = chain.view.GetValue(2, txn3.GetStartTS())
 	assert.Equal(t, int32(2222), v)
@@ -171,7 +171,7 @@ func TestColumnChain2(t *testing.T) {
 	v, err = chain.view.GetValue(2, common.NextGlobalSeqNum())
 	assert.Equal(t, int32(22), v)
 	assert.Nil(t, err)
-	v, err = chain.view.GetValue(2000, common.NextGlobalSeqNum())
+	_, err = chain.view.GetValue(2000, common.NextGlobalSeqNum())
 	assert.NotNil(t, err)
 
 	mask, vals := chain.view.CollectUpdates(txn1.GetStartTS())
@@ -327,7 +327,7 @@ func TestColumnChain4(t *testing.T) {
 	assert.Equal(t, uint64(1), mask.GetCardinality())
 	assert.Equal(t, int32(40), vals[40])
 
-	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
+	mask, _, _ = chain.CollectCommittedInRangeLocked(ts3+1, common.NextGlobalSeqNum())
 	assert.Nil(t, mask)
 
 	mask, vals, _ = chain.CollectCommittedInRangeLocked(ts1, ts3)

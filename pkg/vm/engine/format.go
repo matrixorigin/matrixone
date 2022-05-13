@@ -17,8 +17,9 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func (node *AttributeDef) Format(buf *bytes.Buffer) {
@@ -38,7 +39,6 @@ func (node *Attribute) Format(buf *bytes.Buffer) {
 		str := fmt.Sprintf("%d", node.Type.Width)
 		buf.WriteString(str)
 		buf.WriteString(", ")
-		str = fmt.Sprintf("%d", node.Type.Scale)
 		buf.WriteByte(')')
 	} else if node.Type.Width > 0 {
 		buf.WriteString("(")

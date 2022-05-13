@@ -490,7 +490,7 @@ func (fs *FlatSerializer) SerializeValue(data []byte, value interface{}) ([]byte
 			valueType = SERIAL_TYPE_STRING
 			marshal = []byte(v)
 		default:
-			valueType = SERIAL_TYPE_UNKNOWN
+			// valueType = SERIAL_TYPE_UNKNOWN
 			return nil, nil, errorUnknownValueType
 		}
 	}
@@ -861,7 +861,7 @@ func (cvls *CompactValueLayoutSerializer) Serialize(out []byte, ctx *ValueLayout
 	if ctx.IndexDesc.ID == PrimaryIndexID {
 		controlByte &= ^bit7mask
 	} else {
-		controlByte |= bit7mask
+		// controlByte |= bit7mask
 		return nil, errorSecondaryIndexIsUnsupported
 	}
 
@@ -874,7 +874,7 @@ func (cvls *CompactValueLayoutSerializer) Serialize(out []byte, ctx *ValueLayout
 
 	//bit5: 0-The Attribute X Format does not have Attribute ID；1-The Attribute X Format has Attribute ID
 	if cvls.needAttributeIDInFormat {
-		controlByte |= bit5mask
+		// controlByte |= bit5mask
 		return nil, errorAttributeIDInFormatIsUnsupported
 	} else {
 		controlByte &= ^bit5mask
