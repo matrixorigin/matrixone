@@ -58,6 +58,26 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	return e
 }
 
+func NewSystemDBEntry(catalog *Catalog) *DBEntry {
+	id := SystemDBID
+	entry := &DBEntry{
+		BaseEntry: &BaseEntry{
+			CommitInfo: CommitInfo{
+				CurrOp: OpCreate,
+			},
+			RWMutex:  new(sync.RWMutex),
+			ID:       id,
+			CreateAt: 1,
+		},
+		catalog:   catalog,
+		name:      SystemDBName,
+		entries:   make(map[uint64]*common.DLNode),
+		nameNodes: make(map[string]*nodeList),
+		link:      new(common.Link),
+	}
+	return entry
+}
+
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
 		BaseEntry: new(BaseEntry),

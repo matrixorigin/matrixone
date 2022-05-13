@@ -156,7 +156,8 @@ func TestTable(t *testing.T) {
 	schema.PrimaryKey = 2
 	{
 		txn := mgr.StartTxn(nil)
-		db, _ := txn.CreateDatabase("db")
+		db, err := txn.CreateDatabase("db")
+		assert.Nil(t, err)
 		rel, _ := db.CreateRelation(schema)
 		bat := compute.MockBatch(schema.Types(), common.K*100, int(schema.PrimaryKey), nil)
 		bats := compute.SplitBatch(bat, 100)
@@ -164,14 +165,15 @@ func TestTable(t *testing.T) {
 			err := rel.Append(data)
 			assert.Nil(t, err)
 		}
-		tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+		tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+		tbl, _ := tDB.getOrSetTable(rel.ID())
 		tbl.RangeDeleteLocalRows(1024+20, 1024+30)
 		tbl.RangeDeleteLocalRows(1024*2+38, 1024*2+40)
 		assert.True(t, tbl.IsLocalDeleted(1024+20))
 		assert.True(t, tbl.IsLocalDeleted(1024+30))
 		assert.False(t, tbl.IsLocalDeleted(1024+19))
 		assert.False(t, tbl.IsLocalDeleted(1024+31))
-		err := txn.Commit()
+		err = txn.Commit()
 		assert.Nil(t, err)
 	}
 }
@@ -199,7 +201,8 @@ func TestUpdateUncommitted(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	tbl, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	tbl, _ := tDB.getOrSetTable(rel.ID())
 	row := uint32(9)
 	assert.False(t, tbl.IsLocalDeleted(row))
 	rows := tbl.Rows()
@@ -224,7 +227,8 @@ func TestAppend(t *testing.T) {
 	txn := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	rows := uint64(txnbase.MaxNodeRows) / 8 * 3
 	brows := rows / 3
@@ -325,7 +329,8 @@ func TestLoad(t *testing.T) {
 	txn := mgr.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 
 	err := tbl.Append(bats[0])
@@ -356,7 +361,8 @@ func TestNodeCommand(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
@@ -397,7 +403,8 @@ func TestBuildCommand(t *testing.T) {
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
 
-	table, _ := txn.GetStore().(*txnStore).getOrSetTable(rel.ID())
+	tDB, _ := txn.GetStore().(*txnStore).getOrSetDB(db.GetID())
+	table, _ := tDB.getOrSetTable(rel.ID())
 	tbl := table.(*txnTable)
 	err := tbl.Append(bat)
 	assert.Nil(t, err)
@@ -614,6 +621,7 @@ func TestTransaction1(t *testing.T) {
 	assert.Nil(t, err)
 	err = txn1.Commit()
 	assert.Nil(t, err)
+	t.Log(c.SimplePPString(common.PPL1))
 
 	txn2 := mgr.StartTxn(nil)
 	db2, err := txn2.DropDatabase(name)
@@ -681,11 +689,6 @@ func TestTransaction2(t *testing.T) {
 	t.Log(err)
 
 	txn3 := mgr.StartTxn(nil)
-
-	err = txn3.UseDatabase(name)
-	assert.Nil(t, err)
-	err = txn3.UseDatabase("xx")
-	assert.NotNil(t, err)
 
 	db3, err := txn3.GetDatabase(name)
 	assert.Nil(t, err)

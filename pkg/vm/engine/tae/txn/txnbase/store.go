@@ -26,55 +26,60 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
-func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                              {}
-func (store *NoopTxnStore) Close() error                                            { return nil }
-func (store *NoopTxnStore) RangeDeleteLocalRows(id uint64, start, end uint32) error { return nil }
-func (store *NoopTxnStore) Append(id uint64, data *batch.Batch) error               { return nil }
-func (store *NoopTxnStore) UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error {
-	return nil
-}
-func (store *NoopTxnStore) AddUpdateNode(id uint64, node txnif.UpdateNode) error { return nil }
-func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
-func (store *NoopTxnStore) PreCommit() error                                     { return nil }
-func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
-func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }
-func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
+func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                      {}
+func (store *NoopTxnStore) Close() error                                    { return nil }
+func (store *NoopTxnStore) Append(dbId, id uint64, data *batch.Batch) error { return nil }
+func (store *NoopTxnStore) PrepareRollback() error                          { return nil }
+func (store *NoopTxnStore) PreCommit() error                                { return nil }
+func (store *NoopTxnStore) PrepareCommit() error                            { return nil }
+func (store *NoopTxnStore) ApplyRollback() error                            { return nil }
+func (store *NoopTxnStore) ApplyCommit() error                              { return nil }
 
 func (store *NoopTxnStore) AddTxnEntry(t txnif.TxnEntryType, entry txnif.TxnEntry) {}
 
-func (store *NoopTxnStore) CreateRelation(def interface{}) (rel handle.Relation, err error) { return }
-func (store *NoopTxnStore) DropRelationByName(name string) (rel handle.Relation, err error) { return }
-func (store *NoopTxnStore) GetRelationByName(name string) (rel handle.Relation, err error)  { return }
-func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error)      { return }
-func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)        { return }
-func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)         { return }
-func (store *NoopTxnStore) UseDatabase(name string) (err error)                             { return }
-func (store *NoopTxnStore) CurrentDatabase() (db handle.Database)                           { return }
-func (store *NoopTxnStore) DatabaseNames() (names []string)                                 { return }
-func (store *NoopTxnStore) GetSegment(id *common.ID) (seg handle.Segment, err error)        { return }
-
-func (store *NoopTxnStore) CreateSegment(uint64) (seg handle.Segment, err error)              { return }
-func (store *NoopTxnStore) CreateNonAppendableSegment(uint64) (seg handle.Segment, err error) { return }
-func (store *NoopTxnStore) GetBlock(id *common.ID) (blk handle.Block, err error)              { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64) (blk handle.Block, err error)          { return }
-func (store *NoopTxnStore) CreateNonAppendableBlock(id *common.ID) (blk handle.Block, err error) {
+func (store *NoopTxnStore) CreateRelation(dbId uint64, def interface{}) (rel handle.Relation, err error) {
 	return
 }
-func (store *NoopTxnStore) SoftDeleteBlock(id *common.ID) (err error)                  { return }
-func (store *NoopTxnStore) SoftDeleteSegment(id *common.ID) (err error)                { return }
-func (store *NoopTxnStore) BatchDedup(uint64, *vector.Vector) (err error)              { return }
-func (store *NoopTxnStore) Update(*common.ID, uint32, uint16, interface{}) (err error) { return }
-func (store *NoopTxnStore) RangeDelete(*common.ID, uint32, uint32) (err error)         { return }
-func (store *NoopTxnStore) GetByFilter(uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
+func (store *NoopTxnStore) DropRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
 	return
 }
-func (store *NoopTxnStore) GetValue(*common.ID, uint32, uint16) (v interface{}, err error) {
+func (store *NoopTxnStore) GetRelationByName(dbId uint64, name string) (rel handle.Relation, err error) {
+	return
+}
+func (store *NoopTxnStore) CreateDatabase(name string) (db handle.Database, err error) { return }
+func (store *NoopTxnStore) DropDatabase(name string) (db handle.Database, err error)   { return }
+func (store *NoopTxnStore) GetDatabase(name string) (db handle.Database, err error)    { return }
+func (store *NoopTxnStore) DatabaseNames() (names []string)                            { return }
+func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segment, err error) {
 	return
 }
 
-func (store *NoopTxnStore) LogSegmentID(tid, sid uint64) {}
-func (store *NoopTxnStore) LogBlockID(tid, bid uint64)   {}
-func (store *NoopTxnStore) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+func (store *NoopTxnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) { return }
+func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+	return
+}
+func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
+func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64) (blk handle.Block, err error)  { return }
+func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
+	return
+}
+func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)   { return }
+func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error) { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, *vector.Vector) (err error)    { return }
+func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, interface{}) (err error) {
+	return
+}
+func (store *NoopTxnStore) RangeDelete(uint64, *common.ID, uint32, uint32) (err error) { return }
+func (store *NoopTxnStore) GetByFilter(uint64, uint64, *handle.Filter) (id *common.ID, offset uint32, err error) {
+	return
+}
+func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v interface{}, err error) {
+	return
+}
+
+func (store *NoopTxnStore) LogSegmentID(dbId, tid, sid uint64) {}
+func (store *NoopTxnStore) LogBlockID(dbId, tid, bid uint64)   {}
+func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
 

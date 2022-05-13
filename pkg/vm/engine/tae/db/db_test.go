@@ -466,8 +466,9 @@ func TestCompactBlock1(t *testing.T) {
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
+		m := destBlock.GetMeta().(*catalog.BlockEntry)
 		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler)
-		txn.LogTxnEntry(destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
+		txn.LogTxnEntry(m.GetSegment().GetTable().GetDB().ID, destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
 		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
 		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		assert.Nil(t, err)
@@ -1338,4 +1339,65 @@ func TestLogIndex1(t *testing.T) {
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
 	}
+}
+
+func TestCrossDBTxn(t *testing.T) {
+	tae := initDB(t, nil)
+	defer tae.Close()
+
+	txn := tae.StartTxn(nil)
+	db1, _ := txn.CreateDatabase("db1")
+	db2, _ := txn.CreateDatabase("db2")
+	assert.NotNil(t, db1)
+	assert.NotNil(t, db2)
+	assert.Nil(t, txn.Commit())
+
+	schema1 := catalog.MockSchema(2)
+	schema1.BlockMaxRows = 10
+	schema1.SegmentMaxBlocks = 2
+	schema2 := catalog.MockSchema(4)
+	schema2.BlockMaxRows = 10
+	schema2.SegmentMaxBlocks = 2
+
+	rows1 := uint64(schema1.BlockMaxRows) * 5 / 2
+	rows2 := uint64(schema1.BlockMaxRows) * 3 / 2
+	bat1 := compute.MockBatch(schema1.Types(), rows1, int(schema1.PrimaryKey), nil)
+	bat2 := compute.MockBatch(schema2.Types(), rows2, int(schema2.PrimaryKey), nil)
+
+	txn = tae.StartTxn(nil)
+	db1, _ = txn.GetDatabase("db1")
+	db2, _ = txn.GetDatabase("db2")
+	rel1, _ := db1.CreateRelation(schema1)
+	rel2, _ := db2.CreateRelation(schema2)
+	err := rel1.Append(bat1)
+	assert.Nil(t, err)
+	err = rel2.Append(bat2)
+	assert.Nil(t, err)
+
+	assert.Nil(t, txn.Commit())
+
+	txn = tae.StartTxn(nil)
+	db1, _ = txn.GetDatabase("db1")
+	db2, _ = txn.GetDatabase("db2")
+	rel1, _ = db1.GetRelationByName(schema1.Name)
+	rel2, _ = db2.GetRelationByName(schema2.Name)
+	it1 := rel1.MakeBlockIt()
+	it2 := rel2.MakeBlockIt()
+	r1 := 0
+	r2 := 0
+	for it1.Valid() {
+		blk := it1.GetBlock()
+		r1 += blk.Rows()
+		it1.Next()
+	}
+	for it2.Valid() {
+		blk := it2.GetBlock()
+		r2 += blk.Rows()
+		it2.Next()
+	}
+	assert.Nil(t, txn.Commit())
+	assert.Equal(t, int(rows1), r1)
+	assert.Equal(t, int(rows2), r2)
+
+	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }

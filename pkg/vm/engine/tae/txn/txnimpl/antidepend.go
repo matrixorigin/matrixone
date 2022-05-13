@@ -15,8 +15,6 @@
 package txnimpl
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -26,15 +24,15 @@ import (
 
 type warChecker struct {
 	txn      txnif.AsyncTxn
-	db       *catalog.DBEntry
+	catalog  *catalog.Catalog
 	symTable map[string]bool
 }
 
-func newWarChecker(txn txnif.AsyncTxn, db *catalog.DBEntry) *warChecker {
+func newWarChecker(txn txnif.AsyncTxn, c *catalog.Catalog) *warChecker {
 	return &warChecker{
 		symTable: make(map[string]bool),
-		db:       db,
 		txn:      txn,
+		catalog:  c,
 	}
 }
 
@@ -44,14 +42,14 @@ func (checker *warChecker) readSymbol(symbol string) {
 	}
 }
 
-func (checker *warChecker) Read(id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
+func (checker *warChecker) Read(dbId uint64, id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(dbId)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
+	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
+	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeBlock(checker.db.ID, id.TableID, id.SegmentID, id.BlockID)
+	buf = txnbase.KeyEncoder.EncodeBlock(dbId, id.TableID, id.SegmentID, id.BlockID)
 	checker.readSymbol(string(buf))
 }
 
@@ -60,30 +58,30 @@ func (checker *warChecker) ReadDB(id uint64) {
 	checker.readSymbol(string(buf))
 }
 
-func (checker *warChecker) ReadTable(id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
+func (checker *warChecker) ReadTable(dbId uint64, id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(dbId)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
-	checker.readSymbol(string(buf))
-}
-
-func (checker *warChecker) ReadSegment(id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
-	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
+	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
 	checker.readSymbol(string(buf))
 }
 
-func (checker *warChecker) ReadBlock(id *common.ID) {
-	buf := txnbase.KeyEncoder.EncodeDB(checker.db.ID)
+func (checker *warChecker) ReadSegment(dbId uint64, id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(dbId)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeTable(checker.db.ID, id.TableID)
+	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeSegment(checker.db.ID, id.TableID, id.SegmentID)
+	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
 	checker.readSymbol(string(buf))
-	buf = txnbase.KeyEncoder.EncodeBlock(checker.db.ID, id.TableID, id.SegmentID, id.BlockID)
+}
+
+func (checker *warChecker) ReadBlock(dbId uint64, id *common.ID) {
+	buf := txnbase.KeyEncoder.EncodeDB(dbId)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeTable(dbId, id.TableID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeSegment(dbId, id.TableID, id.SegmentID)
+	checker.readSymbol(string(buf))
+	buf = txnbase.KeyEncoder.EncodeBlock(dbId, id.TableID, id.SegmentID, id.BlockID)
 	checker.readSymbol(string(buf))
 }
 
@@ -91,22 +89,21 @@ func (checker *warChecker) check() (err error) {
 	var entry *catalog.BaseEntry
 	for key := range checker.symTable {
 		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
-		if checker.db != nil && checker.db.GetID() != did {
-			panic(fmt.Sprintf("not expected: %d, %d", checker.db.GetID(), did))
+		db, err := checker.catalog.GetDatabaseByID(did)
+		if err != nil {
+			panic(err)
 		}
 		switch keyt {
 		case txnbase.KeyT_DBEntry:
-			if checker.db != nil {
-				entry = checker.db.BaseEntry
-			}
+			entry = db.BaseEntry
 		case txnbase.KeyT_TableEntry:
-			tb, err := checker.db.GetTableEntryByID(tid)
+			tb, err := db.GetTableEntryByID(tid)
 			if err != nil {
 				panic(err)
 			}
 			entry = tb.BaseEntry
 		case txnbase.KeyT_SegmentEntry:
-			tb, err := checker.db.GetTableEntryByID(tid)
+			tb, err := db.GetTableEntryByID(tid)
 			if err != nil {
 				panic(err)
 			}
@@ -116,7 +113,7 @@ func (checker *warChecker) check() (err error) {
 			}
 			entry = seg.BaseEntry
 		case txnbase.KeyT_BlockEntry:
-			tb, err := checker.db.GetTableEntryByID(tid)
+			tb, err := db.GetTableEntryByID(tid)
 			if err != nil {
 				panic(err)
 			}
