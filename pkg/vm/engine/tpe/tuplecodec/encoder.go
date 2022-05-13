@@ -16,6 +16,7 @@ package tuplecodec
 
 import (
 	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
 )
@@ -29,7 +30,6 @@ var (
 	errorNoEnoughBytes                  = errors.New("there is no enough bytes")
 	errorWrongCountOfBytes              = errors.New("the count of bytes is wrong")
 	errorVarintOverflow                 = errors.New("varint is overflow")
-	errorNotJsonNumber                  = errors.New("not json number")
 )
 
 func NewTupleKeyEncoder(tenantID uint64) *TupleKeyEncoder {

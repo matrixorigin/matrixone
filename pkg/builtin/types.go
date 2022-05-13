@@ -23,6 +23,7 @@ const (
 	Substring
 	Ltrim
 	Rtrim
+	Oct
 	StartsWith
 	Lpad
 	Rpad
@@ -52,4 +53,5 @@ const (
 	EndsWith
 	Date
 	Sign
+	Bin
 )

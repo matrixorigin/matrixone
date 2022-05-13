@@ -38,8 +38,6 @@ import (
 )
 
 func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
-	var names []string
-	var attrs []*engine.AttributeDef
 	var name string
 
 	gen_attr := func(name string, t types.T) *engine.AttributeDef {
@@ -56,6 +54,8 @@ func MakeAttributes(ts ...types.T) ([]string, []*engine.AttributeDef) {
 		}}
 	}
 
+	names := make([]string, 0, len(ts))
+	attrs := make([]*engine.AttributeDef, 0, len(ts))
 	for _, t := range ts {
 		switch t {
 		case types.T_int8:
@@ -477,8 +477,8 @@ func SerializeVectorForBatch(bat *batch.Batch) error {
 }
 
 func ConvertAttributeDescIntoTypesType(attrs []*descriptor.AttributeDesc) ([]string, []*engine.AttributeDef) {
-	var names []string
-	var defs []*engine.AttributeDef
+	names := make([]string, 0, len(attrs))
+	defs := make([]*engine.AttributeDef, 0, len(attrs))
 	for _, attr := range attrs {
 		names = append(names, attr.Name)
 		//make type

@@ -30,12 +30,10 @@ import (
 )
 
 var (
-	errorRowIndexDifferentInKeyAndValue  = errors.New("the rowIndexForkey != rowIndexForValue")
-	errorWriteContextIsInvalid           = errors.New("the write context is invalid")
-	errorReadContextIsInvalid            = errors.New("the read context is invalid")
-	errorAttributeDoesNotHaveThePosition = errors.New("the attribute does not have the position")
-	errorShardNextScanKeyIsNil           = errors.New("ShardNextScanKey is nil")
-	errorShardScanEndKeyIsNil            = errors.New("ShardScanEndKey is nil")
+	errorWriteContextIsInvalid = errors.New("the write context is invalid")
+	errorReadContextIsInvalid  = errors.New("the read context is invalid")
+	errorShardNextScanKeyIsNil = errors.New("ShardNextScanKey is nil")
+	errorShardScanEndKeyIsNil  = errors.New("ShardScanEndKey is nil")
 )
 
 var _ index.IndexHandler = &IndexHandlerImpl{}
