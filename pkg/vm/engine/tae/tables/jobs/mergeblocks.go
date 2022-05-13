@@ -253,6 +253,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 	}
 
+	table := task.toSegEntry.GetTable()
 	txnEntry := txnentries.NewMergeBlocksEntry(
 		task.txn,
 		task.rel,
@@ -264,7 +265,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		fromAddr,
 		toAddr,
 		task.scheduler)
-	if err = task.txn.LogTxnEntry(task.toSegEntry.GetTable().GetID(), txnEntry, ids); err != nil {
+	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
 		return
 	}
 

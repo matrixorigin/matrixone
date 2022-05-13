@@ -466,8 +466,9 @@ func TestCompactBlock1(t *testing.T) {
 
 		destBlock, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
+		m := destBlock.GetMeta().(*catalog.BlockEntry)
 		txnEntry := txnentries.NewCompactBlockEntry(txn, block, destBlock, db.Scheduler)
-		txn.LogTxnEntry(destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
+		txn.LogTxnEntry(m.GetSegment().GetTable().GetDB().ID, destBlock.Fingerprint().TableID, txnEntry, []*common.ID{block.Fingerprint()})
 		// err = rel.PrepareCompactBlock(block.Fingerprint(), destBlock.Fingerprint())
 		destBlockData := destBlock.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		assert.Nil(t, err)

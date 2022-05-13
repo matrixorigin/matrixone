@@ -96,22 +96,15 @@ func (db *txnDatabase) GetName() string { return db.entry.GetName() }
 func (db *txnDatabase) String() string  { return db.entry.String() }
 
 func (db *txnDatabase) CreateRelation(def interface{}) (rel handle.Relation, err error) {
-	// schema := def.(*catalog.Schema)
-	// meta, err := db.entry.CreateTableEntry(schema, db.Txn)
-	// if err != nil {
-	// 	return
-	// }
-	// db.Txn.GetStore().AddTxnEntry(TxnEntryCretaeTable, meta)
-	// rel = newRelation(db.Txn, meta)
-	return db.Txn.GetStore().CreateRelation(def)
+	return db.Txn.GetStore().CreateRelation(db.entry.ID, def)
 }
 
 func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().DropRelationByName(name)
+	return db.Txn.GetStore().DropRelationByName(db.entry.ID, name)
 }
 
 func (db *txnDatabase) GetRelationByName(name string) (rel handle.Relation, err error) {
-	return db.Txn.GetStore().GetRelationByName(name)
+	return db.Txn.GetStore().GetRelationByName(db.entry.ID, name)
 }
 
 func (db *txnDatabase) MakeRelationIt() (it handle.RelationIt) {

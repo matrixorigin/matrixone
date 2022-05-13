@@ -57,8 +57,6 @@ type TxnHandle interface {
 	CreateDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
-	UseDatabase(name string) error
-	CurrentDatabase() handle.Database
 	DatabaseNames() []string
 }
 
@@ -77,7 +75,7 @@ type TxnChanger interface {
 }
 
 type TxnWriter interface {
-	LogTxnEntry(tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 }
 
 type TxnAsyncer interface {
@@ -166,43 +164,38 @@ type TxnStore interface {
 	io.Closer
 	BindTxn(AsyncTxn)
 
-	BatchDedup(id uint64, pks *vector.Vector) error
-	LogSegmentID(tid, sid uint64)
-	LogBlockID(tid, bid uint64)
+	BatchDedup(dbId, id uint64, pks *vector.Vector) error
+	LogSegmentID(dbId, tid, sid uint64)
+	LogBlockID(dbId, tid, bid uint64)
 
-	Append(id uint64, data *batch.Batch) error
-	// RangeDeleteLocalRows(id uint64, start, end uint32) error
-	// UpdateLocalValue(id uint64, row uint32, col uint16, v interface{}) error
-	// AddUpdateNode(id uint64, node UpdateNode) error
+	Append(dbId, id uint64, data *batch.Batch) error
 
-	RangeDelete(id *common.ID, start, end uint32) error
-	Update(id *common.ID, row uint32, col uint16, v interface{}) error
-	GetByFilter(id uint64, filter *handle.Filter) (*common.ID, uint32, error)
-	GetValue(id *common.ID, row uint32, col uint16) (interface{}, error)
+	RangeDelete(dbId uint64, id *common.ID, start, end uint32) error
+	Update(dbId uint64, id *common.ID, row uint32, col uint16, v interface{}) error
+	GetByFilter(dbId uint64, id uint64, filter *handle.Filter) (*common.ID, uint32, error)
+	GetValue(dbId uint64, id *common.ID, row uint32, col uint16) (interface{}, error)
 
-	CreateRelation(def interface{}) (handle.Relation, error)
-	DropRelationByName(name string) (handle.Relation, error)
-	GetRelationByName(name string) (handle.Relation, error)
+	CreateRelation(dbId uint64, def interface{}) (handle.Relation, error)
+	DropRelationByName(dbId uint64, name string) (handle.Relation, error)
+	GetRelationByName(dbId uint64, name string) (handle.Relation, error)
 
 	CreateDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
-	UseDatabase(name string) error
-	CurrentDatabase() handle.Database
 	DatabaseNames() []string
 
-	GetSegment(id *common.ID) (handle.Segment, error)
-	CreateSegment(tid uint64) (handle.Segment, error)
-	CreateNonAppendableSegment(tid uint64) (handle.Segment, error)
-	CreateBlock(tid, sid uint64) (handle.Block, error)
-	GetBlock(id *common.ID) (handle.Block, error)
-	CreateNonAppendableBlock(id *common.ID) (handle.Block, error)
-	SoftDeleteSegment(id *common.ID) error
-	SoftDeleteBlock(id *common.ID) error
+	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
+	CreateSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateBlock(dbId, tid, sid uint64) (handle.Block, error)
+	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
+	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
+	SoftDeleteSegment(dbId uint64, id *common.ID) error
+	SoftDeleteBlock(dbId uint64, id *common.ID) error
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
-	LogTxnEntry(tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
 
 	IsReadonly() bool
 	IncreateWriteCnt() int

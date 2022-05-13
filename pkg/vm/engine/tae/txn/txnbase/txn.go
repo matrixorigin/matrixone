@@ -217,6 +217,6 @@ func (txn *Txn) DatabaseNames() (names []string) {
 	return
 }
 
-func (txn *Txn) LogTxnEntry(tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+func (txn *Txn) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
