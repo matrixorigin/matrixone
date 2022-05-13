@@ -26,13 +26,18 @@ type DataFactory struct {
 	fileFactory  file.SegmentFileFactory
 	appendBufMgr base.INodeManager
 	scheduler    tasks.TaskScheduler
+	dir          string
 }
 
-func NewDataFactory(fileFactory file.SegmentFileFactory, appendBufMgr base.INodeManager, scheduler tasks.TaskScheduler) *DataFactory {
+func NewDataFactory(fileFactory file.SegmentFileFactory,
+	appendBufMgr base.INodeManager,
+	scheduler tasks.TaskScheduler,
+	dir string) *DataFactory {
 	return &DataFactory{
 		fileFactory:  fileFactory,
 		appendBufMgr: appendBufMgr,
 		scheduler:    scheduler,
+		dir:          dir,
 	}
 }
 
@@ -44,7 +49,7 @@ func (factory *DataFactory) MakeTableFactory() catalog.TableDataFactory {
 
 func (factory *DataFactory) MakeSegmentFactory() catalog.SegmentDataFactory {
 	return func(meta *catalog.SegmentEntry) data.Segment {
-		return newSegment(meta, factory.fileFactory, factory.appendBufMgr)
+		return newSegment(meta, factory.fileFactory, factory.appendBufMgr, factory.dir)
 	}
 }
 
