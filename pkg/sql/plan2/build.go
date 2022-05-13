@@ -25,8 +25,7 @@ import (
 )
 
 func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
-	switch stmt := stmt.(type) {
-	case *tree.Select:
+	runBuildSelect := func(stmt *tree.Select) (*plan.Plan, error) {
 		query, selectCtx := newQueryAndSelectCtx(plan.Query_SELECT)
 		err := buildSelect(stmt, ctx, query, selectCtx)
 		return &plan.Plan{
@@ -34,14 +33,13 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
 				Query: query,
 			},
 		}, err
+	}
+
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return runBuildSelect(stmt)
 	case *tree.ParenSelect:
-		query, selectCtx := newQueryAndSelectCtx(plan.Query_SELECT)
-		err := buildSelect(stmt.Select, ctx, query, selectCtx)
-		return &plan.Plan{
-			Plan: &plan.Plan_Query{
-				Query: query,
-			},
-		}, err
+		return runBuildSelect(stmt.Select)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:
@@ -57,5 +55,4 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*plan.Plan, error) {
 	default:
 		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
-
 }

@@ -27,7 +27,7 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `begin`
+	sql := `DELETE FROM NATION WHERE N_NATIONKEY2 > 10`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
@@ -473,7 +473,7 @@ func TestDelete(t *testing.T) {
 	// should error
 	sqls = []string{
 		"DELETE FROM NATION2222",                     // table not exist
-		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column type not match
+		"DELETE FROM NATION WHERE N_NATIONKEY2 > 10", // column not found
 	}
 	runTestShouldError(mock, t, sqls)
 
