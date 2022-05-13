@@ -140,13 +140,12 @@ func (*PropertiesDef) tableDef()  {}
 type Relation interface {
 	Statistics
 
-	Close(Snapshot)
-
 	ID(Snapshot) string
 
 	Nodes(Snapshot) Nodes
 
 	TableDefs(Snapshot) []TableDef
+
 	// true: primary key, false: hide key
 	GetPriKeyOrHideKey(Snapshot) ([]Attribute, bool)
 
