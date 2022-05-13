@@ -20,54 +20,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// MoCatalogSchemaAttribute defines the attribute of the schema
-type MoCatalogSchemaAttribute struct {
+// CatalogSchemaAttribute defines the attribute of the schema
+type CatalogSchemaAttribute struct {
 	AttributeName string
 	AttributeType types.Type
 	IsPrimaryKey  bool
 	Comment       string
 }
 
-func (mcsa *MoCatalogSchemaAttribute) GetName() string {
+func (mcsa *CatalogSchemaAttribute) GetName() string {
 	return mcsa.AttributeName
 }
 
-func (mcsa *MoCatalogSchemaAttribute) GetType() types.Type {
+func (mcsa *CatalogSchemaAttribute) GetType() types.Type {
 	return mcsa.AttributeType
 }
 
-func (mcsa *MoCatalogSchemaAttribute) GetIsPrimaryKey() bool {
+func (mcsa *CatalogSchemaAttribute) GetIsPrimaryKey() bool {
 	return mcsa.IsPrimaryKey
 }
 
-func (mcsa *MoCatalogSchemaAttribute) GetComment() string {
+func (mcsa *CatalogSchemaAttribute) GetComment() string {
 	return mcsa.Comment
 }
 
-// MoCatalogSchema defines the schema for the mo catalog
-type MoCatalogSchema struct {
+// CatalogSchema defines the schema for the mo catalog
+type CatalogSchema struct {
 	Name       string
-	Attributes []*MoCatalogSchemaAttribute
+	Attributes []*CatalogSchemaAttribute
 }
 
-func (mcs *MoCatalogSchema) GetName() string {
+func (mcs *CatalogSchema) GetName() string {
 	return mcs.Name
 }
 
-func (mcs *MoCatalogSchema) Length() int {
+func (mcs *CatalogSchema) Length() int {
 	return len(mcs.Attributes)
 }
 
-func (mcs *MoCatalogSchema) GetAttributes() []*MoCatalogSchemaAttribute {
+func (mcs *CatalogSchema) GetAttributes() []*CatalogSchemaAttribute {
 	return mcs.Attributes
 }
 
-func (mcs *MoCatalogSchema) GetAttribute(i int) *MoCatalogSchemaAttribute {
+func (mcs *CatalogSchema) GetAttribute(i int) *CatalogSchemaAttribute {
 	return mcs.Attributes[i]
 }
 
 // DefineSchemaForMoDatabase decides the schema of the mo_database
-func DefineSchemaForMoDatabase() *MoCatalogSchema {
+func DefineSchemaForMoDatabase() *CatalogSchema {
 	/*
 		mo_database schema
 
@@ -77,7 +77,7 @@ func DefineSchemaForMoDatabase() *MoCatalogSchema {
 		| dat_catalog_name | varchar(256)  |      | catalog name  |
 		| dat_createsql    | varchar(4096) |      | create sql    |
 	*/
-	datNameAttr := &MoCatalogSchemaAttribute{
+	datNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "datname",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -85,7 +85,7 @@ func DefineSchemaForMoDatabase() *MoCatalogSchema {
 	}
 	datNameAttr.AttributeType.Width = 256
 
-	datCatalogNameAttr := &MoCatalogSchemaAttribute{
+	datCatalogNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "dat_catalog_name",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -93,7 +93,7 @@ func DefineSchemaForMoDatabase() *MoCatalogSchema {
 	}
 	datCatalogNameAttr.AttributeType.Width = 256
 
-	datCreatesqlAttr := &MoCatalogSchemaAttribute{
+	datCreatesqlAttr := &CatalogSchemaAttribute{
 		AttributeName: "dat_createsql",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -101,12 +101,12 @@ func DefineSchemaForMoDatabase() *MoCatalogSchema {
 	}
 	datCreatesqlAttr.AttributeType.Width = 4096
 
-	attrs := []*MoCatalogSchemaAttribute{
+	attrs := []*CatalogSchemaAttribute{
 		datNameAttr,
 		datCatalogNameAttr,
 		datCreatesqlAttr,
 	}
-	return &MoCatalogSchema{Name: "mo_database", Attributes: attrs}
+	return &CatalogSchema{Name: "mo_database", Attributes: attrs}
 }
 
 func PrepareInitialDataForMoDatabase() [][]string {
@@ -126,8 +126,8 @@ func FillInitialDataForMoDatabase() *batch.Batch {
 	return PrepareInitialDataForSchema(schema, data)
 }
 
-func PrepareInitialDataForSchema(schema *MoCatalogSchema, data [][]string) *batch.Batch {
-	engineAttributeDefs := ConvertMoCatalogSchemaToEngineFormat(schema)
+func PrepareInitialDataForSchema(schema *CatalogSchema, data [][]string) *batch.Batch {
+	engineAttributeDefs := ConvertCatalogSchemaToEngineFormat(schema)
 	batch := AllocateBatchBasedOnEngineAttributeDefinition(engineAttributeDefs, len(data))
 	//fill batch with prepared data
 	FillBatchWithData(data, batch)
@@ -135,7 +135,7 @@ func PrepareInitialDataForSchema(schema *MoCatalogSchema, data [][]string) *batc
 }
 
 // DefineSchemaForMoTables decides the schema of the mo_tables
-func DefineSchemaForMoTables() *MoCatalogSchema {
+func DefineSchemaForMoTables() *CatalogSchema {
 	/*
 		mo_tables schema
 
@@ -148,7 +148,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 		| rel_comment    | varchar(1024) |       | comment                                                                      |
 		| rel_createsql  | varchar(4096) |       | create sql                                                                   |
 	*/
-	relNameAttr := &MoCatalogSchemaAttribute{
+	relNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "relname",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -156,7 +156,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relNameAttr.AttributeType.Width = 256
 
-	relDatabaseAttr := &MoCatalogSchemaAttribute{
+	relDatabaseAttr := &CatalogSchemaAttribute{
 		AttributeName: "reldatabase",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -164,7 +164,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relDatabaseAttr.AttributeType.Width = 256
 
-	relPersistenceAttr := &MoCatalogSchemaAttribute{
+	relPersistenceAttr := &CatalogSchemaAttribute{
 		AttributeName: "relpersistence",
 		AttributeType: types.T_char.ToType(),
 		IsPrimaryKey:  false,
@@ -172,7 +172,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relPersistenceAttr.AttributeType.Width = 1
 
-	relKindAttr := &MoCatalogSchemaAttribute{
+	relKindAttr := &CatalogSchemaAttribute{
 		AttributeName: "relkind",
 		AttributeType: types.T_char.ToType(),
 		IsPrimaryKey:  false,
@@ -180,7 +180,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relKindAttr.AttributeType.Width = 1
 
-	relCommentAttr := &MoCatalogSchemaAttribute{
+	relCommentAttr := &CatalogSchemaAttribute{
 		AttributeName: "rel_comment",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -188,7 +188,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relCommentAttr.AttributeType.Width = 1024
 
-	relCreatesqlAttr := &MoCatalogSchemaAttribute{
+	relCreatesqlAttr := &CatalogSchemaAttribute{
 		AttributeName: "rel_createsql",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -196,7 +196,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 	}
 	relCreatesqlAttr.AttributeType.Width = 4096
 
-	attrs := []*MoCatalogSchemaAttribute{
+	attrs := []*CatalogSchemaAttribute{
 		relNameAttr,
 		relDatabaseAttr,
 		relPersistenceAttr,
@@ -204,7 +204,7 @@ func DefineSchemaForMoTables() *MoCatalogSchema {
 		relCommentAttr,
 		relCreatesqlAttr,
 	}
-	return &MoCatalogSchema{Name: "mo_tables", Attributes: attrs}
+	return &CatalogSchema{Name: "mo_tables", Attributes: attrs}
 }
 
 func PrepareInitialDataForMoTables() [][]string {
@@ -230,7 +230,7 @@ func FillInitialDataForMoTables() *batch.Batch {
 }
 
 // DefineSchemaForMoColumns decides the schema of the mo_columns
-func DefineSchemaForMoColumns() *MoCatalogSchema {
+func DefineSchemaForMoColumns() *CatalogSchema {
 	/*
 		mo_columns schema
 
@@ -252,7 +252,7 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 		| att_comment           | varchar(1024) |       | comment                                                                                                                                                                         |
 		| att_is_hidden         | tinyint(1)    |       | hidden or not                                                                                                                                                                   |
 	*/
-	attDatabaseAttr := &MoCatalogSchemaAttribute{
+	attDatabaseAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_database",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -260,7 +260,7 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attDatabaseAttr.AttributeType.Width = 256
 
-	attRelNameAttr := &MoCatalogSchemaAttribute{
+	attRelNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_relname",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -268,7 +268,7 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attRelNameAttr.AttributeType.Width = 256
 
-	attNameAttr := &MoCatalogSchemaAttribute{
+	attNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "attname",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -276,42 +276,42 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attNameAttr.AttributeType.Width = 256
 
-	attTypAttr := &MoCatalogSchemaAttribute{
+	attTypAttr := &CatalogSchemaAttribute{
 		AttributeName: "atttyp",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "The data type of this column (zero for a dropped column). ",
 	}
 
-	attNumAttr := &MoCatalogSchemaAttribute{
+	attNumAttr := &CatalogSchemaAttribute{
 		AttributeName: "attnum",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "The number of the column. Ordinary columns are numbered from 1 up.",
 	}
 
-	attLengthAttr := &MoCatalogSchemaAttribute{
+	attLengthAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_length",
 		AttributeType: types.T_int32.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "bytes count for the type.",
 	}
 
-	attNotNullAttr := &MoCatalogSchemaAttribute{
+	attNotNullAttr := &CatalogSchemaAttribute{
 		AttributeName: "attnotnull",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "This represents a not-null constraint.",
 	}
 
-	attHasDefAttr := &MoCatalogSchemaAttribute{
+	attHasDefAttr := &CatalogSchemaAttribute{
 		AttributeName: "atthasdef",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "This column has a default expression or generation expression.",
 	}
 
-	attDefaultAttr := &MoCatalogSchemaAttribute{
+	attDefaultAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_default",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -319,14 +319,14 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attDefaultAttr.AttributeType.Width = 1024
 
-	attIsDroppedAttr := &MoCatalogSchemaAttribute{
+	attIsDroppedAttr := &CatalogSchemaAttribute{
 		AttributeName: "attisdropped",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "This column has been dropped and is no longer valid. A dropped column is still physically present in the table, but is ignored by the parser and so cannot be accessed via SQL.",
 	}
 
-	attConstraintTypeAttr := &MoCatalogSchemaAttribute{
+	attConstraintTypeAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_constraint_type",
 		AttributeType: types.T_char.ToType(),
 		IsPrimaryKey:  false,
@@ -334,21 +334,21 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attConstraintTypeAttr.AttributeType.Width = 1
 
-	attIsUnsignedAttr := &MoCatalogSchemaAttribute{
+	attIsUnsignedAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_is_unsigned",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "unsigned or not",
 	}
 
-	attIsAutoIncrementAttr := &MoCatalogSchemaAttribute{
+	attIsAutoIncrementAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_is_auto_increment",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "auto increment or not ",
 	}
 
-	attCommentAttr := &MoCatalogSchemaAttribute{
+	attCommentAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_comment",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  false,
@@ -356,14 +356,14 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 	}
 	attCommentAttr.AttributeType.Width = 1024
 
-	attIsHiddenAttr := &MoCatalogSchemaAttribute{
+	attIsHiddenAttr := &CatalogSchemaAttribute{
 		AttributeName: "att_is_hidden",
 		AttributeType: types.T_int8.ToType(),
 		IsPrimaryKey:  false,
 		Comment:       "hidden or not",
 	}
 
-	attrs := []*MoCatalogSchemaAttribute{
+	attrs := []*CatalogSchemaAttribute{
 		attDatabaseAttr,
 		attRelNameAttr,
 		attNameAttr,
@@ -381,10 +381,10 @@ func DefineSchemaForMoColumns() *MoCatalogSchema {
 		attIsHiddenAttr,
 	}
 
-	return &MoCatalogSchema{Name: "mo_columns", Attributes: attrs}
+	return &CatalogSchema{Name: "mo_columns", Attributes: attrs}
 }
 
-func extractColumnsInfoFromAttribute(schema *MoCatalogSchema, i int) []string {
+func extractColumnsInfoFromAttribute(schema *CatalogSchema, i int) []string {
 	attr := schema.GetAttribute(i)
 	moColumnsSchema := DefineSchemaForMoColumns()
 	ret := make([]string, moColumnsSchema.Length())
@@ -474,7 +474,7 @@ func FillInitialDataForMoColumns() *batch.Batch {
 }
 
 // DefineSchemaForMoColumns decides the schema of the mo_global_variables
-func DefineSchemaForMoGlobalVariables() *MoCatalogSchema {
+func DefineSchemaForMoGlobalVariables() *CatalogSchema {
 	/*
 		mo_global_variables schema
 		   	  | Attribute       | Type            | Primary Key | Note  |
@@ -482,7 +482,7 @@ func DefineSchemaForMoGlobalVariables() *MoCatalogSchema {
 		      | gv_variable_name  | varchar(256)  | PK   |  |
 		      | gv_variable_value | varchar(1024) |      |  |
 	*/
-	gvVariableNameAttr := &MoCatalogSchemaAttribute{
+	gvVariableNameAttr := &CatalogSchemaAttribute{
 		AttributeName: "gv_variable_name",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -490,7 +490,7 @@ func DefineSchemaForMoGlobalVariables() *MoCatalogSchema {
 	}
 	gvVariableNameAttr.AttributeType.Width = 256
 
-	gvVariableValueAttr := &MoCatalogSchemaAttribute{
+	gvVariableValueAttr := &CatalogSchemaAttribute{
 		AttributeName: "gv_variable_value",
 		AttributeType: types.T_varchar.ToType(),
 		IsPrimaryKey:  true,
@@ -498,12 +498,12 @@ func DefineSchemaForMoGlobalVariables() *MoCatalogSchema {
 	}
 	gvVariableNameAttr.AttributeType.Width = 1024
 
-	attrs := []*MoCatalogSchemaAttribute{
+	attrs := []*CatalogSchemaAttribute{
 		gvVariableNameAttr,
 		gvVariableValueAttr,
 	}
 
-	return &MoCatalogSchema{Name: "mo_global_variables", Attributes: attrs}
+	return &CatalogSchema{Name: "mo_global_variables", Attributes: attrs}
 }
 
 func PrepareInitialDataForMoGlobalVariables() [][]string {

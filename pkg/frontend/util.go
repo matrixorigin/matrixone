@@ -431,8 +431,8 @@ func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.Paramete
 	return pu, nil
 }
 
-func ConvertMoCatalogSchemaToEngineFormat(mcs *MoCatalogSchema) []*engine.AttributeDef {
-	genAttr := func(attr *MoCatalogSchemaAttribute) *engine.AttributeDef {
+func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeDef {
+	genAttr := func(attr *CatalogSchemaAttribute) *engine.AttributeDef {
 		return &engine.AttributeDef{
 			Attr: engine.Attribute{
 				Name:    attr.AttributeName,
