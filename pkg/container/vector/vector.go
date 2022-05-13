@@ -35,6 +35,12 @@ func DecodeFixedCol[T any](v *Vector, sz int) []T {
 
 func New(typ types.Type) *Vector {
 	switch typ.Oid {
+	case types.T_bool:
+		return &Vector{
+			Typ: typ,
+			Col: []bool{},
+			Nsp: &nulls.Nulls{},
+		}
 	case types.T_int8:
 		return &Vector{
 			Typ: typ,
@@ -358,6 +364,22 @@ func SetLength(v *Vector, n int) {
 
 func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		vs := v.Col.([]bool)
+		data, err := mheap.Alloc(m, int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeBoolSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	case types.T_int8:
 		vs := v.Col.([]int8)
 		data, err := mheap.Alloc(m, int64(len(vs)))
@@ -695,6 +717,8 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 
 func Append(v *Vector, arg interface{}) error {
 	switch v.Typ.Oid {
+	case types.T_bool:
+		v.Col = append(v.Col.([]bool), arg.([]bool)...)
 	case types.T_int8:
 		v.Col = append(v.Col.([]int8), arg.([]int8)...)
 	case types.T_int16:
@@ -2815,7 +2839,19 @@ func (v *Vector) Read(data []byte) error {
 	data = data[encoding.TypeSize:]
 	v.Typ = typ
 	v.Or = true
+	fmt.Println("wangjian sqlRead is", typ.Oid)
 	switch typ.Oid {
+	case types.T_bool:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeBoolSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeBoolSlice(data[size:])
+		}
 	case types.T_int8:
 		size := encoding.DecodeUint32(data)
 		if size == 0 {

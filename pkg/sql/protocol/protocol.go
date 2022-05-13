@@ -952,6 +952,7 @@ func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, [
 		}
 		var err error
 		for i, vec := range bat.Vecs {
+			fmt.Println("wangjian sqlDup2 is")
 			if bat.Vecs[i], err = vector.Dup(vec, proc.Mp); err != nil {
 				return nil, nil, err
 			}

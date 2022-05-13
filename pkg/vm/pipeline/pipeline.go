@@ -16,6 +16,7 @@ package pipeline
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -50,6 +51,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	var err error
 	var bat *batch.Batch
 
+	// fmt.Println("wangjian sqlPipeRun is")
 	defer func() {
 		if err != nil {
 			for i, in := range p.instructions {
@@ -72,6 +74,12 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		if bat, err = r.Read(p.refCnts, p.attrs); err != nil {
 			return false, err
 		}
+		if bat == nil {
+			// fmt.Println("wangjian sqlRead0 is", bat)
+		} else {
+			fmt.Println("wangjian sqlRead1 is", bat.Attrs, bat.Vecs[0].Col, len(bat.Vecs))
+		}
+		
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
 		if end, err = vm.Run(p.instructions, proc); err != nil || end { // end is true means pipeline successfully completed

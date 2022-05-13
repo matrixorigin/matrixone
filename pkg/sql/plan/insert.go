@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"strconv"
 )
 
 func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
@@ -93,7 +94,6 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 			return errors.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row '%v'", i))
 		}
 	}
-
 	bat = batch.New(true, attrs)
 	for i, attr := range attrs {
 		typ, ok := attrType[attr]
@@ -103,7 +103,6 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 		bat.Vecs[i] = vector.New(typ)
 		delete(attrType, attr)
 	}
-
 	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
 		plan.Bat = bat
 		return nil
@@ -112,6 +111,28 @@ func (b *build) BuildInsert(stmt *tree.Insert, plan *Insert) error {
 	// insert values for columns
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
+		case types.T_bool:
+			vs := make([]bool, len(rows.Rows))
+			{
+				for j, row := range rows.Rows {
+					v, err := buildConstant(vec.Typ, row[i])
+					if err != nil {
+						return err
+					}
+					if v == nil {
+						nulls.Add(vec.Nsp, uint64(j))
+					} else {
+						if vv, err := rangeCheck(v.(bool), vec.Typ, bat.Attrs[i], j+1); err != nil {
+							return err
+						} else {
+							vs[j] = vv.(bool)
+						}
+					}
+				}
+			}
+			if err := vector.Append(vec, vs); err != nil {
+				return err
+			}
 		case types.T_int8:
 			vs := make([]int8, len(rows.Rows))
 			{

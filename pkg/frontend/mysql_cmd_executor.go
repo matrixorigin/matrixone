@@ -188,11 +188,13 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 	access the shared data. Be careful when it writes the shared data.
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
+	fmt.Println("wangjian sqlpipe0 is")
 	ses := obj.(*Session)
 
 	if bat == nil {
 		return nil
 	}
+	fmt.Println("wangjian sqlpipe1 is", bat.Attrs, bat.Vecs)
 
 	goID := GetRoutineId()
 
@@ -265,6 +267,18 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		//begin1 := time.Now()
 		for i, vec := range bat.Vecs { //col index
 			switch vec.Typ.Oid { //get col
+			case types.T_bool:
+				if !nulls.Any(vec.Nsp) { //all data in this column are not null
+					vs := vec.Col.([]bool)
+					row[i] = vs[rowIndex]
+				} else {
+					if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+						row[i] = nil
+					} else {
+						vs := vec.Col.([]bool)
+						row[i] = vs[rowIndex]
+					}
+				}
 			case types.T_int8:
 				if !nulls.Any(vec.Nsp) { //all data in this column are not null
 					vs := vec.Col.([]int8)
@@ -1120,6 +1134,7 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
+	fmt.Println("wangjian sql0 is", sql)
 	ses := mce.GetSession()
 	proto := ses.GetMysqlProtocol()
 	pdHook := ses.GetEpochgc()
@@ -1431,7 +1446,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -1550,6 +1564,8 @@ convert the type in computation engine to the type in mysql.
 */
 func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	switch engineType {
+	case types.T_bool:
+		col.SetColumnType(defines.MYSQL_TYPE_BOOL)
 	case types.T_int8:
 		col.SetColumnType(defines.MYSQL_TYPE_TINY)
 	case types.T_uint8:

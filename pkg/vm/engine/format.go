@@ -17,8 +17,9 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func (node *AttributeDef) Format(buf *bytes.Buffer) {

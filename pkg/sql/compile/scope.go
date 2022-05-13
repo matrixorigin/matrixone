@@ -469,6 +469,8 @@ func (s *Scope) ShowCreateDatabase(u interface{}, fill func(interface{}, *batch.
 func (s *Scope) Insert(ts uint64) (uint64, error) {
 	p, _ := s.Plan.(*plan.Insert)
 	defer p.Relation.Close()
+	fmt.Println("wangjian sqlInsert is", p.Bat.Attrs, p.Bat.Vecs[0].Col)
+	fmt.Printf("wangjian sqlInsert2 is %T\n", p.Bat.Vecs[0].Col)
 	return uint64(vector.Length(p.Bat.Vecs[0])), p.Relation.Write(ts, p.Bat)
 }
 
@@ -510,6 +512,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	errChan := make(chan error, len(s.PreScopes))
 
 	for i := range s.PreScopes {
+		// fmt.Println("wangjian sqlMergeRun is", s.PreScopes[i].Magic)
 		switch s.PreScopes[i].Magic {
 		case Normal:
 			go func(cs *Scope) {

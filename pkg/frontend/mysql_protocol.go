@@ -1256,6 +1256,12 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 		}
 
 		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_BOOL:
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		case defines.MYSQL_TYPE_DECIMAL:
 			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2

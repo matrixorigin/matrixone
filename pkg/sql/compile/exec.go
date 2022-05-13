@@ -50,7 +50,6 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	// do semantic analysis and build plan for sql
 	// do ast rewrite
 	e.stmt = rewrite.AstRewrite(e.stmt)
-
 	pn, err := plan.New(e.c.db, e.c.sql, e.c.e).BuildStatement(e.stmt)
 	if err != nil {
 		return err
@@ -91,6 +90,7 @@ func (e *Exec) Run(ts uint64) (err error) {
 		return nil
 	}
 
+	fmt.Println("wangjian sqlRun is", e.scope.Magic)
 	switch e.scope.Magic {
 	case Normal:
 		return e.scope.Run(e.c.e)

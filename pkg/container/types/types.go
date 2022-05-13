@@ -29,6 +29,7 @@ const (
 	T_any T = T(plan.Type_ANY)
 
 	// numeric/integer family
+	T_bool   T = T(plan.Type_BOOL)
 	T_int8   T = T(plan.Type_INT8)
 	T_int16  T = T(plan.Type_INT16)
 	T_int32  T = T(plan.Type_INT32)
@@ -105,8 +106,8 @@ var Types map[string]T = map[string]T{
 	"integer unsigned":  T_uint32,
 	"bigint unsigned":   T_uint64,
 
-	"decimal64":  T_decimal64,
-	"decimal128": T_decimal128,
+	//"decimal64":  T_decimal64,
+	//"decimal128": T_decimal128,
 
 	"float":  T_float32,
 	"double": T_float64,
@@ -170,6 +171,8 @@ func (t T) ToType() Type {
 
 func (t T) String() string {
 	switch t {
+	case T_bool:
+		return "BOOL"
 	case T_int8:
 		return "TINYINT"
 	case T_int16:

@@ -1,8 +1,9 @@
 package engine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"

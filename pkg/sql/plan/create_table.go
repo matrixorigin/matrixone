@@ -16,6 +16,9 @@ package plan
 
 import (
 	"fmt"
+	"go/constant"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -23,8 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"go/constant"
-	"math"
 )
 
 // BuildCreateTable do semantic analyze and get table definition from tree.CreateTable to make create table plan.
@@ -189,6 +190,8 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, []string, error
 func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch uint8(n.InternalType.Oid) {
+		case defines.MYSQL_TYPE_BOOL:
+			return &types.Type{Oid: types.T_bool, Size: 1, Width: n.InternalType.Width}, nil
 		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint8, Size: 1, Width: n.InternalType.Width}, nil
@@ -364,7 +367,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 			return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
 		}
 		return nil, errors.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
-	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128:
+	case types.Date, types.Datetime, types.Timestamp, types.Decimal64, types.Decimal128, bool:
 		return v, nil
 	default:
 		return nil, errors.New(errno.DatatypeMismatch, "unexpected type and value")
