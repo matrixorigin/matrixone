@@ -133,11 +133,11 @@ func (bf *blockFile) Close() error {
 }
 
 func (bf *blockFile) Destroy() error {
-	for _, cb := range bf.columns {
-		cb.Unref()
-	}
 	if bf.seg != nil {
 		bf.seg.RemoveBlock(bf.id)
+	}
+	for _, cb := range bf.columns {
+		cb.Unref()
 	}
 	bf.columns = nil
 	bf.deletes = nil

@@ -57,8 +57,6 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	}
 	sf.removeData(block.deletes.dataFile)
 	sf.removeData(block.indexMeta)
-	block.deletes = nil
-	block.indexMeta = nil
 	delete(sf.blocks, id)
 }
 

@@ -102,9 +102,6 @@ func (s *Segment) Init(name string) error {
 	if _, err := s.segFile.Write(sbuffer.Bytes()); err != nil {
 		return err
 	}
-	if err = s.segFile.Sync(); err != nil {
-		return err
-	}
 
 	return nil
 }
