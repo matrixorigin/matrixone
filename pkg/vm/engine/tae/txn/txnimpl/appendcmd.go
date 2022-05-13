@@ -40,7 +40,7 @@ func init() {
 type AppendCmd struct {
 	*txnbase.BaseCustomizedCmd
 	*txnbase.ComposedCmd
-	infos []*appendInfo
+	Infos []*appendInfo
 	Node  InsertNode
 }
 
@@ -56,7 +56,7 @@ func NewAppendCmd(id uint32, node InsertNode) *AppendCmd {
 	impl := &AppendCmd{
 		ComposedCmd: txnbase.NewComposedCmd(),
 		Node:        node,
-		infos:       node.GetAppends(),
+		Infos:       node.GetAppends(),
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -76,12 +76,12 @@ func (c *AppendCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.ID); err != nil {
 		return
 	}
-	if err = binary.Write(w, binary.BigEndian, uint32(len(c.infos))); err != nil {
+	if err = binary.Write(w, binary.BigEndian, uint32(len(c.Infos))); err != nil {
 		return
 	}
 	var sn int64
 	n = 10
-	for _, info := range c.infos {
+	for _, info := range c.Infos {
 		if sn, err = info.WriteTo(w); err != nil {
 			return
 		}
@@ -102,10 +102,10 @@ func (c *AppendCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	var sn int64
 	n = 8
-	c.infos = make([]*appendInfo, length)
+	c.Infos = make([]*appendInfo, length)
 	for i := 0; i < int(length); i++ {
-		c.infos[i] = &appendInfo{dest: &common.ID{}}
-		if sn, err = c.infos[i].ReadFrom(r); err != nil {
+		c.Infos[i] = &appendInfo{dest: &common.ID{}}
+		if sn, err = c.Infos[i].ReadFrom(r); err != nil {
 			return
 		}
 		n += sn
