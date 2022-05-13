@@ -67,13 +67,11 @@ func (sf *segmentFile) Fingerprint() *common.ID { return sf.id }
 func (sf *segmentFile) Close() error            { return nil }
 
 func (sf *segmentFile) close() {
-	sf.Destory()
+	sf.Destroy()
 }
-func (sf *segmentFile) Destory() {
-	for _, block := range sf.blocks {
-		block.Unref()
-	}
-	logutil.Infof("Destoring Segment %d", sf.id.SegmentID)
+func (sf *segmentFile) Destroy() {
+	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	sf.seg.Unmount()
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {

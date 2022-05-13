@@ -133,6 +133,10 @@ func (s *Segment) Mount() {
 	s.log.allocator.Init(LOG_SIZE, s.GetPageSize())
 }
 
+func (s *Segment) Unmount() {
+	logutil.Infof("Unmount Segment: %v", s.name)
+}
+
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
