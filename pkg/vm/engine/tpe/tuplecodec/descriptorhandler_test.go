@@ -17,13 +17,15 @@ package tuplecodec
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/golang/mock/gomock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
-	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
-	"github.com/smartystreets/goconvey/convey"
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
+	mock_tuplecodec "github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/tuplecodec/test"
+
+	"github.com/golang/mock/gomock"
+	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestDescriptorHandlerImpl_LoadRelationDescByName(t *testing.T) {
@@ -764,6 +766,7 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByName(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			desc, err := dhi.LoadDatabaseDescByName(kase.name)
+			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(*desc, *kase.desc), convey.ShouldBeTrue)
 
 			err = dhi.StoreDatabaseDescByName("err"+kase.name, kase.desc)
@@ -872,6 +875,7 @@ func TestDescriptorHandlerImpl_StoreDatabaseDescByID(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 
 			desc, err := dhi.LoadDatabaseDescByID(kase.id)
+			convey.So(err, convey.ShouldBeNil)
 			convey.So(reflect.DeepEqual(*desc, *kase.desc), convey.ShouldBeTrue)
 		}
 

@@ -98,6 +98,7 @@ func TestCreateDB1(t *testing.T) {
 	txn4 := txnMgr.StartTxn(nil)
 
 	h, err := txn4.GetDatabase(name)
+	assert.Nil(t, err)
 	assert.NotNil(t, h)
 	// assert.Equal(t, db1.(*mcokDBHandle).entry, h.(*mcokDBHandle).entry)
 }

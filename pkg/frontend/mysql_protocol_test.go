@@ -101,7 +101,7 @@ func TestReadIntLenEnc(t *testing.T) {
 				t.Errorf("IntLenEnc %d failed.", value)
 				break
 			}
-			_, p2, ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1], 0)
+			_, _, ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1], 0)
 			if ok {
 				t.Errorf("read IntLenEnc failed.")
 				break
@@ -131,7 +131,7 @@ func TestReadCountOfBytes(t *testing.T) {
 		}
 	}
 
-	_, pos, ok = client.readCountOfBytes(data, 0, 100)
+	_, _, ok = client.readCountOfBytes(data, 0, 100)
 	if ok {
 		t.Error("read bytes failed.")
 		return
