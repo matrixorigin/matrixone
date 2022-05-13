@@ -23,32 +23,24 @@ import (
 	"sync"
 )
 
-type BlockType uint8
-
-const (
-	BLOCK BlockType = iota
-	DELETE
-	INDEX
-)
-
 type columnBlock struct {
+	mutex sync.Mutex
 	common.RefHelper
-	block     *blockFile
-	ts        uint64
-	indexes   []*indexFile
-	updates   *updatesFile
-	data      *dataFile
-	blockType BlockType
-	col       int
-	mutex     sync.Mutex
+	block   *blockFile
+	ts      uint64
+	indexes []*indexFile
+	updates *updatesFile
+	data    *dataFile
+	col     int
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	cb := &columnBlock{
 		block:   block,
 		indexes: make([]*indexFile, indexCnt),
+		col:     col,
 	}
-	for i, _ := range cb.indexes {
+	for i := range cb.indexes {
 		cb.indexes[i] = newIndex(cb)
 	}
 	cb.updates = newUpdates(cb)
@@ -63,16 +55,12 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 
 func (cb *columnBlock) WriteTS(ts uint64) (err error) {
 	cb.ts = ts
-	cb.mutex.Lock()
 	if cb.data.file != nil {
+		cb.mutex.Lock()
+		defer cb.mutex.Unlock()
 		cb.data.file = append(cb.data.file,
-			cb.block.seg.GetSegmentFile().NewBlockFile(
-				fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
-		logutil.Infof("WriteTs: %v",
-			fmt.Sprintf("%v-%d_%d_%d.blk",
-				cb.block.seg.GetSegmentFile().GetName(), cb.col, cb.block.id, ts))
+			cb.block.seg.GetSegmentFile().NewBlockFile(fmt.Sprintf("%d_%d_%d.blk", cb.col, cb.block.id, ts)))
 	}
-	cb.mutex.Unlock()
 	return
 }
 

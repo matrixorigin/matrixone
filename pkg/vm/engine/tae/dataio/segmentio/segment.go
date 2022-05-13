@@ -49,6 +49,9 @@ func (sf *segmentFile) RemoveBlock(id uint64) {
 	sf.Lock()
 	defer sf.Unlock()
 	block := sf.blocks[id]
+	if block == nil {
+		return
+	}
 	for _, column := range block.columns {
 		sf.removeData(column.data)
 	}

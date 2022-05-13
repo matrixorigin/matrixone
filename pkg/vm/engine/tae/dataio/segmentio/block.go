@@ -20,7 +20,6 @@ import (
 	gbat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/container/compute"
@@ -40,19 +39,6 @@ type blockFile struct {
 	indexMeta *dataFile
 }
 
-func (bf *blockFile) Destroy() error {
-	for _, cb := range bf.columns {
-		cb.Unref()
-	}
-	if bf.seg != nil {
-		bf.seg.RemoveBlock(bf.id)
-	}
-	bf.columns = nil
-	bf.deletes = nil
-	bf.indexMeta = nil
-	return nil
-}
-
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,
@@ -62,7 +48,7 @@ func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *bl
 	bf.deletes = newDeletes(bf)
 	bf.indexMeta = newIndex(&columnBlock{block: bf}).dataFile
 	bf.OnZeroCB = bf.close
-	for i, _ := range bf.columns {
+	for i := range bf.columns {
 		cnt := 0
 		if indexCnt != nil {
 			cnt = indexCnt[i]
@@ -81,7 +67,7 @@ func (bf *blockFile) Fingerprint() *common.ID {
 
 func (bf *blockFile) close() {
 	bf.Close()
-	bf.Destory()
+	bf.Destroy()
 }
 
 func (bf *blockFile) WriteRows(rows uint32) (err error) {
@@ -146,16 +132,17 @@ func (bf *blockFile) Close() error {
 	return nil
 }
 
-func (bf *blockFile) Destory() {
-	logutil.Infof("Destoring Blk %d @ TS %d", bf.id, bf.ts)
-	if bf.seg != nil {
-		bf.seg.RemoveBlock(bf.id)
-	}
+func (bf *blockFile) Destroy() error {
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}
+	if bf.seg != nil {
+		bf.seg.RemoveBlock(bf.id)
+	}
 	bf.columns = nil
 	bf.deletes = nil
+	bf.indexMeta = nil
+	return nil
 }
 
 func (bf *blockFile) Sync() error { return bf.seg.GetSegmentFile().Sync() }
