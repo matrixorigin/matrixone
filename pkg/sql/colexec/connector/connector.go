@@ -70,7 +70,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		process.FreeRegisters(proc)
 		return true, nil
 	case reg.Ch <- bat:
-		n.Mmu.Alloc(size)
+		if err := n.Mmu.Alloc(size); err != nil {
+			return false, err
+		}
 		proc.Mp.Gm.Free(size)
 		return false, nil
 	}

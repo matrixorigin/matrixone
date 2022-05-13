@@ -68,7 +68,9 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 	}
 	sort.Sort(ctr.ds[0], sels, ovec)
 	if len(ctr.poses) == 1 {
-		batch.Shuffle(bat, sels, proc.Mp)
+		if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 	ps := make([]int64, 0, 16)
@@ -86,6 +88,8 @@ func (ctr *Container) process(bat *batch.Batch, proc *process.Process) (bool, er
 		}
 		ovec = vec
 	}
-	batch.Shuffle(bat, sels, proc.Mp)
+	if err := batch.Shuffle(bat, sels, proc.Mp); err != nil {
+		return false, err
+	}
 	return false, nil
 }

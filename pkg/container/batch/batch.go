@@ -80,7 +80,9 @@ func Shuffle(bat *Batch, m *mheap.Mheap) error {
 			}
 		}
 		for _, r := range bat.Rs {
-			r.Shuffle(bat.Sels, m)
+			if err := r.Shuffle(bat.Sels, m); err != nil {
+				return err
+			}
 		}
 		data, err := mheap.Alloc(m, int64(len(bat.Zs))*8)
 		if err != nil {
