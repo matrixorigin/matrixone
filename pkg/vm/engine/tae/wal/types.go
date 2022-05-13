@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 )
 
 const (
@@ -42,6 +43,7 @@ type Driver interface {
 	GetCurrSeqNum() uint64
 	GetPenddingCnt() uint64
 	Compact() error
+	Replay(handle store.ApplyHandle)(err error)
 	Close() error
 }
 
