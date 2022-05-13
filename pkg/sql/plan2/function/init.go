@@ -8,7 +8,7 @@ import (
 	"sync"
 )
 
-// init function fills the functionRegister from
+// init function fills the functionRegister with
 // aggregates,	see initAggregateFunction
 // builtins,	see initBuiltIns
 // operators,	see initOperators
