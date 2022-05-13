@@ -16,6 +16,7 @@ package mockio
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -23,10 +24,11 @@ import (
 )
 
 var SegmentFileMockFactory = func(name string, id uint64) file.Segment {
-	return newSegmentFile(name, id)
+	return mockFS.OpenFile(name, id)
 }
 
 type segmentFile struct {
+	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
 	ts     uint64
@@ -54,13 +56,17 @@ func (sf *segmentFile) close() {
 	sf.Destroy()
 }
 func (sf *segmentFile) Destroy() {
-	for _, block := range sf.blocks {
-		block.Unref()
-	}
+	// for _, block := range sf.blocks {
+	// 	block.Unref()
+	// }
+
 	logutil.Infof("Destroying Segment %d", sf.id.SegmentID)
+	mockFS.RemoveFile(sf.id.SegmentID)
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
+	sf.Lock()
+	defer sf.Unlock()
 	bf := sf.blocks[id]
 	if bf == nil {
 		bf = newBlock(id, sf, colCnt, indexCnt)
@@ -68,6 +74,12 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (b
 	}
 	block = bf
 	return
+}
+
+func (sf *segmentFile) RemoveBlock(id uint64) {
+	sf.Lock()
+	defer sf.Unlock()
+	delete(sf.blocks, id)
 }
 
 func (sf *segmentFile) WriteTS(ts uint64) error {

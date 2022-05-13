@@ -69,5 +69,6 @@ func TestBlock1(t *testing.T) {
 	dataFile.Unref()
 	colBlk0.Close()
 
+	t.Log(block.RefCount())
 	block.Unref()
 }

@@ -65,7 +65,9 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	db.Wal = wal.NewDriver(dirname, WALDir, nil)
 	db.Scheduler = newTaskScheduler(db, db.Opts.SchedulerCfg.AsyncWorkers, db.Opts.SchedulerCfg.IOWorkers)
 	dataFactory := tables.NewDataFactory(mockio.SegmentFileMockFactory, mutBufMgr, db.Scheduler)
-	db.Opts.Catalog = catalog.MockCatalog(dirname, CATALOGDir, nil, db.Scheduler)
+	if db.Opts.Catalog, err = catalog.OpenCatalog(dirname, CATALOGDir, nil, db.Scheduler); err != nil {
+		return
+	}
 	db.Catalog = db.Opts.Catalog
 
 	// Init and start txn manager
