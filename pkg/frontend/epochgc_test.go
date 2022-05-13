@@ -132,7 +132,6 @@ const (
 	blockRows          = 10000
 	blockCntPerSegment = 2
 	colCnt             = 4
-	segmentCnt         = 5
 )
 
 /*

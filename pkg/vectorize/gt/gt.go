@@ -472,9 +472,7 @@ func decimal64GtScalar(x types.Decimal64, ys []types.Decimal64, xScale, yScale i
 			scaleDiff := xScale - yScale
 			ysScaled[i] = y
 			scale := int64(math.Pow10(int(scaleDiff)))
-			for i, y := range ys {
-				ysScaled[i] = types.ScaleDecimal64(y, scale)
-			}
+			ysScaled[i] = types.ScaleDecimal64(y, scale)
 		}
 		for i, yScaled := range ysScaled {
 			if types.CompareDecimal64Decimal64Aligned(x, yScaled) > 0 {

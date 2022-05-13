@@ -19,22 +19,21 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"math"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tpe/orderedcodec"
-	"math"
-	"strconv"
 )
 
 var (
-	errorTheUvarintOfTheColumnGroupIsTooLarge = errors.New("the uvarint of the column group is too large")
-	errorSecondaryIndexIsUnsupported          = errors.New("secondary index is unsupported now")
-	errorDuplicateAttributeIDInIndex          = errors.New("duplicate attribute id in the index")
-	errorAttributeIDInFormatIsUnsupported     = errors.New("the attributeID in format is unsupported now")
-	errorNoSuchAttributeInTuple               = errors.New("no such attribute in the tuple")
-	errorGetOffsetArrayLenFailed              = errors.New("get offsetArrayLen failed")
-	errorNoSuchField                          = errors.New("no such field")
+	errorSecondaryIndexIsUnsupported      = errors.New("secondary index is unsupported now")
+	errorDuplicateAttributeIDInIndex      = errors.New("duplicate attribute id in the index")
+	errorAttributeIDInFormatIsUnsupported = errors.New("the attributeID in format is unsupported now")
+	errorNoSuchAttributeInTuple           = errors.New("no such attribute in the tuple")
+	errorNoSuchField                      = errors.New("no such field")
 )
 
 type SerializerType int
@@ -669,10 +668,10 @@ func appendValue(data []byte, marshal []byte) []byte {
 // extractActualData extracts the real data part from the buffer
 func extractActualData(data []byte) ([]byte, int64, int, orderedcodec.ValueType, error) {
 	if len(data) == 0 {
-		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorNoEnoughBytes
+		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKNOWN, errorNoEnoughBytes
 	}
 
-	vt := orderedcodec.VALUE_TYPE_UNKOWN
+	vt := orderedcodec.VALUE_TYPE_UNKNOWN
 	switch data[0] {
 	case SERIAL_TYPE_NULL:
 		vt = orderedcodec.VALUE_TYPE_NULL
@@ -708,23 +707,23 @@ func extractActualData(data []byte) ([]byte, int64, int, orderedcodec.ValueType,
 		vt = orderedcodec.VALUE_TYPE_BYTES
 	default:
 		logutil.Errorf("vt 2 %d", vt)
-		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorWrongValueType
+		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKNOWN, errorWrongValueType
 	}
 
 	//decode data len
 	dataLen, bytesRead := binary.Varint(data[1:])
 	if bytesRead == 0 {
-		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorNoEnoughBytes
+		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKNOWN, errorNoEnoughBytes
 	}
 
 	if bytesRead < 0 {
-		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorVarintOverflow
+		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKNOWN, errorVarintOverflow
 	}
 
 	//skip the byte for value type and the bytes for data length
 	dataOffset := 1 + bytesRead
 	if int64(len(data[dataOffset:])) < dataLen {
-		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKOWN, errorNoEnoughBytes
+		return nil, 0, 0, orderedcodec.VALUE_TYPE_UNKNOWN, errorNoEnoughBytes
 	}
 	dataEnd := int64(dataOffset) + dataLen
 
@@ -845,8 +844,8 @@ const (
 	bit7mask byte = (1 << 7)
 	bit6mask byte = (1 << 6)
 	bit5mask byte = (1 << 5)
-	bit4mask byte = (1 << 4)
-	bit3mask byte = (1 << 3)
+	//	bit4mask byte = (1 << 4)
+	//	bit3mask byte = (1 << 3)
 	bit2mask byte = (1 << 2)
 	bit1mask byte = (1 << 1)
 	bit0mask byte = (1 << 0)

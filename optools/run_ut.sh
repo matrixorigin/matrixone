@@ -93,12 +93,8 @@ function run_tests(){
     local cover_profile='profile.raw'
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -covermode=count -coverprofile=$cover_profile -coverpkg=./pkg/... $test_scope | tee $UT_REPORT
-        local html_coverage="coverage.html"
-        logger "INF" "Check on code coverage"
-        cat $cover_profile | egrep -v $(echo ${leave_out[*]} | tr " " "|") > $RAW_COVERAGE
-        go tool cover -o $CODE_COVERAGE -html=$RAW_COVERAGE
-        cp -f $CODE_COVERAGE $html_coverage
+        go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m"  $test_scope | tee $UT_REPORT
+
     else
         logger "INF" "Run UT with race check"
         go test -v -tags matrixone_test -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
@@ -127,8 +123,6 @@ $(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | g
 # BUILD FAILED in UT:
 echo "${IS_BUILD_FAIL[@]}"
 
-# Code Coverage Summary:
-$(go tool cover -func=$RAW_COVERAGE | egrep "^total:\s*\(statements\)" | awk '{print $1, $3}')
 
 EOF
     horiz_rule

@@ -37,21 +37,70 @@ func buildSelect(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
-		tmp, err := buildSelectClause(selectClause, ctx, query, selectCtx)
+		projections, err = buildSelectClause(selectClause, ctx, query, selectCtx)
 		if err != nil {
 			return err
 		}
-		projections = tmp
 	case *tree.ParenSelect:
 		return buildSelect(selectClause.Select, ctx, query, selectCtx)
 	default:
 		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 
-	//order by && limit
-	err = buildSort(stmt, ctx, query, selectCtx)
-	if err != nil {
-		return err
+	rootId := int32(len(query.Nodes) - 1)
+
+	// Build ORDER BY clause
+	if stmt.OrderBy != nil {
+		node := &plan.Node{
+			NodeType: plan.Node_SORT,
+			NodeId:   rootId + 1,
+			Children: []int32{rootId},
+		}
+
+		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		for _, order := range stmt.OrderBy {
+			orderBy := &plan.OrderBySpec{}
+			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			orderBy.OrderBy = expr
+
+			switch order.Direction {
+			case tree.DefaultDirection:
+				orderBy.OrderByFlags = plan.OrderBySpec_INTERNAL
+			case tree.Ascending:
+				orderBy.OrderByFlags = plan.OrderBySpec_ASC
+			case tree.Descending:
+				orderBy.OrderByFlags = plan.OrderBySpec_DESC
+			}
+			orderBys = append(orderBys, orderBy)
+		}
+		node.OrderBy = orderBys
+
+		query.Nodes = append(query.Nodes, node)
+		rootId++
+	}
+
+	// Build LIMIT clause
+	if stmt.Limit != nil {
+		//offset
+		if stmt.Limit.Offset != nil {
+			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			query.Nodes[rootId].Offset = expr
+		}
+
+		//limit
+		if stmt.Limit.Count != nil {
+			expr, err := buildExpr(stmt.Limit.Count, ctx, query, selectCtx)
+			if err != nil {
+				return err
+			}
+			query.Nodes[rootId].Limit = expr
+		}
 	}
 
 	//fetch
@@ -127,60 +176,6 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		query.Steps = append(query.Steps, cteNodeId)
 	}
 
-	return nil
-}
-
-func buildSort(stmt *tree.Select, ctx CompilerContext, query *Query, selectCtx *SelectContext) error {
-	if stmt.OrderBy == nil && stmt.Limit == nil {
-		return nil
-	}
-
-	node := &plan.Node{
-		NodeType: plan.Node_SORT,
-	} //orderby
-	if stmt.OrderBy != nil {
-		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
-		for _, order := range stmt.OrderBy {
-			orderBy := &plan.OrderBySpec{}
-			expr, err := buildExpr(order.Expr, ctx, query, selectCtx)
-			if err != nil {
-				return err
-			}
-			orderBy.OrderBy = expr
-
-			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.OrderByFlags = plan.OrderBySpec_INTERNAL
-			case tree.Ascending:
-				orderBy.OrderByFlags = plan.OrderBySpec_ASC
-			case tree.Descending:
-				orderBy.OrderByFlags = plan.OrderBySpec_DESC
-			}
-			orderBys = append(orderBys, orderBy)
-		}
-		node.OrderBy = orderBys
-	}
-	//limit
-	if stmt.Limit != nil {
-		//offset
-		if stmt.Limit.Offset != nil {
-			expr, err := buildExpr(stmt.Limit.Offset, ctx, query, selectCtx)
-			if err != nil {
-				return err
-			}
-			node.Offset = expr
-		}
-
-		//limit
-		if stmt.Limit.Count != nil {
-			expr, err := buildExpr(stmt.Limit.Count, ctx, query, selectCtx)
-			if err != nil {
-				return err
-			}
-			node.Limit = expr
-		}
-	}
-	appendQueryNode(query, node, false)
 	return nil
 }
 

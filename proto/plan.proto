@@ -282,6 +282,7 @@ message Node {
 		//
 		INSERT          = 51;
 		UPDATE  		= 52;
+		DELETE  		= 53;
 	}
 
 	enum JoinFlag {

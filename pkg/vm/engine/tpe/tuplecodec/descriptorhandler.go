@@ -36,7 +36,6 @@ const (
 var (
 	errorTypeInValueNotEqualToTypeInAttribute = errors.New("the type in the value is not equal to the value in the attribute")
 	errorDoNotFindTheDesc                     = errors.New("do not find the descriptor")
-	errorDoNotFindTheValue                    = errors.New("do not find the value")
 	errorDecodeDescriptorFailed               = errors.New("decode the descriptor failed")
 	errorDescriptorSavedIsNotTheWanted        = errors.New("the descriptor saved is not the wanted one")
 	errorDescInAsyncGCIsNotBytes              = errors.New("desc in asyncGC is not bytes")

@@ -71,7 +71,7 @@ ut:
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
 else
-	@cd optools && timeout 30m ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && timeout 60m ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 # Running build verification tests
@@ -81,7 +81,7 @@ bvt: mo-server
 ifeq ($(UNAME_S),Darwin)
 	@cd optools; ./run_bvt.sh BVT False $(BVT_BRANCH)
 else
-	@cd optools; timeout 30m ./run_bvt.sh BVT False $(BVT_BRANCH)
+	@cd optools; timeout 60m ./run_bvt.sh BVT False $(BVT_BRANCH)
 endif
 
 # Tear down
@@ -123,7 +123,7 @@ install-static-check-tools:
 DIRS=pkg/... \
 	 cmd/...
 
-EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -E unconvert \
+EXTRA_LINTERS=-E misspell -E exportloopref -E rowserrcheck -E depguard -D unconvert \
 	-E prealloc -E gofmt -E stylecheck
 
 .PHONY: static-check

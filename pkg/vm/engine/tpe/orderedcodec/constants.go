@@ -19,7 +19,7 @@ const (
 	nullEncoding = 0
 
 	//marker
-	notNullEncoding = 1
+	// notNullEncoding = 1
 
 	encodingfloatNaN = 2
 
@@ -33,7 +33,7 @@ const (
 
 	encodingPrefixForBytes byte = 18
 
-	encodingPrefixForBytesDesc = encodingPrefixForBytes + 1
+	// encodingPrefixForBytesDesc = encodingPrefixForBytes + 1
 
 	//for integer minimum
 	encodingPrefixForIntegerMinimum = 128
@@ -48,8 +48,8 @@ const (
 	encodingPrefixForIntMax = 253
 
 	//not null descending
-	notNullEncodingForDesc = 254
+	// notNullEncodingForDesc = 254
 
 	//null descending
-	nullEncodingForDesc = 255
+	// nullEncodingForDesc = 255
 )

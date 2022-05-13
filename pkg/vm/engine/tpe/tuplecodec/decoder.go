@@ -106,7 +106,7 @@ func (tkd *TupleKeyDecoder) DecodePrimaryIndexKey(key TupleKey, index *descripto
 		return nil, nil, errorPrimaryIndexIDIsNotOne
 	}
 
-	var retDis []*orderedcodec.DecodedItem
+	retDis := make([]*orderedcodec.DecodedItem, 0, len(index.Attributes))
 	//needs attribute type
 	rest := key
 	for _, attr := range index.Attributes {

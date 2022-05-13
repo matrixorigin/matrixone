@@ -23,19 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func getLastTableDef(query *Query, node *plan.Node) *plan.TableDef {
-	if node.TableDef != nil {
-		return node.TableDef
-	}
-	for _, id := range node.Children {
-		val := getLastTableDef(query, query.Nodes[id])
-		if val != nil {
-			return val
-		}
-	}
-	return nil
-}
-
 func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 	//build select
 	selectStmt := &tree.Select{
@@ -61,7 +48,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 	}
 
 	//get table def
-	tableDef := getLastTableDef(query, query.Nodes[len(query.Nodes)-1])
+	objRef, tableDef := getLastTableDef(query)
 	if tableDef == nil {
 		return errors.New(errno.CaseNotFound, "can not find table in sql")
 	}
@@ -128,6 +115,8 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext, query *Query) error {
 			Columns: columns,
 			Values:  values,
 		},
+		ObjRef:   objRef,
+		TableDef: tableDef,
 	}
 	appendQueryNode(query, node, false)
 

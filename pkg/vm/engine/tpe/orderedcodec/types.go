@@ -28,7 +28,7 @@ type OrderedDecoder struct {
 type ValueType int
 
 const (
-	VALUE_TYPE_UNKOWN   ValueType = 0x0
+	VALUE_TYPE_UNKNOWN  ValueType = 0x0
 	VALUE_TYPE_NULL     ValueType = 0x1
 	VALUE_TYPE_BOOL     ValueType = 0x2
 	VALUE_TYPE_UINT64   ValueType = 0x3

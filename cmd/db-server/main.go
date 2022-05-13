@@ -57,7 +57,6 @@ import (
 )
 
 const (
-	NormalExit              = 0
 	InitialValuesExit       = 1
 	LoadConfigExit          = 2
 	RecreateDirExit         = 3
@@ -100,10 +99,6 @@ func runMOServer() error {
 
 func serverShutdown(isgraceful bool) {
 	mo.Stop()
-}
-
-func registerSignalHandlers() {
-	//	signal.SetupSignalHandler(serverShutdown)
 }
 
 func waitSignal() {
@@ -343,7 +338,6 @@ func main() {
 		logutil.Infof("Start MOServer failed, %v", err)
 		os.Exit(StartMOExit)
 	}
-	//registerSignalHandlers()
 
 	waitSignal()
 	//srv.Stop()
