@@ -94,6 +94,9 @@ func Clean(bat *Batch, m *mheap.Mheap) {
 			vector.Clean(vec, m)
 		}
 	}
+	for _, r := range bat.Rs {
+		r.Free(m)
+	}
 	bat.Vecs = nil
 	bat.Zs = nil
 }
