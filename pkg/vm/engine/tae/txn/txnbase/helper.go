@@ -99,7 +99,7 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, n
 	var size uint32
 	var vecs uint16
 	pos := 0
-	if binary.Read(r, binary.BigEndian, &size); err != nil {
+	if err = binary.Read(r, binary.BigEndian, &size); err != nil {
 		return
 	}
 	buf := make([]byte, size-4)
@@ -107,11 +107,11 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, n
 		return
 	}
 	bbuf := bytes.NewBuffer(buf)
-	if binary.Read(bbuf, binary.BigEndian, &vecs); err != nil {
+	if err = binary.Read(bbuf, binary.BigEndian, &vecs); err != nil {
 		return
 	}
 	var rows uint32
-	if binary.Read(bbuf, binary.BigEndian, &rows); err != nil {
+	if err = binary.Read(bbuf, binary.BigEndian, &rows); err != nil {
 		return
 	}
 	pos += 2 + 4
@@ -131,7 +131,7 @@ func UnmarshalBatchFrom(r io.Reader) (vecTypes []types.Type, bat batch.IBatch, n
 		col := vector.NewVector(vecTypes[i], uint64(rows))
 		cols[i] = col
 		attrs[i] = i
-		if col.(vector.IVectorNode).Unmarshal(buf[pos : pos+int(lens[i])]); err != nil {
+		if err = col.(vector.IVectorNode).Unmarshal(buf[pos : pos+int(lens[i])]); err != nil {
 			return
 		}
 		pos += int(lens[i])
