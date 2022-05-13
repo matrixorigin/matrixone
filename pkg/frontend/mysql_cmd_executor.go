@@ -950,7 +950,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	// build explain data buffer
 	buffer := explain.NewExplainDataBuffer()
 	// generator query explain
-	explainQuery := explain.NewExplainQueryImpl(qry)
+	explainQuery := explain.NewExplainQueryImpl(qry.GetQuery())
 	explainQuery.ExplainPlan(buffer, es)
 
 	session := mce.GetSession()

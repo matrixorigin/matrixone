@@ -373,3 +373,14 @@ func getLastTableDef(query *Query) (*plan.ObjectRef, *plan.TableDef) {
 	}
 	return nil, nil
 }
+
+func newQueryAndSelectCtx(typ plan.Query_StatementType) (*Query, *SelectContext) {
+	selectCtx := &SelectContext{
+		columnAlias: make(map[string]*plan.Expr),
+		cteTables:   make(map[string]*plan.TableDef),
+	}
+	query := &Query{
+		StmtType: typ,
+	}
+	return query, selectCtx
+}

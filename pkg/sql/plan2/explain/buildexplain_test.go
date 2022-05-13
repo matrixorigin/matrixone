@@ -188,14 +188,13 @@ func runOneStmt(opt plan2.Optimizer, t *testing.T, sql string) error {
 
 		//this sql always return one stmt
 		ctx := opt.CurrentContext()
-		query, err := plan2.BuildPlan(ctx, stmt.Statement)
+		logicPlan, err := plan2.BuildPlan(ctx, stmt.Statement)
 		if err != nil {
 			fmt.Printf("Build Query Plan error: '%v'", tree.String(stmt, dialect.MYSQL))
 			return err
 		}
-
 		buffer := NewExplainDataBuffer()
-		explainQuery := NewExplainQueryImpl(query)
+		explainQuery := NewExplainQueryImpl(logicPlan.GetQuery())
 		explainQuery.ExplainPlan(buffer, es)
 		// t.Logf("\n")
 	}

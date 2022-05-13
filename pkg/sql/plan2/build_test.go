@@ -27,7 +27,7 @@ import (
 
 //only use in developing
 func TestSingleSql(t *testing.T) {
-	sql := `DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20`
+	sql := `begin`
 	// stmts, _ := mysql.Parse(sql)
 	// t.Logf("%+v", string(getJson(stmts[0], t)))
 
@@ -511,6 +511,25 @@ func TestSubQuery(t *testing.T) {
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION222)",                                 // table not exist
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY222)", // column not exist
 	}
+	runTestShouldError(mock, t, sqls)
+
+}
+
+func TestTcl(t *testing.T) {
+	mock := NewMockOptimizer()
+	//should pass
+	sqls := []string{
+		"start transaction",
+		"start transaction read write",
+		"begin",
+		"commit and chain",
+		"commit and chain no release",
+		"rollback and chain",
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+
+	// should error
+	sqls = []string{}
 	runTestShouldError(mock, t, sqls)
 
 }

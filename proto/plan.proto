@@ -323,15 +323,6 @@ message Node {
 	string extra_options   = 19;
 }
 
-enum StatementType {
-	UNKNOW = 0;
-	SELECT = 1;
-	INSERT = 2;
-	DELETE = 3;
-	UPDATE = 4;
-	MERGE  = 5;
-}
-
 message Query {
 	enum StatementType {
 		UNKNOWN		= 0;
@@ -362,13 +353,48 @@ message Query {
 	repeated Expr params	= 4;
 }
 
+message TransationControl {
+	enum TclType {
+		BEGIN = 0;
+		COMMIT = 1;
+		ROLLBACK = 2;
+	}
+	//TransationControl type
+	TclType tcl_type = 1;
+	oneof action {
+		TransationBegin begin = 2;
+		TransationCommit commit = 3;
+		TransationRollback rollback = 4;
+	}
+}
 
+message TransationBegin {
+	enum TransationMode {
+		NONE = 0;
+		READ_ONLY = 1;
+		READ_WRITE = 2;
+	}
+	TransationMode mode = 1;
+}
 
+enum TransationCompletionType {
+	CHAIN = 0;
+	NO_CHAIN = 1;
+	RELEASE = 2;
+}
+message TransationCommit {
+	TransationCompletionType completion_type = 1;
+}
+message TransationRollback {
+	TransationCompletionType completion_type = 1;
+}
 
-
-
-
-
+message Plan {
+	oneof plan {
+		Query query = 1;
+		TransationControl tcl =2;
+	}
+}
 
 
 

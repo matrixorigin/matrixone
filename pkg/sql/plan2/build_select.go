@@ -117,11 +117,20 @@ func buildCTE(withExpr *tree.With, ctx CompilerContext, query *Query, selectCtx 
 		return nil
 	}
 
+	var err error
 	for _, cte := range withExpr.CTEs {
-		err := buildStatement(cte.Stmt, ctx, query)
+		switch stmt := cte.Stmt.(type) {
+		case *tree.Select:
+			err = buildSelect(stmt, ctx, query, selectCtx)
+		case *tree.ParenSelect:
+			err = buildSelect(stmt.Select, ctx, query, selectCtx)
+		default:
+			err = errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		}
 		if err != nil {
 			return err
 		}
+
 		//add a projection node
 		alias := string(cte.Name.Alias)
 		node := &plan.Node{
