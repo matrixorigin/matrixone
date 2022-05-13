@@ -30,6 +30,7 @@ type DBEntry struct {
 	*BaseEntry
 	catalog *Catalog
 	name    string
+	isSys   bool
 
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
@@ -74,6 +75,7 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		entries:   make(map[uint64]*common.DLNode),
 		nameNodes: make(map[string]*nodeList),
 		link:      new(common.Link),
+		isSys:     true,
 	}
 	return entry
 }
@@ -87,6 +89,8 @@ func NewReplayDBEntry() *DBEntry {
 	}
 	return entry
 }
+
+func (e *DBEntry) IsSystemDB() bool { return e.isSys }
 
 func (e *DBEntry) Compare(o common.NodePayload) int {
 	oe := o.(*DBEntry).BaseEntry

@@ -45,7 +45,6 @@ type Catalog struct {
 	entries   map[uint64]*common.DLNode
 	nameNodes map[string]*nodeList
 	link      *common.Link
-	sysDB     *DBEntry
 
 	nodesMu sync.RWMutex
 }
@@ -92,13 +91,14 @@ func OpenCatalog(dir, name string, cfg *store.StoreCfg, scheduler tasks.TaskSche
 }
 
 func (catalog *Catalog) InitSystemDB() {
-	catalog.sysDB = NewSystemDBEntry(catalog)
-	dbTables := NewSystemTableEntry(catalog.sysDB, SystemTable_DB_ID, SystemDBSchema)
-	tableTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Table_ID, SystemTableSchema)
-	columnTables := NewSystemTableEntry(catalog.sysDB, SystemTable_Columns_ID, SystemColumnSchema)
-	catalog.sysDB.addEntryLocked(dbTables)
-	catalog.sysDB.addEntryLocked(tableTables)
-	catalog.sysDB.addEntryLocked(columnTables)
+	sysDB := NewSystemDBEntry(catalog)
+	dbTables := NewSystemTableEntry(sysDB, SystemTable_DB_ID, SystemDBSchema)
+	tableTables := NewSystemTableEntry(sysDB, SystemTable_Table_ID, SystemTableSchema)
+	columnTables := NewSystemTableEntry(sysDB, SystemTable_Columns_ID, SystemColumnSchema)
+	sysDB.addEntryLocked(dbTables)
+	sysDB.addEntryLocked(tableTables)
+	sysDB.addEntryLocked(columnTables)
+	catalog.addEntryLocked(sysDB)
 }
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
