@@ -148,6 +148,9 @@ func (bf *blockFile) Close() error {
 
 func (bf *blockFile) Destory() {
 	logutil.Infof("Destoring Blk %d @ TS %d", bf.id, bf.ts)
+	if bf.seg != nil {
+		bf.seg.RemoveBlock(bf.id)
+	}
 	for _, cb := range bf.columns {
 		cb.Unref()
 	}

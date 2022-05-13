@@ -141,9 +141,6 @@ func (bf *blockFile) Destroy() error {
 	bf.columns = nil
 	bf.deletes = nil
 	bf.indexMeta = nil
-	if bf.seg != nil {
-		bf.seg.RemoveBlock(bf.id)
-	}
 	return nil
 }
 
