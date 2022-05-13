@@ -26,6 +26,19 @@ type blockFile struct {
 	indexMeta *dataFile
 }
 
+func (bf *blockFile) Destroy() error {
+	for _, cb := range bf.columns {
+		cb.Unref()
+	}
+	if bf.seg != nil {
+		bf.seg.RemoveBlock(bf.id)
+	}
+	bf.columns = nil
+	bf.deletes = nil
+	bf.indexMeta = nil
+	return nil
+}
+
 func newBlock(id uint64, seg file.Segment, colCnt int, indexCnt map[int]int) *blockFile {
 	bf := &blockFile{
 		seg:     seg,

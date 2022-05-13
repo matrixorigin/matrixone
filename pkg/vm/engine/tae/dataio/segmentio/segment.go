@@ -6,6 +6,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/layout/segment"
+	"sync"
 )
 
 var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
@@ -13,12 +14,35 @@ var SegmentFileIOFactory = func(name string, id uint64) file.Segment {
 }
 
 type segmentFile struct {
+	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
 	seg    *segment.Segment
+}
+
+func (sf *segmentFile) removeData(data *dataFile) {
+	if data.file != nil {
+		for _, file := range data.file {
+			sf.seg.ReleaseFile(file)
+		}
+	}
+}
+
+func (sf *segmentFile) RemoveBlock(id uint64) {
+	sf.Lock()
+	defer sf.Unlock()
+	block := sf.blocks[id]
+	for _, column := range block.columns {
+		sf.removeData(column.data)
+	}
+	sf.removeData(block.deletes.dataFile)
+	sf.removeData(block.indexMeta)
+	block.deletes = nil
+	block.indexMeta = nil
+	delete(sf.blocks, id)
 }
 
 func newSegmentFile(name string, id uint64) *segmentFile {
@@ -51,6 +75,8 @@ func (sf *segmentFile) Destory() {
 }
 
 func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
+	sf.Lock()
+	defer sf.Unlock()
 	bf := sf.blocks[id]
 	if bf == nil {
 		bf = newBlock(id, sf, colCnt, indexCnt)

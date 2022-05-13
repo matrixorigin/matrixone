@@ -124,6 +124,7 @@ func (s *Segment) Mount() {
 
 func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	file := s.nodes[fname]
 	var ino Inode
 	if file == nil {
@@ -141,7 +142,6 @@ func (s *Segment) NewBlockFile(fname string) *BlockFile {
 	}
 	s.nodes[file.name] = file
 	s.lastInode += 1
-	s.mutex.Unlock()
 	return file
 }
 
@@ -177,6 +177,12 @@ func (s *Segment) Update(fd *BlockFile, pl []byte, fOffset uint64) error {
 		s.allocator.level1[0], s.allocator.level0[0], s.allocator.lastPos, allocated)
 	s.log.Append(fd)
 	return nil
+}
+
+func (s *Segment) ReleaseFile(fd *BlockFile) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.nodes, fd.name)
 }
 
 func (s *Segment) Free(fd *BlockFile, n uint32) {

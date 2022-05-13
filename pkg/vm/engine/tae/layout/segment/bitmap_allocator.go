@@ -155,6 +155,7 @@ func (b *BitmapAllocator) getBitPos(val uint64, start uint32) uint32 {
 
 func (b *BitmapAllocator) Free(start uint32, len uint32) {
 	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	pos := start / b.pageSize
 	end := pos + len/b.pageSize
 	b.markAllocFree0(uint64(pos), uint64(end), true)
@@ -162,11 +163,11 @@ func (b *BitmapAllocator) Free(start uint32, len uint32) {
 	l0end := p2roundup(uint64(end), BITS_PER_UNITSET)
 	b.markLevel1(l0start, l0end, true)
 	b.lastPos = uint64(start)
-	b.mutex.Unlock()
 }
 
 func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 	b.mutex.Lock()
+	defer b.mutex.Unlock()
 	length := p2roundup(len, uint64(b.pageSize))
 	var allocated uint64 = 0
 	l1pos := b.lastPos / uint64(b.pageSize) / BITS_PER_UNITSET / BITS_PER_UNIT
@@ -227,7 +228,6 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 				b.markLevel1(l0start, l0end, false)
 				offset := b.lastPos
 				b.lastPos += allocated
-				b.mutex.Unlock()
 				return offset, allocated
 			}
 			l1freePos++
@@ -236,6 +236,5 @@ func (b *BitmapAllocator) Allocate(len uint64) (uint64, uint64) {
 			}
 		}
 	}
-	b.mutex.Unlock()
 	return 0, 0
 }

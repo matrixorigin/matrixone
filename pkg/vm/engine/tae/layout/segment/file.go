@@ -111,6 +111,7 @@ func extentsRemove(extents *[]Extent, vals []Extent) {
 func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 	num := 0
 	b.snode.mutex.Lock()
+	defer b.snode.mutex.Unlock()
 	for _, extent := range b.snode.extents {
 		if fOffset >= extent.length {
 			fOffset -= extent.length
@@ -134,7 +135,6 @@ func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 			offset: oldOff,
 			length: length,
 		})
-		b.snode.mutex.Unlock()
 		return free
 	}
 	vals := make([]Extent, 1)
@@ -197,7 +197,6 @@ func (b *BlockFile) repairExtent(offset, fOffset, length uint32) []Extent {
 		extentsRemove(&b.snode.extents, remove)
 	}
 	extentsInsert(&b.snode.extents, num+1, vals)
-	b.snode.mutex.Unlock()
 	return free
 }
 
@@ -236,9 +235,7 @@ func (b *BlockFile) GetExtents() *[]Extent {
 func (b *BlockFile) Read(offset, length uint32, data []byte) (uint32, error) {
 	remain := uint32(b.snode.size) - offset - length
 	num := 0
-	b.snode.mutex.Lock()
-	extents := b.snode.extents
-	b.snode.mutex.Unlock()
+	extents := *b.GetExtents()
 	for _, extent := range extents {
 		if offset >= extent.length {
 			offset -= extent.length
